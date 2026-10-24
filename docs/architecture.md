@@ -343,15 +343,28 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 | **Control** (WebSocket server; the Agent connects to us) | Both ways | Snapshots up; desired state and intent acknowledgements down; heartbeats |
 
 - The protocol is versioned JSON messages with sequence numbers. On reconnect, the Agent sends a full snapshot and the brain resends the current desired state.
-- **Save backups:** `getSaveFile` every N minutes, with rotation. That's our insurance against a catastrophic bug, and the simulator's source of real starting states.
+- **Security.** Any web page can open a WebSocket to `localhost`, so:
+  - both servers bind to `127.0.0.1` only and accept only the game's origin
+  - each allows one client
+  - the control channel requires a **shared token**, which the deployer writes to a file only the agent reads
+- **Version handshake:** brain and agent are built from the same release. On connect they compare build IDs, and on a mismatch the brain redeploys the agent before anything else.
+- **Atomic deploys.** Each release deploys into its own versioned folder (`/agent/<build>/…`) plus a manifest:
+  - **Ordering:** libraries first, then entry scripts are re-pushed and their RAM re-verified with `calculateRam`. This works around game issue #2907 (stale RAM cache for importers).
+  - **Switch-over:** only after that does `boot.js` switch to the new build, and the reconciler restarts reflexes onto it. Old and new code never mix.
+  - **Release gate:** only tagged releases are deployed to Steam.
+- **Save backups:**
+  - `getSaveFile` every N minutes, with rotation, **plus immediately before every irreversible intent** (install, BitNode change). Save corruption is a known open issue on 3.0.1 (#2809).
+  - Backups are our insurance against catastrophic bugs, and the simulator's source of real starting states.
 
 ---
 
 ## 7. Telemetry and observability
 - **Store:** an append-only time series of snapshots (thinned for old data), decision records, estimate-vs-actual errors, reflex health, and transitions. SQLite to start, in the configurable data directory (ADR 0006).
 - **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup.
-- **Dashboard:** a local web page showing the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, a timeline of BitNodes and installs, and alerts.
-- **Alerts:** a stall (no progress on the route's critical path for X minutes), a reflex crash loop, estimate error above a threshold, brain disconnected, game version changed.
+- **Release tagging:** every record carries the agent release that produced it, so releases can be compared directly ("did v0.4 beat v0.3 on BN1?").
+- **Dashboard:** a web page served on **`127.0.0.1` only**. It shows the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, a timeline of BitNodes and installs, brain/agent health, and alerts.
+- **Alerts** appear **on the dashboard only**: no push notifications. Conditions: a stall (no progress on the route's critical path for X minutes), a reflex crash loop, estimate error above a threshold, brain disconnected, game version changed (hold).
+- **Campaign report:** generated from telemetry: clear time, cycles and installs per BitNode, per release. It's our benchmark in place of community numbers.
 
 ---
 
