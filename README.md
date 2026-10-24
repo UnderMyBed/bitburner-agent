@@ -2,7 +2,7 @@
 
 An autonomous agent that plays [Bitburner](https://github.com/bitburner-official/bitburner-src) from a fresh save to **every Source-File maxed**, unattended and repeatably.
 
-> **Status: pre-alpha, in design.** The architecture and a full mechanics analysis of the game are done. No runnable code yet. See [Roadmap](#roadmap).
+> **Status: pre-alpha.** The architecture and a full mechanics analysis of the game are done, and a spike has proven the headless simulator. No agent code yet. See [Roadmap](#roadmap).
 
 ---
 
@@ -54,8 +54,8 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 | Milestone | Deliverable | Status |
 |---|---|---|
 | Design | Mechanics analysis, architecture, decision records | ✅ |
-| S1 | Simulator spike: prove the real engine runs headless in Node, deterministically, fast | ⏳ in progress |
-| M1 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only) | |
+| S1 | Simulator spike: prove the real engine runs headless in Node, deterministically, fast | ✅ [report](docs/spikes/s1-headless-engine.md) |
+| M1 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only) | ⏳ next |
 | M2 | Simulator core: headless engine, virtual clock, seeded RNG | |
 | M3 | Effectors (UI and Singularity backends), restart-after-reset | |
 | M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then **the live campaign starts at BN1.1 from a fresh save** | |
@@ -73,6 +73,7 @@ Working plan: [`docs/plan.md`](docs/plan.md).
 | [`docs/synthesis.md`](docs/synthesis.md) | The analysis in one page: what the game is and how to beat it |
 | [`docs/mechanics/`](docs/mechanics/) | First-principles mechanics references with `file:line` citations into the game source |
 | [`docs/research/`](docs/research/) | Community tooling, benchmarks and strategies |
+| [`docs/spikes/`](docs/spikes/) | Spike reports; the throwaway code is in [`spikes/`](spikes/) |
 
 ## Supported game version
 

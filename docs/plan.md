@@ -20,7 +20,7 @@
 | 1 | First-principles mechanics reference ([`mechanics/`](mechanics/)) and [`synthesis.md`](synthesis.md) | ✅ |
 | 1b | Community research ([`research/`](research/)) | ✅ |
 | — | Architecture ([`architecture.md`](architecture.md)) and decision records ([`decisions/`](decisions/)) | ✅ draft |
-| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 in progress |
+| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 next |
 
 ## Campaign start
 The agent plays from the very first BitNode. The campaign starts on Steam with a **fresh save at BN1.1** as soon as M4 passes its simulator exit criteria. BN1.1 has no Singularity API, so it's played through the `ui` effector backend, which puts milestone M3 on the critical path. There is no manual phase.

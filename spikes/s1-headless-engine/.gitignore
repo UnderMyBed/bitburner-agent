@@ -1,0 +1,5 @@
+node_modules/
+dist/
+prof/
+# Copies of real saves: personal data, never committed
+fixtures-local/

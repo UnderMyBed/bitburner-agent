@@ -1,0 +1,15 @@
+{
+  "name": "s1-headless-engine",
+  "private": true,
+  "description": "Spike S1: run the real Bitburner engine headless in plain Node under a virtual clock. Throwaway code.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "run": "node run.mjs"
+  },
+  "devDependencies": {
+    "@sinonjs/fake-timers": "15.4.0",
+    "esbuild": "0.28.2",
+    "jsdom": "26.1.0"
+  }
+}

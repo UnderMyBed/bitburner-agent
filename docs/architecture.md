@@ -331,6 +331,8 @@ interface Effectors {
 
 `boot.js` is re-entrant: it is safe to run at any time and in any number of copies. It (re)starts the Agent; everything else follows from reconciliation.
 
+**Fresh save:** a new game starts the interactive tutorial. On v3.0.1, while it runs, finished scripts are never cleaned up and never free their RAM (fixed on `dev`; S1 finding). The first thing the Agent does on a fresh save is end the tutorial, through the `ui` backend's equivalent of the Skip button.
+
 ---
 
 ## 6. Bridge
@@ -386,8 +388,15 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ## 9. Simulator
 
 ### 9.1 Design
-- **Engine:** the real `vendor/bitburner-src` code in plain Node, bootstrapped the way its Jest tests do (`initGameEnvironment`, `setupBasicTestingEnvironment`, NS script execution). Outside Jest this needs our own bundle of the engine, DOM stubs, and the module patches the tests apply (dynamic script import, `Router`, dialogs). **Unproven until the simulator spike (§13, S1) passes.**
-- **Virtual clock:** fake `setTimeout`/`setInterval`/`Date`/`performance.now` (e.g. `@sinonjs/fake-timers`). Game cycles are driven through `Engine.updateGame(numCycles)`. Time advances to the next event, discrete-event style.
+Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
+- **Engine:** the real `vendor/bitburner-src` code, bundled for plain Node with esbuild (the module mapping from the game's `jest.config.js`), on jsdom globals. It boots through the game's own `Engine.load`: the new-game path, or the real save-load path including migration and offline progress.
+- **Browser parity layer:** the harness reproduces what the browser and UI provide implicitly, and each item gets a test:
+  - `window === globalThis` globals (`sprintf`, lodash `_`)
+  - `MainUILoaded`, which starts saved scripts and autoexec
+  - a headless router with the real router's side effects
+  - fake IndexedDB
+  - `blob:` script modules through a synchronous module hook
+- **Virtual clock:** `@sinonjs/fake-timers` fakes `setTimeout`/`setInterval`/`Date`/`performance`. The game's own `Engine.start` loop runs unmodified on it. Time advances to the next timer, discrete-event style. Results don't depend on the driver's step size.
 - **Determinism:**
   - Replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario.
   - The fake `Date` also pins the game's clock-seeded randomness (roulette seed, Circadian Modulator).
@@ -395,11 +404,15 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 - **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine.
 - **`sim` effectors** call engine internals directly (e.g. the function a UI button calls). They never grant Source-Files to unlock Singularity, because that would change the state under test.
 - **Scenario fixtures:** starting states (each BitNode entry with a given Source-File set, plus odd mid-run states) are built through the engine's own prestige functions. Real Steam saves join as fixtures under the one-way save rule (§9.4).
-- **Speed target:** at least **1000×** real time for hacking-dominated phases; measured, not assumed.
+- **Speed (measured in S1):** it depends on the workload, because the engine does whatever work the in-game scripts cause.
+  - 10,000–37,000× for lean hacking workloads.
+  - 50–700× for heavy script churn or IPvGO-scale compute (the legacy fork from a real save ran at 50–78×).
+  - Target: at least **1000×** for our own hacking-phase workloads (workers use `disableLog`). Long-horizon search stays on the fast model (§4.3).
 - **Scale-out:** a worker pool, one engine instance per process. Size is `availableParallelism() − reserve`, about 12–14 on the reference rig. A suite (scenarios × seeds) fans out across the pool; results are aggregated into the repeatability metric.
 
 ### 9.2 Fidelity gaps (known and accepted)
-- The headless simulator doesn't render the UI. UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
+- The headless simulator doesn't render the UI, so code that reads the game's DOM fails there (our `ui` effectors, parts of the legacy fork). UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
+- The browser parity layer (§9.1) is hand-written. A missed side effect of the UI is a silent fidelity gap, so the layer is re-audited whenever the pinned version moves.
 - Timing contention under load (batch landing jitter) is modelled with injected jitter that we calibrate from real telemetry.
 - Offline progress and save/reload are exercised through the engine's real load path using serialised saves.
 
@@ -510,9 +523,9 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 | M | Deliverable | Exit criterion |
 |---|---|---|
 | M0 | Legacy fork retired (upstream merged, archived); repo bootstrapped; design reviewed | ✅ Done |
-| S1 | **Simulator spike** (time-boxed, throwaway code under `spikes/`). The whole plan depends on iterating in simulation, so this goes first. Report in `docs/spikes/`. | Real engine runs headless **outside Jest** under a virtual clock; a real NS hack script runs; two runs with the same seed give the same state hash; first speed number. **If it fails:** E2 (browser build + Playwright clock) becomes the simulator, and §9 and M2 are re-planned. |
+| S1 | **Simulator spike** (time-boxed, throwaway code under `spikes/`). The whole plan depends on iterating in simulation, so this went first. | ✅ Passed ([report](spikes/s1-headless-engine.md), ADR 0007): headless outside Jest, deterministic, step-invariant, exact save round trip, real Steam saves load and play, 50–37,000× depending on workload |
 | M1 | Walking skeleton: bridge, Agent, snapshot, telemetry, dashboard (observe-only); E2 source build plus Playwright harness | Skeleton passes E2 (connect, snapshot, reload, reconnect) in an 8 GB fresh start; then live snapshots on Steam for 24 h without gaps |
-| M2 | Simulator core, productionised from S1: engine, virtual clock, seeded RNG, worker pool, scenario fixtures; runs the legacy fork from BN1 with SF4.3 to a destroy, which is the baseline (§12.3) | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
+| M2 | Simulator core, rebuilt test-first from S1 (its M2 work list): engine, browser parity layer, virtual clock, seeded RNG, worker pool, scenario fixtures; runs the legacy fork from BN1 with SF4.3 to a destroy, which is the baseline (§12.3) | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
 | M3 | Effectors (`ui` and `sim` backends) plus bootstrap/restart paths. **Critical path for BN1.1.** | Every BN1 effector and the UI-driven install-and-restart cycle pass E2 tests on the source build and simulator chaos tests; real-game smoke test |
 | M4 | Fast model + planner v0 (all three levels, candidate-policy rollouts). Activities: `hwgw`, `factionWork`, `companyWork`, `crime`, `classes`. Actions: `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`. WorldDaemon route. | Fast-model fidelity within tolerance on BN1 scenarios; autonomous BN1→destroy in the simulator over N seeds, **at least as fast as the legacy fork**; then **the campaign starts: BN1.1 on Steam from a fresh save** |
 | M5+ | Activities/actions in campaign-need order: `gang`, `bladeburner` route, `stocks`, `hacknet`, `corp`, `darknet`, `sleeves`, `stanek`, `go`, `casinoRun`, `infiltrationRun`… | Each with rates/effects in the fast model, a reflex, scenarios and health checks |
@@ -538,8 +551,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 - **Q2** Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
 - **Q9** Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.
-- **Q4** Simulator speed: how far can a discrete-event clock skip with the real engine (stock 4 s gate, script timers)? First answer from S1.
-- **Q5** The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default?
+- **Q4** ~~Simulator speed~~ Answered by S1: the engine is bound by how much computing the in-game code does, not by the clock. 10,000–37,000× lean, 50–700× heavy; see §9.1.
+- **Q5** The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default? (S1: the load path, including autoexec via `MainUILoaded`, runs in the simulator; terminal injection needs E2.)
 - **Q6** Verify the BN12 `sourceFileOverrides {12: 0}` behaviour in the simulator before relying on it.
 - **Q7** Where does the fork's hard-won RAM-dodging logic go, `ingame/workers` or `legacy/`?
-- **Q8** Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? S1 gives a first answer (the bundle shows what the engine drags in).
+- **Q8** Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? S1: importing the engine drags in the whole UI (894 game files plus React/MUI), though it runs fine in Node. Formula-only extraction is still open.
