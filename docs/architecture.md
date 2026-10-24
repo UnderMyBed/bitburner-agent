@@ -1,27 +1,29 @@
 # Architecture: Autonomous Bitburner Agent
 
 > Status: **DRAFT for review** · 2026-10-24
-> Inputs: `docs/synthesis.md`, `docs/mechanics/*.md`, `docs/scripts-compat-audit.md`
+> Inputs: [`synthesis.md`](synthesis.md), [`mechanics/`](mechanics/), [`research/`](research/), [`legacy/scripts-compat-audit.md`](legacy/scripts-compat-audit.md)
 > Conventions: **D#** = design decision, **Q#** = open question, **R#** = requirement.
 
 ---
 
 ## 1. Purpose
 
-Build one piece of software that takes a Bitburner save from **any valid state** to **every Source-File maxed** (SF1–11 and SF13–15 at level 3, plus SF12 to a target). It should get there **unattended, repeatably, and as fast as wall-clock allows**.
+Build one piece of software that takes a Bitburner save from **any valid state** to **every Source-File maxed** (SF1–11 and SF13–15 at level 3, plus SF12 to level 50, which is the CHALLENGE_BN12 achievement). It should get there **unattended, repeatably, and as fast as wall-clock allows**.
 
 It is **not** a scripted campaign. Behaviour that differs per BitNode should come from **data**: the multipliers, which mechanics are enabled, and which win routes are available. Hand-written `if BN == x` branches are not the approach.
 
 ### 1.1 Goals
-- G1: Reach the goal from a fresh save with human input limited to things that are impossible to automate (§10.1).
+- G1: Reach the goal from a fresh save with human input limited to things that are impossible to automate (§10.1). Manual play while the system is being built (e.g. BN1.1–1.2) is a scheduling choice, not a design limit.
 - G2: Survive any interruption (script death, reload, aug install, BitNode change, offline time, our own crashes) with no human repair.
 - G3: Prove repeatability in a simulator, as a measured pass rate across seeded scenarios.
 - G4: Minimise total wall-clock time to the goal.
 - G5: Make every decision explainable after the fact.
 
+**Priority when goals conflict:** robustness (G2) > correctness > speed (G4). The agent never risks a stall, a broken state or an irreversible mistake to go faster.
+
 ### 1.2 Non-goals
 - Achievements beyond what the goal requires; SF-1 (exploits) is excluded.
-- Supporting game versions other than the one pinned (§12.4).
+- Supporting older game versions. We support the current Steam release; during a rollout the next release is handled through runtime feature detection (§12.4).
 - Pretty UI. A functional dashboard is enough.
 - Claude (or any LLM) playing in the hot loop.
 
@@ -35,14 +37,15 @@ It is **not** a scripted campaign. Behaviour that differs per BitNode should com
 
 | # | Constraint | Consequence |
 |---|---|---|
-| C1 | Steam build **v3.0.1** (VersionNumber 51); Steam may auto-update | Pin the version and detect drift (§12.4) |
+| C1 | Steam build **v3.0.1** (VersionNumber 51); Steam updates whenever it ships (not pinned) | Pin the *source we test against*, detect drift at runtime, forward-check upstream `dev` (§12.4) |
 | C2 | Fresh save means **8 GB home RAM** and every NS function costs RAM | In-game code must be tiny, and expensive calls go in throwaway worker scripts |
 | C3 | RAM is charged by **identifier name** across all imported code; only `document`/`window` are special, and `eval("document")`, `WebSocket` and `fetch` are free | Bundling must be per-script and tree-shaken, with a RAM check in CI |
 | C4 | No Singularity until SF4; ×16, ×4 and ×1 RAM at SF4.1, 4.2 and 4.3 | All player actions go through an **Action API** with a UI backend and a Singularity backend |
 | C5 | All scripts die on aug install or BitNode change; autoexec runs only on game load; `installAugmentations(cb)` and `destroyW0r1dD43m0n(n, cb, opts)` take a callback script | Bootstrap must be re-entrant, with an explicit restart path per transition |
 | C6 | hack/grow/weaken run on wall-clock `setTimeout`; hacknet, work and stocks run on 200 ms game cycles | Sub-second logic must live in game; the simulator needs a virtual clock |
 | C7 | Electron sets `backgroundThrottling: false` | The game runs at full speed minimised. A brain process outside the game is viable. |
-| C8 | Real wall-clock time is the binding cost (~42 node clears plus BN12) | Optimise for time-to-destroy, and start running early |
+| C8 | Real wall-clock time is the binding cost (~42 node clears plus ~50 BN12 clears) | Optimise for time-to-destroy, and start running early |
+| C9 | The game runs 24/7 on the owner's machine. Offline time (reboots, updates) is the exception, and offline progress is lossy (no scripts run; approximated income/rep on reload). | Offline time is an interruption to survive (G2), never a strategy. The planner doesn't rely on offline progress, and the brain runs as a supervised always-on process. |
 
 ---
 
@@ -90,6 +93,8 @@ Simulator: same brain + same in-game bundles, running in Node against the real e
 - An extra transport hop. Not a problem for decisions made on a cadence of seconds or more; sub-second loops stay in game.
 
 **Alternative rejected:** everything in game, the way the fork works. It's RAM-starved, untestable, and needs file-based IPC.
+
+**Supervision:** the brain is an always-on process (C9). It runs under Windows Task Scheduler: started at logon, restarted on failure, and so back after reboots. No extra software is needed. Its health is visible on the dashboard. If it's down, the game is in safe mode (§5.4).
 
 ### D2 — Desired-state reconciliation, not command streams
 The brain publishes a **desired state**, a versioned, declarative document. The in-game Reconciler converges reality toward it with **idempotent** steps, Kubernetes-style.
@@ -187,7 +192,7 @@ Every **planning tick** (default 30 s, plus an event-driven re-plan on a state t
 1. **Score routes.** For each available route, estimate the time to reach every leaf under a candidate allocation. Route ETA is the critical path.
 2. **Allocate.** Choose an allocation of scarce resources that minimises the chosen route's ETA, subject to resource limits and a **switching cost**. Switching cost covers lost focus bonus, gang task churn, re-batching cost and so on, and gives hysteresis against thrashing.
    - v0: greedy, by the marginal reduction in ETA per unit of resource.
-   - Later: rollout search over the simulator's fast models.
+   - Later: rollout search over a **fast model**: a cheap, pure approximation of the game behind one interface. The real engine is only used for validation. The interface lets rollouts move to native code or the GPU without changing the planner (ADR 0006).
 3. **Decide prestige.** Compare the projected time to win if we **install now** against **continuing**, using estimators run with the post-install multipliers (§4.6).
 4. **Emit** a desired state together with a **decision record**: inputs, options considered, scores, and the choice.
 
@@ -285,7 +290,8 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ---
 
 ## 7. Telemetry and observability
-- **Store:** an append-only time series of snapshots (thinned for old data), decision records, estimate-vs-actual errors, reflex health, and transitions. SQLite to start.
+- **Store:** an append-only time series of snapshots (thinned for old data), decision records, estimate-vs-actual errors, reflex health, and transitions. SQLite to start, in the configurable data directory (ADR 0006).
+- **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup.
 - **Dashboard:** a local web page showing the current route and ETA, the allocation, capability rates (estimated against actual), a timeline of BitNodes and installs, and alerts.
 - **Alerts:** a stall (no progress on the route's critical path for X minutes), a reflex crash loop, estimate error above a threshold, brain disconnected, game version changed.
 
@@ -309,6 +315,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 - **Seeded RNG:** replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario.
 - **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine. The Action API uses its `sim` backend.
 - **Speed target:** at least **1000×** real time for hacking-dominated phases; measured, not assumed.
+- **Scale-out:** a worker pool, one engine instance per process. Size is `availableParallelism() − reserve`, about 12–14 on the reference rig. A suite (scenarios × seeds) fans out across the pool; results are aggregated into the repeatability metric.
 
 ### 9.2 Fidelity gaps (known and accepted)
 - The headless simulator doesn't render the UI. UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
@@ -380,9 +387,10 @@ real game ──telemetry──► store ◄──runs── simulator
 ## 12. Engineering
 
 ### 12.1 Language and build
-- TypeScript everywhere.
+- **TypeScript on Node** at the core: brain, bridge, simulator, dashboard, in-game code (ADR 0006).
 - In-game bundles are built per entry point with esbuild, tree-shaken and minified **without renaming NS identifiers**, then RAM-checked.
-- The brain, bridge, simulator and dashboard are Node packages.
+- **Rust (napi-rs)** only for profiled hot spots. **Python services** (GPU, ML, local LLM) only in Phase 4. Neither is present until needed.
+- Fast CI tiers run on GitHub-hosted runners. Heavy suites run locally on the reference rig through one command. There is no self-hosted runner, because the repo is public.
 
 ### 12.2 Repo shape (proposal — to be discussed)
 ```
