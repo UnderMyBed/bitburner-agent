@@ -1,0 +1,20 @@
+{
+  "name": "@bitburner-agent/sim",
+  "private": true,
+  "description": "Headless simulator: the real Bitburner engine in Node, on a virtual clock, deterministic from a seed (ADR 0007).",
+  "license": "MIT",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "setup:engine": "node scripts/setup-engine.ts",
+    "build:engine": "node scripts/build-engine.ts"
+  },
+  "dependencies": {
+    "@bitburner-agent/core": "*",
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.2"
+  },
+  "devDependencies": {
+    "@types/jsdom": "30.0.0"
+  }
+}

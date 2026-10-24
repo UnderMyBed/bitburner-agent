@@ -12,6 +12,8 @@
   },
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm test",
+    "setup:engine": "node packages/sim/scripts/setup-engine.ts",
+    "build:engine": "node packages/sim/scripts/build-engine.ts",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome ci --error-on-warnings .",
     "lint:fix": "biome check --write .",
