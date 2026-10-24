@@ -3,7 +3,7 @@
 - **Date:** 2026-10-24
 - **Question:** can the real game engine (`vendor/bitburner-src` @ `1da7316ff`, v3.0.1) run headless in plain Node, outside Jest, under a virtual clock, deterministically, and fast enough to iterate on?
 - **Verdict: PASS.** Every exit criterion in architecture §13 (S1) is met. The simulator design in §9 stands, with the corrections listed below. Decision recorded in [ADR 0007](../decisions/0007-headless-engine-simulator.md).
-- **Code:** [`spikes/s1-headless-engine/`](../../spikes/s1-headless-engine/) (throwaway; M2 rebuilds it test-first).
+- **Code:** [`spikes/s1-headless-engine/`](../../spikes/s1-headless-engine/) (throwaway; M1 rebuilds it test-first).
 
 ## How it works
 | Piece | What the spike does |
@@ -59,15 +59,15 @@ Other numbers:
    - **`window === globalThis`:** libraries leak globals that player scripts use. `sprintf-js` sets `window.sprintf`/`vsprintf`, and lodash sets `_` under webpack's AMD `define`.
    - **`MainUILoaded`:** emitted by `GameRoot` on mount. It starts the saved scripts **and autoexec**, so the boot path (§5.7, Q5) is testable in the simulator.
    - **The router:** the real `Router.toPage` has game-logic side effects. `Travel` calls `Player.gotoLocation`; `BitVerse` calls `prestigeWorkerScripts` and `calculateAchievements`. The sim router must reproduce these.
-   - **IndexedDB:** missing. The pre-v3 save migration's backup export and `saveGame` fail harmlessly; M2 adds a fake IndexedDB.
-   - **TS/JSX player scripts:** these need swc. The spike stubs it, since our bundles are plain JS; M2 maps to `@swc/core` if needed, as Jest does.
+   - **IndexedDB:** missing. The pre-v3 save migration's backup export and `saveGame` fail harmlessly; M1 adds a fake IndexedDB.
+   - **TS/JSX player scripts:** these need swc. The spike stubs it, since our bundles are plain JS; M1 maps to `@swc/core` if needed, as Jest does.
 3. **A new game starts the interactive tutorial.** On v3.0.1, while it runs, `killWorkerScript` returns early (`src/Netscript/killWorkerScript.ts`), so **scripts that finish are never cleaned up and their RAM is never freed**.
    - Fixed on `dev`, but present on Steam.
    - **The agent's BN1.1 bootstrap on a fresh save must end the tutorial first** (the Skip button calls `iTutorialEnd`). This is an M3 requirement.
 4. **DOM-dependent scripts fail headless.** No UI is rendered, so anything reading game DOM fails. In the fork that's the HUD/stats overlay, the stock summary and the casino's save-button lookup; for us it's our `ui` effectors. As planned, those are covered by E2 (§9.2).
 5. **Q8 (formula import), first answer:** the engine can't be imported without pulling in the whole UI. The bundle has 894 game source files plus React, MUI, Markdown and so on, but it runs in Node regardless. Extracting formula modules for `core/` without UI deps is still open.
 
-## M2 work list (from the spike)
+## M1 work list (from the spike)
 - Rebuild the harness test-first in `packages/sim`.
   - Same mechanisms.
   - A determinism regression test: same seed gives the same hash; step-size invariance.

@@ -94,7 +94,7 @@ Simulator: same brain + same in-game bundles, running in Node against the real e
 
 **Alternative rejected:** everything in game, the way the fork works. It's RAM-starved, untestable, and needs file-based IPC.
 
-**Supervision:** the brain is an always-on process (C9). It runs under Windows Task Scheduler: started at logon, restarted on failure, and so back after reboots. No extra software is needed. Its health is visible on the dashboard. If it's down, the game is in safe mode (§5.4).
+**Supervision:** the brain is an always-on process (C9). It runs under Windows Task Scheduler: started at logon, restarted on failure, and so back after reboots. No extra software is needed. Its health is visible on the dashboard. If it's down, the game is in safe mode (§5.4). The brain in turn keeps the game itself alive (§10.2).
 
 ### D2 — Desired-state reconciliation, not command streams
 The brain publishes a **desired state**, a versioned, declarative document. The in-game Reconciler converges reality toward it with **idempotent** steps, Kubernetes-style.
@@ -452,19 +452,38 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 ## 10. Robustness requirements
 | # | Requirement |
 |---|---|
-| R1 | **Crash-only.** Every component can be killed at any time; on restart it rebuilds from a snapshot plus persisted keys. No important state lives only in memory. |
-| R2 | **Idempotent effects.** Every irreversible action (buy, install, flume, join an exclusive faction) is an intent with a key, a guard and a recorded outcome. |
+| R1 | **Crash-only.** Every component can be killed at any time; on restart it rebuilds from a snapshot plus persisted brain state (§4.1). No important state lives only in memory. |
+| R2 | **Idempotent effects.** Every irreversible action (buy, install, flume, join an exclusive faction) is an intent with a key, a guard and a recorded outcome. Idempotency is judged from game state first, with the ledger as backstop (§5.3). |
 | R3 | **Brain-optional progress** (§5.4). |
 | R4 | **Bounded in-game RAM.** Agent ≤ 3 GB; every bundle's static RAM is checked in CI and verified live via RFA `calculateRam`. |
 | R5 | **Graceful degradation.** A failing activity is marked unhealthy and the planner re-routes around it. |
 | R6 | **Version pinning and drift detection** (§12.4). |
 | R7 | **Explainability.** Every desired-state version links to its decision record. |
-| R8 | **Rate-limited and confirmed irreversibles.** Installs and flumes require the guard to pass on two consecutive snapshots. |
+| R8 | **Rate-limited and confirmed irreversibles.** Installs and flumes require the guard to pass on two consecutive snapshots, and a save backup is taken first (§6). |
+| R9 | **Liveness.** The brain detects a dead or frozen game (no snapshot for N minutes while the brain is up) and a stalled route (no critical-path progress), and alerts on the dashboard. See §10.2 for automatic recovery. |
+| R10 | **Long-run hygiene (24/7).** The game compiles each distinct script source into a module that is never garbage-collected (S1). So in-game code never generates scripts with unique source text: variation goes in arguments and ports, not code. Reflex state is bounded. The Agent reports the page's heap use (`performance.memory`, free through `eval("window")`), so growth is visible before it hurts. |
+| R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps
-1. Install Steam, set the RFA port, and set autoexec to `boot.js` in game options. One time.
-2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase.
+1. Install Steam, set the RFA port, set autoexec to `boot.js` in game options, and install the Task Scheduler tasks (one setup script). One time.
+2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
+4. Interruptions outside the game (Windows reboots, Steam client updates, power loss) are recovered automatically (§10.2). A human is needed only if recovery gives up and raises an alert.
+
+### 10.2 Recovery: the game is relaunched automatically
+The goal is unattended play (C9), so recovery doesn't wait for a human.
+- **Who:**
+  - The same Windows Task Scheduler setup that supervises the brain (D1) also starts Bitburner at logon, through Steam (`steam://rungameid/<appid>`).
+  - Autoexec then runs `boot.js` (§5.7), so a reboot is a short interruption, not a stop.
+- **Dead game** (process gone): the brain's supervisor relaunches it the same way.
+- **Frozen game** (process alive, no snapshot for N minutes, and the Agent unreachable):
+  - The supervisor ends the game process and relaunches it.
+  - At most the progress since the last autosave is lost, plus the time offline.
+  - This is process management only. Nothing touches game code or the save.
+- **Guards:**
+  - Relaunches are rate-limited. After K failures in an hour the supervisor stops and raises a dashboard alert, so we don't get a crash loop.
+  - Every relaunch is logged with its cause.
+- **Pause switch:** the dashboard has a "pause supervision" toggle. While it's on, nothing is relaunched, so the owner can close the game deliberately without the supervisor fighting them.
 
 ---
 
@@ -476,6 +495,9 @@ real game ──telemetry──► store ◄──runs── simulator
                            │
                      versioned model params ──► brain
 ```
+- **One store for both worlds:** live telemetry and simulator runs go into the same SQLite store (§7). Every record is tagged with environment (E0/E1/E2), release, scenario and seed.
+- **Calibration jobs** fit fast-model corrections, the per-BitNode duration table and the timing-jitter model. They run on demand like the other heavy suites.
+- **Model params are code.** Calibration output is a versioned data file that ships through the normal merge gate: PR, CI including the scenario suite, independent review, tagged release. A behaviour change never reaches the live game without the same checks as a code change. This is the same rule as LLM supervisor proposals (§8).
 
 ---
 
@@ -487,7 +509,8 @@ real game ──telemetry──► store ◄──runs── simulator
 - **Rust (napi-rs)** only for profiled hot spots. **Python services** (GPU, ML, local LLM) only in Phase 4. Neither is present until needed.
 - Fast CI tiers run on GitHub-hosted runners. Heavy suites run locally on the reference rig through one command. There is no self-hosted runner, because the repo is public.
 
-### 12.2 Repo shape (proposal — to be discussed)
+### 12.2 Repo shape
+An npm-workspaces monorepo. Packages are created when the first code that needs them lands, not up front.
 ```
 packages/
   game-types/   generated from NetscriptDefinitions.d.ts (pinned) + live drift check
@@ -495,10 +518,14 @@ packages/
   brain/        fast model, planner (campaign/BitNode/cycle), activities, actions, rules file
   ingame/       agent, reconciler, workers, reflexes, effectors (singularity|ui|sim), boot.js
   bridge/       RFA server + control channel
-  sim/          engine harness, virtual clock, scenarios, chaos
+  sim/          engine bundle, browser parity layer, virtual clock, scenarios, chaos, worker pool (ADR 0007)
   dashboard/    local web UI
   legacy/       retired-fork scripts (MIT, with notice) + adapters that run them as reflexes; also the simulator baseline
+spikes/         throwaway experiments; findings in docs/spikes/
+vendor/         bitburner-src submodule (pinned, read-only)
 ```
+- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `dashboard` reads the store only. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
+- **Real saves stay local:** Steam save copies used as fixtures live in a gitignored folder. The public repo only carries fixtures generated by the simulator.
 
 ### 12.3 Migration from the fork (strangler pattern)
 The fork is retired and does **not** play the campaign; the agent plays from BN1.1. The fork's proven parts live on in three ways:
@@ -524,8 +551,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 |---|---|---|
 | M0 | Legacy fork retired (upstream merged, archived); repo bootstrapped; design reviewed | ✅ Done |
 | S1 | **Simulator spike** (time-boxed, throwaway code under `spikes/`). The whole plan depends on iterating in simulation, so this went first. | ✅ Passed ([report](spikes/s1-headless-engine.md), ADR 0007): headless outside Jest, deterministic, step-invariant, exact save round trip, real Steam saves load and play, 50–37,000× depending on workload |
-| M1 | Walking skeleton: bridge, Agent, snapshot, telemetry, dashboard (observe-only); E2 source build plus Playwright harness | Skeleton passes E2 (connect, snapshot, reload, reconnect) in an 8 GB fresh start; then live snapshots on Steam for 24 h without gaps |
-| M2 | Simulator core, rebuilt test-first from S1 (its M2 work list): engine, browser parity layer, virtual clock, seeded RNG, worker pool, scenario fixtures; runs the legacy fork from BN1 with SF4.3 to a destroy, which is the baseline (§12.3) | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
+| M1 | Toolchain and CI first (workspace, test runner, contract and RAM checks, forward-check workflow; then branch protection). Then the simulator core, rebuilt test-first from S1 (its work list): engine, browser parity layer, virtual clock, seeded RNG, worker pool, scenario fixtures. Runs the legacy fork from BN1 with SF4.3 to a destroy, which is the baseline (§12.3). Built first so every later milestone is tested against it. | Deterministic replay of a seed; each browser parity item tested; ≥1000× on a lean hacking workload; fork baseline time-to-destroy recorded |
+| M2 | Walking skeleton: bridge, Agent, snapshot, telemetry, dashboard (observe-only), liveness and recovery (§10.2); E2 source build plus Playwright harness | Skeleton passes in the simulator and on E2 (connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start); then live snapshots on Steam for 24 h without gaps |
 | M3 | Effectors (`ui` and `sim` backends) plus bootstrap/restart paths. **Critical path for BN1.1.** | Every BN1 effector and the UI-driven install-and-restart cycle pass E2 tests on the source build and simulator chaos tests; real-game smoke test |
 | M4 | Fast model + planner v0 (all three levels, candidate-policy rollouts). Activities: `hwgw`, `factionWork`, `companyWork`, `crime`, `classes`. Actions: `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`. WorldDaemon route. | Fast-model fidelity within tolerance on BN1 scenarios; autonomous BN1→destroy in the simulator over N seeds, **at least as fast as the legacy fork**; then **the campaign starts: BN1.1 on Steam from a fresh save** |
 | M5+ | Activities/actions in campaign-need order: `gang`, `bladeburner` route, `stocks`, `hacknet`, `corp`, `darknet`, `sleeves`, `stanek`, `go`, `casinoRun`, `infiltrationRun`… | Each with rates/effects in the fast model, a reflex, scenarios and health checks |
@@ -538,8 +565,10 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 |---|---|---|
 | Fast model diverges from the game, so plans are poor | Slow runs | Fidelity metric with a tolerance gate, estimate-vs-actual monitoring, calibration, simulator A/B before deploy |
 | Over-engineering delays real progress | Lost wall-clock time | The campaign doesn't start until M4, so M1–M4 stay lean vertical slices; a minimal activity/action set for M4 |
-| Simulator fidelity gaps | False confidence | Real-game smoke tier; calibrate jitter; track sim-vs-real divergence |
+| Simulator fidelity gaps, especially a UI side effect missing from the browser parity layer | False confidence | Each parity item has a test; re-audit when the pinned version moves; real-game smoke tier; calibrate jitter; track sim-vs-real divergence (§9.2) |
+| Simulator too slow for heavy workloads (50–700× measured) | Slow scenario suites in late-game nodes | Worker pool; lean in-game code (`disableLog`, no code generation); long horizons on the fast model; profile, then optimise the harness or move hot paths (ADR 0006) |
 | Brain process down for long stretches | Suboptimal play | Safe mode; auto-start; alerts |
+| Game process dead, frozen or bloated (24/7 run) | Lost wall-clock time | Liveness detection and recovery (R9, §10.2); heap monitoring and no code generation (R10); save backups |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher PRs, runtime hold, save backups (§12.4) |
 | UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
 | 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; the Agent degrades to a slow cadence when RAM-starved |
@@ -547,12 +576,15 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 ---
 
 ## 15. Open questions
-- **Q1** In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? Prototype in M1.
+- **Q1** In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? Measured in M2. The simulator uses the engine's own RAM calculator, so the numbers are exact before E2.
 - **Q2** Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
 - **Q9** Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.
 - **Q4** ~~Simulator speed~~ Answered by S1: the engine is bound by how much computing the in-game code does, not by the clock. 10,000–37,000× lean, 50–700× heavy; see §9.1.
 - **Q5** The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default? (S1: the load path, including autoexec via `MainUILoaded`, runs in the simulator; terminal injection needs E2.)
 - **Q6** Verify the BN12 `sourceFileOverrides {12: 0}` behaviour in the simulator before relying on it.
-- **Q7** Where does the fork's hard-won RAM-dodging logic go, `ingame/workers` or `legacy/`?
+- **Q7** ~~Where does the fork's RAM-dodging logic go?~~ Resolved:
+  - The fork's version generates a temp script with unique source text per call, and S1 found that leaks a module each time (R10).
+  - `ingame/workers` is a fixed set of prebuilt worker scripts that take arguments and return results over ports.
+  - The fork's version lives only in `legacy/`.
 - **Q8** Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? S1: importing the engine drags in the whole UI (894 game files plus React/MUI), though it runs fine in Node. Formula-only extraction is still open.
