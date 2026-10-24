@@ -1,0 +1,27 @@
+{
+  "name": "bitburner-agent",
+  "private": true,
+  "description": "An autonomous agent that plays Bitburner from a fresh save to every Source-File maxed.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "npm run typecheck && npm run lint && npm test",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "biome ci --error-on-warnings .",
+    "lint:fix": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
