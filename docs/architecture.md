@@ -371,20 +371,30 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ## 8. LLM and ML roles (deliberately narrow)
 | Role | What | When |
 |---|---|---|
-| Estimator calibration (ML) | Fit correction terms from telemetry and simulator runs | Phase 4 |
-| Planner search | Rollouts over fast models; learned value function only if search is too slow | Later, if needed |
+| Fast-model calibration (ML) | Fit correction terms to the fast model from telemetry and simulator runs. Small models, trainable on the local GPU. | Phase 4, or earlier if fidelity demands it |
+| Planner search | Rollouts over the fast model. GPU-batched rollouts are the scale-up path (ADR 0006). A learned value function only if search is too slow. | After planner v0 |
 | Go engine | Search with the exact ported AI as the opponent; **no reinforcement learning** | With the `go` activity |
-| LLM supervisor (optional) | Reads the decision log and telemetry; diagnoses stalls; proposes rules-file changes **for human approval**; never in the control loop | Phase 4 experiment |
+| LLM supervisor (optional) | A **local model** on the GPU (~30B class fits in 32 GB). Never in the control loop. | Phase 4 experiment |
+
+**LLM supervisor details:**
+- **Event-driven:** it wakes on a stall, a hold, large fast-model divergence or a reflex crash loop, not on a timer.
+- **Read-only on the game:** it reads the decision log and telemetry and writes a diagnosis into the decision log, which the dashboard shows. It has no channel to the live game.
+- **Proposals go through the normal merge gate:** a proposed change (e.g. a rules-file edit) becomes a PR and is subject to the same CI and independent review as any change. It ships only in a tagged release. No human approval step; proposals show up in release notes.
 
 ---
 
 ## 9. Simulator
 
 ### 9.1 Design
-- **Engine:** the real `vendor/bitburner-src` code in Node, bootstrapped the way its Jest tests already do (`initGameEnvironment`, `setupBasicTestingEnvironment`, NS script execution).
-- **Virtual clock:** fake `setTimeout`/`setInterval`/`Date`/`performance.now`. Game cycles are driven through `Engine.updateGame(numCycles)`. Time advances to the next event, discrete-event style.
-- **Seeded RNG:** replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario.
-- **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine. Effectors use their `sim` backend.
+- **Engine:** the real `vendor/bitburner-src` code in plain Node, bootstrapped the way its Jest tests do (`initGameEnvironment`, `setupBasicTestingEnvironment`, NS script execution). Outside Jest this needs our own bundle of the engine, DOM stubs, and the module patches the tests apply (dynamic script import, `Router`, dialogs). **Unproven until the simulator spike (§13, S1) passes.**
+- **Virtual clock:** fake `setTimeout`/`setInterval`/`Date`/`performance.now` (e.g. `@sinonjs/fake-timers`). Game cycles are driven through `Engine.updateGame(numCycles)`. Time advances to the next event, discrete-event style.
+- **Determinism:**
+  - Replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario.
+  - The fake `Date` also pins the game's clock-seeded randomness (roulette seed, Circadian Modulator).
+  - Execution is single-threaded and every timer is virtual, so script interleaving is a function of the seed. A replay test proves it: same seed, same state hash.
+- **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine.
+- **`sim` effectors** call engine internals directly (e.g. the function a UI button calls). They never grant Source-Files to unlock Singularity, because that would change the state under test.
+- **Scenario fixtures:** starting states (each BitNode entry with a given Source-File set, plus odd mid-run states) are built through the engine's own prestige functions. Real Steam saves join as fixtures under the one-way save rule (§9.4).
 - **Speed target:** at least **1000×** real time for hacking-dominated phases; measured, not assumed.
 - **Scale-out:** a worker pool, one engine instance per process. Size is `availableParallelism() − reserve`, about 12–14 on the reference rig. A suite (scenarios × seeds) fans out across the pool; results are aggregated into the repeatability metric.
 
@@ -396,14 +406,15 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ### 9.3 Test pyramid
 | Level | What | Gate |
 |---|---|---|
-| Unit | Activity rates and action effects against game formulas; fast-model step invariants; planner levels on fixed models; reconciler diffing | Every commit |
-| Contract | In-game bundles type-check against the **live** `NetscriptDefinitions.d.ts`; static RAM ≤ budget | Every commit |
+| Unit | Activity rates and action effects against game formulas (formula parity); fast-model step invariants; planner levels on fixed models; reconciler diffing | Every PR (CI) |
+| Property | Reconciler convergence and idempotency, protocol handling of dropped/duplicated/reordered messages, planner invariants, under randomised inputs | Every PR (CI) |
+| Contract | In-game bundles type-check against the pinned `NetscriptDefinitions.d.ts`; static RAM ≤ budget | Every PR (CI) |
 | Scenario (simulator) | Seeded runs: fresh BN1.1→destroy; entry into each BitNode with representative Source-File sets; odd mid-run states | On demand when touching brain/activities/actions; before every release. Includes **fast-model fidelity** (divergence from the engine over a horizon). |
 | Chaos (simulator) | Kill random scripts, drop the brain, reload mid-batch, offline gaps, duplicated messages | Before every release |
 | End-to-end (E2 source build) | UI driver actions, bootstrap/restart paths (Q5), Agent RAM in a real 8 GB start (Q1), bridge connect/reconnect, RFA deploy, real save/reload | On demand when touching `ingame/` or `bridge/`; before every release |
-
-No scheduled (nightly) runs. The heavy suites are run deliberately, not on a timer.
 | Smoke (E0 Steam) | Short checklist confirming E2 results hold on the shipped binary | Before relying on a new UI path in the campaign |
+
+No scheduled (nightly) runs. The heavy suites are run deliberately, not on a timer. Mutation testing runs periodically on core logic (ADR 0004).
 
 **Repeatability metric:** the pass rate and the time-to-destroy distribution per scenario. A release can't regress either beyond a threshold.
 
@@ -478,7 +489,7 @@ packages/
 
 ### 12.3 Migration from the fork (strangler pattern)
 The fork is retired and does **not** play the campaign; the agent plays from BN1.1. The fork's proven parts live on in three ways:
-1. **Baseline:** the fork (autopilot + daemon, with `sim` effectors standing in for its manual steps) runs in the simulator as the benchmark the planner must beat (M4 exit).
+1. **Baseline:** the fork (autopilot + daemon) runs in the simulator as the benchmark the planner must beat (M4 exit). The fork needs a human without SF4, so the fair comparison starts both from the **same BN1 state with SF4.3**, where the fork is fully automatic. For BN1.1 itself (no SF4) the agent is held to absolute targets instead: time-to-destroy and pass rate.
 2. **Legacy reflexes:** fork managers (batcher, stocks, gang, Bladeburner) run under the agent through `legacy/` adapters, while the brain owns strategy.
 3. **Replacement:** legacy reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
 
@@ -499,8 +510,9 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 | M | Deliverable | Exit criterion |
 |---|---|---|
 | M0 | Legacy fork retired (upstream merged, archived); repo bootstrapped; design reviewed | ✅ Done |
+| S1 | **Simulator spike** (time-boxed, throwaway code under `spikes/`). The whole plan depends on iterating in simulation, so this goes first. Report in `docs/spikes/`. | Real engine runs headless **outside Jest** under a virtual clock; a real NS hack script runs; two runs with the same seed give the same state hash; first speed number. **If it fails:** E2 (browser build + Playwright clock) becomes the simulator, and §9 and M2 are re-planned. |
 | M1 | Walking skeleton: bridge, Agent, snapshot, telemetry, dashboard (observe-only); E2 source build plus Playwright harness | Skeleton passes E2 (connect, snapshot, reload, reconnect) in an 8 GB fresh start; then live snapshots on Steam for 24 h without gaps |
-| M2 | Simulator core: engine, virtual clock, seeded RNG; runs the legacy fork (with `sim` effectors for its manual steps) to a BN1 destroy, which is the baseline | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
+| M2 | Simulator core, productionised from S1: engine, virtual clock, seeded RNG, worker pool, scenario fixtures; runs the legacy fork from BN1 with SF4.3 to a destroy, which is the baseline (§12.3) | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
 | M3 | Effectors (`ui` and `sim` backends) plus bootstrap/restart paths. **Critical path for BN1.1.** | Every BN1 effector and the UI-driven install-and-restart cycle pass E2 tests on the source build and simulator chaos tests; real-game smoke test |
 | M4 | Fast model + planner v0 (all three levels, candidate-policy rollouts). Activities: `hwgw`, `factionWork`, `companyWork`, `crime`, `classes`. Actions: `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`. WorldDaemon route. | Fast-model fidelity within tolerance on BN1 scenarios; autonomous BN1→destroy in the simulator over N seeds, **at least as fast as the legacy fork**; then **the campaign starts: BN1.1 on Steam from a fresh save** |
 | M5+ | Activities/actions in campaign-need order: `gang`, `bladeburner` route, `stocks`, `hacknet`, `corp`, `darknet`, `sleeves`, `stanek`, `go`, `casinoRun`, `infiltrationRun`… | Each with rates/effects in the fast model, a reflex, scenarios and health checks |
@@ -526,8 +538,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 - **Q2** Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
 - **Q9** Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.
-- **Q4** Simulator speed: how far can a discrete-event clock skip with the real engine (stock 4 s gate, script timers)?
+- **Q4** Simulator speed: how far can a discrete-event clock skip with the real engine (stock 4 s gate, script timers)? First answer from S1.
 - **Q5** The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default?
 - **Q6** Verify the BN12 `sourceFileOverrides {12: 0}` behaviour in the simulator before relying on it.
 - **Q7** Where does the fork's hard-won RAM-dodging logic go, `ingame/workers` or `legacy/`?
-- **Q8** Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? Spike in M2.
+- **Q8** Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? S1 gives a first answer (the bundle shows what the engine drags in).

@@ -54,7 +54,8 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 | Milestone | Deliverable | Status |
 |---|---|---|
 | Design | Mechanics analysis, architecture, decision records | ✅ |
-| M1 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only) | ⏳ next |
+| S1 | Simulator spike: prove the real engine runs headless in Node, deterministically, fast | ⏳ in progress |
+| M1 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only) | |
 | M2 | Simulator core: headless engine, virtual clock, seeded RNG | |
 | M3 | Effectors (UI and Singularity backends), restart-after-reset | |
 | M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then **the live campaign starts at BN1.1 from a fresh save** | |
