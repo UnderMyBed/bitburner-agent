@@ -5,9 +5,11 @@
 export interface EngineApi {
   /** The game's own `CONSTANTS.VersionNumber`. */
   versionNumber(): number;
+  /** The game's own `commitHash()`: the short commit the build was made from, as webpack injects it. */
+  gameCommit(): string;
 }
 
-const API_FUNCTIONS = { versionNumber: true } satisfies Record<keyof EngineApi, true>;
+const API_FUNCTIONS = { versionNumber: true, gameCommit: true } satisfies Record<keyof EngineApi, true>;
 
 export function assertEngineApi(exports: unknown): asserts exports is EngineApi {
   if (typeof exports !== "object" || exports === null) throw new Error("engine bundle exports nothing");

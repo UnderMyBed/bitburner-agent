@@ -4,6 +4,6 @@ import { loadEngine } from "../../src/host/load-engine.ts";
 
 if (!process.argv.includes("--no-dom")) installDom();
 const engine = loadEngine();
-process.stdout.write(JSON.stringify({ versionNumber: engine.versionNumber() }));
+process.stdout.write(JSON.stringify({ versionNumber: engine.versionNumber(), gameCommit: engine.gameCommit() }));
 // The game starts module-level timers on import; exit explicitly instead of waiting for them.
 process.exit(0);

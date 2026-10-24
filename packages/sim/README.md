@@ -1,62 +1,92 @@
 # @bitburner-agent/sim
 
-The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node, running on a virtual clock and deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
+The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node. When complete, it will run on a virtual clock, deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
 > **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it builds the engine bundle and loads it under a headless DOM. The clock, sessions, scripts, saves and scenarios follow in later tasks.
 
 ## Setup
 
 ```sh
-npm run setup:engine   # once, and after the game submodule changes: installs the game's own dependencies
+npm run setup:engine   # once, and again whenever the game submodule is bumped
 npm run build:engine   # bundles the engine (also done automatically before tests); add -- --force to rebuild
 ```
 
-- **`setup:engine`** runs `npm ci --ignore-scripts` inside `vendor/bitburner-src`, with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`. It uses the game's own lockfile, so the simulator runs exactly the dependency versions the game ships with. It only writes the submodule's gitignored `node_modules`; tracked files are never touched.
-- **`build:engine`** writes `dist/engine.cjs` (the bundle) and `dist/engine.meta.json`.
-  - The meta file holds an inputs fingerprint (game commit, build code, entry sources, esbuild version) plus a bundle report: size, input count, game files, packages.
-  - The build is skipped when the fingerprint is unchanged.
-  - If the game's dependencies are missing, it fails with an error naming `setup:engine`.
+- **`setup:engine`** installs the game's own dependencies from its lockfile, so the simulator runs exactly the versions the game ships with.
+  - It runs `npm ci --ignore-scripts` inside `vendor/bitburner-src`, with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`.
+  - On success it writes a stamp recording which lockfile it installed (`node_modules/.bitburner-agent-setup.json`).
+  - It only writes the submodule's gitignored `node_modules`; tracked files are never touched.
+- **`build:engine`** writes three files to `dist/`:
+
+  | File | What |
+  |---|---|
+  | `engine.cjs` | The bundle |
+  | `engine.cjs.map` | Its source map, back to the game's source |
+  | `engine.meta.json` | An inputs fingerprint plus a bundle report: size, input count, game files, packages, stubs used |
+
+  - The build is **skipped** when the fingerprint is unchanged. The fingerprint covers the game's commit, any uncommitted changes in it, the game's lockfile, the build code, our bundled sources and the esbuild version.
+  - Outputs are written to temporary files and renamed into place, so a concurrent load never sees a half-written bundle.
+- **`npm test` needs setup first.** The test runner builds the bundle before any test runs (`test/global-setup.ts`), including tests in other packages. Watch mode doesn't rebuild it: re-run `build:engine` after changing `src/engine/bundle/`.
 
 ## How the bundle is built
 
-`src/engine/build.ts` bundles `src/engine/entry.ts` together with the game's source using esbuild. The module mapping is **derived from the game's own `jest.config.js`**:
+`src/engine/build.ts` bundles `src/engine/bundle/entry.ts` together with the game's source using esbuild.
+- **Target:** the game is built for the **web** (webpack `target: "web"`), so the bundle uses esbuild's browser platform. Dependencies resolve their browser variants, as in the real game.
+- **Module mapping:** derived from the game's own `jest.config.js` and `webpack.config.js`.
 
-| Import | Jest | Here |
+| Import | Game (Jest / webpack) | Here |
 |---|---|---|
-| CSS, images, fonts, audio | Mocks | Empty modules |
+| CSS and assets (images, fonts, audio, video) | Mocked in Jest | Empty modules (same extension list as Jest) |
 | `@player`, `@enums` | Path aliases | Same aliases |
-| `@nsdefs` (the NS type definitions) | Path alias | Empty module (types only, nothing at runtime) |
-| `monaco-editor`, `monaco-vim` | Null mock | Empty CommonJS module (`src/engine/stubs/null.cjs`) |
-| `*?raw` (documentation pages) | File mock | **The file's text**, as webpack's `asset/source` does |
-| `@swc/wasm-web` (transpiles `.ts`/`.jsx` player scripts) | Mapped to native `@swc/core` | **Stub that throws.** Our in-game code is plain JS; TS/JSX player scripts are a documented parity gap |
-| `/utils/Protections` | Null mock | Not needed: the entry never imports `index.tsx`, the only importer |
+| `@nsdefs` (the NS type definitions) | Path alias to the `.d.ts` | No mapping needed: its imports are type-only and erased |
+| `monaco-editor`, `monaco-vim` | Null mock in Jest | Empty CommonJS module (`stubs/null.cjs`) |
+| `*?raw` (documentation pages) | File mock in Jest; text in webpack | **The file's text**, as webpack does |
+| `@swc/wasm-web` (transpiles `.ts`/`.jsx` player scripts) | Native `@swc/core` in Jest | **Stub that throws.** See "Known gaps" |
+| `crypto` (Node built-in) | `fallback: { crypto: false }` in webpack | Empty module (`stubs/node-builtin.js`), the same |
+| `/utils/Protections` | Null mock in Jest | Not needed: the entry never imports `index.tsx`, the only importer |
+| `__COMMIT_HASH__` | webpack injects `git rev-parse --short HEAD` | Same value, so `ns.ui.getGameInfo().commit` matches the game |
 
-The entry imports the game's `engine` module, so the bundle contains the whole game and its UI dependencies (React, MUI and so on). That's harmless at runtime and makes loading the bundle exercise the real module graph (S1 found about 900 game files).
+The entry imports the game's `engine` module, so the bundle contains the whole game and its UI dependencies (React, MUI and so on), about 16 MB. That's harmless at runtime and makes loading the bundle exercise the real module graph.
 
 ## Typecheck boundary
 
-`src/engine/entry.ts` imports the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this one file. Everything else here is typechecked as usual.
+`src/engine/bundle/entry.ts` imports the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this one file. Everything else here is typechecked as usual.
 
-The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`.
+The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`. `EngineApi` contains functions only.
 
-## Loading the engine
+## Inside a simulation process
+
+This is host-internal: later tasks wrap it in a session API that runs it in a child process. Don't import these from other packages.
 
 ```ts
-import { installDom } from "./src/host/dom.ts";
-import { loadEngine } from "./src/host/load-engine.ts";
-
-installDom();               // must come first: the game touches window/document while its modules load
+installDom();               // first: the game touches window/document while its modules load
 const engine = loadEngine(); // dist/engine.cjs, checked against EngineApi
 ```
 
-- **`installDom()`** installs jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`: `adoptedStyleSheets` and `CSSStyleSheet.replaceSync`.
-- **Run it in its own process.** Game state is global, so each simulation gets its own process. The game also starts module-level timers when it loads, so a process that loaded it exits explicitly rather than waiting for them.
+**`installDom()`** (`src/host/dom.ts`) installs jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`:
+- **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept; later tasks patch these.
+- **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
+- **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance` resolve to the globals at call time, and a virtual clock installed later covers both. `requestAnimationFrame` runs on those timers too, not on real time.
+
+**One simulation per process.** Game state is global. The game also starts module-level timers when it loads, so a process that loaded it must exit explicitly rather than waiting for them.
+
+## Known gaps
+
+- **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS. This will be tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)).
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| "The game's dependencies are not installed" / "are out of date" | Run `npm run setup:engine`. Needed after a fresh clone and after the submodule's lockfile changes. |
+| `ReferenceError: <something> is not defined` while loading the bundle | `installDom()` didn't run before `loadEngine()`. |
+| A process that loaded the engine never exits | The game's module-level timers keep it alive. Call `process.exit()` when done. |
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/engine/` | Build (`build.ts`, `paths.ts`), the bundle entry, `EngineApi`, module stubs |
+| `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
+| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts` and module stubs |
 | `src/host/` | Code that runs inside a simulation process (DOM, engine loading) |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts` (run by the root `npm run` scripts) |
-| `test/` | Unit and integration tests; `global-setup.ts` builds the bundle before tests run |
+| `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` run in child processes |

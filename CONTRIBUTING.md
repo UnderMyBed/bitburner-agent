@@ -92,9 +92,9 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 
 | Command | What it does |
 |---|---|
-| `npm run typecheck` | TypeScript, strict (unused locals/parameters are errors), every `.ts` file under `packages/` (no emit; Node runs `.ts` directly) |
+| `npm run typecheck` | TypeScript, strict (unused locals/parameters are errors), every `.ts` file under `packages/` except the simulator's bundle entry (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)); no emit, Node runs `.ts` directly |
 | `npm run lint` / `npm run lint:fix` | Biome lint and format check, warnings are errors / apply fixes |
-| `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/` (builds the engine bundle first if it's stale) |
+| `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/`. Builds the engine bundle first if it's stale, so it needs `npm run setup:engine` once |
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
 
 Code lives in npm workspaces under `packages/` (see architecture §12.2). `spikes/` is throwaway and excluded from the gates.

@@ -2,5 +2,5 @@
   "extends": "./tsconfig.base.json",
   "include": ["packages/**/*.ts", "*.ts"],
   // Bundled together with the game, which builds under its own TypeScript setup (packages/sim/README.md).
-  "exclude": ["packages/sim/src/engine/entry.ts"]
+  "exclude": ["packages/sim/src/engine/bundle/entry.ts"]
 }

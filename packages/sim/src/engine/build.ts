@@ -1,16 +1,22 @@
-// Builds dist/engine.cjs: the game's source plus entry.ts, bundled for plain Node (ADR 0007).
+// Builds dist/engine.cjs: the game's source plus bundle/entry.ts, bundled for plain Node (ADR 0007).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
 import { enginePaths } from "./paths.ts";
+import { checkVendorInstall, lockfileHash } from "./vendor.ts";
 
+/** Everything that can change the bundle. */
 export interface EngineInputs {
   vendorCommit: string;
+  /** Uncommitted changes in the game's working tree (normally empty: the submodule is read-only). */
+  vendorWorkingTree: string;
+  /** The game's lockfile, which pins the dependency versions that get bundled. */
+  vendorLockfile: string;
   buildScript: string;
-  /** Path (relative to src/engine) → content. */
-  entrySources: Record<string, string>;
+  /** Path (relative to src/engine/bundle, forward slashes) → content. */
+  bundleSources: Record<string, string>;
   esbuildVersion: string;
 }
 
@@ -19,6 +25,8 @@ export interface BundleReport {
   inputs: number;
   gameFiles: number;
   packages: string[];
+  /** Our stub modules that the mapping actually used. */
+  stubs: string[];
 }
 
 export interface BuildResult {
@@ -28,49 +36,57 @@ export interface BuildResult {
 }
 
 export function engineFingerprint(inputs: EngineInputs): string {
-  const sources = Object.keys(inputs.entrySources)
+  const sources = Object.keys(inputs.bundleSources)
     .sort()
-    .map((name) => [name, inputs.entrySources[name]]);
+    .map((name) => [name, inputs.bundleSources[name]]);
+  const { vendorCommit, vendorWorkingTree, vendorLockfile, buildScript, esbuildVersion } = inputs;
   return createHash("sha256")
-    .update(JSON.stringify([inputs.vendorCommit, inputs.buildScript, sources, inputs.esbuildVersion]))
+    .update(JSON.stringify([vendorCommit, vendorWorkingTree, vendorLockfile, buildScript, sources, esbuildVersion]))
     .digest("hex");
 }
 
-export function checkVendorInstall(gameRoot: string = enginePaths.gameRoot): void {
-  if (!existsSync(path.join(gameRoot, "node_modules", "react"))) {
-    throw new Error(`The game's dependencies are not installed in ${gameRoot}. Run: npm run setup:engine`);
+export function collectBundleSources(dir: string): Record<string, string> {
+  const sources: Record<string, string> = {};
+  for (const name of readdirSync(dir, { recursive: true, encoding: "utf8" })) {
+    const file = path.join(dir, name);
+    if (statSync(file).isFile()) sources[name.replaceAll("\\", "/")] = readFileSync(file, "utf8");
   }
+  return sources;
 }
 
-function currentInputs(): EngineInputs {
-  const entrySources: Record<string, string> = {};
-  for (const name of readdirSync(enginePaths.engineDir, { recursive: true, encoding: "utf8" })) {
-    const file = path.join(enginePaths.engineDir, name);
-    if (!existsSync(file) || !/\.(ts|js|cjs)$/.test(name)) continue;
-    entrySources[name.replaceAll("\\", "/")] = readFileSync(file, "utf8");
-  }
+const gameGit = (...args: string[]) =>
+  execFileSync("git", ["-C", enginePaths.gameRoot, ...args], { encoding: "utf8" }).trim();
+
+export function collectEngineInputs(): EngineInputs {
   return {
-    vendorCommit: execFileSync("git", ["-C", enginePaths.gameRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    vendorCommit: gameGit("rev-parse", "HEAD"),
+    vendorWorkingTree: gameGit("status", "--porcelain") + gameGit("diff", "HEAD"),
+    vendorLockfile: lockfileHash(enginePaths.gameRoot),
     buildScript: readFileSync(import.meta.filename, "utf8"),
-    entrySources,
+    bundleSources: collectBundleSources(enginePaths.bundleSourceDir),
     esbuildVersion: esbuild.version,
   };
 }
 
-/**
- * Module mapping derived from the game's jest.config.js, with these differences (see packages/sim/README.md):
- * `?raw` imports load as text (Jest uses a file mock), and @swc/wasm-web is stubbed (Jest maps it to @swc/core).
- */
-function gameModules(gameRoot: string): esbuild.Plugin {
-  const stubs = path.join(enginePaths.engineDir, "stubs");
-  const aliases: Record<string, string> = {
-    "@player": path.join(gameRoot, "src/Player.ts"),
-    "@enums": path.join(gameRoot, "src/Enums.ts"),
-    "@nsdefs": path.join(stubs, "empty.js"),
-    "monaco-editor": path.join(stubs, "null.cjs"),
-    "monaco-vim": path.join(stubs, "null.cjs"),
-    "@swc/wasm-web": path.join(stubs, "swc.js"),
-  };
+// The module mapping, derived from the game's jest.config.js and webpack.config.js. Differences from Jest, all
+// documented in packages/sim/README.md: `?raw` imports load as text (Jest uses a file mock), `@swc/wasm-web` is a
+// stub (Jest maps it to native @swc/core), and `@nsdefs` needs no mapping (its imports are type-only and erased).
+const stubDir = path.join(enginePaths.bundleSourceDir, "stubs");
+const aliases: Record<string, string> = {
+  "@player": path.join(enginePaths.gameRoot, "src/Player.ts"),
+  "@enums": path.join(enginePaths.gameRoot, "src/Enums.ts"),
+  "monaco-editor": path.join(stubDir, "null.cjs"),
+  "monaco-vim": path.join(stubDir, "null.cjs"),
+  "@swc/wasm-web": path.join(stubDir, "swc.js"),
+  // webpack.config.js: `fallback: { crypto: false }`.
+  crypto: path.join(stubDir, "node-builtin.js"),
+};
+/** The asset extensions jest.config.js maps to mocks; here they become empty modules. */
+const assetExtensions = "css less jpg jpeg png gif eot otf webp svg ttf woff woff2 mp4 webm wav mp3 m4a aac oga";
+
+function gameModules(): esbuild.Plugin {
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  const aliasFilter = new RegExp(`^(${Object.keys(aliases).map(escapeRegExp).join("|")})$`);
   return {
     name: "game-modules",
     setup(build) {
@@ -82,9 +98,7 @@ function gameModules(gameRoot: string): esbuild.Plugin {
         contents: readFileSync(args.path, "utf8"),
         loader: "text",
       }));
-      build.onResolve({ filter: /^(@player|@enums|@nsdefs|monaco-editor|monaco-vim|@swc\/wasm-web)$/ }, (args) => ({
-        path: aliases[args.path],
-      }));
+      build.onResolve({ filter: aliasFilter }, (args) => ({ path: aliases[args.path] }));
     },
   };
 }
@@ -99,44 +113,50 @@ function packageOf(input: string): string {
 }
 
 export async function buildEngine({ force = false } = {}): Promise<BuildResult> {
-  checkVendorInstall();
-  const fingerprint = engineFingerprint(currentInputs());
+  checkVendorInstall(enginePaths.gameRoot);
+  const fingerprint = engineFingerprint(collectEngineInputs());
   if (!force && existsSync(enginePaths.bundle) && existsSync(enginePaths.meta)) {
     const meta = JSON.parse(readFileSync(enginePaths.meta, "utf8")) as { fingerprint?: string };
     if (meta.fingerprint === fingerprint) return { skipped: true, fingerprint };
   }
 
-  const empty = Object.fromEntries(
-    ["css", "png", "jpg", "jpeg", "gif", "svg", "webp", "ttf", "woff", "woff2", "mp3", "wav"].map((ext) => [
-      `.${ext}`,
-      "empty" as const,
-    ]),
-  );
   const result = await esbuild.build({
-    entryPoints: [path.join(enginePaths.engineDir, "entry.ts")],
+    entryPoints: [path.join(enginePaths.bundleSourceDir, "entry.ts")],
     outfile: enginePaths.bundle,
     bundle: true,
     format: "cjs",
-    platform: "node",
-    target: "node24",
+    // The game is built for the web (webpack `target: "web"`), so dependencies resolve their browser variants.
+    platform: "browser",
+    target: "es2024",
     nodePaths: [path.join(enginePaths.gameRoot, "node_modules")],
-    define: { "process.env.NODE_ENV": '"production"' },
-    loader: empty,
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      // webpack.config.js injects `git rev-parse --short HEAD` of the game's repo.
+      __COMMIT_HASH__: JSON.stringify(gameGit("rev-parse", "--short", "HEAD")),
+    },
+    loader: Object.fromEntries(assetExtensions.split(" ").map((ext) => [`.${ext}`, "empty" as const])),
     jsx: "transform",
-    plugins: [gameModules(enginePaths.gameRoot)],
+    plugins: [gameModules()],
     sourcemap: "linked",
     metafile: true,
+    write: false,
     logLevel: "error",
   });
 
+  // Write each output to a temporary file and rename it, so a concurrent load never sees a half-written bundle.
+  mkdirSync(path.dirname(enginePaths.bundle), { recursive: true });
+  for (const file of result.outputFiles) {
+    writeFileSync(`${file.path}.tmp`, file.contents);
+    renameSync(`${file.path}.tmp`, file.path);
+  }
   const inputs = Object.keys(result.metafile.inputs);
   const report: BundleReport = {
-    bytes: Object.entries(result.metafile.outputs).find(([file]) => file.endsWith("engine.cjs"))?.[1].bytes ?? 0,
+    bytes: result.outputFiles.find((f) => f.path.endsWith("engine.cjs"))?.contents.byteLength ?? 0,
     inputs: inputs.length,
     gameFiles: inputs.filter((p) => p.includes("bitburner-src/src/")).length,
     packages: [...new Set(inputs.filter((p) => p.includes("node_modules")).map(packageOf))].sort(),
+    stubs: inputs.filter((p) => p.includes("engine/bundle/stubs/")).map((p) => p.slice(p.indexOf("stubs/"))),
   };
-  mkdirSync(path.dirname(enginePaths.meta), { recursive: true });
   writeFileSync(enginePaths.meta, `${JSON.stringify({ fingerprint, report }, null, 2)}\n`);
   return { skipped: false, fingerprint, report };
 }
