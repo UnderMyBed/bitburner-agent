@@ -1,0 +1,59 @@
+name: Task
+description: A PR-sized work item. Carries its own spec; the three-pass review checks the PR against it (ADR 0008).
+labels: ["type:task"]
+body:
+  - type: input
+    id: epic
+    attributes:
+      label: Epic
+      description: Parent epic (this issue should also be added as its sub-issue).
+      placeholder: "#12"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this is needed, and links to the architecture sections, ADRs and reports it implements.
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: What will exist when this is done, its interfaces, and the key decisions and why.
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Implementation plan
+      description: Ordered, test-first steps.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkable statements. The spec review pass verifies each one with evidence.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test plan
+      description: Which tests prove the acceptance criteria, and at which tier (unit, property, contract, scenario, E2).
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Docs to create or update
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope

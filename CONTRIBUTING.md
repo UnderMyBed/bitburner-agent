@@ -18,9 +18,24 @@ Every change to logic starts with a failing test. The bar is "a test would catch
 
 Mutation testing runs periodically on core logic to check that the tests actually catch broken code.
 
+### How work flows ([ADR 0008](docs/decisions/0008-work-tracking-and-reviews.md))
+1. **Milestones** (M1–M6) are GitHub milestones. Each has **epics**, and each epic has **task** sub-issues.
+2. **A task issue is the spec:** design, implementation plan, acceptance criteria, test plan, docs to update. Tasks for a milestone are written in full when it becomes active, and the plan is reviewed against the architecture before building starts.
+3. **Branch, build test-first, open a PR** that closes the task (`Closes #n`), using the PR template.
+4. **Three-pass review**, each pass by a separate fresh-context reviewer:
+   - **Spec:** acceptance criteria met, with evidence.
+   - **Correctness and tests:** bugs, edge cases, and tests that would catch regressions.
+   - **Docs and maintainability.**
+
+   Findings are recorded in one PR comment. Each is fixed, answered, or deferred to a `from-review` issue.
+5. **Merge** when CI passes and the review is resolved (squash only).
+6. **Close the milestone** with a milestone review against its exit criteria, then tag a release.
+
+Owner decisions too small for an ADR go in the [owner decisions log](docs/decisions/owner-decisions.md).
+
 ### Merge gate
-- `main` is protected. Every change lands through a PR.
-- A PR merges only when **all required CI checks pass** *and* an **independent review** has been addressed. Each finding is either fixed or answered.
+- `main` is protected by a repository ruleset with no bypass. Every change lands through a PR, and the `check` CI job must pass on an up-to-date branch.
+- A PR merges only when **all required CI checks pass** *and* the **three-pass review** has been addressed.
 - Releases are tagged from `main` and include notes on what changed, what to try, and known issues.
 
 ### Code standards
@@ -53,4 +68,4 @@ The agent may only use what's reachable from inside the game: the Netscript API 
 
 ## Reporting issues
 
-Use the issue templates. For gameplay problems, include the game version, the BitNode, and the agent's decision log around the event if you have it.
+Use the issue forms: **Bug** for this project's code, **Task**/**Epic**/**Design question** for planned work. For gameplay problems, include the game version, the BitNode, and the agent's decision log around the event if you have it. Bugs in Bitburner itself belong in the [game's repo](https://github.com/bitburner-official/bitburner-src).

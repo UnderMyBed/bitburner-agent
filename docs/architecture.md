@@ -548,6 +548,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 ---
 
 ## 13. Milestones
+Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-agent/milestones), with epics and task issues carrying the detailed specs (ADR 0008). This table is the summary; the issues are the plan.
+
 | M | Deliverable | Exit criterion |
 |---|---|---|
 | M0 | Legacy fork retired (upstream merged, archived); repo bootstrapped; design reviewed | ✅ Done |
@@ -577,15 +579,17 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 ---
 
 ## 15. Open questions
-- **Q1** In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? Measured in M2. The simulator uses the engine's own RAM calculator, so the numbers are exact before E2.
-- **Q2** Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
-- **Q9** Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
+Each open question is tracked as a `type:question` issue; the answer is written back here when it closes.
+
+- **Q1** ([#34](https://github.com/UnderMyBed/bitburner-agent/issues/34)) In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? Measured in M2. The simulator uses the engine's own RAM calculator, so the numbers are exact before E2.
+- **Q2** ([#35](https://github.com/UnderMyBed/bitburner-agent/issues/35)) Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
+- **Q9** ([#39](https://github.com/UnderMyBed/bitburner-agent/issues/39)) Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.
 - **Q4** ~~Simulator speed~~ Answered by S1: the engine is bound by how much computing the in-game code does, not by the clock. 10,000–37,000× lean, 50–700× heavy; see §9.1.
-- **Q5** The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default? (S1: the load path, including autoexec via `MainUILoaded`, runs in the simulator; terminal injection needs E2.)
-- **Q6** Verify the BN12 `sourceFileOverrides {12: 0}` behaviour in the simulator before relying on it.
+- **Q5** ([#36](https://github.com/UnderMyBed/bitburner-agent/issues/36)) The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default? (S1: the load path, including autoexec via `MainUILoaded`, runs in the simulator; terminal injection needs E2.)
+- **Q6** ([#37](https://github.com/UnderMyBed/bitburner-agent/issues/37)) Verify the BN12 `sourceFileOverrides {12: 0}` behaviour in the simulator before relying on it.
 - **Q7** ~~Where does the fork's RAM-dodging logic go?~~ Resolved:
   - The fork's version generates a temp script with unique source text per call, and S1 found that leaks a module each time (R10).
   - `ingame/workers` is a fixed set of prebuilt worker scripts that take arguments and return results over ports.
   - The fork's version lives only in `legacy/`.
-- **Q8** Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? S1: importing the engine drags in the whole UI (894 game files plus React/MUI), though it runs fine in Node. Formula-only extraction is still open.
+- **Q8** ([#38](https://github.com/UnderMyBed/bitburner-agent/issues/38)) Formula import: can we compile `vendor/bitburner-src` formula modules into `core/` without pulling in React/UI dependencies? S1: importing the engine drags in the whole UI (894 game files plus React/MUI), though it runs fine in Node. Formula-only extraction is still open.

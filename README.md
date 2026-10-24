@@ -62,7 +62,7 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 | M5+ | More activities and actions: gangs, Bladeburner, stocks, hacknet, corporations, Dark Net, sleeves, Stanek, IPvGO … | |
 | M6 | Campaign selector, calibration loop | |
 
-Working plan: [`docs/plan.md`](docs/plan.md).
+Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHub milestones](https://github.com/UnderMyBed/bitburner-agent/milestones) and issues.
 
 ## Documentation
 

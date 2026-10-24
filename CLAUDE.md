@@ -10,10 +10,22 @@ Build an autonomous agent that takes Bitburner from a fresh save to every Source
 - **Never play the game directly.** Claude builds software that plays. It doesn't drive the owner's game itself.
 - Keep everything **clear, simple, performant, well documented**. Simplicity beats cleverness.
 
-## Merge gate (ADR 0004)
-- All changes land through PRs to `main`. No direct pushes after the initial bootstrap commit.
+## Work tracking (ADR 0008)
+- Work is tracked as GitHub milestones → epics (`type:epic`) → task sub-issues (`type:task`), plus a project board.
+- **No code without a task issue that carries the spec:** design, implementation plan, acceptance criteria, test plan, docs. When a milestone becomes active, write its tasks in full and run a plan review against the architecture before building.
+- If building shows the spec is wrong, update the issue (and the architecture/ADR) in the same PR. Never let them drift silently.
+- Deferred review findings become `from-review` issues. Owner decisions go in `docs/decisions/owner-decisions.md`.
+
+## Merge gate (ADR 0004, ADR 0008)
+- All changes land through PRs to `main`; a ruleset enforces this. Squash merges only.
 - **Test first.** Write the failing test, make it pass, refactor.
-- A PR merges only when required CI checks pass **and** an independent review has been run and every finding has been fixed or answered. The reviewer is a fresh-context agent given only the diff and the relevant spec, never your reasoning.
+- A PR merges only when required CI checks pass **and** the **three-pass review** is resolved:
+  1. Spec, against the task issue.
+  2. Correctness and tests.
+  3. Docs and maintainability.
+
+  Each pass is a separate fresh-context agent given the diff, the task issue and the linked docs, never your reasoning. Post one findings/resolution table as a PR comment.
+- A milestone closes with a milestone review against its exit criteria, then a tagged release.
 - Run the heavy suites (simulator scenario/chaos, end-to-end) when touching the code they cover and before every release. There are no nightly runs.
 - Behaviour changes update docs in the same PR. Design changes get a new ADR.
 
