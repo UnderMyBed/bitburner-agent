@@ -10,12 +10,14 @@ Build an autonomous agent that takes Bitburner from a fresh save to every Source
 - **Never play the game directly.** Claude builds software that plays. It doesn't drive the owner's game itself.
 - Keep everything **clear, simple, performant, well documented**. Simplicity beats cleverness.
 
-## Merge gate (ADR 0004)
-- All changes land through PRs to `main`. No direct pushes after the initial bootstrap commit.
-- **Test first.** Write the failing test, make it pass, refactor.
-- A PR merges only when required CI checks pass **and** an independent review has been run and every finding has been fixed or answered. The reviewer is a fresh-context agent given only the diff and the relevant spec, never your reasoning.
-- Run the heavy suites (simulator scenario/chaos, end-to-end) when touching the code they cover and before every release. There are no nightly runs.
-- Behaviour changes update docs in the same PR. Design changes get a new ADR.
+## How work flows
+Follow [CONTRIBUTING.md "How work flows"](CONTRIBUTING.md#how-work-flows). It's the canonical procedure: tracking, planning, three-pass review, merge, milestone close. ADR 0004 and ADR 0008 hold the reasons. Rules specific to you:
+- **No code without an issue that carries the spec.** If the issue is wrong, fix it (and the architecture/ADR) in the same PR, visibly.
+- **Reviewers are fresh agents.** Run one per pass, in parallel. Give each the PR number, the issue and the docs to check against, never your reasoning, and tell it to stay read-only. Post the findings table yourself.
+- **Test first.** Write the failing test, make it pass, refactor. Prove gates aren't hollow (probe files) when you add or change one.
+- When you create an issue, add it to the project board (`gh project item-add 3 --owner UnderMyBed --url <issue>`). Keep board statuses current as work moves.
+- Run the heavy suites (simulator scenario/chaos, end-to-end) when touching the code they cover and before every release. No nightly runs.
+- Behaviour changes update docs in the same PR. Design changes get a new ADR; owner decisions go in `docs/decisions/owner-decisions.md`.
 
 ## Rules of engagement (for the agent's runtime on the live game)
 - **Allowed:** Netscript API; page DOM/React state reached from in-game scripts (e.g. `eval("document")`); seeded-RNG prediction from in-game state; official API options such as `sourceFileOverrides`.

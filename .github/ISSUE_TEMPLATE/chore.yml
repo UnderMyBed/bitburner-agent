@@ -1,0 +1,17 @@
+name: Chore
+description: Maintenance with no behaviour change (dependency bump, CI tweak, cleanup).
+labels: ["type:chore"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: How it's verified
+      description: The check that shows nothing changed in behaviour, e.g. `npm run check` or a benchmark.
+    validations:
+      required: true

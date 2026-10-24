@@ -1,0 +1,36 @@
+name: Epic
+description: A deliverable spanning several tasks. Its tasks are sub-issues (ADR 0008).
+labels: ["type:epic"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: A summary of the design, with links to the architecture sections, ADRs and reports that define it.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: In scope, and out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: exit
+    attributes:
+      label: Exit criteria
+      description: Checkable statements, one per line as "- [ ] ...".
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and open questions

@@ -1,6 +1,7 @@
 # 0004 — Merge gate and test regime
 
 - **Status:** Accepted (2026-10-24)
+- **Extended by:** [0008](0008-work-tracking-and-reviews.md)
 
 ## Context
 The project is built largely autonomously by an AI coding agent, with a human owner who designs and play-tests but doesn't review every change. Trust therefore has to come from tests and automated gates rather than from humans reading diffs.

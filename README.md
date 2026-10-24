@@ -55,21 +55,21 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 |---|---|---|
 | Design | Mechanics analysis, architecture, decision records | ✅ |
 | S1 | Simulator spike: prove the real engine runs headless in Node, deterministically, fast | ✅ [report](docs/spikes/s1-headless-engine.md) |
-| M1 | Toolchain and CI, then the simulator core: headless engine, virtual clock, seeded RNG, worker pool | ⏳ next |
+| M1 | Toolchain and CI, then the simulator core: headless engine, virtual clock, seeded RNG, worker pool | ⏳ active |
 | M2 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only), automatic recovery | |
 | M3 | Effectors (UI and Singularity backends), restart-after-reset | |
 | M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then **the live campaign starts at BN1.1 from a fresh save** | |
 | M5+ | More activities and actions: gangs, Bladeburner, stocks, hacknet, corporations, Dark Net, sleeves, Stanek, IPvGO … | |
 | M6 | Campaign selector, calibration loop | |
 
-Working plan: [`docs/plan.md`](docs/plan.md).
+Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHub milestones](https://github.com/UnderMyBed/bitburner-agent/milestones) and issues.
 
 ## Documentation
 
 | Doc | What's in it |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | System design, requirements, test strategy, milestones |
-| [`docs/decisions/`](docs/decisions/) | Architecture decision records |
+| [`docs/decisions/`](docs/decisions/) | Architecture decision records, and the [owner decisions log](docs/decisions/owner-decisions.md) |
 | [`docs/synthesis.md`](docs/synthesis.md) | The analysis in one page: what the game is and how to beat it |
 | [`docs/mechanics/`](docs/mechanics/) | First-principles mechanics references with `file:line` citations into the game source |
 | [`docs/research/`](docs/research/) | Community tooling, benchmarks and strategies |

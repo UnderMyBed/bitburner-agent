@@ -1,0 +1,20 @@
+name: Feedback
+description: Play-testing observations and requests, e.g. "it got stuck in BN1 at …" or "I'd like the dashboard to show …". Triaged into tasks, bugs or questions.
+labels: ["type:feedback"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you saw or want
+    validations:
+      required: true
+  - type: input
+    id: release
+    attributes:
+      label: Agent release and where
+      description: e.g. v0.4.0 on Steam, BN1.2
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Anything that helps
+      description: Screenshots, dashboard alerts, rough times.

@@ -1,0 +1,29 @@
+name: Design question
+description: An open question (architecture §15) to answer with evidence.
+labels: ["type:question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: What depends on the answer.
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How we'll answer it
+      description: The experiment, measurement or analysis, and where it runs.
+    validations:
+      required: true
+  - type: textarea
+    id: answer
+    attributes:
+      label: Answer
+      description: Filled in when closing. Write the answer back into the docs too.
