@@ -25,7 +25,7 @@ A **cheap, advisory, non-blocking** forward check against upstream `dev`:
 - **Advisory only.** It is never a required check and never blocks a merge.
 - **Runs** weekly on a schedule and on demand. A full game checkout, build and simulator run against `dev` are out of scope.
 - **Single output:** one tracking issue ("Upcoming game changes") updated in place, so there is never a stream of new issues. It is closed when the forward diff is empty.
-- The watchlist lives in the repo and grows as capabilities come to depend on more game source.
+- The watchlist lives in the repo and grows as activities and actions come to depend on more game source.
 
 ## Consequences
 - Breaking API and RAM changes are visible weeks before they reach Steam, so fixes can land ahead of time behind feature detection where needed.

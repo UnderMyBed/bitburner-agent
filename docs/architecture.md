@@ -54,10 +54,10 @@ It is **not** a scripted campaign. Behaviour that differs per BitNode should com
 ```
 ┌───────────────────────── Node process: "brain" (TypeScript) ─────────────────────────┐
 │                                                                                      │
-│  Bridge ──► World Model ──► Estimators ──► Planner ──► Desired State ──► Bridge      │
-│    │          (snapshot      (capability    (route,      (per-capability     │       │
-│    │           + derived)     rate models)   allocation,  configs + action   │       │
-│    │                                         prestige)    intents)           │       │
+│  Bridge ──► World Model ──► Fast Model ──► Planner ──► Desired State ──► Bridge      │
+│    │          (snapshot      (activities    (campaign/   (activity configs   │       │
+│    │           + derived)     + actions)     BitNode/     + action intents)  │       │
+│    │                                         cycle)                          │       │
 │    ├── Telemetry store + Decision log ──► Dashboard                          │       │
 │    └── Deployer (Remote File API) ──► pushes in-game bundles                 │       │
 │                                                         (optional) LLM Supervisor    │
@@ -106,7 +106,7 @@ Example desired state:
 {
   "version": 1842, "issuedAt": 1761300000000, "ttlMs": 600000,
   "playerFocus": { "kind": "factionWork", "faction": "CyberSec", "type": "hacking" },
-  "capabilities": {
+  "activities": {
     "hwgw":   { "enabled": true, "targets": ["joesguns","phantasy"], "ramBudget": 0.85 },
     "stocks": { "enabled": false },
     "gang":   { "enabled": true, "mode": "respect", "warfare": "auto" }
@@ -122,25 +122,45 @@ Example desired state:
 
 ## 4. The brain
 
-### 4.1 World Model
-- **Snapshot:** raw state from the game (player, servers, factions, augs, BitNode multipliers, gang, corp, Bladeburner, sleeves, Dark Net, stocks, running scripts and RAM). It is the **only source of truth**.
-- **Derived model:** normalised and enriched, using the game's own functions imported from `vendor/bitburner-src`: hack chance and time, growth, rep gain, aug price escalation, w0r1d_d43m0n difficulty, and so on.
-- Before SF5, BitNode multipliers come from a static table generated from the game source rather than the API.
+### 4.1 World model and brain state
+- **Snapshot:** raw state from the game (player, servers, factions, augs, BitNode multipliers, gang, corp, Bladeburner, sleeves, Dark Net, stocks, running scripts and RAM). It is the **only source of truth for game state**.
+- **Derived model:** the snapshot, normalised and enriched using the game's own functions imported from `vendor/bitburner-src`: hack chance and time, growth, rep gain, exp→level curves, aug price escalation, w0r1d_d43m0n difficulty, and so on. Before SF5, BitNode multipliers come from a static table generated from the game source.
+- **Brain state:** the planner's own commitments: the current BitNode plan, cycle targets, and the active policy and when it was chosen. It isn't derivable from the game, so it's persisted in the store and mirrored to a file on home, which survives installs and BitNode changes. A brain restart **resumes** the plan instead of re-planning from scratch, so there's no thrash. Safe mode can read the mirror.
 
-### 4.2 Capabilities
-A **capability** is any way of turning resources into progress. It's the unit of extension.
+### 4.2 Building blocks: Activities and Actions
+Everything the agent can do is one of two kinds.
+
+**Activities** are ongoing and produce rates while resources are allocated to them.
+```ts
+interface Activity {
+  id: ActivityId;                                   // "hwgw" | "factionWork" | "gang" | ...
+  availability(m: Model): Availability;             // unlocked? which prerequisites are missing?
+  options(m: Model): ActivityOption[];              // discrete modes (gang: respect | money | territory)
+  claims(opt: ActivityOption): ResourceClaim;       // player focus? RAM? sleeves? hashes?
+  rates(m: Model, opt: ActivityOption, alloc: Allocation): RateVector; // instantaneous, in expectation
+  configFor(opt: ActivityOption, alloc: Allocation): ActivityConfig;   // → desired state
+  health(s: Snapshot, expected: RateVector): HealthReport;             // actual vs expected; stalls
+}
+```
+
+**Actions** are one-off: they have preconditions, a cost and an effect.
+```ts
+interface Action {
+  id: ActionId;                                     // "buyAug" | "installAugs" | "buyProgram" | "joinFaction" | ...
+  instances(m: Model): ActionInstance[];            // concrete candidates now (e.g. each purchasable aug)
+  preconditions(m: Model, a: ActionInstance): Check;
+  cost(m: Model, a: ActionInstance): Cost;          // money, focus-time, hashes, …
+  apply(m: Model, a: ActionInstance): Model;        // expected effect (used by the fast model)
+  irreversible: boolean;                            // installs, BitNode changes, exclusive faction joins
+  intentFor(a: ActionInstance): Intent;             // → desired state (idempotency key + guard)
+}
+```
+
+| Activities (rates) | Actions (one-off) |
+|---|---|
+| `hwgw` (hacking batcher), `factionWork`, `companyWork`, `crime`, `classes`, `hacknet`, `stocks`, `gang`, `bladeburner`, `corp`, `sleeves`, `darknet`, `stanek`, `go`, `share` | `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`, `donate`, `graft`, `casinoRun`, `infiltrationRun`, `solveContract`, `acceptStanek` |
 
 ```ts
-interface Capability {
-  id: CapabilityId;                                   // "hwgw" | "gang" | "corp" | "bladeburner" | ...
-  availability(m: Model): Availability;               // unlocked? missing prerequisites? (e.g. needs SF2, karma)
-  options(m: Model): CapabilityOption[];               // discrete modes (gang: respect | money | territory)
-  estimate(m: Model, opt: CapabilityOption, alloc: Allocation): RateVector;
-  claims(opt: CapabilityOption): ResourceClaim;        // player focus? RAM? capex? sleeves?
-  configFor(opt: CapabilityOption, alloc: Allocation): CapabilityConfig; // → desired state
-  health(s: Snapshot): HealthReport;                   // actual vs estimated; stalls; errors
-}
-
 type RateVector = Partial<{
   money: number; hackExp: number; combatExp: number; chaExp: number; intExp: number;
   rep: Record<FactionName, number>; companyRep: Record<CompanyName, number>;
@@ -148,22 +168,34 @@ type RateVector = Partial<{
 }>;
 ```
 
-**Scarce resources** that the planner allocates:
+**Scarce resources**, which the planner allocates across activities:
 
 | Resource | Notes |
 |---|---|
 | Player focus | Exclusive: faction work, company work, crime, class, grafting, infiltration, Bladeburner action, or idle |
 | RAM | Home plus purchased plus rooted servers; worker cores matter for grow/weaken |
-| Money | Capital spending versus saving for augs or Daedalus |
+| Money | Spent by actions (investment and purchases) or held for upcoming costs |
 | Sleeves | Up to 8, each an independent focus |
 | Hashes | If hacknet servers exist |
 
-**Initial capability set** (first 6 build first; the rest as the campaign needs them):
+### 4.3 Fast model
+A cheap, **pure** approximation of the game used for planning rollouts. It is the planner's core dependency.
+```ts
+interface FastModel {
+  init(snapshot: Snapshot): FmState;                       // pure, serialisable
+  step(s: FmState, policy: Policy, dtSeconds: number): FmState;
+}
+// step(): integrates activity rates over dt (exp → levels → rates change, rep accrues, money compounds),
+// fires the policy's actions when their triggers hold (Action.apply), including prestige transitions
+// (installAugs / destroyBitNode apply the documented persist/reset rules).
+```
+- **Built from the same pieces** (`Activity.rates`, `Action.apply`), so the fast model and the live estimates can't disagree.
+- **Expectation by default:** deterministic and RNG-free. A stochastic mode exists for risk-sensitive choices.
+- **Fidelity is measured, not assumed.** Simulator scenarios compare fast-model trajectories against the real engine over the same horizon, and divergence is a tracked metric with a tolerance gate. That's the main job of the "estimate vs actual" calibration loop (§11).
+- **Batchable:** rollouts are independent, so they parallelise across workers today and can move to native code or the GPU later behind the same interface (ADR 0006).
 
-`hwgw` · `factionWork` · `companyWork` · `crime` · `augPurchase` · `homeUpgrade` · `hacknet` · `stocks` · `contracts` · `gang` · `bladeburner` · `corp` · `sleeves` · `darknet` · `stanek` · `go` · `casino` · `infiltration` · `grafting`
-
-### 4.3 Win routes as goal trees
-A route is a requirement tree. Its leaves are quantities that capabilities produce. Routes are data and are checked against `availability`.
+### 4.4 Win routes as goal trees
+A route is a requirement tree. Its leaves are quantities that activities produce or actions grant. Routes are data, checked against `availability`.
 
 ```
 DestroyBN
@@ -180,33 +212,47 @@ DestroyBN
 └─ Route: DarkNet (BN15)       Red Pill only from the labyrinth → backdoor WD
 ```
 
-### 4.4 Estimators
-- An estimator maps `(model, option, allocation) → RateVector` over a time horizon.
-- **v0:** closed-form, from game formulas (exact for hacking, rep, crime and stocks in expectation).
-- **v1:** calibrated. A correction term is fitted from telemetry and simulator runs, wherever the closed form misses (batcher efficiency, gang territory dynamics, corp growth).
-- Every estimate is compared with the observed rate. The error is logged per capability and fed into calibration (§11).
+Most routes take **several reset cycles** (e.g. 30 *installed* augs for Daedalus). The BitNode level of the planner decomposes the chosen route into per-cycle targets.
 
-### 4.5 Planner (model-predictive control)
-Every **planning tick** (default 30 s, plus an event-driven re-plan on a state transition):
+### 4.5 Planning hierarchy
+| Level | Decides | Cadence | Method |
+|---|---|---|---|
+| **Campaign** | Which BitNode next | Once per BitNode | Minimise estimated remaining campaign time |
+| **BitNode** | Win route + **cycle plan** (a target per reset cycle) | At each install, and when the current cycle is off-plan | Multi-cycle fast-model rollouts |
+| **Cycle** | Allocation, purchases, when to install | Every planning tick (30 s) and on events | Candidate-policy rollouts |
+| **Reflex** | Execution | Real time, in game | Reflex scripts (§5.5) |
 
-1. **Score routes.** For each available route, estimate the time to reach every leaf under a candidate allocation. Route ETA is the critical path.
-2. **Allocate.** Choose an allocation of scarce resources that minimises the chosen route's ETA, subject to resource limits and a **switching cost**. Switching cost covers lost focus bonus, gang task churn, re-batching cost and so on, and gives hysteresis against thrashing.
-   - v0: greedy, by the marginal reduction in ETA per unit of resource.
-   - Later: rollout search over a **fast model**: a cheap, pure approximation of the game behind one interface. The real engine is only used for validation. The interface lets rollouts move to native code or the GPU without changing the planner (ADR 0006).
-3. **Decide prestige.** Compare the projected time to win if we **install now** against **continuing**, using estimators run with the post-install multipliers (§4.6).
-4. **Emit** a desired state together with a **decision record**: inputs, options considered, scores, and the choice.
+Each level constrains the one below. A level re-plans when its inputs change or the level below reports it can't meet its targets.
 
-### 4.6 Prestige and campaign decisions
-- **Aug install timing** is the hardest modelling problem. Formulate it explicitly: `argmin over t_install of [t_install + ETA_after(multipliers(augs bought by t_install))]`.
-  - It includes the order in which augs are bought, under the 1.9× price escalation (most expensive first, Red Pill last).
-  - The aug-buying itself is an optimisation: a knapsack problem over price, rep threshold and value per multiplier.
-- **Next-BitNode choice:** pick the BitNode that minimises the **estimated remaining campaign time**, given the current Source-Files and the SF bonuses gained.
-  - Per-BN duration estimates come from a table maintained by simulator runs and real telemetry.
-  - The draft order in the synthesis becomes the **prior**, not hard-coded logic.
-- **BN12:** use `sourceFileOverrides {12: 0}` to keep its difficulty at level 1, subject to verification (Q6).
+#### 4.5.1 Campaign level
+- Chooses the next BitNode by minimising **estimated remaining campaign time**, given the current Source-Files and the bonuses each candidate would add.
+- Per-BitNode duration estimates come from a table maintained by simulator runs and real telemetry. The draft order in the synthesis is the **prior**.
+- **BN12:** `sourceFileOverrides {12: 0}` keeps difficulty at level 1, subject to verification (Q6).
+
+#### 4.5.2 BitNode level
+- Chooses the **win route** and produces a **cycle plan**: an ordered list of cycles, each with targets (augs to install, faction/rep targets, stat targets, unlocks) and an expected duration.
+- **Method:** candidate cycle plans are scored by multi-cycle fast-model rollouts, including the prestige transitions between cycles. The plan with the lowest projected time-to-destroy wins.
+- **Re-planned** at every install, and whenever the cycle level reports its targets are out of reach or the cycle has drifted beyond tolerance.
+
+#### 4.5.3 Cycle level
+Every planning tick:
+1. **Generate candidate policies.** A policy is a parametrised strategy: allocation rule, action triggers (what to buy at what money threshold), focus target, and an install rule.
+   - v0: a small structured family (tens of candidates).
+   - Later: search (cross-entropy / MCTS) and GPU-batched rollouts.
+2. **Roll each forward** with the fast model to the cycle's targets (or a horizon). The score is the projected time to meet the targets, plus a terminal estimate for the remaining plan.
+3. **Install timing falls out of the rollouts.** Candidates differ in when they install, which realises `argmin over t_install of [t_install + ETA_after(multipliers(augs bought by t_install))]`.
+   - Aug selection and order is a knapsack under the 1.9× price escalation: most expensive first, Red Pill last.
+4. **Apply hysteresis.** The incumbent policy is kept unless a challenger wins by more than the **switching cost** (lost focus bonus, gang task churn, re-batching).
+5. **Emit** the desired state (§3, D2) and a decision record (§4.6).
+
+### 4.6 Decision records
+Every desired-state version links to a record: the snapshot sequence number, the level that decided, the candidates considered with their scores and key rollout metrics, the choice, and the margin. Records are what the dashboard shows and what the optional LLM supervisor reads (G5, R7).
 
 ### 4.7 Hard-coded knowledge
-Some things genuinely can't be estimated cheaply: known traps (Stanek before Bladeburner with SF7.3), a sensible BN1.1 opening, and similar. These live in a **declarative rules file** of constraints and preferences consumed by the planner. They never become ad-hoc branches. Each rule cites its mechanics doc and is testable.
+Some things genuinely can't be estimated cheaply: known traps (accept Stanek's Gift before joining Bladeburner with SF7.3), a sensible BN1.1 opening, and similar. These live in a **declarative rules file** of constraints and preferences that the planner consumes. Guardrails, so this doesn't become a scripted campaign by another name:
+- Every rule cites its reason (a mechanics doc or telemetry) and has a test.
+- Rules constrain or bias candidate generation. They never bypass scoring.
+- Rules are debt: each one is deleted once the models derive the same behaviour.
 
 ---
 
@@ -225,7 +271,7 @@ Some things genuinely can't be estimated cheaply: known traps (Stanek before Bla
 - Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps.
 
 ### 5.3 Reconciler
-- For each capability config, it **diffs** desired against actual: is the script running, with which args, with what config.
+- For each activity config, it **diffs** desired against actual: is the script running, with which args, with what config.
 - It starts, stops or reconfigures reflexes to close the diff.
 - It executes intents at most once, using idempotency keys persisted to a file on home, which survives an install.
 - It enforces guards such as "only install if ≥ N augs are queued".
@@ -261,7 +307,7 @@ interface Actions {
   - `ui`: page/React automation through `eval("document")`
   - `sim`: direct engine calls, simulator only
 - Backend selection is automatic, by availability and RAM cost (C4).
-- Capabilities and the planner never know which backend is in use.
+- Activities, actions and the planner never know which backend is in use.
 
 ### 5.7 Bootstrap and restart (C5)
 | Transition | Restart path |
@@ -292,7 +338,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ## 7. Telemetry and observability
 - **Store:** an append-only time series of snapshots (thinned for old data), decision records, estimate-vs-actual errors, reflex health, and transitions. SQLite to start, in the configurable data directory (ADR 0006).
 - **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup.
-- **Dashboard:** a local web page showing the current route and ETA, the allocation, capability rates (estimated against actual), a timeline of BitNodes and installs, and alerts.
+- **Dashboard:** a local web page showing the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, a timeline of BitNodes and installs, and alerts.
 - **Alerts:** a stall (no progress on the route's critical path for X minutes), a reflex crash loop, estimate error above a threshold, brain disconnected, game version changed.
 
 ---
@@ -302,7 +348,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 |---|---|---|
 | Estimator calibration (ML) | Fit correction terms from telemetry and simulator runs | Phase 4 |
 | Planner search | Rollouts over fast models; learned value function only if search is too slow | Later, if needed |
-| Go engine | Search with the exact ported AI as the opponent; **no reinforcement learning** | With the `go` capability |
+| Go engine | Search with the exact ported AI as the opponent; **no reinforcement learning** | With the `go` activity |
 | LLM supervisor (optional) | Reads the decision log and telemetry; diagnoses stalls; proposes rules-file changes **for human approval**; never in the control loop | Phase 4 experiment |
 
 ---
@@ -325,9 +371,9 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ### 9.3 Test pyramid
 | Level | What | Gate |
 |---|---|---|
-| Unit | Estimators against game formulas; the planner on fixed models; reconciler diffing | Every commit |
+| Unit | Activity rates and action effects against game formulas; fast-model step invariants; planner levels on fixed models; reconciler diffing | Every commit |
 | Contract | In-game bundles type-check against the **live** `NetscriptDefinitions.d.ts`; static RAM ≤ budget | Every commit |
-| Scenario (simulator) | Seeded runs: fresh BN1.1→destroy; entry into each BitNode with representative Source-File sets; odd mid-run states | On demand when touching brain/capabilities; before every release |
+| Scenario (simulator) | Seeded runs: fresh BN1.1→destroy; entry into each BitNode with representative Source-File sets; odd mid-run states | On demand when touching brain/activities/actions; before every release. Includes **fast-model fidelity** (divergence from the engine over a horizon). |
 | Chaos (simulator) | Kill random scripts, drop the brain, reload mid-batch, offline gaps, duplicated messages | Before every release |
 | End-to-end (E2 source build) | UI driver actions, bootstrap/restart paths (Q5), Agent RAM in a real 8 GB start (Q1), bridge connect/reconnect, RFA deploy, real save/reload | On demand when touching `ingame/` or `bridge/`; before every release |
 
@@ -361,7 +407,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R2 | **Idempotent effects.** Every irreversible action (buy, install, flume, join an exclusive faction) is an intent with a key, a guard and a recorded outcome. |
 | R3 | **Brain-optional progress** (§5.4). |
 | R4 | **Bounded in-game RAM.** Agent ≤ 3 GB; every bundle's static RAM is checked in CI and verified live via RFA `calculateRam`. |
-| R5 | **Graceful degradation.** A failing capability is marked unhealthy and the planner re-routes around it. |
+| R5 | **Graceful degradation.** A failing activity is marked unhealthy and the planner re-routes around it. |
 | R6 | **Version pinning and drift detection** (§12.4). |
 | R7 | **Explainability.** Every desired-state version links to its decision record. |
 | R8 | **Rate-limited and confirmed irreversibles.** Installs and flumes require the guard to pass on two consecutive snapshots. |
@@ -396,8 +442,8 @@ real game ──telemetry──► store ◄──runs── simulator
 ```
 packages/
   game-types/   generated from NetscriptDefinitions.d.ts (pinned) + live drift check
-  core/         model types, capability interface, route definitions, formula shims → vendor/bitburner-src
-  brain/        planner, estimators, campaign, rules file
+  core/         model types, Activity/Action interfaces, route definitions, formula shims → vendor/bitburner-src
+  brain/        fast model, planner (campaign/BitNode/cycle), activities, actions, rules file
   ingame/       agent, reconciler, workers, reflexes, action API (singularity|ui|sim), boot.js
   bridge/       RFA server + control channel
   sim/          engine harness, virtual clock, scenarios, chaos
@@ -431,8 +477,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 | M1 | Walking skeleton: bridge, Agent, snapshot, telemetry, dashboard (observe-only); E2 source build plus Playwright harness | Skeleton passes E2 (connect, snapshot, reload, reconnect) in an 8 GB fresh start; then live snapshots on Steam for 24 h without gaps |
 | M2 | Simulator core: engine, virtual clock, seeded RNG; runs the fork's daemon to a BN1 destroy | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
 | M3 | Action API (UI and sim backends) plus bootstrap/restart paths | Install-and-restart cycle passes in simulator chaos tests and a real-game smoke test |
-| M4 | Planner v0 with `hwgw`, `factionWork`, `companyWork`, `crime`, `augPurchase`, `homeUpgrade`, and the WorldDaemon route | Autonomous BN1→destroy in the simulator over N seeds; then BN4 ×3 on Steam |
-| M5+ | Capabilities in campaign-need order: `gang`, `bladeburner` route, `stocks`, `hacknet`, `corp`, `darknet`, `sleeves`, `stanek`, `go`… | Each with an estimator, a reflex, scenarios and health checks |
+| M4 | Fast model + planner v0 (all three levels, candidate-policy rollouts). Activities: `hwgw`, `factionWork`, `companyWork`, `crime`, `classes`. Actions: `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`. WorldDaemon route. | Fast-model fidelity within tolerance on BN1 scenarios; autonomous BN1→destroy in the simulator over N seeds, **at least as fast as the legacy fork**; then BN4 ×3 on Steam |
+| M5+ | Activities/actions in campaign-need order: `gang`, `bladeburner` route, `stocks`, `hacknet`, `corp`, `darknet`, `sleeves`, `stanek`, `go`, `casinoRun`, `infiltrationRun`… | Each with rates/effects in the fast model, a reflex, scenarios and health checks |
 | M6 | Campaign selector, calibration loop, (optional) LLM supervisor | Next-BN choice from data; estimate error within bounds |
 
 ---
@@ -440,8 +486,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 ## 14. Risks
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Estimators are wrong, so plans are poor | Slow runs | Estimate-vs-actual monitoring, calibration, simulator A/B before deploy |
-| Over-engineering delays real progress | Lost wall-clock time | The fork plays meanwhile; build the skeleton first; at most 6 capabilities for M4 |
+| Fast model diverges from the game, so plans are poor | Slow runs | Fidelity metric with a tolerance gate, estimate-vs-actual monitoring, calibration, simulator A/B before deploy |
+| Over-engineering delays real progress | Lost wall-clock time | The fork plays meanwhile; build the skeleton first; a minimal activity/action set for M4 |
 | Simulator fidelity gaps | False confidence | Real-game smoke tier; calibrate jitter; track sim-vs-real divergence |
 | Brain process down for long stretches | Suboptimal play | Safe mode; auto-start; alerts |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher PRs, runtime hold, save backups (§12.4) |
@@ -452,7 +498,8 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 
 ## 15. Open questions
 - **Q1** In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? Prototype in M1.
-- **Q2** Planner v0: is greedy marginal-ETA allocation good enough to finish BN1 in the simulator, or do we need rollouts on day one?
+- **Q2** Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
+- **Q9** Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.
 - **Q4** Simulator speed: how far can a discrete-event clock skip with the real engine (stock 4 s gate, script timers)?
 - **Q5** The UI-driver restart path before SF4 (terminal injection from a page timer): does it work reliably, or is save-and-reload the safer default?
