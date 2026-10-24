@@ -1,0 +1,8 @@
+{
+  "name": "@bitburner-agent/core",
+  "private": true,
+  "description": "Shared model types, interfaces and game facts used by the brain, the in-game code and the simulator.",
+  "license": "MIT",
+  "type": "module",
+  "exports": "./src/index.ts"
+}

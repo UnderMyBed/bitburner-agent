@@ -30,11 +30,22 @@ Mutation testing runs periodically on core logic to check that the tests actuall
 
 ## Setup
 
-Toolchain setup lands with milestone M1. Until then the repo is documentation plus the pinned game source:
+Requires Node 24 (see `.node-version`).
 
 ```sh
 git clone --recurse-submodules https://github.com/UnderMyBed/bitburner-agent.git
+cd bitburner-agent
+npm ci
+npm run check        # typecheck + lint/format + tests: the same gates CI runs
 ```
+
+| Command | What it does |
+|---|---|
+| `npm run typecheck` | TypeScript, strict, across all packages (no emit; Node runs `.ts` directly) |
+| `npm run lint` / `npm run lint:fix` | Biome lint and format check / apply fixes |
+| `npm test` / `npm run test:watch` | Vitest |
+
+Code lives in npm workspaces under `packages/` (see architecture §12.2). `spikes/` is throwaway and excluded from the gates.
 
 ## Rules of engagement
 
