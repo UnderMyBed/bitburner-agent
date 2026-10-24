@@ -56,8 +56,8 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 | Design | Mechanics analysis, architecture, decision records | ✅ |
 | M1 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only) | ⏳ next |
 | M2 | Simulator core: headless engine, virtual clock, seeded RNG | |
-| M3 | Action API (Singularity and UI backends), restart-after-reset | |
-| M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then BN4 ×3 live | |
+| M3 | Effectors (UI and Singularity backends), restart-after-reset | |
+| M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then **the live campaign starts at BN1.1 from a fresh save** | |
 | M5+ | More activities and actions: gangs, Bladeburner, stocks, hacknet, corporations, Dark Net, sleeves, Stanek, IPvGO … | |
 | M6 | Campaign selector, calibration loop | |
 

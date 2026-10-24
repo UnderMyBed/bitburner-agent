@@ -22,5 +22,8 @@
 | — | Architecture ([`architecture.md`](architecture.md)) and decision records ([`decisions/`](decisions/)) | ✅ draft |
 | M1–M6 | Build milestones, see architecture §13 | M1 next |
 
-## Legacy baseline
-The legacy fork ([UnderMyBed/bitburner-scripts](https://github.com/UnderMyBed/bitburner-scripts)) gets the upstream compatibility fixes merged and is then archived. It is only kept running long enough to play BN1.1 while M1–M4 are built. Its owner clicks the faction/aug/install actions by hand, since there's no Singularity API before SF4.
+## Campaign start
+The agent plays from the very first BitNode. The campaign starts on Steam with a **fresh save at BN1.1** as soon as M4 passes its simulator exit criteria. BN1.1 has no Singularity API, so it's played through the `ui` effector backend, which puts milestone M3 on the critical path. There is no manual phase.
+
+## Legacy fork
+[UnderMyBed/bitburner-scripts](https://github.com/UnderMyBed/bitburner-scripts) is retired: upstream fixes merged, then archived. It doesn't play the campaign. Its proven managers run under the agent as legacy reflexes, and the whole fork runs in the simulator as the baseline the planner must beat (architecture §12.3).

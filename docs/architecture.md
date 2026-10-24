@@ -13,7 +13,7 @@ Build one piece of software that takes a Bitburner save from **any valid state**
 It is **not** a scripted campaign. Behaviour that differs per BitNode should come from **data**: the multipliers, which mechanics are enabled, and which win routes are available. Hand-written `if BN == x` branches are not the approach.
 
 ### 1.1 Goals
-- G1: Reach the goal from a fresh save with human input limited to things that are impossible to automate (§10.1). Manual play while the system is being built (e.g. BN1.1–1.2) is a scheduling choice, not a design limit.
+- G1: Reach the goal from a fresh save with human input limited to things that are impossible to automate (§10.1). The agent plays from the very first BitNode: BN1.1, which has no Singularity API, is played through the `ui` backend (§5.6).
 - G2: Survive any interruption (script death, reload, aug install, BitNode change, offline time, our own crashes) with no human repair.
 - G3: Prove repeatability in a simulator, as a measured pass rate across seeded scenarios.
 - G4: Minimise total wall-clock time to the goal.
@@ -40,7 +40,7 @@ It is **not** a scripted campaign. Behaviour that differs per BitNode should com
 | C1 | Steam build **v3.0.1** (VersionNumber 51); Steam updates whenever it ships (not pinned) | Pin the *source we test against*, detect drift at runtime, forward-check upstream `dev` (§12.4) |
 | C2 | Fresh save means **8 GB home RAM** and every NS function costs RAM | In-game code must be tiny, and expensive calls go in throwaway worker scripts |
 | C3 | RAM is charged by **identifier name** across all imported code; only `document`/`window` are special, and `eval("document")`, `WebSocket` and `fetch` are free | Bundling must be per-script and tree-shaken, with a RAM check in CI |
-| C4 | No Singularity until SF4; ×16, ×4 and ×1 RAM at SF4.1, 4.2 and 4.3 | All player actions go through an **Action API** with a UI backend and a Singularity backend |
+| C4 | No Singularity until SF4; ×16, ×4 and ×1 RAM at SF4.1, 4.2 and 4.3 | All player actions go through **Effectors** (§5.6) with a UI backend and a Singularity backend |
 | C5 | All scripts die on aug install or BitNode change; autoexec runs only on game load; `installAugmentations(cb)` and `destroyW0r1dD43m0n(n, cb, opts)` take a callback script | Bootstrap must be re-entrant, with an explicit restart path per transition |
 | C6 | hack/grow/weaken run on wall-clock `setTimeout`; hacknet, work and stocks run on 200 ms game cycles | Sub-second logic must live in game; the simulator needs a virtual clock |
 | C7 | Electron sets `backgroundThrottling: false` | The game runs at full speed minimised. A brain process outside the game is viable. |
@@ -70,7 +70,7 @@ It is **not** a scripted campaign. Behaviour that differs per BitNode should com
 │    └─ Safe mode      — holds last desired state if the brain is away                 │
 │  Reflexes (in-game, real-time): HWGW batcher, stock trader, gang ticker,             │
 │    Bladeburner loop, Go player, Dark Net crawler, corp cycle, casino/infiltration    │
-│  Action API: Singularity backend | UI-driver backend                                 │
+│  Effectors: Singularity backend | UI backend                                         │
 │  Bootstrap: boot.js (autoexec + install/flume callbacks + terminal injection)       │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -262,40 +262,52 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - One persistent script, held to a **≤ 3 GB** budget that we enforce.
 - It holds the WebSocket to the brain and runs the Snapshotter and Reconciler. It never calls expensive NS functions directly.
 - Expensive calls go to **worker scripts**: tiny, single-purpose, short-lived. They write their results to a port or file. This is the fork's `getNsDataThroughFile` pattern, formalised.
+- **RAM reservation:** the agent and its workers get a fixed reserved slice of home RAM, sized from measured worker peaks. Reflexes, the batcher in particular, receive their RAM budget from the reconciler and never use the reservation. On an 8 GB start the reservation is the first claim on RAM. When RAM is starved, the agent drops to slower snapshot tiers instead of growing.
 
 ### 5.2 Snapshotter
 - **Tiered cadence:**
-  - fast (2 s): money, player focus, running scripts
-  - medium (10 s): player stats, servers
-  - slow (60 s): factions, augs, the big subsystems
-- Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps.
+
+  | Tier | Cadence | Contents |
+  |---|---|---|
+  | static | once per reset, plus on demand | server max money, min security, required hack level, ports; faction/aug catalogue; BitNode multipliers |
+  | slow | 60 s | factions and rep, owned/queued augs, the big subsystems (gang, corp, Bladeburner, sleeves, Dark Net) |
+  | medium | 10 s | player stats and exp, server money and security, purchased servers |
+  | fast | 2 s | money, player focus, running scripts, reflex health metrics |
+
+- Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps. Tiers are merged into one model on the brain side.
 
 ### 5.3 Reconciler
-- For each activity config, it **diffs** desired against actual: is the script running, with which args, with what config.
-- It starts, stops or reconfigures reflexes to close the diff.
-- It executes intents at most once, using idempotency keys persisted to a file on home, which survives an install.
-- It enforces guards such as "only install if ≥ N augs are queued".
+- **Namespace ownership:** the reconciler manages only the scripts it owns: everything under `/agent/`, plus legacy reflexes it launched itself. It never kills or modifies anything else. Foreign scripts' RAM is counted as unavailable. In **observe-only mode** it launches and kills nothing except its own workers.
+- **Activities:** for each activity config, it diffs desired against actual: is the reflex running, with which config, and is it healthy. It starts, stops or reconfigures reflexes to close the diff.
+- **Intents:** executed at most once.
+  - **Game state is the first idempotency check.** For example, `buyAug X` is skipped if X is owned or queued; `joinFaction F` if already a member.
+  - The **ledger** on home (it survives installs and BitNode changes) is the backstop for intents the game can't confirm (casino run, donation, infiltration run).
+- **Guards:** checked before every intent. Irreversible intents need their guard to hold on two consecutive snapshots (R8).
 
 ### 5.4 Safe mode
 If the brain has been silent longer than `ttlMs`, the agent **keeps running the last desired state**, minus intents. Reflexes keep producing money and XP; nothing irreversible happens (no installs, no BitNode changes). Progress continues; only optimality is lost.
 
 ### 5.5 Reflexes
-Real-time loops that are configured by the brain and never decide strategy:
+Real-time loops that are configured by the brain and never decide strategy.
+- **Hot configuration:** each reflex re-reads its config (a file or port written by the reconciler) every loop. Script arguments only identify the instance, so a config change never restarts a reflex or drops batches in flight.
+- **Health out:** each reflex publishes its metrics (rates, errors, loop latency) to a port the snapshotter reads. That feeds `Activity.health` and the fast-model fidelity metric.
+- **Legacy reflexes** (from the retired fork, run through `legacy/` adapters) are launched with their self-launching of helper scripts disabled. Only the reconciler decides which processes exist.
 
 | Reflex | Why it's in game | Source |
 |---|---|---|
-| HWGW batcher | Millisecond landing precision | Fork `daemon.js` first; possible rewrite later (§13) |
-| Stock trader | Reacts on stock ticks | Fork `stockmaster.js` (patched) |
-| Gang ticker | Territory tick (~20 s) swap trick | Fork `gangs.js` (patched via the upstream merge) |
-| Bladeburner loop | Action completion events | Fork `bladeburner.js` |
+| HWGW batcher | Millisecond landing precision | Legacy `daemon.js` first; possible rewrite later (§13) |
+| Stock trader | Reacts on stock ticks | Legacy `stockmaster.js` |
+| Gang ticker | Territory tick (~20 s) swap trick | Legacy `gangs.js` (includes the upstream v3 fix) |
+| Bladeburner loop | Action completion events | Legacy `bladeburner.js` |
 | Go player | Turn-by-turn play, cheat timing within one 200 ms tick | **New**: AI port plus search, predicted cheats |
 | Dark Net crawler | Self-replicating onto frontier servers, sessions per process | **New** |
 | Corp cycle | Five-state market cycle | **New** |
-| Casino / infiltration | DOM/React-driven, real-time | **New** (UI driver) |
+| Casino / infiltration | DOM/React-driven, real-time | **New** (UI backend) |
 
-### 5.6 Action API
+### 5.6 Effectors
+The in-game side of §4.2 Actions. The flow is: a brain **Action** becomes an **intent** in the desired state, and the reconciler executes it through an **Effector**.
 ```ts
-interface Actions {
+interface Effectors {
   joinFaction(f): Result;  purchaseAug(f, aug): Result;  installAugs(cb): Result;
   workForFaction(f, type, focus): Result;  workForCompany(c, focus): Result;  commitCrime(c): Result;
   travel(city): Result;  purchaseTor(): Result;  purchaseProgram(p): Result;  upgradeHomeRam(): Result;
@@ -304,10 +316,10 @@ interface Actions {
 ```
 - **Backends:**
   - `singularity`: SF4, or inside BN4
-  - `ui`: page/React automation through `eval("document")`
+  - `ui`: page/React automation through `eval("document")`. This is **on the critical path**: a fresh save has no Singularity, so BN1.1 is played entirely through this backend.
   - `sim`: direct engine calls, simulator only
-- Backend selection is automatic, by availability and RAM cost (C4).
-- Activities, actions and the planner never know which backend is in use.
+- Backend selection is automatic, by availability and RAM cost (C4). The `ui` backend also covers the things that never get an API (casino, infiltration).
+- Brain-side code never knows which backend is in use.
 
 ### 5.7 Bootstrap and restart (C5)
 | Transition | Restart path |
@@ -315,7 +327,7 @@ interface Actions {
 | Game load | Autoexec setting → `boot.js` (set once by hand, §10.1) |
 | Aug install (SF4) | `installAugmentations("boot.js")` |
 | BitNode change (SF4) | `destroyW0r1dD43m0n(n, "boot.js", opts)` |
-| Aug install / BitNode change through the UI (before SF4) | The UI driver types `run boot.js` into `#terminal-input` from a page-level timer that outlives the dying script; fallback is save and reload, so autoexec fires |
+| Aug install / BitNode change through the UI (before SF4) | The `ui` backend types `run boot.js` into `#terminal-input` from a page-level timer that outlives the dying script. Fallback is save and reload, so autoexec fires. **On the critical path for BN1.1** (Q5). |
 
 `boot.js` is re-entrant: it is safe to run at any time and in any number of copies. It (re)starts the Agent; everything else follows from reconciliation.
 
@@ -359,7 +371,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 - **Engine:** the real `vendor/bitburner-src` code in Node, bootstrapped the way its Jest tests already do (`initGameEnvironment`, `setupBasicTestingEnvironment`, NS script execution).
 - **Virtual clock:** fake `setTimeout`/`setInterval`/`Date`/`performance.now`. Game cycles are driven through `Engine.updateGame(numCycles)`. Time advances to the next event, discrete-event style.
 - **Seeded RNG:** replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario.
-- **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine. The Action API uses its `sim` backend.
+- **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine. Effectors use their `sim` backend.
 - **Speed target:** at least **1000×** real time for hacking-dominated phases; measured, not assumed.
 - **Scale-out:** a worker pool, one engine instance per process. Size is `availableParallelism() − reserve`, about 12–14 on the reference rig. A suite (scenarios × seeds) fans out across the pool; results are aggregated into the repeatability metric.
 
@@ -414,7 +426,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 
 ### 10.1 Irreducible human steps
 1. Install Steam, set the RFA port, and set autoexec to `boot.js` in game options. One time.
-2. Before SF4 in BN1.1, by our earlier decision: faction/aug/install clicks **until the UI driver is ready**.
+2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase.
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
 
 ---
@@ -444,18 +456,18 @@ packages/
   game-types/   generated from NetscriptDefinitions.d.ts (pinned) + live drift check
   core/         model types, Activity/Action interfaces, route definitions, formula shims → vendor/bitburner-src
   brain/        fast model, planner (campaign/BitNode/cycle), activities, actions, rules file
-  ingame/       agent, reconciler, workers, reflexes, action API (singularity|ui|sim), boot.js
+  ingame/       agent, reconciler, workers, reflexes, effectors (singularity|ui|sim), boot.js
   bridge/       RFA server + control channel
   sim/          engine harness, virtual clock, scenarios, chaos
   dashboard/    local web UI
-  legacy/       adapters that run fork scripts as reflexes during migration
+  legacy/       retired-fork scripts (MIT, with notice) + adapters that run them as reflexes; also the simulator baseline
 ```
 
 ### 12.3 Migration from the fork (strangler pattern)
-1. The patched fork runs BN1.1 **now**, standalone.
-2. The Agent and brain come up in **observe-only** mode alongside the fork: telemetry and estimates, no control.
-3. The brain takes over **strategy** (autopilot is retired); fork managers run as reflexes through `legacy/` adapters.
-4. Fork reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
+The fork is retired and does **not** play the campaign; the agent plays from BN1.1. The fork's proven parts live on in three ways:
+1. **Baseline:** the fork (autopilot + daemon, with `sim` effectors standing in for its manual steps) runs in the simulator as the benchmark the planner must beat (M4 exit).
+2. **Legacy reflexes:** fork managers (batcher, stocks, gang, Bladeburner) run under the agent through `legacy/` adapters, while the brain owns strategy.
+3. **Replacement:** legacy reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
 
 ### 12.4 Version management
 The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit Steam ships (3.0.1 = `1da7316ff`). We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
@@ -473,11 +485,11 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 ## 13. Milestones
 | M | Deliverable | Exit criterion |
 |---|---|---|
-| M0 | Fork patched (upstream merge plus audit fixes); BN1.1 running | BN1.1 progressing on Steam |
+| M0 | Legacy fork retired (upstream merged, archived); repo bootstrapped; design reviewed | ✅ Done |
 | M1 | Walking skeleton: bridge, Agent, snapshot, telemetry, dashboard (observe-only); E2 source build plus Playwright harness | Skeleton passes E2 (connect, snapshot, reload, reconnect) in an 8 GB fresh start; then live snapshots on Steam for 24 h without gaps |
-| M2 | Simulator core: engine, virtual clock, seeded RNG; runs the fork's daemon to a BN1 destroy | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
-| M3 | Action API (UI and sim backends) plus bootstrap/restart paths | Install-and-restart cycle passes in simulator chaos tests and a real-game smoke test |
-| M4 | Fast model + planner v0 (all three levels, candidate-policy rollouts). Activities: `hwgw`, `factionWork`, `companyWork`, `crime`, `classes`. Actions: `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`. WorldDaemon route. | Fast-model fidelity within tolerance on BN1 scenarios; autonomous BN1→destroy in the simulator over N seeds, **at least as fast as the legacy fork**; then BN4 ×3 on Steam |
+| M2 | Simulator core: engine, virtual clock, seeded RNG; runs the legacy fork (with `sim` effectors for its manual steps) to a BN1 destroy, which is the baseline | Deterministic replay of a seed; ≥100× speed (1000× stretch) |
+| M3 | Effectors (`ui` and `sim` backends) plus bootstrap/restart paths. **Critical path for BN1.1.** | Every BN1 effector and the UI-driven install-and-restart cycle pass E2 tests on the source build and simulator chaos tests; real-game smoke test |
+| M4 | Fast model + planner v0 (all three levels, candidate-policy rollouts). Activities: `hwgw`, `factionWork`, `companyWork`, `crime`, `classes`. Actions: `buyAug`, `installAugs`, `destroyBitNode`, `joinFaction`, `travel`, `buyTor`, `buyProgram`, `upgradeHome`, `buyServer`, `backdoor`. WorldDaemon route. | Fast-model fidelity within tolerance on BN1 scenarios; autonomous BN1→destroy in the simulator over N seeds, **at least as fast as the legacy fork**; then **the campaign starts: BN1.1 on Steam from a fresh save** |
 | M5+ | Activities/actions in campaign-need order: `gang`, `bladeburner` route, `stocks`, `hacknet`, `corp`, `darknet`, `sleeves`, `stanek`, `go`, `casinoRun`, `infiltrationRun`… | Each with rates/effects in the fast model, a reflex, scenarios and health checks |
 | M6 | Campaign selector, calibration loop, (optional) LLM supervisor | Next-BN choice from data; estimate error within bounds |
 
@@ -487,11 +499,11 @@ Upgrading the pinned version is a normal PR: regenerate types, run the full suit
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Fast model diverges from the game, so plans are poor | Slow runs | Fidelity metric with a tolerance gate, estimate-vs-actual monitoring, calibration, simulator A/B before deploy |
-| Over-engineering delays real progress | Lost wall-clock time | The fork plays meanwhile; build the skeleton first; a minimal activity/action set for M4 |
+| Over-engineering delays real progress | Lost wall-clock time | The campaign doesn't start until M4, so M1–M4 stay lean vertical slices; a minimal activity/action set for M4 |
 | Simulator fidelity gaps | False confidence | Real-game smoke tier; calibrate jitter; track sim-vs-real divergence |
 | Brain process down for long stretches | Suboptimal play | Safe mode; auto-start; alerts |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher PRs, runtime hold, save backups (§12.4) |
-| UI-driver fragility (DOM/React changes) | Pre-SF4 stalls | Short-lived dependency (Singularity replaces most of it); smoke tests |
+| UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
 | 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; the Agent degrades to a slow cadence when RAM-starved |
 
 ---
