@@ -8,5 +8,6 @@ Each significant design or process decision gets a short record: context, decisi
 | [0002](0002-desired-state-reconciliation.md) | Desired-state reconciliation instead of command streams | Accepted |
 | [0003](0003-game-version-pinning.md) | Game version pinning and Steam patch strategy | Accepted |
 | [0004](0004-merge-gate-and-testing.md) | Merge gate and test regime | Accepted |
+| [0005](0005-forward-compat-dev-branch.md) | Forward-compatibility checks against upstream `dev` | Accepted |
 
 Template: copy an existing record. Keep it under a page.

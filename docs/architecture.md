@@ -408,6 +408,9 @@ The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit
 1. **See it coming:** a scheduled CI workflow watches upstream `stable`. When it moves, the workflow bumps the submodule on a branch, runs the full suite (including a diff of the API definitions), and opens a PR with a compatibility report. Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
 2. **Hold at runtime:** on every connect the brain checks `VersionNumber` and `getDefinitionFile` against the pinned build. On a mismatch it goes to **hold**: reflexes keep running, no intents, alert raised.
 3. **Save backups:** the bridge pulls rotating saves via RFA (§6), so a bad patch or bug can always be rolled back.
+4. **Look further ahead:** a cheap, advisory weekly check against upstream `dev` covers API diff, contract typecheck, RAM cost diff and a watched-source commit log. It reports into one tracking issue and never blocks merges (ADR 0005).
+
+Steam itself is not pinned: game updates are taken as Steam ships them.
 
 Upgrading the pinned version is a normal PR: regenerate types, run the full suite, re-run smoke checks.
 
