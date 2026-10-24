@@ -19,7 +19,7 @@ body:
     id: env
     attributes:
       label: Environment
-      description: E0 Steam / E1 simulator / E2 source build; agent release; game version; BitNode.
+      description: "Environment (architecture §9.4): E0 Steam, E1 simulator or E2 source build; plus agent release, game version, BitNode."
     validations:
       required: true
   - type: textarea

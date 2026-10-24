@@ -18,24 +18,59 @@ Every change to logic starts with a failing test. The bar is "a test would catch
 
 Mutation testing runs periodically on core logic to check that the tests actually catch broken code.
 
-### How work flows ([ADR 0008](docs/decisions/0008-work-tracking-and-reviews.md))
-1. **Milestones** (M1–M6) are GitHub milestones. Each has **epics**, and each epic has **task** sub-issues.
-2. **A task issue is the spec:** design, implementation plan, acceptance criteria, test plan, docs to update. Tasks for a milestone are written in full when it becomes active, and the plan is reviewed against the architecture before building starts.
-3. **Branch, build test-first, open a PR** that closes the task (`Closes #n`), using the PR template.
-4. **Three-pass review**, each pass by a separate fresh-context reviewer:
-   - **Spec:** acceptance criteria met, with evidence.
-   - **Correctness and tests:** bugs, edge cases, and tests that would catch regressions.
-   - **Docs and maintainability.**
+### How work flows
+This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tracking-and-reviews.md) records why it works this way.
 
-   Findings are recorded in one PR comment. Each is fixed, answered, or deferred to a `from-review` issue.
-5. **Merge** when CI passes and the review is resolved (squash only).
-6. **Close the milestone** with a milestone review against its exit criteria, then tag a release.
+**Where things are tracked**
+- **Milestones** (M1–M6) are [GitHub milestones](https://github.com/UnderMyBed/bitburner-agent/milestones). Their exit criteria are canonical in [architecture §13](docs/architecture.md#13-milestones).
+- Each milestone has **epics**. Each epic has **task** sub-issues; the sub-issue link is the canonical parent.
+- The [project board](https://github.com/users/UnderMyBed/projects/3) shows every issue and PR by status: Todo, In Progress, In Review, Done. New issues are added to it when created.
+- **Labels:**
+  - `type:` epic, task, chore, bug, question or feedback
+  - `area:` the package or concern
+  - `from-review`: a deferred review finding
+  - `blocked`
+- Owner decisions too small for an ADR go in the [owner decisions log](docs/decisions/owner-decisions.md).
 
-Owner decisions too small for an ADR go in the [owner decisions log](docs/decisions/owner-decisions.md).
+**The cycle**
+1. **Plan.** When a milestone becomes active, write its tasks in full using the Task form: design, implementation plan, acceptance criteria, test plan, docs. Later milestones stay as epics until then.
+   - A reviewer then checks the whole milestone plan against the architecture: complete, consistent, testable.
+   - The plan review's findings and their resolution are posted on the milestone's **review issue** ("Mx reviews", label `area:process`), which also holds the milestone review at the end.
+2. **Build.** Branch, test first, and open a PR that closes its issue (`Closes #n`), using the PR template.
+   - If the spec turns out to be wrong, update the issue (and the architecture or ADR) in the same PR, so the change is visible.
+3. **Review: three passes.** Each pass is a separate reviewer that sees only the diff, the issue and the docs it links. It never sees the author's reasoning; in this project the reviewers are fresh AI-agent sessions. The passes run in parallel.
+
+   | Pass | Checks against | Looks for |
+   |---|---|---|
+   | 1. Spec | The issue and its linked architecture sections and ADRs | Every acceptance criterion met, with evidence; deviations justified and the spec updated; nothing missing; no scope creep |
+   | 2. Correctness and tests | The code and its tests | Bugs, edge cases, failure modes, determinism, performance; whether tests would catch a regression |
+   | 3. Docs and maintainability | Docs and code quality | Docs updated or created; clarity, simplicity, conventions; fit with the architecture |
+
+   - **Severity:** each finding is a **blocker** (must fix before merge), **should-fix** (fix now unless answered with a reason) or **nit** (optional).
+   - **Record:** all findings go into one PR comment, as a table:
+
+     | # | Pass | Severity | Finding | Resolution |
+     |---|---|---|---|---|
+     | 1 | 2 | should-fix | Unused imports pass the gates | Fixed: `noUnusedLocals`; verified with a probe file |
+
+   - Every finding is fixed, answered, or deferred to a `from-review` issue.
+   - **Trivial changes** (typo, version bump) may run one combined pass; the PR says so.
+4. **Merge** when CI passes and the review is resolved. Merges are squash only.
+5. **Close the milestone.** Run a milestone review:
+   - every exit criterion verified with evidence
+   - all of the milestone's issues closed or explicitly moved
+   - docs consistent with what was built
+
+   Record it on the milestone's review issue, then tag a release (procedure: [#23](https://github.com/UnderMyBed/bitburner-agent/issues/23)).
+
+**Lighter paths**
+- **Chores** (dependency bumps, CI tweaks) use the Chore form: what and why, and how it's verified.
+- **Automated PRs** state their reason in the PR body instead of closing an issue.
+- **Feedback** from play-testing (observations, requests) uses the Feedback form. It's triaged into tasks, bugs or questions.
 
 ### Merge gate
 - `main` is protected by a repository ruleset with no bypass. Every change lands through a PR, and the `check` CI job must pass on an up-to-date branch.
-- A PR merges only when **all required CI checks pass** *and* the **three-pass review** has been addressed.
+- A PR merges only when **all required CI checks pass** *and* the **three-pass review** is resolved.
 - Releases are tagged from `main` and include notes on what changed, what to try, and known issues.
 
 ### Code standards
@@ -68,4 +103,9 @@ The agent may only use what's reachable from inside the game: the Netscript API 
 
 ## Reporting issues
 
-Use the issue forms: **Bug** for this project's code, **Task**/**Epic**/**Design question** for planned work. For gameplay problems, include the game version, the BitNode, and the agent's decision log around the event if you have it. Bugs in Bitburner itself belong in the [game's repo](https://github.com/bitburner-official/bitburner-src).
+Use the issue forms:
+- **Feedback** for play-testing observations and requests
+- **Bug** for defects in this project's code
+- **Task**, **Epic**, **Chore** and **Design question** for planned work
+
+For gameplay problems, include the game version, the BitNode, and the agent's decision log around the event if you have it. Bugs in Bitburner itself belong in the [game's repo](https://github.com/bitburner-official/bitburner-src).

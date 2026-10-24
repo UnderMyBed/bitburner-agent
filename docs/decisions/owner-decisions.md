@@ -13,7 +13,7 @@ Decisions made by the project owner that don't each need a full ADR. Each row sa
 | 7 | 2026-10-24 | **No nightly scheduled runs.** Heavy suites run on demand and before every release. | [ADR 0004](0004-merge-gate-and-testing.md) |
 | 8 | 2026-10-24 | **Working model:** the owner designs and play-tests each release on Steam; Claude builds autonomously, test-first, behind a PR gate (CI plus independent review) with no human review step. | [ADR 0004](0004-merge-gate-and-testing.md), [plan](../plan.md), [CLAUDE.md](../../CLAUDE.md) |
 | 9 | 2026-10-24 | The agent repo is **public open source** under MIT, with a high-quality README and a contributing guide, but no community support commitment. | [README](../../README.md), [CONTRIBUTING](../../CONTRIBUTING.md) |
-| 10 | 2026-10-24 | **Legacy fork:** merge upstream, point its README at this project, delete its issues, archive it. Done. | [plan](../plan.md) |
+| 10 | 2026-10-24 | **Legacy fork:** merge upstream, point its README at this project, delete its issues, archive it. Done. | [plan](../plan.md), [synthesis §6](../synthesis.md) |
 | 11 | 2026-10-24 | **The agent plays BN1.1 itself** through the UI backend; there's no manual phase, and the legacy fork never plays the campaign. Supersedes an earlier "fork plays BN1.1 with manual clicks" plan. | [plan](../plan.md), [synthesis §6](../synthesis.md), [architecture §12.3](../architecture.md) |
 | 12 | 2026-10-24 | The game runs **24/7** on the owner's PC. | [architecture C9](../architecture.md) |
 | 13 | 2026-10-24 | When goals conflict: **robustness > correctness > speed**. | [architecture §1](../architecture.md) |
@@ -21,8 +21,9 @@ Decisions made by the project owner that don't each need a full ADR. Each row sa
 | 15 | 2026-10-24 | The reconciler **manages only its own namespace** (`/agent/…` plus legacy reflexes it launched itself). | [architecture §5.3](../architecture.md) |
 | 16 | 2026-10-24 | **No Discord integration.** Automated scanning would break Discord's terms (self-bots), and no official integration exists. | This log |
 | 17 | 2026-10-24 | **LLM supervisor proposals** go through the normal merge gate (PR, CI, independent review) with no human approval step. | [architecture §8](../architecture.md) |
-| 18 | 2026-10-24 | Game bugs found along the way are collected for a later session that files upstream issues and fixes. They're kept outside this repo. | `UPSTREAM-BUGS.md` in the owner's workspace |
+| 18 | 2026-10-24 | Game bugs found along the way are collected for a later session that files upstream issues and fixes. They're kept outside this repo. | Kept privately by the owner |
 | 19 | 2026-10-24 | **Simulator spike first**, because the plan depends on iterating in simulation. Passed. | [architecture §13](../architecture.md), [S1 report](../spikes/s1-headless-engine.md), [ADR 0007](0007-headless-engine-simulator.md) |
 | 20 | 2026-10-24 | **The game is relaunched automatically** when it dies or freezes, through Task Scheduler and Steam, with a dashboard switch to pause supervision. | [architecture §10.2](../architecture.md) |
 | 21 | 2026-10-24 | **Simulator before skeleton:** M1 is toolchain and the simulator core; M2 is the walking skeleton. | [architecture §13](../architecture.md) |
 | 22 | 2026-10-24 | **Work tracking:** GitHub issues, epics and milestones that carry design and implementation plans, plus a project board; **three-pass reviews** check PRs against those specs. | [ADR 0008](0008-work-tracking-and-reviews.md) |
+| 23 | 2026-10-24 | **Claude never plays the game directly.** Claude builds the software that plays; it doesn't drive the owner's game itself. | [CLAUDE.md](../../CLAUDE.md), [plan](../plan.md) |

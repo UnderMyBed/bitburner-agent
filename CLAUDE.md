@@ -10,24 +10,14 @@ Build an autonomous agent that takes Bitburner from a fresh save to every Source
 - **Never play the game directly.** Claude builds software that plays. It doesn't drive the owner's game itself.
 - Keep everything **clear, simple, performant, well documented**. Simplicity beats cleverness.
 
-## Work tracking (ADR 0008)
-- Work is tracked as GitHub milestones → epics (`type:epic`) → task sub-issues (`type:task`), plus a project board.
-- **No code without a task issue that carries the spec:** design, implementation plan, acceptance criteria, test plan, docs. When a milestone becomes active, write its tasks in full and run a plan review against the architecture before building.
-- If building shows the spec is wrong, update the issue (and the architecture/ADR) in the same PR. Never let them drift silently.
-- Deferred review findings become `from-review` issues. Owner decisions go in `docs/decisions/owner-decisions.md`.
-
-## Merge gate (ADR 0004, ADR 0008)
-- All changes land through PRs to `main`; a ruleset enforces this. Squash merges only.
-- **Test first.** Write the failing test, make it pass, refactor.
-- A PR merges only when required CI checks pass **and** the **three-pass review** is resolved:
-  1. Spec, against the task issue.
-  2. Correctness and tests.
-  3. Docs and maintainability.
-
-  Each pass is a separate fresh-context agent given the diff, the task issue and the linked docs, never your reasoning. Post one findings/resolution table as a PR comment.
-- A milestone closes with a milestone review against its exit criteria, then a tagged release.
-- Run the heavy suites (simulator scenario/chaos, end-to-end) when touching the code they cover and before every release. There are no nightly runs.
-- Behaviour changes update docs in the same PR. Design changes get a new ADR.
+## How work flows
+Follow [CONTRIBUTING.md "How work flows"](CONTRIBUTING.md#how-work-flows). It's the canonical procedure: tracking, planning, three-pass review, merge, milestone close. ADR 0004 and ADR 0008 hold the reasons. Rules specific to you:
+- **No code without an issue that carries the spec.** If the issue is wrong, fix it (and the architecture/ADR) in the same PR, visibly.
+- **Reviewers are fresh agents.** Run one per pass, in parallel. Give each the PR number, the issue and the docs to check against, never your reasoning, and tell it to stay read-only. Post the findings table yourself.
+- **Test first.** Write the failing test, make it pass, refactor. Prove gates aren't hollow (probe files) when you add or change one.
+- When you create an issue, add it to the project board (`gh project item-add 3 --owner UnderMyBed --url <issue>`). Keep board statuses current as work moves.
+- Run the heavy suites (simulator scenario/chaos, end-to-end) when touching the code they cover and before every release. No nightly runs.
+- Behaviour changes update docs in the same PR. Design changes get a new ADR; owner decisions go in `docs/decisions/owner-decisions.md`.
 
 ## Rules of engagement (for the agent's runtime on the live game)
 - **Allowed:** Netscript API; page DOM/React state reached from in-game scripts (e.g. `eval("document")`); seeded-RNG prediction from in-game state; official API options such as `sourceFileOverrides`.

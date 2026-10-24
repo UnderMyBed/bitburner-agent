@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Each significant design or process decision gets a short record: context, decision, consequences. Records are immutable once accepted. To change one, add a new record that supersedes it.
+Each significant design or process decision gets a short record: context, decision, consequences. Records are immutable once accepted. To change one, add a new record that supersedes, amends or extends it. The only edit allowed to an accepted record is a link in its status header ("Superseded by", "Amended by", "Extended by"), so readers find the newer record.
 
 | ADR | Title | Status |
 |---|---|---|

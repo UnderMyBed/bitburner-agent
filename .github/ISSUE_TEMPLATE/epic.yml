@@ -26,8 +26,8 @@ body:
     id: exit
     attributes:
       label: Exit criteria
-      value: |
-        - [ ]
+      description: Checkable statements, one per line as "- [ ] ...".
+      placeholder: "- [ ] ..."
     validations:
       required: true
   - type: textarea
