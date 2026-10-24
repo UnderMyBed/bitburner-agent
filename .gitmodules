@@ -1,0 +1,5 @@
+[submodule "vendor/bitburner-src"]
+	path = vendor/bitburner-src
+	url = https://github.com/bitburner-official/bitburner-src.git
+	branch = stable
+	shallow = true

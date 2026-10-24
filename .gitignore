@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.reports/
+*.log
+.env
+.env.*
+
+# local runtime data (telemetry store, save backups)
+.data/
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
