@@ -16,9 +16,9 @@
 ## Phases
 | Phase | Content | Status |
 |---|---|---|
-| 0 | Baseline: legacy script audit against 3.0.1 ([`legacy/scripts-compat-audit.md`](legacy/scripts-compat-audit.md)); retire the legacy fork | ✅ audit; retirement in progress |
+| 0 | Baseline: legacy script audit against 3.0.1 ([`legacy/scripts-compat-audit.md`](legacy/scripts-compat-audit.md)); retire the legacy fork | ✅ |
 | 1 | First-principles mechanics reference ([`mechanics/`](mechanics/)) and [`synthesis.md`](synthesis.md) | ✅ |
-| 1b | Community research ([`research/`](research/)) | ⏳ |
+| 1b | Community research ([`research/`](research/)) | ✅ |
 | — | Architecture ([`architecture.md`](architecture.md)) and decision records ([`decisions/`](decisions/)) | ✅ draft |
 | M1–M6 | Build milestones, see architecture §13 | M1 next |
 
