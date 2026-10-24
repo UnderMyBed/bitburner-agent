@@ -22,6 +22,6 @@ describe("PINNED_GAME", () => {
 
   test("matches the commit the submodule is pinned to", () => {
     const head = execFileSync("git", ["-C", gameSrc, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    expect(head.startsWith(PINNED_GAME.commit)).toBe(true);
+    expect(head.slice(0, PINNED_GAME.commit.length)).toBe(PINNED_GAME.commit);
   });
 });
