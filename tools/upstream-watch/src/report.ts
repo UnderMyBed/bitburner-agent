@@ -1,4 +1,4 @@
-// The forward-check report: what changed between the pinned game and an upstream ref, as Markdown for an issue body.
+// The watchers' report: what changed between the pinned game and an upstream ref, as Markdown for an issue body.
 import type { DeclarationDiff } from "./declarations.ts";
 import type { RamCostChange } from "./ram-costs.ts";
 
@@ -6,9 +6,10 @@ import type { RamCostChange } from "./ram-costs.ts";
 export const DEFINITIONS = "src/ScriptEditor/NetscriptDefinitions.d.ts";
 export const RAM_COSTS = "src/Netscript/RamCostGenerator.ts";
 
-export interface ForwardReport {
+export interface WatchReport {
   pinned: { sha: string; version: string };
-  upstream: { ref: string; sha: string; version: string; date: string };
+  /** `ahead`: a later commit than the pinned one, with it in its history (not a rewind, a side branch or the same). */
+  upstream: { ref: string; sha: string; version: string; date: string; ahead: boolean };
   api: DeclarationDiff;
   /** The definitions file's unified diff. */
   rawApiDiff: string;
@@ -17,16 +18,28 @@ export interface ForwardReport {
   commits: { sha: string; title: string }[];
 }
 
+/**
+ * Which watcher the report is for. "dev" is the forward check (ADR 0005): what's coming further ahead. "stable" is the
+ * stable watcher (ADR 0003, 0010): a move there means a Steam update is coming, so its report leads with the bump steps.
+ */
+export type Watcher = "dev" | "stable";
+
 /** GitHub refuses issue bodies over 65,536 characters; this leaves room. */
 export const BODY_LIMIT = 60_000;
 /** Longer lists are cut, saying how many more there are: the issue is a pointer, the tool has the rest. */
 const LIST_LIMIT = 150;
 // Links into this repository: the report is about this project, whichever repository its issue is published to.
-const ADR = "https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/decisions/0005-forward-compat-dev-branch.md";
-const WATCHLIST = "https://github.com/UnderMyBed/bitburner-agent/blob/main/tools/upstream-watch/watchlist.txt";
+const REPO = "https://github.com/UnderMyBed/bitburner-agent/blob/main";
+const FORWARD_ADR = `${REPO}/docs/decisions/0005-forward-compat-dev-branch.md`;
+const PINNING_ADR = `${REPO}/docs/decisions/0003-game-version-pinning.md`;
+const STABLE_ADR = `${REPO}/docs/decisions/0010-stable-watcher-opens-an-issue.md`;
+const WATCHLIST = `${REPO}/tools/upstream-watch/watchlist.txt`;
 const CUT = "\n\nCut short to fit in an issue. Run the tool locally for the whole report.";
 
-export function changeCount(report: ForwardReport): number {
+/** Whether the upstream ref is another commit than the pinned one. */
+const moved = (report: WatchReport) => report.upstream.sha !== report.pinned.sha;
+
+export function changeCount(report: WatchReport): number {
   const { added, removed, changed } = report.api;
   return added.length + removed.length + changed.length + report.ram.length + report.commits.length;
 }
@@ -54,7 +67,7 @@ function capped<T>(items: T[], render: (item: T) => string, noun: string): strin
   return more > 0 ? [...lines, "", `…and ${count(more, `more ${noun}`)}.`] : lines;
 }
 
-function apiSection(report: ForwardReport): string[] {
+function apiSection(report: WatchReport): string[] {
   const { added, removed, changed } = report.api;
   if (added.length + removed.length + changed.length === 0) return ["No changes."];
   const lines: string[] = [];
@@ -77,7 +90,7 @@ function apiSection(report: ForwardReport): string[] {
   return lines;
 }
 
-function ramSection(report: ForwardReport): string[] {
+function ramSection(report: WatchReport): string[] {
   if (report.ram.length === 0) return ["No changes."];
   return [
     `| Function | Pinned | ${codeSpan(report.upstream.ref)} |`,
@@ -86,6 +99,44 @@ function ramSection(report: ForwardReport): string[] {
     "",
     "GB. (SF4) marks a Singularity cost, which is ×16 without Source-File 4 or at SF4.1, ×4 at SF4.2, and as shown at SF4.3 or in BitNode 4.",
   ];
+}
+
+/** What to do to move the pinned game to the upstream commit: the stable watcher's issue tracks these. */
+function bumpSteps(report: WatchReport): string[] {
+  const { sha } = report.upstream;
+  // Docs write the pinned commit as 9 characters (`1da7316ff`).
+  const old = [report.pinned.version, report.pinned.sha.slice(0, 9)];
+  return [
+    "## Bump steps",
+    "",
+    // The submodule is a shallow clone: a plain `fetch origin stable` pulls in years of history behind it.
+    `1. Point the submodule at it: \`git -C vendor/bitburner-src fetch --depth 1 origin ${sha}\`, then \`git -C vendor/bitburner-src checkout FETCH_HEAD\`, and commit the new gitlink.`,
+    "2. Update `PINNED_GAME` in `packages/core/src/game-version.ts` (version string, `VersionNumber`, commit). Its contract test checks it against the submodule.",
+    "3. Run `npm run setup:engine` (the game's lockfile may have changed), then `npm run check`.",
+    `4. Re-audit the simulator's browser parity: [the checklist](${REPO}/docs/sim/parity.md#re-auditing-after-a-version-bump).`,
+    `5. Run the heavy suites ([releasing](${REPO}/docs/releasing.md) step 2) and, once they exist, the smoke checks.`,
+    "6. Update the mechanics docs that the API, RAM cost and watched-source sections below touch.",
+    `7. Update the other mentions of the pinned version: search the repository for \`${old[0]}\` and \`${old[1]}\` (the README, CLAUDE.md, the architecture and mechanics docs).`,
+    "8. Open the bump PR as a normal PR (CI and the three-pass review), closing this issue.",
+    "",
+  ];
+}
+
+/** The opening paragraph: what was compared, and what it means for this watcher. */
+function intro(report: WatchReport, watcher: Watcher): string {
+  const { pinned, upstream } = report;
+  const theirs = `v${upstream.version} (\`${short(upstream.sha)}\`, committed ${upstream.date})`;
+  const ours = `v${pinned.version} (\`${short(pinned.sha)}\`)`;
+  if (watcher === "dev") {
+    return `Compared the pinned game, ${ours}, with upstream ${codeSpan(upstream.ref)}, ${theirs}. Generated by \`tools/upstream-watch\`; advisory only ([ADR 0005](${FORWARD_ADR})).`;
+  }
+  const generated = "Generated by `tools/upstream-watch`.";
+  if (!moved(report))
+    return `Upstream ${codeSpan(upstream.ref)} is the pinned commit, ${ours}: nothing to do. ${generated}`;
+  if (!upstream.ahead) {
+    return `Upstream ${codeSpan(upstream.ref)} differs from the pinned game, ${ours}, but isn't ahead of it: ${theirs} doesn't have the pinned commit in its history. A rewound branch or a test ref, not a release to bump to: check before acting on it. ${generated}`;
+  }
+  return `Upstream ${codeSpan(upstream.ref)} has moved ahead of the pinned game, ${ours}, to ${theirs}. Steam ships from \`stable\`, so a Steam update is coming. This issue tracks bumping the pinned game ([ADR 0003](${PINNING_ADR}), [ADR 0010](${STABLE_ADR})). ${generated}`;
 }
 
 /** The rawest part, the diff, is cut first to keep the body under the limit. */
@@ -107,8 +158,7 @@ function rawDiff(diff: string, room: number): string[] {
   return [...fence(cut.slice(0, cut.lastIndexOf("\n") + 1).trimEnd()), note.trim()];
 }
 
-export function renderReport(report: ForwardReport): string {
-  const { pinned, upstream } = report;
+export function renderReport(report: WatchReport, watcher: Watcher = "dev"): string {
   const total = changeCount(report);
   const declarations = report.api.added.length + report.api.removed.length + report.api.changed.length;
   const summary =
@@ -116,10 +166,11 @@ export function renderReport(report: ForwardReport): string {
       ? "**No changes.**"
       : `**${count(total, "change")}:** ${count(declarations, "API declaration")}, ${count(report.ram.length, "RAM cost")}, ${count(report.commits.length, "watched-source commit")}.`;
   const head = [
-    `Compared the pinned game, v${pinned.version} (\`${short(pinned.sha)}\`), with upstream ${codeSpan(upstream.ref)}, v${upstream.version} (\`${short(upstream.sha)}\`, committed ${upstream.date}). Generated by \`tools/upstream-watch\`; advisory only ([ADR 0005](${ADR})).`,
+    intro(report, watcher),
     "",
     summary,
     "",
+    ...(watcher === "stable" && report.upstream.ahead ? bumpSteps(report) : []),
     "## API surface",
     "",
     `\`${DEFINITIONS}\`, by declaration and member. Comments and formatting don't count.`,
@@ -154,4 +205,29 @@ export function renderReport(report: ForwardReport): string {
   if (body.length <= BODY_LIMIT) return body;
   const cut = body.slice(0, BODY_LIMIT - CUT.length);
   return cut.slice(0, cut.lastIndexOf("\n")).trimEnd() + CUT;
+}
+
+/** The report as `report --out` writes it, for `publish`. */
+export interface ReportFile {
+  /** Changed declarations, RAM costs and watched commits. */
+  changes: number;
+  /** Whether the ref is another commit than the pinned one, changes or not. */
+  moved: boolean;
+  /** Whether it's ahead of the pinned one: see `WatchReport.upstream.ahead`. */
+  ahead: boolean;
+  pinned: { sha: string; version: string };
+  upstream: { ref: string; sha: string; version: string };
+  markdown: string;
+}
+
+export function reportFile(report: WatchReport, watcher: Watcher = "dev"): ReportFile {
+  const { ref, sha, version, ahead } = report.upstream;
+  return {
+    changes: changeCount(report),
+    moved: moved(report),
+    ahead,
+    pinned: report.pinned,
+    upstream: { ref, sha, version },
+    markdown: renderReport(report, watcher),
+  };
 }

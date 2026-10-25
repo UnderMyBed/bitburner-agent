@@ -1,0 +1,95 @@
+# The upstream watchers' shared jobs (tools/upstream-watch/README.md), called by stable-watch.yml and
+# forward-check.yml. The report job reads upstream content with nothing but read access to this repository; only the
+# publish job, which runs our CLI on the finished report, can write issues. Every input reaches the scripts through
+# the environment, never interpolated into them.
+name: Upstream watch (shared)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Upstream ref to compare with the pinned game
+        type: string
+        required: true
+      watcher:
+        description: dev or stable (cli.ts report --watcher)
+        type: string
+        required: true
+      title:
+        description: The tracking issue's title; may use {version} and {sha}
+        type: string
+        required: true
+      prefix:
+        description: The title prefix that finds the tracking issue
+        type: string
+        required: true
+      publish_on:
+        description: changes or moved (cli.ts publish --on)
+        type: string
+        required: true
+      when_empty:
+        description: close or leave (cli.ts publish --when-empty)
+        type: string
+        required: true
+      dry_run:
+        description: Print what publish would do, and touch no issue
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.report.outputs.report }}
+    steps:
+      # No submodule needed: the pinned commit is read from the gitlink.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Clone the game's history (blobless)
+        run: git clone --quiet --filter=blob:none --no-checkout https://github.com/bitburner-official/bitburner-src.git "$RUNNER_TEMP/game"
+      - name: Build the report
+        id: report
+        env:
+          REF: ${{ inputs.ref }}
+          WATCHER: ${{ inputs.watcher }}
+        run: |
+          node tools/upstream-watch/cli.ts report --game "$RUNNER_TEMP/game" --ref "$REF" --watcher "$WATCHER" --out "$RUNNER_TEMP/report.json"
+          echo "report=$(jq -c . "$RUNNER_TEMP/report.json")" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ needs.report.outputs.report }}
+          TITLE: ${{ inputs.title }}
+          PREFIX: ${{ inputs.prefix }}
+          PUBLISH_ON: ${{ inputs.publish_on }}
+          WHEN_EMPTY: ${{ inputs.when_empty }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          printf '%s' "$REPORT" > "$RUNNER_TEMP/report.json"
+          args=(--report "$RUNNER_TEMP/report.json" --title "$TITLE" --prefix "$PREFIX" --on "$PUBLISH_ON" --when-empty "$WHEN_EMPTY")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node tools/upstream-watch/cli.ts publish "${args[@]}"

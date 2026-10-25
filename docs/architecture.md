@@ -37,7 +37,7 @@ It is **not** a scripted campaign. Behaviour that differs per BitNode should com
 
 | # | Constraint | Consequence |
 |---|---|---|
-| C1 | Steam build **v3.0.1** (VersionNumber 51); Steam updates whenever it ships (not pinned) | Pin the *source we test against*, detect drift at runtime, forward-check upstream `dev` (§12.4) |
+| C1 | Steam build **v3.0.1** (VersionNumber 51); Steam updates whenever it ships (not pinned) | Pin the *source we test against*, detect drift at runtime, watch upstream `stable` and `dev` (§12.4) |
 | C2 | Fresh save means **8 GB home RAM** and every NS function costs RAM | In-game code must be tiny, and expensive calls go in throwaway worker scripts |
 | C3 | RAM is charged by **identifier name** across all imported code; only `document`/`window` are special, and `eval("document")`, `WebSocket` and `fetch` are free | Bundling must be per-script and tree-shaken, with a RAM check in CI |
 | C4 | No Singularity until SF4; ×16, ×4 and ×1 RAM at SF4.1, 4.2 and 4.3 | All player actions go through **Effectors** (§5.6) with a UI backend and a Singularity backend |
@@ -529,7 +529,7 @@ packages/
   dashboard/    local web UI
   legacy/       retired-fork scripts (MIT, with notice; fork/ is byte-for-byte, see PROVENANCE.md) + adapters that run them as reflexes; also the simulator baseline
 spikes/         throwaway experiments; findings in docs/spikes/
-tools/          repository tooling run by Node, under the same gates (upstream-watch: the forward check against upstream dev)
+tools/          repository tooling run by Node, under the same gates (upstream-watch: the upstream stable and dev watchers)
 vendor/         bitburner-src submodule (pinned, read-only)
 ```
 - **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `dashboard` reads the store only. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
@@ -544,7 +544,7 @@ The fork is retired and does **not** play the campaign; the agent plays from BN1
 
 ### 12.4 Version management
 The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit Steam ships (3.0.1 = `1da7316ff`). We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
-1. **See it coming:** a CI workflow, run on demand and at every release (ADR 0009), watches upstream `stable`. When it moves, the workflow bumps the submodule on a branch, runs the full suite (including a diff of the API definitions), and opens a PR with a compatibility report. Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
+1. **See it coming:** a CI workflow, run on demand and at every release (ADR 0009), watches upstream `stable`. When it has moved ahead of the pinned commit, the workflow keeps one issue with a compatibility report (API, RAM cost and watched-source diffs) and the bump steps. The bump itself is a normal PR (ADR 0010, [`tools/upstream-watch`](../tools/upstream-watch/README.md)). Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
 2. **Hold at runtime:** on every connect the brain checks `VersionNumber` and `getDefinitionFile` against the pinned build. On a mismatch it goes to **hold**: reflexes keep running, no intents, alert raised.
 3. **Save backups:** the bridge pulls rotating saves via RFA (§6), so a bad patch or bug can always be rolled back.
 4. **Look further ahead:** a cheap, advisory check against upstream `dev`, run on demand and at every release (ADR 0009), covers API diff, contract typecheck (once the in-game package exists, #42), RAM cost diff and a commit log for a [watchlist](../tools/upstream-watch/watchlist.txt) of game source. It reports into one tracking issue and never blocks merges (ADR 0005, [`tools/upstream-watch`](../tools/upstream-watch/README.md)).
@@ -580,7 +580,7 @@ Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-a
 | Simulator too slow for heavy workloads (50–700× measured) | Slow scenario suites in late-game nodes | Worker pool; lean in-game code (`disableLog`, no code generation); long horizons on the fast model; profile, then optimise the harness or move hot paths (ADR 0006) |
 | Brain process down for long stretches | Suboptimal play | Safe mode; auto-start; alerts |
 | Game process dead, frozen or bloated (24/7 run) | Lost wall-clock time | Liveness detection and recovery (R9, §10.2); heap monitoring and no code generation (R10); save backups |
-| Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher PRs, runtime hold, save backups (§12.4) |
+| Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher issues, runtime hold, save backups (§12.4) |
 | UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
 | 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; the Agent degrades to a slow cadence when RAM-starved |
 

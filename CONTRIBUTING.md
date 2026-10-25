@@ -100,7 +100,7 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 | `npm run sim -- <scenario.json>` | Run a simulator scenario across seeds and print the results ([docs/sim/scenarios.md](docs/sim/scenarios.md)) |
 | `npm run bench -w @bitburner-agent/sim` | Benchmark the simulator's speed and memory and record a row ([docs/sim/benchmarks.md](docs/sim/benchmarks.md)); before releases, not in CI |
 
-Code lives in npm workspaces under `packages/` (see architecture §12.2). `tools/` holds repository tooling run by Node, under the same gates, such as [`tools/upstream-watch`](tools/upstream-watch/README.md), the forward check against upstream `dev`. `spikes/` is throwaway and excluded from the gates. `packages/legacy/fork/` is vendored third-party JS: Biome skips it, it's never edited, and `packages/legacy/test/fork.test.ts` checks its bytes.
+Code lives in npm workspaces under `packages/` (see architecture §12.2). `tools/` holds repository tooling run by Node, under the same gates, such as [`tools/upstream-watch`](tools/upstream-watch/README.md), the upstream `stable` and `dev` watchers. `spikes/` is throwaway and excluded from the gates. `packages/legacy/fork/` is vendored third-party JS: Biome skips it, it's never edited, and `packages/legacy/test/fork.test.ts` checks its bytes.
 
 ## Rules of engagement
 

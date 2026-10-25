@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { diffDeclarations, extractDeclarations } from "./declarations.ts";
 import { diffRamCosts, extractRamCosts } from "./ram-costs.ts";
-import { DEFINITIONS, type ForwardReport, RAM_COSTS } from "./report.ts";
+import { DEFINITIONS, RAM_COSTS, type WatchReport } from "./report.ts";
 
 const CONSTANTS = "src/Constants.ts";
 
@@ -25,8 +25,20 @@ function versionAt(game: string, rev: string): string {
   return /VersionString:\s*"([^"]+)"/.exec(constants)?.[1] ?? "unknown";
 }
 
+/** Whether `descendant` is `ancestor` or comes after it in history. */
+function isAncestor(game: string, ancestor: string, descendant: string): boolean {
+  try {
+    git(game, "merge-base", "--is-ancestor", ancestor, descendant);
+    return true;
+  } catch (error) {
+    // Exit 1 means "not an ancestor"; anything else is a real failure.
+    if ((error as { status?: number }).status === 1) return false;
+    throw error;
+  }
+}
+
 /** Everything the report says about `ref` against the pinned commit, read from the game clone at `game`. */
-export function buildReport(game: string, pinned: string, ref: string, watchlist: string[]): ForwardReport {
+export function buildReport(game: string, pinned: string, ref: string, watchlist: string[]): WatchReport {
   const sha = git(game, "rev-parse", `${ref}^{commit}`).trim();
   const show = (rev: string, file: string) => git(game, "show", `${rev}:${file}`);
   const log = git(game, "log", "--format=%H%x09%s", `${pinned}..${sha}`, "--", ...watchlist).trim();
@@ -37,6 +49,7 @@ export function buildReport(game: string, pinned: string, ref: string, watchlist
       sha,
       version: versionAt(game, sha),
       date: git(game, "log", "-1", "--format=%cs", sha).trim(),
+      ahead: sha !== pinned && isAncestor(game, pinned, sha),
     },
     api: diffDeclarations(extractDeclarations(show(pinned, DEFINITIONS)), extractDeclarations(show(sha, DEFINITIONS))),
     rawApiDiff: git(game, "diff", pinned, sha, "--", DEFINITIONS),
