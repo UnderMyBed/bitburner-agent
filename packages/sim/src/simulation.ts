@@ -6,12 +6,15 @@ import {
   type GameSummary,
   type HostMessage,
   type HostOptions,
+  type ProcessInfo,
+  type RunOptions,
+  type RunResult,
   validateAdvance,
   validateHostOptions,
 } from "./protocol.ts";
 import { RpcClient } from "./rpc.ts";
 
-export type { Fixture, GameSummary } from "./protocol.ts";
+export type { Fixture, GameSummary, ProcessInfo, RunOptions, RunResult, ScriptArg } from "./protocol.ts";
 export type SimulationOptions = HostOptions;
 
 const HOST_ENTRY = path.join(import.meta.dirname, "host", "main.ts");
@@ -98,6 +101,31 @@ export class Simulation {
   /** sha256 of the game's own save JSON: two simulations are in the same state exactly when these match. */
   stateHash(): Promise<string> {
     return this.rpc.call("stateHash", {});
+  }
+
+  /** Writes a script or text file on a server, as a player saving it in the editor would. */
+  writeFile(host: string, path: string, content: string): Promise<void> {
+    return this.rpc.call("writeFile", { host, path, content });
+  }
+
+  /** Starts a script as the terminal's `run` does. `pid` is 0 if the game refused, with its message in `error`. */
+  run(host: string, script: string, { threads = 1, args = [] }: RunOptions = {}): Promise<RunResult> {
+    return this.rpc.call("run", { host, script, threads, args });
+  }
+
+  /** Running scripts on a server, by pid. */
+  ps(host: string): Promise<ProcessInfo[]> {
+    return this.rpc.call("ps", { host });
+  }
+
+  /** A running or recently finished script's log lines. */
+  logs(pid: number): Promise<string[]> {
+    return this.rpc.call("logs", { pid });
+  }
+
+  /** Kills a running script; false if there is none with that pid. */
+  kill(pid: number): Promise<boolean> {
+    return this.rpc.call("kill", { pid });
   }
 
   /** For tests and troubleshooting. */

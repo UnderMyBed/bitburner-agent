@@ -2,7 +2,7 @@
 
 The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node, running on a virtual clock and deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
-> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game in a child process on a virtual clock, deterministically from a seed. Scripts, saves and scenarios follow in later tasks.
+> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game in a child process on a virtual clock, runs player scripts, and is deterministic from a seed. Saves and scenarios follow in later tasks.
 
 ## Setup
 
@@ -96,6 +96,29 @@ A fixture is the game state a simulation starts from.
 - **Autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.
 - **Without a fixture** the engine is loaded but no game is booted. That's only useful for testing the harness, and `summary()`/`stateHash()` refuse.
 
+### Scripts
+
+```ts
+await sim.writeFile("home", "hack.js", source);                    // as saving it in the editor
+const { pid, error } = await sim.run("home", "hack.js", { threads: 3, args: ["n00dles"] });
+await sim.advance(60 * 60_000);
+await sim.ps("home");   // [{ pid, filename, threads, args }]
+await sim.logs(pid);    // log lines, also after the script has finished
+await sim.kill(pid);    // false if no such script is running
+```
+
+- **These wrap the game's own functions.**
+  - `run` does what the terminal's `run` does: the same RAM check, pid allocation and failure messages. When the game refuses, `pid` is 0 and `error` holds its message.
+  - `writeFile` accepts script and text files.
+- **Script modules.** The game imports scripts from `blob:` URLs, which Node can't import.
+  - The host captures each script's source when the game creates its Blob, and hands out short `blob:sim/<n>` URLs served by a synchronous module hook (`src/host/scripts.ts`).
+  - Other Blobs, e.g. a save export, keep Node's own object URLs.
+  - The game revokes a script's URL right after starting its import, relying on browser semantics. So an import in progress keeps its source until it finishes.
+- **The import barrier.** Importing a module takes real time, and virtual time must not move meanwhile. Otherwise when a script starts, and everything that follows, would depend on how fast the machine is. The barrier has two layers:
+  - Between every two timers the clock fires, it waits until no import is in flight. This covers a script started mid-advance (e.g. by `ns.run`).
+  - Before every request it waits too. This covers the request right after `run`.
+
+  Each layer has its own test with a test hook that slows imports down (`testHooks.importDelayMs`). With the barrier switched off (`testHooks.disableImportBarrier`), the slowed run diverges at once.
 ### State hash and summary
 
 - **`stateHash()`** is the sha256 of the game's own save JSON (`saveObject.getSaveData()`, decoded), plus the positions of the seeded random streams.

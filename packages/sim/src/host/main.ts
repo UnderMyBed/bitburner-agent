@@ -13,6 +13,7 @@ import {
   type Result,
   validateAdvance,
   validateHostOptions,
+  validateRun,
 } from "../protocol.ts";
 import { installHost } from "./install.ts";
 import { pinnedLocale } from "./parity/locale.ts";
@@ -30,17 +31,23 @@ function bootFixture(engine: EngineApi, fixture: Fixture): Promise<void> {
   }
 }
 
-async function start(options: HostOptions): Promise<Handlers> {
+interface Host {
+  handlers: Handlers;
+  /** Resolves once no script module is being imported (the import barrier). */
+  quiescent(): Promise<void>;
+}
+
+async function start(options: HostOptions): Promise<Host> {
   validateHostOptions(options);
   const bootStarted = process.hrtime.bigint(); // real time: the virtual clock doesn't measure the host itself
-  const { clock, engine } = installHost(options);
+  const { clock, engine, scripts } = installHost(options);
   if (options.fixture) await bootFixture(engine, options.fixture);
   const bootMs = Math.round(Number(process.hrtime.bigint() - bootStarted) / 1e6);
   const booted = () => {
     if (!options.fixture) throw new Error("no game is booted: this simulation was started without a fixture");
   };
 
-  return {
+  const handlers: Handlers = {
     now: () => clock.now(),
     advance: async ({ ms }) => {
       validateAdvance(ms);
@@ -64,6 +71,27 @@ async function start(options: HostOptions): Promise<Handlers> {
         restoreRandomState(random);
       }
       return createHash("sha256").update(save).update(JSON.stringify(random)).digest("hex");
+    },
+    writeFile: ({ host, path, content }) => {
+      booted();
+      engine.writeFile(host, path, content);
+    },
+    run: ({ host, script, threads, args }) => {
+      booted();
+      validateRun({ threads, args });
+      return engine.runScript(host, script, threads, args);
+    },
+    ps: ({ host }) => {
+      booted();
+      return engine.ps(host);
+    },
+    logs: ({ pid }) => {
+      booted();
+      return engine.scriptLogs(pid);
+    },
+    kill: ({ pid }) => {
+      booted();
+      return engine.killScript(pid);
     },
     "diagnostics.clock": () => ({
       engineLastUpdate: engine.engineLastUpdate(),
@@ -91,18 +119,20 @@ async function start(options: HostOptions): Promise<Handlers> {
       process.exit(code);
     },
   };
+  return { handlers, quiescent: () => new Promise((resolve) => scripts.whenQuiescent(resolve)) };
 }
 
-let handlers: Handlers | undefined;
-// Everything runs strictly one after another. A request that arrived during an `advance` would otherwise observe (or
-// change) the game part-way through it, at a point that depends on real IPC timing: not deterministic.
+let host: Host | undefined;
+// Everything runs strictly one after another, and each request waits until no script module is being imported.
+// Otherwise a request could observe (or change) the game part-way through an `advance`, or before a script that was
+// just started has actually begun, at a point that depends on real timing: not deterministic.
 let queue: Promise<void> = Promise.resolve();
 
 process.on("message", (message: ParentMessage) => {
   queue = queue.then(async () => {
     if (message.type === "init") {
       try {
-        handlers = await start(message.options);
+        host = await start(message.options);
         send({ type: "ready" });
       } catch (error) {
         send({ type: "fatal", error: errorText(error) });
@@ -112,8 +142,10 @@ process.on("message", (message: ParentMessage) => {
     }
     const { id, method, params } = message;
     try {
-      const handler = handlers?.[method] as ((params: unknown) => unknown) | undefined;
-      if (!handler) throw new Error(handlers ? `unknown method ${method}` : "the host is not initialised");
+      if (!host) throw new Error("the host is not initialised");
+      await host.quiescent();
+      const handler = host.handlers[method] as ((params: unknown) => unknown) | undefined;
+      if (!handler) throw new Error(`unknown method ${method}`);
       send({ type: "response", id, ok: true, result: await handler(params) });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));

@@ -1,4 +1,4 @@
-import type { GameDiagnostics, GameSummary, Tutorial } from "../protocol.ts";
+import type { GameDiagnostics, GameSummary, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../protocol.ts";
 
 /**
  * The typed boundary between our code and the engine bundle. `bundle/entry.ts` (bundled together with the game, and
@@ -25,6 +25,14 @@ export interface EngineApi {
   saveJson(): Promise<string>;
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
   gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
+  /** Sets the game's hook for importing player-script modules. */
+  setScriptImport(doImport: (url: string) => Promise<unknown>): void;
+  writeFile(host: string, path: string, content: string): void;
+  /** As the terminal's `run`: the game's own RAM check, pid and failure message. */
+  runScript(host: string, path: string, threads: number, args: ScriptArg[]): RunResult;
+  ps(host: string): ProcessInfo[];
+  scriptLogs(pid: number): string[];
+  killScript(pid: number): boolean;
 }
 
 const API_FUNCTIONS = {
@@ -37,6 +45,12 @@ const API_FUNCTIONS = {
   gameSummary: true,
   saveJson: true,
   gameDiagnostics: true,
+  setScriptImport: true,
+  writeFile: true,
+  runScript: true,
+  ps: true,
+  scriptLogs: true,
+  killScript: true,
 } satisfies Record<keyof EngineApi, true>;
 
 export function assertEngineApi(exports: unknown): asserts exports is EngineApi {

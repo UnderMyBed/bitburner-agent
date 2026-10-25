@@ -10,6 +10,35 @@ export type Tutorial = "running" | "skipped";
 /** The game state a simulation starts from. A union: later fixture kinds add members. */
 export type Fixture = { kind: "new"; tutorial: Tutorial };
 
+/** Test-only knobs; never used by real scenarios. */
+export interface TestHooks {
+  /** Delays every script import by a real (not virtual) [min, max] ms, to prove the import barrier works. */
+  importDelayMs?: [number, number];
+  /** Turns the import barrier off, to show that the barrier test would catch its absence. */
+  disableImportBarrier?: boolean;
+}
+
+export type ScriptArg = string | number | boolean;
+
+export interface RunOptions {
+  /** Default 1. */
+  threads?: number;
+  args?: ScriptArg[];
+}
+
+/** pid is 0 when the game refused to start the script; rror then holds the game's own message. */
+export interface RunResult {
+  pid: number;
+  error?: string;
+}
+
+export interface ProcessInfo {
+  pid: number;
+  filename: string;
+  threads: number;
+  args: ScriptArg[];
+}
+
 export interface HostOptions {
   /** Seeds every source of randomness the game can reach. An unsigned 32-bit integer. */
   seed: number;
@@ -17,6 +46,7 @@ export interface HostOptions {
   epochMs: number;
   /** Without a fixture the engine is loaded but no game is booted. */
   fixture?: Fixture;
+  testHooks?: TestHooks;
 }
 
 /** A fixed-schema snapshot of the game, for tests and reports. */
@@ -76,6 +106,16 @@ export interface HostMethods {
   summary(params: Record<string, never>): GameSummary;
   /** sha256 of the game's own save JSON: two runs are identical exactly when their saves are. */
   stateHash(params: Record<string, never>): string;
+  /** Writes a script or text file, as a player saving it in the editor would. */
+  writeFile(params: { host: string; path: string; content: string }): void;
+  /** Starts a script as the terminal's `run` does: the game's own RAM check, pid and messages. */
+  run(params: { host: string; script: string; threads: number; args: ScriptArg[] }): RunResult;
+  /** Running scripts on a server, by pid. */
+  ps(params: { host: string }): ProcessInfo[];
+  /** A running or recently finished script's log lines. */
+  logs(params: { pid: number }): string[];
+  /** Kills a running script; false if there is none with that pid. */
+  kill(params: { pid: number }): boolean;
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   "diagnostics.random"(params: { count: number }): RandomSample;
@@ -105,14 +145,38 @@ export function validateHostOptions(options: HostOptions): void {
   if (!Number.isSafeInteger(epochMs) || epochMs < 0) {
     throw new RangeError(`epochMs must be a non-negative integer, got ${epochMs}`);
   }
-  const { fixture } = options;
-  if (fixture !== undefined) {
-    if (fixture.kind !== "new") throw new RangeError(`unknown fixture kind ${JSON.stringify(fixture.kind)}`);
-    if (fixture.tutorial !== "running" && fixture.tutorial !== "skipped") {
-      throw new RangeError(
-        `a new-game fixture needs tutorial: "running" or "skipped", got ${JSON.stringify(fixture.tutorial)}`,
-      );
+  if (options.fixture !== undefined) validateFixture(options.fixture);
+  const delay = options.testHooks?.importDelayMs;
+  if (delay && !(Number.isInteger(delay[0]) && Number.isInteger(delay[1]) && 0 <= delay[0] && delay[0] <= delay[1])) {
+    throw new RangeError(
+      `testHooks.importDelayMs must be [min, max] integers with 0 <= min <= max, got ${JSON.stringify(delay)}`,
+    );
+  }
+}
+
+function validateFixture(fixture: Fixture): void {
+  switch (fixture.kind) {
+    case "new":
+      if (fixture.tutorial !== "running" && fixture.tutorial !== "skipped") {
+        throw new RangeError(
+          `a new-game fixture needs tutorial: "running" or "skipped", got ${JSON.stringify(fixture.tutorial)}`,
+        );
+      }
+      return;
+    default: {
+      // Exhaustive: a new fixture kind that isn't handled here is a type error.
+      const unhandled: never = fixture.kind;
+      throw new RangeError(`unknown fixture kind ${JSON.stringify(unhandled)}`);
     }
+  }
+}
+
+export function validateRun({ threads, args }: { threads: number; args: ScriptArg[] }): void {
+  if (!Number.isSafeInteger(threads) || threads < 1) {
+    throw new RangeError(`threads must be a positive integer, got ${threads}`);
+  }
+  if (!args.every((arg) => ["string", "number", "boolean"].includes(typeof arg))) {
+    throw new RangeError("script args must be strings, numbers or booleans");
   }
 }
 
