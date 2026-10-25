@@ -31,7 +31,8 @@ const SCAN_TO = `        if (first && inRange(from, to, first)) {
  *
  * That holds while the heap's order follows due times, which fake-timers breaks in two ways: idle callbacks sort last
  * whatever their due time (the host doesn't fake `requestIdleCallback`), and an interval with no numeric delay is due
- * at NaN once it has fired (`callAt += interval`, fake-timers-src.js:1513; a script's `setInterval(fn)`; #80). Throws
+ * at NaN once it has fired (`callAt += interval`, fake-timers-src.js:1513). The host's timers rule out the second:
+ * every delay reaches fake-timers as a whole number (`browserDelay`, `browserInterval`; #80). Throws
  * if the version or the patched lines aren't the ones this was made for, so an upgrade can't keep the patch without a
  * re-check.
  */
@@ -91,16 +92,37 @@ export interface VirtualClock {
 const evaluateGlobally: (code: string) => unknown = globalThis.eval;
 
 /**
+ * A timer's delay as Chromium takes it (#80): the timeout is a WebIDL `long`, so ToNumber then ToInt32 (truncated;
+ * NaN and ±Infinity are 0; it wraps modulo 2^32), and HTML's timer steps make a negative one 0. fake-timers keeps a
+ * fraction and parses a non-number with `parseInt`, which gives `setInterval` a NaN interval.
+ */
+export function browserDelay(timeout: unknown): number {
+  return Math.max(0, Number(timeout) | 0);
+}
+
+/**
+ * An interval's delay. HTML clamps a timer under 4 ms to 4 ms once its nesting level passes a threshold, and each
+ * repeat of an interval nests one deeper, so a short interval settles at 4 ms. The threshold differs between Chromium
+ * versions, so this uses 4 ms from the start: an approximation for the first few firings, which also keeps a 0 ms
+ * interval from firing forever at one moment, as fake-timers would.
+ */
+export function browserInterval(timeout: unknown): number {
+  return Math.max(4, browserDelay(timeout));
+}
+
+/**
  * Timer callbacks run as a browser runs them:
- * - with `this` set to the window; fake-timers passes `null`. A string handler is evaluated, as code. The game relies on it: `Engine.start` is passed bare to
- *   setTimeout and assigns `this.isRunning`.
+ * - with `this` set to the window; fake-timers passes `null`. A string handler is evaluated, as code. The game relies
+ *   on it: `Engine.start` is passed bare to setTimeout and assigns `this.isRunning`.
  * - an exception a callback throws is reported as uncaught and the clock carries on; fake-timers would rethrow it out
  *   of `advance`.
+ * - after a delay taken as Chromium takes it (`browserDelay`, `browserInterval`).
  */
 function callTimersAsABrowserDoes(): void {
   const timers = globalThis as unknown as Record<"setTimeout" | "setInterval", (...args: unknown[]) => unknown>;
   for (const name of ["setTimeout", "setInterval"] as const) {
     const faked = timers[name];
+    const delay = name === "setTimeout" ? browserDelay : browserInterval;
     timers[name] = (handler: unknown, timeout?: unknown, ...args: unknown[]) => {
       const run = typeof handler === "function" ? handler : () => evaluateGlobally(String(handler));
       const callback = (...callbackArgs: unknown[]) => {
@@ -110,7 +132,7 @@ function callTimersAsABrowserDoes(): void {
           reportUncaughtException(error);
         }
       };
-      return faked(callback, timeout, ...args);
+      return faked(callback, delay(timeout), ...args);
     };
   }
 }

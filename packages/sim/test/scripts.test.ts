@@ -154,6 +154,38 @@ describe("running scripts", () => {
     );
   });
 
+  test("timer delays are taken as Chromium takes them: no, bad, negative and zero interval delays repeat every 4 ms", async () => {
+    // fake-timers alone gave `setInterval(fn)` a NaN interval, which broke its timer order (runUntil threw), and
+    // repeated a 0 ms interval forever at one moment (#80).
+    const sim = await newGame(1);
+    const script = `export async function main(ns) {
+      const start = Date.now();
+      const counts = { none: 0, text: 0, negative: 0, zero: 0 };
+      let fraction = -1;
+      setTimeout(() => { fraction = Date.now() - start; }, 1.9);
+      const ids = [
+        setInterval(() => counts.none++),
+        setInterval(() => counts.text++, "x"),
+        setInterval(() => counts.negative++, -5),
+        setInterval(() => counts.zero++, 0),
+      ];
+      await ns.sleep(1000);
+      for (const id of ids) clearInterval(id);
+      ns.print(JSON.stringify({ fraction, counts }));
+    }`;
+    await sim.writeFile("home", "timers.js", script);
+    const { pid } = await sim.run("home", "timers.js");
+    const { stoppedBy } = await sim.runUntil(5000, { stopWhen: [{ scriptExited: "timers.js" }] });
+    expect(stoppedBy).toBe(0);
+    const line = (await sim.logs(pid)).find((entry) => entry.startsWith("{"));
+    const { fraction, counts } = JSON.parse(line ?? "{}") as { fraction: number; counts: Record<string, number> };
+    expect(fraction).toBe(1); // 1.9 ms is 1 ms, as a WebIDL long
+    for (const count of Object.values(counts)) {
+      expect(count).toBeGreaterThanOrEqual(249);
+      expect(count).toBeLessThanOrEqual(250);
+    }
+  });
+
   test("garbage collection doesn't change results: compiled modules are held, as upstream dev holds them", async () => {
     // The game caches each compiled module by its source, through a WeakRef (NetscriptJSEvaluator.ts:41-47, :223-224).
     // A module the collector frees comes back fresh, its module-level state reset, so a script that keeps state at
