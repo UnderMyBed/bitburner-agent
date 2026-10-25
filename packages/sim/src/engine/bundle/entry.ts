@@ -23,6 +23,7 @@ import { resolveTextFilePath } from "../../../../../vendor/bitburner-src/src/Pat
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { enterBitNode } from "../../../../../vendor/bitburner-src/src/RedPill";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
+import type { ScriptModule, ScriptURL } from "../../../../../vendor/bitburner-src/src/Script/LoadedModule";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { SpecialServers } from "../../../../../vendor/bitburner-src/src/Server/data/SpecialServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
@@ -273,7 +274,8 @@ export function routerBack() {
 
 /** How the game imports player-script modules (NetscriptJSEvaluator's hook point, as its Jest tests use). */
 export function setScriptImport(doImport: (url: string) => Promise<unknown>) {
-  config.doImport = doImport;
+  // The host imports the module the game made, so what it resolves with is that module's namespace: a ScriptModule.
+  config.doImport = (url: ScriptURL) => doImport(url) as Promise<ScriptModule>;
 }
 
 function server(host: string) {

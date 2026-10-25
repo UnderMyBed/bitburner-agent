@@ -1,0 +1,16 @@
+{
+  // The simulator's bundled sources (src/engine/bundle/) import the game's source, so they're typechecked the way the
+  // game is: its own TypeScript (vendor/bitburner-src/node_modules) and its tsconfig. `npm run typecheck` runs this.
+  "extends": "../../vendor/bitburner-src/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../../vendor/bitburner-src",
+    "paths": {
+      "@player": ["src/Player"],
+      "@enums": ["src/Enums"],
+      "@nsdefs": ["src/ScriptEditor/NetscriptDefinitions"],
+      "*": ["*", "node_modules/*", "node_modules/@types/*"]
+    },
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/engine/bundle/*.ts", "../../vendor/bitburner-src/src/**/*.d.ts"]
+}

@@ -49,7 +49,12 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Everything else here is typechecked as usual. esbuild only strips types, so nothing typechecks these files: tests are their only guard, so keep them small.
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it a second time:
+- with the game's own TypeScript (`vendor/bitburner-src/node_modules`, installed by `npm run setup:engine`);
+- against the game's types, through [`tsconfig.bundle.json`](tsconfig.bundle.json), which extends the game's tsconfig and resolves its path aliases and packages;
+- run by `scripts/typecheck-bundle.ts`.
+
+esbuild only strips types, so this check is what catches a bundled file drifting from the game's API. Everything else here is typechecked as usual.
 
 The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`. `EngineApi` contains functions only.
 
@@ -347,5 +352,6 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
 | `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), prompt rules (`prompts.ts`), machine-independent paths (`paths.ts`), heap and CPU profile measurement (`measure.ts`), engine loading |
 | `src/host/parity/` | Browser-parity fixes: locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, no network |
-| `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts` (run by the root `npm run` scripts), `bench.ts` (`npm run bench -w @bitburner-agent/sim`) |
+| `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts`, `typecheck-bundle.ts` (run by the root `npm run` scripts), `bench.ts` (`npm run bench -w @bitburner-agent/sim`) |
+| `tsconfig.bundle.json` | The bundled sources' typecheck against the game's types ([Typecheck boundary](#typecheck-boundary)) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` holds child-process probes and save helpers (decoding, and editing saves into test fixtures) |

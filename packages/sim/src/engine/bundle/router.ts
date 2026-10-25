@@ -18,14 +18,10 @@ import { LocationName } from "../../../../../vendor/bitburner-src/src/Enums";
 import { GameCycleEvents } from "../../../../../vendor/bitburner-src/src/engine";
 import { prestigeWorkerScripts } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
+import type { ComplexPage } from "../../../../../vendor/bitburner-src/src/ui/Enums";
 import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { ActivateRecoveryMode, RecoveryMode } from "../../../../../vendor/bitburner-src/src/ui/React/RecoveryRoot";
-import {
-  type ComplexPage,
-  Page,
-  type PageContext,
-  type PageWithContext,
-} from "../../../../../vendor/bitburner-src/src/ui/Router";
+import { Page, type PageContext, type PageWithContext } from "../../../../../vendor/bitburner-src/src/ui/Router";
 import type { BitVerseReached } from "../../protocol.ts";
 
 const MAX_PAGES_IN_HISTORY = 10;
