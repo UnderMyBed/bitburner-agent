@@ -28,7 +28,9 @@ It takes a few minutes and isn't part of CI: CI machines vary too much for the n
   - The host's V8 heap is sampled after a full garbage collection when the scripts start, then at the end of each virtual day.
   - The row shows the first and last samples, and the growth per day: the median day-to-day change from day 1 on. The first day is left out because it's mostly warm-up.
   - A one-off step, such as a cache emptying once, doesn't move the median. A leak moves every day's change, so it does.
-  - Lean runs a fixed set of scripts, so this catches leaks in the game's loop and in running scripts. Leaks that grow with each new script module show up once the fork-style run ([#64](https://github.com/UnderMyBed/bitburner-agent/issues/64)) is added. Some growth there is expected: the simulator keeps one module per distinct script source it compiles ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), so only growth beyond that counts as a leak.
+  - Lean runs a fixed set of scripts, so this catches leaks in the game's loop and in running scripts. Leaks that grow with each new script module show in the legacy fork's run, which compiles temp scripts all the time: the [baseline](baselines.md) samples its heap the same way and records its growth per virtual day on each release ([#64](https://github.com/UnderMyBed/bitburner-agent/issues/64)). Some growth there is expected: the simulator keeps one module per distinct script source it compiles ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), so only growth beyond that counts as a leak.
+
+The legacy fork isn't one of these workloads: it lives in `@bitburner-agent/legacy`, which builds on the simulator, and a benchmark of it here would make the simulator depend on it. Its speed and heap are recorded with the [baseline](baselines.md) instead.
 
 Measurements come from inside the simulation's host process (`Simulation.diagnostics.heap()` and `.profile()`), not the process running the benchmark.
 

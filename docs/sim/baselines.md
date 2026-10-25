@@ -45,7 +45,7 @@ So by default ([#75](https://github.com/UnderMyBed/bitburner-agent/issues/75)):
 | Time to destroy | Virtual hours from the start to the destroy, over the seeds that passed: min / median / p90 / max |
 | Speed | Virtual ms per real ms, the median over the seeds that didn't fail (`ok`: no crash, refused script or request, recovery mode, or stopped loop), passed or not, measured with heap sampling on |
 | Real time per seed | The median over the same seeds |
-| Heap growth per virtual day | The median over seeds of each seed's growth, measured as benchmarks measure it: the median day-to-day change, the first day's change (warm-up) left out, from whole-day samples only. Some growth is expected: the simulator keeps one module per distinct script source compiled ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), and the fork compiles temp scripts all the time |
+| Heap growth per virtual day | The simulator's check for leaks that grow with each new script module, which the benchmarks' lean run can't see ([#64](https://github.com/UnderMyBed/bitburner-agent/issues/64)). The median over seeds of each seed's growth, measured as benchmarks measure it: the median day-to-day change, the first day's change (warm-up) left out, from whole-day samples only. Some growth is expected: the simulator keeps one module per distinct script source compiled ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), and the fork compiles temp scripts all the time |
 
 Medians of an even count take the lower middle value, as the scenario aggregate does. The command prints the row: paste it at the end of the table, and explain the run's failed seeds below.
 
