@@ -71,7 +71,8 @@ For each seed:
 | `virtualMs` | Virtual time the run took, from when its scripts started. |
 | `wallMs`, `speed` | Real time the run took (setup and the final hash excluded), and virtual ms per real ms. |
 | `stateHash`, `summary` | The final state hash and summary. |
-| `checkpoints` | `{ virtualMs, summary }` every `checkpointEveryMs`, and at the end. |
+| `checkpoints` | `{ virtualMs, summary }` every `checkpointEveryMs`, and at the end; with `measureHeap`, also `heapMb`. |
+| `heapStartMb` | With `measureHeap`: the host's heap after a full collection, in MB, as the run starts. |
 | `events` | Every event. |
 
 The results don't depend on how many seeds run at once: each has its own process.
@@ -89,7 +90,11 @@ npm run sim -- <scenario.json> [--seeds a..b | --seeds a,b,c] [--workers k] [--j
 - npm runs it from the repository root, so the scenario and `--json` paths are relative to that.
 - It exits 0 if every seed passed, 1 if any didn't, and 2 if it couldn't run at all (bad usage, a bad scenario, a build failure).
 
-From code, `runScenario`, `runSeed`, `loadScenario` and `formatRun` are exported by `@bitburner-agent/sim`.
+From code, `@bitburner-agent/sim` exports these:
+- `runScenario`, `runSeed`, `startScenario` (a simulation set up as a scenario says, not yet run), `loadScenario`, `formatRun`;
+- `parseSeeds` and `parseWorkers`, which parse the CLI's options.
+
+`runScenario`/`runSeed` take `measureHeap: true` to sample the host's heap after a full collection, as the run starts and at every checkpoint. Each sample takes real time, so speeds read a little lower. The [fork baseline](baselines.md) is a scenario built in code (`baselineScenario()` in `@bitburner-agent/legacy`), since its files come from the vendored fork. It runs with `npm run baseline -w @bitburner-agent/legacy`.
 
 ## Workloads
 

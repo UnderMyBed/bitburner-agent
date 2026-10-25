@@ -188,6 +188,17 @@ describe("running scenarios", () => {
     expect(only).toMatchObject({ ok: true, passed: true, stoppedBy: { list: "stopWhen", index: 0 } });
     expect(only?.checkpoints.map((c) => c.virtualMs)).toEqual([MINUTE, 2 * MINUTE, 150_000]);
     expect(only?.virtualMs).toBe(150_000);
+    expect(only?.heapStartMb).toBeUndefined();
+    expect(only?.checkpoints.every((c) => c.heapMb === undefined)).toBe(true);
+  });
+
+  test("with measureHeap, the heap is sampled as the run starts and at every checkpoint", async () => {
+    const scenario = lean({ checkpointEveryMs: MINUTE, durationMs: 2 * MINUTE });
+    const [only] = (await runScenario(scenario, { seeds: [1], workers: 1, measureHeap: true })).results;
+    const heaps = [only?.heapStartMb, ...(only?.checkpoints.map((c) => c.heapMb) ?? [])];
+    expect(heaps).toHaveLength(3);
+    for (const mb of heaps) expect(mb).toBeGreaterThan(10);
+    for (const mb of heaps) expect(mb).toBeLessThan(4096);
   });
 
   test("a failWhen condition ends the run and fails it", async () => {

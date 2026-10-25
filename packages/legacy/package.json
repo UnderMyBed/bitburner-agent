@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "exports": "./src/index.ts",
+  "scripts": {
+    "baseline": "node scripts/baseline.ts"
+  },
   "devDependencies": {
     "@bitburner-agent/sim": "*"
   }

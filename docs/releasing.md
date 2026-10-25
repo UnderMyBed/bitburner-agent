@@ -23,7 +23,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 
 2. **Run the heavy suites on it.** Check out the candidate commit, run each suite, and post its printed table on the review issue, naming the commit:
    - the workloads: `npm run sim -- packages/sim/scenarios/<name>.json` for each `.json` file there
-   - the baselines (the legacy-fork BN1 baseline, [#33](https://github.com/UnderMyBed/bitburner-agent/issues/33)): the full seed run, with results written up in `docs/sim/baselines.md`
+   - the baselines: `npm run baseline -w @bitburner-agent/legacy` runs the legacy fork's BN1 baseline over its 8 seeds, and its results go in a new row of [`docs/sim/baselines.md`](sim/baselines.md)
    - the benchmarks, on the reference rig: `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md` ([benchmarks](sim/benchmarks.md)). Post the printed row. A regression (exit 1) isn't recorded. Find the cause before going on: fix it, or say on the review issue why it's accepted and record it with `-- --accept` ([regressions](sim/benchmarks.md#regressions)).
    - the upstream watchers ([ADR 0009](decisions/0009-upstream-watchers-on-demand.md), [`tools/upstream-watch`](../tools/upstream-watch/README.md)). They run on `main`, which is the candidate commit until the close-out:
 

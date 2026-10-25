@@ -538,7 +538,7 @@ vendor/         bitburner-src submodule (pinned, read-only)
 
 ### 12.3 Migration from the fork (strangler pattern)
 The fork is retired and does **not** play the campaign; the agent plays from BN1.1. The fork's proven parts live on in three ways:
-1. **Baseline:** the fork (autopilot + daemon) runs in the simulator as the benchmark the planner must beat (M4 exit). The fork needs a human without SF4, so the fair comparison starts both from the **same BN1 state with SF4.3**, where the fork is fully automatic. For BN1.1 itself (no SF4) the agent is held to absolute targets instead: time-to-destroy and pass rate.
+1. **Baseline:** the fork (autopilot + daemon) runs in the simulator as the benchmark the planner must beat (M4 exit). The fork needs a human without SF4, so the fair comparison starts both from the **same BN1 state with SF4.3**: a fresh BitNode, 8 GB of home RAM. There the fork still can't run (its helper scripts don't fit), so its baseline starts with a **scripted early game** (owner decisions log #25): an in-game script does what a player does first, hacking n00dles and buying home RAM to 16 GB, then hands over to the fork, which is fully automatic from there. Every state stays one a player can reach, and the early game counts in the fork's time ([baselines](sim/baselines.md)). For BN1.1 itself (no SF4) the agent is held to absolute targets instead: time-to-destroy and pass rate.
 2. **Legacy reflexes:** fork managers (batcher, stocks, gang, Bladeburner) run under the agent through `legacy/` adapters, while the brain owns strategy.
 3. **Replacement:** legacy reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
 

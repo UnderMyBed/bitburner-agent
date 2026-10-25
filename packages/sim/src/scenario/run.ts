@@ -10,6 +10,8 @@ export interface Checkpoint {
   /** Virtual time since the run started (after setup), which `summary.virtualMs` counts from the boot. */
   virtualMs: number;
   summary: GameSummary;
+  /** The host's heap after a full collection, in MB, with `measureHeap`. */
+  heapMb?: number;
 }
 
 /** What ended a run early: a `stopWhen` or `failWhen` condition (by index), or arriving at the BitVerse. */
@@ -41,12 +43,19 @@ export interface SeedResult {
   stateHash?: string;
   summary?: GameSummary;
   checkpoints: Checkpoint[];
+  /** The host's heap after a full collection, in MB, as the run starts (after setup), with `measureHeap`. */
+  heapStartMb?: number;
   events: SimEvent[];
 }
 
 export interface ScenarioOptions {
   /** Where the scenario's relative paths start: the scenario file's directory. Default: the working directory. */
   baseDir?: string;
+  /**
+   * Sample the host's heap (after a full collection) as the run starts and at every checkpoint, to see whether it
+   * grows. Each sample collects garbage, which takes real time, so speeds read a little lower.
+   */
+  measureHeap?: boolean;
   /**
    * Test-only knobs: `crashSeeds` makes those seeds' simulations crash after they start, to show a failure stays
    * with its seed.
@@ -133,6 +142,10 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
   let sim: Simulation | undefined;
   try {
     sim = await startScenario(scenario, seed, options);
+    const live = sim;
+    const heapMb = async () => (options.measureHeap ? (await live.diagnostics.heap()) / 2 ** 20 : undefined);
+    const heapStartMb = await heapMb();
+    if (heapStartMb !== undefined) result.heapStartMb = heapStartMb;
     const stopWhen = scenario.stopWhen ?? [];
     const conditions = [...stopWhen, ...(scenario.failWhen ?? [])];
     const startedAt = await sim.now();
@@ -155,7 +168,12 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
             ? { list: "stopWhen", index: stoppedBy }
             : { list: "failWhen", index: stoppedBy - stopWhen.length };
       }
-      result.checkpoints.push({ virtualMs: elapsed, summary: await sim.summary() });
+      const checkpointHeap = await heapMb();
+      result.checkpoints.push({
+        virtualMs: elapsed,
+        summary: await sim.summary(),
+        ...(checkpointHeap !== undefined ? { heapMb: checkpointHeap } : {}),
+      });
     }
     result.wallMs = Math.round(performance.now() - wallStart);
     result.virtualMs = elapsed;

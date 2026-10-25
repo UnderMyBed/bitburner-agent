@@ -224,3 +224,21 @@ export function loadScenario(file: string): { scenario: Scenario; baseDir: strin
   validateScenario(parsed);
   return { scenario: parsed, baseDir: path.dirname(path.resolve(file)) };
 }
+
+/** A `--seeds` value: a range "3..7" or a list "1,2,5"; every part a plain integer, no duplicates. */
+export function parseSeeds(text: string): number[] {
+  const range = /^(\d+)\.\.(\d+)$/.exec(text);
+  const seeds = range
+    ? Array.from({ length: Number(range[2]) - Number(range[1]) + 1 }, (_, i) => Number(range[1]) + i)
+    : text.split(",").map((part) => (/^\d+$/.test(part) ? Number(part) : Number.NaN));
+  if (seeds.length === 0 || !seeds.every(isSeed) || new Set(seeds).size !== seeds.length) {
+    throw new RangeError(`--seeds: a range a..b (a <= b) or a list a,b,c of distinct seeds, got "${text}"`);
+  }
+  return seeds;
+}
+
+/** A `--workers` value: a positive integer. */
+export function parseWorkers(text: string): number {
+  if (!/^\d+$/.test(text) || Number(text) < 1) throw new RangeError(`--workers: a positive integer, got "${text}"`);
+  return Number(text);
+}
