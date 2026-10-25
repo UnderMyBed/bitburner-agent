@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   type Fixture,
+  MIN_HEAP_MB,
+  maxHeapError,
   type OnBitVerse,
   type PromptRule,
   type ScriptArg,
@@ -243,18 +245,22 @@ export function parseWorkers(text: string): number {
   return Number(text);
 }
 
-/** A `--wall-limit` value: whole minutes of real time per seed, at least 1. Returns ms. */
+/** The longest wall limit, in ms: the most a timer can wait (2^31 − 1 ms, about 24.8 days). */
+export const MAX_WALL_LIMIT_MS = 2 ** 31 - 1;
+
+/** A `--wall-limit` value: whole minutes of real time per seed, from 1 to 35,791 (`MAX_WALL_LIMIT_MS`). Returns ms. */
 export function parseWallLimit(text: string): number {
-  if (!/^\d+$/.test(text) || Number(text) < 1) {
-    throw new RangeError(`--wall-limit: whole minutes of real time per seed, at least 1, got "${text}"`);
+  const most = Math.floor(MAX_WALL_LIMIT_MS / 60_000);
+  if (!/^\d+$/.test(text) || Number(text) < 1 || Number(text) > most) {
+    throw new RangeError(`--wall-limit: whole minutes of real time per seed, 1 to ${most}, got "${text}"`);
   }
   return Number(text) * 60_000;
 }
 
-/** A `--max-heap` value: whole MB, at least 256 (`SimulationOptions.maxHeapMb`). */
+/** A `--max-heap` value: whole MB per simulation, at least `MIN_HEAP_MB` (`SimulationOptions.maxHeapMb`). */
 export function parseMaxHeap(text: string): number {
-  if (!/^\d+$/.test(text) || Number(text) < 256) {
-    throw new RangeError(`--max-heap: whole MB per simulation, at least 256, got "${text}"`);
+  if (!/^\d+$/.test(text) || maxHeapError(Number(text))) {
+    throw new RangeError(`--max-heap: whole MB per simulation, at least ${MIN_HEAP_MB}, got "${text}"`);
   }
   return Number(text);
 }

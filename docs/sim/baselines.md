@@ -31,7 +31,7 @@ While it runs, it prints a progress line per seed at the end of each virtual day
 So by default ([#75](https://github.com/UnderMyBed/bitburner-agent/issues/75)):
 - **One seed at a time** (`--workers` changes it).
 - **A hard limit of 12 hours of real time per seed** (`--wall-limit`, in minutes). The command kills a seed's simulation when its limit passes, even part-way through a virtual day, and the seed fails with "wall limit: …", keeping the days it finished. A seed that hits it needs a decision about where the baseline runs, not a longer limit.
-- **A 2 GB heap per simulation** (`--max-heap`, in MB). The fork's heap stayed near 120 MB, and reached 1 GB only with 144,000 scripts running.
+- **A 2 GB heap per simulation** (`--max-heap`, in MB). Measured on one seed ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)), the heap after a full collection stayed near 120 MB for 22 virtual hours and reached 1 GB with 144,144 scripts running. The processes still grew to 3.4 GB, because V8 grows its heap toward its limit before collecting; the cap makes it collect sooner ([scenarios](scenarios.md#the-cli)).
 
 ## What a row records
 

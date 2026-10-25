@@ -261,7 +261,7 @@ const { now, stoppedBy } = await sim.runUntil(24 * 3_600_000, {
 Scenario files run a described workload across many seeds in parallel, with per-seed results and an aggregate (the repeatability metric of architecture §9.3):
 
 ```
-npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--json out.json]
+npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--wall-limit minutes] [--max-heap MB] [--json out.json]
 ```
 
 [docs/sim/scenarios.md](../../docs/sim/scenarios.md) is the reference: the scenario file, stop and fail conditions, results, the aggregate, the CLI, and the workloads in `scenarios/` (lean, batch, churn, copies) mapped to spike S1's measurements.
@@ -354,7 +354,7 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 |---|---|
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
 | `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), and module stubs |
-| `src/scenario/` | Scenario specs (`spec.ts`), the runner and pool (`run.ts`), the CLI's table (`report.ts`) |
+| `src/scenario/` | Scenario specs and the CLIs' option parsers (`spec.ts`), the runner and pool (`run.ts`), the CLIs' table and progress line (`report.ts`), the `npm run sim` CLI (`cli.ts`) |
 | `src/bench/` | Benchmark results as `benchmarks.md` rows and the regression check (`report.ts`), profile summaries (`profile.ts`) |
 | `scenarios/` | Workload scenarios (lean, batch, churn, copies) and their scripts |
 | `src/simulation.ts`, `src/options.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, option resolution (epoch, reading saves), the RPC client, the message types |

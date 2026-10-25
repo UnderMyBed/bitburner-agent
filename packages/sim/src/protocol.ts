@@ -97,6 +97,15 @@ export interface SimulationOptions {
   testHooks?: TestHooks;
 }
 
+/** The least `maxHeapMb`: a booted game's heap is about 110 MB. */
+export const MIN_HEAP_MB = 256;
+
+/** Why `maxHeapMb` isn't usable, or null if it is (or isn't set). */
+export function maxHeapError(maxHeapMb: number | undefined): string | null {
+  if (maxHeapMb === undefined || (Number.isSafeInteger(maxHeapMb) && maxHeapMb >= MIN_HEAP_MB)) return null;
+  return `maxHeapMb must be a whole number of MB, at least ${MIN_HEAP_MB}, got ${maxHeapMb}`;
+}
+
 export interface PromptRule {
   /** Matches a prompt whose text contains this (case-sensitive). */
   match: string;
@@ -370,7 +379,7 @@ export interface HostMethods {
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */
   "diagnostics.heap"(params: Record<string, never>): number;
-  /** The host's V8 heap limit, in bytes (`heap_size_limit`): `maxHeapMb` plus a little for the young generation. */
+  /** The host's V8 heap limit, in bytes: `maxHeapMb` plus room for the young generation, or Node's default. */
   "diagnostics.heapLimit"(params: Record<string, never>): number;
   /**
    * Starts or stops a CPU profile of the host (the game and everything it runs). Stopping returns the profile, in the

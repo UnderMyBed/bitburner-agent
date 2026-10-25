@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
+import { scenarioCli } from "../src/scenario/cli.ts";
 import { formatRun } from "../src/scenario/report.ts";
 import {
   aggregate,
   defaultWorkers,
   distribution,
   runScenario,
+  runSeed,
   type SeedResult,
   startScenario,
 } from "../src/scenario/run.ts";
@@ -233,7 +235,11 @@ describe("running scenarios", () => {
     // Ten virtual years of the lean loop in 30-day pieces: many real seconds without a limit.
     const scenario = lean({ durationMs: 3650 * DAY, checkpointEveryMs: 30 * DAY });
     const [only] = (await runScenario(scenario, { seeds: [1], workers: 1, wallLimitMs: 500 })).results;
-    expect(only).toMatchObject({ ok: false, passed: false, error: expect.stringMatching(/^wall limit: 500 ms/) });
+    expect(only).toMatchObject({
+      ok: false,
+      passed: false,
+      error: "wall limit: 500 ms of real time reached; before its first checkpoint",
+    });
     expect(only?.wallMs).toBeGreaterThanOrEqual(500);
     expect(only?.wallMs).toBeLessThan(5000);
     const kept = only?.checkpoints ?? [];
@@ -241,6 +247,44 @@ describe("running scenarios", () => {
     expect(only?.virtualMs).toBe(kept.at(-1)?.virtualMs ?? 0);
   });
 
+  test("a seed stopped by its wall limit keeps the checkpoints it reached, and says where it got to", async () => {
+    const scenario = lean({ durationMs: 3650 * DAY, checkpointEveryMs: MINUTE });
+    const [only] = (await runScenario(scenario, { seeds: [1], workers: 1, wallLimitMs: 1500 })).results;
+    const kept = only?.checkpoints ?? [];
+    expect(kept.length).toBeGreaterThan(0);
+    const last = kept.at(-1);
+    expect(only?.virtualMs).toBe(last?.virtualMs);
+    expect(only?.summary).toEqual(last?.summary);
+    expect(only?.error).toBe(
+      `wall limit: 1500 ms of real time reached; its last checkpoint was at ${((last?.virtualMs ?? 0) / 3_600_000).toFixed(1)} virtual hours`,
+    );
+    expect(only?.stateHash).toBeUndefined();
+  });
+
+  test.each([0, -1, 1.5, Number.NaN, 2 ** 31])("refuses wallLimitMs %s before starting anything", async (ms) => {
+    await expect(runScenario(lean(), { seeds: [1], wallLimitMs: ms })).rejects.toThrow(/wallLimitMs/);
+    const result = await runSeed(lean(), 1, { wallLimitMs: ms });
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/wallLimitMs/) });
+  });
+
+  test("refuses a maxHeapMb that can't work before starting any seed", async () => {
+    await expect(runScenario(lean(), { seeds: [1, 2], maxHeapMb: 100 })).rejects.toThrow(/maxHeapMb/);
+  });
+
+  test.each([
+    [
+      "throws",
+      () => {
+        throw new Error("printer broke");
+      },
+    ],
+    ["returns a rejected promise", () => Promise.reject(new Error("printer broke"))],
+  ])("a progress callback that %s doesn't change the seed's result", async (_, onCheckpoint) => {
+    const scenario = lean({ checkpointEveryMs: MINUTE, durationMs: 2 * MINUTE });
+    const [only] = (await runScenario(scenario, { seeds: [1], workers: 1, onCheckpoint })).results;
+    expect(only).toMatchObject({ ok: true, passed: true, virtualMs: 2 * MINUTE });
+    expect(only?.checkpoints).toHaveLength(2);
+  });
   test("maxHeapMb reaches each seed's simulation", async () => {
     const sim = await startScenario(lean(), 1, { maxHeapMb: 512 });
     try {
@@ -336,7 +380,37 @@ describe("the CLI", () => {
     expect(written.results.every((r) => r.ok && r.summary !== undefined)).toBe(true);
   });
 
-  test("prints a progress line per seed per checkpoint on stderr; --wall-limit and --max-heap reach the run", async () => {
+  test("passes --seeds, --workers, --wall-limit (minutes) and --max-heap (MB) to the run", async () => {
+    const runs: unknown[] = [];
+    const code = await scenarioCli(
+      [
+        "packages/sim/scenarios/lean.json",
+        "--seeds",
+        "2..3",
+        "--workers",
+        "1",
+        "--wall-limit",
+        "90",
+        "--max-heap",
+        "512",
+      ],
+      {
+        buildEngine: async () => undefined,
+        runScenario: async (scenario, options) => {
+          runs.push(options);
+          return { scenario: scenario.name, results: [], aggregate: aggregate([]) };
+        },
+        log: () => {},
+        error: () => {},
+      },
+    );
+    expect(code).toBe(0);
+    expect(runs).toEqual([
+      expect.objectContaining({ seeds: [2, 3], workers: 1, wallLimitMs: 90 * MINUTE, maxHeapMb: 512 }),
+    ]);
+  });
+
+  test("prints a progress line per seed per checkpoint on stderr, and accepts --wall-limit and --max-heap", async () => {
     const dir = writeScenario("cli-progress", {
       ...lean(),
       files: { home: "scripts" },
@@ -382,6 +456,8 @@ describe("the CLI", () => {
     [["packages/sim/scenarios/lean.json", "--wall-limit", "0"], "--wall-limit"],
     [["packages/sim/scenarios/lean.json", "--wall-limit", "1.5"], "--wall-limit"],
     [["packages/sim/scenarios/lean.json", "--max-heap", "128"], "--max-heap"],
+    [["packages/sim/scenarios/lean.json", "--wall-limit", "35792"], "--wall-limit"],
+    [["packages/sim/scenarios/lean.json", "--max-heap", "100000000000000000000"], "--max-heap"],
   ])("refuses %o, exiting 2", async (args, message) => {
     expect(await run(...args)).toMatchObject({ code: 2, stderr: expect.stringContaining(message) });
   });

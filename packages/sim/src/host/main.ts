@@ -4,7 +4,6 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
 import process from "node:process";
-import { getHeapStatistics } from "node:v8";
 import type { EngineApi } from "../engine/api.ts";
 import {
   type HostFixture,
@@ -22,7 +21,7 @@ import {
 } from "../protocol.ts";
 import { events } from "./events.ts";
 import { installHost } from "./install.ts";
-import { heapUsed, startProfile, stopProfile } from "./measure.ts";
+import { heapLimit, heapUsed, startProfile, stopProfile } from "./measure.ts";
 import { pinnedLocale } from "./parity/locale.ts";
 import { randomState, restoreRandomState } from "./random.ts";
 import { runUntil, watchBitNodeEntries } from "./run-until.ts";
@@ -172,7 +171,7 @@ async function start(options: HostOptions): Promise<Host> {
     },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
-    "diagnostics.heapLimit": () => getHeapStatistics().heap_size_limit,
+    "diagnostics.heapLimit": () => heapLimit(),
     "diagnostics.profile": async ({ action }) => {
       if (action === "start") {
         await startProfile();

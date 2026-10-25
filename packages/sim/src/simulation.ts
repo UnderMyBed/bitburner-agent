@@ -8,6 +8,7 @@ import {
   type GameSummary,
   type HostMessage,
   type HostOptions,
+  maxHeapError,
   type ProcessInfo,
   type RunOptions,
   type RunResult,
@@ -46,8 +47,6 @@ export type {
 const HOST_ENTRY = path.join(import.meta.dirname, "host", "main.ts");
 const OUTPUT_TAIL_CHARS = 8192;
 const STARTUP_TIMEOUT_MS = 60_000;
-/** The least `maxHeapMb`: a booted game's heap is about 110 MB. */
-const MIN_HEAP_MB = 256;
 
 /**
  * One simulated game in its own process (game state is global, so one engine per process). The engine is loaded on
@@ -63,13 +62,15 @@ export class Simulation {
   }
 
   static async start({ maxHeapMb, ...options }: SimulationOptions): Promise<Simulation> {
-    if (maxHeapMb !== undefined && !(Number.isSafeInteger(maxHeapMb) && maxHeapMb >= MIN_HEAP_MB)) {
-      throw new RangeError(`maxHeapMb must be a whole number of MB, at least ${MIN_HEAP_MB}, got ${maxHeapMb}`);
-    }
+    const badHeap = maxHeapError(maxHeapMb);
+    if (badHeap) throw new RangeError(badHeap);
     return Simulation.spawn(resolveOptions(options), maxHeapMb);
   }
 
-  /** Starts a host without the parent-side checks, so tests can reach the host's own validation. */
+  /**
+   * Starts a host without the parent-side checks, so tests can reach the host's own validation. `maxHeapMb` becomes
+   * the host's `--max-old-space-size`, unchecked.
+   */
   static async spawn(options: HostOptions, maxHeapMb?: number): Promise<Simulation> {
     const child = fork(HOST_ENTRY, [], {
       // Don't inherit the parent's Node flags (e.g. a test runner's loaders): the host is plain Node.

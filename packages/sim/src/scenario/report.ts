@@ -1,4 +1,5 @@
-// The CLI's text report of a scenario run: one row per seed, the aggregate, then the errors in full.
+// The CLIs' text output for a scenario run: the table (one row per seed, the aggregate, then the errors in full), and
+// the progress line printed at each checkpoint.
 import type { Checkpoint, Distribution, ScenarioRun, SeedResult } from "./run.ts";
 
 const hours = (ms: number) => `${(ms / 3_600_000).toFixed(2)} h`;
@@ -22,7 +23,8 @@ function stop(r: SeedResult): string {
  * CLIs print one per seed per checkpoint, to stderr, so a long run shows how far each seed has got.
  */
 export function formatProgress(seed: number, { virtualMs, summary }: Checkpoint, wallMs: number): string {
-  const speed = wallMs > 0 ? `${Math.round(virtualMs / wallMs)}x` : "-";
+  const ratio = wallMs > 0 ? virtualMs / wallMs : null;
+  const speed = ratio === null ? "-" : `${ratio < 10 ? ratio.toFixed(1) : Math.round(ratio)}x`;
   const real = `${(wallMs / 60_000).toFixed(1)} min`;
   return (
     `seed ${seed}: ${hours(virtualMs)} virtual, ${real} real, ${speed}; ` +
