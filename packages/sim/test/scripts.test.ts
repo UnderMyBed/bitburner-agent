@@ -153,6 +153,34 @@ describe("running scripts", () => {
       "The requested module 'lib01.js' does not provide an export named 'nope'",
     );
   });
+
+  test("garbage collection doesn't change results: compiled modules are held, as upstream dev holds them", async () => {
+    // The game caches each compiled module by its source, through a WeakRef (NetscriptJSEvaluator.ts:41-46). A module
+    // the collector frees comes back fresh, its module-level state reset, so a script that keeps state at module level
+    // (as the legacy fork does) would act on when the collector ran (#73). Here a file changes and changes back, which
+    // leaves its first module only in the cache; one game then collects garbage before the second run.
+    const counter = (note = "") =>
+      `let runs = 0;\nexport async function main(ns) { runs++; ns.print("run " + runs); }${note}`;
+    const [kept, collected] = await Promise.all([newGame(1), newGame(1)]);
+    const counts: string[][] = [];
+    for (const sim of [kept, collected]) {
+      await sim.writeFile("home", "counter.js", counter());
+      const first = await sim.run("home", "counter.js");
+      await sim.advance(1000);
+      await sim.writeFile("home", "counter.js", counter("\n// changed"));
+      await sim.writeFile("home", "counter.js", counter());
+      if (sim === collected) await sim.diagnostics.heap(); // a full collection
+      const second = await sim.run("home", "counter.js");
+      await sim.advance(1000);
+      const lines = [...(await sim.logs(first.pid)), ...(await sim.logs(second.pid))];
+      counts.push(lines.filter((line) => line.startsWith("run ")));
+    }
+    expect(counts).toEqual([
+      ["run 1", "run 2"],
+      ["run 1", "run 2"],
+    ]);
+    expect(await collected.stateHash()).toBe(await kept.stateHash());
+  });
 });
 
 describe("import barrier", () => {

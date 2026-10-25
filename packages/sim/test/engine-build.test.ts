@@ -10,6 +10,7 @@ import {
   collectEngineInputs,
   type EngineInputs,
   engineFingerprint,
+  holdModules,
 } from "../src/engine/build.ts";
 import { enginePaths } from "../src/engine/paths.ts";
 import { checkVendorInstall, lockfileHash, writeSetupStamp } from "../src/engine/vendor.ts";
@@ -57,6 +58,7 @@ describe("collectEngineInputs", () => {
       "router.ts",
       "stubs/node-builtin.js",
       "stubs/null.cjs",
+      "stubs/strong-refs.ts",
       "stubs/swc.js",
     ]);
   });
@@ -139,6 +141,45 @@ describe("engine bundle", () => {
     // Mapped to stubs, so they must not be bundled as packages.
     expect(report.packages).not.toContain("monaco-editor");
     expect(report.packages).not.toContain("@swc/wasm-web");
-    expect(report.stubs).toEqual(expect.arrayContaining(["stubs/node-builtin.js", "stubs/null.cjs", "stubs/swc.js"]));
+    expect(report.stubs).toEqual(
+      expect.arrayContaining(["stubs/node-builtin.js", "stubs/null.cjs", "stubs/strong-refs.ts", "stubs/swc.js"]),
+    );
+  });
+
+  test("the game's module cache, and only it, gets the strong WeakRef and FinalizationRegistry (#73)", () => {
+    const bundle = readFileSync(enginePaths.bundle, "utf8");
+    expect(bundle).toContain("moduleCache.set(newCode, new StrongRef(script.mod))");
+    expect(bundle).toMatch(/var cleanup = new InertFinalizationRegistry\(/);
+    expect(bundle.match(/new (StrongRef|InertFinalizationRegistry)\(/g)).toHaveLength(2);
+  });
+});
+
+describe("holdModules", () => {
+  const cache = "const c = new Map();\nconst r = new FinalizationRegistry(() => {});\nc.set(k, new WeakRef(m));";
+
+  test("imports the strong stand-ins into the module cache's source, which is otherwise unchanged", () => {
+    const [first, ...rest] = holdModules(cache).split("\n");
+    expect(first).toMatch(/^import \{ WeakRef, FinalizationRegistry \} from ".*\/stubs\/strong-refs\.ts";$/);
+    expect(rest.join("\n")).toBe(cache);
+  });
+
+  test.each([
+    ["a WeakRef", cache.replace("new WeakRef(m)", "m")],
+    ["a FinalizationRegistry", cache.replace("new FinalizationRegistry(() => {})", "null")],
+  ])("fails the build once the cache no longer makes %s, so the patch goes", (_, source) => {
+    expect(() => holdModules(source)).toThrow(/remove holdModules/);
+  });
+});
+
+describe("the strong stand-ins", () => {
+  test("a StrongRef always returns its target; the registry never calls back", async () => {
+    const { WeakRef: Strong, FinalizationRegistry: Inert } = await import("../src/engine/bundle/stubs/strong-refs.ts");
+    const target = {};
+    expect(new Strong(target).deref()).toBe(target);
+    const registry = new Inert(() => {
+      throw new Error("called back");
+    });
+    expect(registry.register(target, "key")).toBeUndefined();
+    expect(registry.unregister(target)).toBe(false);
   });
 });

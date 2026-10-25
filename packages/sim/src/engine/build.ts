@@ -99,8 +99,30 @@ function gameModules(): esbuild.Plugin {
         loader: "text",
       }));
       build.onResolve({ filter: aliasFilter }, (args) => ({ path: aliases[args.path] }));
+      build.onLoad({ filter: /[\\/]src[\\/]NetscriptJSEvaluator\.ts$/ }, (args) => ({
+        contents: holdModules(readFileSync(args.path, "utf8")),
+        loader: "ts",
+      }));
     },
   };
+}
+
+/**
+ * The game's module cache holds each compiled module through a `WeakRef` and drops its entry from a
+ * `FinalizationRegistry` callback (NetscriptJSEvaluator.ts:41-46, :223). A module the collector frees comes back
+ * fresh, its module-level state reset, so results would depend on when the collector runs (#73). This imports strong
+ * stand-ins into that file alone (stubs/strong-refs.ts), so the cache holds every module, as upstream dev's does.
+ * Throws if the file stops using them, so the patch goes when a version bump makes it unnecessary.
+ */
+export function holdModules(source: string): string {
+  if (!/new WeakRef\(/.test(source) || !/new FinalizationRegistry\(/.test(source)) {
+    throw new Error(
+      "NetscriptJSEvaluator.ts no longer makes a WeakRef and a FinalizationRegistry: re-check the module cache, " +
+        "then remove holdModules (packages/sim/src/engine/build.ts) and its row in docs/sim/parity.md (#73).",
+    );
+  }
+  const stub = path.join(stubDir, "strong-refs.ts").replaceAll("\\", "/");
+  return `import { WeakRef, FinalizationRegistry } from ${JSON.stringify(stub)};\n${source}`;
 }
 
 function packageOf(input: string): string {

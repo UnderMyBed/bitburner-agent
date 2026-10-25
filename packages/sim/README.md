@@ -44,6 +44,7 @@ npm run build:engine   # bundles the engine (also done automatically before test
 | `crypto` (Node built-in) | `fallback: { crypto: false }` in webpack | Empty module (`stubs/node-builtin.js`), the same |
 | `/utils/Protections` | Null mock in Jest | Not needed: the entry never imports `index.tsx`, the only importer |
 | `__COMMIT_HASH__` | webpack injects `git rev-parse --short HEAD` | Same value, so `ns.ui.getGameInfo().commit` matches the game |
+| `WeakRef`, `FinalizationRegistry` in `NetscriptJSEvaluator.ts` (the script module cache) | The browser's | **Strong stand-ins** (`stubs/strong-refs.ts`), imported into that file alone (`holdModules`), so compiled modules are never dropped, as on upstream dev. See "Differences from a browser" |
 
 The entry imports the game's `engine` module, so the bundle contains the whole game and its UI dependencies (React, MUI and so on), about 16 MB. That's harmless at runtime and makes loading the bundle exercise the real module graph.
 
@@ -332,6 +333,7 @@ Deliberate differences:
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
 - **No windows and no network.** Tail windows don't exist: `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail calls do nothing. `ns.ui.windowSize()` is a fixed 1024×768. The simulation is offline ([Browser globals, errors and network](#browser-globals-errors-and-network)).
 - **A simulated player at the UI.** Prompt rules answer at once, and error popups are closed at once ([Prompts](#prompts), [Events](#events)).
+- **Compiled script modules are never dropped.** The game caches each script's compiled module by its source. On v3.0.1 the cache holds modules weakly, so a browser's garbage collector can drop one whenever no file has that source any more; the next script with the same source then gets a fresh module, with its module-level variables reset. Here the cache holds every module, as upstream dev's does ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), so a script's module-level state lasts as long as the simulation, and results don't depend on when the collector runs. Our in-game code must not depend on module-level state either lasting or resetting.
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
 
 The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists any open gaps and the deliberate differences.
