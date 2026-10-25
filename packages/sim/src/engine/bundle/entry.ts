@@ -1,5 +1,6 @@
-// Bundled together with the game's source into dist/engine.cjs. Not typechecked by the repo's tsc: it imports the
-// game, which builds under its own TypeScript setup. Keep it minimal; its exports must match EngineApi (../api.ts).
+// Bundled together with the game's source into dist/engine.cjs. It imports the game, so it's typechecked the game's way
+// (tsconfig.bundle.json, README "Typecheck boundary"), not by the repo's tsc. Keep it minimal; its exports must match
+// EngineApi (../api.ts), which the typecheck checks at the end of this file.
 import { getBitNodeMultipliers } from "../../../../../vendor/bitburner-src/src/BitNode/BitNode";
 import { currentNodeMults } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeMultipliers";
 import {
@@ -23,6 +24,7 @@ import { resolveTextFilePath } from "../../../../../vendor/bitburner-src/src/Pat
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { enterBitNode } from "../../../../../vendor/bitburner-src/src/RedPill";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
+import type { ScriptModule, ScriptURL } from "../../../../../vendor/bitburner-src/src/Script/LoadedModule";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { SpecialServers } from "../../../../../vendor/bitburner-src/src/Server/data/SpecialServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
@@ -34,6 +36,7 @@ import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
 import type { GameEvent, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import type { EngineApi } from "../api.ts";
 import { answerPrompts, captureUi, installPageGlobals } from "./page.ts";
 import { bitVerseFlume, mountRouter, routerPages } from "./router.ts";
 
@@ -273,7 +276,8 @@ export function routerBack() {
 
 /** How the game imports player-script modules (NetscriptJSEvaluator's hook point, as its Jest tests use). */
 export function setScriptImport(doImport: (url: string) => Promise<unknown>) {
-  config.doImport = doImport;
+  // The host imports the module the game made, so what it resolves with is that module's namespace: a ScriptModule.
+  config.doImport = (url: ScriptURL) => doImport(url) as Promise<ScriptModule>;
 }
 
 function server(host: string) {
@@ -327,3 +331,7 @@ export function scriptLogs(pid: number): string[] {
 export function killScript(pid: number): boolean {
   return killWorkerScriptByPid(pid);
 }
+
+// The typecheck checks this module's exports against EngineApi, the interface our code uses (assertEngineApi checks
+// at runtime that none is missing or extra).
+null as unknown as typeof import("./entry.ts") satisfies EngineApi;

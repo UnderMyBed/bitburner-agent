@@ -1,0 +1,23 @@
+{
+  // The simulator's bundled sources (src/engine/bundle/) import the game's source, so they're typechecked the way the
+  // game is: with its own TypeScript (scripts/typecheck-bundle.ts runs it) and its tsconfig, extended here:
+  // - `paths` replaces the game's whole map, so its aliases are restated: keep them in step with the game's
+  //   tsconfig.json. `*` lets bare imports (`src/...`, `react`, `lodash`) resolve against the game's root and
+  //   node_modules, not this repository's.
+  // - `typeRoots`: the game's global types (its @types/node, jest…), not this repository's.
+  // - `allowImportingTsExtensions`: our files import `../../protocol.ts` and `../api.ts` with their extensions.
+  // - The game's `.d.ts` files hold its global declarations.
+  "extends": "../../vendor/bitburner-src/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../../vendor/bitburner-src",
+    "paths": {
+      "@player": ["src/Player"],
+      "@enums": ["src/Enums"],
+      "@nsdefs": ["src/ScriptEditor/NetscriptDefinitions"],
+      "*": ["*", "node_modules/*", "node_modules/@types/*"]
+    },
+    "typeRoots": ["../../vendor/bitburner-src/node_modules/@types"],
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/engine/bundle/**/*.ts", "../../vendor/bitburner-src/src/**/*.d.ts"]
+}

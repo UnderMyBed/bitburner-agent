@@ -93,7 +93,7 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 
 | Command | What it does |
 |---|---|
-| `npm run typecheck` | TypeScript, strict (unused locals/parameters are errors), every `.ts` file under `packages/` and `tools/` except the simulator's bundled sources (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)); no emit, Node runs `.ts` directly |
+| `npm run typecheck` | Two steps. First TypeScript, strict (unused locals/parameters are errors), every `.ts` file under `packages/` and `tools/` except the simulator's bundled sources. Then those bundled sources, against the game's types with the game's own TypeScript and options; this needs `npm run setup:engine` (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)). No emit: Node runs `.ts` directly |
 | `npm run lint` / `npm run lint:fix` | Biome lint and format check, warnings are errors / apply fixes |
 | `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/` and `tools/`. Builds the engine bundle first if it's stale, so it needs `npm run setup:engine` once |
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |

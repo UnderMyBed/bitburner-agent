@@ -11,21 +11,17 @@
 // Mirrors GameRoot.tsx at v3.0.1: MAX_PAGES_IN_HISTORY (:99), determineStartPage (:152-173), hiddenPages and the
 // Router itself (:238-291). test/router.test.ts checks the copied constants against the game's source, so a version
 // bump that changes them fails loudly; docs/sim/parity.md §2 lists every behaviour and its test. Bundled with the game
-// (entry.ts), so the repo's tsc doesn't check this file: keep it small.
+// (entry.ts) and typechecked the game's way (tsconfig.bundle.json), not by the repo's tsc: keep it small.
 import { calculateAchievements } from "../../../../../vendor/bitburner-src/src/Achievements/Achievements";
 import { isBitNodeFinished } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
 import { LocationName } from "../../../../../vendor/bitburner-src/src/Enums";
 import { GameCycleEvents } from "../../../../../vendor/bitburner-src/src/engine";
 import { prestigeWorkerScripts } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
+import type { ComplexPage } from "../../../../../vendor/bitburner-src/src/ui/Enums";
 import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { ActivateRecoveryMode, RecoveryMode } from "../../../../../vendor/bitburner-src/src/ui/React/RecoveryRoot";
-import {
-  type ComplexPage,
-  Page,
-  type PageContext,
-  type PageWithContext,
-} from "../../../../../vendor/bitburner-src/src/ui/Router";
+import { Page, type PageContext, type PageWithContext } from "../../../../../vendor/bitburner-src/src/ui/Router";
 import type { BitVerseReached } from "../../protocol.ts";
 
 const MAX_PAGES_IN_HISTORY = 10;
