@@ -2,7 +2,7 @@
 
 The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node. When complete, it will run on a virtual clock, deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
-> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it builds the engine bundle and loads it under a headless DOM. The clock, sessions, scripts, saves and scenarios follow in later tasks.
+> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it builds the engine bundle and runs it in a child process on a virtual clock with seeded randomness. Booting a game, scripts, saves and scenarios follow in later tasks.
 
 ## Setup
 
@@ -53,19 +53,45 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`. `EngineApi` contains functions only.
 
-## Inside a simulation process
-
-This is host-internal: later tasks wrap it in a session API that runs it in a child process. Don't import these from other packages.
+## Using a simulation
 
 ```ts
-installDom();               // first: the game touches window/document while its modules load
-const engine = loadEngine(); // dist/engine.cjs, checked against EngineApi
+import { Simulation } from "@bitburner-agent/sim";
+
+const sim = await Simulation.start({ seed: 1, epochMs: Date.UTC(2026, 0, 1) });
+await sim.advance(60 * 60_000); // one virtual hour
+console.log(await sim.now());   // epochMs + 3,600,000
+await sim.close();
 ```
+
+- **One process per simulation.** `Simulation.start` forks a fresh child process (`src/host/main.ts`), because game state is global. It resolves once the engine is loaded.
+- **Requests** go over Node IPC as typed request/response messages (`src/protocol.ts`, `src/rpc.ts`).
+  - If the process dies, every pending call rejects with its exit code (or signal) and the last 8 KB of its output.
+  - Later calls reject immediately.
+- **Nothing happens until `advance(ms)`.** It fires every timer due in the next `ms` virtual milliseconds, in order: the engine's own loop, script timers, everything.
+- **`diagnostics`** (`clock()`, `random(n)`, `crash(code, message)`) exist for tests and troubleshooting.
+
+## Determinism
+
+Each simulation process installs its environment in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
+
+1. **DOM** (`installDom`): see below.
+2. **Seeded randomness** (`installSeededRandom`):
+   - `Math.random` becomes sfc32 seeded from the scenario seed (`src/host/rng.ts`). jsdom's `window` shares Node's `Math`.
+   - `crypto.getRandomValues` and `crypto.randomUUID` get a second, independent seeded stream, so drawing crypto bytes doesn't shift `Math.random`.
+   - The sfc32 stream is checked against an independent reference implementation and frozen by golden values. Changing it changes every seeded scenario.
+3. **Virtual clock** (`installClock`, `@sinonjs/fake-timers`):
+   - `setTimeout`/`setInterval` (and their clears), `Date` and `performance` are virtual, starting at `epochMs`. `performance.now()` starts at 0, like a page that just loaded.
+   - Microtasks, `process.nextTick` and `setImmediate` stay real, so promises and I/O work.
+4. **The engine bundle** (`loadEngine`).
+## Inside a simulation process
+
+Host-internal: other packages use `Simulation`. `installHost` runs these steps in order.
 
 **`installDom()`** (`src/host/dom.ts`) installs jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`:
 - **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept; later tasks patch these.
 - **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
-- **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance` resolve to the globals at call time, and a virtual clock installed later covers both. `requestAnimationFrame` runs on those timers too, not on real time.
+- **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance`/`crypto` resolve to the globals at call time, and the virtual clock and seeded randomness cover both. `requestAnimationFrame` runs on those timers too, not on real time.
 
 **One simulation per process.** Game state is global. The game also starts module-level timers when it loads, so a process that loaded it must exit explicitly rather than waiting for them.
 
@@ -87,6 +113,7 @@ const engine = loadEngine(); // dist/engine.cjs, checked against EngineApi
 |---|---|
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
 | `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts` and module stubs |
-| `src/host/` | Code that runs inside a simulation process (DOM, engine loading) |
+| `src/simulation.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, the RPC client, the message types |
+| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, engine loading |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts` (run by the root `npm run` scripts) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` run in child processes |

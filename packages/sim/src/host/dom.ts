@@ -1,7 +1,15 @@
 import { JSDOM } from "jsdom";
 
 /** Browser APIs the game uses through `window.` as well as bare: they must resolve to the same (virtual) objects. */
-const SHARED_WITH_GLOBAL = ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"];
+const SHARED_WITH_GLOBAL = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "Date",
+  "performance",
+  "crypto",
+];
 
 /**
  * Installs a jsdom window as the browser globals the engine expects at import time. Must run before the engine
@@ -27,7 +35,8 @@ export function installDom(): JSDOM {
   }
 
   // The game calls `window.setTimeout` (engine loop, ns.sleep) as well as bare `setTimeout`. Make window's timers,
-  // Date and performance follow the globals at call time, so a virtual clock installed later covers both.
+  // Date, performance and crypto follow the globals at call time, so the virtual clock and seeded randomness
+  // installed later cover both access paths.
   for (const key of SHARED_WITH_GLOBAL) {
     Object.defineProperty(window, key, {
       configurable: true,
