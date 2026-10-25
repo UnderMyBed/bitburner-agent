@@ -1,0 +1,33 @@
+// Which issue a watcher run touches. Each watcher keeps one tracking issue, found by its title prefix.
+
+export interface ExistingIssue {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  title: string;
+}
+
+export type IssueAction =
+  | { kind: "create" }
+  | { kind: "update"; number: number }
+  /** Reopen it, then update it as for "update". */
+  | { kind: "reopen"; number: number }
+  | { kind: "close"; number: number }
+  | { kind: "none" };
+
+/**
+ * With changes, the open tracking issue is updated. If none is open, the latest closed one is reopened, so the history
+ * stays in one thread, and one is created only if there's never been one. Without changes, the open one is closed
+ * (`whenEmpty: "close"`) or left as it is ("leave").
+ */
+export function planIssue(
+  issues: ExistingIssue[],
+  titlePrefix: string,
+  { changes, whenEmpty }: { changes: boolean; whenEmpty: "close" | "leave" },
+): IssueAction {
+  const ours = issues.filter((i) => i.title.startsWith(titlePrefix)).sort((a, b) => b.number - a.number);
+  const open = ours.find((i) => i.state === "OPEN");
+  if (!changes) return open && whenEmpty === "close" ? { kind: "close", number: open.number } : { kind: "none" };
+  if (open) return { kind: "update", number: open.number };
+  const latest = ours[0];
+  return latest ? { kind: "reopen", number: latest.number } : { kind: "create" };
+}

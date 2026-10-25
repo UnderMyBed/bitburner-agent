@@ -12,6 +12,7 @@ Each significant design or process decision gets a short record: context, decisi
 | [0006](0006-tech-stack-and-compute.md) | Tech stack and compute strategy | Accepted |
 | [0007](0007-headless-engine-simulator.md) | Simulator: the real engine, headless, on a virtual clock | Accepted |
 | [0008](0008-work-tracking-and-reviews.md) | Work tracking and three-pass reviews | Accepted |
+| [0009](0009-upstream-watchers-on-demand.md) | The upstream watchers run on demand | Accepted |
 
 Smaller decisions by the project owner are in the [owner decisions log](owner-decisions.md).
 

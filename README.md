@@ -79,7 +79,7 @@ Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHu
 
 ## Supported game version
 
-Bitburner **v3.0.1** (VersionNumber 51), the current Steam release. The game source is pinned at `vendor/bitburner-src`. A scheduled workflow watches the upstream `stable` branch and opens a compatibility PR when it moves (see [ADR 0003](docs/decisions/0003-game-version-pinning.md)).
+Bitburner **v3.0.1** (VersionNumber 51), the current Steam release. The game source is pinned at `vendor/bitburner-src`. Workflows run at every release watch upstream: `stable` for the next Steam release ([ADR 0003](docs/decisions/0003-game-version-pinning.md)) and `dev` for changes further ahead ([ADR 0005](docs/decisions/0005-forward-compat-dev-branch.md), [`tools/upstream-watch`](tools/upstream-watch/README.md)).
 
 ## Getting started
 
