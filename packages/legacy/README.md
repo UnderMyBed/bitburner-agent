@@ -6,7 +6,7 @@ The legacy fork's scripts, vendored unchanged, for:
 - **The baseline now.** The fork's BN1 time-to-destroy from a BN1 + SF4.3 start is what the agent is measured against ([architecture §12.3](../../docs/architecture.md#123-migration-from-the-fork-strangler-pattern)).
 - **Legacy reflexes later.** Its proven managers (the batcher in `daemon.js`, `stockmaster.js`, `gangs.js`, `bladeburner.js`) will run under the agent through adapters in this package, until our own replacements prove at least as good (architecture §12.3).
 
-The files are in [`fork/`](fork/), exactly as recorded. [`PROVENANCE.md`](PROVENANCE.md) says where they came from and the rules: `fork/` is never edited in place, and a change would be a patch. They're MIT-licensed, © 2021 Alain Bryden ([`fork/LICENSE`](fork/LICENSE)). `fork/README.md` and `fork/CLAUDE.md` are the fork's own docs, about the fork as it was, not about this repository.
+The files are in [`fork/`](fork/), exactly as recorded. [`PROVENANCE.md`](PROVENANCE.md) says where they came from and the rules: `fork/` is never edited in place, and a change would be a patch. They're MIT-licensed, © 2021 Alain Bryden ([`fork/LICENSE`](fork/LICENSE)). `fork/README.md` and `fork/CLAUDE.md` are the fork's own docs, about the fork as it was, not about this repository. Claude Code doesn't load `fork/CLAUDE.md` as instructions: the repository's [`.claude/settings.json`](../../.claude/settings.json) excludes it.
 
 ```ts
 import { Simulation } from "@bitburner-agent/sim";
