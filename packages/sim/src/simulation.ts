@@ -195,6 +195,10 @@ export class Simulation {
     setHomeRam: (gb: number) => this.rpc.call("diagnostics.setHomeRam", { gb }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
+    /** The host's V8 heap in use, in bytes, after a full garbage collection. */
+    heap: () => this.rpc.call("diagnostics.heap", {}),
+    /** Starts or stops a CPU profile of the host; stopping returns it. */
+    profile: (action: "start" | "stop") => this.rpc.call("diagnostics.profile", { action }),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),
   };
 

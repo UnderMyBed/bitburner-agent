@@ -24,7 +24,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 2. **Run the heavy suites on it.** Check out the candidate commit, run each suite, and post its printed table on the review issue, naming the commit:
    - the workloads: `npm run sim -- packages/sim/scenarios/<name>.json` for each `.json` file there
    - the baselines (the legacy-fork BN1 baseline, [#33](https://github.com/UnderMyBed/bitburner-agent/issues/33)): the full seed run, with results written up in `docs/sim/baselines.md`
-   - the benchmarks (added by [#31](https://github.com/UnderMyBed/bitburner-agent/issues/31)): `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md`
+   - the benchmarks, on the reference rig: `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md` ([benchmarks](sim/benchmarks.md)). If it flags a regression (exit 1), find the cause before going on: fix it, or say on the review issue why it's accepted.
    - once they exist: the end-to-end suite (E2, from M2) and the chaos suite (from M3)
 
 3. **Review the milestone.** An independent reviewer (a fresh agent session, as for PR reviews) checks it, and the result is posted on the review issue in this form:
