@@ -32,7 +32,7 @@ const SCAN_TO = `        if (first && inRange(from, to, first)) {
  * That holds while the heap's order follows due times, which fake-timers breaks in two ways: idle callbacks sort last
  * whatever their due time (the host doesn't fake `requestIdleCallback`), and an interval with no numeric delay is due
  * at NaN once it has fired (`callAt += interval`, fake-timers-src.js:1513). The host's timers rule out the second:
- * every delay reaches fake-timers as a whole number (`browserDelay`, `browserInterval`; #80). Throws
+ * no delay reaches fake-timers as NaN (`browserDelay`; #80). Throws
  * if the version or the patched lines aren't the ones this was made for, so an upgrade can't keep the patch without a
  * re-check.
  */
@@ -92,22 +92,37 @@ export interface VirtualClock {
 const evaluateGlobally: (code: string) => unknown = globalThis.eval;
 
 /**
- * A timer's delay as Chromium takes it (#80): the timeout is a WebIDL `long`, so ToNumber then ToInt32 (truncated;
- * NaN and ±Infinity are 0; it wraps modulo 2^32), and HTML's timer steps make a negative one 0. fake-timers keeps a
- * fraction and parses a non-number with `parseInt`, which gives `setInterval` a NaN interval.
+ * A timer's delay as Chromium takes it (#80): the timeout is a WebIDL `long` (ToNumber, then ToInt32: truncated, NaN
+ * and ±Infinity are 0, and it wraps modulo 2^32), and HTML's timer steps make a negative one 0. fake-timers truncates
+ * a number as Chromium does, but reads a delay with `parseInt(String(...))` (fake-timers-src.js:1336, :2012), which
+ * misreads exponent notation (`"1e3"` is 1 ms, `1e-7` 1 ms) and gives `setInterval(fn)` a NaN interval; delays over
+ * 2^31 − 1 it makes 1 ms. Like WebIDL, a BigInt or a Symbol throws a TypeError.
  */
 export function browserDelay(timeout: unknown): number {
-  return Math.max(0, Number(timeout) | 0);
+  return Math.max(0, +(timeout as number) | 0);
 }
 
 /**
- * An interval's delay. HTML clamps a timer under 4 ms to 4 ms once its nesting level passes a threshold, and each
- * repeat of an interval nests one deeper, so a short interval settles at 4 ms. The threshold differs between Chromium
- * versions, so this uses 4 ms from the start: an approximation for the first few firings, which also keeps a 0 ms
- * interval from firing forever at one moment, as fake-timers would.
+ * Chromium's timer nesting (Chromium 146, Electron 41: `third_party/blink/renderer/core/scheduler/dom_timer.cc`): a
+ * timer's nesting level is one more than the level of the timer task that set it (0 outside a timer task), and a timer
+ * under 4 ms whose level is over 6 waits 4 ms. Each firing of an interval nests one level deeper.
  */
-export function browserInterval(timeout: unknown): number {
-  return Math.max(4, browserDelay(timeout));
+export const MAX_TIMER_NESTING_LEVEL = 6;
+/** The delay a deeply nested short timer waits instead. */
+export const MIN_NESTED_TIMER_MS = 4;
+
+/** The delay of a timer at nesting level `level`. */
+export function nestedDelay(delay: number, level: number): number {
+  return level > MAX_TIMER_NESTING_LEVEL && delay < MIN_NESTED_TIMER_MS ? MIN_NESTED_TIMER_MS : delay;
+}
+
+/**
+ * The level of the timer task running now, and of its microtasks, which run in the same task in a browser; 0 outside
+ * any. The clock sets it back to 0 between timers, once a timer's microtasks have run.
+ */
+let runningLevel = 0;
+function endTimerTask(): void {
+  runningLevel = 0;
 }
 
 /**
@@ -116,27 +131,76 @@ export function browserInterval(timeout: unknown): number {
  *   on it: `Engine.start` is passed bare to setTimeout and assigns `this.isRunning`.
  * - an exception a callback throws is reported as uncaught and the clock carries on; fake-timers would rethrow it out
  *   of `advance`.
- * - after a delay taken as Chromium takes it (`browserDelay`, `browserInterval`).
+ * - after a delay taken as Chromium takes it (`browserDelay`), clamped as Chromium clamps nested timers
+ *   (`nestedDelay`). A short interval moves to 4 ms at the firing whose level passes 6, as Chromium's does
+ *   (`DOMTimer::Fired`). One difference remains: fake-timers makes a 0 ms timer set during a tick wait 1 ms
+ *   (fake-timers-src.js:1336), where Chromium runs it at once; virtual time couldn't move through a chain of them
+ *   otherwise.
+ * - `clearTimeout` and `clearInterval` clear either kind, as in a browser, including an interval that moved to 4 ms.
  */
 function callTimersAsABrowserDoes(): void {
-  const timers = globalThis as unknown as Record<"setTimeout" | "setInterval", (...args: unknown[]) => unknown>;
-  for (const name of ["setTimeout", "setInterval"] as const) {
-    const faked = timers[name];
-    const delay = name === "setTimeout" ? browserDelay : browserInterval;
-    timers[name] = (handler: unknown, timeout?: unknown, ...args: unknown[]) => {
-      const run = typeof handler === "function" ? handler : () => evaluateGlobally(String(handler));
-      const callback = (...callbackArgs: unknown[]) => {
-        try {
-          run.apply(globalThis.window ?? globalThis, callbackArgs);
-        } catch (error) {
-          reportUncaughtException(error);
-        }
-      };
-      return faked(callback, delay(timeout), ...args);
+  type TimerFunction = (...args: unknown[]) => unknown;
+  const timers = globalThis as unknown as Record<
+    "setTimeout" | "setInterval" | "clearTimeout" | "clearInterval",
+    TimerFunction
+  >;
+  const fake = {
+    setTimeout: timers.setTimeout,
+    setInterval: timers.setInterval,
+    clearTimeout: timers.clearTimeout,
+    clearInterval: timers.clearInterval,
+  };
+  /** An interval that moved to 4 ms: the handle the script holds → fake-timers' current one. */
+  const moved = new Map<unknown, unknown>();
+  const callbackFor = (handler: unknown, args: unknown[]) => {
+    const run = typeof handler === "function" ? handler : () => evaluateGlobally(String(handler));
+    return () => {
+      try {
+        run.apply(globalThis.window ?? globalThis, args);
+      } catch (error) {
+        reportUncaughtException(error);
+      }
+    };
+  };
+
+  timers.setTimeout = (handler: unknown, timeout?: unknown, ...args: unknown[]) => {
+    const level = runningLevel + 1;
+    const delay = nestedDelay(browserDelay(timeout), level);
+    const callback = callbackFor(handler, args);
+    return fake.setTimeout(() => {
+      runningLevel = level;
+      callback();
+    }, delay);
+  };
+
+  timers.setInterval = (handler: unknown, timeout?: unknown, ...args: unknown[]) => {
+    let level = runningLevel + 1;
+    let delay = nestedDelay(browserDelay(timeout), level);
+    const callback = callbackFor(handler, args);
+    let handle: unknown;
+    const fire = () => {
+      // The callback runs at the interval's level; the firing nests the next one deeper (DOMTimer::Fired).
+      runningLevel = level;
+      level += 1;
+      if (level === MAX_TIMER_NESTING_LEVEL + 1 && delay < MIN_NESTED_TIMER_MS) {
+        delay = MIN_NESTED_TIMER_MS;
+        fake.clearInterval(moved.get(handle) ?? handle);
+        moved.set(handle, fake.setInterval(fire, delay));
+      }
+      callback();
+    };
+    handle = fake.setInterval(fire, delay);
+    return handle;
+  };
+
+  for (const name of ["clearTimeout", "clearInterval"] as const) {
+    timers[name] = (handle: unknown) => {
+      const current = moved.get(handle);
+      moved.delete(handle);
+      return fake[name](current ?? handle);
     };
   }
 }
-
 /**
  * Fakes timers, Date and performance from `epochMs`. Microtasks, nextTick and setImmediate stay real, so promises
  * and I/O still work. Window's copies follow these globals (installDom), so both access paths are virtual.
@@ -151,8 +215,15 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
   // through it after every timer it fires (:2232). Lend it `betweenTimers` for that moment only; the real setImmediate
   // stays installed for everyone else. If an upgrade moves that capture, the test "a script started in the middle of
   // an advance begins at the same virtual time, however slow its import" fails.
+  // The lent function also ends the timer task, once the timer's microtasks have run, so the next timer, or a request,
+  // starts at nesting level 0.
   const realSetImmediate = globalThis.setImmediate;
-  if (betweenTimers) globalThis.setImmediate = betweenTimers as unknown as typeof setImmediate;
+  const yieldBetween = betweenTimers ?? ((continueTick: () => void) => void realSetImmediate(continueTick));
+  globalThis.setImmediate = ((continueTick: () => void) =>
+    yieldBetween(() => {
+      endTimerTask();
+      continueTick();
+    })) as unknown as typeof setImmediate;
   let clock: ReturnType<ReturnType<typeof FakeTimers.withGlobal>["install"]>;
   try {
     clock = FakeTimers.withGlobal(globalThis).install({

@@ -1,13 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
-import {
-  browserDelay,
-  browserInterval,
-  FAKE_TIMERS_VERSION,
-  FakeTimers,
-  skipEmptyTimerScans,
-} from "../src/host/clock.ts";
+import { browserDelay, FAKE_TIMERS_VERSION, FakeTimers, nestedDelay, skipEmptyTimerScans } from "../src/host/clock.ts";
 
 const require = createRequire(import.meta.url);
 const installed = readFileSync(require.resolve("@sinonjs/fake-timers"), "utf8");
@@ -90,29 +84,50 @@ describe("timer delays, as Chromium takes them (#80)", () => {
   test.each([
     [undefined, 0],
     ["x", 0],
+    ["", 0],
+    [null, 0],
+    [true, 1],
     [Number.NaN, 0],
     [-5, 0],
+    [-0.5, 0],
     [1.9, 1],
     [12_345.678, 12_345],
     ["250", 250],
+    ["  12 ", 12],
+    ["1e3", 1000], // fake-timers' parseInt read 1
+    ["0x10", 16], // parseInt read 0
+    [1e-7, 0], // String(1e-7) is "1e-7", which parseInt read as 1
+    [{ valueOf: () => 7 }, 7],
     [Number.POSITIVE_INFINITY, 0],
-    [2 ** 31, 0], // WebIDL long wraps to a negative, which HTML clamps to 0
+    [Number.NEGATIVE_INFINITY, 0],
+    [2 ** 31, 0], // WebIDL long wraps to a negative, which HTML makes 0; fake-timers made it 1
+    [2 ** 32 + 5, 5],
     [2 ** 31 - 1, 2 ** 31 - 1],
-  ])("setTimeout's delay %s is %s ms", (timeout, ms) => {
+  ])("a delay of %s is %s ms", (timeout, ms) => {
     expect(browserDelay(timeout)).toBe(ms);
   });
 
   test.each([
-    [undefined, 4],
-    [0, 4],
-    [3, 4],
-    [4, 4],
-    [10.5, 10],
-  ])("setInterval's delay %s repeats every %s ms (HTML's 4 ms clamp for short repeats)", (timeout, ms) => {
-    expect(browserInterval(timeout)).toBe(ms);
+    ["a BigInt", 1000n],
+    ["a Symbol", Symbol("delay")],
+  ])("a delay that is %s throws a TypeError, as WebIDL's ToNumber does", (_, timeout) => {
+    expect(() => browserDelay(timeout)).toThrow(TypeError);
   });
-});
 
+  test.each([
+    [0, 6, 0],
+    [3, 6, 3],
+    [0, 7, 4],
+    [3, 7, 4],
+    [4, 7, 4],
+    [10, 100, 10],
+  ])(
+    "a %s ms timer at nesting level %s waits %s ms (Chromium clamps short timers past level 6)",
+    (delay, level, ms) => {
+      expect(nestedDelay(delay, level)).toBe(ms);
+    },
+  );
+});
 describe("the clock's fake-timers patch (#74)", () => {
   test("adds the early return to the installed fake-timers' firstTimerInRange, once, keeping its line numbers", () => {
     const patched = skipEmptyTimerScans(installed, FAKE_TIMERS_VERSION);

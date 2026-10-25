@@ -154,38 +154,63 @@ describe("running scripts", () => {
     );
   });
 
-  test("timer delays are taken as Chromium takes them: no, bad, negative and zero interval delays repeat every 4 ms", async () => {
-    // fake-timers alone gave `setInterval(fn)` a NaN interval, which broke its timer order (runUntil threw), and
-    // repeated a 0 ms interval forever at one moment (#80).
+  test("timers are delayed and nested as in Chromium 146: delays as WebIDL reads them, short ones clamped past level 6", async () => {
+    // fake-timers alone gave `setInterval(fn)` a NaN interval, which broke its timer order (runUntil threw), repeated
+    // a 0 ms interval forever at one moment, and read "1e3" as 1 ms (#80).
     const sim = await newGame(1);
     const script = `export async function main(ns) {
       const start = Date.now();
-      const counts = { none: 0, text: 0, negative: 0, zero: 0 };
-      let fraction = -1;
-      setTimeout(() => { fraction = Date.now() - start; }, 1.9);
+      const at = () => Date.now() - start;
+      const intervals = { none: [], text: [], negative: [], zero: [] };
       const ids = [
-        setInterval(() => counts.none++),
-        setInterval(() => counts.text++, "x"),
-        setInterval(() => counts.negative++, -5),
-        setInterval(() => counts.zero++, 0),
+        setInterval(() => intervals.none.push(at())),
+        setInterval(() => intervals.text.push(at()), "x"),
+        setInterval(() => intervals.negative.push(at()), -5),
+        setInterval(() => intervals.zero.push(at()), 0),
       ];
-      await ns.sleep(1000);
+      const chain = [];
+      const step = () => { chain.push(at()); if (chain.length < 10) setTimeout(step, 0); };
+      setTimeout(step, 0);
+      let exponent = -1;
+      setTimeout(() => { exponent = at(); }, "1e3");
+      await ns.sleep(1100);
       for (const id of ids) clearInterval(id);
-      ns.print(JSON.stringify({ fraction, counts }));
+      // End inside a deep chain, so the last timer task was at level 12.
+      await new Promise((resolve) => { let n = 0; const go = () => (++n < 12 ? setTimeout(go, 0) : resolve()); setTimeout(go, 0); });
+      const first = Object.fromEntries(Object.entries(intervals).map(([name, times]) => [name, times.slice(0, 9)]));
+      ns.print(JSON.stringify({ first, chain, exponent }));
     }`;
     await sim.writeFile("home", "timers.js", script);
     const { pid } = await sim.run("home", "timers.js");
     const { stoppedBy } = await sim.runUntil(5000, { stopWhen: [{ scriptExited: "timers.js" }] });
     expect(stoppedBy).toBe(0);
     const line = (await sim.logs(pid)).find((entry) => entry.startsWith("{"));
-    const { fraction, counts } = JSON.parse(line ?? "{}") as { fraction: number; counts: Record<string, number> };
-    expect(fraction).toBe(1); // 1.9 ms is 1 ms, as a WebIDL long
-    for (const count of Object.values(counts)) {
-      expect(count).toBeGreaterThanOrEqual(249);
-      expect(count).toBeLessThanOrEqual(250);
-    }
-  });
+    const { first, chain, exponent } = JSON.parse(line ?? "{}") as {
+      first: Record<string, number[]>;
+      chain: number[];
+      exponent: number;
+    };
+    // A 0 ms interval set by the script (level 1) fires at once six times (levels 1-6), then every 4 ms, as Chromium's.
+    for (const times of Object.values(first)) expect(times).toEqual([0, 0, 0, 0, 0, 0, 4, 8, 12]);
+    // A chain of 0 ms timeouts: Chromium runs levels 1-6 at once, then 4 ms apart (0,0,0,0,0,0,4,8,12,16). Here each
+    // one set during a tick waits fake-timers' 1 ms, then 4 ms apart from level 7.
+    expect(chain).toEqual([0, 1, 2, 3, 4, 5, 9, 13, 17, 21]);
+    expect(exponent).toBe(1000); // "1e3" is 1000 ms, as WebIDL reads it; fake-timers' parseInt read 1
 
+    // A request is a fresh task: a script it starts sets its timers at level 1 again, however deep the last ones were.
+    const fresh = `export async function main(ns) {
+      const start = Date.now();
+      const times = [];
+      const id = setInterval(() => times.push(Date.now() - start), 0);
+      await ns.sleep(10);
+      clearInterval(id);
+      ns.print(JSON.stringify(times.slice(0, 7)));
+    }`;
+    await sim.writeFile("home", "fresh.js", fresh);
+    const second = await sim.run("home", "fresh.js");
+    await sim.runUntil(5000, { stopWhen: [{ scriptExited: "fresh.js" }] });
+    expect((await sim.logs(second.pid)).find((entry) => entry.startsWith("["))).toBe("[0,0,0,0,0,0,4]");
+  });
   test("garbage collection doesn't change results: compiled modules are held, as upstream dev holds them", async () => {
     // The game caches each compiled module by its source, through a WeakRef (NetscriptJSEvaluator.ts:41-47, :223-224).
     // A module the collector frees comes back fresh, its module-level state reset, so a script that keeps state at
