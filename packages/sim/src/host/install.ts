@@ -3,7 +3,7 @@ import type { HostOptions } from "../protocol.ts";
 import { installClock, type VirtualClock } from "./clock.ts";
 import { installDom } from "./dom.ts";
 import { loadEngine } from "./load-engine.ts";
-import { pinDefaultLocale } from "./locale.ts";
+import { pinDefaultLocale } from "./parity/locale.ts";
 import { installSeededRandom } from "./random.ts";
 
 /**

@@ -1,15 +1,14 @@
 // Messages between a Simulation (parent) and its host process (child), over Node IPC. Every message carries a
 // `type`, so new kinds (e.g. host events in later tasks) can be added without ambiguity.
 
-/** The game state a simulation starts from. */
-export type Fixture = {
-  kind: "new";
-  /**
-   * A new game starts the interactive tutorial; "skipped" ends it as the Skip button does. On v3.0.1 a running tutorial
-   * stops finished scripts from being cleaned up, so there is no default: every fixture must choose.
-   */
-  tutorial: "running" | "skipped";
-};
+/**
+ * A new game starts the interactive tutorial; "skipped" ends it as the Skip button does. On v3.0.1 a running tutorial
+ * stops finished scripts from being cleaned up, so there is no default: every fixture must choose.
+ */
+export type Tutorial = "running" | "skipped";
+
+/** The game state a simulation starts from. A union: later fixture kinds add members. */
+export type Fixture = { kind: "new"; tutorial: Tutorial };
 
 export interface HostOptions {
   /** Seeds every source of randomness the game can reach. An unsigned 32-bit integer. */
@@ -41,7 +40,13 @@ export interface GameSummary {
 
 export interface GameDiagnostics {
   tutorialRunning: boolean;
-  /** The default locale the game sees, and the locale the host pinned (see src/host/locale.ts). */
+  /** The game's own setting (0: the harness turned autosave off). */
+  autosaveInterval: number;
+  /** Every coding contract, as "host:file", sorted. */
+  contracts: string[];
+  /** Real milliseconds the host took to load the engine and boot the fixture. */
+  bootMs: number;
+  /** The default locale the game sees, and the locale the host pinned (see src/host/parity/locale.ts). */
   defaultLocale: string;
   pinnedLocale: string | null;
 }

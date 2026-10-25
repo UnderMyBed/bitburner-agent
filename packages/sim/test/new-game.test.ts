@@ -14,12 +14,15 @@ afterAll(async () => {
 });
 
 describe("new-game fixture", () => {
-  test("boots a fresh game (bundle load + boot timed)", async () => {
+  test("boots a fresh game (bundle load + boot timed inside the host)", async () => {
     const started = performance.now();
     const sim = await newGame(1);
-    const bootMs = performance.now() - started;
-    console.log(`bundle load + new-game boot: ${Math.round(bootMs)} ms`);
+    const { bootMs } = await sim.diagnostics.game();
+    console.log(
+      `bundle load + new-game boot: ${bootMs} ms in the host (${Math.round(performance.now() - started)} ms with fork)`,
+    );
     expect(bootMs).toBeLessThan(2000);
+    expect((await sim.diagnostics.game()).autosaveInterval).toBe(0); // the harness snapshots instead
     expect(await sim.summary()).toEqual({
       virtualMs: 0,
       playtimeMs: 0,
@@ -84,11 +87,43 @@ describe("determinism", () => {
     expect(await stepped.stateHash()).toBe(await whole.stateHash());
   });
 
+  test("hashing along the way doesn't change how the run turns out", async () => {
+    // Serialising the save draws from Math.random (the game builds a throwaway PlayerObject); the host must undo it.
+    const [hashed, plain] = await Promise.all([newGame(11), newGame(11)]);
+    for (let i = 0; i < 36; i++) {
+      await hashed.stateHash();
+      await hashed.advance(10 * 60_000);
+    }
+    await plain.advance(6 * HOUR);
+    expect(await hashed.stateHash()).toBe(await plain.stateHash());
+  });
+
   test("the state hash changes when the game state changes", async () => {
     const sim = await newGame(11);
     const before = await sim.stateHash();
-    expect(await sim.stateHash()).toBe(before); // hashing has no side effects
     await sim.advance(1000);
     expect(await sim.stateHash()).not.toBe(before);
+  });
+
+  test("seeded randomness drives the game: coding contracts follow the seed", async () => {
+    const [a, b, c] = await Promise.all([newGame(11), newGame(11), newGame(12)]);
+    await Promise.all([a, b, c].map((sim) => sim.advance(6 * HOUR)));
+    const [ca, cb, cc] = await Promise.all([a, b, c].map(async (sim) => (await sim.diagnostics.game()).contracts));
+    expect(ca?.length).toBeGreaterThan(0);
+    expect(ca).toEqual(cb);
+    expect(ca).not.toEqual(cc);
+  });
+
+  // Recorded on one machine and checked on every other (CI runs Linux): the state must not depend on the platform.
+  test("the state is the same on every machine (golden hashes for seed 1)", async () => {
+    const sim = await newGame(1);
+    const atBoot = await sim.stateHash();
+    await sim.advance(HOUR);
+    expect({ atBoot, afterOneHour: await sim.stateHash() }).toMatchInlineSnapshot(`
+      {
+        "afterOneHour": "e43584f65c9c9056f8f1c182464970e7f228639503554f5392b9cd764731be04",
+        "atBoot": "dd797305d1ea8220ac4405c6d3999ef55c9d2898914fb8716085dd03f857272f",
+      }
+    `);
   });
 });

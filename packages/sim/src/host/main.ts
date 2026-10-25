@@ -2,7 +2,9 @@
 // boots the fixture, then answers requests one at a time.
 import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
+import type { EngineApi } from "../engine/api.ts";
 import {
+  type Fixture,
   type HostMessage,
   type HostOptions,
   type Method,
@@ -13,17 +15,27 @@ import {
   validateHostOptions,
 } from "../protocol.ts";
 import { installHost } from "./install.ts";
-import { pinnedLocale } from "./locale.ts";
+import { pinnedLocale } from "./parity/locale.ts";
+import { randomState, restoreRandomState } from "./random.ts";
 
 const send = (message: HostMessage) => process.send?.(message);
 const errorText = (error: unknown) => (error instanceof Error ? (error.stack ?? error.message) : String(error));
 
 type Handlers = { [M in Method]: (params: Params<M>) => Result<M> | Promise<Result<M>> };
 
+function bootFixture(engine: EngineApi, fixture: Fixture): Promise<void> {
+  switch (fixture.kind) {
+    case "new":
+      return engine.bootNewGame(fixture.tutorial);
+  }
+}
+
 async function start(options: HostOptions): Promise<Handlers> {
   validateHostOptions(options);
+  const bootStarted = process.hrtime.bigint(); // real time: the virtual clock doesn't measure the host itself
   const { clock, engine } = installHost(options);
-  if (options.fixture) await engine.bootNewGame(options.fixture.tutorial);
+  if (options.fixture) await bootFixture(engine, options.fixture);
+  const bootMs = Math.round(Number(process.hrtime.bigint() - bootStarted) / 1e6);
   const booted = () => {
     if (!options.fixture) throw new Error("no game is booted: this simulation was started without a fixture");
   };
@@ -41,9 +53,17 @@ async function start(options: HostOptions): Promise<Handlers> {
     },
     stateHash: async () => {
       booted();
-      return createHash("sha256")
-        .update(await engine.saveJson())
-        .digest("hex");
+      // Serialising the save draws from Math.random (the game builds a throwaway PlayerObject), so undo those draws:
+      // hashing must not change how the run turns out. The random state is part of the hash, because the save alone
+      // doesn't record where the seeded streams are, and two equal saves could still diverge.
+      const random = randomState();
+      let save: string;
+      try {
+        save = await engine.saveJson();
+      } finally {
+        restoreRandomState(random);
+      }
+      return createHash("sha256").update(save).update(JSON.stringify(random)).digest("hex");
     },
     "diagnostics.clock": () => ({
       engineLastUpdate: engine.engineLastUpdate(),
@@ -53,7 +73,8 @@ async function start(options: HostOptions): Promise<Handlers> {
     "diagnostics.game": () => {
       booted();
       return {
-        tutorialRunning: engine.tutorialRunning(),
+        ...engine.gameDiagnostics(),
+        bootMs,
         defaultLocale: new Intl.DateTimeFormat().resolvedOptions().locale,
         pinnedLocale: pinnedLocale() ?? null,
       };

@@ -28,6 +28,7 @@ process.stdout.write(
     windowPerformanceFollowsGlobal: w.performance === g.performance,
     rafUsesGlobalSetTimeout,
     hasRootElement: dom.window.document.getElementById("root") !== null,
+    userAgent: navigator.userAgent,
     localStorageIsJsdom: g.localStorage === w.localStorage && storage?.constructor.name === "Storage",
     adoptedStyleSheets: Array.isArray((dom.window.document as unknown as Record<string, unknown>).adoptedStyleSheets),
     replaceSyncIsNoop: sheet.prototype.replaceSync.call({}, "") === undefined,

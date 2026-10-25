@@ -1,6 +1,13 @@
 import { JSDOM } from "jsdom";
 
 /** Browser APIs the game uses through `window.` as well as bare: they must resolve to the same (virtual) objects. */
+/**
+ * A fixed user agent, like the Steam (Electron) build's. The game hashes `navigator.userAgent` into the saved
+ * `Player.identifier`, and jsdom's default includes the host OS, so a default UA would make saves differ by machine.
+ */
+export const STEAM_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) bitburner/3.0.1 Chrome/146.0.0.0 Electron/41.4.0 Safari/537.36";
+
 const SHARED_WITH_GLOBAL = [
   "setTimeout",
   "clearTimeout",
@@ -20,6 +27,8 @@ export function installDom(): JSDOM {
     // Any http(s) origin works; it gives jsdom a working localStorage. No query string, so the game's
     // `?noScripts` check (NetscriptWorker.ts) stays off.
     url: "https://bitburner.local/",
+    // jsdom's way to set navigator.userAgent. The page has no subresources, so nothing is ever fetched.
+    resources: { userAgent: STEAM_USER_AGENT },
   });
   const window = dom.window as unknown as Record<string, unknown>;
 

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { STEAM_USER_AGENT } from "../src/host/dom.ts";
 
 // installDom mutates globals, so it runs in a child process (helpers/dom-probe.ts).
 const probe = JSON.parse(
@@ -19,6 +20,11 @@ test("window and globalThis share one set of timers, Date and performance, even 
 
 test("requestAnimationFrame runs on the global timers, not on real time", () => {
   expect(probe.rafUsesGlobalSetTimeout).toBe(true);
+});
+
+test("the user agent is fixed, not derived from this machine", () => {
+  // The game hashes navigator.userAgent into Player.identifier, which is saved; jsdom's default includes the OS.
+  expect(probe.userAgent).toBe(STEAM_USER_AGENT);
 });
 
 test("document and storage come from jsdom", () => {

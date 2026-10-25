@@ -1,4 +1,4 @@
-import { sfc32 } from "./rng.ts";
+import { type Rng, type Sfc32State, sfc32 } from "./rng.ts";
 
 const INTEGER_ARRAYS = [
   Int8Array,
@@ -19,10 +19,31 @@ const MAX_BYTES = 65536;
  * Node's Math) and Web Crypto's getRandomValues/randomUUID (window.crypto follows the global, see installDom).
  * Crypto gets its own stream, so code that draws crypto bytes doesn't shift the Math.random sequence.
  */
-export function installSeededRandom(seed: number): void {
-  Math.random = sfc32(seed);
+let streams: { math: Rng; crypto: Rng } | undefined;
 
+/** Where both seeded streams are; restoring it undoes every draw made since. */
+export interface RandomState {
+  math: Sfc32State;
+  crypto: Sfc32State;
+}
+
+export function randomState(): RandomState {
+  if (!streams) throw new Error("seeded randomness is not installed");
+  return { math: streams.math.state(), crypto: streams.crypto.state() };
+}
+
+export function restoreRandomState(state: RandomState): void {
+  if (!streams) throw new Error("seeded randomness is not installed");
+  streams.math.setState(state.math);
+  streams.crypto.setState(state.crypto);
+}
+
+export function installSeededRandom(seed: number): void {
+  const math = sfc32(seed);
   const byte = sfc32((seed ^ 0x5bd1e995) >>> 0);
+  streams = { math, crypto: byte };
+  Math.random = math;
+
   // Same contract as Web Crypto's getRandomValues, including its errors.
   const getRandomValues = <T extends ArrayBufferView | null>(array: T): T => {
     if (!array || !INTEGER_ARRAYS.some((type) => array instanceof type)) {

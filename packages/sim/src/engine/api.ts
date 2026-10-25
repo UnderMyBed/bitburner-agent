@@ -1,4 +1,4 @@
-import type { GameSummary } from "../protocol.ts";
+import type { GameDiagnostics, GameSummary, Tutorial } from "../protocol.ts";
 
 /**
  * The typed boundary between our code and the engine bundle. `bundle/entry.ts` (bundled together with the game, and
@@ -18,12 +18,13 @@ export interface EngineApi {
   dateNow(): number;
   performanceNow(): number;
   /** Boots a new game through the game's own `Engine.load`, then does what the UI does once mounted. */
-  bootNewGame(tutorial: "running" | "skipped"): Promise<void>;
+  bootNewGame(tutorial: Tutorial): Promise<void>;
   /** The game-side fields of a summary (the host adds `virtualMs`). */
   gameSummary(): Omit<GameSummary, "virtualMs">;
   /** The game's own save, as JSON text. */
   saveJson(): Promise<string>;
-  tutorialRunning(): boolean;
+  /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
+  gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
 }
 
 const API_FUNCTIONS = {
@@ -35,7 +36,7 @@ const API_FUNCTIONS = {
   bootNewGame: true,
   gameSummary: true,
   saveJson: true,
-  tutorialRunning: true,
+  gameDiagnostics: true,
 } satisfies Record<keyof EngineApi, true>;
 
 export function assertEngineApi(exports: unknown): asserts exports is EngineApi {
