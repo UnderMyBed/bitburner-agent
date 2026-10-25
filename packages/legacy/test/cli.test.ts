@@ -7,17 +7,25 @@ import { baselineCli, type CliDeps } from "../src/cli.ts";
 
 const HOUR = 60 * 60 * 1000;
 
+const checkpoint = (hours: number) => ({
+  virtualMs: hours * HOUR,
+  summary: { money: 5e9, hackingLevel: 400, augsInstalled: 13, homeRamMax: 512 } as GameSummary,
+  heapMb: 115,
+});
+
+/** A seed that reached 12 hours, or one its wall limit stopped after the 4-hour checkpoint. */
 function seed(n: number, passed: boolean): SeedResult {
   return {
     seed: n,
-    ok: true,
-    stoppedBy: passed ? { list: "stopWhen", index: 0 } : null,
+    ok: passed,
+    ...(passed ? {} : { error: "wall limit: 60 min" }),
+    stoppedBy: null,
     passed,
     uncaught: 0,
-    virtualMs: 30 * HOUR,
-    wallMs: 20 * 60_000,
-    speed: 90,
-    checkpoints: [],
+    virtualMs: passed ? 12 * HOUR : 5 * HOUR,
+    wallMs: passed ? 6 * 60_000 : 60 * 60_000,
+    speed: passed ? 120 : 0,
+    checkpoints: passed ? [checkpoint(4), checkpoint(8), checkpoint(12)] : [checkpoint(4)],
     events: [],
   };
 }
@@ -44,21 +52,21 @@ function deps(results: SeedResult[], overrides: Partial<CliDeps> = {}) {
 }
 
 describe("the baseline CLI", () => {
-  test("exits 0 when every seed destroyed the BitNode, and prints the row with the run's details", async () => {
+  test("exits 0 when every seed reached 12 hours, and prints a row per checkpoint with the run's details", async () => {
     const { all, runScenario, output } = deps([seed(1, true), seed(2, true)]);
     expect(await baselineCli(["--seeds", "1..2"], all)).toBe(0);
     expect(runScenario).toHaveBeenCalledWith(
       expect.objectContaining({ name: expect.stringMatching(/^legacy-bn1/) }),
       expect.objectContaining({ workers: 1, seeds: [1, 2], measureHeap: true }),
     );
-    // One row per checkpoint; these stub seeds reached none.
-    expect(output.at(-1)).toContain("| 2026-10-25 | abc1234-dirty | test-rig | v24.0.0 | 1..2 | 4 h | 0/2 |");
-    expect(
-      output
-        .at(-1)
-        ?.split("\n")
-        .filter((line) => line.startsWith("|")),
-    ).toHaveLength(3);
+    const rows = output
+      .at(-1)
+      ?.split("\n")
+      .filter((line) => line.startsWith("|"));
+    expect(rows).toHaveLength(3);
+    expect(rows?.[2]).toBe(
+      "| 2026-10-25 | abc1234-dirty | test-rig | v24.0.0 | 1..2 | 12 h | 2/2 | $5b ($5b–$5b) | 400 (400–400) | 13 | 512 GB | 115 MB | 120x | 6 min |",
+    );
   });
 
   test("exits 1 when any seed didn't", async () => {
@@ -89,12 +97,12 @@ describe("the baseline CLI", () => {
     const { all, errors } = deps(results, {
       runScenario: async (_, options) => {
         const summary = { scripts: 210, money: 2e9, hackingLevel: 229 } as GameSummary;
-        options.onCheckpoint?.(2, { virtualMs: 24 * HOUR, summary }, 12 * 60_000);
+        options.onCheckpoint?.(2, { virtualMs: 4 * HOUR, summary }, 2 * 60_000);
         return { scenario: "legacy-bn1", results, aggregate: aggregate(results) };
       },
     });
     await baselineCli([], all);
-    expect(errors).toEqual(["seed 2: 24.00 h virtual, 12.0 min real, 120x; 210 scripts, $2.00e+9, hacking 229"]);
+    expect(errors).toEqual(["seed 2: 4.00 h virtual, 2.0 min real, 120x; 210 scripts, $2.00e+9, hacking 229"]);
   });
 
   test("writes --json relative to where npm ran, before printing anything", async () => {

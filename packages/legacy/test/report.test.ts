@@ -39,6 +39,12 @@ describe("formatting", () => {
     [8.08e11, "$808b"],
     [5.21e12, "$5.21t"],
     [3e18, "$3000q"],
+    // Rounding up to 1000 moves to the next unit.
+    [999_500, "$1m"],
+    [999_499, "$999k"],
+    [999_999_999, "$1b"],
+    // The sign goes before the "$", as the game shows it.
+    [-1234, "-$1.23k"],
   ])("money %s reads %s", (money, text) => {
     expect(formatMoney(money)).toBe(text);
   });
@@ -74,6 +80,7 @@ describe("the release rows", () => {
     const results = [
       seed(1, {
         wallMs: 8 * 60_000,
+        speed: 100,
         checkpoints: [
           checkpoint(4, { money: 1e9, hackingLevel: 200, augsInstalled: 6, homeRamMax: 128 }, 110),
           checkpoint(8, { money: 3e9, hackingLevel: 300, augsInstalled: 10, homeRamMax: 128 }, 112),
@@ -82,31 +89,49 @@ describe("the release rows", () => {
       }),
       seed(2, {
         wallMs: 9 * 60_000,
+        speed: 120,
         checkpoints: [
           checkpoint(4, { money: 2e9, hackingLevel: 220, augsInstalled: 6, homeRamMax: 128 }, 111),
           checkpoint(8, { money: 4e9, hackingLevel: 320, augsInstalled: 13, homeRamMax: 512 }, 113),
           checkpoint(12, { money: 6e9, hackingLevel: 410, augsInstalled: 20, homeRamMax: 2048 }, 116),
         ],
       }),
+      // Stopped by its wall limit after 4 hours: its checkpoint counts, its real time and speed don't.
       seed(3, {
-        wallMs: 10 * 60_000,
+        ok: false,
+        passed: false,
+        error: "wall limit: 2 min",
+        virtualMs: 5 * HOUR,
+        wallMs: 2 * 60_000,
+        speed: 300,
         checkpoints: [checkpoint(4, { money: 9e9, hackingLevel: 250, augsInstalled: 6, homeRamMax: 32 }, 120)],
       }),
-      // Failed early: its real time must not count, and it reached no checkpoint.
-      seed(4, { ok: false, passed: false, wallMs: 1 * 60_000 }),
+      // Failed early: it reached no checkpoint, and its real time and speed don't count either.
+      seed(4, { ok: false, passed: false, wallMs: 1 * 60_000, speed: 400 }),
+      seed(5, {
+        wallMs: 10 * 60_000,
+        speed: 110,
+        checkpoints: [
+          checkpoint(4, { money: 1.5e9, hackingLevel: 210, augsInstalled: 5, homeRamMax: 64 }, 105),
+          checkpoint(8, { money: 2e9, hackingLevel: 280, augsInstalled: 8, homeRamMax: 64 }, 109),
+          checkpoint(12, { money: 7e9, hackingLevel: 450, augsInstalled: 25, homeRamMax: 4096 }, 118),
+        ],
+      }),
     ];
     const rows = baselineRows({ scenario: "s", results, aggregate: aggregate(results) }, meta);
-    const prefix = "| 2026-10-25 | abc1234 | rig-16c-62g | v24.22.1 | 1..4 |";
+    const prefix = "| 2026-10-25 | abc1234 | rig-16c-62g | v24.22.1 | 1..5 |";
     expect(rows).toEqual([
-      `${prefix} 4 h | 3/4 | $2b ($1b–$9b) | 220 (200–250) | 6 | 128 GB | 111 MB | 9 min |`,
-      `${prefix} 8 h | 2/4 | $3b ($3b–$4b) | 300 (300–320) | 10 | 128 GB | 112 MB | 9 min |`,
-      `${prefix} 12 h | 2/4 | $5b ($5b–$6b) | 400 (400–410) | 13 | 512 GB | 114 MB | 9 min |`,
+      `${prefix} 4 h | 4/5 | $1.5b ($1b–$9b) | 210 (200–250) | 6 | 64 GB | 110 MB | 110x | 9 min |`,
+      `${prefix} 8 h | 3/5 | $3b ($2b–$4b) | 300 (280–320) | 10 | 128 GB | 112 MB | 110x | 9 min |`,
+      `${prefix} 12 h | 3/5 | $6b ($5b–$7b) | 410 (400–450) | 20 | 2048 GB | 116 MB | 110x | 9 min |`,
     ]);
   });
 
   test("with no seed reaching a checkpoint, its columns read '-'", () => {
     const results = [seed(1, { ok: false, passed: false })];
     const rows = baselineRows({ scenario: "s", results, aggregate: aggregate(results) }, meta);
-    expect(rows[0]).toBe("| 2026-10-25 | abc1234 | rig-16c-62g | v24.22.1 | 1 | 4 h | 0/1 | - | - | - | - | - | - |");
+    expect(rows[0]).toBe(
+      "| 2026-10-25 | abc1234 | rig-16c-62g | v24.22.1 | 1 | 4 h | 0/1 | - | - | - | - | - | - | - |",
+    );
   });
 });

@@ -38,16 +38,17 @@ export function formatSeeds(seeds: number[]): string {
   return consecutive && sorted.length > 1 ? `${first}..${last}` : sorted.join(",");
 }
 
-/** Money as the game shows it: three significant digits and a suffix. */
+/** Money as the game shows it: three significant digits, a suffix, and any sign before the "$". */
 export function formatMoney(n: number): string {
   const units = ["", "k", "m", "b", "t", "q"];
-  let value = n;
+  // Round once, before choosing the unit, so $999.6m reads $1b, not $1000m.
+  let value = Number(Math.abs(n).toPrecision(3));
   let unit = 0;
-  while (Math.abs(value) >= 1000 && unit < units.length - 1) {
+  while (value >= 1000 && unit < units.length - 1) {
     value /= 1000;
     unit += 1;
   }
-  return `$${Number(value.toPrecision(3))}${units[unit]}`;
+  return `${n < 0 ? "-" : ""}$${Number(value.toPrecision(3))}${units[unit]}`;
 }
 
 export interface RowMeta {
@@ -61,12 +62,16 @@ export interface RowMeta {
 
 /**
  * The run's rows for docs/sim/baselines.md, one per checkpoint: the seeds that reached it; the median money and
- * hacking level, with their ranges; the median augmentations installed, home RAM and heap. The real time per seed is
- * the median over the seeds that didn't fail. Medians of an even count take the lower middle value.
+ * hacking level, with their ranges; the median augmentations installed, home RAM and heap. The speed and real time
+ * per seed are the whole run's medians over the seeds that didn't fail, the same on each row. Medians of an even count
+ * take the lower middle value.
  */
 export function baselineRows(run: ScenarioRun, { date, commit, rig, node }: RowMeta): string[] {
   const seeds = formatSeeds(run.results.map((r) => r.seed));
-  const real = distribution(run.results.filter((r) => r.ok).map((r) => r.wallMs))?.median;
+  const ok = run.results.filter((r) => r.ok);
+  const speed = distribution(ok.map((r) => r.speed))?.median;
+  const speedText = speed === undefined ? "-" : `${speed.toFixed(0)}x`;
+  const real = distribution(ok.map((r) => r.wallMs))?.median;
   const realText = real === undefined ? "-" : `${(real / 60_000).toFixed(0)} min`;
   return CHECKPOINTS_MS.map((ms) => {
     const reached = run.results.flatMap((r) => at(r, ms) ?? []);
@@ -109,6 +114,7 @@ export function baselineRows(run: ScenarioRun, { date, commit, rig, node }: RowM
         (n) => `${n.toFixed(0)} MB`,
         false,
       ),
+      speedText,
       realText,
     ];
     return `| ${cells.join(" | ")} |`;

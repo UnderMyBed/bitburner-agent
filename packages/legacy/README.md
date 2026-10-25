@@ -41,14 +41,14 @@ It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each se
 ## Checks
 
 `test/baseline.test.ts`, the baseline's CI smoke tests:
-- the scenario starts in BN1 with SF1.1 and SF4.3 and runs `autopilot.js --disable-casino`, stopping at the destroy, for up to 30 days, seeds 1–8
+- the scenario starts in BN1 with SF1.1 and SF4.3 and runs `autopilot.js --disable-casino` for 12 virtual hours, with a checkpoint every 4 and no stop condition, seeds 1–8
 - home starts at 32 GB, and within 5 virtual minutes the fork runs unattended: `daemon.js` and the SF4-only `work-for-factions.js` start
 - the fork makes progress (money, hacking level) within a virtual hour
 - the script refuses bad arguments with exit 2
 
-`test/cli.test.ts`, the CLI with a stubbed run: exit 0 and 1, its defaults (one worker, an hour, 2 GB) and the flags that change them, progress lines on stderr, the rows' details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for bad arguments, a missing `--json` folder, a bad rig name or no commit.
+`test/cli.test.ts`, the CLI with a stubbed run: exit 0 (every seed reached 12 hours) and 1 (a seed's wall limit stopped it), its defaults (one worker, an hour, 2 GB) and the flags that change them, progress lines on stderr, the rows' details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for bad arguments, a missing `--json` folder, a bad rig name or no commit.
 
-`test/report.test.ts`: the heap's daily samples and growth, the heap table, `--seeds` formatting, and the release row.
+`test/report.test.ts`: money and `--seeds` formatting, the heap table at each checkpoint, and the rows, one per checkpoint. The rows' data is chosen so that only the median gives each value, a wall-limited seed's checkpoint counts in Reached, and only the seeds that didn't fail count for speed and real time.
 
 `test/fork.test.ts`:
 - every file matches the manifest byte for byte, with nothing missing or extra; `forkFiles()` gives exactly those bytes; `PROVENANCE.md` agrees with the manifest

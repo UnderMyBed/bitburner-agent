@@ -52,9 +52,9 @@ export interface CliDeps {
 }
 
 /**
- * Runs the CLI. Returns the exit code: 0 if every seed destroyed the BitNode, 1 if any didn't, 2 if it couldn't run.
+ * Runs the CLI. Returns the exit code: 0 if every seed reached 12 virtual hours, 1 if any didn't, 2 if it couldn't run.
  * Everything that can refuse (arguments, the `--json` folder, the commit, the rig's name) is checked before the run,
- * and the JSON is written as soon as the run ends, so hours of results are never lost to a late error.
+ * and the JSON is written as soon as the run ends, so a run's results are never lost to a late error.
  */
 export async function baselineCli(argv: string[], deps: CliDeps): Promise<number> {
   let meta: Parameters<typeof baselineRows>[1];
@@ -73,7 +73,7 @@ export async function baselineCli(argv: string[], deps: CliDeps): Promise<number
       },
     });
     if (positionals.length > 0) throw new RangeError(USAGE);
-    // Defaults sized for a heavy seed: one at a time, an hour, 2 GB (docs/sim/baselines.md, #75).
+    // Defaults: one seed at a time, an hour each, 2 GB (docs/sim/baselines.md, #75).
     options = {
       workers: values.workers === undefined ? 1 : parseWorkers(values.workers),
       wallLimitMs: values["wall-limit"] === undefined ? DEFAULT_WALL_LIMIT_MS : parseWallLimit(values["wall-limit"]),

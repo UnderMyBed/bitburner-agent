@@ -54,31 +54,39 @@ One row per checkpoint, so three per run.
 | Augs | Augmentations installed: the median |
 | Home RAM | The median |
 | Heap | The simulator's heap after a full collection, the median: the check for leaks that grow with each new script module, which the benchmarks' lean run can't see ([#64](https://github.com/UnderMyBed/bitburner-agent/issues/64)). Some growth is expected: the simulator keeps one module per distinct script source compiled ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)) |
-| Real time per seed | The median over the seeds that didn't fail (`ok`: no crash, refused script or request, recovery mode, stopped loop, or wall limit), measured with heap sampling on |
+| Speed | Virtual time per real time over the whole run, the median over the seeds that didn't fail (`ok`: no crash, refused script or request, recovery mode, stopped loop, or wall limit), measured with heap sampling on. The same on each of the run's rows |
+| Real time per seed | The whole run's real time, the median over the seeds that didn't fail, as for Speed. The same on each of the run's rows: it isn't the time to reach that checkpoint |
 
-Medians of an even count take the lower middle value, as the scenario aggregate does. Money in hand is a snapshot: the fork spends it on augmentations and RAM, so read it with the augmentations and home RAM beside it. The command prints the rows: paste them at the end of the table, and explain any failed seed below.
+Reached counts every seed that got to the checkpoint, including one that failed later, so the 12 h row's Reached can be higher than the pass rate; the CLI's `passed:` line gives that. Medians of an even count take the lower middle value, as the scenario aggregate does. Money in hand is a snapshot: the fork spends it on augmentations and RAM, so read it with the augmentations and home RAM beside it. The command prints the rows: paste them at the end of the table, and explain any failed seed below.
 
 ## Failures
 
 Every seed that didn't pass is explained here, per run: what stopped it, and whether the fork, the simulator or the scenario was at fault, with an issue where it's ours to fix.
 
-None recorded yet.
+- **4799701 (the first run):** none; all 8 seeds reached 12 hours.
+- **Before it**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before that run ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
+  - [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73): results depended on when garbage collection ran, through the game's module cache.
+  - [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74): the virtual clock's cost grew with the timers pending, so tens of thousands of scripts slowed it to a crawl.
+  - [#75](https://github.com/UnderMyBed/bitburner-agent/issues/75): the CLI had no real-time limit or heap cap, so a slow seed held the machine for hours.
+  - [#80](https://github.com/UnderMyBed/bitburner-agent/issues/80): timers didn't clamp and nest as Steam's Chromium does.
+
+  The cost that remained, single-digit speed once the fork runs tens of thousands of scripts, isn't a defect: it's why the baseline stops at 12 hours ([ADR 0011](../decisions/0011-checkpointed-simulator-comparisons.md)).
 
 ## Results
 
 The reference rig is the owner's machine. Rows are appended at the end of this file, so keep the results table last.
 
 Reading the first run (4799701, the reference rig):
-- **All 8 seeds reached 12 hours**, in 54 real minutes in all: about 6 minutes a seed, at a median 117× real time.
+- **All 8 seeds reached 12 hours** (`passed: 8/8`), in 54 real minutes in all: about 6 minutes a seed, at a median 117× real time.
 - **The fork's progress, median (range):**
   - **4 h:** hacking 242 (163–285), 6 augmentations installed, home 64 GB.
   - **8 h:** hacking 323 (254–356), 11 augmentations, 128 GB.
   - **12 h:** hacking 411 (344–723), 14 augmentations, 512 GB.
   Money swings with each reset and purchase, so it's the least telling column.
-- **The heap grows about 9 MB over 12 hours** (106 to 115 MB, median), which the modules the fork compiles account for. Seed 3 was the exception: it got furthest (hacking 723, $1.89t at 12 h), was already running heavy batches, and reached 159 MB. It was also the slowest seed, at 10 minutes.
+- **The heap grows about 9 MB over 12 hours** (106 MB at the start, from the CLI's heap table, to 115 MB, median), which the modules the fork compiles account for. Seed 3 was the exception: it got furthest (hacking 723, $1.89t at 12 h), was already running heavy batches, and reached 159 MB. It was also the slowest seed, at 10 minutes.
 
-| Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Real time per seed |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 6 min |
-| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 113 MB | 6 min |
-| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 115 MB | 6 min |
+| Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Speed | Real time per seed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 117x | 6 min |
+| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 113 MB | 117x | 6 min |
+| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 115 MB | 117x | 6 min |
