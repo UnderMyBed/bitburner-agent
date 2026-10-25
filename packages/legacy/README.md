@@ -33,10 +33,10 @@ const result = await runSeed(baselineScenario({ durationMs: HOUR, checkpointEver
 - **End:** the run passes when the fork destroys the BitNode, through Singularity or by reaching the BitVerse, and stops there. It gives up after 30 virtual days. Seeds 1–8.
 
 ```
-npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--json out.json]
+npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--wall-limit minutes] [--max-heap MB] [--json out.json]
 ```
 
-It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each seed's heap (start, end, largest, growth per virtual day), and the run's row for the baselines page. `--json` paths are relative to where you ran npm. The CLI is `src/cli.ts` (`baselineCli`), which `scripts/baseline.ts` calls with the real dependencies. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. It runs one seed at a time unless `--workers` says otherwise: a seed is heavy, about 14 real minutes per virtual day at best and several hours once the fork runs tens of thousands of scripts ([baselines](../../docs/sim/baselines.md#running-it)).
+It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each seed's heap (start, end, largest, growth per virtual day), and the run's row for the baselines page. `--json` paths are relative to where you ran npm. The CLI is `src/cli.ts` (`baselineCli`), which `scripts/baseline.ts` calls with the real dependencies. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. A seed is heavy: about 14 real minutes per virtual day at best, and several hours once the fork runs tens of thousands of scripts. So by default it runs one seed at a time, kills a seed after 12 hours of real time (`--wall-limit`, in minutes), caps each simulation's heap at 2 GB (`--max-heap`, in MB), and prints a progress line per seed per virtual day on stderr ([baselines](../../docs/sim/baselines.md#running-it)).
 
 ## Checks
 
@@ -46,7 +46,7 @@ It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each se
 - the fork makes progress (money, hacking level) within a virtual hour
 - the script refuses bad arguments with exit 2
 
-`test/cli.test.ts`, the CLI with a stubbed run: exit 0 and 1, one worker by default, the row's details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for bad arguments, a missing `--json` folder, a bad rig name or no commit.
+`test/cli.test.ts`, the CLI with a stubbed run: exit 0 and 1, its defaults (one worker, 12 hours, 2 GB) and the flags that change them, progress lines on stderr, the row's details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for bad arguments, a missing `--json` folder, a bad rig name or no commit.
 
 `test/report.test.ts`: the heap's daily samples and growth, the heap table, `--seeds` formatting, and the release row.
 

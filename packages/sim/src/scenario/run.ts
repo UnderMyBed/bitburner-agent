@@ -2,9 +2,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
-import type { Fixture, GameSummary, SimEvent } from "../protocol.ts";
+import { type Fixture, type GameSummary, maxHeapError, type SimEvent } from "../protocol.ts";
 import { Simulation } from "../simulation.ts";
-import { type Scenario, scenarioSeeds } from "./spec.ts";
+import { MAX_WALL_LIMIT_MS, type Scenario, scenarioSeeds } from "./spec.ts";
 
 export interface Checkpoint {
   /** Virtual time since the run started (after setup), which `summary.virtualMs` counts from the boot. */
@@ -20,8 +20,8 @@ export type Stop = { list: "stopWhen" | "failWhen"; index: number } | "bitverse"
 export interface SeedResult {
   seed: number;
   /**
-   * False if the run failed: the simulation crashed, a script couldn't start, a request was refused, the game went
-   * into recovery mode or its loop stopped.
+   * False if the run failed: the simulation crashed (out of memory under `maxHeapMb`, too), a script couldn't start, a
+   * request was refused, the game went into recovery mode or its loop stopped, or it ran past `wallLimitMs`.
    */
   ok: boolean;
   error?: string;
@@ -57,6 +57,21 @@ export interface ScenarioOptions {
    * game: collection can't (#73).
    */
   measureHeap?: boolean;
+  /**
+   * A hard limit on each seed's real time, in ms (1 to `MAX_WALL_LIMIT_MS`), on its simulation work: counted from
+   * when its setup is done, as `wallMs` is, to its last piece. Booting has its own 60 s limit; writing files and
+   * starting scripts aren't timed. Past it, the parent kills the seed's simulation process, mid-piece if need be, and
+   * the seed fails with an error starting "wall limit:", keeping the checkpoints it had. The timer runs in the parent,
+   * so a slow simulation can't hold it off.
+   */
+  wallLimitMs?: number;
+  /**
+   * Called with each checkpoint as it's taken, and the seed's real time so far (ms): for progress output. It can't
+   * change the seed's result: a throw, or a rejected promise, is ignored.
+   */
+  onCheckpoint?: (seed: number, checkpoint: Checkpoint, wallMs: number) => void;
+  /** Each seed's simulation runs with this V8 heap cap (`SimulationOptions.maxHeapMb`). */
+  maxHeapMb?: number;
   /**
    * Test-only knobs: `crashSeeds` makes those seeds' simulations crash after they start, to show a failure stays
    * with its seed.
@@ -107,6 +122,7 @@ export async function startScenario(
     fixture: resolveFixture(scenario.fixture, baseDir),
     ...(scenario.epochMs !== undefined ? { epochMs: scenario.epochMs } : {}),
     ...(scenario.prompts ? { prompts: scenario.prompts } : {}),
+    ...(options.maxHeapMb !== undefined ? { maxHeapMb: options.maxHeapMb } : {}),
   });
   try {
     if (options.testHooks?.crashSeeds?.includes(seed)) await sim.diagnostics.crash(3, `test hook: crash seed ${seed}`);
@@ -126,6 +142,28 @@ export async function startScenario(
   }
 }
 
+function wallLimitError(wallLimitMs: number | undefined): string | null {
+  if (wallLimitMs === undefined) return null;
+  if (Number.isSafeInteger(wallLimitMs) && wallLimitMs > 0 && wallLimitMs <= MAX_WALL_LIMIT_MS) return null;
+  return `wallLimitMs must be a whole number of ms from 1 to ${MAX_WALL_LIMIT_MS} (a timer's longest), got ${wallLimitMs}`;
+}
+
+/** A wall limit as people set it: minutes or hours, or ms when it's under a minute. */
+function describeLimit(ms: number): string {
+  if (ms < 60_000) return `${ms} ms`;
+  return ms < 3_600_000 ? `${Number((ms / 60_000).toFixed(1))} min` : `${Number((ms / 3_600_000).toFixed(1))} h`;
+}
+
+/** Calls the progress callback; it can't change the seed's result, even if it throws or its promise rejects. */
+function reportCheckpoint(options: ScenarioOptions, seed: number, checkpoint: Checkpoint, wallMs: number): void {
+  try {
+    const returned: unknown = options.onCheckpoint?.(seed, checkpoint, wallMs);
+    if (returned instanceof Promise) returned.catch(() => {});
+  } catch {
+    // progress output only
+  }
+}
+
 /** Runs a scenario with one seed, in a fresh simulation. Never throws: a failure is in the result. */
 export async function runSeed(scenario: Scenario, seed: number, options: ScenarioOptions = {}): Promise<SeedResult> {
   const result: SeedResult = {
@@ -140,7 +178,13 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
     checkpoints: [],
     events: [],
   };
+  const { wallLimitMs } = options;
+  const badLimit = wallLimitError(wallLimitMs) ?? maxHeapError(options.maxHeapMb);
+  if (badLimit) return { ...result, error: badLimit };
   let sim: Simulation | undefined;
+  let limit: ReturnType<typeof setTimeout> | undefined;
+  let overLimit = false;
+  let wallStart = 0;
   try {
     sim = await startScenario(scenario, seed, options);
     const live = sim;
@@ -150,7 +194,14 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
     const stopWhen = scenario.stopWhen ?? [];
     const conditions = [...stopWhen, ...(scenario.failWhen ?? [])];
     const startedAt = await sim.now();
-    const wallStart = performance.now();
+    wallStart = performance.now();
+    if (wallLimitMs !== undefined) {
+      limit = setTimeout(() => {
+        overLimit = true;
+        // The pending call rejects, ending the run below.
+        live.close().catch(() => {});
+      }, wallLimitMs);
+    }
     const every = scenario.checkpointEveryMs ?? scenario.durationMs;
     let elapsed = 0;
     // Each piece ends at a checkpoint (or a stop). Events count from boot, so one at boot (a save at the BitVerse)
@@ -170,12 +221,16 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
             : { list: "failWhen", index: stoppedBy - stopWhen.length };
       }
       const checkpointHeap = await heapMb();
-      result.checkpoints.push({
+      const checkpoint: Checkpoint = {
         virtualMs: elapsed,
         summary: await sim.summary(),
         ...(checkpointHeap !== undefined ? { heapMb: checkpointHeap } : {}),
-      });
+      };
+      result.checkpoints.push(checkpoint);
+      reportCheckpoint(options, seed, checkpoint, Math.round(performance.now() - wallStart));
     }
+    // The limit bounds the simulation's work: a run that got this far finished in time.
+    clearTimeout(limit);
     result.wallMs = Math.round(performance.now() - wallStart);
     result.virtualMs = elapsed;
     result.speed = result.wallMs > 0 ? Math.round(elapsed / result.wallMs) : 0;
@@ -190,12 +245,27 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
     result.passed = !failed && (!mustStop || stop !== null);
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
+    if (overLimit) {
+      // What it had: the time it ran, and the last checkpoint it reached.
+      const last = result.checkpoints.at(-1);
+      result.wallMs = Math.round(performance.now() - wallStart);
+      result.virtualMs = last?.virtualMs ?? 0;
+      if (last) result.summary = last.summary;
+      const reached = last
+        ? `its last checkpoint was at ${(last.virtualMs / 3_600_000).toFixed(1)} virtual hours`
+        : "before its first checkpoint";
+      result.error = `wall limit: ${describeLimit(wallLimitMs as number)} of real time reached; ${reached}`;
+    }
   } finally {
-    await sim?.close();
+    clearTimeout(limit);
+    try {
+      await sim?.close();
+    } catch {
+      // the process is gone either way; the result already says what happened
+    }
   }
   return result;
 }
-
 /** The default number of simulations at once: the machine's parallelism, less a reserve for everything else. */
 export function defaultWorkers(reserve = 2, parallelism = availableParallelism()): number {
   return Math.max(1, parallelism - reserve);
@@ -221,6 +291,8 @@ export async function runScenario(
 ): Promise<ScenarioRun> {
   if (!Number.isInteger(workers) || workers < 1)
     throw new RangeError(`workers must be a positive integer, got ${workers}`);
+  const badLimit = wallLimitError(options.wallLimitMs) ?? maxHeapError(options.maxHeapMb);
+  if (badLimit) throw new RangeError(badLimit);
   const results: SeedResult[] = new Array(seeds.length);
   let next = 0;
   const worker = async () => {

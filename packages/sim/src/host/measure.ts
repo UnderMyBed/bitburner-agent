@@ -1,8 +1,8 @@
-// Measuring the host itself, for benchmarks: its heap after a full collection, and CPU profiles.
+// Measuring the host itself, for benchmarks: its heap after a full collection, its heap limit, and CPU profiles.
 
 import { Session } from "node:inspector/promises";
 import process from "node:process";
-import { setFlagsFromString } from "node:v8";
+import { getHeapStatistics, setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import type { CpuProfile } from "../protocol.ts";
 
@@ -25,6 +25,11 @@ function collectGarbage(): void {
 export function heapUsed(): number {
   collectGarbage();
   return process.memoryUsage().heapUsed;
+}
+
+/** The V8 heap limit, in bytes: `--max-old-space-size` plus room for the young generation, or Node's default. */
+export function heapLimit(): number {
+  return getHeapStatistics().heap_size_limit;
 }
 
 let profiling: Session | null = null;

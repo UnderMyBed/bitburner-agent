@@ -13,10 +13,10 @@ What the agent has to beat. The legacy fork, played headless from a BitNode star
 ## Running it
 
 ```
-npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--json out.json]
+npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--wall-limit minutes] [--max-heap MB] [--json out.json]
 ```
 
-It prints:
+While it runs, it prints a progress line per seed at the end of each virtual day, on stderr: virtual and real time so far, speed, scripts, money and hacking level. At the end it prints:
 - the scenario table, one row per seed ([scenarios](scenarios.md));
 - each seed's heap: at the start, at the end, the largest sample, and the growth per virtual day (below). The heap is sampled after a full collection at the start and at the end of each virtual day; `--json` has every sample (`checkpoints[].heapMb`);
 - the run's row for the results table below.
@@ -28,7 +28,10 @@ It prints:
 - From about one virtual day in, the fork's batching runs tens of thousands of scripts, and the speed falls to 3–11×: several real hours per virtual day ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)).
 - Each simulation process grew to about 3.4 GB.
 
-So it runs one seed at a time unless `--workers` says otherwise. Until [#75](https://github.com/UnderMyBed/bitburner-agent/issues/75) it prints nothing until every seed ends and has no real-time limit: stop it by hand if it overruns.
+So by default ([#75](https://github.com/UnderMyBed/bitburner-agent/issues/75)):
+- **One seed at a time** (`--workers` changes it).
+- **A hard limit of 12 hours of real time per seed** (`--wall-limit`, in minutes). The command kills a seed's simulation when its limit passes, even part-way through a virtual day, and the seed fails with "wall limit: …", keeping the days it finished. A seed that hits it needs a decision about where the baseline runs, not a longer limit.
+- **A 2 GB heap per simulation** (`--max-heap`, in MB). Measured on one seed ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)), the heap after a full collection stayed near 120 MB for 22 virtual hours and reached 1 GB with 144,144 scripts running. The processes still grew to 3.4 GB, because V8 grows its heap toward its limit before collecting; the cap makes it collect sooner ([scenarios](scenarios.md#the-cli)).
 
 ## What a row records
 

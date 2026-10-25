@@ -8,6 +8,7 @@ import {
   type GameSummary,
   type HostMessage,
   type HostOptions,
+  maxHeapError,
   type ProcessInfo,
   type RunOptions,
   type RunResult,
@@ -60,15 +61,20 @@ export class Simulation {
     this.rpc = rpc;
   }
 
-  static async start(options: SimulationOptions): Promise<Simulation> {
-    return Simulation.spawn(resolveOptions(options));
+  static async start({ maxHeapMb, ...options }: SimulationOptions): Promise<Simulation> {
+    const badHeap = maxHeapError(maxHeapMb);
+    if (badHeap) throw new RangeError(badHeap);
+    return Simulation.spawn(resolveOptions(options), maxHeapMb);
   }
 
-  /** Starts a host without the parent-side checks, so tests can reach the host's own validation. */
-  static async spawn(options: HostOptions): Promise<Simulation> {
+  /**
+   * Starts a host without the parent-side checks, so tests can reach the host's own validation. `maxHeapMb` becomes
+   * the host's `--max-old-space-size`, unchecked.
+   */
+  static async spawn(options: HostOptions, maxHeapMb?: number): Promise<Simulation> {
     const child = fork(HOST_ENTRY, [], {
       // Don't inherit the parent's Node flags (e.g. a test runner's loaders): the host is plain Node.
-      execArgv: [],
+      execArgv: maxHeapMb === undefined ? [] : [`--max-old-space-size=${maxHeapMb}`],
       // Pin the time zone, so local-time formatting in the game reads the same on every machine.
       env: { ...process.env, TZ: "UTC" },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -197,6 +203,8 @@ export class Simulation {
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     /** The host's V8 heap in use, in bytes, after a full garbage collection. */
     heap: () => this.rpc.call("diagnostics.heap", {}),
+    /** The host's V8 heap limit, in bytes: `maxHeapMb` plus a little for the young generation, or Node's default. */
+    heapLimit: () => this.rpc.call("diagnostics.heapLimit", {}),
     /** Starts or stops a CPU profile of the host; stopping returns it. */
     profile: (action: "start" | "stop") => this.rpc.call("diagnostics.profile", { action }),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),

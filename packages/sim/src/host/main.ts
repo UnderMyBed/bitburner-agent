@@ -21,7 +21,7 @@ import {
 } from "../protocol.ts";
 import { events } from "./events.ts";
 import { installHost } from "./install.ts";
-import { heapUsed, startProfile, stopProfile } from "./measure.ts";
+import { heapLimit, heapUsed, startProfile, stopProfile } from "./measure.ts";
 import { pinnedLocale } from "./parity/locale.ts";
 import { randomState, restoreRandomState } from "./random.ts";
 import { runUntil, watchBitNodeEntries } from "./run-until.ts";
@@ -171,6 +171,7 @@ async function start(options: HostOptions): Promise<Host> {
     },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
+    "diagnostics.heapLimit": () => heapLimit(),
     "diagnostics.profile": async ({ action }) => {
       if (action === "start") {
         await startProfile();
