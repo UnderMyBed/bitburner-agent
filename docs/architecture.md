@@ -529,6 +529,7 @@ packages/
   dashboard/    local web UI
   legacy/       retired-fork scripts (MIT, with notice; fork/ is byte-for-byte, see PROVENANCE.md) + adapters that run them as reflexes; also the simulator baseline
 spikes/         throwaway experiments; findings in docs/spikes/
+tools/          repository tooling run by Node, under the same gates (upstream-watch: the upstream watchers)
 vendor/         bitburner-src submodule (pinned, read-only)
 ```
 - **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `dashboard` reads the store only. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
@@ -546,7 +547,7 @@ The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit
 1. **See it coming:** a scheduled CI workflow watches upstream `stable`. When it moves, the workflow bumps the submodule on a branch, runs the full suite (including a diff of the API definitions), and opens a PR with a compatibility report. Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
 2. **Hold at runtime:** on every connect the brain checks `VersionNumber` and `getDefinitionFile` against the pinned build. On a mismatch it goes to **hold**: reflexes keep running, no intents, alert raised.
 3. **Save backups:** the bridge pulls rotating saves via RFA (§6), so a bad patch or bug can always be rolled back.
-4. **Look further ahead:** a cheap, advisory weekly check against upstream `dev` covers API diff, contract typecheck, RAM cost diff and a watched-source commit log. It reports into one tracking issue and never blocks merges (ADR 0005).
+4. **Look further ahead:** a cheap, advisory weekly check against upstream `dev` covers API diff, contract typecheck, RAM cost diff and a commit log for a [watchlist](../tools/upstream-watch/watchlist.txt) of game source. It reports into one tracking issue and never blocks merges (ADR 0005, [`tools/upstream-watch`](../tools/upstream-watch/README.md)).
 
 Steam itself is not pinned: game updates are taken as Steam ships them.
 
