@@ -1,3 +1,4 @@
+export { commitId, growthPerDay, rigId } from "./bench/report.ts";
 export type { EngineApi } from "./engine/api.ts";
 export { buildEngine } from "./engine/build.ts";
 export { formatRun } from "./scenario/report.ts";
@@ -14,8 +15,17 @@ export {
   type ScenarioRun,
   type SeedResult,
   type Stop,
+  startScenario,
 } from "./scenario/run.ts";
-export { loadScenario, type Scenario, type ScriptToRun, scenarioSeeds, validateScenario } from "./scenario/spec.ts";
+export {
+  loadScenario,
+  parseSeeds,
+  parseWorkers,
+  type Scenario,
+  type ScriptToRun,
+  scenarioSeeds,
+  validateScenario,
+} from "./scenario/spec.ts";
 export {
   type BitNodeFixture,
   type ComparisonOp,

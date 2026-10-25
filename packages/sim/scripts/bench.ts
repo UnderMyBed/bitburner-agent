@@ -4,13 +4,13 @@
 // row from this machine (docs/sim/benchmarks.md has the rules). A regressed row is recorded only with --accept.
 // Exits 0 if nothing regressed, 1 if something did, and 2 if it couldn't run.
 // With --profile, it instead profiles one run of a workload, writes the profile and prints where the time went.
-import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { topSelfTime } from "../src/bench/profile.ts";
 import {
   type BenchRow,
+  commitId,
   formatRow,
   growthPerDay,
   parseRows,
@@ -62,11 +62,7 @@ async function leanHeap(): Promise<number[]> {
 }
 
 /** The short commit hash, "-dirty" if anything but the results file has changed. */
-function commit(): string {
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" }).trim();
-  const changed = git("status", "--porcelain", "--", ".", `:!${path.relative(REPO_ROOT, RESULTS)}`);
-  return `${git("rev-parse", "--short", "HEAD")}${changed ? "-dirty" : ""}`;
-}
+const commit = () => commitId(REPO_ROOT, [path.relative(REPO_ROOT, RESULTS)]);
 
 /** Measures, prints the row and records it unless that's a dry run, or it regressed and isn't accepted. */
 async function bench({ dryRun, accept }: { dryRun: boolean; accept: boolean }): Promise<string[]> {
