@@ -94,6 +94,21 @@ describe("Simulation (host environment, no game booted)", () => {
     expect(await sim.diagnostics.profile("stop")).not.toBeNull();
   });
 
+  test("maxHeapMb caps the host's V8 heap; without it, Node's default applies", async () => {
+    const capped = await Simulation.start({ seed: 1, epochMs: EPOCH, maxHeapMb: 512 });
+    open.push(capped);
+    const uncapped = await start(1);
+    const limit = await capped.diagnostics.heapLimit();
+    // V8's limit is the old space plus room for the young generation (about 700 MB here).
+    expect(limit).toBeGreaterThanOrEqual(512 * 2 ** 20);
+    expect(limit).toBeLessThan(1024 * 2 ** 20);
+    expect(await uncapped.diagnostics.heapLimit()).toBeGreaterThan(1024 * 2 ** 20);
+  });
+
+  test.each([0, 128, 1.5, Number.NaN])("refuses maxHeapMb %s: a whole number of MB, at least 256", async (mb) => {
+    await expect(Simulation.start({ seed: 1, epochMs: EPOCH, maxHeapMb: mb })).rejects.toThrow(/maxHeapMb/);
+  });
+
   test("close rejects pending calls and can be called again", async () => {
     const sim = await start(1);
     const pending = sim.advance(24 * 3600_000);

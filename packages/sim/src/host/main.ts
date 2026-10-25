@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
 import process from "node:process";
+import { getHeapStatistics } from "node:v8";
 import type { EngineApi } from "../engine/api.ts";
 import {
   type HostFixture,
@@ -171,6 +172,7 @@ async function start(options: HostOptions): Promise<Host> {
     },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
+    "diagnostics.heapLimit": () => getHeapStatistics().heap_size_limit,
     "diagnostics.profile": async ({ action }) => {
       if (action === "start") {
         await startProfile();

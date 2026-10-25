@@ -82,21 +82,26 @@ The results don't depend on how many seeds run at once: each has its own process
 ## The CLI
 
 ```
-npm run sim -- <scenario.json> [--seeds a..b | --seeds a,b,c] [--workers k] [--json out.json]
+npm run sim -- <scenario.json> [--seeds a..b | a,b,c] [--workers k] [--wall-limit minutes] [--max-heap MB] [--json out.json]
 ```
 
-- It builds the engine if needed, runs every seed, prints the table, and with `--json` writes the full results.
+- It builds the engine if needed, runs every seed, prints the table, and with `--json` writes the full results. While it runs, it prints a progress line per seed at each checkpoint on stderr: virtual and real time so far, speed, scripts, money and hacking level.
 - `--seeds` overrides the scenario's seeds; `--workers` the pool size, which by default is `availableParallelism() − 2`, at least 1 (architecture §9.1, ADR 0006).
+- `--wall-limit` is a hard limit on each seed's real time, in whole minutes; a seed past it is killed and fails ("wall limit: …"). `--max-heap` caps each simulation's V8 heap, in MB (at least 256). Neither is set by default.
 - npm runs it from the repository root, so the scenario and `--json` paths are relative to that.
 - It exits 0 if every seed passed, 1 if any didn't, and 2 if it couldn't run at all (bad usage, a bad scenario, a build failure).
 
 From code, `@bitburner-agent/sim` exports these:
 - `runScenario`, `runSeed`, `startScenario` (a simulation set up as a scenario says, not yet run), `loadScenario`, `formatRun`;
-- `parseSeeds` and `parseWorkers`, which parse the CLIs' `--seeds` and `--workers` (this CLI's and the baseline's);
+- `parseSeeds`, `parseWorkers`, `parseWallLimit` and `parseMaxHeap`, which parse the CLIs' options (this CLI's and the baseline's), and `formatProgress`, their progress line;
 - `aggregate` and `distribution`, the run's aggregate and its min / median / p90 / max;
 - `growthPerDay`, `rigId` and `commitId`, the benchmarks' heap statistic, machine name and commit ([benchmarks](benchmarks.md)), which the baseline reuses.
 
-`runScenario`/`runSeed` take `measureHeap: true` to sample the host's heap after a full collection, as the run starts and at every checkpoint. Each sample takes real time, so speeds read a little lower; it doesn't change the game ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)).
+`runScenario`/`runSeed` take these options besides the seeds and workers:
+- `wallLimitMs`: a hard limit on each seed's real time, counted once its setup is done. The parent enforces it with its own timer: past it, it kills the seed's simulation process, mid-piece if need be, and the seed fails with an error starting "wall limit:", keeping the checkpoints it had.
+- `onCheckpoint(seed, checkpoint, wallMs)`: called with each checkpoint as it's taken, for progress output.
+- `maxHeapMb`: each simulation's V8 heap cap (`SimulationOptions.maxHeapMb`). V8 grows its heap toward its limit before collecting, so a long run can hold far more memory than it uses; a cap makes it collect sooner. A run that needs more crashes, as out of memory.
+- `measureHeap: true`, to sample the host's heap after a full collection, as the run starts and at every checkpoint. Each sample takes real time, so speeds read a little lower; it doesn't change the game ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)).
 
 The [fork baseline](baselines.md) is a scenario built in code (`baselineScenario()` from `@bitburner-agent/legacy`), since its files come from the vendored fork. It runs with `npm run baseline -w @bitburner-agent/legacy`.
 

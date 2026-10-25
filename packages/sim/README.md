@@ -78,12 +78,13 @@ await sim.close();
 ### Process and requests
 
 - **One process per simulation.** `Simulation.start` forks a fresh child process (`src/host/main.ts`), because game state is global.
-  - Options travel in an `init` message, not the environment, so large ones (e.g. saves) fit.
+  - Options travel in an `init` message, not the environment, so large ones (e.g. saves) fit. The one exception is `maxHeapMb`, which becomes the process's `--max-old-space-size`: a cap on its V8 heap, so a long run collects sooner instead of growing toward Node's default limit. A run that needs more crashes, as out of memory.
   - `start` resolves once the fixture is booted; it fails with the host's reason if setup fails, or after 60 s.
 - **Inputs are checked:**
   - `seed` is an unsigned 32-bit integer (wider values would alias).
   - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock. `epochMs` is required, except with a save fixture, which refuses it; `offlineMs` is a non-negative integer.
   - `prompts` rules each need a non-empty `match` and a text or `true`/`false` answer.
+  - `maxHeapMb` is a whole number of MB, at least 256 (a booted game's heap is about 110 MB).
   - A BitNode fixture's `n` and Source-File numbers are 1-15, written as plain integers. Source-File levels are 1-3, except SF12's, which go to 1,000,000.
 - **Requests** go over Node IPC as typed messages (`src/protocol.ts`, `src/rpc.ts`).
   - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing. Each request also waits for script imports to finish (see [the import barrier](#scripts)).
@@ -99,6 +100,7 @@ await sim.close();
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
   - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it. Measuring doesn't change the game ([Determinism](#determinism)).
+  - `heapLimit()`: the process's V8 heap limit, in bytes: `maxHeapMb` plus room for the young generation, or Node's default
   - `profile("start" | "stop")`: a CPU profile of the process, through the inspector. Stopping returns it (the `.cpuprofile` format). One at a time.
   - `crash(code, message)`
 

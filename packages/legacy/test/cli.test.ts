@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { aggregate, type ScenarioRun, type SeedResult } from "@bitburner-agent/sim";
+import { aggregate, type GameSummary, type ScenarioRun, type SeedResult } from "@bitburner-agent/sim";
 import { describe, expect, test, vi } from "vitest";
 import { baselineCli, type CliDeps } from "../src/cli.ts";
 
@@ -47,11 +47,10 @@ describe("the baseline CLI", () => {
   test("exits 0 when every seed destroyed the BitNode, and prints the row with the run's details", async () => {
     const { all, runScenario, output } = deps([seed(1, true), seed(2, true)]);
     expect(await baselineCli(["--seeds", "1..2"], all)).toBe(0);
-    expect(runScenario).toHaveBeenCalledWith(expect.objectContaining({ name: expect.stringMatching(/^legacy-bn1/) }), {
-      workers: 1,
-      seeds: [1, 2],
-      measureHeap: true,
-    });
+    expect(runScenario).toHaveBeenCalledWith(
+      expect.objectContaining({ name: expect.stringMatching(/^legacy-bn1/) }),
+      expect.objectContaining({ workers: 1, seeds: [1, 2], measureHeap: true }),
+    );
     expect(output.at(-1)).toContain("| 2026-10-25 | abc1234-dirty | test-rig | v24.0.0 | 1..2 | 2/2 |");
   });
 
@@ -60,10 +59,35 @@ describe("the baseline CLI", () => {
     expect(await baselineCli([], all)).toBe(1);
   });
 
-  test("runs one seed at a time unless --workers says otherwise", async () => {
+  test("by default: one seed at a time, 12 hours of real time per seed, a 2 GB heap per simulation", async () => {
     const { all, runScenario } = deps([seed(1, true)]);
-    await baselineCli(["--workers", "3"], all);
-    expect(runScenario).toHaveBeenCalledWith(expect.anything(), { workers: 3, measureHeap: true });
+    await baselineCli([], all);
+    expect(runScenario).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ workers: 1, wallLimitMs: 12 * HOUR, maxHeapMb: 2048 }),
+    );
+  });
+
+  test("--workers, --wall-limit (minutes) and --max-heap (MB) change them", async () => {
+    const { all, runScenario } = deps([seed(1, true)]);
+    await baselineCli(["--workers", "3", "--wall-limit", "90", "--max-heap", "4096"], all);
+    expect(runScenario).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ workers: 3, wallLimitMs: 90 * 60_000, maxHeapMb: 4096 }),
+    );
+  });
+
+  test("prints a progress line per checkpoint, on stderr", async () => {
+    const results = [seed(2, true)];
+    const { all, errors } = deps(results, {
+      runScenario: async (_, options) => {
+        const summary = { scripts: 210, money: 2e9, hackingLevel: 229 } as GameSummary;
+        options.onCheckpoint?.(2, { virtualMs: 24 * HOUR, summary }, 12 * 60_000);
+        return { scenario: "legacy-bn1", results, aggregate: aggregate(results) };
+      },
+    });
+    await baselineCli([], all);
+    expect(errors).toEqual(["seed 2: 24.00 h virtual, 12.0 min real, 120x; 210 scripts, $2.00e+9, hacking 229"]);
   });
 
   test("writes --json relative to where npm ran, before printing anything", async () => {
@@ -80,6 +104,8 @@ describe("the baseline CLI", () => {
 
   test.each([
     ["a positional argument", ["extra"], {}, /usage: npm run baseline/],
+    ["a wall limit of no minutes", ["--wall-limit", "0"], {}, /--wall-limit/],
+    ["a heap too small to boot", ["--max-heap", "128"], {}, /--max-heap/],
     ["a --json folder that doesn't exist", ["--json", "missing/run.json"], {}, /--json: no folder/],
     [
       "a rig name it can't use",

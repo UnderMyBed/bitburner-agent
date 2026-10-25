@@ -1,5 +1,5 @@
 // The CLI's text report of a scenario run: one row per seed, the aggregate, then the errors in full.
-import type { Distribution, ScenarioRun, SeedResult } from "./run.ts";
+import type { Checkpoint, Distribution, ScenarioRun, SeedResult } from "./run.ts";
 
 const hours = (ms: number) => `${(ms / 3_600_000).toFixed(2)} h`;
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
@@ -15,6 +15,19 @@ function result(r: SeedResult): string {
 function stop(r: SeedResult): string {
   if (r.stoppedBy === null) return "-";
   return r.stoppedBy === "bitverse" ? "bitverse" : `${r.stoppedBy.list}[${r.stoppedBy.index}]`;
+}
+
+/**
+ * A progress line for a checkpoint: the seed, virtual and real time so far, the speed, and how the game stands. The
+ * CLIs print one per seed per checkpoint, to stderr, so a long run shows how far each seed has got.
+ */
+export function formatProgress(seed: number, { virtualMs, summary }: Checkpoint, wallMs: number): string {
+  const speed = wallMs > 0 ? `${Math.round(virtualMs / wallMs)}x` : "-";
+  const real = `${(wallMs / 60_000).toFixed(1)} min`;
+  return (
+    `seed ${seed}: ${hours(virtualMs)} virtual, ${real} real, ${speed}; ` +
+    `${summary.scripts} scripts, $${summary.money.toExponential(2)}, hacking ${summary.hackingLevel}`
+  );
 }
 
 /** A scenario run as a plain-text table, one row per seed, then the aggregate and any errors in full. */

@@ -1,7 +1,7 @@
 export { commitId, growthPerDay, rigId } from "./bench/report.ts";
 export type { EngineApi } from "./engine/api.ts";
 export { buildEngine } from "./engine/build.ts";
-export { formatRun } from "./scenario/report.ts";
+export { formatProgress, formatRun } from "./scenario/report.ts";
 export {
   type Aggregate,
   aggregate,
@@ -19,7 +19,9 @@ export {
 } from "./scenario/run.ts";
 export {
   loadScenario,
+  parseMaxHeap,
   parseSeeds,
+  parseWallLimit,
   parseWorkers,
   type Scenario,
   type ScriptToRun,

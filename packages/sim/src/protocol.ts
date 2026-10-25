@@ -88,6 +88,12 @@ export interface SimulationOptions {
    * prompt replaces it (which closes it as dismissing does).
    */
   prompts?: PromptRule[];
+  /**
+   * Caps the simulation process's V8 heap (`--max-old-space-size`), in MB: a whole number, at least 256. V8 grows its
+   * heap toward the limit before collecting, so a long run can hold far more memory than it uses; a cap makes it
+   * collect sooner. A run that needs more than the cap crashes, as out of memory. Default: Node's.
+   */
+  maxHeapMb?: number;
   testHooks?: TestHooks;
 }
 
@@ -364,6 +370,8 @@ export interface HostMethods {
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */
   "diagnostics.heap"(params: Record<string, never>): number;
+  /** The host's V8 heap limit, in bytes (`heap_size_limit`): `maxHeapMb` plus a little for the young generation. */
+  "diagnostics.heapLimit"(params: Record<string, never>): number;
   /**
    * Starts or stops a CPU profile of the host (the game and everything it runs). Stopping returns the profile, in the
    * `.cpuprofile` format Chrome DevTools and Node use.

@@ -5,8 +5,11 @@ import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import {
+  formatProgress,
   formatRun,
+  parseMaxHeap,
   parseSeeds,
+  parseWallLimit,
   parseWorkers,
   type Scenario,
   type ScenarioOptions,
@@ -16,7 +19,12 @@ import { baselineScenario } from "./baseline.ts";
 import { baselineRow, formatHeaps } from "./report.ts";
 
 export const USAGE =
-  "usage: npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--json out.json]";
+  "usage: npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] " +
+  "[--wall-limit minutes (default 720)] [--max-heap MB (default 2048)] [--json out.json]";
+/** Each seed's default real-time limit: 12 hours. */
+export const DEFAULT_WALL_LIMIT_MS = 12 * 60 * 60_000;
+/** Each simulation's default heap cap: the fork's heap stayed near 120 MB, reaching 1 GB only with 144,000 scripts. */
+export const DEFAULT_MAX_HEAP_MB = 2048;
 
 export interface CliDeps {
   buildEngine: () => Promise<unknown>;
@@ -43,17 +51,27 @@ export interface CliDeps {
  */
 export async function baselineCli(argv: string[], deps: CliDeps): Promise<number> {
   let meta: Parameters<typeof baselineRow>[1];
-  let options: { seeds?: number[]; workers: number };
+  let options: { seeds?: number[]; workers: number; wallLimitMs: number; maxHeapMb: number };
   let json: string | undefined;
   try {
     const { values, positionals } = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { seeds: { type: "string" }, workers: { type: "string" }, json: { type: "string" } },
+      options: {
+        seeds: { type: "string" },
+        workers: { type: "string" },
+        "wall-limit": { type: "string" },
+        "max-heap": { type: "string" },
+        json: { type: "string" },
+      },
     });
     if (positionals.length > 0) throw new RangeError(USAGE);
     // One seed at a time unless asked: a seed is heavy (docs/sim/baselines.md, #75).
-    options = { workers: values.workers === undefined ? 1 : parseWorkers(values.workers) };
+    options = {
+      workers: values.workers === undefined ? 1 : parseWorkers(values.workers),
+      wallLimitMs: values["wall-limit"] === undefined ? DEFAULT_WALL_LIMIT_MS : parseWallLimit(values["wall-limit"]),
+      maxHeapMb: values["max-heap"] === undefined ? DEFAULT_MAX_HEAP_MB : parseMaxHeap(values["max-heap"]),
+    };
     if (values.seeds !== undefined) options.seeds = parseSeeds(values.seeds);
     json = values.json === undefined ? undefined : path.resolve(deps.cwd, values.json);
     if (json && !existsSync(path.dirname(json))) throw new Error(`--json: no folder ${path.dirname(json)}`);
@@ -66,7 +84,11 @@ export async function baselineCli(argv: string[], deps: CliDeps): Promise<number
   let run: ScenarioRun;
   try {
     // A seed's failure is in its result; this throws only if the run as a whole couldn't happen.
-    run = await deps.runScenario(baselineScenario(), { ...options, measureHeap: true });
+    run = await deps.runScenario(baselineScenario(), {
+      ...options,
+      measureHeap: true,
+      onCheckpoint: (seed, checkpoint, wallMs) => deps.error(formatProgress(seed, checkpoint, wallMs)),
+    });
   } catch (error) {
     deps.error(error instanceof Error ? error.message : String(error));
     return 2;

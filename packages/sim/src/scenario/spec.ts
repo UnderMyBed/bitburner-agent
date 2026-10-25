@@ -242,3 +242,19 @@ export function parseWorkers(text: string): number {
   if (!/^\d+$/.test(text) || Number(text) < 1) throw new RangeError(`--workers: a positive integer, got "${text}"`);
   return Number(text);
 }
+
+/** A `--wall-limit` value: whole minutes of real time per seed, at least 1. Returns ms. */
+export function parseWallLimit(text: string): number {
+  if (!/^\d+$/.test(text) || Number(text) < 1) {
+    throw new RangeError(`--wall-limit: whole minutes of real time per seed, at least 1, got "${text}"`);
+  }
+  return Number(text) * 60_000;
+}
+
+/** A `--max-heap` value: whole MB, at least 256 (`SimulationOptions.maxHeapMb`). */
+export function parseMaxHeap(text: string): number {
+  if (!/^\d+$/.test(text) || Number(text) < 256) {
+    throw new RangeError(`--max-heap: whole MB per simulation, at least 256, got "${text}"`);
+  }
+  return Number(text);
+}
