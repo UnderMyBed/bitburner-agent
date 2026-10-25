@@ -72,12 +72,46 @@ export function splitTopLevel(text: string, separator: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part !== "");
 }
 
-/** Whitespace runs collapsed to one space, and none just inside brackets: formatting-only changes compare equal. */
-export function normalize(text: string): string {
-  return text
+/**
+ * The first index of `char` from `from` on that's outside brackets, generics' angle brackets and strings; -1 if none.
+ * An arrow's `>` isn't an angle bracket.
+ */
+export function topLevelIndex(text: string, char: string, from = 0): number {
+  let angles = 0;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i] as string;
+    if (c === char && angles === 0) return i;
+    if (QUOTES.includes(c)) i = stringEnd(text, i) - 1;
+    else if (OPEN.includes(c)) i = closingIndex(text, i);
+    else if (c === "<") angles++;
+    else if (c === ">" && text[i - 1] !== "=" && angles > 0) angles--;
+  }
+  return -1;
+}
+
+/** Formatting outside strings made uniform, so formatting-only changes compare equal. */
+function normalizeCode(code: string): string {
+  return code
     .replace(/\s+/g, " ")
     .replace(/([([{]) /g, "$1")
     .replace(/ ([)\]}])/g, "$1")
     .replace(/[,;] ?([)\]}])/g, "$1")
-    .trim();
+    .replace(/ ([,;])/g, "$1");
+}
+
+/**
+ * Whitespace runs collapsed to one space, none just inside brackets or before a separator, and no trailing separator
+ * before a closing bracket. String contents are left alone.
+ */
+export function normalize(text: string): string {
+  let out = "";
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (!QUOTES.includes(text[i] as string)) continue;
+    const end = stringEnd(text, i);
+    out += normalizeCode(text.slice(start, i)) + text.slice(i, end);
+    start = end;
+    i = end - 1;
+  }
+  return (out + normalizeCode(text.slice(start))).trim();
 }

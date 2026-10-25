@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { changeCount, type ForwardReport, inert, renderReport } from "../src/report.ts";
+import { BODY_LIMIT, changeCount, codeSpan, type ForwardReport, renderReport } from "../src/report.ts";
 
 const empty: ForwardReport = {
   pinned: { sha: "1da7316ff0000000000000000000000000000000", version: "3.0.1" },
@@ -25,6 +25,7 @@ const full: ForwardReport = {
     { path: "dnet.freezeServer", before: null, after: "2" },
     { path: "removed.fn", before: "1", after: null },
     { path: "hack", before: "0.1", after: "0.15" },
+    { path: "odd", before: "a || b", after: null },
   ],
   commits: [{ sha: "9aa05655aaaa", title: "DNET: remove TRP from darknet in BN12 (#3025) thanks @someone" }],
 };
@@ -32,15 +33,16 @@ const full: ForwardReport = {
 describe("changeCount", () => {
   test("counts changed declarations, RAM costs and watched commits", () => {
     expect(changeCount(empty)).toBe(0);
-    expect(changeCount(full)).toBe(4 + 3 + 1);
+    expect(changeCount(full)).toBe(4 + 4 + 1);
   });
 });
 
-describe("inert", () => {
-  test("puts issue references and mentions in code, so they link nowhere and notify no one", () => {
-    expect(inert("Fix (#3025), thanks @someone and @other-dev; a@b.c stays")).toBe(
-      "Fix (`#3025`), thanks `@someone` and `@other-dev`; a@b.c stays",
-    );
+describe("codeSpan", () => {
+  test("wraps text in a code span long enough for the backticks inside it", () => {
+    expect(codeSpan("plain")).toBe("`plain`");
+    expect(codeSpan("Fix `foo #12")).toBe("``Fix `foo #12``");
+    expect(codeSpan("`edge`")).toBe("`` `edge` ``");
+    expect(codeSpan("a ``b`` c")).toBe("```a ``b`` c```");
   });
 });
 
@@ -52,19 +54,45 @@ describe("renderReport", () => {
     expect(text).toContain("**No changes.**");
   });
 
-  test("lists API changes by declaration, RAM costs in a table, and commits with their references made inert", () => {
+  test("lists API changes by declaration, RAM costs in a table, and commits in code spans", () => {
     const text = renderReport(full);
-    expect(text).toContain("**8 changes:** 4 API declarations, 3 RAM costs, 1 watched-source commit.");
+    expect(text).toContain("**9 changes:** 4 API declarations, 4 RAM costs, 1 watched-source commit.");
     expect(text).toContain("- **Added:** `type GangTaskName`");
     expect(text).toContain("- **Removed:** `type SimpleOpponentStats`");
     expect(text).toContain("  - `interface NS`: added `isFullPort`, `isEmptyPort`; removed `old`; changed `spawn`");
     expect(text).toContain("  - `type CityName`\n");
     expect(text).toContain("```diff\n--- a\n+++ b\n+  isFullPort(port: number): boolean;\n```");
-    expect(text).toContain("| `dnet.freezeServer` | – | 2 |");
-    expect(text).toContain("| `removed.fn` | 1 | – |");
-    expect(text).toContain("| `hack` | 0.1 | 0.15 |");
-    expect(text).toContain("- `9aa05655aa` DNET: remove TRP from darknet in BN12 (`#3025`) thanks `@someone`");
+    expect(text).toContain("| `dnet.freezeServer` | – | `2` |");
+    expect(text).toContain("| `removed.fn` | `1` | – |");
+    expect(text).toContain("| `hack` | `0.1` | `0.15` |");
+    // Pipes in a cell would end it: escaped, even in code.
+    expect(text).toContain("| `odd` | `a \\|\\| b` | – |");
+    // A whole title in code: its references, mentions and markup link to nothing and notify no one.
+    expect(text).toContain("- `9aa05655aa` `DNET: remove TRP from darknet in BN12 (#3025) thanks @someone`");
     expect(text).toContain("## Contract typecheck");
+  });
+
+  test("caps long lists, saying how many more there are", () => {
+    const many = {
+      ...full,
+      ram: Array.from({ length: 600 }, (_, i) => ({ path: `ns.fn${i}`, before: null, after: "1" })),
+      commits: Array.from({ length: 900 }, (_, i) => ({
+        sha: `${i}`.padStart(40, "0"),
+        title: `CATEGORY: a fairly typical upstream commit title, about this long (#${3000 + i})`,
+      })),
+    };
+    const text = renderReport(many);
+    expect(text.length).toBeLessThanOrEqual(BODY_LIMIT);
+    expect(text).toContain("**1504 changes:**");
+    expect(text).toContain("…and 750 more commits.");
+    expect(text).toContain("…and 450 more RAM costs.");
+  });
+
+  test("anything still too long is cut at the limit, with a note", () => {
+    const names = Array.from({ length: 150 }, (_, i) => `interface ${"Long".repeat(100)}${i}`);
+    const text = renderReport({ ...full, api: { added: names, removed: names, changed: [] } });
+    expect(text.length).toBeLessThanOrEqual(BODY_LIMIT);
+    expect(text.endsWith("Cut short to fit in an issue. Run the tool locally for the whole report.")).toBe(true);
   });
 
   test("stays under GitHub's issue body limit, cutting the raw diff first", () => {
@@ -72,6 +100,6 @@ describe("renderReport", () => {
     const text = renderReport(huge);
     expect(text.length).toBeLessThanOrEqual(60_000);
     expect(text).toContain("The raw diff is cut short");
-    expect(text).toContain("| `hack` | 0.1 | 0.15 |");
+    expect(text).toContain("| `hack` | `0.1` | `0.15` |");
   });
 });

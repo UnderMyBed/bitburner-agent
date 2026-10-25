@@ -96,6 +96,23 @@ describe("extractDeclarations", () => {
     expect(declarations.get("type CityName")?.text).toBe('type CityName = "Aevum" | "Sector-12";');
   });
 
+  test("braces and = inside a declaration's generics aren't its body or its value", () => {
+    const generic = extractDeclarations(
+      "interface Foo<T extends { a: number }> { x: T; }\ninterface Bar { y: number; }\ntype X<T = string> = { a: T; b: number };",
+    );
+    expect([...generic.keys()]).toEqual(["interface Foo", "interface Bar", "type X"]);
+    expect([...(generic.get("interface Foo")?.members?.keys() ?? [])]).toEqual(["x"]);
+    expect([...(generic.get("type X")?.members?.keys() ?? [])]).toEqual(["a", "b"]);
+  });
+
+  test("enum and class members, with accessors named apart", () => {
+    const declarations = extractDeclarations(
+      'declare enum Color { Red = "red", Blue = "blue" }\ndeclare class C { get x(): number; set x(v: number); get(): void; }',
+    );
+    expect([...(declarations.get("enum Color")?.members?.keys() ?? [])]).toEqual(["Red", "Blue"]);
+    expect([...(declarations.get("class C")?.members?.keys() ?? [])]).toEqual(["get x", "set x", "get"]);
+  });
+
   test("reads the real pinned definitions: NS and its hack()", () => {
     const real = extractDeclarations(readFileSync(PINNED, "utf8"));
     expect(real.size).toBeGreaterThan(150);
@@ -115,6 +132,23 @@ describe("diffDeclarations", () => {
         { key: "type DarknetResult", added: ["code"], removed: [], changed: [] },
       ],
     });
+  });
+
+  test("when either side isn't an object type, the declaration changed but there's no member breakdown", () => {
+    // Upstream's real CacheResult change: an object type became an intersection, keeping two of its members.
+    const before = extractDeclarations("type CacheResult = { success: boolean; message: string; karmaLoss: number };");
+    const after = extractDeclarations("type CacheResult = { success: boolean; message: string } & CacheReward;");
+    expect(diffDeclarations(before, after).changed).toEqual([
+      { key: "type CacheResult", added: [], removed: [], changed: [] },
+    ]);
+    expect(diffDeclarations(after, before).changed).toEqual([
+      { key: "type CacheResult", added: [], removed: [], changed: [] },
+    ]);
+  });
+
+  test("a changed string value is a change, though whitespace inside it would be squeezed elsewhere", () => {
+    const diff = diffDeclarations(extractDeclarations('type U = "a  b";'), extractDeclarations('type U = "a b";'));
+    expect(diff.changed.map((c) => c.key)).toEqual(["type U"]);
   });
 
   test("formatting and comments alone aren't changes", () => {

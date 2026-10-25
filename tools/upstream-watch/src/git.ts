@@ -1,13 +1,10 @@
 // The git reads the report needs, from a clone of the game's repository (blobless is enough).
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { diffDeclarations, extractDeclarations } from "./declarations.ts";
 import { diffRamCosts, extractRamCosts } from "./ram-costs.ts";
-import type { ForwardReport } from "./report.ts";
+import { DEFINITIONS, type ForwardReport, RAM_COSTS } from "./report.ts";
 
-export const DEFINITIONS = "src/ScriptEditor/NetscriptDefinitions.d.ts";
-export const RAM_COSTS = "src/Netscript/RamCostGenerator.ts";
 const CONSTANTS = "src/Constants.ts";
 
 function git(repo: string, ...args: string[]): string {
@@ -20,14 +17,6 @@ export function pinnedCommit(repoRoot: string): string {
   const sha = /^160000 commit ([0-9a-f]{40})\t/.exec(entry)?.[1];
   if (!sha) throw new Error(`vendor/bitburner-src isn't a submodule in ${repoRoot}'s HEAD: "${entry}"`);
   return sha;
-}
-
-/** Paths from the watchlist file: one per line, `#` comments and blank lines skipped. */
-export function readWatchlist(file: string): string[] {
-  return readFileSync(file, "utf8")
-    .split("\n")
-    .map((line) => line.replace(/#.*/, "").trim())
-    .filter((line) => line !== "");
 }
 
 /** The game's version string at a commit, e.g. "3.0.1". */

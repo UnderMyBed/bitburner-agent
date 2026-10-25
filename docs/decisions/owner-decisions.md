@@ -27,3 +27,4 @@ Decisions made by the project owner that don't each need a full ADR. Each row sa
 | 21 | 2026-10-24 | **Simulator before skeleton:** M1 is toolchain and the simulator core; M2 is the walking skeleton. | [architecture §13](../architecture.md) |
 | 22 | 2026-10-24 | **Work tracking:** GitHub issues, epics and milestones that carry design and implementation plans, plus a project board; **three-pass reviews** check PRs against those specs. | [ADR 0008](0008-work-tracking-and-reviews.md) |
 | 23 | 2026-10-24 | **Claude never plays the game directly.** Claude builds the software that plays; it doesn't drive the owner's game itself. | [CLAUDE.md](../../CLAUDE.md), [plan](../plan.md) |
+| 24 | 2026-10-24 | **The upstream watchers run on demand**, not weekly: both the `dev` forward check and the `stable` watcher. Every release runs them. | [ADR 0009](0009-upstream-watchers-on-demand.md), [releasing](../releasing.md) |

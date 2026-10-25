@@ -1,6 +1,6 @@
 // The API surface of a declaration file (NetscriptDefinitions.d.ts): its top-level declarations and their members,
 // and what changed between two versions.
-import { closingIndex, normalize, splitTopLevel, stringEnd, stripComments } from "./scan.ts";
+import { closingIndex, normalize, splitTopLevel, stringEnd, stripComments, topLevelIndex } from "./scan.ts";
 
 export interface Declaration {
   /** e.g. "interface NS", "type CityName". */
@@ -25,29 +25,24 @@ function statements(text: string): string[] {
       i++;
       continue;
     }
-    const start = i;
-    let end = text.length;
-    for (let j = i; j < text.length; j++) {
-      const char = text[j] as string;
-      if (`"'\``.includes(char)) j = stringEnd(text, j) - 1;
-      else if (char === "{" && BLOCK.test(text.slice(start, j))) {
-        end = closingIndex(text, j) + 1;
-        break;
-      } else if ("([{".includes(char)) j = closingIndex(text, j);
-      else if (char === ";") {
-        end = j + 1;
-        break;
-      }
-    }
-    found.push(text.slice(start, end));
+    // A block declaration ends with its body; anything else at its `;`.
+    const body = BLOCK.test(text.slice(i, i + 100)) ? topLevelIndex(text, "{", i) : -1;
+    const semicolon = body === -1 ? topLevelIndex(text, ";", i) : -1;
+    const end = body !== -1 ? closingIndex(text, body) + 1 : semicolon !== -1 ? semicolon + 1 : text.length;
+    found.push(text.slice(i, end));
     i = end;
   }
   return found;
 }
 
-/** A member's name: an identifier, a quoted key, an index signature, or "(call)" / "(construct)" for signatures. */
+/**
+ * A member's name: an identifier, a quoted key, an index signature, "get x" / "set x" for accessors, or "(call)" /
+ * "(construct)" for signatures.
+ */
 function memberName(member: string): string {
   const bare = member.replace(/^(?:(?:readonly|static|public|private|protected|abstract|declare)\s+)+/, "");
+  const accessor = /^(get|set)\s+([\w$]+)/.exec(bare);
+  if (accessor) return `${accessor[1]} ${accessor[2]}`;
   if (bare.startsWith("[")) return bare.slice(0, closingIndex(bare, 0) + 1);
   if (bare.startsWith('"') || bare.startsWith("'")) return bare.slice(0, stringEnd(bare, 0));
   if (bare.startsWith("(") || bare.startsWith("<")) return "(call)";
@@ -58,12 +53,14 @@ function memberName(member: string): string {
 /** The members of a `{ … }` body, by name; overloads share a name, joined by line breaks. */
 function membersOf(body: string, separator: ";" | ","): Map<string, string> {
   const members = new Map<string, string>();
-  for (const member of splitTopLevel(body, separator).map(normalize)) {
-    const name = memberName(member);
-    const earlier = members.get(name);
-    members.set(name, earlier === undefined ? member : `${earlier}\n${member}`);
-  }
+  for (const member of splitTopLevel(body, separator).map(normalize)) appendTo(members, memberName(member), member);
   return members;
+}
+
+/** Adds `text` under `key`, after a line break if there's already text there. */
+function appendTo(map: Map<string, string>, key: string, text: string): void {
+  const earlier = map.get(key);
+  map.set(key, earlier === undefined ? text : `${earlier}\n${text}`);
 }
 
 function declarationOf(statement: string): Declaration {
@@ -75,13 +72,14 @@ function declarationOf(statement: string): Declaration {
   if (kind === "type") {
     // An object type: `type X = { … };`, the braces being the whole right-hand side.
     const value = text
-      .slice(text.indexOf("=") + 1)
+      .slice(topLevelIndex(text, "=", named[0].length) + 1)
       .replace(/;$/, "")
       .trim();
-    if (value.startsWith("{") && closingIndex(value, 0) === value.length - 1)
+    if (value.startsWith("{") && closingIndex(value, 0) === value.length - 1) {
       members = membersOf(value.slice(1, -1), ";");
+    }
   } else if (kind === "interface" || kind === "class" || kind === "enum") {
-    const open = text.indexOf("{", named[0].length);
+    const open = topLevelIndex(text, "{", named[0].length);
     if (open !== -1) members = membersOf(text.slice(open + 1, closingIndex(text, open)), kind === "enum" ? "," : ";");
   }
   return { key: `${kind} ${name}`, text, members };
@@ -100,10 +98,7 @@ export function extractDeclarations(source: string): Map<string, Declaration> {
     earlier.text += `\n${declaration.text}`;
     if (declaration.members) {
       earlier.members ??= new Map();
-      for (const [name, member] of declaration.members) {
-        const before = earlier.members.get(name);
-        earlier.members.set(name, before === undefined ? member : `${before}\n${member}`);
-      }
+      for (const [name, member] of declaration.members) appendTo(earlier.members, name, member);
     }
   }
   return declarations;
@@ -125,7 +120,8 @@ export interface DeclarationDiff {
   changed: ChangedDeclaration[];
 }
 
-function keyDiff<T>(before: Map<string, T>, after: Map<string, T>) {
+/** The keys only in `after`, only in `before`, and in both, each in its map's order (both: `after`'s). */
+export function keyDiff<T>(before: Map<string, T>, after: Map<string, T>) {
   return {
     added: [...after.keys()].filter((key) => !before.has(key)),
     removed: [...before.keys()].filter((key) => !after.has(key)),
@@ -141,7 +137,12 @@ export function diffDeclarations(before: Map<string, Declaration>, after: Map<st
     const old = before.get(key) as Declaration;
     const now = after.get(key) as Declaration;
     if (old.text === now.text) continue;
-    const members = keyDiff(old.members ?? new Map(), now.members ?? new Map());
+    // Members compare only between two bodies: an object type becoming an intersection has none to compare.
+    if (!old.members || !now.members) {
+      changed.push({ key, added: [], removed: [], changed: [] });
+      continue;
+    }
+    const members = keyDiff(old.members, now.members);
     changed.push({
       key,
       added: members.added,

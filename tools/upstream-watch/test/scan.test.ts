@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { closingIndex, splitTopLevel, stripComments } from "../src/scan.ts";
+import { closingIndex, normalize, splitTopLevel, stripComments, topLevelIndex } from "../src/scan.ts";
 
 describe("stripComments", () => {
   test("removes line and block comments, keeping line breaks", () => {
@@ -39,5 +39,34 @@ describe("splitTopLevel", () => {
 
   test("an arrow's > isn't a bracket", () => {
     expect(splitTopLevel("f: () => void; g: number", ";")).toEqual(["f: () => void", "g: number"]);
+  });
+});
+
+describe("normalize", () => {
+  test("collapses whitespace and drops it inside brackets and before a closing one, with a trailing separator", () => {
+    expect(normalize("{\n  a: number;\n  b: ( x ,  y );\n}")).toBe("{a: number; b: (x, y)}");
+  });
+
+  test("leaves string contents alone, so a changed string value still compares different", () => {
+    expect(normalize('x:  "a  b" | "( c )" ;')).toBe('x: "a  b" | "( c )";');
+  });
+});
+
+describe("topLevelIndex", () => {
+  test("skips what's inside generics' angle brackets, but not an arrow's >", () => {
+    const iface = "interface Foo<T extends { a: number }> { x: T }";
+    expect(topLevelIndex(iface, "{")).toBe(iface.lastIndexOf("{"));
+    const alias = "type X<T = string> = { a: T }";
+    expect(topLevelIndex(alias, "=")).toBe(alias.lastIndexOf("= {"));
+    const defaults = "type X<F = () => void, G = 1> = { a: 1 }";
+    expect(topLevelIndex(defaults, "=")).toBe(defaults.lastIndexOf("= {"));
+    const arrow = "type F = () => void; next";
+    expect(topLevelIndex(arrow, ";")).toBe(arrow.indexOf(";"));
+  });
+
+  test("skips brackets and strings, starts where asked, and is -1 if there's none", () => {
+    expect(topLevelIndex(`a(";") "x;" [;];b`, ";")).toBe(15);
+    expect(topLevelIndex("a;b;c", ";", 2)).toBe(3);
+    expect(topLevelIndex("abc", ";")).toBe(-1);
   });
 });

@@ -1,8 +1,11 @@
 // RAM costs from the game's src/Netscript/RamCostGenerator.ts: the `RamCosts` tree flattened to function paths, with
 // the cost constants and arithmetic resolved, and what changed between two versions.
+import { keyDiff } from "./declarations.ts";
 import { closingIndex, normalize, splitTopLevel, stripComments } from "./scan.ts";
 
+/** The objects read: the cost tree, and the constants its costs are written in. */
 const ROOT = "RamCosts";
+const CONSTANTS = "RamCostConstants";
 
 /** The bodies of the file's `const name = { … }` object literals, by name. */
 function objectLiterals(text: string): Map<string, string> {
@@ -29,10 +32,18 @@ function resolve(expression: string, constants: Map<string, string>): string {
     const inner = resolve((sf4[1] as string).trim(), constants);
     return /^[\d.]+$/.test(inner) ? `${inner} (SF4)` : expression;
   }
-  const substituted = expression.replace(/RamCostConstants\.([\w$]+)/g, (whole, name) => constants.get(name) ?? whole);
+  const substituted = expression.replace(
+    new RegExp(`${CONSTANTS}\\.([\\w$]+)`, "g"),
+    (whole, name) => constants.get(name) ?? whole,
+  );
   if (!/^[\d.\s+\-*/()]+$/.test(substituted)) return expression;
-  const value = Function(`"use strict"; return (${substituted});`)() as unknown;
-  return typeof value === "number" && Number.isFinite(value) ? formatNumber(value) : expression;
+  // Only digits, dots, spaces, operators and parentheses get here, so evaluating it can only compute a number or fail.
+  try {
+    const value = Function(`"use strict"; return (${substituted});`)() as unknown;
+    return typeof value === "number" && Number.isFinite(value) ? formatNumber(value) : expression;
+  } catch {
+    return expression;
+  }
 }
 
 /**
@@ -42,7 +53,7 @@ function resolve(expression: string, constants: Map<string, string>): string {
 export function extractRamCosts(source: string): Map<string, string> {
   const objects = objectLiterals(stripComments(source));
   const constants = new Map<string, string>();
-  for (const entry of splitTopLevel(objects.get("RamCostConstants") ?? "", ",")) {
+  for (const entry of splitTopLevel(objects.get(CONSTANTS) ?? "", ",")) {
     const [name, value] = entry.split(":").map((part) => part.trim());
     if (name && value) constants.set(name, resolve(value, constants));
   }
@@ -82,12 +93,13 @@ export interface RamCostChange {
 
 /** Functions added (in the newer file's order), then removed (in the older's), then changed (in the newer's). */
 export function diffRamCosts(before: Map<string, string>, after: Map<string, string>): RamCostChange[] {
-  const added = [...after].filter(([path]) => !before.has(path));
-  const removed = [...before].filter(([path]) => !after.has(path));
-  const changed = [...after].filter(([path, cost]) => before.has(path) && before.get(path) !== cost);
+  const { added, removed, both } = keyDiff(before, after);
+  const cost = (map: Map<string, string>, path: string) => map.get(path) as string;
   return [
-    ...added.map(([path, cost]) => ({ path, before: null, after: cost })),
-    ...removed.map(([path, cost]) => ({ path, before: cost, after: null })),
-    ...changed.map(([path, cost]) => ({ path, before: before.get(path) as string, after: cost })),
+    ...added.map((path) => ({ path, before: null, after: cost(after, path) })),
+    ...removed.map((path) => ({ path, before: cost(before, path), after: null })),
+    ...both
+      .filter((path) => before.get(path) !== after.get(path))
+      .map((path) => ({ path, before: cost(before, path), after: cost(after, path) })),
   ];
 }

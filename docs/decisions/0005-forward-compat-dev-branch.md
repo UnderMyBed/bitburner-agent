@@ -1,6 +1,6 @@
 # 0005 — Forward-compatibility checks against upstream `dev`
 
-- **Status:** Accepted (2026-10-24)
+- **Status:** Accepted (2026-10-24). Amended by [0009](0009-upstream-watchers-on-demand.md).
 - **Extends:** [0003](0003-game-version-pinning.md)
 
 ## Context

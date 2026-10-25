@@ -66,9 +66,11 @@ describe("extractRamCosts", () => {
     });
   });
 
-  test("keeps an expression it can't resolve as written", () => {
-    const odd = BEFORE.replace("numNodes: 0.5,", "numNodes: someFunction(),");
-    expect(extractRamCosts(odd).get("hacknet.numNodes")).toBe("someFunction()");
+  test("keeps an expression it can't resolve as written, including arithmetic that isn't valid", () => {
+    for (const odd of ["someFunction()", "()", "010", "1..5", "1 / 0"]) {
+      const source = BEFORE.replace("numNodes: 0.5,", `numNodes: ${odd},`);
+      expect(extractRamCosts(source).get("hacknet.numNodes"), odd).toBe(odd);
+    }
   });
 
   test("reads the real pinned cost table", () => {

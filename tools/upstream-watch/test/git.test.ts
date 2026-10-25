@@ -1,16 +1,34 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
-import { buildReport, DEFINITIONS, pinnedCommit, RAM_COSTS, readWatchlist } from "../src/git.ts";
+import { buildReport, pinnedCommit } from "../src/git.ts";
+import { DEFINITIONS, RAM_COSTS } from "../src/report.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const temp = mkdtempSync(path.join(tmpdir(), "upstream-watch-"));
 afterAll(() => rmSync(temp, { recursive: true, force: true }));
 
 const git = (...args: string[]) =>
-  execFileSync("git", ["-C", temp, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  execFileSync(
+    "git",
+    // Scratch commits ignore the machine's own git setup: signing and hooks would get in the way.
+    [
+      "-C",
+      temp,
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=",
+      ...args,
+    ],
+    { encoding: "utf8" },
+  ).trim();
 
 function commit(files: Record<string, string>, message: string): string {
   for (const [file, content] of Object.entries(files)) {
@@ -66,13 +84,10 @@ describe("buildReport", () => {
 });
 
 describe("this repository", () => {
-  test("the pinned commit is the submodule's gitlink", () => {
-    expect(pinnedCommit(REPO_ROOT)).toMatch(/^1da7316ff[0-9a-f]{31}$/);
-  });
-
-  test("every watchlist path exists in the pinned game", () => {
-    const watchlist = readWatchlist(path.join(REPO_ROOT, "tools/upstream-watch/watchlist.txt"));
-    expect(watchlist.length).toBeGreaterThan(50);
-    expect(watchlist.filter((p) => !existsSync(path.join(REPO_ROOT, "vendor/bitburner-src", p)))).toEqual([]);
+  test("the pinned commit is the submodule's gitlink, the commit checked out in vendor/bitburner-src", () => {
+    const checkedOut = execFileSync("git", ["-C", path.join(REPO_ROOT, "vendor/bitburner-src"), "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+    expect(pinnedCommit(REPO_ROOT)).toBe(checkedOut);
   });
 });
