@@ -21,19 +21,31 @@ const SHARED_WITH_GLOBAL = [
 
 /**
  * `window.postMessage` as a browser has it, for messages to the page itself. jsdom's leaves the event's `source` and
- * `origin` unset (browser/Window.js), and the game's setImmediate polyfill (jszip's) ignores messages whose `source`
+ * `origin` unset (jsdom/lib/jsdom/browser/Window.js), and the game's setImmediate polyfill (jszip's) ignores messages whose `source`
  * isn't the window, so its callbacks would never run. The message is delivered on a later real task, as in a browser.
  */
 function installPostMessage(window: Window & typeof globalThis): void {
-  window.postMessage = function postMessage(...args: unknown[]) {
-    if (args.length < 2) throw new TypeError("'postMessage' requires 2 arguments: 'message' and 'targetOrigin'");
-    const [message, targetOrigin] = args;
+  window.postMessage = function postMessage(message: unknown, options?: unknown) {
+    // postMessage(message, targetOrigin) or postMessage(message, { targetOrigin }); the default is "/", this page.
+    const target =
+      typeof options === "string" ? options : ((options as { targetOrigin?: string })?.targetOrigin ?? "/");
     const origin = window.location.origin;
-    if (targetOrigin !== "*" && targetOrigin !== "/" && new URL(String(targetOrigin)).origin !== origin) return;
+    if (target !== "*" && target !== "/") {
+      let targetOrigin: string;
+      try {
+        targetOrigin = new URL(target).origin;
+      } catch {
+        throw new window.DOMException(`Invalid target origin '${target}' in a call to 'postMessage'.`, "SyntaxError");
+      }
+      if (targetOrigin !== origin) return;
+    }
+    const data = structuredClone(message);
     realTimers.setImmediate(() => {
-      window.dispatchEvent(new window.MessageEvent("message", { data: message, origin, source: window }));
+      window.dispatchEvent(new window.MessageEvent("message", { data, origin, source: window }));
     });
   } as typeof window.postMessage;
+  // In a browser the window is the global object: the bare name is the same function.
+  globalThis.postMessage = window.postMessage;
 }
 
 /**

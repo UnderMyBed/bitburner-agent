@@ -10,13 +10,17 @@ const { IDBKeyRange, indexedDB } = require("fake-indexeddb") as typeof import("f
 
 /**
  * fake-indexeddb runs each transaction step on `globalThis.setImmediate`, looked up at call time
- * (build/cjs/lib/scheduling.js), and would fall back to `setTimeout`, the virtual clock, once Node's globals are hidden
- * from scripts (node-globals.ts). That would leave the game's save waiting for virtual time. It gets the real one.
+ * (build/cjs/lib/scheduling.js, pinned at 6.2.5). Once Node's globals are hidden (node-globals.ts) that's undefined
+ * until the engine loads, which would leave IndexedDB on `setTimeout`, the virtual clock, and then the game's
+ * polyfill, which a script could replace. It gets the real one. If an upgrade moves `queueTask`, this throws; if it
+ * stops using it, the saves tests time out.
  */
 function scheduleOnRealTime(): void {
   const scheduling = require(path.join(path.dirname(require.resolve("fake-indexeddb")), "lib/scheduling.js")) as {
     queueTask: (fn: () => void) => void;
   };
+  if (typeof scheduling.queueTask !== "function")
+    throw new Error("fake-indexeddb no longer has lib/scheduling.js queueTask");
   scheduling.queueTask = (fn) => {
     realTimers.setImmediate(fn);
   };

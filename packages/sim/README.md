@@ -320,12 +320,13 @@ Besides the Router ([Pages](#pages-and-the-bitverse)) and the UI's events, the b
   - A string passed to `setTimeout` is evaluated as code.
   - Both kinds also go to stderr, except a ScriptDeath, so a host bug's error isn't mistaken for only a game one.
 - **Stack traces** name repository files as `<repo>/…` with forward slashes, the same on every machine (`src/host/paths.ts`). The game saves some in its crash reports.
+- **No Node.** `process`, `Buffer` and `global` don't exist, as in a browser. `setImmediate` and `clearImmediate` are the game's own polyfill, as in a browser, where the game installs it ([Determinism](#determinism), setup step 6). `window.postMessage` and the bare `postMessage` are one function, and deliver to the page with `source` and `origin`.
 - **Offline.** `fetch` fails as with no connection, so `ns.wget` returns false; `XMLHttpRequest`, `WebSocket` and `EventSource` refuse.
 - **Imports.** As from a browser's `blob:` modules, scripts can import other scripts and `data:` URLs, and relative paths, bare names and `node:` built-ins don't resolve. `http(s):` URLs fail because the simulation is offline.
 
 ## Differences from a browser
 
-Deliberate differences, and the gaps still open:
+Deliberate differences:
 
 - **No rendered UI.** Nothing is drawn, so scripts that read the game's page (its DOM: HUD values, buttons) fail headless. That covers parts of the legacy fork and our own `ui` effectors. They're tested on a real browser build instead (environment E2, architecture §9.4).
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
@@ -333,7 +334,7 @@ Deliberate differences, and the gaps still open:
 - **A simulated player at the UI.** Prompt rules answer at once, and error popups are closed at once ([Prompts](#prompts), [Events](#events)).
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
 
-The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists the open gaps and the deliberate differences.
+The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists any open gaps and the deliberate differences.
 
 ## Troubleshooting
 
