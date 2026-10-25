@@ -35,7 +35,7 @@ await sim.run("home", "autopilot.js", { args: ["--disable-casino"] });
 npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--json out.json]
 ```
 
-It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)) and each run's heap, measured at the start and every virtual day. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run.
+It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)) and each run's heap, measured at the start and every virtual day. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. It runs one seed at a time unless `--workers` says otherwise: a seed is heavy, roughly 14 real minutes per virtual day at best ([baselines](../../docs/sim/baselines.md#running-it)).
 
 ## Checks
 
