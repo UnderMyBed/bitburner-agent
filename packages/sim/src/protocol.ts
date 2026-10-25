@@ -7,8 +7,20 @@
  */
 export type Tutorial = "running" | "skipped";
 
-/** The game state a simulation starts from. A union: later fixture kinds add members. */
-export type Fixture = { kind: "new"; tutorial: Tutorial };
+/** The game state a simulation starts from. */
+export type Fixture =
+  | { kind: "new"; tutorial: Tutorial }
+  /**
+   * A save, as the game writes it: a Steam/Electron `.json.gz` file or the web build's base64 export. The virtual
+   * epoch is the save's own `lastUpdate` plus `offlineMs` (default 0), so the game's real offline-progress path runs.
+   */
+  | { kind: "save"; bytes?: Uint8Array; path?: string; offlineMs?: number };
+
+/** A fixture as the host receives it: a save already read, its format known. */
+export type HostFixture =
+  | { kind: "new"; tutorial: Tutorial }
+  /** `data` is the gzip bytes in base64 (`gzip`) or the web export's base64 text itself (`base64`). */
+  | { kind: "save"; format: "gzip" | "base64"; data: string };
 
 /**
  * Test-only knobs for the simulator's own tests. Never use them in scenarios: with the barrier disabled, the
@@ -45,15 +57,33 @@ export interface ProcessInfo {
   args: ScriptArg[];
 }
 
-export interface HostOptions {
+export interface SimulationOptions {
   /** Seeds every source of randomness the game can reach. An unsigned 32-bit integer. */
   seed: number;
-  /** Virtual epoch: what the game's Date reads when it loads. A non-negative integer. */
-  epochMs: number;
+  /**
+   * Virtual epoch: what the game's Date reads when it loads. A non-negative integer. Required, except with a save
+   * fixture, which takes its epoch from the save (and refuses this option).
+   */
+  epochMs?: number;
   /** Without a fixture the engine is loaded but no game is booted. */
   fixture?: Fixture;
   testHooks?: TestHooks;
 }
+
+/** What the host process receives: the epoch decided and the fixture resolved. */
+export interface HostOptions {
+  seed: number;
+  epochMs: number;
+  fixture?: HostFixture;
+  testHooks?: TestHooks;
+}
+
+/** Things that happened in the game that a browser would have shown or done outside the page. */
+export type SimEvent =
+  /** The game started a file download (an `<a download>` click), e.g. a save export or a pre-v3 backup. */
+  | { type: "download"; at: number; filename: string; bytes: number }
+  /** The game (or a library in it) wrote an error or warning to the console. */
+  | { type: "console"; at: number; level: "error" | "warn"; message: string };
 
 /** A fixed-schema snapshot of the game, for tests and reports. */
 export interface GameSummary {
@@ -112,6 +142,10 @@ export interface HostMethods {
   summary(params: Record<string, never>): GameSummary;
   /** sha256 of the game's own save JSON: two runs are identical exactly when their saves are. */
   stateHash(params: Record<string, never>): string;
+  /** The game's own save, gzip bytes in base64 (the Steam `.json.gz` format). */
+  save(params: Record<string, never>): string;
+  /** Everything recorded in the event log since the simulation started, in order. */
+  events(params: Record<string, never>): SimEvent[];
   /** Writes a script or text file, as a player saving it in the editor would. */
   writeFile(params: { host: string; path: string; content: string }): void;
   /** Starts a script as the terminal's `run` does: the game's own RAM check, pid and messages. */
@@ -160,7 +194,7 @@ export function validateHostOptions(options: HostOptions): void {
   }
 }
 
-function validateFixture(fixture: Fixture): void {
+function validateFixture(fixture: HostFixture): void {
   switch (fixture.kind) {
     case "new":
       if (fixture.tutorial !== "running" && fixture.tutorial !== "skipped") {
@@ -169,10 +203,15 @@ function validateFixture(fixture: Fixture): void {
         );
       }
       return;
+    case "save":
+      if ((fixture.format !== "gzip" && fixture.format !== "base64") || typeof fixture.data !== "string") {
+        throw new RangeError("a save fixture needs its data, as gzip (base64-encoded) or base64 text");
+      }
+      return;
     default: {
       // Exhaustive: a new fixture kind that isn't handled here is a type error.
-      const unhandled: never = fixture.kind;
-      throw new RangeError(`unknown fixture kind ${JSON.stringify(unhandled)}`);
+      const unhandled: never = fixture;
+      throw new RangeError(`unknown fixture kind ${JSON.stringify((unhandled as { kind: unknown }).kind)}`);
     }
   }
 }

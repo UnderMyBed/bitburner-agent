@@ -7,6 +7,7 @@ export {
   type RunOptions,
   type RunResult,
   type ScriptArg,
+  type SimEvent,
   Simulation,
   type SimulationOptions,
 } from "./simulation.ts";

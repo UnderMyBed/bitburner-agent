@@ -2,6 +2,7 @@
 // game, which builds under its own TypeScript setup. Keep it minimal; its exports must match EngineApi (../api.ts).
 import { getBitNodeLevel } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
+import { save as saveToIndexedDb } from "../../../../../vendor/bitburner-src/src/db";
 import { Engine } from "../../../../../vendor/bitburner-src/src/engine";
 import { ITutorial, iTutorialEnd } from "../../../../../vendor/bitburner-src/src/InteractiveTutorial";
 import { killWorkerScriptByPid } from "../../../../../vendor/bitburner-src/src/Netscript/killWorkerScript";
@@ -18,7 +19,7 @@ import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
-import { isPositiveInteger } from "../../../../../vendor/bitburner-src/src/types";
+import { isPositiveInteger, type SaveData } from "../../../../../vendor/bitburner-src/src/types";
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
@@ -47,11 +48,30 @@ export function performanceNow() {
 /** The game's own new-game path, then what the UI does once it has mounted. */
 export async function bootNewGame(tutorial: Tutorial) {
   await Engine.load(undefined); // no save data: a new game; ends by starting the engine loop
+  afterUiMount();
+  if (tutorial === "skipped") iTutorialEnd(); // what the tutorial's Skip button calls
+}
+
+/**
+ * The game's own load path for a save (migration, offline progress), then what the UI does once it has mounted. The
+ * browser's IndexedDB would already hold this save, and the pre-v3 migration reads it from there, so it's stored first.
+ */
+export async function bootSave(saveData: SaveData) {
+  await saveToIndexedDb(saveData);
+  await Engine.load(saveData);
+  afterUiMount();
+}
+
+function afterUiMount() {
   UIEventEmitter.emit(UIEventType.MainUILoaded); // GameRoot emits this on mount: starts saved scripts and autoexec
-  // There is no IndexedDB to autosave into; the harness takes its own snapshots.
+  // Autosave would serialise the whole game every virtual minute; the harness takes its own snapshots instead.
   Settings.AutosaveInterval = 0;
   Settings.SuppressAutosaveDisabledWarnings = true;
-  if (tutorial === "skipped") iTutorialEnd(); // what the tutorial's Skip button calls
+}
+
+/** The game's own save: gzip bytes, as the Steam build writes them. */
+export async function saveBytes() {
+  return (await saveObject.getSaveData()) as Uint8Array;
 }
 
 export function gameSummary() {

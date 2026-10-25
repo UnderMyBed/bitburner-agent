@@ -19,6 +19,10 @@ export interface EngineApi {
   performanceNow(): number;
   /** Boots a new game through the game's own `Engine.load`, then does what the UI does once mounted. */
   bootNewGame(tutorial: Tutorial): Promise<void>;
+  /** Loads a save through the game's own `Engine.load` (stored in IndexedDB first, as the browser would have it). */
+  bootSave(saveData: string | Uint8Array): Promise<void>;
+  /** The game's own save: gzip bytes. */
+  saveBytes(): Promise<Uint8Array>;
   /** The game-side fields of a summary (the host adds `virtualMs`). */
   gameSummary(): Omit<GameSummary, "virtualMs">;
   /** The game's own save, as JSON text. */
@@ -42,6 +46,8 @@ const API_FUNCTIONS = {
   dateNow: true,
   performanceNow: true,
   bootNewGame: true,
+  bootSave: true,
+  saveBytes: true,
   gameSummary: true,
   saveJson: true,
   gameDiagnostics: true,

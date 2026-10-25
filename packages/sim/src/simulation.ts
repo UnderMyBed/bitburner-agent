@@ -1,6 +1,7 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
+import { resolveOptions } from "./options.ts";
 import {
   describeExit,
   type GameSummary,
@@ -9,13 +10,22 @@ import {
   type ProcessInfo,
   type RunOptions,
   type RunResult,
+  type SimEvent,
+  type SimulationOptions,
   validateAdvance,
-  validateHostOptions,
 } from "./protocol.ts";
 import { RpcClient } from "./rpc.ts";
 
-export type { Fixture, GameSummary, ProcessInfo, RunOptions, RunResult, ScriptArg } from "./protocol.ts";
-export type SimulationOptions = HostOptions;
+export type {
+  Fixture,
+  GameSummary,
+  ProcessInfo,
+  RunOptions,
+  RunResult,
+  ScriptArg,
+  SimEvent,
+  SimulationOptions,
+} from "./protocol.ts";
 
 const HOST_ENTRY = path.join(import.meta.dirname, "host", "main.ts");
 const OUTPUT_TAIL_CHARS = 8192;
@@ -35,8 +45,7 @@ export class Simulation {
   }
 
   static async start(options: SimulationOptions): Promise<Simulation> {
-    validateHostOptions(options);
-    return Simulation.spawn(options);
+    return Simulation.spawn(resolveOptions(options));
   }
 
   /** Starts a host without the parent-side checks, so tests can reach the host's own validation. */
@@ -101,6 +110,16 @@ export class Simulation {
   /** sha256 of the game's own save JSON: two simulations are in the same state exactly when these match. */
   stateHash(): Promise<string> {
     return this.rpc.call("stateHash", {});
+  }
+
+  /** The game's own save, as the Steam build writes it (`.json.gz` bytes). Load it with a `save` fixture. */
+  async save(): Promise<Uint8Array> {
+    return new Uint8Array(Buffer.from(await this.rpc.call("save", {}), "base64"));
+  }
+
+  /** What the game did that a browser would have shown or done outside the page (downloads, console errors). */
+  events(): Promise<SimEvent[]> {
+    return this.rpc.call("events", {});
   }
 
   /** Writes a script or text file on a server, as a player saving it in the editor would. */
