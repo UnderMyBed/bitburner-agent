@@ -12,12 +12,13 @@ import {
   createRunningScriptInstance,
   startWorkerScript,
 } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
-import { resolveScriptFilePath } from "../../../../../vendor/bitburner-src/src/Paths/ScriptFilePath";
+import { isLegacyScript, resolveScriptFilePath } from "../../../../../vendor/bitburner-src/src/Paths/ScriptFilePath";
 import { resolveTextFilePath } from "../../../../../vendor/bitburner-src/src/Paths/TextFilePath";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
+import { isPositiveInteger } from "../../../../../vendor/bitburner-src/src/types";
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
@@ -108,6 +109,14 @@ export function runScript(host: string, path: string, threads: number, args: Scr
   const target = server(host);
   const scriptPath = resolveScriptFilePath(path);
   if (!scriptPath) return { pid: 0, error: `Not a script path: ${path}` };
+  // The terminal's own checks and messages.
+  if (isLegacyScript(scriptPath)) return { pid: 0, error: "Running .script files is unsupported." };
+  if (!isPositiveInteger(threads)) {
+    return {
+      pid: 0,
+      error: "Invalid number of threads specified. Number of threads must be an integer greater than 0",
+    };
+  }
   const runOptions = { threads, temporary: false, ramOverride: undefined, preventDuplicates: false };
   const result = createRunningScriptInstance(target, scriptPath, runOptions, args);
   if (!result.success) return { pid: 0, error: result.message };
@@ -127,6 +136,7 @@ export function scriptLogs(pid: number): string[] {
   const script =
     workerScripts.get(pid)?.scriptRef ?? recentScripts.find((r) => r.runningScript.pid === pid)?.runningScript;
   if (!script) throw new Error(`No running or recent script with pid ${pid}`);
+  // Log lines are strings, except from ns.printRaw/tprintRaw, which log React elements; those don't read as text.
   return script.logs.map((line) => (typeof line === "string" ? line : String(line)));
 }
 

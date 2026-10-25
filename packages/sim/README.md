@@ -78,7 +78,7 @@ await sim.close();
   - `seed` is an unsigned 32-bit integer (wider values would alias).
   - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock.
 - **Requests** go over Node IPC as typed messages (`src/protocol.ts`, `src/rpc.ts`).
-  - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing.
+  - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing. Each request also waits for script imports to finish (see [the import barrier](#scripts)).
   - If the process ends, or a message can't be delivered, pending and later calls reject. The error has the exit code (or signal) and the last 8,192 characters of the process's combined stdout and stderr.
 - **Nothing happens until `advance(ms)`.** It fires every timer due in the next `ms` virtual milliseconds, in order: the engine's own loop, script timers, everything.
 - **`close()`** ends the process; pending calls reject. It's safe to call twice.
@@ -103,13 +103,14 @@ await sim.writeFile("home", "hack.js", source);                    // as saving 
 const { pid, error } = await sim.run("home", "hack.js", { threads: 3, args: ["n00dles"] });
 await sim.advance(60 * 60_000);
 await sim.ps("home");   // [{ pid, filename, threads, args }]
-await sim.logs(pid);    // log lines, also after the script has finished
+await sim.logs(pid);    // log lines, also for recently finished scripts
 await sim.kill(pid);    // false if no such script is running
 ```
 
 - **These wrap the game's own functions.**
-  - `run` does what the terminal's `run` does: the same RAM check, pid allocation and failure messages. When the game refuses, `pid` is 0 and `error` holds its message.
+  - `run` does what the terminal's `run` does: the same checks (legacy `.script` files, thread count, RAM), pid allocation and failure messages. When the game refuses, `pid` is 0 and `error` holds its message. Unlike the terminal it takes `threads` and `args` directly, with no flag parsing (`--ram-override`, `--temporary` and `--tail` aren't offered).
   - `writeFile` accepts script and text files.
+  - `logs` covers running scripts and the game's list of recently finished ones (`Settings.MaxRecentScriptsCapacity`, 50 by default). For any other pid it throws, whereas `kill` returns false.
 - **Script modules.** The game imports scripts from `blob:` URLs, which Node can't import.
   - The host captures each script's source when the game creates its Blob, and hands out short `blob:sim/<n>` URLs served by a synchronous module hook (`src/host/scripts.ts`).
   - Other Blobs, e.g. a save export, keep Node's own object URLs.
@@ -118,7 +119,10 @@ await sim.kill(pid);    // false if no such script is running
   - Between every two timers the clock fires, it waits until no import is in flight. This covers a script started mid-advance (e.g. by `ns.run`).
   - Before every request it waits too. This covers the request right after `run`.
 
-  Each layer has its own test with a test hook that slows imports down (`testHooks.importDelayMs`). With the barrier switched off (`testHooks.disableImportBarrier`), the slowed run diverges at once.
+  Imports also **finish in the order they were requested**: when two scripts start in the same instant, the first one asked for runs first (and takes the first random draws), however long each import really takes.
+
+  Each layer has its own test with a test hook that slows imports down (`testHooks.importDelayMs`). With the barrier switched off (`testHooks.disableImportBarrier`), the slowed run diverges at once. Test hooks are for the simulator's own tests only: with the barrier off, the determinism guarantee doesn't hold.
+
 ### State hash and summary
 
 - **`stateHash()`** is the sha256 of the game's own save JSON (`saveObject.getSaveData()`, decoded), plus the positions of the seeded random streams.
@@ -140,7 +144,7 @@ await sim.kill(pid);    // false if no such script is running
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
 1. **Browser environment** (`installDom`, `src/host/dom.ts`): jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`.
-   - **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept; later tasks patch these.
+   - **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept. The later steps patch some of them: `crypto` (step 3), and `Blob`, `URL.createObjectURL` and `URL.revokeObjectURL` (step 4).
    - **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
    - **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance`/`crypto` resolve to the globals at call time, and the virtual clock and seeded randomness cover both. `requestAnimationFrame` runs on those timers too, not on real time.
    - **A fixed user agent,** like the Steam build's. The game hashes `navigator.userAgent` into the saved `Player.identifier`, and jsdom's default names the host OS.
@@ -152,17 +156,21 @@ Other packages only use `Simulation`; the rest of this section describes the hos
    - `crypto.getRandomValues` and `crypto.randomUUID` get a second, independent stream, so drawing crypto bytes doesn't shift `Math.random`. They keep Web Crypto's contract, errors included.
    - The engine itself draws from `Math.random` while it loads, deterministically.
    - The sfc32 stream is checked against an independent reference implementation and frozen by golden values. Changing it changes every seeded scenario.
-4. **Virtual clock** (`installClock`, `@sinonjs/fake-timers`):
+4. **Script modules** (`installScriptModules`, `src/host/scripts.ts`): the `Blob`/object-URL capture and module hook, plus the import barrier ([Scripts](#scripts)).
+5. **Virtual clock** (`installClock`, `@sinonjs/fake-timers`):
    - `setTimeout`/`setInterval` (and their clears), `Date` and `performance` are virtual, starting at `epochMs`. `performance.now()` starts at 0, like a page that just loaded.
    - Microtasks, `process.nextTick` and `setImmediate` stay real, so promises and I/O work.
+   - Between timers, the clock yields to the real event loop through the import barrier, so virtual time never moves while a script is loading. This relies on a fake-timers internal; see the comment in `clock.ts`.
    - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`.
-5. **The engine bundle** (`loadEngine`).
+6. **The engine bundle** (`loadEngine`), which then gets the barrier-aware import function (`setScriptImport`).
+
 ## Known gaps
 
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
 - **The UI router is still the game's pre-mount stub.** Until the headless router lands, messages (`.msg` files, and the `fl1ght.exe` hint) aren't delivered, `Bladeburner.process()` returns early, and `Router.toPage` calls queue up unused.
+- **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
 
-Both are tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)).
+These are tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)).
 
 ## Troubleshooting
 
@@ -179,6 +187,6 @@ Both are tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https:
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
 | `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts` and module stubs |
 | `src/simulation.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, the RPC client, the message types |
-| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, engine loading; `parity/` holds browser-parity fixes (so far the locale pin) |
+| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), engine loading; `parity/` holds browser-parity fixes (so far the locale pin) |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts` (run by the root `npm run` scripts) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` run in child processes |

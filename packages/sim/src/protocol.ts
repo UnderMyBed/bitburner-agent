@@ -10,12 +10,18 @@ export type Tutorial = "running" | "skipped";
 /** The game state a simulation starts from. A union: later fixture kinds add members. */
 export type Fixture = { kind: "new"; tutorial: Tutorial };
 
-/** Test-only knobs; never used by real scenarios. */
+/**
+ * Test-only knobs for the simulator's own tests. Never use them in scenarios: with the barrier disabled, the
+ * determinism guarantee doesn't hold.
+ * @internal
+ */
 export interface TestHooks {
   /** Delays every script import by a real (not virtual) [min, max] ms, to prove the import barrier works. */
   importDelayMs?: [number, number];
   /** Turns the import barrier off, to show that the barrier test would catch its absence. */
   disableImportBarrier?: boolean;
+  /** How long an import may take, in real ms, before the host gives up (default 30 s). */
+  importTimeoutMs?: number;
 }
 
 export type ScriptArg = string | number | boolean;
@@ -26,7 +32,7 @@ export interface RunOptions {
   args?: ScriptArg[];
 }
 
-/** pid is 0 when the game refused to start the script; rror then holds the game's own message. */
+/** `pid` is 0 when the game refused to start the script; `error` then holds the game's own message. */
 export interface RunResult {
   pid: number;
   error?: string;
@@ -171,10 +177,9 @@ function validateFixture(fixture: Fixture): void {
   }
 }
 
+/** Type checks only: a bad thread count gets the game's own refusal (pid 0), as at the terminal. */
 export function validateRun({ threads, args }: { threads: number; args: ScriptArg[] }): void {
-  if (!Number.isSafeInteger(threads) || threads < 1) {
-    throw new RangeError(`threads must be a positive integer, got ${threads}`);
-  }
+  if (typeof threads !== "number") throw new RangeError(`threads must be a number, got ${typeof threads}`);
   if (!args.every((arg) => ["string", "number", "boolean"].includes(typeof arg))) {
     throw new RangeError("script args must be strings, numbers or booleans");
   }

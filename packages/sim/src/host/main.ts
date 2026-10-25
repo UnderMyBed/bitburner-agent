@@ -122,7 +122,7 @@ async function start(options: HostOptions): Promise<Host> {
   return { handlers, quiescent: () => new Promise((resolve) => scripts.whenQuiescent(resolve)) };
 }
 
-let host: Host | undefined;
+let simHost: Host | undefined;
 // Everything runs strictly one after another, and each request waits until no script module is being imported.
 // Otherwise a request could observe (or change) the game part-way through an `advance`, or before a script that was
 // just started has actually begun, at a point that depends on real timing: not deterministic.
@@ -132,7 +132,7 @@ process.on("message", (message: ParentMessage) => {
   queue = queue.then(async () => {
     if (message.type === "init") {
       try {
-        host = await start(message.options);
+        simHost = await start(message.options);
         send({ type: "ready" });
       } catch (error) {
         send({ type: "fatal", error: errorText(error) });
@@ -142,9 +142,9 @@ process.on("message", (message: ParentMessage) => {
     }
     const { id, method, params } = message;
     try {
-      if (!host) throw new Error("the host is not initialised");
-      await host.quiescent();
-      const handler = host.handlers[method] as ((params: unknown) => unknown) | undefined;
+      if (!simHost) throw new Error("the host is not initialised");
+      await simHost.quiescent();
+      const handler = simHost.handlers[method] as ((params: unknown) => unknown) | undefined;
       if (!handler) throw new Error(`unknown method ${method}`);
       send({ type: "response", id, ok: true, result: await handler(params) });
     } catch (error) {

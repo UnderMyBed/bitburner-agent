@@ -37,8 +37,11 @@ function callTimersWithWindowAsThis(): void {
  * virtual time while a script module is still loading.
  */
 export function installClock(epochMs: number, betweenTimers?: (continueTick: () => void) => void): VirtualClock {
-  // fake-timers captures `setImmediate` when the clock is created and yields through it between timers in
-  // tickAsync. Lend it `betweenTimers` for that moment only; the real setImmediate stays installed for everyone else.
+  // This relies on a fake-timers internal (pinned at 15.4.0): `withGlobal` captures
+  // `originalSetTimeout = _global.setImmediate || _global.setTimeout` (fake-timers-src.js:1748), and tickAsync yields
+  // through it after every timer it fires (:2232). Lend it `betweenTimers` for that moment only; the real setImmediate
+  // stays installed for everyone else. If an upgrade moves that capture, the test "a script started in the middle of
+  // an advance begins at the same virtual time, however slow its import" fails.
   const realSetImmediate = globalThis.setImmediate;
   if (betweenTimers) globalThis.setImmediate = betweenTimers as unknown as typeof setImmediate;
   let clock: ReturnType<ReturnType<typeof FakeTimers.withGlobal>["install"]>;
