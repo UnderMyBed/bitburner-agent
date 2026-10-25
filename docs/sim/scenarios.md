@@ -94,7 +94,7 @@ From code, `@bitburner-agent/sim` exports these:
 - `runScenario`, `runSeed`, `startScenario` (a simulation set up as a scenario says, not yet run), `loadScenario`, `formatRun`;
 - `parseSeeds` and `parseWorkers`, which parse the CLI's options.
 
-`runScenario`/`runSeed` take `measureHeap: true` to sample the host's heap after a full collection, as the run starts and at every checkpoint. Each sample takes real time, so speeds read a little lower. The [fork baseline](baselines.md) is a scenario built in code (`baselineScenario()` in `@bitburner-agent/legacy`), since its files come from the vendored fork. It runs with `npm run baseline -w @bitburner-agent/legacy`.
+`runScenario`/`runSeed` take `measureHeap: true` to sample the host's heap after a full collection, as the run starts and at every checkpoint. Each sample takes real time, so speeds read a little lower; it doesn't change the game ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)). The [fork baseline](baselines.md) is a scenario built in code (`baselineScenario()` in `@bitburner-agent/legacy`), since its files come from the vendored fork. It runs with `npm run baseline -w @bitburner-agent/legacy`.
 
 ## Workloads
 

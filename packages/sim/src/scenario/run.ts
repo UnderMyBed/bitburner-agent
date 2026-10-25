@@ -53,7 +53,8 @@ export interface ScenarioOptions {
   baseDir?: string;
   /**
    * Sample the host's heap (after a full collection) as the run starts and at every checkpoint, to see whether it
-   * grows. Each sample collects garbage, which takes real time, so speeds read a little lower.
+   * grows. Each sample collects garbage, which takes real time, so speeds read a little lower. It doesn't change the
+   * game: collection can't (#73).
    */
   measureHeap?: boolean;
   /**
