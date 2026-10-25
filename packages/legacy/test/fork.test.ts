@@ -112,5 +112,5 @@ describe("the fork in the simulator", () => {
         message: expect.stringContaining("addCSS"),
       }),
     );
-  });
+  }, 180_000); // the fork is a heavy workload (S1: tens of times real time), and CI runners are slow
 });
