@@ -10,10 +10,10 @@ export const DAY = 24 * 60 * 60 * 1000;
  * The baseline scenario (owner decisions log #28): BN1 re-entered with SF1.1 and SF4.3, the least a player can hold
  * along with SF4.3, which the game makes BN1.2. SF1 starts home at 32 GB, so the fork runs unattended from the start:
  * its game files are on home and `autopilot.js --disable-casino` runs, as a player starts it. A run passes when the
- * fork destroys the BitNode; it stops there (or at the BitVerse, if that comes first), and gives up after 30 virtual
- * days.
+ * fork destroys the BitNode, through Singularity or by reaching the BitVerse, and stops there; it gives up after 30
+ * virtual days.
  *
- * `overrides` replace top-level fields (a shallow merge), for tests; the baseline itself never overrides.
+ * `overrides` replace top-level fields (a shallow merge), for shorter runs and tests; the baseline never overrides.
  */
 export function baselineScenario(overrides: Partial<Scenario> = {}): Scenario {
   const scenario: unknown = {

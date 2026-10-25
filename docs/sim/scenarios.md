@@ -93,7 +93,8 @@ npm run sim -- <scenario.json> [--seeds a..b | --seeds a,b,c] [--workers k] [--j
 From code, `@bitburner-agent/sim` exports these:
 - `runScenario`, `runSeed`, `startScenario` (a simulation set up as a scenario says, not yet run), `loadScenario`, `formatRun`;
 - `parseSeeds` and `parseWorkers`, which parse the CLIs' `--seeds` and `--workers` (this CLI's and the baseline's);
-- `growthPerDay` and `rigId`, the benchmarks' heap statistic and machine name ([benchmarks](benchmarks.md)), which the baseline reuses.
+- `aggregate` and `distribution`, the run's aggregate and its min / median / p90 / max;
+- `growthPerDay`, `rigId` and `commitId`, the benchmarks' heap statistic, machine name and commit ([benchmarks](benchmarks.md)), which the baseline reuses.
 
 `runScenario`/`runSeed` take `measureHeap: true` to sample the host's heap after a full collection, as the run starts and at every checkpoint. Each sample takes real time, so speeds read a little lower; it doesn't change the game ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)).
 

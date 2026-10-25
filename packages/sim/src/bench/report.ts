@@ -1,4 +1,5 @@
 // Benchmark results as rows of docs/sim/benchmarks.md, and the regression check against earlier rows.
+import { execFileSync } from "node:child_process";
 import { cpus, totalmem } from "node:os";
 
 /** The workloads benchmarked: scenario files in packages/sim/scenarios/. */
@@ -35,6 +36,16 @@ export function rigId(env = process.env.BENCH_RIG, cpuList = cpus(), memory = to
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
   return `${model}-${cpuList.length}c-${Math.round(memory / 2 ** 30)}g`;
+}
+
+/**
+ * The checkout's short commit hash, with "-dirty" if the working tree has changes other than the `ignore` paths
+ * (relative to `repoRoot`), so a row never names a commit it didn't run.
+ */
+export function commitId(repoRoot: string, ignore: string[] = []): string {
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  const changed = git("status", "--porcelain", "--", ".", ...ignore.map((p) => `:!${p}`));
+  return `${git("rev-parse", "--short", "HEAD")}${changed ? "-dirty" : ""}`;
 }
 
 const HEAP_COLUMNS = ["Heap start", "Heap end", "Heap growth per day"] as const;

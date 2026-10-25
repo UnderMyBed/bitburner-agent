@@ -9,32 +9,34 @@ The legacy fork's scripts, vendored unchanged, for:
 The files are in [`fork/`](fork/), exactly as recorded. [`PROVENANCE.md`](PROVENANCE.md) says where they came from and the rules: `fork/` is never edited in place, and a change would be a patch. They're MIT-licensed, © 2021 Alain Bryden ([`fork/LICENSE`](fork/LICENSE)). `fork/README.md` and `fork/CLAUDE.md` are the fork's own docs, about the fork as it was, not about this repository. The repository's [`.claude/settings.json`](../../.claude/settings.json) excludes `fork/CLAUDE.md` from Claude Code's memory (`claudeMdExcludes`), for sessions started at the repository root, where Claude Code reads that file.
 
 ```ts
-import { runSeed } from "@bitburner-agent/sim";
+import { buildEngine, runSeed } from "@bitburner-agent/sim";
 import { baselineScenario } from "@bitburner-agent/legacy";
 
+await buildEngine(); // once, after a fresh clone or a game bump
+const HOUR = 60 * 60 * 1000;
 // One seed of the baseline, for a virtual hour.
-const result = await runSeed(baselineScenario({ durationMs: 60 * 60 * 1000 }), 1);
+const result = await runSeed(baselineScenario({ durationMs: HOUR, checkpointEveryMs: HOUR }), 1);
 ```
 
 - `gameFiles()`: what a game needs: the scripts (`.js`) and the text files they read (`.txt`).
 - `forkFiles()`: every vendored file, in path order, as text (the fork is all UTF-8; some files keep CRLF line endings).
 - `forkManifest()`, `FORK`: the source, commit, tree and per-file sha256, from [`manifest.json`](manifest.json).
 - `FORK_DIR`: where the files are.
-- `baselineScenario(overrides?)`, `DAY`: the baseline ([below](#the-baseline)). `overrides` replace top-level fields, for tests.
-- `formatHeaps(run)`, `baselineRow(run, meta)`, `seedHeapGrowth(result)`, `dailyHeapMb(result)`: the baseline's heap table and its row for `docs/sim/baselines.md` (`src/report.ts`).
+- `baselineScenario(overrides?)`, `DAY`: the baseline ([below](#the-baseline)). `overrides` replace top-level fields, for shorter runs and tests.
+- `formatHeaps(run)`, `baselineRow(run, meta: RowMeta)`, `formatSeeds(seeds)`, `seedHeapGrowth(result)`, `dailyHeapMb(result)`: the baseline's heap table and its row for `docs/sim/baselines.md` (`src/report.ts`).
 
 ## The baseline
 
 `baselineScenario()` (`src/baseline.ts`) is the fork's BN1 baseline: what the agent's planner has to beat (M4). Results and how to read them: [docs/sim/baselines.md](../../docs/sim/baselines.md).
 - **Start** (owner decisions log #28): BN1 with SF1.1 and SF4.3, the least a player can hold along with SF4.3; the game makes it BN1.2. SF1 starts home at 32 GB of RAM, so the fork runs unattended from the start.
 - **Play:** the fork's game files on home, and `autopilot.js --disable-casino`, as a player starts it.
-- **End:** the run passes when the fork destroys the BitNode, and stops there or at the BitVerse. It gives up after 30 virtual days. Seeds 1–8.
+- **End:** the run passes when the fork destroys the BitNode, through Singularity or by reaching the BitVerse, and stops there. It gives up after 30 virtual days. Seeds 1–8.
 
 ```
 npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--json out.json]
 ```
 
-It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each seed's heap (start, end, largest, growth per virtual day), and the run's row for the baselines page. `--json` paths are relative to where you ran npm. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. It runs one seed at a time unless `--workers` says otherwise: a seed is heavy, about 14 real minutes per virtual day at best and several hours once the fork runs tens of thousands of scripts ([baselines](../../docs/sim/baselines.md#running-it)).
+It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each seed's heap (start, end, largest, growth per virtual day), and the run's row for the baselines page. `--json` paths are relative to where you ran npm. The CLI is `src/cli.ts` (`baselineCli`), which `scripts/baseline.ts` calls with the real dependencies. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. It runs one seed at a time unless `--workers` says otherwise: a seed is heavy, about 14 real minutes per virtual day at best and several hours once the fork runs tens of thousands of scripts ([baselines](../../docs/sim/baselines.md#running-it)).
 
 ## Checks
 
@@ -42,9 +44,11 @@ It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each se
 - the scenario starts in BN1 with SF1.1 and SF4.3 and runs `autopilot.js --disable-casino`, stopping at the destroy, for up to 30 days, seeds 1–8
 - home starts at 32 GB, and within 5 virtual minutes the fork runs unattended: `daemon.js` and the SF4-only `work-for-factions.js` start
 - the fork makes progress (money, hacking level) within a virtual hour
-- the CLI refuses bad arguments with exit 2
+- the script refuses bad arguments with exit 2
 
-`test/report.test.ts`: the heap's daily samples and growth, the heap table, and the release row.
+`test/cli.test.ts`, the CLI with a stubbed run: exit 0 and 1, one worker by default, the row's details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for bad arguments, a missing `--json` folder, a bad rig name or no commit.
+
+`test/report.test.ts`: the heap's daily samples and growth, the heap table, `--seeds` formatting, and the release row.
 
 `test/fork.test.ts`:
 - every file matches the manifest byte for byte, with nothing missing or extra; `forkFiles()` gives exactly those bytes; `PROVENANCE.md` agrees with the manifest

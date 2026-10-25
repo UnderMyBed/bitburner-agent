@@ -48,4 +48,4 @@ export function gameFiles(): ForkFile[] {
 }
 
 export { baselineScenario, DAY } from "./baseline.ts";
-export { baselineRow, dailyHeapMb, formatHeaps, type RowMeta, seedHeapGrowth } from "./report.ts";
+export { baselineRow, dailyHeapMb, formatHeaps, formatSeeds, type RowMeta, seedHeapGrowth } from "./report.ts";
