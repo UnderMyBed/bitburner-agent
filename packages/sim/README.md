@@ -25,7 +25,7 @@ npm run build:engine   # bundles the engine (also done automatically before test
 
   - The build is **skipped** when the fingerprint is unchanged. The fingerprint covers the game's commit, any uncommitted changes in it, the game's lockfile, the build code, our bundled sources and the esbuild version.
   - Outputs are written to temporary files and renamed into place, so a concurrent load never sees a half-written bundle.
-- **`npm test` needs setup first.** The test runner builds the bundle before any test runs (`test/global-setup.ts`), including tests in other packages. Watch mode doesn't rebuild it: re-run `build:engine` after changing `src/engine/bundle/`.
+- **`npm test` and `npm run typecheck` need setup first.** The typecheck checks the bundled sources with the game's TypeScript ([below](#typecheck-boundary)). The test runner builds the bundle before any test runs (`test/global-setup.ts`), including tests in other packages. Watch mode doesn't rebuild it: re-run `build:engine` after changing `src/engine/bundle/`.
 
 ## How the bundle is built
 
@@ -49,12 +49,12 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it a second time:
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
 - with the game's own TypeScript (`vendor/bitburner-src/node_modules`, installed by `npm run setup:engine`);
 - against the game's types, through [`tsconfig.bundle.json`](tsconfig.bundle.json), which extends the game's tsconfig and resolves its path aliases and packages;
 - run by `scripts/typecheck-bundle.ts`.
 
-esbuild only strips types, so this check is what catches a bundled file drifting from the game's API. Everything else here is typechecked as usual.
+esbuild only strips types, so this check is what catches a bundled file drifting from the game's API. It also checks that `entry.ts`'s exports satisfy `EngineApi`. The game's compiler options apply: `strict`, but not the repo's unused-locals and unused-parameters errors (Biome still flags unused variables). Everything else here is typechecked as usual.
 
 The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`. `EngineApi` contains functions only.
 

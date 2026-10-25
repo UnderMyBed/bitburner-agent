@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.base.json",
   "include": ["packages/**/*.ts", "tools/**/*.ts", "*.ts"],
-  // Bundled together with the game, which builds under its own TypeScript setup (packages/sim/README.md).
+  // Bundled together with the game, so typechecked the game's way instead: packages/sim/tsconfig.bundle.json
+  // (packages/sim/README.md#typecheck-boundary).
   "exclude": ["packages/sim/src/engine/bundle/**"]
 }

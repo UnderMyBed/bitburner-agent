@@ -11,7 +11,8 @@ import type {
 
 /**
  * The typed boundary between our code and the engine bundle. `bundle/entry.ts` (bundled together with the game, and
- * not typechecked by us) must export exactly these functions; `assertEngineApi` checks that at runtime.
+ * typechecked against the game's types by `npm run typecheck`) must export exactly these functions: the typecheck
+ * checks their types, and `assertEngineApi` checks at runtime that nothing is missing or extra.
  */
 export interface EngineApi {
   /** The game's own `CONSTANTS.VersionNumber`. */
