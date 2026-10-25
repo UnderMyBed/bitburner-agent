@@ -1,14 +1,15 @@
-import { afterAll, expect } from "vitest";
+import { afterEach, expect } from "vitest";
 import { Simulation, type SimulationOptions } from "../../src/simulation.ts";
 
 /**
- * A `start` function for a test file: it starts simulations, and closes them all once the file's tests are done.
+ * A `start` function for a test file: it starts simulations, and closes each test's when that test ends.
  * Call it at the top level of the file.
  */
 export function useSimulations(): (options: SimulationOptions) => Promise<Simulation> {
   const open: Simulation[] = [];
-  afterAll(async () => {
-    await Promise.all(open.map((sim) => sim.close()));
+  // Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+  afterEach(async () => {
+    await Promise.all(open.splice(0).map((sim) => sim.close()));
   });
   return async (options) => {
     const sim = await Simulation.start(options);

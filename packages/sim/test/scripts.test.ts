@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { NODE_GLOBALS } from "../src/host/parity/node-globals.ts";
 import { Simulation, type SimulationOptions } from "../src/simulation.ts";
 
@@ -14,8 +14,9 @@ async function newGame(seed: number, extra: Partial<SimulationOptions> = {}): Pr
   open.push(sim);
   return sim;
 }
-afterAll(async () => {
-  await Promise.all(open.map((sim) => sim.close()));
+// Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((sim) => sim.close()));
 });
 
 // The reference workloads from spike S1.
@@ -319,7 +320,7 @@ describe("script API", () => {
     ]);
   });
 
-  test.skip("saves still work after a script changes how stack traces are made", async () => {
+  test("saves still work after a script changes how stack traces are made", async () => {
     const sim = await newGame(1);
     const script = `export async function main(ns) { Error.stackTraceLimit = 2; Error.prepareStackTrace = () => "x"; }`;
     await sim.writeFile("home", "stacks.js", script);

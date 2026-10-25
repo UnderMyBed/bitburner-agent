@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { Simulation } from "@bitburner-agent/sim";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { FORK, FORK_DIR, forkFiles, forkManifest, gameFiles } from "../src/index.ts";
 
 const EPOCH = Date.UTC(2026, 0, 1);
@@ -54,8 +54,9 @@ describe("the vendored fork", () => {
 
 describe("the fork in the simulator", () => {
   const open: Simulation[] = [];
-  afterAll(async () => {
-    await Promise.all(open.map((sim) => sim.close()));
+  // Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+  afterEach(async () => {
+    await Promise.all(open.splice(0).map((sim) => sim.close()));
   });
 
   /** A new game with the fork's game files on home. */
