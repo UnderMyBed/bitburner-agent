@@ -2,7 +2,7 @@
 
 The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node, running on a virtual clock and deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
-> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it builds the engine bundle and runs it in a child process on a virtual clock with seeded randomness. Booting a game, scripts, saves and scenarios follow in later tasks.
+> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game in a child process on a virtual clock, deterministically from a seed. Scripts, saves and scenarios follow in later tasks.
 
 ## Setup
 
@@ -58,16 +58,22 @@ The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api
 ```ts
 import { Simulation } from "@bitburner-agent/sim";
 
-const sim = await Simulation.start({ seed: 1, epochMs: Date.UTC(2026, 0, 1) });
-await sim.advance(60 * 60_000); // one virtual hour
-console.log(await sim.now());   // epochMs + 3,600,000
+const sim = await Simulation.start({
+  seed: 1,
+  epochMs: Date.UTC(2026, 0, 1),
+  fixture: { kind: "new", tutorial: "skipped" },
+});
+await sim.advance(60 * 60_000);    // one virtual hour
+console.log(await sim.summary());  // { virtualMs: 3600000, playtimeMs: 3600000, money: …, … }
+console.log(await sim.stateHash()); // sha256 of the game's own save
 await sim.close();
 ```
 
+### Process and requests
+
 - **One process per simulation.** `Simulation.start` forks a fresh child process (`src/host/main.ts`), because game state is global.
   - Options travel in an `init` message, not the environment, so large ones (e.g. saves) fit.
-  - The child runs with `TZ=UTC`, so local-time formatting reads the same on every machine.
-  - `start` resolves once the engine is loaded; it fails with the host's reason if setup fails, or after 60 s.
+  - `start` resolves once the fixture is booted; it fails with the host's reason if setup fails, or after 60 s.
 - **Inputs are checked:**
   - `seed` is an unsigned 32-bit integer (wider values would alias).
   - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock.
@@ -76,28 +82,64 @@ await sim.close();
   - If the process ends, or a message can't be delivered, pending and later calls reject. The error has the exit code (or signal) and the last 8,192 characters of the process's combined stdout and stderr.
 - **Nothing happens until `advance(ms)`.** It fires every timer due in the next `ms` virtual milliseconds, in order: the engine's own loop, script timers, everything.
 - **`close()`** ends the process; pending calls reject. It's safe to call twice.
-- **`diagnostics`** (`clock()`, `random(n)`, `crash(code, message)`) exist for tests and troubleshooting.
+- **`diagnostics`** exist for tests and troubleshooting:
+  - `clock()`: the engine's view of time
+  - `game()`: tutorial state, autosave setting, coding contracts, host boot time, default and pinned locale
+  - `random(n)`: samples of the seeded streams
+  - `crash(code, message)`
+
+### Fixtures
+
+A fixture is the game state a simulation starts from.
+- **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`. It then does what the UI does once mounted: it emits `MainUILoaded`, which starts saved scripts and autoexec.
+- **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
+- **Autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.
+- **Without a fixture** the engine is loaded but no game is booted. That's only useful for testing the harness, and `summary()`/`stateHash()` refuse.
+
+### State hash and summary
+
+- **`stateHash()`** is the sha256 of the game's own save JSON (`saveObject.getSaveData()`, decoded), plus the positions of the seeded random streams.
+  - The save covers everything the game persists: player, servers, scripts and their logs, factions, companies, the stock market, settings…
+  - The random positions are added because the save doesn't record them, and two equal saves could still diverge.
+  - **Not covered:** the engine's cycle counters and pending timers. Equal hashes mean equal persisted state and randomness, not a byte-identical process.
+  - Hashing has no side effects. Serialising the save draws from `Math.random` (the game builds a throwaway `PlayerObject`), so the host restores the random state afterwards.
+- **`summary()`** returns a fixed schema (`GameSummary`):
+  - `virtualMs` (since start), `playtimeMs`
+  - `bitNodeN`, `bitNodeLevel` (the game's own `getBitNodeLevel`), `sourceFiles`
+  - `money`, `hackingLevel`, `hackingExp`
+  - `homeRamUsed`, `homeRamMax`, `scripts`
+  - `augsInstalled`, `augsQueued`
 
 ## Determinism
 
-Other packages only use `Simulation`; this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
+**The guarantee:** the same seed, epoch, fixture and sequence of calls give the same `stateHash()`, whatever the `advance` step sizes, on any machine. `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
+
+Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
 1. **Browser environment** (`installDom`, `src/host/dom.ts`): jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`.
    - **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept; later tasks patch these.
    - **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
    - **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance`/`crypto` resolve to the globals at call time, and the virtual clock and seeded randomness cover both. `requestAnimationFrame` runs on those timers too, not on real time.
-2. **Seeded randomness** (`installSeededRandom`, `src/host/random.ts`):
+   - **A fixed user agent,** like the Steam build's. The game hashes `navigator.userAgent` into the saved `Player.identifier`, and jsdom's default names the host OS.
+2. **Pinned locale and time zone** (`src/host/parity/locale.ts`):
+   - Locale-sensitive built-ins called without a locale use `en-US`, because locale-dependent text ends up in saves (e.g. Dark Net logs call `toLocaleTimeString()`). Calls with an explicit locale are unchanged.
+   - The time zone is `UTC`, set on the process.
+3. **Seeded randomness** (`installSeededRandom`, `src/host/random.ts`):
    - `Math.random` becomes sfc32 seeded from the seed (`src/host/rng.ts`). jsdom's `window` shares Node's `Math`.
    - `crypto.getRandomValues` and `crypto.randomUUID` get a second, independent stream, so drawing crypto bytes doesn't shift `Math.random`. They keep Web Crypto's contract, errors included.
    - The engine itself draws from `Math.random` while it loads, deterministically.
    - The sfc32 stream is checked against an independent reference implementation and frozen by golden values. Changing it changes every seeded scenario.
-3. **Virtual clock** (`installClock`, `@sinonjs/fake-timers`):
+4. **Virtual clock** (`installClock`, `@sinonjs/fake-timers`):
    - `setTimeout`/`setInterval` (and their clears), `Date` and `performance` are virtual, starting at `epochMs`. `performance.now()` starts at 0, like a page that just loaded.
    - Microtasks, `process.nextTick` and `setImmediate` stay real, so promises and I/O work.
-4. **The engine bundle** (`loadEngine`).
+   - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`.
+5. **The engine bundle** (`loadEngine`).
 ## Known gaps
 
-- **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS. This will be tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)).
+- **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
+- **The UI router is still the game's pre-mount stub.** Until the headless router lands, messages (`.msg` files, and the `fl1ght.exe` hint) aren't delivered, `Bladeburner.process()` returns early, and `Router.toPage` calls queue up unused.
+
+Both are tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)).
 
 ## Troubleshooting
 
@@ -114,6 +156,6 @@ Other packages only use `Simulation`; this section describes the host side. Each
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
 | `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts` and module stubs |
 | `src/simulation.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, the RPC client, the message types |
-| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, engine loading |
+| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, engine loading; `parity/` holds browser-parity fixes (so far the locale pin) |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts` (run by the root `npm run` scripts) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` run in child processes |

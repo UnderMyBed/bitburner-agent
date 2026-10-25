@@ -11,6 +11,24 @@ export interface VirtualClock {
 }
 
 /**
+ * Browsers call timer callbacks with `this` set to the window; fake-timers calls them with `null`. The game relies
+ * on the browser behaviour: `Engine.start` is passed bare to setTimeout and assigns `this.isRunning`.
+ */
+function callTimersWithWindowAsThis(): void {
+  const timers = globalThis as unknown as Record<"setTimeout" | "setInterval", (...args: unknown[]) => unknown>;
+  for (const name of ["setTimeout", "setInterval"] as const) {
+    const faked = timers[name];
+    timers[name] = (handler: unknown, timeout?: unknown, ...args: unknown[]) => {
+      const callback =
+        typeof handler === "function"
+          ? (...callbackArgs: unknown[]) => handler.apply(globalThis.window ?? globalThis, callbackArgs)
+          : handler;
+      return faked(callback, timeout, ...args);
+    };
+  }
+}
+
+/**
  * Fakes timers, Date and performance from `epochMs`. Microtasks, nextTick and setImmediate stay real, so promises
  * and I/O still work. Window's copies follow these globals (installDom), so both access paths are virtual.
  */
@@ -20,6 +38,7 @@ export function installClock(epochMs: number): VirtualClock {
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
     loopLimit: 1e9,
   });
+  callTimersWithWindowAsThis();
   return {
     now: () => clock.now,
     advance: async (ms) => {

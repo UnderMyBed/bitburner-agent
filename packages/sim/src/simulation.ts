@@ -1,9 +1,17 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
-import { describeExit, type HostMessage, type HostOptions, validateAdvance, validateHostOptions } from "./protocol.ts";
+import {
+  describeExit,
+  type GameSummary,
+  type HostMessage,
+  type HostOptions,
+  validateAdvance,
+  validateHostOptions,
+} from "./protocol.ts";
 import { RpcClient } from "./rpc.ts";
 
+export type { Fixture, GameSummary } from "./protocol.ts";
 export type SimulationOptions = HostOptions;
 
 const HOST_ENTRY = path.join(import.meta.dirname, "host", "main.ts");
@@ -82,9 +90,20 @@ export class Simulation {
     return this.rpc.call("advance", { ms });
   }
 
+  /** A fixed-schema snapshot of the game. Needs a fixture. */
+  summary(): Promise<GameSummary> {
+    return this.rpc.call("summary", {});
+  }
+
+  /** sha256 of the game's own save JSON: two simulations are in the same state exactly when these match. */
+  stateHash(): Promise<string> {
+    return this.rpc.call("stateHash", {});
+  }
+
   /** For tests and troubleshooting. */
   readonly diagnostics = {
     clock: () => this.rpc.call("diagnostics.clock", {}),
+    game: () => this.rpc.call("diagnostics.game", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),
   };

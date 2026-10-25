@@ -1,8 +1,17 @@
+export type Sfc32State = [number, number, number, number];
+
+/** A seeded random-number function, like Math.random, whose position can be saved and restored. */
+export interface Rng {
+  (): number;
+  state(): Sfc32State;
+  setState(state: Sfc32State): void;
+}
+
 /**
  * sfc32 ("small fast chaotic", from PractRand), seeded through splitmix32 and warmed up by 12 rounds.
  * Returns floats in [0, 1), like Math.random. Every seeded scenario depends on this exact stream.
  */
-export function sfc32(seed: number): () => number {
+export function sfc32(seed: number): Rng {
   let s = seed >>> 0;
   const splitmix32 = () => {
     s = (s + 0x9e3779b9) | 0;
@@ -25,5 +34,10 @@ export function sfc32(seed: number): () => number {
     return (t >>> 0) / 4294967296;
   };
   for (let i = 0; i < 12; i++) next();
-  return next;
+  return Object.assign(next, {
+    state: (): Sfc32State => [a, b, c, d],
+    setState: (state: Sfc32State) => {
+      [a, b, c, d] = state;
+    },
+  });
 }

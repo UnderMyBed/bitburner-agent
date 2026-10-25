@@ -1,8 +1,12 @@
-// Entry point of a simulation process (forked by Simulation.start). Waits for its options, sets up the host, then
-// answers requests one at a time.
+// Entry point of a simulation process (forked by Simulation.start). Waits for its options, sets up the host and
+// boots the fixture, then answers requests one at a time.
+import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
+import type { EngineApi } from "../engine/api.ts";
 import {
+  type Fixture,
   type HostMessage,
+  type HostOptions,
   type Method,
   type Params,
   type ParentMessage,
@@ -11,13 +15,31 @@ import {
   validateHostOptions,
 } from "../protocol.ts";
 import { installHost } from "./install.ts";
+import { pinnedLocale } from "./parity/locale.ts";
+import { randomState, restoreRandomState } from "./random.ts";
 
 const send = (message: HostMessage) => process.send?.(message);
 const errorText = (error: unknown) => (error instanceof Error ? (error.stack ?? error.message) : String(error));
 
 type Handlers = { [M in Method]: (params: Params<M>) => Result<M> | Promise<Result<M>> };
 
-function handlersFor({ clock, engine }: ReturnType<typeof installHost>): Handlers {
+function bootFixture(engine: EngineApi, fixture: Fixture): Promise<void> {
+  switch (fixture.kind) {
+    case "new":
+      return engine.bootNewGame(fixture.tutorial);
+  }
+}
+
+async function start(options: HostOptions): Promise<Handlers> {
+  validateHostOptions(options);
+  const bootStarted = process.hrtime.bigint(); // real time: the virtual clock doesn't measure the host itself
+  const { clock, engine } = installHost(options);
+  if (options.fixture) await bootFixture(engine, options.fixture);
+  const bootMs = Math.round(Number(process.hrtime.bigint() - bootStarted) / 1e6);
+  const booted = () => {
+    if (!options.fixture) throw new Error("no game is booted: this simulation was started without a fixture");
+  };
+
   return {
     now: () => clock.now(),
     advance: async ({ ms }) => {
@@ -25,11 +47,38 @@ function handlersFor({ clock, engine }: ReturnType<typeof installHost>): Handler
       await clock.advance(ms);
       return clock.now();
     },
+    summary: () => {
+      booted();
+      return { virtualMs: clock.now() - options.epochMs, ...engine.gameSummary() };
+    },
+    stateHash: async () => {
+      booted();
+      // Serialising the save draws from Math.random (the game builds a throwaway PlayerObject), so undo those draws:
+      // hashing must not change how the run turns out. The random state is part of the hash, because the save alone
+      // doesn't record where the seeded streams are, and two equal saves could still diverge.
+      const random = randomState();
+      let save: string;
+      try {
+        save = await engine.saveJson();
+      } finally {
+        restoreRandomState(random);
+      }
+      return createHash("sha256").update(save).update(JSON.stringify(random)).digest("hex");
+    },
     "diagnostics.clock": () => ({
       engineLastUpdate: engine.engineLastUpdate(),
       engineDateNow: engine.dateNow(),
       enginePerformanceNow: engine.performanceNow(),
     }),
+    "diagnostics.game": () => {
+      booted();
+      return {
+        ...engine.gameDiagnostics(),
+        bootMs,
+        defaultLocale: new Intl.DateTimeFormat().resolvedOptions().locale,
+        pinnedLocale: pinnedLocale() ?? null,
+      };
+    },
     "diagnostics.random": ({ count }) => ({
       math: Array.from({ length: count }, () => Math.random()),
       windowMath: Array.from({ length: count }, () => window.Math.random()),
@@ -45,24 +94,23 @@ function handlersFor({ clock, engine }: ReturnType<typeof installHost>): Handler
 }
 
 let handlers: Handlers | undefined;
-// Requests run strictly one after another. A request that arrived during an `advance` would otherwise observe (or
+// Everything runs strictly one after another. A request that arrived during an `advance` would otherwise observe (or
 // change) the game part-way through it, at a point that depends on real IPC timing: not deterministic.
 let queue: Promise<void> = Promise.resolve();
 
 process.on("message", (message: ParentMessage) => {
-  if (message.type === "init") {
-    try {
-      validateHostOptions(message.options);
-      handlers = handlersFor(installHost(message.options));
-      send({ type: "ready" });
-    } catch (error) {
-      send({ type: "fatal", error: errorText(error) });
-      process.exit(1);
-    }
-    return;
-  }
-  const { id, method, params } = message;
   queue = queue.then(async () => {
+    if (message.type === "init") {
+      try {
+        handlers = await start(message.options);
+        send({ type: "ready" });
+      } catch (error) {
+        send({ type: "fatal", error: errorText(error) });
+        process.exit(1);
+      }
+      return;
+    }
+    const { id, method, params } = message;
     try {
       const handler = handlers?.[method] as ((params: unknown) => unknown) | undefined;
       if (!handler) throw new Error(handlers ? `unknown method ${method}` : "the host is not initialised");
