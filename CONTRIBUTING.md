@@ -61,7 +61,7 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
    - all of the milestone's issues closed or explicitly moved
    - docs consistent with what was built
 
-   Record it on the milestone's review issue, then tag a release (procedure: [#23](https://github.com/UnderMyBed/bitburner-agent/issues/23)).
+   Record it on the milestone's review issue, then tag a release: [docs/releasing.md](docs/releasing.md).
 
 **Lighter paths**
 - **Chores** (dependency bumps, CI tweaks) use the Chore form: what and why, and how it's verified.
@@ -71,7 +71,7 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
 ### Merge gate
 - `main` is protected by a repository ruleset with no bypass. Every change lands through a PR, and the `check` CI job must pass on an up-to-date branch.
 - A PR merges only when **all required CI checks pass** *and* the **three-pass review** is resolved.
-- Releases are tagged from `main` and include notes on what changed, what to try, and known issues.
+- Releases are tagged from `main` and include notes on what changed, what to try, and known issues ([docs/releasing.md](docs/releasing.md)).
 
 ### Code standards
 - **Clear and simple beats clever.** If a reviewer needs the PR description to understand the code, the code isn't clear yet.

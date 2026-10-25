@@ -73,6 +73,7 @@ Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHu
 | [`docs/synthesis.md`](docs/synthesis.md) | The analysis in one page: what the game is and how to beat it |
 | [`docs/mechanics/`](docs/mechanics/) | First-principles mechanics references with `file:line` citations into the game source |
 | [`docs/research/`](docs/research/) | Community tooling, benchmarks and strategies |
+| [`docs/releasing.md`](docs/releasing.md) | How a release is made: versions, the pre-release checklist, notes, commands |
 | [`docs/spikes/`](docs/spikes/) | Spike reports; the throwaway code is in [`spikes/`](spikes/) |
 | [`docs/sim/`](docs/sim/) | The simulator: its browser [parity audit](docs/sim/parity.md) (what the browser and UI provide, and what the simulator does about each) and [scenarios](docs/sim/scenarios.md) (running workloads across seeds) |
 
