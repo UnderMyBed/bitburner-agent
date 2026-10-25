@@ -96,7 +96,7 @@ From code, `@bitburner-agent/sim` exports these:
 - `formatRun` and `formatProgress`, the CLIs' table and progress line;
 - `parseSeeds`, `parseWorkers`, `parseWallLimit` and `parseMaxHeap`, which parse the CLIs' options (this CLI's and the baseline's);
 - `aggregate` and `distribution`, the run's aggregate and its min / median / p90 / max;
-- `growthPerDay`, `rigId` and `commitId`, the benchmarks' heap statistic, machine name and commit ([benchmarks](benchmarks.md)), which the baseline reuses.
+- `growthPerDay`, `rigId` and `commitId`, the benchmarks' heap statistic, machine name and commit ([benchmarks](benchmarks.md)); the baseline reuses the last two.
 
 `runScenario`/`runSeed` take these options besides the seeds and workers:
 - `wallLimitMs`: a hard limit on each seed's real time, from 1 ms to `MAX_WALL_LIMIT_MS` (2^31 − 1 ms, about 24.8 days, the longest a timer can wait), over the span `wallMs` counts. Booting has its own 60 s limit; writing files and starting scripts aren't timed. The parent enforces it with its own timer: past it, it kills the seed's simulation process, mid-piece if need be, and the seed fails with an error starting "wall limit:", keeping the checkpoints it had.

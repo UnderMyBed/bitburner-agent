@@ -1,6 +1,6 @@
 // npm run baseline: runs the fork baseline (baseline.ts, docs/sim/baselines.md) once per seed, measuring each run's
-// heap, with a real-time limit per seed and a heap cap per simulation. It prints a progress line per seed per virtual
-// day on stderr, then the scenario table, each seed's heap and the run's row for docs/sim/baselines.md.
+// heap, with a real-time limit per seed and a heap cap per simulation. It prints a progress line per seed at each
+// checkpoint on stderr, then the scenario table, each seed's heap and the run's rows for docs/sim/baselines.md.
 // scripts/baseline.ts calls it with the real dependencies; tests pass stubs.
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -17,16 +17,16 @@ import {
   type ScenarioRun,
 } from "@bitburner-agent/sim";
 import { baselineScenario } from "./baseline.ts";
-import { baselineRow, formatHeaps } from "./report.ts";
+import { baselineRows, formatHeaps } from "./report.ts";
 
 export const USAGE =
   "usage: npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] " +
-  "[--wall-limit minutes (default 720)] [--max-heap MB (default 2048)] [--json out.json]";
+  "[--wall-limit minutes (default 60)] [--max-heap MB (default 2048)] [--json out.json]";
 /**
- * Each seed's default real-time limit: 12 hours, a night's run. The first attempt ran 6.5 hours without a word; a seed
- * that needs longer than this needs a decision about where the baseline runs (#33), not a longer default.
+ * Each seed's default real-time limit: 60 minutes. A seed's 12 virtual hours take about 6 real minutes on the reference
+ * rig (ADR 0011), so a seed that needs an hour has gone wrong, and should stop rather than hold the machine.
  */
-export const DEFAULT_WALL_LIMIT_MS = 12 * 60 * 60_000;
+export const DEFAULT_WALL_LIMIT_MS = 60 * 60_000;
 /**
  * Each simulation's default heap cap. Measured on one seed (#74): about 120 MB after a full collection for the first 22
  * virtual hours, 1 GB with 144,144 scripts running. 2 GB leaves room for that; the processes grew to 3.4 GB uncapped.
@@ -52,12 +52,12 @@ export interface CliDeps {
 }
 
 /**
- * Runs the CLI. Returns the exit code: 0 if every seed destroyed the BitNode, 1 if any didn't, 2 if it couldn't run.
+ * Runs the CLI. Returns the exit code: 0 if every seed reached 12 virtual hours, 1 if any didn't, 2 if it couldn't run.
  * Everything that can refuse (arguments, the `--json` folder, the commit, the rig's name) is checked before the run,
- * and the JSON is written as soon as the run ends, so hours of results are never lost to a late error.
+ * and the JSON is written as soon as the run ends, so a run's results are never lost to a late error.
  */
 export async function baselineCli(argv: string[], deps: CliDeps): Promise<number> {
-  let meta: Parameters<typeof baselineRow>[1];
+  let meta: Parameters<typeof baselineRows>[1];
   let options: { seeds?: number[]; workers: number; wallLimitMs: number; maxHeapMb: number };
   let json: string | undefined;
   try {
@@ -73,7 +73,7 @@ export async function baselineCli(argv: string[], deps: CliDeps): Promise<number
       },
     });
     if (positionals.length > 0) throw new RangeError(USAGE);
-    // Defaults sized for a heavy seed: one at a time, 12 hours, 2 GB (docs/sim/baselines.md, #75).
+    // Defaults: one seed at a time, an hour each, 2 GB (docs/sim/baselines.md, #75).
     options = {
       workers: values.workers === undefined ? 1 : parseWorkers(values.workers),
       wallLimitMs: values["wall-limit"] === undefined ? DEFAULT_WALL_LIMIT_MS : parseWallLimit(values["wall-limit"]),
@@ -103,6 +103,6 @@ export async function baselineCli(argv: string[], deps: CliDeps): Promise<number
   if (json) writeFileSync(json, `${JSON.stringify(run, null, 2)}\n`);
   deps.log(formatRun(run));
   deps.log(`\n${formatHeaps(run)}`);
-  deps.log(`\nrow for docs/sim/baselines.md:\n${baselineRow(run, meta)}`);
+  deps.log(`\nrows for docs/sim/baselines.md:\n${baselineRows(run, meta).join("\n")}`);
   return run.aggregate.passed === run.aggregate.seeds ? 0 : 1;
 }
