@@ -25,6 +25,7 @@ function generator(seed: number): () => number {
   };
 }
 
+/** Delays are always numbers: an interval without one breaks the heap's order, and the patch's equivalence (#80). */
 function scenario(seed: number): Op[] {
   const random = generator(seed);
   const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)] as T;

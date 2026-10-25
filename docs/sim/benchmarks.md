@@ -53,19 +53,25 @@ Exit codes: 0 nothing regressed, 1 something did, 2 it couldn't run.
 
 ## Scaling with running scripts
 
-Each running script that sleeps is a pending timer in the virtual clock. Until [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74), fake-timers scanned every pending timer, twice per step, whenever none was due in the range being run, which with the simulator's stepping was every step. A run slowed with the square of the scripts running, and the legacy fork's baseline fell to 3–6× real time with about 23,000 to 144,000 scripts. The clock now skips that scan ([`clock.ts`](../../packages/sim/src/host/clock.ts), `skipEmptyTimerScans`). Its cost per step no longer grows in proportion to the timers pending ([`clock.test.ts`](../../packages/sim/test/clock.test.ts) checks it with 20,000), and the results are the same: the golden state hashes are unchanged.
+Each running script that sleeps is a pending timer in the virtual clock. Until [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74), once a step's due timers had fired, the earliest timer left was past the range, and fake-timers then scanned every pending timer to find nothing, twice. So the clock's share of each step grew with the timers pending, and its share of a run with the square of the scripts running. The legacy fork's baseline fell to 3–6× real time with about 23,000 to 144,000 scripts. The clock now skips that scan ([`clock.ts`](../../packages/sim/src/host/clock.ts), `skipEmptyTimerScans`). Its cost per step no longer grows in proportion to the timers pending ([`clock.test.ts`](../../packages/sim/test/clock.test.ts) checks it with 20,000). The results are the same, and the golden state hashes are unchanged, except for a script's `setInterval` without a numeric delay ([#80](https://github.com/UnderMyBed/bitburner-agent/issues/80)).
 
-Measured on the reference rig, seed 1, the patch switched off and on in the same commit (343c05b):
+Measured on the reference rig in the same commit (343c05b), with the patch switched off by a local edit, then on. The first four rows are `--dry-run`'s median over each workload's seeds 1–4. The last is seed 1 of churn with `homeRamGb: 65536` and `ctl.js` args `[1, 125]` (625 workers a second), for 10 virtual minutes:
 
-| Workload | Scripts at once | Off | On |
+| Workload | What runs | Off | On |
 |---|---|---|---|
-| lean | 1 | 26,341× | 26,634× |
-| copies | 100 | 9,574× | 12,040× |
-| batch | short-lived workers, up to 20 threads each | 9,445× | 10,232× |
-| churn | thousands, up to about 4,700 (its RAM's limit) | 281× | 476× |
-| churn with 64 TB of home RAM and 625 workers a second (10 virtual minutes) | 12,000–37,000 | 49× | 100× |
+| lean | one script | 26,341× | 26,634× |
+| copies | 100 scripts | 9,574× | 12,040× |
+| batch | short-lived workers of up to 20 threads | 9,445× | 10,232× |
+| churn | thousands of one-thread workers (its 8 TB holds about 4,700) | 281× | 476× |
+| churn, the variant above | 12,000–37,000 workers at once (measured) | 49× | 100× |
 
-Where the time goes now, at 12,000–37,000 scripts (that last run, profiled): the game 56%, fake-timers 17%, garbage collection 11%, V8 itself 7%, the scripts 4%, the host 1%. The game's share grows with its work per script, which a browser pays too. Most of it is a log line for every NS call (`formatNumber`, `log`), plus the loop updating every running script. fake-timers' remaining cost is per timer: adding one, and removing it from the heap in O(log n). The host's after-every-timer hook (a real macrotask for the import barrier, and the BitNode-entry check) costs the same per timer whatever the script count. Stop conditions are checked once per step, and are constant-time except `scriptExited`, which looks through the running scripts.
+Where the time goes now:
+- **That last run, 12,000–37,000 scripts:**
+  - the game 56%, fake-timers 17%, garbage collection 11%, V8 itself 7%, the scripts 4%, idle 3%, the host 1%;
+  - about half the game's share is a log line for every NS call (`formatNumber`, `log`, `formatSize`) and the loop updating every running script (`updateOnlineScriptTimes`). It grows with the game's work per script, which a browser pays too;
+  - fake-timers' remaining cost is per timer: adding one, and removing it from the heap in O(log n).
+- **The legacy fork from its 23-hour save, up to about 4,700 scripts:** its own scripts 48%, the game 37%, fake-timers 4%, garbage collection 4%, V8 itself 3%, the host 2%.
+- **The host's after-every-timer hook** (a real macrotask for the import barrier, and the BitNode-entry check) costs the same per timer whatever the script count. Stop conditions are checked once per step, and are constant-time except `scriptExited`, which looks through the running scripts.
 
 The legacy fork also plays IPvGO, whose CPU work holds it to about 100× however few scripts run ([baselines](baselines.md#running-it)).
 
@@ -78,7 +84,10 @@ Reading the first row (2026-10-25, the reference rig):
 - **churn** is the heavy script-churn class. Spike S1 measured 50–700× for that class ([architecture §9.1](../architecture.md#91-design)), and it isn't held to the target.
 - **The heap doesn't grow.** It drops once between days 2 and 3 (about 104 to 93 MB), then stays within 0.2 MB through day 7.
 
-Reading the second row (5457a1c, the reference rig): it includes the clock patch ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)) and the changes merged since the first row (#68–#78). churn nearly doubles (259× to 479×), copies gains about 30% and batch about 10%; lean is unchanged and the heap still doesn't grow. The patch's own effect, measured alone, is in [Scaling with running scripts](#scaling-with-running-scripts).
+Reading the second row (5457a1c, the reference rig):
+- It includes the clock patch ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)) and the changes merged since the first row (#68–#70, #72, #76–#78). The patch's own effect, measured alone, is in [Scaling with running scripts](#scaling-with-running-scripts).
+- **churn** nearly doubles (259× to 479×), **copies** gains about 30% and **batch** about 10%. **lean** is unchanged.
+- **The heap still doesn't grow.**
 
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
 
