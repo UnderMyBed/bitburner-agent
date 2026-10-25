@@ -10,12 +10,13 @@ const KEEP = 10_000;
 
 let kept: SimEvent[] = [];
 let dropped = 0;
-/** Events recorded so far, by type, dropped ones included. */
-const counts = new Map<SimEvent["type"], number>();
+/** Where each event a run can stop on sits in the log (positions count dropped events too), by type. */
+const STOP_EVENTS = new Set<SimEvent["type"]>(["bitnodeDestroyed", "bitnodeFlumed", "bitverseReached"]);
+const stopEvents: { position: number; type: SimEvent["type"] }[] = [];
 let clockReady = false;
 
 function record(event: SimEvent): void {
-  counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+  if (STOP_EVENTS.has(event.type)) stopEvents.push({ position: dropped + kept.length, type: event.type });
   kept.push(event);
   if (kept.length > KEEP * 2) {
     dropped += kept.length - KEEP;
@@ -30,9 +31,17 @@ export function markClockReady(): void {
   clockReady = true;
 }
 
-/** How many events of this type have been recorded so far. */
-export function eventCount(type: SimEvent["type"]): number {
-  return counts.get(type) ?? 0;
+/** The position the next event will take in the log. */
+export function logEnd(): number {
+  return dropped + kept.length;
+}
+
+/** Whether an event of this type (bitnodeDestroyed, bitnodeFlumed or bitverseReached) is at `position` or later. */
+export function stopEventSince(type: SimEvent["type"], position: number): boolean {
+  for (let i = stopEvents.length - 1; i >= 0 && (stopEvents[i]?.position ?? -1) >= position; i--) {
+    if (stopEvents[i]?.type === type) return true;
+  }
+  return false;
 }
 
 export function events(since: number): EventPage {

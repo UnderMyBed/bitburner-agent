@@ -48,11 +48,11 @@ export interface EngineApi {
   enterFromBitVerse(n: number): void;
   /**
    * The BitNode entry since the last call, if any: from which BitNode to which, and whether by destroying it. The first
-   * call takes a baseline. Call after every timer.
+   * call takes a baseline. Call after every timer and every request.
    */
   bitNodeEntry(): { from: number; to: number; destroyed: boolean } | null;
-  /** Whether a script with this filename is running, on any server. */
-  scriptRunning(filename: string): boolean;
+  /** Whether a script with this filename is running (on any server), has recently finished, or neither. */
+  scriptState(filename: string): "running" | "finished" | "unknown";
   /** Sets home's RAM, in GB. A harness edit, for test and benchmark scenarios. */
   setHomeRam(gb: number): void;
   /** The page the game's Router is on. */
@@ -111,7 +111,7 @@ const API_FUNCTIONS = {
   destroyBitNode: true,
   enterFromBitVerse: true,
   bitNodeEntry: true,
-  scriptRunning: true,
+  scriptState: true,
   page: true,
   setHomeRam: true,
   bitNodeMultipliers: true,

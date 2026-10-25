@@ -23,7 +23,7 @@ export function installHost({ seed, epochMs, prompts, testHooks }: HostOptions):
   clock: VirtualClock;
   engine: EngineApi;
   scripts: ScriptLoader;
-  /** Sets what runs after every timer the clock fires (before the import barrier), e.g. the BitNode-entry watch. */
+  /** Sets what runs after every timer the clock fires, once its microtasks have run: e.g. the BitNode-entry watch. */
   afterEveryTimer(run: () => void): void;
 } {
   installMachineIndependentStacks();
@@ -39,10 +39,13 @@ export function installHost({ seed, epochMs, prompts, testHooks }: HostOptions):
   installSeededRandom(seed);
   const scripts = installScriptModules(testHooks);
   let afterTimer = () => {};
-  const clock = installClock(epochMs, (continueTick) => {
-    afterTimer();
-    scripts.whenQuiescent(continueTick);
-  });
+  const clock = installClock(epochMs, (continueTick) =>
+    // Once nothing is importing, the timer's microtasks have run too (a script's code after an `await`).
+    scripts.whenQuiescent(() => {
+      afterTimer();
+      continueTick();
+    }),
+  );
   markClockReady();
   // There is no `process` in a browser. The game reads this one while loading (Constants.ts isInTestEnvironment), and
   // it would change game behaviour; a test runner may have set it for this process.

@@ -1,5 +1,5 @@
 // Scenario specs: what to run in a simulation, as JSON. A scenario file says where a run starts, which scripts run,
-// for how long, and what ends it; the runner (run.ts) runs it once per seed.
+// for how long, and what ends it; the runner (run.ts) runs it once per seed. docs/sim/scenarios.md is the reference.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -8,7 +8,10 @@ import {
   type PromptRule,
   type ScriptArg,
   type StopCondition,
+  validateBitNodeFixture,
   validateHomeRam,
+  validatePrompts,
+  validateRun,
   validateRunUntil,
 } from "../protocol.ts";
 
@@ -29,15 +32,17 @@ export interface Scenario {
   epochMs?: number;
   /**
    * Files to write before the scripts start, per host: either `{ path: content }`, or a directory (relative to the
-   * scenario file) whose files are all written, under their relative paths.
+   * scenario file, and inside its directory) whose files are all written, under their relative paths.
    */
   files?: Record<string, Record<string, string> | string>;
   /** Scripts to start, in order, after the files are written. */
   run?: ScriptToRun[];
   /** The most virtual time a run takes, in ms. */
   durationMs: number;
-  /** A run ends early after the first timer at which any of these holds. */
+  /** The run ends early, and passes, after the first moment at which any of these holds. */
   stopWhen?: StopCondition[];
+  /** The run ends early, and fails, after the first moment at which any of these holds. */
+  failWhen?: StopCondition[];
   /** What happens when the game reaches the BitVerse. Without it, the game waits there. */
   onBitVerse?: OnBitVerse;
   /** How `ns.prompt` is answered (see `SimulationOptions.prompts`). */
@@ -46,24 +51,28 @@ export interface Scenario {
   checkpointEveryMs?: number;
   /** Seeds to run, as a list or an inclusive range. Default `[1]`. */
   seeds?: number[] | { from: number; to: number };
-  /** Home's RAM, in GB: a harness edit for test and benchmark workloads. */
+  /**
+   * Home's RAM, in GB: a harness edit for test and benchmark workloads. A run with it isn't a state a player can
+   * reach, so its results don't compare with real play.
+   */
   homeRamGb?: number;
 }
 
-const KEYS = new Set([
-  "name",
-  "fixture",
-  "epochMs",
-  "files",
-  "run",
-  "durationMs",
-  "stopWhen",
-  "onBitVerse",
-  "prompts",
-  "checkpointEveryMs",
-  "seeds",
-  "homeRamGb",
-]);
+const KEYS: Record<keyof Scenario, true> = {
+  name: true,
+  fixture: true,
+  epochMs: true,
+  files: true,
+  run: true,
+  durationMs: true,
+  stopWhen: true,
+  failWhen: true,
+  onBitVerse: true,
+  prompts: true,
+  checkpointEveryMs: true,
+  seeds: true,
+  homeRamGb: true,
+};
 
 /** The seeds a scenario runs, in order. */
 export function scenarioSeeds(seeds: Scenario["seeds"] = [1]): number[] {
@@ -73,61 +82,134 @@ export function scenarioSeeds(seeds: Scenario["seeds"] = [1]): number[] {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const isSeed = (value: unknown) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 0xffffffff;
+export const isSeed = (value: unknown): value is number =>
+  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 0xffffffff;
+
+/** A file directory must stay inside the scenario's directory, and not be it (that would copy the scenario too). */
+function isContainedDirectory(dir: string): boolean {
+  const normal = path.normalize(dir);
+  return !path.isAbsolute(dir) && normal !== "." && normal !== ".." && !normal.startsWith(`..${path.sep}`);
+}
+
+function validateFixtureShape(fixture: unknown, epochMs: unknown): void {
+  if (!isRecord(fixture)) throw new RangeError("fixture: { kind: … }, as Simulation takes it");
+  switch (fixture.kind) {
+    case "new":
+      if (fixture.tutorial !== "running" && fixture.tutorial !== "skipped") {
+        throw new RangeError('fixture: a new game needs tutorial: "running" or "skipped"');
+      }
+      break;
+    case "bitnode":
+      validateBitNodeFixture(fixture as never);
+      break;
+    case "save": {
+      if (typeof fixture.path !== "string" || fixture.bytes !== undefined) {
+        throw new RangeError("fixture: a save fixture in a scenario needs a path (relative to the scenario file)");
+      }
+      const offline = fixture.offlineMs;
+      if (offline !== undefined && !(Number.isSafeInteger(offline) && (offline as number) >= 0)) {
+        throw new RangeError("fixture.offlineMs: a non-negative integer");
+      }
+      if (epochMs !== undefined) throw new RangeError("epochMs: a save fixture takes its epoch from the save");
+      return;
+    }
+    default:
+      throw new RangeError(`fixture: kind "new", "bitnode" or "save", got ${JSON.stringify(fixture.kind)}`);
+  }
+  if (!(Number.isSafeInteger(epochMs) && (epochMs as number) >= 0)) {
+    throw new RangeError("epochMs: required (a non-negative integer) unless the fixture is a save");
+  }
+}
+
+function validateRunEntry(run: unknown, i: number): void {
+  if (!isRecord(run) || typeof run.script !== "string" || run.script === "") {
+    throw new RangeError(`run[${i}]: { script, host?, threads?, args? }`);
+  }
+  if (run.host !== undefined && (typeof run.host !== "string" || run.host === "")) {
+    throw new RangeError(`run[${i}].host: a server name`);
+  }
+  const threads = run.threads ?? 1;
+  if (!Number.isSafeInteger(threads) || (threads as number) < 1) {
+    throw new RangeError(`run[${i}].threads: a positive integer`);
+  }
+  if (run.args !== undefined && !Array.isArray(run.args)) throw new RangeError(`run[${i}].args: a list`);
+  validateRun({ threads: threads as number, args: (run.args ?? []) as ScriptArg[] });
+}
 
 /**
- * Checks a scenario's shape and values; throws a RangeError naming what's wrong. The fixture, epoch and prompt rules
- * are checked in full when a simulation starts.
+ * Checks a scenario completely, short of reading the files it names: throws a RangeError naming what's wrong. So a bad
+ * scenario is refused once, rather than failing every seed the same way.
  */
 export function validateScenario(value: unknown): asserts value is Scenario {
-  const fail = (message: string): never => {
-    throw new RangeError(`invalid scenario: ${message}`);
+  const field = (name: string, check: () => void) => {
+    try {
+      check();
+    } catch (error) {
+      const message = (error as Error).message;
+      throw new RangeError(`invalid scenario: ${message.startsWith(name) ? "" : `${name}: `}${message}`);
+    }
   };
-  if (!isRecord(value)) return fail("a scenario is a JSON object");
-  for (const key of Object.keys(value)) if (!KEYS.has(key)) fail(`unknown field "${key}"`);
-  const s = value as Partial<Scenario>;
-  if (typeof s.name !== "string" || s.name === "") fail("name: a non-empty string");
-  if (!isRecord(s.fixture) || typeof s.fixture.kind !== "string") fail("fixture: { kind: … }, as Simulation takes it");
-  if (!Number.isSafeInteger(s.durationMs) || (s.durationMs as number) <= 0) fail("durationMs: a positive integer");
-  if (s.checkpointEveryMs !== undefined && !(Number.isSafeInteger(s.checkpointEveryMs) && s.checkpointEveryMs > 0)) {
-    fail("checkpointEveryMs: a positive integer");
+  if (!isRecord(value)) throw new RangeError("invalid scenario: a scenario is a JSON object");
+  for (const key of Object.keys(value)) {
+    if (!Object.hasOwn(KEYS, key)) throw new RangeError(`invalid scenario: unknown field "${key}"`);
+  }
+  const s = value as Record<string, unknown>;
+  field("name", () => {
+    if (typeof s.name !== "string" || s.name === "") throw new RangeError("a non-empty string");
+  });
+  field("fixture", () => validateFixtureShape(s.fixture, s.epochMs));
+  field("durationMs", () => {
+    if (!Number.isSafeInteger(s.durationMs) || (s.durationMs as number) <= 0)
+      throw new RangeError("a positive integer");
+  });
+  if (s.checkpointEveryMs !== undefined) {
+    field("checkpointEveryMs", () => {
+      if (!Number.isSafeInteger(s.checkpointEveryMs) || (s.checkpointEveryMs as number) <= 0) {
+        throw new RangeError("a positive integer");
+      }
+    });
   }
   if (s.files !== undefined) {
-    if (!isRecord(s.files)) fail("files: { host: { path: content } or a directory }");
-    for (const [host, files] of Object.entries(s.files as Record<string, unknown>)) {
-      const ok =
-        typeof files === "string" || (isRecord(files) && Object.values(files).every((c) => typeof c === "string"));
-      if (!ok) fail(`files.${host}: { path: content } or a directory`);
-    }
+    field("files", () => {
+      if (!isRecord(s.files)) throw new RangeError("{ host: { path: content } or a directory }");
+      for (const [host, files] of Object.entries(s.files)) {
+        if (typeof files === "string") {
+          if (!isContainedDirectory(files)) {
+            throw new RangeError(`files.${host}: a directory inside the scenario's own directory, got "${files}"`);
+          }
+        } else if (!isRecord(files) || !Object.values(files).every((c) => typeof c === "string")) {
+          throw new RangeError(`files.${host}: { path: content } or a directory`);
+        }
+      }
+    });
   }
   if (s.run !== undefined) {
-    if (!Array.isArray(s.run)) fail("run: a list of { script, host?, threads?, args? }");
-    for (const [i, run] of (s.run as unknown[]).entries()) {
-      if (!isRecord(run) || typeof run.script !== "string") fail(`run[${i}]: { script, host?, threads?, args? }`);
-    }
+    field("run", () => {
+      if (!Array.isArray(s.run)) throw new RangeError("a list of { script, host?, threads?, args? }");
+      s.run.forEach(validateRunEntry);
+    });
   }
   if (s.seeds !== undefined) {
-    const range = s.seeds as { from?: unknown; to?: unknown };
-    const ok = Array.isArray(s.seeds)
-      ? s.seeds.length > 0 && s.seeds.every(isSeed)
-      : isSeed(range.from) && isSeed(range.to) && (range.from as number) <= (range.to as number);
-    if (!ok) fail("seeds: a non-empty list of seeds, or { from, to }");
+    field("seeds", () => {
+      const range = s.seeds as { from?: unknown; to?: unknown };
+      const ok = Array.isArray(s.seeds)
+        ? s.seeds.length > 0 && s.seeds.every(isSeed) && new Set(s.seeds).size === s.seeds.length
+        : isRecord(s.seeds) && isSeed(range.from) && isSeed(range.to) && range.from <= range.to;
+      if (!ok) throw new RangeError("a non-empty list of distinct seeds, or { from, to }");
+    });
   }
-  if (s.homeRamGb !== undefined) {
-    try {
-      validateHomeRam(s.homeRamGb);
-    } catch (error) {
-      fail(`homeRamGb: ${(error as Error).message}`);
+  if (s.homeRamGb !== undefined) field("homeRamGb", () => validateHomeRam(s.homeRamGb as number));
+  if (s.prompts !== undefined) field("prompts", () => validatePrompts(s.prompts as PromptRule[]));
+  for (const name of ["stopWhen", "failWhen"] as const) {
+    if (s[name] !== undefined) {
+      field(name, () => {
+        if (!Array.isArray(s[name])) throw new RangeError("a list of stop conditions");
+        validateRunUntil({ ms: 0, stopWhen: s[name] as StopCondition[] });
+      });
     }
   }
-  try {
-    validateRunUntil({
-      ms: 0,
-      ...(s.stopWhen ? { stopWhen: s.stopWhen } : {}),
-      ...(s.onBitVerse ? { onBitVerse: s.onBitVerse } : {}),
-    });
-  } catch (error) {
-    fail((error as Error).message);
+  if (s.onBitVerse !== undefined) {
+    field("onBitVerse", () => validateRunUntil({ ms: 0, onBitVerse: s.onBitVerse as OnBitVerse }));
   }
 }
 

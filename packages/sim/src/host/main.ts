@@ -21,7 +21,7 @@ import { events } from "./events.ts";
 import { installHost } from "./install.ts";
 import { pinnedLocale } from "./parity/locale.ts";
 import { randomState, restoreRandomState } from "./random.ts";
-import { runUntil, watchBitNodeEntries } from "./run.ts";
+import { runUntil, watchBitNodeEntries } from "./run-until.ts";
 
 const send = (message: HostMessage) => process.send?.(message);
 const errorText = (error: unknown) => (error instanceof Error ? (error.stack ?? error.message) : String(error));
@@ -122,7 +122,7 @@ async function start(options: HostOptions): Promise<Host> {
     runUntil: (params) => {
       booted();
       validateRunUntil(params);
-      return runUntil(params, { clock, engine, watch, epochMs: options.epochMs });
+      return runUntil(params, { clock, engine, watch });
     },
     kill: ({ pid }) => {
       booted();
@@ -199,8 +199,12 @@ process.on("message", (message: ParentMessage) => {
       await simHost.quiescent();
       const handler = simHost.handlers[method] as ((params: unknown) => unknown) | undefined;
       if (!handler) throw new Error(`unknown method ${method}`);
-      const result = await handler(params);
-      simHost.afterRequest();
+      let result: unknown;
+      try {
+        result = await handler(params);
+      } finally {
+        simHost.afterRequest(); // even if it threw part-way: it may still have changed the game
+      }
       send({ type: "response", id, ok: true, result });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));

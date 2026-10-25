@@ -128,39 +128,67 @@ export function enterFromBitVerse(n: number) {
   leaveCinematic();
 }
 
-/**
- * Watches for the game entering a BitNode, however it happened. Every entry stamps `Player.lastNodeReset` with the
- * current time (Player.prestigeSourceFile); two entries in the same virtual ms are told apart by the BitNode. Both ways of destroying a BitNode backdoor w0r1d_d43m0n first (Singularity's
- * destroyW0r1dD43m0n, or a backdoor that leads to the BitVerse); a flume doesn't. The entry replaces every server, so
- * this keeps the previous w0r1d_d43m0n to look at afterwards. The first call only takes a baseline.
- */
-let watched: { reset: number; bitNode: number; daemon: unknown } | null = null;
-export function bitNodeEntry(): { from: number; to: number; destroyed: boolean } | null {
-  const daemon = GetServer(SpecialServers.WorldDaemon);
-  if (watched === null || (Player.lastNodeReset === watched.reset && Player.bitNodeN === watched.bitNode)) {
-    // Installing augmentations replaces the servers too, so keep the current w0r1d_d43m0n.
-    watched = { reset: Player.lastNodeReset, bitNode: Player.bitNodeN, daemon };
-    return null;
-  }
-  const destroyed = (watched.daemon as { backdoorInstalled?: boolean } | null)?.backdoorInstalled === true;
-  const entry = { from: watched.bitNode, to: Player.bitNodeN, destroyed };
-  watched = { reset: Player.lastNodeReset, bitNode: Player.bitNodeN, daemon };
-  return entry;
+interface Watched {
+  reset: number;
+  bitNode: number;
+  /** All Source-File levels, as `JSON.stringify` of the map: only a destroy changes them. */
+  sourceFiles: string;
+  /** The level of the current BitNode's own Source-File. */
+  ownLevel: number;
+  daemon: unknown;
+}
+let watched: Watched | null = null;
+
+function snapshot(): Watched {
+  return {
+    reset: Player.lastNodeReset,
+    bitNode: Player.bitNodeN,
+    sourceFiles: JSON.stringify([...Player.sourceFiles]),
+    ownLevel: Player.sourceFileLvl(Player.bitNodeN),
+    daemon: GetServer(SpecialServers.WorldDaemon),
+  };
 }
 
+/**
+ * Watches for the game entering a BitNode, however it happened (a Singularity call, the BitVerse portal, b1t_flum3).
+ * - **That it happened:** every entry stamps `Player.lastNodeReset` with the current time (prestigeSourceFile), and a
+ *   destroy changes the Source-Files. Only two flumes into the same BitNode in one virtual ms would go unseen.
+ * - **Destroy or flume:** a destroy gives the left BitNode's Source-File a level (RedPill.tsx giveSourceFile), unless
+ *   it was already at its cap (3; SF12 has none). At the cap the two leave the same state, and only then does this
+ *   fall back on w0r1d_d43m0n: every destroy backdoors it first. The entry replaces every server, so the previous one
+ *   is kept to look at.
+ * The first call only takes a baseline.
+ */
+export function bitNodeEntry(): { from: number; to: number; destroyed: boolean } | null {
+  const now = snapshot();
+  const before = watched;
+  watched = now;
+  if (
+    before === null ||
+    (now.reset === before.reset && now.bitNode === before.bitNode && now.sourceFiles === before.sourceFiles)
+  ) {
+    return null;
+  }
+  const levelAfter = Player.sourceFileLvl(before.bitNode);
+  const capped = before.bitNode !== 12 && before.ownLevel >= 3;
+  const backdoored = (before.daemon as { backdoorInstalled?: boolean } | null)?.backdoorInstalled === true;
+  const destroyed = levelAfter > before.ownLevel || (capped && backdoored);
+  return { from: before.bitNode, to: now.bitNode, destroyed };
+}
+
+/** Whether a script with this filename is running (on any server), has recently finished, or neither. */
+export function scriptState(filename: string): "running" | "finished" | "unknown" {
+  for (const ws of workerScripts.values()) if (ws.name === filename) return "running";
+  return recentScripts.some((r) => r.runningScript.filename === filename) ? "finished" : "unknown";
+}
 /** Sets home's RAM, in GB: a harness edit for test and benchmark scenarios, not something a player can do. */
 export function setHomeRam(gb: number) {
   Player.getHomeComputer().maxRam = gb;
 }
 
+/** The page the game's Router is on. */
 export function page(): string {
   return Router.page();
-}
-
-/** Whether a script with this filename is running, on any server. */
-export function scriptRunning(filename: string): boolean {
-  for (const ws of workerScripts.values()) if (ws.name === filename) return true;
-  return false;
 }
 
 export function bitNodeMultipliers(n: number, level: number): Record<string, number> {

@@ -21,6 +21,7 @@ import { RpcClient } from "./rpc.ts";
 
 export type {
   BitNodeFixture,
+  ComparisonOp,
   EventPage,
   Fixture,
   GameEvent,
@@ -37,6 +38,8 @@ export type {
   SimEvent,
   SimulationOptions,
   StopCondition,
+  StopEvent,
+  SummaryField,
   Tutorial,
 } from "./protocol.ts";
 
@@ -120,8 +123,8 @@ export class Simulation {
    * first timer after which one holds. `onBitVerse` says what happens if the game reaches the BitVerse. Resolves with
    * the virtual now and what stopped the run (an index into `stopWhen`, "bitverse", or null if it ran the full time).
    */
-  runUntil(ms: number, { stopWhen, onBitVerse }: Omit<RunUntilParams, "ms"> = {}): Promise<RunUntilResult> {
-    const params: RunUntilParams = { ms, ...(stopWhen ? { stopWhen } : {}), ...(onBitVerse ? { onBitVerse } : {}) };
+  runUntil(ms: number, options: Omit<RunUntilParams, "ms"> = {}): Promise<RunUntilResult> {
+    const params: RunUntilParams = { ms, ...options };
     validateRunUntil(params);
     return this.rpc.call("runUntil", params);
   }

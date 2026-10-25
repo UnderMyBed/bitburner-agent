@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { SimEvent, Simulation, SimulationOptions } from "../src/simulation.ts";
 import { editSave } from "./helpers/save-edit.ts";
@@ -10,14 +12,7 @@ const HOUR = 3_600_000;
 const start = useSimulations();
 const newGame = (seed = 6) => start({ seed, epochMs: EPOCH, fixture: { kind: "new", tutorial: "skipped" } });
 
-const HACK_LOOP = `export async function main(ns) {
-  ns.nuke("n00dles");
-  while (true) {
-    if (ns.getServerSecurityLevel("n00dles") > ns.getServerMinSecurityLevel("n00dles") + 1) await ns.weaken("n00dles");
-    else if (ns.getServerMoneyAvailable("n00dles") < ns.getServerMaxMoney("n00dles") * 0.75) await ns.grow("n00dles");
-    else await ns.hack("n00dles");
-  }
-}`;
+const HACK_LOOP = readFileSync(path.join(import.meta.dirname, "../scenarios/scripts/hack.js"), "utf8");
 
 async function hacking(seed = 6): Promise<Simulation> {
   const sim = await newGame(seed);
@@ -30,8 +25,8 @@ async function hacking(seed = 6): Promise<Simulation> {
  * BN1 with SF4.3, able to destroy w0r1d_d43m0n at once. That takes The Red Pill, whose install links w0r1d_d43m0n to
  * The-Cave (Prestige.ts), root on it, and its hacking level, lowered here to what a new player has.
  */
-async function readyToDestroy(): Promise<Simulation> {
-  const fixture = await start({ seed: 6, epochMs: EPOCH, fixture: { kind: "bitnode", n: 1, sourceFiles: { 4: 3 } } });
+async function readyToDestroy(sourceFiles: Record<number, number> = { 4: 3 }): Promise<Simulation> {
+  const fixture = await start({ seed: 6, epochMs: EPOCH, fixture: { kind: "bitnode", n: 1, sourceFiles } });
   const save = editSave(await fixture.save(), ({ PlayerSave, AllServersSave }) => {
     PlayerSave.data.augmentations.push({ name: "The Red Pill", level: 1 });
     AllServersSave.home.data.maxRam = 1024;
@@ -73,6 +68,26 @@ describe("runUntil", () => {
     expect(await inPieces.stateHash()).toBe(await whole.stateHash());
   });
 
+  test("0 ms sleeps behave as under advance, and a loop of them doesn't stall", async () => {
+    const zeros = `const t0 = Date.now(); for (let i = 0; i < 100; i++) await ns.sleep(0); ns.print("out:" + (Date.now() - t0));`;
+    const [byAdvance, byRunUntil] = await Promise.all([newGame(), newGame()]);
+    for (const sim of [byAdvance, byRunUntil])
+      await sim.writeFile("home", "zeros.js", `export async function main(ns) { ${zeros} }`);
+    const a = await byAdvance.run("home", "zeros.js");
+    const b = await byRunUntil.run("home", "zeros.js");
+    await byAdvance.advance(5000);
+    await byRunUntil.runUntil(5000);
+    const out = async (sim: Simulation, pid: number) => (await sim.logs(pid)).find((l) => l.startsWith("out:"));
+    // 99: the first sleep starts outside a tick, so it fires in the same ms; each later one 1 ms after the last.
+    expect(await out(byAdvance, a.pid)).toBe("out:99");
+    expect(await out(byRunUntil, b.pid)).toBe("out:99");
+
+    await byRunUntil.writeFile("home", "spin.js", "export async function main(ns) { while (true) await ns.sleep(0); }");
+    await byRunUntil.run("home", "spin.js");
+    const from = await byRunUntil.now();
+    expect(await byRunUntil.runUntil(1000)).toEqual({ now: from + 1000, stoppedBy: null });
+  });
+
   test("stops when a script exits", async () => {
     const sim = await newGame();
     await sim.writeFile("home", "nap.js", "export async function main(ns) { await ns.sleep(5000); }");
@@ -83,6 +98,11 @@ describe("runUntil", () => {
     expect(now - EPOCH).toBeLessThan(6000);
   });
 
+  test("a script that hasn't started yet hasn't exited", async () => {
+    const sim = await hacking();
+    expect((await sim.runUntil(1000, { stopWhen: [{ scriptExited: "later.js" }] })).stoppedBy).toBe(null);
+  });
+
   test("runs the full time when nothing holds, and says which condition stopped it", async () => {
     const sim = await newGame();
     await sim.writeFile("home", "nap.js", "export async function main(ns) { await ns.sleep(5000); }");
@@ -90,6 +110,9 @@ describe("runUntil", () => {
     const stopWhen = [{ event: "bitnodeDestroyed" as const }, { scriptExited: "nap.js" }];
     expect((await sim.runUntil(1000, { stopWhen })).stoppedBy).toBe(null);
     expect((await sim.runUntil(HOUR, { stopWhen })).stoppedBy).toBe(1);
+    // It ends exactly at the end, between the game's 200 ms ticks too.
+    const from = await sim.now();
+    expect(await sim.runUntil(1234)).toEqual({ now: from + 1234, stoppedBy: null });
   });
 
   test.each([
@@ -99,6 +122,9 @@ describe("runUntil", () => {
     [{ ms: 1, stopWhen: [{ summary: { field: "money", op: "!=", value: 1 } }] }, /summary op/],
     [{ ms: 1, stopWhen: [{ scriptExited: "a.js", event: "bitverseReached" }] }, /exactly one/],
     [{ ms: 1, onBitVerse: { enter: 16 } }, /onBitVerse/],
+    [{ ms: 1, stopWhen: [{ summary: { field: "virtualMs", op: ">", value: 1 } }] }, /summary field/],
+    [{ ms: 1, eventsFrom: -1 }, /eventsFrom/],
+    [{ ms: 1, stalledLoopMs: 0 }, /stalledLoopMs/],
   ])("refuses %o", async (params, message) => {
     const sim = await newGame();
     const { ms, ...rest } = params as { ms: number };
@@ -126,9 +152,53 @@ describe("BitNode entries", () => {
     await sim.advance(60_000);
     expect(await entries(sim)).toEqual([{ type: "bitnodeFlumed", left: 1, entered: 3 }]);
     const [event] = (await sim.events()).events.filter((e) => e.type === "bitnodeFlumed");
-    expect((event?.at ?? 0) - t0).toBeGreaterThanOrEqual(5000);
-    expect((event?.at ?? 0) - t0).toBeLessThan(6000); // not the end of the advance
+    expect((event?.at ?? 0) - t0).toBe(5000); // the timer it happened in, not the end of the advance
     expect(await sim.summary()).toMatchObject({ bitNodeN: 3, sourceFiles: { 4: 3 } });
+  });
+
+  test("an entry exactly at the end of a run still stops it", async () => {
+    const sim = await readyToDestroy();
+    const t0 = await sim.now();
+    const flume = "export async function main(ns) { await ns.sleep(5000); ns.singularity.b1tflum3(3); }";
+    await sim.writeFile("home", "flume.js", flume);
+    await sim.run("home", "flume.js");
+    const stopWhen = [{ event: "bitnodeFlumed" as const }];
+    expect(await sim.runUntil(5000, { stopWhen })).toEqual({ now: t0 + 5000, stoppedBy: 0 });
+    // By default a run counts only its own events: the next one doesn't stop on that flume again.
+    expect(await sim.runUntil(1000, { stopWhen })).toEqual({ now: t0 + 6000, stoppedBy: null });
+    expect(await sim.runUntil(1000, { stopWhen, eventsFrom: 0 })).toEqual({ now: t0 + 6000, stoppedBy: 0 });
+  });
+
+  test("destroying the BitNode you're in: bitnodeDestroyed from BN1 to BN1", async () => {
+    const sim = await readyToDestroy();
+    await sim.writeFile("home", "again.js", "export async function main(ns) { ns.singularity.destroyW0r1dD43m0n(1); }");
+    await sim.run("home", "again.js");
+    await sim.advance(1000);
+    expect(await entries(sim)).toEqual([{ type: "bitnodeDestroyed", destroyed: 1, entered: 1 }]);
+    expect(await sim.summary()).toMatchObject({ bitNodeN: 1, sourceFiles: { 1: 1, 4: 3 } });
+  });
+
+  test("destroying a BitNode whose Source-File is maxed is still a destroy (w0r1d_d43m0n was backdoored)", async () => {
+    const sim = await readyToDestroy({ 1: 3, 4: 3 });
+    await sim.writeFile("home", "end.js", "export async function main(ns) { ns.singularity.destroyW0r1dD43m0n(2); }");
+    await sim.run("home", "end.js");
+    await sim.advance(1000);
+    expect(await entries(sim)).toEqual([{ type: "bitnodeDestroyed", destroyed: 1, entered: 2 }]);
+    expect((await sim.summary()).sourceFiles).toEqual({ 1: 3, 4: 3 });
+  });
+
+  test("destroying into the same BitNode in the same ms as the last entry is still seen", async () => {
+    const sim = await start({ seed: 6, epochMs: EPOCH, fixture: { kind: "bitnode", n: 1, sourceFiles: {} } });
+    await sim.diagnostics.destroyBitNode(1); // at the fixture's own entry time: only the Source-Files tell
+    expect(await entries(sim)).toEqual([{ type: "bitnodeDestroyed", destroyed: 1, entered: 1 }]);
+  });
+
+  test("an entry a request makes is recorded at once (the portal diagnostic)", async () => {
+    const sim = await start({ seed: 6, epochMs: EPOCH, fixture: { kind: "bitnode", n: 1, sourceFiles: {} } });
+    await sim.advance(1000);
+    await sim.diagnostics.destroyBitNode(2);
+    const [event] = (await sim.events()).events.filter((e) => e.type === "bitnodeDestroyed");
+    expect(event).toEqual({ type: "bitnodeDestroyed", destroyed: 1, entered: 2, at: EPOCH + 1000 });
   });
 
   // Backdooring w0r1d_d43m0n only takes the game to the BitVerse; a player then picks the next BitNode there.
@@ -157,6 +227,18 @@ describe("BitNode entries", () => {
     expect(await entries(sim)).toEqual([]);
   });
 
+  test("flumeing from the BitVerse after a backdoor is a flume: no Source-File is granted", async () => {
+    const sim = await readyToDestroy();
+    await sim.writeFile("home", "door.js", `export async function main(ns) {${BACKDOOR}}`);
+    await sim.run("home", "door.js");
+    await sim.runUntil(HOUR, { onBitVerse: "stop" });
+    await sim.writeFile("home", "flume.js", "export async function main(ns) { ns.singularity.b1tflum3(3); }");
+    await sim.run("home", "flume.js");
+    await sim.advance(1000);
+    expect(await entries(sim)).toEqual([{ type: "bitnodeFlumed", left: 1, entered: 3 }]);
+    expect((await sim.summary()).sourceFiles).toEqual({ 4: 3 });
+  });
+
   test("onBitVerse: { enter } picks the next BitNode as the portal does: a bitnodeDestroyed event", async () => {
     const sim = await readyToDestroy();
     await sim.writeFile("home", "door.js", `export async function main(ns) {${BACKDOOR}}`);
@@ -167,6 +249,8 @@ describe("BitNode entries", () => {
     });
     expect(result.stoppedBy).toBe(0);
     expect(await entries(sim)).toEqual([{ type: "bitnodeDestroyed", destroyed: 1, entered: 6 }]);
+    const [event] = (await sim.events()).events.filter((e) => e.type === "bitnodeDestroyed");
+    expect(event?.at).toBe(result.now); // recorded at the moment of entry, not a timer later
     // BitNode 6's cinematic is left as Continue does.
     expect(await sim.diagnostics.game()).toMatchObject({ page: "Terminal" });
     expect(await sim.summary()).toMatchObject({ bitNodeN: 6, sourceFiles: { 1: 1, 4: 3 } });

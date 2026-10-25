@@ -82,14 +82,14 @@ await sim.close();
 - **Requests** go over Node IPC as typed messages (`src/protocol.ts`, `src/rpc.ts`).
   - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing. Each request also waits for script imports to finish (see [the import barrier](#scripts)).
   - If the process ends, or a message can't be delivered, pending and later calls reject. The error has the exit code (or signal) and the last 8,192 characters of the process's combined stdout and stderr.
-- **Nothing happens until `advance(ms)`.** It fires every timer due in the next `ms` virtual milliseconds, in order: the engine's own loop, script timers, everything.
+- **Nothing happens until `advance(ms)` (or `runUntil`).** It fires every timer due in the next `ms` virtual milliseconds, in order: the engine's own loop, script timers, everything.
 - **`close()`** ends the process; pending calls reject. It's safe to call twice.
 - **`diagnostics`** exist for tests and troubleshooting:
   - `clock()`: the engine's view of time
   - `game()`: tutorial state, autosave setting, the current page and `Player.focus`, the current BitNode's multipliers, exploits earned (always none), whether the game thinks it's under a test runner (always false), coding contracts, host boot time, default and pinned locale
   - `random(n)`: samples of the seeded streams
   - `toPage(page, flume?)` and `back()`: navigate as game code does (see [Pages](#pages-and-the-bitverse)). **Test-only:** they change game state (going to the BitVerse kills every script), and scenarios must not use them.
-  - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios get their own way in #30.
+  - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios use `runUntil`'s `onBitVerse`.
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
   - `crash(code, message)`
@@ -153,8 +153,8 @@ The log records what the game did that a browser would have shown or done outsid
   - Node's own process warnings (`(node:<pid>) …`) are left out: they're about the host, not the game.
 - **`bitverseReached`:** the game went to the BitVerse page, with `flume` and the `destroyedBitNode`. See [Pages](#pages-and-the-bitverse).
 - **`bitnodeDestroyed`:** the game left BitNode `destroyed` for BitNode `entered` by destroying it, through Singularity's `destroyW0r1dD43m0n` or the BitVerse after a backdoor. **`bitnodeFlumed`:** it left BitNode `left` for `entered` without destroying it (b1t_flum3.exe, `b1tflum3`).
-  - Both are recorded at the timer, or after the request, in which the game entered the BitNode, whichever way it got there.
-  - A destroy is told from a flume by w0r1d_d43m0n: both destroy paths backdoor it first, a flume doesn't. A BitNode fixture's own entry isn't an event.
+  - Both are recorded at the moment the game entered the BitNode: after the timer (and its microtasks), or the request, that did it, whichever way it got there. A BitNode fixture's own entry isn't an event.
+  - A destroy is told from a flume by the Source-File: a destroy raises the left BitNode's, a flume doesn't. At its cap (3) both leave the same state, so there a destroy is told by w0r1d_d43m0n, which every destroy backdoors first. Only two flumes into the same BitNode within one virtual ms would go unseen.
 
 The host keeps the most recent 10,000 events. A page reports how many older ones were `dropped`, so a long run of noisy scripts can't grow memory without limit.
 
@@ -178,8 +178,8 @@ Game logic reads which page the player is on and navigates between pages. In the
 - **The start page** follows the save, as the game decides it: the BitVerse if the BitNode is finished, the Work page if work is in progress, otherwise the Terminal. A save the game can't make sense of starts on the Recovery page.
 - **Page state and history** are the real router's: game logic sees the current page (Singularity's `isBusy`, `ns.spawn`, Bladeburner, message delivery), and `back()` walks a 10-page history.
 - **Side effects** are the real router's: going to the Travel page moves the player to the Travel Agency, leaving the Work page ends focus, and going to the BitVerse kills every script and checks achievements. The Work page also does what its component does: once the work ends, it goes back to the Terminal.
-- **The BitVerse** is where a player picks the next BitNode, in the UI. Headless, arriving there records a `bitverseReached` event, also when a save starts there. Then the game waits: navigating there killed every script, and a save that starts there restarts only its saved scripts. Scenarios decide what enters the next BitNode ([#30](https://github.com/UnderMyBed/bitburner-agent/issues/30)). `ns.singularity.destroyW0r1dD43m0n` and `b1tflum3` skip the BitVerse and enter the next BitNode directly.
-- **Entering BitNode 6** lands on the Bladeburner cinematic, which only its Continue button leaves. Headless, as with a player who never clicks, the game stays there with messages hidden until something navigates to the Terminal. (A BitNode fixture leaves it; see [Fixtures](#fixtures).)
+- **The BitVerse** is where a player picks the next BitNode, in the UI. Headless, arriving there records a `bitverseReached` event, also when a save starts there. Then the game waits: navigating there killed every script, and a save that starts there restarts only its saved scripts. What enters the next BitNode is up to the run: see `onBitVerse` in [Running until something happens](#running-until-something-happens). `ns.singularity.destroyW0r1dD43m0n` and `b1tflum3` skip the BitVerse and enter the next BitNode directly.
+- **Entering BitNode 6** lands on the Bladeburner cinematic, which only its Continue button leaves. Headless, as with a player who never clicks, the game stays there with messages hidden until something navigates to the Terminal. (A BitNode fixture leaves it, and so does `onBitVerse: { enter: 6 }`.)
 - **The page is part of the state hash.** The save doesn't hold it, and it decides what happens next.
 
 The [parity audit](../../docs/sim/parity.md#2-the-router-srcuigameroottsx) lists every router behaviour and its test.
@@ -220,73 +220,27 @@ const { now, stoppedBy } = await sim.runUntil(24 * 3_600_000, {
 });
 ```
 
-`runUntil(ms, …)` advances like `advance(ms)`, firing the same timers in the same order, so the state is the same however a run is cut up. The difference: it checks `stopWhen` after **every** timer, and stops right after the first timer at which a condition holds. So when a run stops doesn't depend on how it's driven.
-- **Stop conditions** (any one is enough):
-  - `{ event }`: a `bitnodeDestroyed`, `bitnodeFlumed` or `bitverseReached` event during the run
-  - `{ scriptExited: filename }`: no script with that name is running, on any server
-  - `{ summary: { field, op, value } }`: a numeric `GameSummary` field compared with `<`, `<=`, `==`, `>=` or `>`
+`runUntil(ms, …)` advances like `advance(ms)`, firing the same timers with the same semantics, so the state is the same however a run is cut up. It goes in steps, to each moment a timer is due, and checks the stop conditions at the start and after each step: a run stops right after the moment a condition first holds, wherever the pieces of a run are cut.
+- **Stop conditions** (the first to hold stops the run):
+  - `{ event }`: a `bitnodeDestroyed`, `bitnodeFlumed` or `bitverseReached` event. By default, one during this call; `eventsFrom: 0` counts every event since the game booted (a log position, as `EventPage.next`).
+  - `{ scriptExited: filename }`: a script with that filename (its full path, as `ps` shows it) has run, and none is running now. A script that hasn't started yet hasn't exited.
+  - `{ summary: { field, op, value } }`: a numeric `GameSummary` field (not `virtualMs`: the run's length is `ms`) compared with `<`, `<=`, `==`, `>=` or `>`.
 - **`onBitVerse`:** what happens at the BitVerse, where a player picks the next BitNode.
   - `"stop"` ends the run there.
   - `{ enter: n }` enters BitNode `n` at once, as a player clicking its portal would. That destroys the current BitNode, unless the BitVerse was reached by flume, and leaves BitNode 6's cinematic as Continue does.
   - Without it, the game waits at the BitVerse.
+- **It fails** (rejects) if the game goes into recovery mode, or the game loop falls behind virtual time by more than `stalledLoopMs` (default 10 s): an uncaught error in the loop stops it, as in a browser, and time would otherwise go on over a frozen game.
 - It resolves with the virtual `now` and `stoppedBy`: the index of the condition that held, `"bitverse"`, or `null` if it ran the full time.
 
-### Scenarios
+## Scenarios
 
-A scenario file describes runs: where they start, which scripts run, for how long, and what ends them. The runner runs it once per seed, each seed in its own simulation process, several at once.
-
-```json
-{
-  "name": "lean: one hack loop on n00dles, 3 threads",
-  "fixture": { "kind": "new", "tutorial": "skipped" },
-  "epochMs": 1767225600000,
-  "files": { "home": "lean" },
-  "run": [{ "script": "hack.js", "threads": 3 }],
-  "durationMs": 21600000,
-  "checkpointEveryMs": 3600000,
-  "seeds": { "from": 1, "to": 4 }
-}
-```
-
-- **Fields** (`src/scenario/spec.ts`):
-  - `name`, `fixture` and `epochMs` as for `Simulation.start`. A save fixture's `path` is relative to the scenario file.
-  - `files`: per host, either `{ path: content }` or a directory (relative to the scenario file) whose files are all written.
-  - `run`: scripts to start, in order: `{ script, host?, threads?, args? }`.
-  - `durationMs`: the most virtual time a run takes.
-  - `stopWhen` and `onBitVerse`: as for `runUntil`.
-  - `prompts`: prompt rules.
-  - `checkpointEveryMs`: take a summary every interval (and at the end).
-  - `seeds`: a list or `{ from, to }`; default `[1]`.
-  - `homeRamGb`: sets home's RAM, a harness edit for test and benchmark workloads.
-
-  Unknown fields and bad values are refused with a message naming them.
-- **Per seed** (`runSeed`, `src/scenario/run.ts`):
-  - `ok`, or `error` if the run failed (the process crashed, a script couldn't start). A failure stays with its seed.
-  - `passed`: ok and, if the scenario has stop conditions, stopped by one.
-  - `stoppedBy`.
-  - `virtualMs`, `wallMs` (booting excluded) and `speed` (virtual ms per real ms).
-  - `stateHash`, the final `summary`, `checkpoints`, and every event.
-
-  The results don't depend on how many run at once: each seed has its own process.
-- **Aggregate:**
-  - the pass rate
-  - time to stop over the runs that stopped (min, median, 90th percentile, max)
-  - speed over the runs that didn't fail
-- **Pool size:** by default `availableParallelism() − 2`, at least 1.
-
-**The CLI:**
+Scenario files run a described workload across many seeds in parallel, with per-seed results and an aggregate (the repeatability metric of architecture §9.3):
 
 ```
-npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8 | --seeds 1,3] [--workers 4] [--json out.json]
+npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--json out.json]
 ```
 
-It builds the engine if needed, prints a table (one row per seed, then the aggregate), and writes the full results as JSON if asked. It exits 0 if every seed passed, 1 if any didn't, 2 on bad usage.
-
-**Workloads.** `packages/sim/scenarios/` holds the S1 spike's three workloads, used to measure speed (#31):
-- `lean.json`: one hack loop.
-- `batch.json`: a controller that exec()s single-operation workers every 200 ms.
-- `heavy.json`: 100 copies of the hack loop, each its own module.
-
+[docs/sim/scenarios.md](../../docs/sim/scenarios.md) is the reference: the scenario file, stop and fail conditions, results, the aggregate, the CLI, and the workloads in `scenarios/` (lean, batch, churn, copies) mapped to spike S1's measurements.
 ### State hash and summary
 
 - **`stateHash()`** is the sha256 of the game's own save JSON (`saveObject.getSaveData()`, decoded), plus the positions of the seeded random streams.
@@ -303,7 +257,7 @@ It builds the engine if needed, prints a table (one row per seed, then the aggre
 
 ## Determinism
 
-**The guarantee:** the same seed, epoch, fixture, prompt rules and sequence of calls give the same `stateHash()`, whatever the `advance` step sizes, on any machine. `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
+**The guarantee:** the same seed, epoch, fixture, prompt rules and sequence of calls give the same `stateHash()`, whatever the `advance` or `runUntil` step sizes, on any machine. `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
 
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
