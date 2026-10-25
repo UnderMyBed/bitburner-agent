@@ -154,6 +154,161 @@ describe("running scripts", () => {
     );
   });
 
+  test("timers are delayed and nested as in Chromium 146: delays as WebIDL reads them, short ones clamped past level 6", async () => {
+    // fake-timers alone gave `setInterval(fn)` a NaN interval, which broke its timer order (runUntil threw), repeated
+    // a 0 ms interval forever at one moment, and read "1e3" as 1 ms (#80).
+    const sim = await newGame(1);
+    const script = `export async function main(ns) {
+      const start = Date.now();
+      const at = () => Date.now() - start;
+      const intervals = { none: [], text: [], negative: [], zero: [] };
+      const ids = [
+        setInterval(() => intervals.none.push(at())),
+        setInterval(() => intervals.text.push(at()), "x"),
+        setInterval(() => intervals.negative.push(at()), -5),
+        setInterval(() => intervals.zero.push(at()), 0),
+      ];
+      const chain = [];
+      const step = () => { chain.push(at()); if (chain.length < 10) setTimeout(step, 0); };
+      setTimeout(step, 0);
+      let exponent = -1;
+      setTimeout(() => { exponent = at(); }, "1e3");
+      await ns.sleep(1100);
+      for (const id of ids) clearInterval(id);
+      // End inside a deep chain, so the last timer task was past level 6.
+      await new Promise((resolve) => { let n = 0; const go = () => (++n < 12 ? setTimeout(go, 0) : resolve()); setTimeout(go, 0); });
+      const first = Object.fromEntries(Object.entries(intervals).map(([name, times]) => [name, times.slice(0, 9)]));
+      ns.print(JSON.stringify({ first, chain, exponent }));
+    }`;
+    await sim.writeFile("home", "timers.js", script);
+    const { pid } = await sim.run("home", "timers.js");
+    const { stoppedBy } = await sim.runUntil(5000, { stopWhen: [{ scriptExited: "timers.js" }] });
+    expect(stoppedBy).toBe(0);
+    const line = (await sim.logs(pid)).find((entry) => entry.startsWith("{"));
+    const { first, chain, exponent } = JSON.parse(line ?? "{}") as {
+      first: Record<string, number[]>;
+      chain: number[];
+      exponent: number;
+    };
+    // A 0 ms interval set by the script (level 1) fires at once six times (levels 1-6), then every 4 ms, as Chromium's.
+    for (const times of Object.values(first)) expect(times).toEqual([0, 0, 0, 0, 0, 0, 4, 8, 12]);
+    // A chain of 0 ms timeouts: Chromium runs levels 1-6 at once, then 4 ms apart (0,0,0,0,0,0,4,8,12,16). Here each
+    // one set during a tick waits fake-timers' 1 ms, then 4 ms apart from level 7.
+    expect(chain).toEqual([0, 1, 2, 3, 4, 5, 9, 13, 17, 21]);
+    expect(exponent).toBe(1000); // "1e3" is 1000 ms, as WebIDL reads it; fake-timers' parseInt read 1
+
+    // A request is a fresh task: a script it starts sets its timers at level 1 again, however deep the last ones were.
+    const fresh = `export async function main(ns) {
+      const start = Date.now();
+      const times = [];
+      const id = setInterval(() => times.push(Date.now() - start), 0);
+      await ns.sleep(10);
+      clearInterval(id);
+      ns.print(JSON.stringify(times.slice(0, 7)));
+    }`;
+    await sim.writeFile("home", "fresh.js", fresh);
+    const second = await sim.run("home", "fresh.js");
+    await sim.runUntil(5000, { stopWhen: [{ scriptExited: "fresh.js" }] });
+    expect((await sim.logs(second.pid)).find((entry) => entry.startsWith("["))).toBe("[0,0,0,0,0,0,4]");
+  });
+  test("tasks that aren't timers start at nesting level 0: a new script's main(), a message, an animation frame", async () => {
+    // Each runs after a chain deep past level 6. A 0 ms timer set from a fresh task waits only fake-timers' 1 ms; one
+    // nested past level 6 would wait 4.
+    const sim = await newGame(1);
+    const deep =
+      "await new Promise((done) => { let n = 0; const go = () => (++n < 10 ? setTimeout(go, 0) : done()); setTimeout(go, 0); });";
+    const child = `export async function main(ns) {
+      const start = Date.now();
+      const times = [];
+      await new Promise((done) => { const step = () => { times.push(Date.now() - start); times.length < 8 ? setTimeout(step, 0) : done(); }; setTimeout(step, 0); });
+      ns.print("child " + JSON.stringify(times));
+    }`;
+    const parent = `export async function main(ns) {
+      ${deep}
+      ns.run("child.js");
+      ${deep}
+      const fromMessage = await new Promise((done) => setImmediate(() => { const s = Date.now(); setTimeout(() => done(Date.now() - s), 0); }));
+      ${deep}
+      const fromFrame = await new Promise((done) => requestAnimationFrame(() => { const s = Date.now(); setTimeout(() => done(Date.now() - s), 0); }));
+      ns.print("tasks " + JSON.stringify({ fromMessage, fromFrame }));
+      await ns.sleep(1000);
+    }`;
+    await sim.writeFile("home", "child.js", child);
+    await sim.writeFile("home", "parent.js", parent);
+    const { pid } = await sim.run("home", "parent.js");
+    await sim.runUntil(5000, { stopWhen: [{ scriptExited: "parent.js" }] });
+    const lines = [...(await sim.logs(pid)), ...(await sim.logs(pid + 1))];
+    // The child's chain starts at level 1, as a request's would: six links of fake-timers' 1 ms, then 4 ms.
+    expect(lines).toContain("child [1,2,3,4,5,6,10,14]");
+    // The message runs outside fake-timers' tick, so its 0 ms timer waits 0 ms, as in Chromium; the frame, a timer to
+    // fake-timers, takes its 1 ms. Nested past level 6, either would wait 4.
+    expect(lines).toContain('tasks {"fromMessage":0,"fromFrame":1}');
+  });
+
+  test.each([
+    ["imports at full speed", {}],
+    ["slow imports", SLOW_IMPORTS],
+  ])(
+    "starting a new script doesn't reset the importer's level (%s); a message during the import is a task of its own",
+    async (_, extra) => {
+      // In Chromium the parent's microtasks all run at its level, and the child's module loads in a later task. Node can
+      // settle the import inside the parent's microtasks, so the host waits for a real task before resetting (#80).
+      const sim = await newGame(1, extra);
+      const deep =
+        "await new Promise((done) => { let n = 0; const go = () => (++n < 10 ? setTimeout(go, 0) : done()); setTimeout(go, 0); });";
+      const parent = `export async function main(ns) {
+      ${deep}
+      ns.run("child-a.js");
+      for (let i = 0; i < 20; i++) await null;
+      const afterRun = await new Promise((done) => { const s = Date.now(); setTimeout(() => done(Date.now() - s), 0); });
+      ${deep}
+      ns.run("child-b.js");
+      const fromMessage = await new Promise((done) => setImmediate(() => { const s = Date.now(); setTimeout(() => done(Date.now() - s), 0); }));
+      ns.print(JSON.stringify({ afterRun, fromMessage }));
+      await ns.sleep(100);
+    }`;
+      for (const name of ["child-a.js", "child-b.js"]) {
+        await sim.writeFile("home", name, `export async function main(ns) { await ns.sleep(10); } // ${name}`);
+      }
+      await sim.writeFile("home", "parent.js", parent);
+      const { pid } = await sim.run("home", "parent.js");
+      await sim.runUntil(5000, { stopWhen: [{ scriptExited: "parent.js" }] });
+      const line = (await sim.logs(pid)).find((entry) => entry.startsWith("{"));
+      // The parent is still past level 6 after ns.run, so its 0 ms timer waits 4 ms, however long the import takes. A
+      // message is a task of its own: its 0 ms timer isn't clamped. It waits fake-timers' 1 ms, since the import holds
+      // the clock mid-advance, at either import speed.
+      expect(JSON.parse(line ?? "{}")).toEqual({ afterRun: 4, fromMessage: 1 });
+    },
+  );
+
+  test("intervals: callbacks run at their own level, a long one keeps its period, a moved one clears however it's named", async () => {
+    const sim = await newGame(1);
+    const script = `export async function main(ns) {
+      const start = Date.now();
+      // A 0 ms interval set by a request is at level 1: its 5th callback runs at level 5, so a 0 ms timer it sets is at
+      // level 6 and isn't clamped.
+      let fifth = -1, fired = 0;
+      const short = setInterval(() => { if (++fired === 5) { const s = Date.now(); setTimeout(() => { fifth = Date.now() - s; }, 0); } }, 0);
+      const long = [];
+      const five = setInterval(() => long.push(Date.now() - start), 5);
+      let a = 0, b = 0;
+      const byNumber = setInterval(() => a++, 0);
+      const byTimeout = setInterval(() => b++, 0);
+      await ns.sleep(50);
+      clearInterval(short); clearInterval(five);
+      clearInterval(Number(byNumber)); // as a browser's numeric id would be
+      clearTimeout(byTimeout); // either clear clears either kind
+      const [a0, b0] = [a, b];
+      await ns.sleep(50);
+      ns.print(JSON.stringify({ fifth, long: long.slice(0, 8), stopped: a === a0 && b === b0 }));
+    }`;
+    await sim.writeFile("home", "intervals.js", script);
+    const { pid } = await sim.run("home", "intervals.js");
+    await sim.runUntil(5000, { stopWhen: [{ scriptExited: "intervals.js" }] });
+    const line = (await sim.logs(pid)).find((entry) => entry.startsWith("{"));
+    expect(JSON.parse(line ?? "{}")).toEqual({ fifth: 1, long: [5, 10, 15, 20, 25, 30, 35, 40], stopped: true });
+  });
+
   test("garbage collection doesn't change results: compiled modules are held, as upstream dev holds them", async () => {
     // The game caches each compiled module by its source, through a WeakRef (NetscriptJSEvaluator.ts:41-47, :223-224).
     // A module the collector frees comes back fresh, its module-level state reset, so a script that keeps state at

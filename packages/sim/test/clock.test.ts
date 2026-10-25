@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
-import { FAKE_TIMERS_VERSION, FakeTimers, skipEmptyTimerScans } from "../src/host/clock.ts";
+import {
+  browserDelay,
+  FAKE_TIMERS_VERSION,
+  FakeTimers,
+  nestedDelay,
+  STEAM_ELECTRON,
+  skipEmptyTimerScans,
+} from "../src/host/clock.ts";
 
 const require = createRequire(import.meta.url);
 const installed = readFileSync(require.resolve("@sinonjs/fake-timers"), "utf8");
@@ -79,6 +86,65 @@ async function play(clock: Clock, ops: Op[], ticks: "tick" | "tickAsync"): Promi
   log.push(`end@${clock.now}`);
   return log;
 }
+
+describe("timer delays, as Chromium takes them (#80)", () => {
+  test.each([
+    [undefined, 0],
+    ["x", 0],
+    ["", 0],
+    [null, 0],
+    [true, 1],
+    [Number.NaN, 0],
+    [-5, 0],
+    [-0.5, 0],
+    [1.9, 1],
+    [12_345.678, 12_345],
+    ["250", 250],
+    ["  12 ", 12],
+    ["1e3", 1000], // fake-timers' parseInt read 1
+    ["0x10", 16], // parseInt read 0
+    [1e-7, 0], // String(1e-7) is "1e-7", which parseInt read as 1
+    [{ valueOf: () => 7 }, 7],
+    [Number.POSITIVE_INFINITY, 0],
+    [Number.NEGATIVE_INFINITY, 0],
+    [2 ** 31, 0], // WebIDL long wraps to a negative, which HTML makes 0; fake-timers made it 1
+    [2 ** 32 + 5, 5],
+    [2 ** 31 - 1, 2 ** 31 - 1],
+  ])("a delay of %s is %s ms", (timeout, ms) => {
+    expect(browserDelay(timeout)).toBe(ms);
+  });
+
+  test.each([
+    ["a BigInt", 1000n],
+    ["a Symbol", Symbol("delay")],
+  ])("a delay that is %s throws a TypeError, as WebIDL's ToNumber does", (_, timeout) => {
+    expect(() => browserDelay(timeout)).toThrow(TypeError);
+  });
+
+  test("the timer model follows the Electron in Steam's build: a change of Electron means re-checking it", () => {
+    // Chromium's nesting rules (MAX_TIMER_NESTING_LEVEL, MIN_NESTED_TIMER_MS, no 1 ms floor on intervals) are read from
+    // the Chromium of this Electron (docs/sim/parity.md, "Re-auditing"). If the game moves to another, re-read
+    // dom_timer.cc and features.cc at its Chromium tag, then update STEAM_ELECTRON.
+    const lock = JSON.parse(
+      readFileSync(new URL("../../../vendor/bitburner-src/package-lock.json", import.meta.url), "utf8"),
+    ) as { packages: Record<string, { version?: string }> };
+    expect(lock.packages["node_modules/electron"]?.version).toBe(STEAM_ELECTRON);
+  });
+
+  test.each([
+    [0, 6, 0],
+    [3, 6, 3],
+    [0, 7, 4],
+    [3, 7, 4],
+    [4, 7, 4],
+    [10, 100, 10],
+  ])(
+    "a %s ms timer at nesting level %s waits %s ms (Chromium clamps short timers past level 6)",
+    (delay, level, ms) => {
+      expect(nestedDelay(delay, level)).toBe(ms);
+    },
+  );
+});
 
 describe("the clock's fake-timers patch (#74)", () => {
   test("adds the early return to the installed fake-timers' firstTimerInRange, once, keeping its line numbers", () => {

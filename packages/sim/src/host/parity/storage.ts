@@ -2,7 +2,7 @@
 // in-memory implementation stands in, on both the global and jsdom's window.
 import { createRequire } from "node:module";
 import path from "node:path";
-import { realTimers } from "../clock.ts";
+import { beginTask, realTimers } from "../clock.ts";
 
 const require = createRequire(import.meta.url);
 // The CommonJS build: its modules call the scheduler through its exports object, so it can be pointed elsewhere.
@@ -22,7 +22,11 @@ function scheduleOnRealTime(): void {
   if (typeof scheduling.queueTask !== "function")
     throw new Error("fake-indexeddb no longer has lib/scheduling.js queueTask");
   scheduling.queueTask = (fn) => {
-    realTimers.setImmediate(fn);
+    // Each step is a task of its own, so a timer its callbacks set isn't nested.
+    realTimers.setImmediate(() => {
+      beginTask();
+      fn();
+    });
   };
 }
 

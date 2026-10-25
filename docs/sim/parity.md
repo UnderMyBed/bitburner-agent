@@ -2,7 +2,7 @@
 
 The simulator runs the real game headless: Node, jsdom, a virtual clock, no React rendering ([architecture §9.1](../architecture.md#91-design), [ADR 0007](../decisions/0007-headless-engine-simulator.md)). But the game also relies on things a browser and its mounted UI provide without being asked. This page lists every such thing we found, and what the simulator does about each one.
 
-- **Game version audited:** v3.0.1 (`vendor/bitburner-src` at `1da7316ff`).
+- **Game version audited:** v3.0.1 (`vendor/bitburner-src` at `1da7316ff`). **Browser:** Electron 41.4.0, the one in its `package-lock.json`, with Chromium 146.0.7680.216; the timer model follows that Chromium (§8).
 - **Citations:** `file:line` in the game's tree (`vendor/bitburner-src/`), unless the path starts with `packages/` (ours). Test files are in `packages/sim/test/`.
 - **Dispositions:**
   - **handled**: the simulator reproduces it. The test that proves it is named; otherwise the row says why no test is needed, or which issue adds one.
@@ -23,7 +23,7 @@ The by-design differences:
   - The event log keeps what the UI would drop: repeated alerts, and toasts on pages that hide messages (3.3, 3.5).
 - **No windows, no network:** no tail windows and no real window size (3.8, 4.8); the simulator is offline (4.6).
 - **Globals:** the page's globals are shared between `window` and the global object, but a property a script adds to one later isn't on the other (4.4).
-- **From §8:** no rendered UI, no TS/JSX player scripts, no script modules that await a timer at top level, and compiled script modules are never dropped ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)).
+- **From §8:** no rendered UI, no TS/JSX player scripts, no script modules that await a timer at top level, compiled script modules are never dropped ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), and a 0 ms timer set while the clock is advancing waits 1 ms of virtual time ([#80](https://github.com/UnderMyBed/bitburner-agent/issues/80)).
 
 The [simulator README](../../packages/sim/README.md#differences-from-a-browser) lists the ones that affect what scripts can do.
 ## 1. Loading and the game loop (`src/engine.tsx`)
@@ -157,6 +157,9 @@ What the host provides so the above works.
 | `window` timers, `Date`, `performance` and `crypto` follow the globals; `requestAnimationFrame` runs on virtual timers | `host/dom.ts` | handled: `dom.test.ts` |
 | Fixed Steam user agent | `host/dom.ts` | handled: `dom.test.ts` |
 | Timer callbacks run with `this` = `window` | `host/clock.ts` | handled: `new-game.test.ts` ("the game runs on the virtual clock…") |
+| Timer delays as Chromium takes them: a WebIDL `long` (ToNumber, then ToInt32: truncated; NaN and ±Infinity are 0; it wraps modulo 2^32; a BigInt or a Symbol throws), negative ones 0 (HTML's timer steps). fake-timers read some differently: a non-number `setTimeout` delay with `parseInt(x, 10)` (fake-timers-src.js:1287; `"1e3"` was 1 ms, `"0x10"` 0), a number as `parseInt(String(x))` (:1336; `1e-7` was 1 ms), any delay over 2^31 − 1 as 1 ms (:1293, :1299), and `setInterval`'s with `parseInt` (:2012), which gave `setInterval(fn)`, `"x"`, NaN and ±Infinity a NaN interval that broke its timer order ([#80](https://github.com/UnderMyBed/bitburner-agent/issues/80)) | `host/clock.ts` (`browserDelay`) | handled: `clock.test.ts` ("a delay of %s is %s ms", "…throws a TypeError…"), `scripts.test.ts` ("timers are delayed and nested as in Chromium 146…") |
+| Chromium's timer nesting (`dom_timer.cc` at 146.0.7680.216): a timer's level is one more than the level of the timer task that set it, whose microtasks share its level; any other task (a request, a script module's import settling, a message, an IndexedDB step, an animation frame) is at 0. A timer under 4 ms whose level is over 6 waits 4 ms; each firing of an interval nests one deeper, so a short interval repeats every 4 ms from the firing that takes its level to 7. fake-timers has no nesting, so `setInterval(fn, 0)` fired forever at one moment | `host/clock.ts` (`nestedDelay`, `beginTask`; called from `host/scripts.ts`, `host/dom.ts`, `host/parity/storage.ts`) | handled: `clock.test.ts` ("a %s ms timer at nesting level %s…", and a test that fails if Steam's Electron changes), `scripts.test.ts` ("timers are delayed and nested…", "tasks that aren't timers start at nesting level 0…", "intervals: callbacks run at their own level…", "starting a new script doesn't reset the importer's level…"). The import's reset waits for a real task, since Node can settle an import inside the importer's microtasks. The message and IndexedDB resets matter only while the import barrier holds the clock; the message's is tested that way, the IndexedDB one isn't |
+| A 0 ms timer set while the clock is advancing (from a timer, or work between timers: fake-timers' "during a tick"): fake-timers makes it wait 1 ms (fake-timers-src.js:1336), where Chromium runs it at once | `host/clock.ts` | by design: without it, virtual time couldn't move through a chain of them. A chain of 0 ms timeouts takes 1 ms a link until its level passes 6, then 4 ms as in Chromium, so up to 6 ms longer in all: 5 ms for a chain started by a request (the first link, set outside an advance, takes 0), none for one started past level 6. README "Differences from a browser"; `scripts.test.ts`, `run-until.test.ts` ("0 ms sleeps…": 100 links take 381 ms, Chromium 376) |
 | Default locale pinned to `en-US`; `TZ=UTC` | `host/parity/locale.ts`, `simulation.ts` | handled: `locale.test.ts`, `locale-case.test.ts`, `new-game.test.ts` |
 | In-memory IndexedDB | `host/parity/storage.ts` | handled: `saves.test.ts` |
 | Synchronous gzip streams | `host/parity/compression.ts` | handled: `saves.test.ts` |
@@ -191,4 +194,5 @@ What the host provides so the above works.
    - `WeakRef|FinalizationRegistry` (§8, the module cache): the only ways code can see the collector run, so anything new that uses them can make results depend on when it does. Only the module cache is patched. For the game's dependencies, `engine-build.test.ts` fails if the bundle makes either anywhere else.
 4. Re-check every `file:line` citation: they all move on a bump.
 5. Run the simulator's tests. `router.test.ts` checks the router constants copied from `GameRoot.tsx`, `page.test.ts` the messages copied from `index.tsx`, and `bitnode.test.ts` the BitNode and Source-File limits.
-6. Update the summary.
+6. Check the browser: if `node_modules/electron` changed in `vendor/bitburner-src/package-lock.json`, find its Chromium version, re-read `third_party/blink/renderer/core/scheduler/dom_timer.cc` and `kSetIntervalWithoutClamp` in `third_party/blink/common/features.cc` at that tag, update `MAX_TIMER_NESTING_LEVEL`, `MIN_NESTED_TIMER_MS` and `STEAM_ELECTRON` (`packages/sim/src/host/clock.ts`; `clock.test.ts` fails until then), and the "Browser" line at the top.
+7. Update the summary.

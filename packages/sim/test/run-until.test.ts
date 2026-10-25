@@ -78,9 +78,10 @@ describe("runUntil", () => {
     await byAdvance.advance(5000);
     await byRunUntil.runUntil(5000);
     const out = async (sim: Simulation, pid: number) => (await sim.logs(pid)).find((l) => l.startsWith("out:"));
-    // 99: the first sleep starts outside a tick, so it fires in the same ms; each later one 1 ms after the last.
-    expect(await out(byAdvance, a.pid)).toBe("out:99");
-    expect(await out(byRunUntil, b.pid)).toBe("out:99");
+    // 381: the first sleep starts outside a tick, so it fires in the same ms; links 2-6 each wait fake-timers' 1 ms;
+    // from link 7, past nesting level 6, Chromium's clamp makes each 4 ms (#80). Chromium itself takes 376.
+    expect(await out(byAdvance, a.pid)).toBe("out:381");
+    expect(await out(byRunUntil, b.pid)).toBe("out:381");
 
     await byRunUntil.writeFile("home", "spin.js", "export async function main(ns) { while (true) await ns.sleep(0); }");
     await byRunUntil.run("home", "spin.js");
