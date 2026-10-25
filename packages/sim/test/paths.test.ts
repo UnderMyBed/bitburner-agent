@@ -20,10 +20,10 @@ describe("withoutMachinePaths", () => {
     expect(withoutMachinePaths(`"${forward}/a.js"`)).toBe('"<repo>/a.js"');
   });
 
-  test("leaves a sibling directory, and a URL that merely contains the path, alone", () => {
+  test("leaves a sibling directory alone, and the text around a path", () => {
     expect(withoutMachinePaths(`${REPO_ROOT}-old/x.js`)).toBe(`${REPO_ROOT}-old/x.js`);
-    const url = `http://example.com/${forward.replace(/^\//, "")}`;
-    expect(withoutMachinePaths(url)).not.toContain("example.com<repo>");
+    // The slash before the path is the URL's, not the path's: it stays.
+    expect(withoutMachinePaths(`http://example.com/${forward}/x.js`)).toBe("http://example.com/<repo>/x.js");
   });
 
   test.runIf(process.platform === "win32")("ignores the drive letter's case on Windows", () => {
