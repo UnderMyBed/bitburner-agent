@@ -18,9 +18,9 @@ export type SaveFixture = { kind: "save"; offlineMs?: number } & (
 );
 
 /**
- * Entering BitNode `n` with the given Source-Files (number → level), from a new game, through the game's own
- * `enterBitNode` as b1t_flum3.exe does. The BitNode's level follows from the Source-Files, as in the game: BitNode n at
- * level L means `sourceFiles[n] = L - 1`.
+ * Entering BitNode `n` with the given Source-Files (BitNode → level), from a new game, through the game's own
+ * `enterBitNode` as b1t_flum3.exe does: a player with these Source-Files and no other history. The BitNode's level is
+ * `sourceFiles[n] + 1`, capped at 3 except in BitNode 12, as the game's `getBitNodeLevel` computes it.
  */
 export interface BitNodeFixture {
   kind: "bitnode";
@@ -268,11 +268,12 @@ export interface HostMethods {
   /** `Router.back()`, as the UI's Back buttons call it. Test-only, like `diagnostics.toPage`. */
   "diagnostics.back"(params: Record<string, never>): void;
   /**
-   * Enters BitNode `n` as the BitVerse's portal does (`enterBitNode(false, Player.bitNodeN, n, defaults)`): the current
-   * BitNode's Source-File goes up a level. Test-only: scenarios get their own way in #30.
+   * Destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy: the
+   * current BitNode's Source-File goes up a level. Fails if the game goes into recovery mode. Test-only: it changes
+   * game state, and scenarios get their own way in #30.
    */
-  "diagnostics.enterBitNode"(params: { n: number }): void;
-  /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
+  "diagnostics.destroyBitNode"(params: { n: number }): void;
+  /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** Writes `message` to stderr and exits with `code`. */
   "diagnostics.crash"(params: { code: number; message: string }): never;
@@ -322,9 +323,16 @@ function validatePrompts(prompts: PromptRule[]): void {
   }
 }
 
-/** The game's BitNodes (BitNode/Constants.ts validBitNodes), and how far each Source-File goes. */
-const BITNODES = 15;
-const maxSourceFileLevel = (n: number) => (n === 12 ? Number.MAX_SAFE_INTEGER : 3);
+/**
+ * The game's BitNodes (BitNode/Constants.ts `validBitNodes`), and how far each Source-File goes: 3, except SF12, which
+ * the game doesn't cap (RedPill.tsx `giveSourceFile`). Entering BitNode 12 applies NeuroFlux Governor once per SF12
+ * level, so SF12 stops at a level that still boots in about a second. test/bitnode.test.ts checks these against the
+ * game's source.
+ */
+export const BITNODES = 15;
+export const MAX_SF_LEVEL = 3;
+export const MAX_SF12_LEVEL = 1_000_000;
+const maxSourceFileLevel = (n: number) => (n === 12 ? MAX_SF12_LEVEL : MAX_SF_LEVEL);
 
 function validateBitNodeFixture({ n, sourceFiles }: BitNodeFixture): void {
   const isBitNode = (value: number) => Number.isInteger(value) && value >= 1 && value <= BITNODES;
@@ -334,10 +342,13 @@ function validateBitNodeFixture({ n, sourceFiles }: BitNodeFixture): void {
   }
   for (const [key, level] of Object.entries(sourceFiles)) {
     const bitNode = Number(key);
-    if (!isBitNode(bitNode)) throw new RangeError(`no Source-File ${key}: BitNodes are 1-${BITNODES}`);
+    // Only plain integer keys: "04", " 4" and "0x4" would all read as 4, and two of them would collide.
+    if (!isBitNode(bitNode) || String(bitNode) !== key) {
+      throw new RangeError(`no Source-File ${JSON.stringify(key)}: Source-Files are numbered 1-${BITNODES}`);
+    }
     if (!Number.isInteger(level) || level < 1 || level > maxSourceFileLevel(bitNode)) {
       throw new RangeError(
-        `Source-File ${key} level must be an integer from 1 to ${bitNode === 12 ? "any" : 3}, got ${JSON.stringify(level)}`,
+        `Source-File ${key} level must be an integer from 1 to ${maxSourceFileLevel(bitNode)}, got ${JSON.stringify(level)}`,
       );
     }
   }

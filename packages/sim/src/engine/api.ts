@@ -32,12 +32,16 @@ export interface EngineApi {
   bootSave(saveData: string | Uint8Array): Promise<void>;
   /**
    * A new game, then BitNode `n` entered with `sourceFiles` (BitNode → level) through the game's own `enterBitNode`,
-   * as b1t_flum3.exe does. Leaves BitNode 6's cinematic as its Continue button does.
+   * as b1t_flum3.exe does. Leaves BitNode 6's cinematic as its Continue button does. Throws if the game goes into
+   * recovery mode.
    */
   bootBitNode(n: number, sourceFiles: Record<string, number>): Promise<void>;
-  /** The BitVerse portal's `enterBitNode(false, Player.bitNodeN, n, defaults)`. Test-only. */
-  enterBitNodeByPortal(n: number): void;
-  /** The game's own `getBitNodeMultipliers(n, level)`. */
+  /**
+   * What the BitVerse portal does after a real destroy: the current BitNode's Source-File goes up a level, then BitNode
+   * `n` starts. Throws if the game goes into recovery mode. Test-only.
+   */
+  destroyBitNode(n: number): void;
+  /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   bitNodeMultipliers(n: number, level: number): Record<string, number>;
   /** The game's own save: gzip bytes. */
   saveBytes(): Promise<Uint8Array>;
@@ -88,7 +92,7 @@ const API_FUNCTIONS = {
   bootNewGame: true,
   bootSave: true,
   bootBitNode: true,
-  enterBitNodeByPortal: true,
+  destroyBitNode: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

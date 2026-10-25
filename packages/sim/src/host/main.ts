@@ -143,9 +143,9 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       engine.routerBack();
     },
-    "diagnostics.enterBitNode": ({ n }) => {
+    "diagnostics.destroyBitNode": ({ n }) => {
       booted();
-      engine.enterBitNodeByPortal(n);
+      engine.destroyBitNode(n);
     },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.crash": ({ code, message }) => {

@@ -26,9 +26,11 @@ export type {
   PromptRule,
   RunOptions,
   RunResult,
+  SaveFixture,
   ScriptArg,
   SimEvent,
   SimulationOptions,
+  Tutorial,
 } from "./protocol.ts";
 
 const HOST_ENTRY = path.join(import.meta.dirname, "host", "main.ts");
@@ -163,8 +165,12 @@ export class Simulation {
     toPage: (page: string, flume = false) => this.rpc.call("diagnostics.toPage", { page, flume }),
     /** Test-only, like `toPage`. */
     back: () => this.rpc.call("diagnostics.back", {}),
-    /** Test-only: enters BitNode `n` as the BitVerse's portal does, granting the current BitNode's Source-File. */
-    enterBitNode: (n: number) => this.rpc.call("diagnostics.enterBitNode", { n }),
+    /**
+     * Test-only: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real
+     * destroy (granting the current BitNode's Source-File).
+     */
+    destroyBitNode: (n: number) => this.rpc.call("diagnostics.destroyBitNode", { n }),
+    /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),
   };

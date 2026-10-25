@@ -79,12 +79,25 @@ export async function bootSave(saveData: SaveData) {
  * A new game, then BitNode `n` entered with the given Source-Files, as b1t_flum3.exe does: through the game's own
  * `enterBitNode` (RedPill.tsx), which resets the game for the new BitNode without granting a Source-File. The game's
  * own tests set up the same way (test/jest/Utilities.ts). A player entering a BitNode has long finished the tutorial.
+ * The UI is already up when a player flumes, so this happens after the new game's mount.
  */
 export async function bootBitNode(n: number, sourceFiles: Record<string, number>) {
   await bootNewGame("skipped");
   for (const [bitNode, level] of Object.entries(sourceFiles)) Player.sourceFiles.set(Number(bitNode), level);
-  enterBitNode(true, Player.bitNodeN, n, getDefaultBitNodeOptions());
+  enterBitNodeChecked(true, n);
   leaveCinematic();
+}
+
+/**
+ * The game's `enterBitNode`. If its prestige fails, the game goes into recovery mode and shows the Recovery page
+ * (RedPill.tsx); a simulation can't use that state, so this fails instead.
+ */
+function enterBitNodeChecked(isFlume: boolean, n: number) {
+  enterBitNode(isFlume, Player.bitNodeN, n, getDefaultBitNodeOptions());
+  if (Router.page() === Page.Recovery) {
+    // The game keeps the error to itself (RecoveryRoot.tsx); its recovery page would show it.
+    throw new Error(`Entering BitNode ${n} failed: the game went into recovery mode`);
+  }
 }
 
 /**
@@ -95,11 +108,13 @@ function leaveCinematic() {
   if (Router.page() === Page.BladeburnerCinematic) Router.toPage(Page.Terminal);
 }
 
-/** The BitVerse portal's call (PortalModal.tsx): destroys the current BitNode, granting its Source-File. Test-only. */
-export function enterBitNodeByPortal(n: number) {
-  enterBitNode(false, Player.bitNodeN, n, getDefaultBitNodeOptions());
+/**
+ * What the BitVerse portal does after a real destroy (PortalModal.tsx, with flume false): the current BitNode's
+ * Source-File goes up a level, then BitNode `n` starts. Test-only.
+ */
+export function destroyBitNode(n: number) {
+  enterBitNodeChecked(false, n);
 }
-
 export function bitNodeMultipliers(n: number, level: number): Record<string, number> {
   return { ...getBitNodeMultipliers(n, level) };
 }

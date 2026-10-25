@@ -10,8 +10,10 @@ export {
   type PromptRule,
   type RunOptions,
   type RunResult,
+  type SaveFixture,
   type ScriptArg,
   type SimEvent,
   Simulation,
   type SimulationOptions,
+  type Tutorial,
 } from "./simulation.ts";
