@@ -1,6 +1,6 @@
 import FakeTimers from "@sinonjs/fake-timers";
 
-/** Real timer functions, captured before the clock is faked, for the harness's own use. */
+/** Real timer functions, captured before the clock is faked, for the harness's own use (the import barrier, #26). */
 export const realTimers = { setTimeout, clearTimeout, setImmediate };
 
 export interface VirtualClock {

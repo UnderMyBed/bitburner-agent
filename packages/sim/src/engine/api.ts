@@ -9,7 +9,10 @@ export interface EngineApi {
   gameCommit(): string;
   /** `Engine._lastUpdate`: read from Date when the engine module loads. */
   engineLastUpdate(): number;
-  /** `Date.now()` and `performance.now()` as seen from inside the bundle. */
+  /**
+   * `Date.now()` and `performance.now()` as seen from inside the bundle. It shares the host's globals today; these
+   * guard against the bundle ever capturing its own (real) Date or performance.
+   */
   dateNow(): number;
   performanceNow(): number;
 }

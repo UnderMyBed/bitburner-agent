@@ -1,13 +1,9 @@
 import type { EngineApi } from "../engine/api.ts";
+import type { HostOptions } from "../protocol.ts";
 import { installClock, type VirtualClock } from "./clock.ts";
 import { installDom } from "./dom.ts";
 import { loadEngine } from "./load-engine.ts";
 import { installSeededRandom } from "./random.ts";
-
-export interface HostOptions {
-  seed: number;
-  epochMs: number;
-}
 
 /**
  * Sets up a simulation process in the only safe order: the browser environment, seeded randomness and the virtual

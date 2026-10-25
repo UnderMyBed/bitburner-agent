@@ -1,5 +1,19 @@
 import { sfc32 } from "./rng.ts";
 
+const INTEGER_ARRAYS = [
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  BigInt64Array,
+  BigUint64Array,
+];
+/** Web Crypto's per-call limit. */
+const MAX_BYTES = 65536;
+
 /**
  * Replaces every source of randomness the game can reach with seeded streams: Math.random (jsdom's window shares
  * Node's Math) and Web Crypto's getRandomValues/randomUUID (window.crypto follows the global, see installDom).
@@ -9,11 +23,16 @@ export function installSeededRandom(seed: number): void {
   Math.random = sfc32(seed);
 
   const byte = sfc32((seed ^ 0x5bd1e995) >>> 0);
+  // Same contract as Web Crypto's getRandomValues, including its errors.
   const getRandomValues = <T extends ArrayBufferView | null>(array: T): T => {
-    if (array) {
-      const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
-      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(byte() * 256);
+    if (!array || !INTEGER_ARRAYS.some((type) => array instanceof type)) {
+      throw new DOMException("getRandomValues() only accepts integer typed arrays", "TypeMismatchError");
     }
+    if (array.byteLength > MAX_BYTES) {
+      throw new DOMException(`getRandomValues() can't generate more than ${MAX_BYTES} bytes`, "QuotaExceededError");
+    }
+    const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(byte() * 256);
     return array;
   };
   const randomUUID = (): `${string}-${string}-${string}-${string}-${string}` => {
