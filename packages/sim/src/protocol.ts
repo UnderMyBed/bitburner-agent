@@ -91,7 +91,13 @@ export type SimEvent =
    * The game (or a library in it) wrote an error or warning to the console. Machine-specific file paths in the
    * message are replaced by `<repo>`, so the log reads the same on every machine.
    */
-  | { type: "console"; at: number; level: "error" | "warn"; message: string };
+  | { type: "console"; at: number; level: "error" | "warn"; message: string }
+  /**
+   * The game went to the BitVerse page, where the player picks the next BitNode: a BitNode was destroyed (or, with
+   * `flume`, left early by b1t_flum3.exe), or a save loaded there. Running scripts were killed on the way, as the
+   * real router does. Nothing more happens until something enters a BitNode.
+   */
+  | { type: "bitverseReached"; at: number; flume: boolean; destroyedBitNode: number };
 
 /** A page of the event log: events from position `since` on, and where the next page starts. */
 export interface EventPage {
@@ -124,6 +130,10 @@ export interface GameDiagnostics {
   tutorialRunning: boolean;
   /** The game's own setting (0: the harness turned autosave off). */
   autosaveInterval: number;
+  /** The page the game's Router is on: its `Page` value, e.g. "Terminal" or "BitVerse". */
+  page: string;
+  /** `Player.focus`: whether the player is focused on their current work. */
+  focus: boolean;
   /** Every coding contract, as "host:file", sorted. */
   contracts: string[];
   /** Real milliseconds the host took to load the engine and boot the fixture. */
@@ -175,6 +185,10 @@ export interface HostMethods {
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   "diagnostics.random"(params: { count: number }): RandomSample;
+  /** Navigates as game code does (`Router.toPage`): a simple page by its name, or "BitVerse" (with `flume`). */
+  "diagnostics.toPage"(params: { page: string; flume?: boolean }): void;
+  /** `Router.back()`, as the UI's Back buttons call it. */
+  "diagnostics.back"(params: Record<string, never>): void;
   /** Writes `message` to stderr and exits with `code`. */
   "diagnostics.crash"(params: { code: number; message: string }): never;
 }

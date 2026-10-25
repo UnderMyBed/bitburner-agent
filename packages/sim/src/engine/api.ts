@@ -29,6 +29,16 @@ export interface EngineApi {
   saveJson(): Promise<string>;
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
   gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
+  /**
+   * Booting replaces the game's pre-mount Router stub with a headless router (`bundle/router.ts`), as GameRoot does on
+   * its first render. `listener` hears every arrival at the BitVerse page, including a game that starts there. Call
+   * before booting.
+   */
+  installRouter(listener: (reached: { flume: boolean; destroyedBitNode: number }) => void): void;
+  /** Navigates as game code does (`Router.toPage`): a simple page, or the BitVerse. For tests. */
+  toPage(page: string, flume: boolean): void;
+  /** `Router.back()`. For tests. */
+  routerBack(): void;
   /** Sets the game's hook for importing player-script modules. */
   setScriptImport(doImport: (url: string) => Promise<unknown>): void;
   writeFile(host: string, path: string, content: string): void;
@@ -51,6 +61,9 @@ const API_FUNCTIONS = {
   gameSummary: true,
   saveJson: true,
   gameDiagnostics: true,
+  installRouter: true,
+  toPage: true,
+  routerBack: true,
   setScriptImport: true,
   writeFile: true,
   runScript: true,

@@ -56,6 +56,11 @@ export function captureConsole(): void {
   }
 }
 
+/** The game reached the BitVerse page (see the headless router, src/engine/bundle/router.ts). */
+export function bitverseReached({ flume, destroyedBitNode }: { flume: boolean; destroyedBitNode: number }): void {
+  record({ type: "bitverseReached", at: now(), flume, destroyedBitNode });
+}
+
 /**
  * The game downloads files by clicking an `<a download>` on an object URL (utils/FileUtils.ts): save exports and the
  * pre-v3 backup. jsdom can't navigate; record the download instead.

@@ -132,6 +132,14 @@ async function start(options: HostOptions): Promise<Host> {
       windowCryptoBytes: Array.from(window.crypto.getRandomValues(new Uint8Array(count))),
       uuid: crypto.randomUUID(),
     }),
+    "diagnostics.toPage": ({ page, flume }) => {
+      booted();
+      engine.toPage(page, flume ?? false);
+    },
+    "diagnostics.back": () => {
+      booted();
+      engine.routerBack();
+    },
     "diagnostics.crash": ({ code, message }) => {
       writeSync(2, `${message}\n`);
       process.exit(code);

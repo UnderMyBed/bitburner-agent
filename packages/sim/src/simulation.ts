@@ -156,6 +156,8 @@ export class Simulation {
     clock: () => this.rpc.call("diagnostics.clock", {}),
     game: () => this.rpc.call("diagnostics.game", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
+    toPage: (page: string, flume = false) => this.rpc.call("diagnostics.toPage", { page, flume }),
+    back: () => this.rpc.call("diagnostics.back", {}),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),
   };
 

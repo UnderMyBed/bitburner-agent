@@ -20,10 +20,14 @@ import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
 import { isPositiveInteger, type SaveData } from "../../../../../vendor/bitburner-src/src/types";
+import type { SimplePage } from "../../../../../vendor/bitburner-src/src/ui/Enums";
+import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
+import { isSimplePage, Page } from "../../../../../vendor/bitburner-src/src/ui/Router";
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
 import type { ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import { type BitVerseReached, mountRouter } from "./router.ts";
 
 export function versionNumber() {
   return CONSTANTS.VersionNumber;
@@ -63,6 +67,7 @@ export async function bootSave(saveData: SaveData) {
 }
 
 function afterUiMount() {
+  mountRouter(onBitVerse); // GameRoot's first render
   UIEventEmitter.emit(UIEventType.MainUILoaded); // GameRoot emits this on mount: starts saved scripts and autoexec
   // Autosave would serialise the whole game every virtual minute; the harness takes its own snapshots instead.
   Settings.AutosaveInterval = 0;
@@ -104,10 +109,30 @@ export function gameDiagnostics() {
   return {
     tutorialRunning: ITutorial.isRunning,
     autosaveInterval: Settings.AutosaveInterval,
+    page: Router.page(),
+    focus: Player.focus,
     contracts: GetAllServers()
       .flatMap((server) => server.contracts.map((contract) => `${server.hostname}:${contract.fn}`))
       .sort(),
   };
+}
+
+let onBitVerse: (reached: BitVerseReached) => void = () => {};
+
+/** Who hears arrivals at the BitVerse, once booting mounts the headless router (router.ts). Call before booting. */
+export function installRouter(listener: (reached: BitVerseReached) => void) {
+  onBitVerse = listener;
+}
+
+/** Navigates as game code does (`Router.toPage`). Test-only: simple pages, and the BitVerse. */
+export function toPage(page: string, flume: boolean) {
+  if (page === Page.BitVerse) return Router.toPage(Page.BitVerse, { flume, quick: true });
+  if (!isSimplePage(page as Page)) throw new Error(`Not a page diagnostics can open: ${page}`);
+  Router.toPage(page as SimplePage);
+}
+
+export function routerBack() {
+  Router.back();
 }
 
 /** How the game imports player-script modules (NetscriptJSEvaluator's hook point, as its Jest tests use). */
