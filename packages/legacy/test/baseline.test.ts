@@ -3,7 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { runSeed, type Simulation, startScenario } from "@bitburner-agent/sim";
 import { afterEach, describe, expect, test } from "vitest";
-import { baselineScenario, DAY } from "../src/baseline.ts";
+import { baselineScenario, CHECKPOINTS_MS } from "../src/baseline.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -22,10 +22,12 @@ describe("the baseline scenario (smoke tests; the full run isn't in CI, docs/sim
     expect(home["autopilot.js"]).toBeDefined();
     expect(home["daemon.js"]).toBeDefined();
     expect(scenario.run).toEqual([{ script: "autopilot.js", args: ["--disable-casino"] }]);
-    expect(scenario.stopWhen).toEqual([{ event: "bitnodeDestroyed" }]);
-    expect(scenario.onBitVerse).toBe("stop");
-    expect(scenario.durationMs).toBe(30 * DAY);
-    expect(scenario.checkpointEveryMs).toBe(DAY);
+    // 12 virtual hours, a checkpoint every 4, and no stop condition (ADR 0011).
+    expect(CHECKPOINTS_MS).toEqual([4 * HOUR, 8 * HOUR, 12 * HOUR]);
+    expect(scenario.durationMs).toBe(12 * HOUR);
+    expect(scenario.checkpointEveryMs).toBe(4 * HOUR);
+    expect(scenario.stopWhen).toBeUndefined();
+    expect(scenario.onBitVerse).toBeUndefined();
     expect(scenario.seeds).toEqual({ from: 1, to: 8 });
   });
 

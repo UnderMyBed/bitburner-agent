@@ -51,7 +51,14 @@ describe("the baseline CLI", () => {
       expect.objectContaining({ name: expect.stringMatching(/^legacy-bn1/) }),
       expect.objectContaining({ workers: 1, seeds: [1, 2], measureHeap: true }),
     );
-    expect(output.at(-1)).toContain("| 2026-10-25 | abc1234-dirty | test-rig | v24.0.0 | 1..2 | 2/2 |");
+    // One row per checkpoint; these stub seeds reached none.
+    expect(output.at(-1)).toContain("| 2026-10-25 | abc1234-dirty | test-rig | v24.0.0 | 1..2 | 4 h | 0/2 |");
+    expect(
+      output
+        .at(-1)
+        ?.split("\n")
+        .filter((line) => line.startsWith("|")),
+    ).toHaveLength(3);
   });
 
   test("exits 1 when any seed didn't", async () => {
@@ -59,12 +66,12 @@ describe("the baseline CLI", () => {
     expect(await baselineCli([], all)).toBe(1);
   });
 
-  test("by default: one seed at a time, 12 hours of real time per seed, a 2 GB heap per simulation", async () => {
+  test("by default: one seed at a time, an hour of real time per seed, a 2 GB heap per simulation", async () => {
     const { all, runScenario } = deps([seed(1, true)]);
     await baselineCli([], all);
     expect(runScenario).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ workers: 1, wallLimitMs: 12 * HOUR, maxHeapMb: 2048 }),
+      expect.objectContaining({ workers: 1, wallLimitMs: HOUR, maxHeapMb: 2048 }),
     );
   });
 

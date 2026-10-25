@@ -1,6 +1,6 @@
 # 0007 — Simulator: the real engine, headless, on a virtual clock
 
-- **Status:** Accepted (2026-10-24)
+- **Status:** Accepted (2026-10-24). Amended by [0011](0011-checkpointed-simulator-comparisons.md) (what the simulator is used for).
 
 ## Context
 The whole plan depends on iterating in simulation: scenario suites, fast-model fidelity, the M4 exit criterion. Architecture §9 assumed the real game engine could run headless, but nothing had proven it. The game's Jest tests run engine code under jsdom, Babel and module mocks, which is a long way from a fast, deterministic simulator.
