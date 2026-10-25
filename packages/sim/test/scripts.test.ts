@@ -107,8 +107,9 @@ describe("running scripts", () => {
 
   test("an error is attributed to the module it came from, however many modules are loaded", async () => {
     // The game names the script in an error's stack by finding a module URL, then a file name, inside each stack line
-    // (Netscript/ErrorMessages.ts). With a dozen modules, some blob:sim/ URL is a prefix of another (…/1 in …/12), so
-    // attribution must not depend on them: frames carry the game's `//# sourceURL=home/<file>` instead, as in a browser.
+    // (Netscript/ErrorMessages.ts). Frames carry the game's `//# sourceURL=<server>/<file>`, as in a browser, so they
+    // match by file name. Twelve modules give two-digit module numbers too, so this would also catch a URL scheme
+    // where one URL contains another, should frames ever show the URLs.
     const sim = await newGame(1);
     const libs = Array.from({ length: 12 }, (_, i) => `lib${String(i + 1).padStart(2, "0")}.js`);
     // Each source differs: the game shares one module between scripts with identical code (its moduleCache).
@@ -125,6 +126,30 @@ describe("running scripts", () => {
       attributed.push(/(lib\d\d\.js):L\d+@Module\.fail/.exec(message)?.[1] ?? message);
     }
     expect(attributed).toEqual(libs);
+  });
+
+  test("a module URL in an error message becomes its own script's name, however many modules are loaded", async () => {
+    // The game swaps module URLs in an error message for file names by plain replacement, in dependency order
+    // (Netscript/ErrorMessages.ts, parseBlobUrlInMessage), and a link error quotes the URL. A browser's blob URLs are
+    // UUIDs; ours must not contain one another either, or blob:sim/1 would turn blob:sim/12 into "lib12.js2".
+    const sim = await newGame(1);
+    const libs = Array.from({ length: 12 }, (_, i) => `lib${String(i + 1).padStart(2, "0")}.js`);
+    for (const lib of libs) await sim.writeFile("home", lib, `export const name = "${lib}";`);
+    // Loading all twelve numbers them in reverse import order: lib12 first, lib01 twelfth.
+    const imports = libs.map((name, i) => `import * as l${i} from "./${name}";`).join("\n");
+    await sim.writeFile("home", "all.js", `${imports}\nexport async function main(ns) {}`);
+    await sim.run("home", "all.js");
+    await sim.advance(1000);
+    // The importer depends on lib12 (the first URL) and lib01 (one it's a prefix of), and asks lib01 for a missing export.
+    const bad =
+      'import { nope } from "./lib01.js";\nimport * as z from "./lib12.js";\nexport async function main(ns) {}';
+    await sim.writeFile("home", "bad.js", bad);
+    const { pid } = await sim.run("home", "bad.js");
+    await sim.advance(1000);
+    const error = (await sim.events()).events.find((e) => e.type === "error" && e.pid === pid);
+    expect(error?.type === "error" ? error.message : "").toContain(
+      "The requested module 'lib01.js' does not provide an export named 'nope'",
+    );
   });
 });
 

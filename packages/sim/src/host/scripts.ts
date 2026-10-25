@@ -1,5 +1,5 @@
 // Player scripts are ES modules the game imports from `blob:` URLs, which Node can't import. The host captures each
-// script's source when the game makes its Blob, hands out short in-memory `blob:sim/<n>` URLs, and serves them
+// script's source when the game makes its Blob, hands out in-memory `blob:sim/<n>` URLs (n fixed-width), and serves them
 // through a synchronous module hook, which is what the browser does with real Blob URLs. (data: URLs, as in the
 // game's Jest setup, would nest each child module's encoded source inside every module that imports it.)
 import { writeSync } from "node:fs";
@@ -8,6 +8,11 @@ import type { TestHooks } from "../protocol.ts";
 import { realTimers } from "./clock.ts";
 
 const SCHEME = "blob:sim/";
+/**
+ * Module numbers are this many digits, so no URL contains another: the game swaps URLs in error messages for file
+ * names by plain replacement (ErrorMessages.ts), and a browser's UUID URLs never contain one another either.
+ */
+const DIGITS = 8;
 
 export interface ScriptLoader {
   /** What the game's `config.doImport` should be: imports a script module, counted for the barrier. */
@@ -42,7 +47,7 @@ export function installScriptModules(testHooks: TestHooks = {}): ScriptLoader {
   URL.createObjectURL = (blob: Blob) => {
     const code = sources.get(blob);
     if (code === undefined) return createObjectURL(blob);
-    const url = `${SCHEME}${++nextModule}`;
+    const url = `${SCHEME}${String(++nextModule).padStart(DIGITS, "0")}`;
     modules.set(url, code);
     return url;
   };
