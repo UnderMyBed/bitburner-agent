@@ -12,13 +12,16 @@ import {
   type ParentMessage,
   type Result,
   validateAdvance,
+  validateHomeRam,
   validateHostOptions,
   validateRun,
+  validateRunUntil,
 } from "../protocol.ts";
 import { events } from "./events.ts";
 import { installHost } from "./install.ts";
 import { pinnedLocale } from "./parity/locale.ts";
 import { randomState, restoreRandomState } from "./random.ts";
+import { runUntil, watchBitNodeEntries } from "./run-until.ts";
 
 const send = (message: HostMessage) => process.send?.(message);
 const errorText = (error: unknown) => (error instanceof Error ? (error.stack ?? error.message) : String(error));
@@ -56,13 +59,19 @@ interface Host {
   handlers: Handlers;
   /** Resolves once no script module is being imported (the import barrier). */
   quiescent(): Promise<void>;
+  /** Runs after every request: a request can change the game too (e.g. entering a BitNode). */
+  afterRequest(): void;
 }
 
 async function start(options: HostOptions): Promise<Host> {
   validateHostOptions(options);
   const bootStarted = process.hrtime.bigint(); // real time: the virtual clock doesn't measure the host itself
-  const { clock, engine, scripts } = installHost(options);
+  const { clock, engine, scripts, afterEveryTimer } = installHost(options);
   if (options.fixture) await bootFixture(engine, options.fixture);
+  // From the booted game on, every BitNode entry is an event, whether a timer or a request caused it.
+  const watch = options.fixture ? watchBitNodeEntries(engine) : () => {};
+  watch();
+  afterEveryTimer(watch);
   const bootMs = Math.round(Number(process.hrtime.bigint() - bootStarted) / 1e6);
   const booted = () => {
     if (!options.fixture) throw new Error("no game is booted: this simulation was started without a fixture");
@@ -110,6 +119,11 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       return engine.scriptLogs(pid);
     },
+    runUntil: (params) => {
+      booted();
+      validateRunUntil(params);
+      return runUntil(params, { clock, engine, watch });
+    },
     kill: ({ pid }) => {
       booted();
       return engine.killScript(pid);
@@ -147,13 +161,18 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       engine.destroyBitNode(n);
     },
+    "diagnostics.setHomeRam": ({ gb }) => {
+      booted();
+      validateHomeRam(gb);
+      engine.setHomeRam(gb);
+    },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.crash": ({ code, message }) => {
       writeSync(2, `${message}\n`);
       process.exit(code);
     },
   };
-  return { handlers, quiescent: () => new Promise((resolve) => scripts.whenQuiescent(resolve)) };
+  return { handlers, quiescent: () => new Promise((resolve) => scripts.whenQuiescent(resolve)), afterRequest: watch };
 }
 
 let simHost: Host | undefined;
@@ -180,7 +199,13 @@ process.on("message", (message: ParentMessage) => {
       await simHost.quiescent();
       const handler = simHost.handlers[method] as ((params: unknown) => unknown) | undefined;
       if (!handler) throw new Error(`unknown method ${method}`);
-      send({ type: "response", id, ok: true, result: await handler(params) });
+      let result: unknown;
+      try {
+        result = await handler(params);
+      } finally {
+        simHost.afterRequest(); // even if it threw part-way: it may still have changed the game
+      }
+      send({ type: "response", id, ok: true, result });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       send({

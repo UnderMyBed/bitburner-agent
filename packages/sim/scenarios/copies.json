@@ -1,0 +1,11 @@
+{
+  "name": "copies: 100 copies of the hack loop, each its own module",
+  "fixture": { "kind": "new", "tutorial": "skipped" },
+  "epochMs": 1767225600000,
+  "files": { "home": "scripts" },
+  "homeRamGb": 1024,
+  "run": [{ "script": "spawn.js", "args": [100] }],
+  "durationMs": 3600000,
+  "checkpointEveryMs": 600000,
+  "seeds": { "from": 1, "to": 4 }
+}

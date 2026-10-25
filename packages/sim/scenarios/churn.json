@@ -1,0 +1,11 @@
+{
+  "name": "churn: a controller exec()ing 125 one-thread workers a second, thousands at once",
+  "fixture": { "kind": "new", "tutorial": "skipped" },
+  "epochMs": 1767225600000,
+  "files": { "home": "scripts" },
+  "homeRamGb": 8192,
+  "run": [{ "script": "ctl.js", "args": [1, 25] }],
+  "durationMs": 3600000,
+  "checkpointEveryMs": 600000,
+  "seeds": { "from": 1, "to": 4 }
+}

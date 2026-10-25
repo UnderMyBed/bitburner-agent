@@ -9,6 +9,12 @@ export interface VirtualClock {
   now(): number;
   /** Fires every timer due in the next `ms` virtual milliseconds, in order, then returns. */
   advance(ms: number): Promise<void>;
+  /**
+   * Advances to `endMs` as `advance` does, but in steps: to each moment a timer is due, firing every timer due then
+   * (exactly as `advance` would), and calling `stop` after each step. Stops right there, virtual time staying at that
+   * moment, when `stop` returns true; `stop` is also called once at `endMs`. Returns whether it stopped.
+   */
+  advanceUntil(endMs: number, stop: () => boolean): Promise<boolean>;
 }
 
 /** A string timer handler is code, which a browser evaluates in the global scope: an indirect eval. */
@@ -71,6 +77,21 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
     now: () => clock.now,
     advance: async (ms) => {
       await clock.tickAsync(ms);
+    },
+    advanceUntil: async (endMs, stop) => {
+      // fake-timers has no "tick, but stop when…". Each step is a tickAsync to the next moment a timer is due, which
+      // keeps tickAsync's semantics exactly (a 0 ms timer set during a tick is due 1 ms later, for one). That moment
+      // comes from its timer heap, an internal (pinned at 15.4.0); test/run-until.test.ts "without a stop condition it
+      // is advance…" fails if it moves.
+      for (;;) {
+        const heap = (clock as unknown as { timerHeap?: { peek(): { callAt: number } | undefined } }).timerHeap;
+        if (!heap) throw new Error("fake-timers' timerHeap is gone: advanceUntil needs updating (clock.ts)");
+        const next = heap.peek()?.callAt;
+        const to = next === undefined ? endMs : Math.min(next, endMs);
+        await clock.tickAsync(to - clock.now);
+        if (stop()) return true;
+        if (to === endMs) return false;
+      }
     },
   };
 }

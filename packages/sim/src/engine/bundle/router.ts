@@ -52,6 +52,12 @@ function startPage(): PageWithContext {
 
 let pages: PageWithContext[] = [];
 
+/** If the game is at the BitVerse, whether it got there by flume (b1t_flum3.exe); otherwise null. */
+export function bitVerseFlume(): boolean | null {
+  const page = pages[0];
+  return page?.page === Page.BitVerse ? page.flume : null;
+}
+
 /** The page history, newest first, as page names. Not saved by the game, so the state hash adds it. */
 export function routerPages(): string[] {
   return pages.map(({ page }) => page);
