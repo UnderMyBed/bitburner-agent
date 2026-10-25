@@ -306,6 +306,7 @@ Other packages only use `Simulation`; the rest of this section describes the hos
    - `setTimeout`/`setInterval` (and their clears), `Date` and `performance` are virtual, starting at `epochMs`. `performance.now()` starts at 0, like a page that just loaded.
    - Microtasks and Node's `process.nextTick` and `setImmediate` stay real, so promises and I/O work. (Node's globals are hidden from the game in step 6; host code keeps its own references.)
    - Between timers, the clock yields to the real event loop through the import barrier, so virtual time never moves while a script is loading. This relies on a fake-timers internal; see the comment in `clock.ts`.
+   - fake-timers is loaded from its own source with one patch (`skipEmptyTimerScans`; `node_modules` stays as installed). When no timer is due in the range being run, it no longer scans every pending timer to find that out, so a step costs the same however many scripts are sleeping ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)). The results are identical, and loading fails if a fake-timers upgrade changes the patched lines.
    - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`. An exception a callback throws is logged as uncaught, and the clock carries on; fake-timers would rethrow it.
 6. **The engine bundle** (`loadEngine`), after two things:
    - `JEST_WORKER_ID` is removed from the environment (the game reads it while loading).

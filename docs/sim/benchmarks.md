@@ -60,8 +60,15 @@ Reading the first row (2026-10-25, the reference rig):
 - **churn** is the heavy script-churn class. Spike S1 measured 50–700× for that class ([architecture §9.1](../architecture.md#91-design)), and it isn't held to the target.
 - **The heap doesn't grow.** It drops once between days 2 and 3 (about 104 to 93 MB), then stays within 0.2 MB through day 7.
 
+The second row (5457a1c) skips fake-timers' scan of every pending timer when none is due ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)), and gives the same results:
+- **churn** nearly doubles, 259× to 479×. It runs thousands of scripts at once, and each one's sleep is a pending timer that every step used to scan, twice.
+- **copies** (100 scripts) gains about 30% and **batch** about 10%. **lean** (one script) is unchanged.
+
+**Speed with thousands of scripts running.** Before the patch, a step cost time in proportion to the scripts asleep, so a run slowed with the square of the scripts running. The legacy fork's baseline fell to 3–6× real time with 22,000 to 144,000 scripts ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)). Now the clock's cost per step doesn't depend on how many timers are pending (`clock.test.ts` checks it with 20,000). The rest grows with the game's own work per script, which a browser pays too: its loop updates every running script, and the fork's scheduler reads every server's RAM. The host's after-every-timer hook costs the same per timer whatever the script count: a real macrotask, so the import barrier can hold virtual time while a module loads (about 8% of churn), and constant-time checks of stop conditions and BitNode entries. The fork's own speed is recorded in [baselines](baselines.md) once it has run.
+
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
 
 | Date | Commit | Rig | Node | lean | batch | churn | copies | Heap start | Heap end | Heap growth per day |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-10-25 | 8149ce0 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26406x | 9038x | 259x | 9137x | 102.9 MB | 93.0 MB | +0.0 MB |
+| 2026-10-25 | 5457a1c | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 27034x | 10028x | 479x | 12040x | 103.6 MB | 93.5 MB | +0.0 MB |
