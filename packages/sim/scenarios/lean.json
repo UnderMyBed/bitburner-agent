@@ -1,0 +1,10 @@
+{
+  "name": "lean: one hack loop on n00dles, 3 threads",
+  "fixture": { "kind": "new", "tutorial": "skipped" },
+  "epochMs": 1767225600000,
+  "files": { "home": "lean" },
+  "run": [{ "script": "hack.js", "threads": 3 }],
+  "durationMs": 21600000,
+  "checkpointEveryMs": 3600000,
+  "seeds": { "from": 1, "to": 4 }
+}

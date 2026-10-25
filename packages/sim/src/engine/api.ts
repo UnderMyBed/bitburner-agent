@@ -41,6 +41,22 @@ export interface EngineApi {
    * `n` starts. Throws if the game goes into recovery mode. Test-only.
    */
   destroyBitNode(n: number): void;
+  /**
+   * The BitVerse portal's choice of BitNode `n`: enters it (destroying the current BitNode unless the BitVerse was
+   * reached by flume), then leaves BitNode 6's cinematic. Throws if the game isn't at the BitVerse.
+   */
+  enterFromBitVerse(n: number): void;
+  /**
+   * The BitNode entry since the last call, if any: from which BitNode to which, and whether by destroying it. The first
+   * call takes a baseline. Call after every timer.
+   */
+  bitNodeEntry(): { from: number; to: number; destroyed: boolean } | null;
+  /** Whether a script with this filename is running, on any server. */
+  scriptRunning(filename: string): boolean;
+  /** Sets home's RAM, in GB. A harness edit, for test and benchmark scenarios. */
+  setHomeRam(gb: number): void;
+  /** The page the game's Router is on. */
+  page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   bitNodeMultipliers(n: number, level: number): Record<string, number>;
   /** The game's own save: gzip bytes. */
@@ -93,6 +109,11 @@ const API_FUNCTIONS = {
   bootSave: true,
   bootBitNode: true,
   destroyBitNode: true,
+  enterFromBitVerse: true,
+  bitNodeEntry: true,
+  scriptRunning: true,
+  page: true,
+  setHomeRam: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

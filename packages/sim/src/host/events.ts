@@ -10,9 +10,12 @@ const KEEP = 10_000;
 
 let kept: SimEvent[] = [];
 let dropped = 0;
+/** Events recorded so far, by type, dropped ones included. */
+const counts = new Map<SimEvent["type"], number>();
 let clockReady = false;
 
 function record(event: SimEvent): void {
+  counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
   kept.push(event);
   if (kept.length > KEEP * 2) {
     dropped += kept.length - KEEP;
@@ -25,6 +28,11 @@ const now = () => (clockReady ? Date.now() : 0);
 
 export function markClockReady(): void {
   clockReady = true;
+}
+
+/** How many events of this type have been recorded so far. */
+export function eventCount(type: SimEvent["type"]): number {
+  return counts.get(type) ?? 0;
 }
 
 export function events(since: number): EventPage {

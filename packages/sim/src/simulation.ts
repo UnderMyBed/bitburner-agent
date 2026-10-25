@@ -11,8 +11,11 @@ import {
   type ProcessInfo,
   type RunOptions,
   type RunResult,
+  type RunUntilParams,
+  type RunUntilResult,
   type SimulationOptions,
   validateAdvance,
+  validateRunUntil,
 } from "./protocol.ts";
 import { RpcClient } from "./rpc.ts";
 
@@ -22,14 +25,18 @@ export type {
   Fixture,
   GameEvent,
   GameSummary,
+  OnBitVerse,
   ProcessInfo,
   PromptRule,
   RunOptions,
   RunResult,
+  RunUntilParams,
+  RunUntilResult,
   SaveFixture,
   ScriptArg,
   SimEvent,
   SimulationOptions,
+  StopCondition,
   Tutorial,
 } from "./protocol.ts";
 
@@ -108,6 +115,17 @@ export class Simulation {
     return this.rpc.call("advance", { ms });
   }
 
+  /**
+   * Runs the game for up to `ms` virtual milliseconds, checking `stopWhen` after every timer and stopping right at the
+   * first timer after which one holds. `onBitVerse` says what happens if the game reaches the BitVerse. Resolves with
+   * the virtual now and what stopped the run (an index into `stopWhen`, "bitverse", or null if it ran the full time).
+   */
+  runUntil(ms: number, { stopWhen, onBitVerse }: Omit<RunUntilParams, "ms"> = {}): Promise<RunUntilResult> {
+    const params: RunUntilParams = { ms, ...(stopWhen ? { stopWhen } : {}), ...(onBitVerse ? { onBitVerse } : {}) };
+    validateRunUntil(params);
+    return this.rpc.call("runUntil", params);
+  }
+
   /** A fixed-schema snapshot of the game. Needs a fixture. */
   summary(): Promise<GameSummary> {
     return this.rpc.call("summary", {});
@@ -170,6 +188,8 @@ export class Simulation {
      * destroy (granting the current BitNode's Source-File).
      */
     destroyBitNode: (n: number) => this.rpc.call("diagnostics.destroyBitNode", { n }),
+    /** Sets home's RAM, in GB (a power of 2). A harness edit, for test and benchmark scenarios. */
+    setHomeRam: (gb: number) => this.rpc.call("diagnostics.setHomeRam", { gb }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),

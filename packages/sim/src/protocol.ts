@@ -150,7 +150,14 @@ export type GameEvent =
    * the real router does; a save that starts there restarts its saved scripts as usual. The game then waits there
    * until something enters a BitNode.
    */
-  | ({ type: "bitverseReached" } & BitVerseReached);
+  | ({ type: "bitverseReached" } & BitVerseReached)
+  /**
+   * The game left BitNode `destroyed` for BitNode `entered` by destroying it: through w0r1d_d43m0n
+   * (`ns.singularity.destroyW0r1dD43m0n`), or through the BitVerse after backdooring it.
+   */
+  | { type: "bitnodeDestroyed"; destroyed: number; entered: number }
+  /** The game left BitNode `left` for BitNode `entered` without destroying it (b1t_flum3.exe, `ns.singularity.b1tflum3`). */
+  | { type: "bitnodeFlumed"; left: number; entered: number };
 
 /**
  * Things that happened in the game that a browser would have shown or done outside the page, in order. `at` is the
@@ -166,6 +173,42 @@ export type SimEvent = { at: number } & (
    */
   | { type: "console"; level: "error" | "warn"; message: string }
 );
+
+/** A condition that ends a run (`runUntil`), checked after every timer. */
+export type StopCondition =
+  /** An event of this type was recorded during the run. */
+  | { event: "bitnodeDestroyed" | "bitnodeFlumed" | "bitverseReached" }
+  /** No script with this filename is running any more, on any server. */
+  | { scriptExited: string }
+  /** A `GameSummary` field compares with `value` as `op` says, e.g. `{ field: "money", op: ">=", value: 1e9 }`. */
+  | { summary: { field: SummaryField; op: ComparisonOp; value: number } };
+
+export type ComparisonOp = "<" | "<=" | "==" | ">=" | ">";
+export type SummaryField = Exclude<
+  { [K in keyof GameSummary]: GameSummary[K] extends number ? K : never }[keyof GameSummary],
+  undefined
+>;
+
+/**
+ * What a run does when the game arrives at the BitVerse, where a player picks the next BitNode: stop there, or enter
+ * BitNode `enter` at once, as a player clicking its portal would. Without it, the game waits at the BitVerse.
+ */
+export type OnBitVerse = "stop" | { enter: number };
+
+export interface RunUntilParams {
+  /** The most virtual time to run, a non-negative integer of ms. */
+  ms: number;
+  /** The run stops after the first timer at which any of these holds. */
+  stopWhen?: StopCondition[];
+  onBitVerse?: OnBitVerse;
+}
+
+export interface RunUntilResult {
+  /** Virtual now when the run ended. */
+  now: number;
+  /** Which condition stopped the run (its index in `stopWhen`, or "bitverse" for `onBitVerse: "stop"`), or null. */
+  stoppedBy: number | "bitverse" | null;
+}
 
 /** A page of the event log: events from position `since` on, and where the next page starts. */
 export interface EventPage {
@@ -256,6 +299,11 @@ export interface HostMethods {
   logs(params: { pid: number }): string[];
   /** Kills a running script; false if there is none with that pid. */
   kill(params: { pid: number }): boolean;
+  /**
+   * Advances like `advance`, but checks `stopWhen` after every timer that fires, and stops right there when one holds.
+   * Also handles arrivals at the BitVerse per `onBitVerse`.
+   */
+  runUntil(params: RunUntilParams): RunUntilResult;
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   "diagnostics.random"(params: { count: number }): RandomSample;
@@ -273,6 +321,11 @@ export interface HostMethods {
    * game state, and scenarios get their own way in #30.
    */
   "diagnostics.destroyBitNode"(params: { n: number }): void;
+  /**
+   * Sets home's RAM, in GB (a power of 2, 8 to 2^30), so test and benchmark scenarios can run big workloads at once. A
+   * harness edit, not something a player can do.
+   */
+  "diagnostics.setHomeRam"(params: { gb: number }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** Writes `message` to stderr and exits with `code`. */
@@ -387,9 +440,71 @@ export function validateRun({ threads, args }: { threads: number; args: ScriptAr
   }
 }
 
+/** Home RAM as the game has it: a power of 2 GB, from 8 to 2^30 (ServerPurchases.ts limits). */
+export function validateHomeRam(gb: number): void {
+  if (!Number.isInteger(gb) || gb < 8 || gb > 2 ** 30 || (gb & (gb - 1)) !== 0) {
+    throw new RangeError(`home RAM must be a power of 2 GB from 8 to 2^30, got ${gb}`);
+  }
+}
+
 export function validateAdvance(ms: number): void {
   if (!Number.isSafeInteger(ms) || ms < 0) {
     throw new RangeError(`advance(ms) needs a non-negative integer number of milliseconds, got ${ms}`);
+  }
+}
+
+const STOP_EVENTS = ["bitnodeDestroyed", "bitnodeFlumed", "bitverseReached"];
+const COMPARISON_OPS = ["<", "<=", "==", ">=", ">"];
+const SUMMARY_FIELDS: Record<SummaryField, true> = {
+  virtualMs: true,
+  playtimeMs: true,
+  bitNodeN: true,
+  bitNodeLevel: true,
+  money: true,
+  hackingLevel: true,
+  hackingExp: true,
+  homeRamUsed: true,
+  homeRamMax: true,
+  scripts: true,
+  augsInstalled: true,
+  augsQueued: true,
+};
+
+/** Describes what's wrong with a stop condition, or returns null if it's valid. */
+function stopConditionProblem(condition: StopCondition): string | null {
+  if (typeof condition !== "object" || condition === null) return "a stop condition must be an object";
+  const keys = Object.keys(condition);
+  if (keys.length !== 1)
+    return `a stop condition has exactly one of event, scriptExited, summary; got ${keys.join(", ")}`;
+  if ("event" in condition) {
+    return STOP_EVENTS.includes(condition.event) ? null : `stop on event: one of ${STOP_EVENTS.join(", ")}`;
+  }
+  if ("scriptExited" in condition) {
+    return typeof condition.scriptExited === "string" && condition.scriptExited !== ""
+      ? null
+      : "scriptExited: a filename";
+  }
+  if ("summary" in condition) {
+    const { field, op, value } = condition.summary ?? {};
+    if (!Object.hasOwn(SUMMARY_FIELDS, field)) return `summary field: one of ${Object.keys(SUMMARY_FIELDS).join(", ")}`;
+    if (!COMPARISON_OPS.includes(op)) return `summary op: one of ${COMPARISON_OPS.join(" ")}`;
+    return typeof value === "number" && !Number.isNaN(value) ? null : "summary value: a number";
+  }
+  return `unknown stop condition ${JSON.stringify(condition)}`;
+}
+
+export function validateRunUntil({ ms, stopWhen = [], onBitVerse }: RunUntilParams): void {
+  validateAdvance(ms);
+  if (!Array.isArray(stopWhen)) throw new RangeError("stopWhen must be a list of stop conditions");
+  for (const condition of stopWhen) {
+    const problem = stopConditionProblem(condition);
+    if (problem) throw new RangeError(`bad stop condition ${JSON.stringify(condition)}: ${problem}`);
+  }
+  if (onBitVerse !== undefined && onBitVerse !== "stop") {
+    const n = (onBitVerse as { enter?: unknown }).enter;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > BITNODES) {
+      throw new RangeError(`onBitVerse must be "stop" or { enter: 1-${BITNODES} }, got ${JSON.stringify(onBitVerse)}`);
+    }
   }
 }
 

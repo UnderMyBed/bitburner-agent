@@ -9,6 +9,11 @@ export interface VirtualClock {
   now(): number;
   /** Fires every timer due in the next `ms` virtual milliseconds, in order, then returns. */
   advance(ms: number): Promise<void>;
+  /**
+   * Fires timers in order, as `advance` does, until virtual time reaches `endMs`, but calls `stop` after each one and
+   * stops right there (virtual time stays at that timer) when it returns true. Returns whether it stopped.
+   */
+  runUntil(endMs: number, stop: () => boolean): Promise<boolean>;
 }
 
 /** A string timer handler is code, which a browser evaluates in the global scope: an indirect eval. */
@@ -71,6 +76,20 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
     now: () => clock.now,
     advance: async (ms) => {
       await clock.tickAsync(ms);
+    },
+    runUntil: async (endMs, stop) => {
+      // fake-timers has no "tick, but stop when…", so this fires one timer at a time (nextAsync, which yields through
+      // `betweenTimers` like tickAsync), peeking at the next one first: its timer heap (pinned at 15.4.0).
+      const heap = (clock as unknown as { timerHeap?: { peek(): { callAt: number } | undefined } }).timerHeap;
+      for (;;) {
+        const next = heap?.peek()?.callAt;
+        if (next === undefined || next > endMs) {
+          await clock.tickAsync(endMs - clock.now); // no timer due: just move time on
+          return false;
+        }
+        await clock.nextAsync();
+        if (stop()) return true;
+      }
     },
   };
 }

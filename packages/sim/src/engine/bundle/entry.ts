@@ -24,6 +24,7 @@ import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { enterBitNode } from "../../../../../vendor/bitburner-src/src/RedPill";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
+import { SpecialServers } from "../../../../../vendor/bitburner-src/src/Server/data/SpecialServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
 import { isPositiveInteger, type SaveData } from "../../../../../vendor/bitburner-src/src/types";
 import type { SimplePage } from "../../../../../vendor/bitburner-src/src/ui/Enums";
@@ -34,7 +35,7 @@ import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helper
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
 import type { GameEvent, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
 import { answerPrompts, captureUi, installPageGlobals } from "./page.ts";
-import { mountRouter, routerPages } from "./router.ts";
+import { bitVerseFlume, mountRouter, routerPages } from "./router.ts";
 
 export { answerPrompts as setPromptAnswerer, installPageGlobals };
 
@@ -115,6 +116,53 @@ function leaveCinematic() {
 export function destroyBitNode(n: number) {
   enterBitNodeChecked(false, n);
 }
+/**
+ * What the BitVerse's portal does when a player picks BitNode `n` there (PortalModal.tsx): enter it, destroying the
+ * current BitNode unless the BitVerse was reached by flume. Then leave BitNode 6's cinematic, as a player clicking
+ * Continue would. Throws if the game isn't at the BitVerse.
+ */
+export function enterFromBitVerse(n: number) {
+  const flume = bitVerseFlume();
+  if (flume === null) throw new Error(`Not at the BitVerse: can't enter BitNode ${n} from page ${Router.page()}`);
+  enterBitNodeChecked(flume, n);
+  leaveCinematic();
+}
+
+/**
+ * Watches for the game entering a BitNode, however it happened. Every entry stamps `Player.lastNodeReset` with the
+ * current time (Player.prestigeSourceFile); two entries in the same virtual ms are told apart by the BitNode. Both ways of destroying a BitNode backdoor w0r1d_d43m0n first (Singularity's
+ * destroyW0r1dD43m0n, or a backdoor that leads to the BitVerse); a flume doesn't. The entry replaces every server, so
+ * this keeps the previous w0r1d_d43m0n to look at afterwards. The first call only takes a baseline.
+ */
+let watched: { reset: number; bitNode: number; daemon: unknown } | null = null;
+export function bitNodeEntry(): { from: number; to: number; destroyed: boolean } | null {
+  const daemon = GetServer(SpecialServers.WorldDaemon);
+  if (watched === null || (Player.lastNodeReset === watched.reset && Player.bitNodeN === watched.bitNode)) {
+    // Installing augmentations replaces the servers too, so keep the current w0r1d_d43m0n.
+    watched = { reset: Player.lastNodeReset, bitNode: Player.bitNodeN, daemon };
+    return null;
+  }
+  const destroyed = (watched.daemon as { backdoorInstalled?: boolean } | null)?.backdoorInstalled === true;
+  const entry = { from: watched.bitNode, to: Player.bitNodeN, destroyed };
+  watched = { reset: Player.lastNodeReset, bitNode: Player.bitNodeN, daemon };
+  return entry;
+}
+
+/** Sets home's RAM, in GB: a harness edit for test and benchmark scenarios, not something a player can do. */
+export function setHomeRam(gb: number) {
+  Player.getHomeComputer().maxRam = gb;
+}
+
+export function page(): string {
+  return Router.page();
+}
+
+/** Whether a script with this filename is running, on any server. */
+export function scriptRunning(filename: string): boolean {
+  for (const ws of workerScripts.values()) if (ws.name === filename) return true;
+  return false;
+}
+
 export function bitNodeMultipliers(n: number, level: number): Record<string, number> {
   return { ...getBitNodeMultipliers(n, level) };
 }

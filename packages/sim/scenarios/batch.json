@@ -1,0 +1,11 @@
+{
+  "name": "batch: a controller exec()ing single-operation workers every 200 ms",
+  "fixture": { "kind": "new", "tutorial": "skipped" },
+  "epochMs": 1767225600000,
+  "homeRamGb": 1024,
+  "files": { "home": "batch" },
+  "run": [{ "script": "ctl.js", "args": [20, 1] }],
+  "durationMs": 21600000,
+  "checkpointEveryMs": 3600000,
+  "seeds": { "from": 1, "to": 4 }
+}
