@@ -398,7 +398,8 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
   - `blob:` script modules through a synchronous module hook
 - **Virtual clock:** `@sinonjs/fake-timers` fakes `setTimeout`/`setInterval`/`Date`/`performance`. The game's own `Engine.start` loop runs unmodified on it. Time advances to the next timer, discrete-event style. Results don't depend on the driver's step size.
 - **Determinism:**
-  - Replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario.
+  - Replace `Math.random` (and confirm the game's `WHRNG` sites) with a seeded PRNG per scenario. Web Crypto's `getRandomValues`/`randomUUID` get a second, independent seeded stream.
+  - One process per simulation (game state is global); the parent drives it over IPC, and the host runs requests one at a time, so nothing observes the game mid-advance.
   - The fake `Date` also pins the game's clock-seeded randomness (roulette seed, Circadian Modulator).
   - Execution is single-threaded and every timer is virtual, so script interleaving is a function of the seed. A replay test proves it: same seed, same state hash.
 - **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine.
