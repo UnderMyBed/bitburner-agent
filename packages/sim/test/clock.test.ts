@@ -145,6 +145,7 @@ describe("timer delays, as Chromium takes them (#80)", () => {
     },
   );
 });
+
 describe("the clock's fake-timers patch (#74)", () => {
   test("adds the early return to the installed fake-timers' firstTimerInRange, once, keeping its line numbers", () => {
     const patched = skipEmptyTimerScans(installed, FAKE_TIMERS_VERSION);
