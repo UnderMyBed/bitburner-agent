@@ -1,7 +1,7 @@
 # tools/upstream-watch
 
-Watches the upstream game repository for changes coming our way, and keeps a tracking issue about them. There are two watchers ([architecture §12.4](../../docs/architecture.md#124-version-management)):
-- **The `stable` watcher** ([ADR 0003](../../docs/decisions/0003-game-version-pinning.md), [ADR 0010](../../docs/decisions/0010-stable-watcher-opens-an-issue.md)). Steam ships from `stable`, so when it moves past the pinned game, a Steam update is coming. Its issue, "Upstream stable moved: v… (…)", holds the report and the steps to bump the pinned game.
+Watches the upstream game repository for changes coming our way. There are two watchers, and each keeps one tracking issue ([architecture §12.4](../../docs/architecture.md#124-version-management)):
+- **The `stable` watcher** ([ADR 0003](../../docs/decisions/0003-game-version-pinning.md), [ADR 0010](../../docs/decisions/0010-stable-watcher-opens-an-issue.md)). Steam ships from `stable`, so when it moves ahead of the pinned game, a Steam update is coming. Its issue, "Upstream stable moved: v… (…)", holds the steps to bump the pinned game, then the report.
 - **The forward check against `dev`** ([ADR 0005](../../docs/decisions/0005-forward-compat-dev-branch.md)) looks further ahead. Its issue is "Upcoming game changes (upstream dev)".
 
 Both are advisory: nothing they find blocks a merge. Both run on demand and at every release ([ADR 0009](../../docs/decisions/0009-upstream-watchers-on-demand.md)).
@@ -16,6 +16,18 @@ It compares the pinned game (`vendor/bitburner-src`'s gitlink) with an upstream 
 | RAM costs | `src/Netscript/RamCostGenerator.ts` | Each function's cost under `ns` (`hack`, `singularity.cat`, `formulas.hacking.hackChance`), with the cost constants and arithmetic resolved, so a changed constant shows up in every function that uses it. `(SF4)` marks a Singularity cost, which is multiplied without Source-File 4. |
 | Watched source | [`watchlist.txt`](watchlist.txt) | Commits touching the watched paths: whole subsystems (BitNode, constants, corporation, darknet, the Netscript runtime and every `ns` function), plus every game file our [mechanics docs](../../docs/mechanics/) cite. |
 | Contract typecheck | — | Not applicable until an in-game package exists ([#42](https://github.com/UnderMyBed/bitburner-agent/issues/42)). |
+
+The stable watcher's report leads with **bump steps**, when `stable` is ahead of the pinned commit:
+1. the shallow fetch and checkout of the new commit;
+2. `PINNED_GAME`;
+3. `setup:engine` and `npm run check`;
+4. the parity re-audit;
+5. the heavy suites;
+6. the mechanics docs;
+7. a search for the old version and commit;
+8. the bump PR.
+
+If `stable` differs without being ahead (a rewound branch, or a test ref), it says so instead.
 
 - **Upstream text is shown in code spans:** each commit title whole, and names and costs too. Its `#123` references, `@mentions`, links and HTML therefore don't link to our own issues, notify anyone upstream or change the page.
 - **Long lists are capped** at 150 entries with "…and N more". The raw diff is cut first, so the body stays under GitHub's limit.
@@ -32,18 +44,24 @@ node tools/upstream-watch/cli.ts report --game ../game --ref origin/dev [--out r
 
 `report` prints the Markdown.
 - `--ref` is a branch (`origin/<name>`), a tag or a commit.
-- `--watcher stable` gives the stable watcher's form. It says whether `stable` has moved and, if it has, leads with the bump steps. The default, `dev`, is the forward check's.
+- `--watcher stable` gives the stable watcher's form. It says whether `stable` has moved and, if it has moved ahead, leads with the bump steps. The default, `dev`, is the forward check's.
 - `--pinned <sha>` compares from another commit than the pinned one.
-- `--out` also writes the report as JSON for `publish`: `{ changes, moved, pinned, upstream, markdown }`. `moved` says whether the ref is another commit than the pinned one, whether or not anything listed changed.
+- `--out` also writes the report as JSON for `publish`: `{ changes, moved, ahead, pinned, upstream, markdown }`.
+  - `moved` says whether the ref is another commit than the pinned one, whether or not anything listed changed.
+  - `ahead` says whether it also has the pinned commit in its history.
 
 `publish` updates the tracking issue from that file, through the `gh` CLI:
 
 ```
 node tools/upstream-watch/cli.ts publish --report report.json --title "Upcoming game changes (upstream dev)" [--dry-run]
+
+node tools/upstream-watch/cli.ts report --game ../game --ref origin/stable --watcher stable --out stable.json
+node tools/upstream-watch/cli.ts publish --report stable.json --title "Upstream stable moved: v{version} ({sha})" \
+  --prefix "Upstream stable moved" --on moved --when-empty leave [--dry-run]
 ```
 
 - It finds the watcher's issue by title prefix (`--prefix`, default the title) among issues labelled `upstream-watch`. The label must exist; it's in [CONTRIBUTING](../../CONTRIBUTING.md)'s label list.
-- The title may use `{version}` and `{sha}`, filled from the upstream commit: the stable watcher's is `"Upstream stable moved: v{version} ({sha})"`, with the prefix `"Upstream stable moved"`.
+- The title may use `{version}` and `{sha}`, filled from the upstream commit. Such a title needs `--prefix`, since the filled title changes between runs.
 - **Something to report** is listed changes (`--on changes`, the default) or, for the stable watcher, any move of the ref (`--on moved`).
 - **With something to report:** it updates the open issue. If none is open, it reopens the latest closed one, so the history stays in one thread. If there's never been one, it creates one.
 - **With nothing:** `--when-empty close` (the default) closes the open issue with a comment. `leave` leaves it: the stable watcher's issue is closed by the bump PR.
@@ -54,14 +72,14 @@ Both commands exit 0 on success and 2 on bad usage or any failure: a git or gh e
 
 ## The workflows
 
-Each watcher has a workflow. Run it from Actions → Run workflow, or with `gh workflow run <file>`. Every release runs both ([releasing](../../docs/releasing.md) step 2).
+Each watcher has a workflow. Run it from Actions → Run workflow, or with `gh workflow run <file>`. Every release runs both ([releasing](../../docs/releasing.md) step 2). Both call [`upstream-watch.yml`](../../.github/workflows/upstream-watch.yml), which holds the jobs, so the action pins live in one place.
 
 | Workflow | `ref` input (default) | Publishes with |
 |---|---|---|
 | [`stable-watch.yml`](../../.github/workflows/stable-watch.yml), "Stable watch (upstream stable)" | `origin/stable` | `--on moved --when-empty leave` |
 | [`forward-check.yml`](../../.github/workflows/forward-check.yml), "Forward check (upstream dev)" | `origin/dev` | `--on changes --when-empty close` |
 
-The `ref` input is there for testing: point it at another commit to see what a move would look like. Each workflow runs in two jobs:
+Both workflows also take a `dry_run` input, which prints what `publish` would do and touches no issue. The `ref` input is for testing: point it at another commit to see what a move would look like. On the stable watcher, any `ref` but `origin/stable` is always a dry run, since a test ref would otherwise open an issue saying a Steam update is coming. The jobs:
 - **`report`** reads upstream content, with read-only access to this repository.
 - **`publish`**, the only job that can write issues, runs `publish` on the finished report.
 
@@ -83,9 +101,9 @@ Neither runs on pull requests, and neither is a required check.
   | `src/scan.ts` | Comments, strings, matching brackets, top-level search and splitting, normalising whitespace |
   | `src/declarations.ts` | Declarations and members of a `.d.ts`, and their diff |
   | `src/ram-costs.ts` | The RAM cost tree, flattened and resolved, and its diff |
-  | `src/report.ts` | The report's shape and its Markdown, kept under GitHub's issue size limit |
+  | `src/report.ts` | The report's shape (`WatchReport`), its Markdown for each watcher (with the stable watcher's bump steps), kept under GitHub's issue size limit, and the JSON `publish` reads (`reportFile`) |
   | `src/git.ts` | `buildReport`: both versions read from the game clone and compared; the pinned commit |
-  | `src/issue.ts` | Which issue to create, update, reopen or close |
+  | `src/issue.ts` | Whether there's news (`hasNews`), which issue to create, update, reopen or close (`planIssue`), and title placeholders (`fillTitle`) |
   | `src/watchlist.ts` | Reading the watchlist, and the game files a doc cites |
   | `watchlist.txt` | Watched game source paths |
   | `test/` | Unit tests, plus integration tests on a scratch git repository, the real pinned files and the docs |

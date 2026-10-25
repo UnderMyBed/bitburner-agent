@@ -1,4 +1,4 @@
-# Game source paths the forward check watches (ADR 0005): `git log <pinned>..<upstream> -- <these>` lists the commits
+# Game source paths the upstream watchers watch: `git log <pinned>..<upstream> -- <these>` lists the commits
 # touching them. One path (file or directory, ending in /) per line, relative to the game repository; # starts a comment.
 # A test checks that every path exists and that every game file the mechanics docs cite is covered.
 

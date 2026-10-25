@@ -4,7 +4,7 @@
 - **Amends:** [0003](0003-game-version-pinning.md) (when the `stable` watcher runs), [0005](0005-forward-compat-dev-branch.md) (when and how the `dev` forward check runs)
 
 ## Context
-ADR 0003 has a scheduled workflow watch upstream `stable`. ADR 0005 has the forward check against `dev` run weekly and on demand. The owner decided this project has no scheduled runs: heavy suites already run on demand and before every release (owner decisions log #7). The watchers are now included too (log #24).
+ADR 0003 has a scheduled workflow watch upstream `stable`. ADR 0005 has the forward check against `dev` run weekly and on demand. The owner decided this project has no scheduled runs: heavy suites already run on demand and before every release (owner decisions log #7). The watchers are now included too (#24).
 
 Building the forward check ([`tools/upstream-watch`](../../tools/upstream-watch/README.md), #21) also settled two details that ADR 0005's table got wrong:
 - It sparse-fetches nothing. It makes a blobless clone of the game's repository: full history, with file contents fetched only when read. That is cheap, and `git log pinned..dev` needs the history anyway.
