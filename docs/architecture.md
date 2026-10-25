@@ -389,7 +389,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 
 ### 9.1 Design
 Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
-- **Engine:** the real `vendor/bitburner-src` code, bundled for plain Node with esbuild (the module mapping from the game's `jest.config.js`), on jsdom globals. It boots through the game's own `Engine.load`: the new-game path, or the real save-load path including migration and offline progress.
+- **Engine:** the real `vendor/bitburner-src` code, bundled for plain Node with esbuild (the module mapping from the game's `jest.config.js`), on jsdom globals. One game file differs in the bundle: the script module cache gets strong `WeakRef`/`FinalizationRegistry` stand-ins, so garbage collection can't change results ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73), [parity audit §8](sim/parity.md#8-the-simulators-own-parity-layer)). It boots through the game's own `Engine.load`: the new-game path, or the real save-load path including migration and offline progress.
 - **Browser parity layer:** the harness reproduces what the browser and UI provide implicitly, and each item gets a test. The [parity audit](sim/parity.md) is the full inventory, with each item's disposition and test:
   - the page's globals (`sprintf`, lodash `_`, `React`), shared between `window` and the global object
   - the UI's popups, toasts, error popup and prompts, as sim events; prompts answered by scenario rules, or left open as with nobody at the screen
@@ -419,7 +419,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 ### 9.2 Fidelity gaps (known and accepted)
 - The headless simulator doesn't render the UI, so code that reads the game's DOM fails there (our `ui` effectors, parts of the legacy fork). UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
 - The browser parity layer (§9.1) is hand-written. A missed side effect of the UI is a silent fidelity gap, so the layer is re-audited ([parity audit](sim/parity.md)) whenever the pinned version moves.
-- The simulator differs from a browser on purpose in a few places, listed in the [parity audit's summary](sim/parity.md#summary): a simulated player at the UI (prompt rules, error popups closed at once), no network, no windows, autosave off.
+- The simulator differs from a browser on purpose in a few places, listed in the [parity audit's summary](sim/parity.md#summary): a simulated player at the UI (prompt rules, error popups closed at once), no network, no windows, autosave off, and compiled script modules never dropped.
 - Timing contention under load (batch landing jitter) is modelled with injected jitter that we calibrate from real telemetry.
 - Offline progress and save/reload are exercised through the engine's real load path using serialised saves.
 
@@ -468,7 +468,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R7 | **Explainability.** Every desired-state version links to its decision record. |
 | R8 | **Rate-limited and confirmed irreversibles.** Installs and flumes require the guard to pass on two consecutive snapshots, and a save backup is taken first (§6). |
 | R9 | **Liveness.** The brain detects a dead or frozen game (no snapshot for N minutes while the brain is up) and a stalled route (no critical-path progress), and alerts on the dashboard. See §10.2 for automatic recovery. |
-| R10 | **Long-run hygiene (24/7).** The game compiles each distinct script source into a module that is never garbage-collected (S1). So in-game code never generates scripts with unique source text: variation goes in arguments and ports, not code. Reflex state is bounded. The Agent reports the page's heap use (`performance.memory`, free through `eval("window")`), so growth is visible before it hurts. |
+| R10 | **Long-run hygiene (24/7).** The game compiles each distinct script source into a module that is never garbage-collected (S1). So in-game code never generates scripts with unique source text: variation goes in arguments and ports, not code. On v3.0.1 the game's cache holds those modules weakly, so a source that returns after a garbage collection compiles, and leaks, a new module, with its module-level variables reset. In-game code therefore keeps no state at module level that it relies on either lasting or resetting. (The simulator holds every module, as upstream dev does: [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73).) Reflex state is bounded. The Agent reports the page's heap use (`performance.memory`, free through `eval("window")`), so growth is visible before it hurts. |
 | R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps

@@ -44,12 +44,13 @@ npm run build:engine   # bundles the engine (also done automatically before test
 | `crypto` (Node built-in) | `fallback: { crypto: false }` in webpack | Empty module (`stubs/node-builtin.js`), the same |
 | `/utils/Protections` | Null mock in Jest | Not needed: the entry never imports `index.tsx`, the only importer |
 | `__COMMIT_HASH__` | webpack injects `git rev-parse --short HEAD` | Same value, so `ns.ui.getGameInfo().commit` matches the game |
+| `WeakRef`, `FinalizationRegistry` in `NetscriptJSEvaluator.ts` (the script module cache) | Built-ins (the browser's; Node's under Jest) | **Strong stand-ins** (`stubs/strong-refs.ts`), imported into that file alone (`holdModules`), so compiled modules are never dropped, as on upstream dev. See "Differences from a browser" |
 
 The entry imports the game's `engine` module, so the bundle contains the whole game and its UI dependencies (React, MUI and so on), about 16 MB. That's harmless at runtime and makes loading the bundle exercise the real module graph.
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`, `stubs/strong-refs.ts`) are bundled with the game's source, and most import it. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
 - with the game's own TypeScript (`vendor/bitburner-src/node_modules`, installed by `npm run setup:engine`);
 - against the game's types, through [`tsconfig.bundle.json`](tsconfig.bundle.json), which extends the game's tsconfig and resolves its path aliases and packages;
 - run by `scripts/typecheck-bundle.ts`.
@@ -97,7 +98,7 @@ await sim.close();
   - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios use `runUntil`'s `onBitVerse`.
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
-  - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it.
+  - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it. Measuring doesn't change the game ([Determinism](#determinism)).
   - `profile("start" | "stop")`: a CPU profile of the process, through the inspector. Stopping returns it (the `.cpuprofile` format). One at a time.
   - `crash(code, message)`
 
@@ -276,7 +277,7 @@ npm run bench -w @bitburner-agent/sim -- --profile <workload> [--out file.cpupro
 
 ## Determinism
 
-**The guarantee:** the same seed, epoch, fixture, prompt rules and sequence of calls give the same `stateHash()`, whatever the `advance` or `runUntil` step sizes, on any machine. `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
+**The guarantee:** the same seed, epoch, fixture, prompt rules and sequence of calls give the same `stateHash()`, whatever the `advance` or `runUntil` step sizes, on any machine. Garbage collection doesn't change it either, including the full collections `diagnostics.heap()` takes, because the build holds every compiled script module ([Differences from a browser](#differences-from-a-browser)). `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
 
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
@@ -332,6 +333,7 @@ Deliberate differences:
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
 - **No windows and no network.** Tail windows don't exist: `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail calls do nothing. `ns.ui.windowSize()` is a fixed 1024×768. The simulation is offline ([Browser globals, errors and network](#browser-globals-errors-and-network)).
 - **A simulated player at the UI.** Prompt rules answer at once, and error popups are closed at once ([Prompts](#prompts), [Events](#events)).
+- **Compiled script modules are never dropped.** The game caches each script's compiled module by its source. On v3.0.1 the cache holds modules weakly, so a browser's garbage collector can drop one whenever no file has that source any more; the next script with the same source then gets a fresh module, with its module-level variables reset. Here the cache holds every module, as upstream dev's does ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), so a script's module-level state lasts as long as the simulation, and results don't depend on when the collector runs. Our in-game code must not depend on module-level state either lasting or resetting (architecture R10). Memory: one module per distinct source ever compiled, kept for the simulation's life. Most of that is Node's, which never frees an imported module, as the game's own comment says of browsers (`NetscriptJSEvaluator.ts:39`); the cache adds its key, the source text.
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
 
 The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists any open gaps and the deliberate differences.
