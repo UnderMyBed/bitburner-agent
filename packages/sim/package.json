@@ -13,6 +13,7 @@
     "@bitburner-agent/core": "*",
     "@sinonjs/fake-timers": "15.4.0",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "6.2.5",
     "jsdom": "30.1.2"
   },
   "devDependencies": {

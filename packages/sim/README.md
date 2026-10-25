@@ -76,7 +76,7 @@ await sim.close();
   - `start` resolves once the fixture is booted; it fails with the host's reason if setup fails, or after 60 s.
 - **Inputs are checked:**
   - `seed` is an unsigned 32-bit integer (wider values would alias).
-  - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock.
+  - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock. `epochMs` is required, except with a save fixture, which refuses it; `offlineMs` is a non-negative integer.
 - **Requests** go over Node IPC as typed messages (`src/protocol.ts`, `src/rpc.ts`).
   - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing. Each request also waits for script imports to finish (see [the import barrier](#scripts)).
   - If the process ends, or a message can't be delivered, pending and later calls reject. The error has the exit code (or signal) and the last 8,192 characters of the process's combined stdout and stderr.
@@ -92,9 +92,48 @@ await sim.close();
 
 A fixture is the game state a simulation starts from.
 - **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`. It then does what the UI does once mounted: it emits `MainUILoaded`, which starts saved scripts and autoexec.
-- **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
-- **Autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.
+  - **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
+- **`{ kind: "save", bytes | path, offlineMs? }`** loads a save through the game's own `Engine.load`: migration, offline progress, restarting the saved scripts. See [Saves](#saves).
+- **For every fixture, autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.
 - **Without a fixture** the engine is loaded but no game is booted. That's only useful for testing the harness, and `summary()`/`stateHash()` refuse.
+
+### Saves
+
+```ts
+const bytes = await sim.save();                                    // the game's own save: Steam .json.gz bytes
+const later = await Simulation.start({ seed: 1, fixture: { kind: "save", bytes, offlineMs: 3_600_000 } });
+```
+
+- **`save()`** returns exactly what the Steam build writes (gzip bytes), from the game's own serialiser. Like hashing, it has no side effects on the run.
+- **Compression takes no virtual time.** The game gzips with `CompressionStream`, which Node runs on a thread pool in real time, so a script awaiting a save (e.g. `ns.singularity.getSaveData`) would see virtual time move by however long the machine took. The host's stand-in (`src/host/parity/compression.ts`) does the same gzip work synchronously.
+- **A save fixture takes its epoch from the save.** The parent reads the save's `Player.lastUpdate` before the host starts, and the epoch is that plus `offlineMs` (default 0). The game's real offline-progress path then credits the offline time: income, playtime, and saved scripts' offline production. Passing `epochMs` with a save fixture is refused.
+- **Formats:** `.json.gz` bytes (Steam/Electron) or the web build's base64 export, as `bytes` or from a file `path` (the only form a JSON scenario can use). Plain JSON, or a damaged file, is refused with a message saying so.
+- **What loading changes:**
+  - A save the simulator made round-trips **exactly**: with no offline time, save → load → save gives an identical save, field for field, and the saved scripts are running again.
+  - Any other save gets two settings overridden on load: `AutosaveInterval` (0) and `SuppressAutosaveDisabledWarnings` (true).
+  - The game itself changes state on load in places. For example, an IPvGO game where the AI is to move spends 2 of its stored cycles each time it's loaded (`Go/boardAnalysis/goAI.ts`). That's the game's behaviour, not the harness's.
+- **IndexedDB.** The game keeps its save in IndexedDB, so the host provides an in-memory one (`fake-indexeddb`, on `window` and the global), holding the loaded save as a browser would. The pre-v3 migration reads its backup from there.
+- **Old saves migrate.** A pre-v3 save makes the game export a backup of the old data before migrating it; that download shows up in the event log. CI checks this with a v2.8.1 save from the game's own migration tests.
+
+**Real Steam saves are personal data.** As test fixtures they go in `packages/sim/fixtures-local/`, which is gitignored and never committed. Tests that use them skip, and say so, when there are none. Saves only ever flow one way: Steam saves may become simulator fixtures, and nothing the simulator produces is ever loaded into Steam (architecture §9.4).
+
+### Events
+
+```ts
+const { events, next } = await sim.events();   // everything so far
+const newer = await sim.events(next);          // only what happened since
+```
+
+The log records what the game did that a browser would have shown or done outside the page, in order. Each event has `at`, the virtual time; 0 means it happened while the host was still being set up.
+- **`download`:** the game started a file download (an `<a download>` click, e.g. a save export or the pre-v3 backup), with the file name and size. jsdom can't navigate, so the host records it instead.
+- **`console`:** an error or warning on the console, from the game or a library.
+  - It's also written to stderr, so it appears in the output tail if the process dies.
+  - File paths on this machine are replaced by `<repo>`, so the log reads the same everywhere.
+  - Node's own process warnings (`(node:<pid>) …`) are left out: they're about the host, not the game.
+
+The host keeps the most recent 10,000 events. A page reports how many older ones were `dropped`, so a long run of noisy scripts can't grow memory without limit.
+
+More event kinds (alerts, dialogs, prompts) come with the browser-parity layer ([#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)).
 
 ### Scripts
 
@@ -143,7 +182,10 @@ await sim.kill(pid);    // false if no such script is running
 
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
-1. **Browser environment** (`installDom`, `src/host/dom.ts`): jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`.
+1. **Browser environment** (`installDom`, `src/host/dom.ts`): jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`. Alongside it, `installHost` also sets up:
+   - console capture (first, so nothing is missed) and download capture, for the event log (`src/host/events.ts`)
+   - an in-memory IndexedDB (`src/host/parity/storage.ts`)
+   - synchronous gzip streams (`src/host/parity/compression.ts`)
    - **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept. The later steps patch some of them: `crypto` (step 3), and `Blob`, `URL.createObjectURL` and `URL.revokeObjectURL` (step 4).
    - **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
    - **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance`/`crypto` resolve to the globals at call time, and the virtual clock and seeded randomness cover both. `requestAnimationFrame` runs on those timers too, not on real time.
@@ -166,6 +208,7 @@ Other packages only use `Simulation`; the rest of this section describes the hos
 
 ## Known gaps
 
+- **No rendered UI.** Nothing is drawn, so scripts that read the game's page (its DOM: HUD values, buttons) fail headless. That covers parts of the legacy fork and our own `ui` effectors. They're tested on a real browser build instead (environment E2, architecture §9.4).
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
 - **The UI router is still the game's pre-mount stub.** Until the headless router lands, messages (`.msg` files, and the `fl1ght.exe` hint) aren't delivered, `Bladeburner.process()` returns early, and `Router.toPage` calls queue up unused.
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
@@ -186,7 +229,8 @@ These are tracked in the browser-parity audit (`docs/sim/parity.md`, [#28](https
 |---|---|
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
 | `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts` and module stubs |
-| `src/simulation.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, the RPC client, the message types |
-| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), engine loading; `parity/` holds browser-parity fixes (so far the locale pin) |
+| `src/simulation.ts`, `src/options.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, option resolution (epoch, reading saves), the RPC client, the message types |
+| `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
+| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), engine loading; `parity/` holds browser-parity fixes (locale pin, IndexedDB, synchronous gzip) |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts` (run by the root `npm run` scripts) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` run in child processes |

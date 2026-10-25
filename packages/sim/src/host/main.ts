@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
 import type { EngineApi } from "../engine/api.ts";
 import {
-  type Fixture,
+  type HostFixture,
   type HostMessage,
   type HostOptions,
   type Method,
@@ -15,6 +15,7 @@ import {
   validateHostOptions,
   validateRun,
 } from "../protocol.ts";
+import { events } from "./events.ts";
 import { installHost } from "./install.ts";
 import { pinnedLocale } from "./parity/locale.ts";
 import { randomState, restoreRandomState } from "./random.ts";
@@ -24,10 +25,28 @@ const errorText = (error: unknown) => (error instanceof Error ? (error.stack ?? 
 
 type Handlers = { [M in Method]: (params: Params<M>) => Result<M> | Promise<Result<M>> };
 
-function bootFixture(engine: EngineApi, fixture: Fixture): Promise<void> {
+function bootFixture(engine: EngineApi, fixture: HostFixture): Promise<void> {
   switch (fixture.kind) {
     case "new":
       return engine.bootNewGame(fixture.tutorial);
+    case "save":
+      // The game takes gzip saves as bytes and the web export as its base64 text.
+      return engine.bootSave(
+        fixture.format === "gzip" ? new Uint8Array(Buffer.from(fixture.data, "base64")) : fixture.data,
+      );
+  }
+}
+
+/**
+ * Serialising a save draws from Math.random (the game builds a throwaway PlayerObject), so anything that serialises
+ * must undo those draws: observing the game must not change how the run turns out.
+ */
+async function withoutRandomDraws<T>(serialise: () => Promise<T>): Promise<T> {
+  const random = randomState();
+  try {
+    return await serialise();
+  } finally {
+    restoreRandomState(random);
   }
 }
 
@@ -60,18 +79,17 @@ async function start(options: HostOptions): Promise<Host> {
     },
     stateHash: async () => {
       booted();
-      // Serialising the save draws from Math.random (the game builds a throwaway PlayerObject), so undo those draws:
-      // hashing must not change how the run turns out. The random state is part of the hash, because the save alone
-      // doesn't record where the seeded streams are, and two equal saves could still diverge.
+      // The random state is part of the hash, because the save alone doesn't record where the seeded streams are,
+      // and two equal saves could still diverge.
       const random = randomState();
-      let save: string;
-      try {
-        save = await engine.saveJson();
-      } finally {
-        restoreRandomState(random);
-      }
+      const save = await withoutRandomDraws(() => engine.saveJson());
       return createHash("sha256").update(save).update(JSON.stringify(random)).digest("hex");
     },
+    save: async () => {
+      booted();
+      return Buffer.from(await withoutRandomDraws(() => engine.saveBytes())).toString("base64");
+    },
+    events: ({ since }) => events(since),
     writeFile: ({ host, path, content }) => {
       booted();
       engine.writeFile(host, path, content);

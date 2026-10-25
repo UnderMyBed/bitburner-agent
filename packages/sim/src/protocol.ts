@@ -1,5 +1,5 @@
-// Messages between a Simulation (parent) and its host process (child), over Node IPC. Every message carries a
-// `type`, so new kinds (e.g. host events in later tasks) can be added without ambiguity.
+// The types a Simulation (parent) and its host process (child) share: options, fixtures, results, and the messages
+// between them over Node IPC. Every message carries a `type`, so new kinds can be added without ambiguity.
 
 /**
  * A new game starts the interactive tutorial; "skipped" ends it as the Skip button does. On v3.0.1 a running tutorial
@@ -7,8 +7,24 @@
  */
 export type Tutorial = "running" | "skipped";
 
-/** The game state a simulation starts from. A union: later fixture kinds add members. */
-export type Fixture = { kind: "new"; tutorial: Tutorial };
+/**
+ * A save, as the game writes it: a Steam/Electron `.json.gz` file or the web build's base64 export, given as bytes or
+ * as a file path (the only form a JSON scenario can use). The virtual epoch is the save's own `lastUpdate` plus
+ * `offlineMs` (default 0), so the game's real offline-progress path runs.
+ */
+export type SaveFixture = { kind: "save"; offlineMs?: number } & (
+  | { bytes: Uint8Array; path?: never }
+  | { path: string; bytes?: never }
+);
+
+/** The game state a simulation starts from. */
+export type Fixture = { kind: "new"; tutorial: Tutorial } | SaveFixture;
+
+/**
+ * A fixture as the host receives it. Only kinds that need work in the parent differ from `Fixture`: a save arrives
+ * already read, its format known (`data` is the gzip bytes in base64, or the web export's base64 text itself).
+ */
+export type HostFixture = Exclude<Fixture, SaveFixture> | { kind: "save"; format: "gzip" | "base64"; data: string };
 
 /**
  * Test-only knobs for the simulator's own tests. Never use them in scenarios: with the barrier disabled, the
@@ -45,14 +61,44 @@ export interface ProcessInfo {
   args: ScriptArg[];
 }
 
-export interface HostOptions {
+export interface SimulationOptions {
   /** Seeds every source of randomness the game can reach. An unsigned 32-bit integer. */
   seed: number;
-  /** Virtual epoch: what the game's Date reads when it loads. A non-negative integer. */
-  epochMs: number;
+  /**
+   * Virtual epoch: what the game's Date reads when it loads. A non-negative integer. Required, except with a save
+   * fixture, which takes its epoch from the save (and refuses this option).
+   */
+  epochMs?: number;
   /** Without a fixture the engine is loaded but no game is booted. */
   fixture?: Fixture;
   testHooks?: TestHooks;
+}
+
+/** What the host process receives: the epoch decided and the fixture resolved. */
+export interface HostOptions {
+  seed: number;
+  epochMs: number;
+  fixture?: HostFixture;
+  testHooks?: TestHooks;
+}
+
+/** Things that happened in the game that a browser would have shown or done outside the page. */
+/** `at` is the virtual epoch time it happened, or 0 if it happened while the host was still being set up. */
+export type SimEvent =
+  /** The game started a file download (an `<a download>` click), e.g. a save export or a pre-v3 backup. */
+  | { type: "download"; at: number; filename: string; bytes: number }
+  /**
+   * The game (or a library in it) wrote an error or warning to the console. Machine-specific file paths in the
+   * message are replaced by `<repo>`, so the log reads the same on every machine.
+   */
+  | { type: "console"; at: number; level: "error" | "warn"; message: string };
+
+/** A page of the event log: events from position `since` on, and where the next page starts. */
+export interface EventPage {
+  events: SimEvent[];
+  next: number;
+  /** Events older than the kept window, no longer available (the log keeps the most recent ones). */
+  dropped: number;
 }
 
 /** A fixed-schema snapshot of the game, for tests and reports. */
@@ -112,6 +158,10 @@ export interface HostMethods {
   summary(params: Record<string, never>): GameSummary;
   /** sha256 of the game's own save JSON: two runs are identical exactly when their saves are. */
   stateHash(params: Record<string, never>): string;
+  /** The game's own save, gzip bytes in base64 (the Steam `.json.gz` format). */
+  save(params: Record<string, never>): string;
+  /** The event log from position `since` (default 0) on, in order. */
+  events(params: { since: number }): EventPage;
   /** Writes a script or text file, as a player saving it in the editor would. */
   writeFile(params: { host: string; path: string; content: string }): void;
   /** Starts a script as the terminal's `run` does: the game's own RAM check, pid and messages. */
@@ -160,7 +210,7 @@ export function validateHostOptions(options: HostOptions): void {
   }
 }
 
-function validateFixture(fixture: Fixture): void {
+function validateFixture(fixture: HostFixture): void {
   switch (fixture.kind) {
     case "new":
       if (fixture.tutorial !== "running" && fixture.tutorial !== "skipped") {
@@ -169,10 +219,15 @@ function validateFixture(fixture: Fixture): void {
         );
       }
       return;
+    case "save":
+      if ((fixture.format !== "gzip" && fixture.format !== "base64") || typeof fixture.data !== "string") {
+        throw new RangeError("a save fixture needs its data, as gzip (base64-encoded) or base64 text");
+      }
+      return;
     default: {
       // Exhaustive: a new fixture kind that isn't handled here is a type error.
-      const unhandled: never = fixture.kind;
-      throw new RangeError(`unknown fixture kind ${JSON.stringify(unhandled)}`);
+      const unhandled: never = fixture;
+      throw new RangeError(`unknown fixture kind ${JSON.stringify((unhandled as { kind: unknown }).kind)}`);
     }
   }
 }
