@@ -49,7 +49,7 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Everything else here is typechecked as usual. esbuild only strips types, so nothing typechecks these files: tests are their only guard, so keep them small.
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Everything else here is typechecked as usual. esbuild only strips types, so nothing typechecks these files: tests are their only guard, so keep them small.
 
 The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`. `EngineApi` contains functions only.
 
@@ -77,6 +77,7 @@ await sim.close();
 - **Inputs are checked:**
   - `seed` is an unsigned 32-bit integer (wider values would alias).
   - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock. `epochMs` is required, except with a save fixture, which refuses it; `offlineMs` is a non-negative integer.
+  - `prompts` rules each need a non-empty `match` and a text or `true`/`false` answer.
 - **Requests** go over Node IPC as typed messages (`src/protocol.ts`, `src/rpc.ts`).
   - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing. Each request also waits for script imports to finish (see [the import barrier](#scripts)).
   - If the process ends, or a message can't be delivered, pending and later calls reject. The error has the exit code (or signal) and the last 8,192 characters of the process's combined stdout and stderr.
@@ -128,7 +129,11 @@ const newer = await sim.events(next);          // only what happened since
 
 The log records what the game did that a browser would have shown or done outside the page, in order. Each event has `at`, the virtual time; 0 means it happened while the host was still being set up.
 - **`download`:** the game started a file download (an `<a download>` click, e.g. a save export or the pre-v3 backup), with the file name and size. jsdom can't navigate, so the host records it instead.
-- **`console`:** an error or warning on the console, from the game or a library.
+- **`alert`:** a popup the game raised (`ns.alert`, a message arriving, any `dialogBoxCreate`), as text. React content is rendered to its text.
+- **`toast`:** a toast (`ns.toast`, achievements, saves…), with its text and `variant`. The UI drops toasts while a page hides messages; the log keeps them.
+- **`error`:** an error the game reports in its error popup: a script error, or an uncaught one. It has `errorType`, `message`, `host`, `script` and `pid`. Each popup is dismissed at once, so every error is reported, repeats included.
+- **`prompt`:** an `ns.prompt`, with its `text`, `kind` (boolean, text or select) and `choices`. Also the `answer` it got and whether a rule or the default gave it. See [Prompts](#prompts).
+- **`console`:** an error or warning on the console, from the game or a library, or an uncaught error (as a browser logs one).
   - It's also written to stderr, so it appears in the output tail if the process dies.
   - File paths on this machine are replaced by `<repo>`, so the log reads the same everywhere.
   - Node's own process warnings (`(node:<pid>) …`) are left out: they're about the host, not the game.
@@ -136,7 +141,28 @@ The log records what the game did that a browser would have shown or done outsid
 
 The host keeps the most recent 10,000 events. A page reports how many older ones were `dropped`, so a long run of noisy scripts can't grow memory without limit.
 
-More event kinds (alerts, dialogs, prompts) come with the browser-parity layer ([#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)).
+The same seed and calls give the same log (`test/page.test.ts`).
+
+### Prompts
+
+There is no player to answer `ns.prompt`, so the simulation answers it at once:
+
+```ts
+const sim = await Simulation.start({ seed: 1, epochMs, fixture, prompts: [{ match: "Continue", answer: true }] });
+```
+
+- **Rules:** the first rule whose `match` is part of the prompt's text gives the `answer`: `true`/`false` for a yes/no prompt, the text or the chosen option for a text or select prompt.
+- **Default:** a prompt no rule matches gets what dismissing it gives in the game: `""` for a text or select prompt, `false` for anything else.
+- Every prompt and its answer is a `prompt` event.
+
+### The page's other parts
+
+Besides the Router (below), the browser page gives the game and its scripts a few things that the simulator reproduces (`src/engine/bundle/page.ts`, `src/host/parity/`):
+- **Globals.** `sprintf`, `vsprintf`, lodash's `_`, `React` and `ReactDOM` are globals for scripts. `window.print` and `window.prompt` throw, as the game makes them. In a browser `window` is the global object. Here they are two objects with the page's globals copied to both once, so a script that later sets `window.x` doesn't get a global `x`.
+- **Uncaught errors** are handled as a browser does. A rejected promise nobody handled is raised on `window`, where the game's own listener ignores the `ScriptDeath` of killed scripts and reports anything else. An exception in a timer callback is logged. Either way the simulation carries on.
+- **Stack traces** name repository files as `<repo>/…`, the same on every machine. The game saves some in its crash reports.
+- **Offline.** `fetch` fails as with no connection (so `ns.wget` returns false); `XMLHttpRequest`, `WebSocket` and `EventSource` refuse.
+- **Imports.** Scripts can import other scripts and nothing else, as in a browser.
 
 ### Pages and the BitVerse
 
@@ -198,9 +224,10 @@ await sim.kill(pid);    // false if no such script is running
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
 1. **Browser environment** (`installDom`, `src/host/dom.ts`): jsdom globals, plus the two patches from the game's `FixJSDOMEnvironment.ts`. Alongside it, `installHost` also sets up:
-   - console capture (first, so nothing is missed) and download capture, for the event log (`src/host/events.ts`)
+   - machine-independent stack traces (first: stacks are formatted when an error is made), then console capture (so nothing is missed) and download capture, for the event log (`src/host/events.ts`)
    - an in-memory IndexedDB (`src/host/parity/storage.ts`)
    - synchronous gzip streams (`src/host/parity/compression.ts`)
+   - no network (`src/host/parity/network.ts`), and uncaught promise rejections raised on `window` (`src/host/parity/errors.ts`)
    - **Node's built-ins win.** Where Node already provides a standard API (`Blob`, `URL`, `Event`, `crypto`, `performance`…), Node's is kept. The later steps patch some of them: `crypto` (step 3), and `Blob`, `URL.createObjectURL` and `URL.revokeObjectURL` (step 4).
    - **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
    - **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance`/`crypto` resolve to the globals at call time, and the virtual clock and seeded randomness cover both. `requestAnimationFrame` runs on those timers too, not on real time.
@@ -218,17 +245,18 @@ Other packages only use `Simulation`; the rest of this section describes the hos
    - `setTimeout`/`setInterval` (and their clears), `Date` and `performance` are virtual, starting at `epochMs`. `performance.now()` starts at 0, like a page that just loaded.
    - Microtasks, `process.nextTick` and `setImmediate` stay real, so promises and I/O work.
    - Between timers, the clock yields to the real event loop through the import barrier, so virtual time never moves while a script is loading. This relies on a fake-timers internal; see the comment in `clock.ts`.
-   - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`.
-6. **The engine bundle** (`loadEngine`), which then gets the barrier-aware import function (`setScriptImport`) and the listener for `bitverseReached` events (`setBitVerseListener`).
+   - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`. An exception a callback throws is logged as uncaught, and the clock carries on; fake-timers would rethrow it.
+6. **The engine bundle** (`loadEngine`), after removing `JEST_WORKER_ID` from the environment (the game reads it while loading). Then the page's globals (`installPageGlobals`), the barrier-aware import function (`setScriptImport`), the event listener (`setGameEventListener`) and the prompt rules (`setPromptAnswerer`).
 
 ## Known gaps
 
 - **No rendered UI.** Nothing is drawn, so scripts that read the game's page (its DOM: HUD values, buttons) fail headless. That covers parts of the legacy fork and our own `ui` effectors. They're tested on a real browser build instead (environment E2, architecture §9.4).
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
-- **Unhandled promise rejections end the simulation process.** The browser swallows them (a killed script's pending `ns.sleep`, for one); fixing this is [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47), with the other open parity gaps.
+- **No windows and no network.** Tail windows don't exist: `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail calls do nothing. `ns.ui.windowSize()` is a fixed 1024×768. The simulation is offline ([The page's other parts](#the-pages-other-parts)).
+- **Nobody at the UI.** Prompts are answered at once, and error popups dismissed at once ([Prompts](#prompts), [Events](#events)).
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
 
-The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists the open gaps.
+The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists the deliberate differences.
 
 ## Troubleshooting
 
@@ -243,9 +271,9 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | Path | What |
 |---|---|
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
-| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`) and module stubs |
+| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), and module stubs |
 | `src/simulation.ts`, `src/options.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, option resolution (epoch, reading saves), the RPC client, the message types |
 | `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
-| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), engine loading; `parity/` holds browser-parity fixes (locale pin, IndexedDB, synchronous gzip) |
+| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), engine loading; `parity/` holds browser-parity fixes (locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, no network); `prompts.ts` answers prompts |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts` (run by the root `npm run` scripts) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` holds child-process probes and save helpers (decoding, and editing saves into test fixtures) |

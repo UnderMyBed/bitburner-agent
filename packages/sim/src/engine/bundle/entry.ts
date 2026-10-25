@@ -26,8 +26,11 @@ import { isSimplePage, Page } from "../../../../../vendor/bitburner-src/src/ui/R
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
-import type { BitVerseReached, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import type { GameEvent, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import { setGameEventListener as captureUi, installPageGlobals, setPromptAnswerer } from "./page.ts";
 import { mountRouter, routerPages } from "./router.ts";
+
+export { installPageGlobals, setPromptAnswerer };
 
 export function versionNumber() {
   return CONSTANTS.VersionNumber;
@@ -66,15 +69,16 @@ export async function bootSave(saveData: SaveData) {
   afterUiMount();
 }
 
-let onBitVerse: (reached: BitVerseReached) => void = () => {};
+let report: (event: GameEvent) => void = () => {};
 
-/** Who hears arrivals at the BitVerse once booting mounts the headless router (router.ts). Call before booting. */
-export function setBitVerseListener(listener: (reached: BitVerseReached) => void) {
-  onBitVerse = listener;
+/** Who hears the game's UI events (page.ts) and arrivals at the BitVerse (router.ts). Call before booting. */
+export function setGameEventListener(listener: (event: GameEvent) => void) {
+  report = listener;
+  captureUi(listener);
 }
 
 function afterUiMount() {
-  mountRouter(onBitVerse); // GameRoot's first render
+  mountRouter((reached) => report({ type: "bitverseReached", ...reached })); // GameRoot's first render
   UIEventEmitter.emit(UIEventType.MainUILoaded); // GameRoot emits this on mount: starts saved scripts and autoexec
   // Autosave would serialise the whole game every virtual minute; the harness takes its own snapshots instead.
   Settings.AutosaveInterval = 0;
@@ -120,6 +124,8 @@ export function gameDiagnostics() {
     autosaveInterval: Settings.AutosaveInterval,
     page: Router.page(),
     focus: Player.focus,
+    exploits: [...Player.exploits],
+    testEnvironment: CONSTANTS.isInTestEnvironment,
     contracts: GetAllServers()
       .flatMap((server) => server.contracts.map((contract) => `${server.hostname}:${contract.fn}`))
       .sort(),

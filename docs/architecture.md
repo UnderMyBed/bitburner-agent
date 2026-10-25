@@ -391,7 +391,9 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 - **Engine:** the real `vendor/bitburner-src` code, bundled for plain Node with esbuild (the module mapping from the game's `jest.config.js`), on jsdom globals. It boots through the game's own `Engine.load`: the new-game path, or the real save-load path including migration and offline progress.
 - **Browser parity layer:** the harness reproduces what the browser and UI provide implicitly, and each item gets a test. The [parity audit](sim/parity.md) is the full inventory, with each item's disposition and test:
-  - `window === globalThis` globals (`sprintf`, lodash `_`): planned, [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)
+  - `window === globalThis` globals (`sprintf`, lodash `_`, `React`)
+  - the UI's popups, toasts, error popup and prompts, as sim events; prompts answered by scenario rules
+  - uncaught errors handled as a browser does; no network
   - browser timer semantics (callbacks run with `this` = `window`), a pinned default locale and time zone
   - `MainUILoaded`, which starts saved scripts and autoexec
   - a headless router with the real router's side effects

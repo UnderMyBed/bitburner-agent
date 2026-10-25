@@ -205,7 +205,8 @@ describe("events", () => {
     await sim.run("home", "warn.js");
     await sim.advance(1000);
     const first = await sim.events();
-    expect(first.events).toHaveLength(1);
+    // (The first page also has an achievement's toast: a script that runs this fast earns one.)
+    expect(first.events.filter(isConsole).map((e) => e.message)).toEqual(["one"]);
     await sim.run("home", "warn.js");
     await sim.advance(1000);
     const second = await sim.events(first.next);

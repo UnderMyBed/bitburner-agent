@@ -3,7 +3,7 @@
 import { resolveObjectURL } from "node:buffer";
 import path from "node:path";
 import { format } from "node:util";
-import type { BitVerseReached, EventPage, SimEvent } from "../protocol.ts";
+import type { EventPage, GameEvent, SimEvent } from "../protocol.ts";
 
 /** The most recent events kept; older ones are dropped (and counted). A long run of noisy scripts stays bounded. */
 const KEEP = 10_000;
@@ -33,10 +33,22 @@ export function events(since: number): EventPage {
   return { events: kept.slice(start - dropped), next: dropped + kept.length, dropped: Math.max(0, dropped - since) };
 }
 
-/** Stack traces name files on this machine; make them read the same everywhere. */
-function withoutMachinePaths(message: string): string {
-  const fileUrl = `file:///${REPO_ROOT.replaceAll("\\", "/")}`;
-  return message.replaceAll(fileUrl, "<repo>").replaceAll(REPO_ROOT, "<repo>");
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A path in the repository, as a path (either separator) or a file URL, with the rest of the path after the root. */
+const REPO_PATH = new RegExp(
+  `(?:file://)?/?(?:${[...new Set([REPO_ROOT, REPO_ROOT.replaceAll("\\", "/")])].map(escapeRegExp).join("|")})([\\\\/][^\\s:()"']*)?`,
+  "g",
+);
+
+/**
+ * Stack traces and messages name files on this machine; make them read the same everywhere: `<repo>/path/to/file`,
+ * with forward slashes, whatever the machine's root and separator.
+ */
+export function withoutMachinePaths(message: string): string {
+  return message.replace(
+    REPO_PATH,
+    (_match, rest: string | undefined) => `<repo>${(rest ?? "").replaceAll("\\", "/")}`,
+  );
 }
 
 /**
@@ -56,9 +68,9 @@ export function captureConsole(): void {
   }
 }
 
-/** The game reached the BitVerse page (see the headless router, src/engine/bundle/router.ts). */
-export function bitverseReached({ flume, destroyedBitNode }: BitVerseReached): void {
-  record({ type: "bitverseReached", at: now(), flume, destroyedBitNode });
+/** Something the game raised for its UI, or the router's arrival at the BitVerse (src/engine/bundle/). */
+export function gameEvent(event: GameEvent): void {
+  record({ ...event, at: now() });
 }
 
 /**

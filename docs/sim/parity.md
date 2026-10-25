@@ -13,23 +13,17 @@ The simulator runs the real game headless: Node, jsdom, a virtual clock, no Reac
 
 ## Summary
 
-The headless router (§2) closes the biggest gap. These gaps remain, all tracked in [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47):
+The headless router (§2, #28) and the page layer (§3, §4; [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)) leave no open gaps. What remains are the by-design differences:
+- **Saves and fixtures:** autosave is off (1.7); every new game chooses whether the tutorial runs (1.10); a save the game can't load fails the simulation's start instead of opening the Recovery page (2.3).
+- **No player at the UI:**
+  - Prompts are answered at once, by the scenario's rules or as dismissing them would (3.1).
+  - Error popups are dismissed at once, so every error is reported (3.4).
+  - There are no tail windows and no real window size (3.8, 4.8).
+  - The simulator is offline (4.6).
+- **Globals:** the page's globals are copied onto the global object once, after the engine loads. A script that later sets `window.x` doesn't get a global `x` (4.4).
+- **From §8:** no rendered UI, no TS/JSX player scripts, and no script modules that await a timer at top level.
 
-| Gap | Effect headless |
-|---|---|
-| Unhandled promise rejections (4.1) | **The simulation process crashes.** A browser swallows a killed script's `ScriptDeath`, e.g. from a script that called `ns.sleep` without `await`. |
-| `ns.prompt` has no UI to answer it (3.1) | A script awaiting `ns.prompt` waits forever |
-| `globalThis.React` / `ReactDOM` not set (4.3) | Scripts that build React content for `ns.printRaw`, `tprintRaw` or tail titles throw `ReferenceError` |
-| The script realm: `globalThis !== window` (4.4) | Globals that libraries set on `window` (`sprintf`, lodash `_`) aren't visible to scripts as bare names, and the reverse |
-| `window.prompt` / `window.print` don't throw (4.5) | jsdom's stubs return `undefined` where the game makes them throw |
-| `ns.wget` does real network I/O (4.6) | Not reproducible |
-| `JEST_WORKER_ID` in the environment (4.7) | Would skip Darknet's 6 s migration delay |
-| `node:` imports from player scripts (§8) | A script can import Node built-ins; a browser would refuse |
-| Crash reports name machine paths (3.4) | `CRASH_REPORT_*.txt` on home holds a stack with local file paths |
-| Tail-window state (3.8), `ns.ui.windowSize()` (4.8) | `tailProperties` is always `null`; the window is always 1024×768 |
-
-The by-design differences: autosave is off (1.7); every new game chooses whether the tutorial runs (1.10); a save the game can't load fails the simulation's start instead of opening the Recovery page (2.3); and, from §8, no rendered UI, no TS/JSX player scripts, and no script modules that await a timer at top level. The [simulator README](../../packages/sim/README.md#known-gaps) lists the ones that affect what scripts can do.
-
+The [simulator README](../../packages/sim/README.md#known-gaps) lists the ones that affect what scripts can do.
 ## 1. Loading and the game loop (`src/engine.tsx`)
 
 | # | What | Disposition |
@@ -78,15 +72,16 @@ The game's `EventEmitter.emit` calls subscribers synchronously and does nothing 
 
 | # | What | Disposition |
 |---|---|---|
-| 3.1 | `ns.prompt` returns a promise that only the prompt modal resolves (`NetscriptFunctions.ts:1367-1373`, `ui/React/PromptManager.tsx:31-40`). Terminal `rm` confirmations work the same way (`Terminal/commands/rm.ts:140-146`) | **gap** ([#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)): an awaited `ns.prompt` never returns. |
+| 3.1 | `ns.prompt` returns a promise that only the prompt modal resolves (`NetscriptFunctions.ts:1367-1373`, `ui/React/PromptManager.tsx:31-40`). Terminal `rm` confirmations work the same way (`Terminal/commands/rm.ts:140-146`) | **handled**: the host answers at once, as a player would. The answer comes from the simulation's prompt rules, or else is what dismissing gives: `""` for a text or select prompt, `false` otherwise (`PromptManager.tsx:23-29`). Each prompt and its answer is a `prompt` event (`packages/sim/src/engine/bundle/page.ts`, `packages/sim/src/host/prompts.ts`). Answering at once is **by design**: a modal would otherwise wait for a player who isn't there. Tests: `page.test.ts` ("with no rule, a prompt is answered as dismissing it would be", "rules answer prompts…"). |
 | 3.2 | Terminal coding contracts await a modal (`CodingContract/Contract.ts:158-173`, `Terminal/Terminal.ts:536-600`) | **irrelevant**: terminal only; `ns.codingcontract.attempt` doesn't use it. |
-| 3.3 | `dialogBoxCreate` / `AlertEvents` (`ui/React/DialogBox.tsx`, `ui/React/AlertManager.tsx`): about 200 call sites, including `ns.alert` and every message | **irrelevant** to game state: no caller reads a result. Capturing the text in the event log is #47. |
-| 3.4 | `exceptionAlert` (`utils/helpers/exceptionAlert.tsx:42-95`) writes `CRASH_REPORT_<time>.txt` to home (`:12-29`), with the error's stack and `navigator.userAgent` (`:56`) | **gap** (#47): the stack names this machine's file paths, so the saved state can differ between machines. Only when an exception alert fires. |
-| 3.5 | Toasts (`SnackbarEvents`, `ui/React/Snackbar.tsx`): `ns.toast`, achievements, exploits, hospitalisation, saves | **irrelevant**: state changes before the toast. |
+| 3.3 | `dialogBoxCreate` / `AlertEvents` (`ui/React/DialogBox.tsx`, `ui/React/AlertManager.tsx`): about 200 call sites, including `ns.alert` and every message | **handled**: no caller reads a result, so there's no game-state effect. Each popup is an `alert` event with its text; React content is rendered to text (`page.ts`). Tests: `page.test.ts` ("alerts and toasts, in the order…", "React content is reduced to its text…"). |
+| 3.4 | `exceptionAlert` (`utils/helpers/exceptionAlert.tsx:42-95`) writes `CRASH_REPORT_<time>.txt` to home (`:12-29`), with the error's stack and `navigator.userAgent` (`:56`) | **handled**: every stack names repository files as `<repo>/…` with forward slashes, the same on every machine (`packages/sim/src/host/parity/errors.ts`). Test: `page.test.ts` ("stack traces name repository files relative to <repo>…"). |
+| 3.5 | Toasts (`SnackbarEvents`, `ui/React/Snackbar.tsx`): `ns.toast`, achievements, exploits, hospitalisation, saves | **handled**: state changes before the toast. Each toast is a `toast` event (`page.ts`). The UI drops toasts while a page hides messages; the log keeps them. Test: `page.test.ts` ("alerts and toasts, in the order…"). |
 | 3.6 | Faction invitations (`Faction/FactionHelpers.tsx:25-33`, `Faction/ui/FactionInvitationManager.tsx`) | **irrelevant**: the invitation is recorded before the event; the modal's Join only calls `joinFaction`. Headless equals a player who never clicks Join; the agent joins through `ns.singularity.joinFaction`. |
 | 3.7 | `BitFlumeEvent` (`run b1t_flum3.exe` without `-q`, `Programs/Programs.ts:320`) | **irrelevant**: terminal only; its modal's button navigates to the BitVerse (§2). |
-| 3.8 | Tail windows (`ui/React/LogBoxManager.tsx`) set `RunningScript.tailProps` (`:191`) | **gap** (#47, minor): `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail resize, move and render calls do nothing. |
-| 3.9 | UI-only re-render emitters: `GoEvents`, `StaneksGiftEvents`, `DarknetEvents`, `TerminalEvents`, `ITutorialEvents`, `OverviewEventEmitter`, `KeyBindingEvents`, `EditorEvents`, `GameOptionsPageEvents`, `ThemeEvents`, `Apr1Events`, `ErrorState.ErrorUpdate`, `DocumentationPopUpEvents`, `RemoteFileApiConnectionEvents`, `Infiltration.updateEvent` | **irrelevant**: re-render only. |
+| 3.8 | Tail windows (`ui/React/LogBoxManager.tsx`) set `RunningScript.tailProps` (`:191`) | **by design**: there are no windows. `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail resize, move and render calls do nothing; README "Known gaps". |
+| 3.9 | UI-only re-render emitters: `GoEvents`, `StaneksGiftEvents`, `DarknetEvents`, `TerminalEvents`, `ITutorialEvents`, `OverviewEventEmitter`, `KeyBindingEvents`, `EditorEvents`, `GameOptionsPageEvents`, `ThemeEvents`, `Apr1Events`, `DocumentationPopUpEvents`, `RemoteFileApiConnectionEvents`, `Infiltration.updateEvent` | **irrelevant**: re-render only. |
+| 3.11 | The error popup (`ErrorHandling/ErrorModal.tsx`) shows each error the game reports through `ErrorState.ErrorUpdate` (`ErrorHandling/DisplayError.ts`). The game reports a new error only while no popup is open | **handled**: each error is an `error` event, and the popup is dismissed at once, as its close button does with `force` (`page.ts`). Without that, only the first error would ever be reported. Test: `page.test.ts` ("every script error is reported…"). |
 | 3.10 | Module-level subscribers that do run headless: number formats (`ui/formatNumber.ts:30-47`), gang upgrade text (`Gang/GangMemberUpgrade.ts:18`), infiltration's hospitalisation hook (`Infiltration/Infiltration.ts:82-88`) | **handled**: plain code that runs as in the browser. No test of its own: formats follow the pinned locale (tested, §8), and infiltration can't start without the UI. |
 
 ## 4. Globals and the script realm
@@ -95,27 +90,28 @@ The game's `EventEmitter.emit` calls subscribers synchronously and does nothing 
 
 | # | What | Disposition |
 |---|---|---|
-| 4.1 | The game handles unhandled promise rejections with a `window` `unhandledrejection` listener that ignores `ScriptDeath` (`engine.tsx:241` → `UncaughtPromiseHandler.ts:3-8`, `utils/ErrorHandler.ts:10-13`) | **gap** (#47): Node never raises that event on the jsdom window, and the host has no process handler, so Node's default ends the process. Seen: a script that calls `ns.sleep` without `await`, then is killed, crashes the simulation. |
+| 4.1 | The game handles unhandled promise rejections with a `window` `unhandledrejection` listener that ignores `ScriptDeath` (`engine.tsx:241` → `UncaughtPromiseHandler.ts:3-8`, `utils/ErrorHandler.ts:10-13`) | **handled**: Node would end the process, so the host raises the browser's event on `window` instead, and logs the rejection if no listener handled it (`packages/sim/src/host/parity/errors.ts`). Tests: `page.test.ts` ("a killed script's un-awaited sleep doesn't end the simulation…", "any other rejection nobody handled reaches the game's error popup"). |
 | 4.2 | `utils/Protections.ts` makes `Number`, `Object`, `String` and the IndexedDB globals read-only (`index.tsx:1`) | **irrelevant** to correct scripts; headless a script *could* overwrite them. Our code doesn't. |
-| 4.3 | `globalThis.React`, `globalThis.ReactDOM` (`index.tsx:15-16`), which scripts use for `printRaw`, `tprintRaw` and tail titles | **gap** (#47). |
-| 4.4 | In a browser `globalThis === window`. Headless, `window`, `document`, `navigator` and storage on `globalThis` are jsdom's, but `globalThis` itself is Node's (`packages/sim/src/host/dom.ts`). So globals that libraries set on `window` while loading don't reach scripts' bare names: sprintf-js's `sprintf` and `vsprintf`, and lodash's `_` (webpack's AMD path). Spike S1 found the legacy fork uses them | **gap** (#47). |
-| 4.5 | `window.print` and `window.prompt` throw a "you meant ns.print/ns.prompt" error (`index.tsx:60-70`) | **gap** (#47, minor): jsdom's stubs return `undefined`. |
-| 4.6 | `ns.wget` uses `fetch` (`NetscriptFunctions.ts:1375-1390`) | **gap** (#47): Node's real `fetch` is kept, so it reaches the network. |
-| 4.7 | `CONSTANTS.isInTestEnvironment` reads `process.env.JEST_WORKER_ID` (`Constants.ts:9`); when it's set, `ns.dnet.induceServerMigration` skips its delay (`NetscriptFunctions/Darknet.ts:444`) | **gap** (#47): `process` doesn't exist in a browser; the host must make sure the variable isn't set. |
-| 4.8 | `ns.ui.windowSize()` (`NetscriptFunctions/UserInterface.ts:121-123`) | **gap** (#47, minor): jsdom's fixed 1024×768. |
+| 4.3 | `globalThis.React`, `globalThis.ReactDOM` (`index.tsx:15-16`), which scripts use for `printRaw`, `tprintRaw` and tail titles | **handled** (`page.ts`). Test: `page.test.ts` ("scripts see what the page puts on window as globals…"). |
+| 4.4 | In a browser `globalThis === window`. Headless, `window`, `document`, `navigator` and storage on `globalThis` are jsdom's, but `globalThis` itself is Node's (`packages/sim/src/host/dom.ts`). So globals that libraries set on `window` while loading wouldn't reach scripts' bare names: sprintf-js's `sprintf` and `vsprintf`, and lodash's `_` (webpack's AMD path). Spike S1 found the legacy fork uses them | **handled**: after the engine loads, the page's globals (these, plus 4.3 and 4.5) are put on both `window` and the global object (`page.ts`). Test: `page.test.ts` ("scripts see what the page puts on window as globals…"). Two objects remain, which is **by design**: a script that sets `window.x` later doesn't get a global `x`. |
+| 4.5 | `window.print` and `window.prompt` throw a "you meant ns.print/ns.prompt" error (`index.tsx:60-70`) | **handled** (`page.ts`). Test: `page.test.ts` ("window.print and window.prompt throw…"). |
+| 4.6 | `ns.wget` uses `fetch` (`NetscriptFunctions.ts:1375-1390`) | **by design**: the simulator is offline, so runs can't depend on the outside world. `fetch` fails as a browser's does with no connection, so `ns.wget` returns false. `XMLHttpRequest`, `WebSocket` and `EventSource` refuse outright (`packages/sim/src/host/parity/network.ts`). Test: `page.test.ts` ("scripts can't reach the network…"). |
+| 4.7 | `CONSTANTS.isInTestEnvironment` reads `process.env.JEST_WORKER_ID` (`Constants.ts:9`); when it's set, `ns.dnet.induceServerMigration` skips its delay (`NetscriptFunctions/Darknet.ts:444`) | **handled**: `process` doesn't exist in a browser, so the host removes the variable before the engine loads (`packages/sim/src/host/install.ts`). Test: `page.test.ts` ("the game doesn't think it's in a test environment…"). |
+| 4.8 | `ns.ui.windowSize()` (`NetscriptFunctions/UserInterface.ts:121-123`) | **by design**: there is no window, so it's jsdom's fixed 1024×768. README "Known gaps". |
 | 4.9 | `Player.identifier` hashes `Date`, the user agent, the window size and `Math.random` (`PersonObjects/Player/PlayerObject.ts:160-167`); `ns.ui.getGameInfo().platform` reads the user agent (`UserInterface.ts:179-186`) | **handled**: deterministic (virtual `Date`, the fixed Steam user agent, seeded randomness), and the platform reads "Steam". Tests: `dom.test.ts` ("the user agent is fixed…"), `simulation.test.ts` ("randomness in the host is the seeded stream…"), and the golden hashes in `new-game.test.ts`, which cover the saved identifier. |
 | 4.10 | `document`/`window` in a script's source cost RAM (`Script/RamCalculations.ts:185-192`) | **handled**: pure source analysis, unchanged. No test needed. |
 | 4.11 | Electron bridge calls during saves and achievements (`Electron.tsx:171-216`) | **irrelevant**: each returns early without `window.electronBridge`. |
 | 4.12 | A Darknet password hint that, if a script `eval`s it, sets `globalThis.pwn3d` and calls `alert(...)` and `globalThis.openDevMenu()` (`DarkNet/controllers/ServerGenerator.ts:561`) | **irrelevant**: no game-state effect. Headless, `alert` is jsdom's not-implemented stub, which logs a console error (it shows in the sim event log) instead of blocking. |
+| 4.13 | An exception a timer callback throws: a browser reports it as an `error` event on `window`, logs it, and carries on | **handled**: fake timers would rethrow it out of `advance`, so the clock reports it as the browser does (`packages/sim/src/host/clock.ts`, `parity/errors.ts`). Test: `page.test.ts` ("an exception in a timer callback is logged, and time goes on"). |
 
 ## 5. Exploits (`src/Exploits/`)
 
-Exploits are saved state with a gameplay effect (`Exploits/applyExploits.ts`), so a simulator that triggered one by accident would change results. A test that a long run grants none is part of #47.
+Exploits are saved state with a gameplay effect (`Exploits/applyExploits.ts`), so a simulator that triggered one by accident would change results. `page.test.ts` ("a day of play earns no exploits…") checks that a long run earns none.
 
 | Exploit | Detection | Disposition |
 |---|---|---|
-| TimeCompression | `performance.now()` deltas between 15 s timers (`Exploits/loops.ts:15-31`) | **handled**: `performance` and the timers share the virtual clock, so 15 s of virtual time reads as 15 s. It would fire if `performance` stayed real while timers ran fast. Test: #47's no-exploits test. |
-| PrototypeTampering | `(55).toExponential()` every 15 min (`loops.ts:4-13`) | **handled**: virtual `setInterval`; fires only if a script really patches `Number.prototype`. Test: #47's no-exploits test. |
+| TimeCompression | `performance.now()` deltas between 15 s timers (`Exploits/loops.ts:15-31`) | **handled**: `performance` and the timers share the virtual clock, so 15 s of virtual time reads as 15 s. It would fire if `performance` stayed real while timers ran fast; that mutation fails the test. Test: "a day of play earns no exploits…". |
+| PrototypeTampering | `(55).toExponential()` every 15 min (`loops.ts:4-13`) | **handled**: virtual `setInterval`; fires only if a script really patches `Number.prototype`. Test: "a day of play earns no exploits…". |
 | Bypass | `ns.bypass(document)` (`NetscriptFunctions/Extra.ts:21-37`) | **handled**: the script's `document` is the game's (one jsdom). No test: our code doesn't call it. |
 | UndocumentedFunctionCall, INeedARainbow, EditSaveFile | Script calls, or the save itself | **handled**: no browser involved, so nothing to test. |
 | Unclickable, N00dles, YoureNotMeantToAccessThis, TrueRecursion, RealityAlteration | Mounted components, trusted clicks, iframes, a debugger | **irrelevant**: can't happen headless (and the dev menu is forbidden anyway). |
@@ -161,17 +157,20 @@ What the host provides so the above works.
 | Synchronous gzip streams | `host/parity/compression.ts` | handled: `saves.test.ts` |
 | `blob:` script modules: revoke-after-import, imports complete in order, the import barrier | `host/scripts.ts` | handled: `scripts.test.ts` |
 | `MainUILoaded` after boot; the headless router | `engine/bundle/entry.ts`, `engine/bundle/router.ts` | handled: `saves.test.ts`, `router.test.ts` |
+| The page's globals; popups, toasts, errors and prompts as events; prompt rules | `engine/bundle/page.ts`, `host/prompts.ts`, `host/events.ts` | handled: `page.test.ts` |
+| Uncaught errors handled as a browser does; machine-independent stack traces | `host/parity/errors.ts`, `host/clock.ts` | handled: `page.test.ts` |
+| No network | `host/parity/network.ts` | by design: `page.test.ts` |
 | React's scheduler uses the real `setImmediate` | — | irrelevant: no React tree is rendered (`ReactDOM.render` never runs) |
 | The game's `moduleCache` holds modules by `WeakRef` (`NetscriptJSEvaluator.ts`), so whether rewriting a file back to old content recompiles depends on garbage collection | — | irrelevant to results: imports complete in order regardless (`scripts.test.ts`) |
 | Script modules that await a timer at top level can't load (the barrier holds virtual time) | `host/scripts.ts` (a watchdog fails loudly after 30 s real time) | by design: README "Known gaps"; `scripts.test.ts` ("a module that can never finish loading fails loudly…") |
-| Player scripts can import `node:` built-ins | `host/scripts.ts` (resolve hook) | gap: #47 |
+| Player scripts can't import anything but other scripts: the game refuses other static imports in its RAM check, and the module hook refuses dynamic ones, as a browser can't resolve them from a `blob:` module | `host/scripts.ts` (resolve hook) | handled: `page.test.ts` ("scripts can import other scripts, and nothing else") |
 | No rendered UI: scripts that read the game's DOM (HUD values, buttons) find nothing | — | by design: README "Known gaps"; covered by E2 tests on a browser build (architecture §9.4) |
 | TS/JSX player scripts (the game's swc is stubbed) | `engine/bundle/stubs/swc.js` | by design: README "Known gaps"; our in-game code is plain JS |
 
 ## Re-auditing after a version bump
 
 1. Update "Game version audited" at the top.
-2. Diff the sources this audit read in full: `git -C vendor/bitburner-src diff <old>..<new> -- src/index.tsx src/ui/GameRoot.tsx src/engine.tsx src/RedPill.tsx src/ui/WorkInProgressRoot.tsx src/Exploits`. Mirror any change to `GameRoot`'s Router in `packages/sim/src/engine/bundle/router.ts`.
+2. Diff the sources this audit read in full: `git -C vendor/bitburner-src diff <old>..<new> -- src/index.tsx src/ui/GameRoot.tsx src/engine.tsx src/RedPill.tsx src/ui/WorkInProgressRoot.tsx src/ui/React/PromptManager.tsx src/ui/React/AlertManager.tsx src/ui/React/Snackbar.tsx src/ErrorHandling src/UncaughtPromiseHandler.ts src/Exploits`. Mirror any change in `packages/sim/src/engine/bundle/page.ts` too. Mirror any change to `GameRoot`'s Router in `packages/sim/src/engine/bundle/router.ts`.
 3. Re-run these searches over `vendor/bitburner-src/src`, and compare the hits with the rows above. Anything new needs a row.
    - `Router\.(toPage|page|hidingMessages|back|allowRouting)\(` (§2; 2.14 lists the call sites)
    - `UIEventEmitter`, and `\.subscribe\(` outside `ui/` (§2, §3)

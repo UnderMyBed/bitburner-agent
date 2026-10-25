@@ -1,8 +1,9 @@
 import type {
-  BitVerseReached,
   GameDiagnostics,
+  GameEvent,
   GameSummary,
   ProcessInfo,
+  PromptRequest,
   RunResult,
   ScriptArg,
   Tutorial,
@@ -38,11 +39,18 @@ export interface EngineApi {
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
   gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
   /**
-   * Booting replaces the game's pre-mount Router stub with a headless router (`bundle/router.ts`), as GameRoot does on
-   * its first render. `listener` hears every arrival at the BitVerse page, including a game that starts there. Call
-   * before booting.
+   * What the browser page gives the game besides the Router: the globals index.tsx and libraries put on `window`,
+   * mirrored onto the global object (`bundle/page.ts`). Call once, right after loading the engine.
    */
-  setBitVerseListener(listener: (reached: BitVerseReached) => void): void;
+  installPageGlobals(): void;
+  /**
+   * Who hears what the UI would have shown (popups, toasts, the error popup; `bundle/page.ts`) and every arrival at
+   * the BitVerse page (`bundle/router.ts`, which booting mounts as GameRoot does on its first render). Call before
+   * booting.
+   */
+  setGameEventListener(listener: (event: GameEvent) => void): void;
+  /** Who answers `ns.prompt`, in the player's place. Call before booting. */
+  setPromptAnswerer(answer: (prompt: PromptRequest) => string | boolean): void;
   /** The router's page history, newest first: runtime state the save doesn't hold, so the state hash adds it. */
   routerPages(): string[];
   /** Navigates as game code does (`Router.toPage`): a simple page, or the BitVerse. Test-only. */
@@ -71,7 +79,9 @@ const API_FUNCTIONS = {
   gameSummary: true,
   saveJson: true,
   gameDiagnostics: true,
-  setBitVerseListener: true,
+  installPageGlobals: true,
+  setGameEventListener: true,
+  setPromptAnswerer: true,
   routerPages: true,
   toPage: true,
   routerBack: true,

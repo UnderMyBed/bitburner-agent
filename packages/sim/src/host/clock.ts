@@ -1,4 +1,5 @@
 import FakeTimers from "@sinonjs/fake-timers";
+import { reportUncaughtException } from "./parity/errors.ts";
 
 /** Real timer functions, captured before the clock is faked, for the harness's own use (the import barrier, #26). */
 export const realTimers = { setTimeout, clearTimeout, setImmediate };
@@ -11,17 +12,26 @@ export interface VirtualClock {
 }
 
 /**
- * Browsers call timer callbacks with `this` set to the window; fake-timers calls them with `null`. The game relies
- * on the browser behaviour: `Engine.start` is passed bare to setTimeout and assigns `this.isRunning`.
+ * Timer callbacks run as a browser runs them:
+ * - with `this` set to the window; fake-timers passes `null`. The game relies on it: `Engine.start` is passed bare to
+ *   setTimeout and assigns `this.isRunning`.
+ * - an exception a callback throws is reported as uncaught and the clock carries on; fake-timers would rethrow it out
+ *   of `advance`.
  */
-function callTimersWithWindowAsThis(): void {
+function callTimersAsABrowserDoes(): void {
   const timers = globalThis as unknown as Record<"setTimeout" | "setInterval", (...args: unknown[]) => unknown>;
   for (const name of ["setTimeout", "setInterval"] as const) {
     const faked = timers[name];
     timers[name] = (handler: unknown, timeout?: unknown, ...args: unknown[]) => {
       const callback =
         typeof handler === "function"
-          ? (...callbackArgs: unknown[]) => handler.apply(globalThis.window ?? globalThis, callbackArgs)
+          ? (...callbackArgs: unknown[]) => {
+              try {
+                handler.apply(globalThis.window ?? globalThis, callbackArgs);
+              } catch (error) {
+                reportUncaughtException(error);
+              }
+            }
           : handler;
       return faked(callback, timeout, ...args);
     };
@@ -54,7 +64,7 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
   } finally {
     globalThis.setImmediate = realSetImmediate;
   }
-  callTimersWithWindowAsThis();
+  callTimersAsABrowserDoes();
   return {
     now: () => clock.now,
     advance: async (ms) => {

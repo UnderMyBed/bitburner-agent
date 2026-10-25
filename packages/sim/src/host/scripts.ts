@@ -60,6 +60,12 @@ export function installScriptModules(testHooks: TestHooks = {}): ScriptLoader {
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier.startsWith(SCHEME)) return { url: specifier, shortCircuit: true };
+      // A player script can only import other scripts: the game rewrites their imports to blob: URLs. A browser
+      // can't resolve anything else from a blob: module (`node:fs`, a bare package name), and the simulator is
+      // offline (`https:`).
+      if (context.parentURL?.startsWith(SCHEME)) {
+        throw new TypeError(`Failed to resolve module specifier "${specifier}"`);
+      }
       return nextResolve(specifier, context);
     },
     load(url, context, nextLoad) {
