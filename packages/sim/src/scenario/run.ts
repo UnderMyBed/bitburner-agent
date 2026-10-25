@@ -82,9 +82,42 @@ async function allEvents(sim: Simulation): Promise<SimEvent[]> {
   }
 }
 
+/**
+ * Starts a fresh simulation set up as the scenario says: its fixture, home RAM and files, with its scripts running.
+ * Virtual time hasn't moved yet. Closes the simulation and throws if any of that fails.
+ */
+export async function startScenario(
+  scenario: Scenario,
+  seed: number,
+  options: ScenarioOptions = {},
+): Promise<Simulation> {
+  const baseDir = options.baseDir ?? process.cwd();
+  const sim = await Simulation.start({
+    seed,
+    fixture: resolveFixture(scenario.fixture, baseDir),
+    ...(scenario.epochMs !== undefined ? { epochMs: scenario.epochMs } : {}),
+    ...(scenario.prompts ? { prompts: scenario.prompts } : {}),
+  });
+  try {
+    if (options.testHooks?.crashSeeds?.includes(seed)) await sim.diagnostics.crash(3, `test hook: crash seed ${seed}`);
+    if (scenario.homeRamGb !== undefined) await sim.diagnostics.setHomeRam(scenario.homeRamGb);
+    for (const [host, files] of Object.entries(scenario.files ?? {})) {
+      const contents = typeof files === "string" ? filesIn(path.resolve(baseDir, files)) : files;
+      for (const [file, content] of Object.entries(contents)) await sim.writeFile(host, file, content);
+    }
+    for (const { script, host = "home", threads = 1, args = [] } of scenario.run ?? []) {
+      const { pid, error } = await sim.run(host, script, { threads, args });
+      if (pid === 0) throw new Error(`couldn't start ${script} on ${host}: ${error}`);
+    }
+    return sim;
+  } catch (error) {
+    await sim.close();
+    throw error;
+  }
+}
+
 /** Runs a scenario with one seed, in a fresh simulation. Never throws: a failure is in the result. */
 export async function runSeed(scenario: Scenario, seed: number, options: ScenarioOptions = {}): Promise<SeedResult> {
-  const baseDir = options.baseDir ?? process.cwd();
   const result: SeedResult = {
     seed,
     ok: false,
@@ -99,23 +132,7 @@ export async function runSeed(scenario: Scenario, seed: number, options: Scenari
   };
   let sim: Simulation | undefined;
   try {
-    sim = await Simulation.start({
-      seed,
-      fixture: resolveFixture(scenario.fixture, baseDir),
-      ...(scenario.epochMs !== undefined ? { epochMs: scenario.epochMs } : {}),
-      ...(scenario.prompts ? { prompts: scenario.prompts } : {}),
-    });
-    if (options.testHooks?.crashSeeds?.includes(seed)) await sim.diagnostics.crash(3, `test hook: crash seed ${seed}`);
-    if (scenario.homeRamGb !== undefined) await sim.diagnostics.setHomeRam(scenario.homeRamGb);
-    for (const [host, files] of Object.entries(scenario.files ?? {})) {
-      const contents = typeof files === "string" ? filesIn(path.resolve(baseDir, files)) : files;
-      for (const [file, content] of Object.entries(contents)) await sim.writeFile(host, file, content);
-    }
-    for (const { script, host = "home", threads = 1, args = [] } of scenario.run ?? []) {
-      const { pid, error } = await sim.run(host, script, { threads, args });
-      if (pid === 0) throw new Error(`couldn't start ${script} on ${host}: ${error}`);
-    }
-
+    sim = await startScenario(scenario, seed, options);
     const stopWhen = scenario.stopWhen ?? [];
     const conditions = [...stopWhen, ...(scenario.failWhen ?? [])];
     const startedAt = await sim.now();

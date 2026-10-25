@@ -297,6 +297,20 @@ export interface RandomSample {
   uuid: string;
 }
 
+/** A V8 CPU profile (the `.cpuprofile` format): call-tree nodes, and which node each sample was in. */
+export interface CpuProfile {
+  nodes: {
+    id: number;
+    callFrame: { functionName: string; url: string; lineNumber: number; columnNumber: number };
+    children?: number[];
+  }[];
+  startTime: number;
+  endTime: number;
+  samples: number[];
+  /** Microseconds since the previous sample. */
+  timeDeltas: number[];
+}
+
 /** Every method the host answers. Diagnostics exist for tests and troubleshooting. */
 export interface HostMethods {
   now(params: Record<string, never>): number;
@@ -348,6 +362,13 @@ export interface HostMethods {
   "diagnostics.setHomeRam"(params: { gb: number }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
+  /** The host's V8 heap in use, in bytes, after a full garbage collection. */
+  "diagnostics.heap"(params: Record<string, never>): number;
+  /**
+   * Starts or stops a CPU profile of the host (the game and everything it runs). Stopping returns the profile, in the
+   * `.cpuprofile` format Chrome DevTools and Node use.
+   */
+  "diagnostics.profile"(params: { action: "start" | "stop" }): CpuProfile | null;
   /** Writes `message` to stderr and exits with `code`. */
   "diagnostics.crash"(params: { code: number; message: string }): never;
 }

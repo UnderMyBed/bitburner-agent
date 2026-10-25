@@ -413,6 +413,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
   - 10,000–37,000× for lean hacking workloads.
   - 50–700× for heavy script churn or IPvGO-scale compute (the legacy fork from a real save ran at 50–78×).
   - Target: at least **1000×** for our own hacking-phase workloads (workers use `disableLog`). Long-horizon search stays on the fast model (§4.3).
+  - Measured on every release, with heap growth over a long run, and recorded per rig in [docs/sim/benchmarks.md](sim/benchmarks.md).
 - **Scale-out:** a worker pool, one engine instance per process. Size is `availableParallelism() − reserve`, about 12–14 on the reference rig. A suite (scenarios × seeds) fans out across the pool; results are aggregated into the repeatability metric. Scenario files and the runner: [docs/sim/scenarios.md](sim/scenarios.md). Benchmark workloads may set home's RAM to fit (`homeRamGb`), a harness edit; agent and baseline scenarios don't, so their states stay ones a player can reach.
 
 ### 9.2 Fidelity gaps (known and accepted)

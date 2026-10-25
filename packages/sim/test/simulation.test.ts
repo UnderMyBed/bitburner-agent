@@ -76,6 +76,23 @@ describe("Simulation (host environment, no game booted)", () => {
     );
   });
 
+  test("measures the host's heap and profiles it, for benchmarks", async () => {
+    const sim = await start(1);
+    const heap = await sim.diagnostics.heap();
+    expect(heap).toBeGreaterThan(1 * 2 ** 20);
+    expect(heap).toBeLessThan(4 * 2 ** 30);
+    await expect(sim.diagnostics.profile("stop")).rejects.toThrow(/no profile is running/);
+    await sim.diagnostics.profile("start");
+    await expect(sim.diagnostics.profile("start")).rejects.toThrow(/already running/);
+    await sim.advance(3600_000);
+    const profile = await sim.diagnostics.profile("stop");
+    expect(profile?.nodes.length).toBeGreaterThan(0);
+    expect(profile?.samples.length).toBe(profile?.timeDeltas.length);
+    // Stopped: another can start.
+    await sim.diagnostics.profile("start");
+    expect(await sim.diagnostics.profile("stop")).not.toBeNull();
+  });
+
   test("close rejects pending calls and can be called again", async () => {
     const sim = await start(1);
     const pending = sim.advance(24 * 3600_000);

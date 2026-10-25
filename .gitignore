@@ -18,3 +18,6 @@ Thumbs.db
 
 # Copies of real Steam saves used as local test fixtures: personal data, never committed
 packages/sim/fixtures-local/
+
+# CPU profiles from npm run bench -- --profile
+*.cpuprofile

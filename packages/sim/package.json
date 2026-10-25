@@ -7,7 +7,8 @@
   "exports": "./src/index.ts",
   "scripts": {
     "setup:engine": "node scripts/setup-engine.ts",
-    "build:engine": "node scripts/build-engine.ts"
+    "build:engine": "node scripts/build-engine.ts",
+    "bench": "node scripts/bench.ts"
   },
   "dependencies": {
     "@bitburner-agent/core": "*",

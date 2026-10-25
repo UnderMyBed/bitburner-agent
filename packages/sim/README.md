@@ -92,6 +92,8 @@ await sim.close();
   - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios use `runUntil`'s `onBitVerse`.
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
+  - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it.
+  - `profile("start" | "stop")`: a CPU profile of the process, through the inspector. Stopping returns it (the `.cpuprofile` format). One at a time.
   - `crash(code, message)`
 
 ### Fixtures
@@ -232,15 +234,6 @@ const { now, stoppedBy } = await sim.runUntil(24 * 3_600_000, {
 - **It fails** (rejects) if the game goes into recovery mode, or the game loop falls behind virtual time by more than `stalledLoopMs` (default 10 s): an uncaught error in the loop stops it, as in a browser, and time would otherwise go on over a frozen game.
 - It resolves with the virtual `now` and `stoppedBy`: the index of the condition that held, `"bitverse"`, or `null` if it ran the full time.
 
-## Scenarios
-
-Scenario files run a described workload across many seeds in parallel, with per-seed results and an aggregate (the repeatability metric of architecture §9.3):
-
-```
-npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--json out.json]
-```
-
-[docs/sim/scenarios.md](../../docs/sim/scenarios.md) is the reference: the scenario file, stop and fail conditions, results, the aggregate, the CLI, and the workloads in `scenarios/` (lean, batch, churn, copies) mapped to spike S1's measurements.
 ### State hash and summary
 
 - **`stateHash()`** is the sha256 of the game's own save JSON (`saveObject.getSaveData()`, decoded), plus the positions of the seeded random streams.
@@ -254,6 +247,27 @@ npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--
   - `money`, `hackingLevel`, `hackingExp`
   - `homeRamUsed`, `homeRamMax`, `scripts`
   - `augsInstalled`, `augsQueued`
+
+## Scenarios
+
+Scenario files run a described workload across many seeds in parallel, with per-seed results and an aggregate (the repeatability metric of architecture §9.3):
+
+```
+npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--json out.json]
+```
+
+[docs/sim/scenarios.md](../../docs/sim/scenarios.md) is the reference: the scenario file, stop and fail conditions, results, the aggregate, the CLI, and the workloads in `scenarios/` (lean, batch, churn, copies) mapped to spike S1's measurements.
+
+## Benchmarks
+
+The benchmark measures each workload's speed and the heap over a 7-virtual-day lean run. It appends a row to [docs/sim/benchmarks.md](../../docs/sim/benchmarks.md), unless the row regressed compared with the last row from the same machine (`--accept` records it anyway). It runs before every release and isn't part of CI.
+
+```
+npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept]
+npm run bench -w @bitburner-agent/sim -- --profile <workload> [--out file.cpuprofile]
+```
+
+`--profile` writes a CPU profile of one run (to `.reports/` by default) and prints the functions with the most self time. The benchmarks doc covers what's measured, the regression rules and profiling.
 
 ## Determinism
 
@@ -327,10 +341,11 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
 | `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), and module stubs |
 | `src/scenario/` | Scenario specs (`spec.ts`), the runner and pool (`run.ts`), the CLI's table (`report.ts`) |
-| `scenarios/` | Workload scenarios (lean, batch, heavy) and their scripts |
+| `src/bench/` | Benchmark results as `benchmarks.md` rows and the regression check (`report.ts`), profile summaries (`profile.ts`) |
+| `scenarios/` | Workload scenarios (lean, batch, churn, copies) and their scripts |
 | `src/simulation.ts`, `src/options.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, option resolution (epoch, reading saves), the RPC client, the message types |
 | `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
-| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), prompt rules (`prompts.ts`), machine-independent paths (`paths.ts`), engine loading |
+| `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), prompt rules (`prompts.ts`), machine-independent paths (`paths.ts`), heap and CPU profile measurement (`measure.ts`), engine loading |
 | `src/host/parity/` | Browser-parity fixes: locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, no network |
-| `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts` (run by the root `npm run` scripts) |
+| `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts` (run by the root `npm run` scripts), `bench.ts` (`npm run bench -w @bitburner-agent/sim`) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` holds child-process probes and save helpers (decoding, and editing saves into test fixtures) |

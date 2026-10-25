@@ -93,7 +93,7 @@ From code, `runScenario`, `runSeed`, `loadScenario` and `formatRun` are exported
 
 ## Workloads
 
-[`packages/sim/scenarios/`](../../packages/sim/scenarios/) holds the S1 spike's workloads ([S1 report](../spikes/s1-headless-engine.md)), used to measure speed (#31). They share the scripts in `scenarios/scripts/`.
+[`packages/sim/scenarios/`](../../packages/sim/scenarios/) holds the S1 spike's workloads ([S1 report](../spikes/s1-headless-engine.md)), used to measure speed ([benchmarks](benchmarks.md)). They share the scripts in `scenarios/scripts/`.
 
 | Scenario | What it runs | S1 equivalent |
 |---|---|---|

@@ -75,7 +75,7 @@ Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHu
 | [`docs/research/`](docs/research/) | Community tooling, benchmarks and strategies |
 | [`docs/releasing.md`](docs/releasing.md) | How a release is made: versions, the pre-release checklist, notes, commands |
 | [`docs/spikes/`](docs/spikes/) | Spike reports; the throwaway code is in [`spikes/`](spikes/) |
-| [`docs/sim/`](docs/sim/) | The simulator: its browser [parity audit](docs/sim/parity.md) (what the browser and UI provide, and what the simulator does about each) and [scenarios](docs/sim/scenarios.md) (running workloads across seeds) |
+| [`docs/sim/`](docs/sim/) | The simulator: its browser [parity audit](docs/sim/parity.md) (what the browser and UI provide, and what the simulator does about each), [scenarios](docs/sim/scenarios.md) (running workloads across seeds) and [benchmarks](docs/sim/benchmarks.md) (speed and memory per release) |
 
 ## Supported game version
 

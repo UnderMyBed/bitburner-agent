@@ -220,6 +220,19 @@ describe("script API", () => {
     expect((await sim.ps("home")).map((p) => p.pid)).toEqual([first.pid, third.pid]);
   });
 
+  test("measuring the heap doesn't expose gc to player scripts", async () => {
+    const sim = await newGame(1);
+    expect(await sim.diagnostics.heap()).toBeGreaterThan(0);
+    await sim.writeFile(
+      "home",
+      "gc.js",
+      'export async function main(ns) { ns.print([typeof gc, typeof globalThis.gc, typeof eval("window").gc].join(" ")); }',
+    );
+    const { pid } = await sim.run("home", "gc.js");
+    await sim.advance(1000);
+    expect((await sim.logs(pid))[0]).toBe("undefined undefined undefined");
+  });
+
   test("logs stay readable after a script finishes; unknown pids are an error", async () => {
     const sim = await newGame(1);
     await sim.writeFile("home", "hello.js", 'export async function main(ns) { ns.print("hello"); }');
