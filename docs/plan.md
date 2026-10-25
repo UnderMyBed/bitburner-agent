@@ -11,7 +11,7 @@
 ## Working model
 - **The owner** designs the system and uses it: plays the Steam campaign with each release and brings back feedback and iteration requests.
 - **The build process** (Claude) builds, tests, documents and releases. It works autonomously behind the merge gate in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
-- Each large session ends in a tagged release with notes on what changed, what to try, and known issues.
+- Each milestone ends in a tagged release, with notes on what changed, what to try, and known issues; fixes in between get patch releases ([releasing.md](releasing.md)).
 
 ## Phases
 | Phase | Content | Status |
