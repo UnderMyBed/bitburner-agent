@@ -23,7 +23,7 @@ export const USAGE =
   "usage: npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] " +
   "[--wall-limit minutes (default 60)] [--max-heap MB (default 2048)] [--json out.json]";
 /**
- * Each seed's default real-time limit: 60 minutes. A seed's 12 virtual hours take about 8 real minutes on the reference
+ * Each seed's default real-time limit: 60 minutes. A seed's 12 virtual hours take about 6 real minutes on the reference
  * rig (ADR 0011), so a seed that needs an hour has gone wrong, and should stop rather than hold the machine.
  */
 export const DEFAULT_WALL_LIMIT_MS = 60 * 60_000;

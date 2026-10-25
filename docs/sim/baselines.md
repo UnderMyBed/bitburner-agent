@@ -1,14 +1,23 @@
 # Baselines
 
-What the agent has to beat. The legacy fork, played headless from a BitNode start a player can reach, sets the bar. M1 records its time-to-destroy, and the M4 exit criterion compares the agent's planner with it ([architecture §12.3](../architecture.md#123-migration-from-the-fork-strangler-pattern), [§13](../architecture.md#13-milestones)). A baseline runs on each release ([releasing](../releasing.md), step 2) and adds a row below.
+What the agent has to beat. The legacy fork, played headless from a BitNode start a player can reach, sets the bar. Both are compared at fixed checkpoints, since a full run to a destroy costs hours per seed ([ADR 0011](../decisions/0011-checkpointed-simulator-comparisons.md)). M1 records the fork's progress at each checkpoint, and the M4 exit criterion needs the agent to be at least as far along at every one ([architecture §12.3](../architecture.md#123-migration-from-the-fork-strangler-pattern), [§13](../architecture.md#13-milestones)). A baseline runs on each release ([releasing](../releasing.md), step 2) and adds rows below.
 
 ## The BN1 baseline
 
-`baselineScenario()` from `@bitburner-agent/legacy` ([README](../../packages/legacy/README.md#the-baseline), [owner decisions log](../decisions/owner-decisions.md) #28):
+`baselineScenario()` from `@bitburner-agent/legacy` ([README](../../packages/legacy/README.md#the-baseline), [owner decisions log](../decisions/owner-decisions.md) #28, #29):
 - **Start:** BN1 with SF1.1 and SF4.3, the least a player can hold along with SF4.3 (earning SF4 means destroying BN1 first). The game makes it BN1.2. SF1 starts home at 32 GB of RAM (`Prestige.ts:248-249`), more than the 16 GB the fork needs to run unattended, and SF4.3 lets it use Singularity at no extra RAM cost.
 - **Play:** the fork's game files on home, and `autopilot.js --disable-casino`, as a player starts it. The casino is off because `casino.js` plays through the game's page, which a headless run doesn't have.
-- **End:** a seed passes when the fork destroys the BitNode: through Singularity, which enters the next BitNode at once, or by reaching the BitVerse, the UI's route to the same destroy. The run stops there, and otherwise gives up after 30 virtual days.
+- **Checkpoints:** 4, 8 and 12 virtual hours (`CHECKPOINTS_MS`). A seed passes if it gets to 12 hours without failing. There's no stop condition: the fork doesn't destroy BN1 that early.
 - **Seeds:** 1–8, each in its own simulation.
+
+## Why checkpoints, and why 12 hours
+
+The simulator runs the real game, so it pays for the game's real work ([ADR 0011](../decisions/0011-checkpointed-simulator-comparisons.md)). Measured on seed 1 (reference rig):
+- **To about 2 virtual hours:** 600–830× real time.
+- **From then to about 14 hours:** about 100×, held there by the fork's constant IPvGO play. The game paces Go moves with virtual-time sleeps, which cost nothing here, while each move's CPU work is real.
+- **From about 15 hours:** the fork has the RAM to run tens of thousands of batch scripts (28,339 at 16 h), and the speed falls to single digits (7× at 16 h). Most of that is the game's own work per script on every cycle ([benchmarks](benchmarks.md#scaling-with-running-scripts)).
+
+So 12 virtual hours take about 6 real minutes per seed (54 minutes for all 8, in the first run below), and a full run to a destroy takes hours.
 
 ## Running it
 
@@ -16,38 +25,38 @@ What the agent has to beat. The legacy fork, played headless from a BitNode star
 npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--wall-limit minutes] [--max-heap MB] [--json out.json]
 ```
 
-While it runs, it prints a progress line per seed at the end of each virtual day, on stderr: virtual and real time so far, speed, scripts, money and hacking level. At the end it prints:
+While it runs, it prints a progress line per seed at each checkpoint, on stderr: virtual and real time so far, speed, scripts, money and hacking level. At the end it prints:
 - the scenario table, one row per seed ([scenarios](scenarios.md));
-- each seed's heap: at the start, at the end, the largest sample, and the growth per virtual day (below). The heap is sampled after a full collection at the start and at the end of each virtual day; `--json` has every sample (`checkpoints[].heapMb`);
-- the run's row for the results table below.
+- each seed's heap at the start and at each checkpoint, after a full collection;
+- the run's rows for the results table below, one per checkpoint.
 
-`--json` paths are relative to where you ran npm. The command exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. What the row needs (the commit, the rig's name, the `--json` folder) is checked before the run, and the JSON is written as soon as the run ends, so a late error can't lose a run.
+`--json` paths are relative to where you ran npm. The command exits 0 if every seed reached 12 hours, 1 if any didn't, and 2 if it couldn't run. What the rows need (the commit, the rig's name, the `--json` folder) is checked before the run, and the JSON is written as soon as the run ends, so a late error can't lose a run.
 
-**It's heavy.** Measured on one seed, on the earlier SF4.3-only start with 8 GB ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33), [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)). The SF1.1 start will shift the timings; the first recorded run replaces these figures:
-- The fork plays IPvGO all the time. The game paces Go moves with virtual-time sleeps, which cost nothing in the simulator, while each move's CPU work is real. That holds the fork to about 100× real time, about 14 real minutes per virtual day.
-- From about one virtual day in, the fork's batching runs thousands, then tens of thousands, of scripts. Before #74's clock fix the speed fell to 11× at about 1,800 scripts, 6× at about 23,000 and 3× at about 144,000: several real hours per virtual day. The fix about doubles the speed with tens of thousands of scripts running ([benchmarks](benchmarks.md#scaling-with-running-scripts)); the first recorded run will show the fork's.
-- Each simulation process grew to about 3.4 GB.
-
-So by default ([#75](https://github.com/UnderMyBed/bitburner-agent/issues/75)):
+By default ([#75](https://github.com/UnderMyBed/bitburner-agent/issues/75)):
 - **One seed at a time** (`--workers` changes it).
-- **A hard limit of 12 hours of real time per seed** (`--wall-limit`, in minutes). The command kills a seed's simulation when its limit passes, even part-way through a virtual day, and the seed fails with "wall limit: …", keeping the days it finished. A seed that hits it needs a decision about where the baseline runs, not a longer limit.
-- **A 2 GB heap per simulation** (`--max-heap`, in MB). Measured on one seed ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)), the heap after a full collection stayed near 120 MB for 22 virtual hours and reached 1 GB with 144,144 scripts running. The processes still grew to 3.4 GB, because V8 grows its heap toward its limit before collecting; the cap makes it collect sooner ([scenarios](scenarios.md#the-cli)).
+- **A hard limit of 60 minutes of real time per seed** (`--wall-limit`, in minutes). A seed should take a few minutes, so one that hits the limit has gone wrong. The command kills its simulation, even part-way through, and the seed fails with "wall limit: …", keeping the checkpoints it reached.
+- **A 2 GB heap per simulation** (`--max-heap`, in MB). V8 grows its heap toward its limit before collecting, so without a cap a long run holds far more memory than it uses ([scenarios](scenarios.md#the-cli)).
 
 ## What a row records
+
+One row per checkpoint, so three per run.
 
 | Column | What |
 |---|---|
 | Date | UTC, the day of the run |
 | Commit, Node | The commit run, with "-dirty" if the working tree had changes, and the Node version |
 | Rig | The machine, as [benchmarks](benchmarks.md#regressions) name it: `BENCH_RIG` if set, otherwise its CPU model, logical CPU count and memory |
-| Seeds | The seeds run, as `--seeds` takes them: `npm run baseline -w @bitburner-agent/legacy -- --seeds <Seeds>` at the commit reproduces the row (the simulator is deterministic) |
-| Passed | Seeds that destroyed the BitNode, of those run |
-| Time to destroy | Virtual hours from the start to the destroy, over the seeds that passed: min / median / p90 / max |
-| Speed | Virtual ms per real ms, the median over the seeds that didn't fail (`ok`: no crash, refused script or request, recovery mode, or stopped loop), passed or not, measured with heap sampling on |
-| Real time per seed | The median over the same seeds |
-| Heap growth per virtual day | The simulator's check for leaks that grow with each new script module, which the benchmarks' lean run can't see ([#64](https://github.com/UnderMyBed/bitburner-agent/issues/64)). The median over seeds of each seed's growth, measured as benchmarks measure it: the median day-to-day change, the first day's change (warm-up) left out, from whole-day samples only. Some growth is expected: the simulator keeps one module per distinct script source compiled ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), and the fork compiles temp scripts all the time |
+| Seeds | The seeds run, as `--seeds` takes them: `npm run baseline -w @bitburner-agent/legacy -- --seeds <Seeds>` at the commit reproduces the rows (the simulator is deterministic) |
+| At | The checkpoint: 4, 8 or 12 virtual hours |
+| Reached | Seeds that reached it, of those run |
+| Money | Money in hand: the median (min–max) over the seeds that reached it |
+| Hacking | Hacking level: the median (min–max) |
+| Augs | Augmentations installed: the median |
+| Home RAM | The median |
+| Heap | The simulator's heap after a full collection, the median: the check for leaks that grow with each new script module, which the benchmarks' lean run can't see ([#64](https://github.com/UnderMyBed/bitburner-agent/issues/64)). Some growth is expected: the simulator keeps one module per distinct script source compiled ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)) |
+| Real time per seed | The median over the seeds that didn't fail (`ok`: no crash, refused script or request, recovery mode, stopped loop, or wall limit), measured with heap sampling on |
 
-Medians of an even count take the lower middle value, as the scenario aggregate does. The command prints the row: paste it at the end of the table, and explain the run's failed seeds below.
+Medians of an even count take the lower middle value, as the scenario aggregate does. Money in hand is a snapshot: the fork spends it on augmentations and RAM, so read it with the augmentations and home RAM beside it. The command prints the rows: paste them at the end of the table, and explain any failed seed below.
 
 ## Failures
 
@@ -57,7 +66,19 @@ None recorded yet.
 
 ## Results
 
-The reference rig is the owner's machine. No runs are recorded yet: the first follows [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74) and [#75](https://github.com/UnderMyBed/bitburner-agent/issues/75). Rows are appended at the end of this file, so keep the results table last.
+The reference rig is the owner's machine. Rows are appended at the end of this file, so keep the results table last.
 
-| Date | Commit | Rig | Node | Seeds | Passed | Time to destroy (min / median / p90 / max) | Speed | Real time per seed | Heap growth per virtual day |
-|---|---|---|---|---|---|---|---|---|---|
+Reading the first run (4799701, the reference rig):
+- **All 8 seeds reached 12 hours**, in 54 real minutes in all: about 6 minutes a seed, at a median 117× real time.
+- **The fork's progress, median (range):**
+  - **4 h:** hacking 242 (163–285), 6 augmentations installed, home 64 GB.
+  - **8 h:** hacking 323 (254–356), 11 augmentations, 128 GB.
+  - **12 h:** hacking 411 (344–723), 14 augmentations, 512 GB.
+  Money swings with each reset and purchase, so it's the least telling column.
+- **The heap grows about 9 MB over 12 hours** (106 to 115 MB, median), which the modules the fork compiles account for. Seed 3 was the exception: it got furthest (hacking 723, $1.89t at 12 h), was already running heavy batches, and reached 159 MB. It was also the slowest seed, at 10 minutes.
+
+| Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Real time per seed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 6 min |
+| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 113 MB | 6 min |
+| 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 115 MB | 6 min |
