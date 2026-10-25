@@ -3,7 +3,9 @@
 // listener). It logs the error if no listener handled it, and carries on. Node would end the process instead. The game
 // relies on the browser's way: its `unhandledrejection` listener ignores the ScriptDeath that a killed script's
 // pending promises reject with (UncaughtPromiseHandler.ts, utils/ErrorHandler.ts).
+
 import { writeSync } from "node:fs";
+import process from "node:process";
 import { format } from "node:util";
 import { withoutMachinePaths } from "../paths.ts";
 

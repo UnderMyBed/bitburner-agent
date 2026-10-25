@@ -289,6 +289,7 @@ Other packages only use `Simulation`; the rest of this section describes the hos
    - **Always jsdom's:** `window`, `document`, `navigator`, `localStorage`, `sessionStorage`.
    - **`window` follows the globals.** The game uses `window.setTimeout` as well as bare `setTimeout` (the engine loop, `ns.sleep`). So `window.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`/`Date`/`performance`/`crypto` resolve to the globals at call time, and the virtual clock and seeded randomness cover both. `requestAnimationFrame` runs on those timers too, not on real time.
    - **A fixed user agent,** like the Steam build's. The game hashes `navigator.userAgent` into the saved `Player.identifier`, and jsdom's default names the host OS.
+   - **`window.postMessage`** to the page delivers its event on a later real task with `source` and `origin` set, as a browser does; jsdom's leaves `source` unset.
 2. **Pinned locale and time zone** (`src/host/parity/locale.ts`):
    - Locale-sensitive built-ins called without a locale use `en-US`, because locale-dependent text ends up in saves (e.g. Dark Net logs call `toLocaleTimeString()`). Calls with an explicit locale are unchanged.
    - The time zone is `UTC`, set on the process.
@@ -300,10 +301,14 @@ Other packages only use `Simulation`; the rest of this section describes the hos
 4. **Script modules** (`installScriptModules`, `src/host/scripts.ts`): the `Blob`/object-URL capture and module hook, plus the import barrier ([Scripts](#scripts)).
 5. **Virtual clock** (`installClock`, `@sinonjs/fake-timers`):
    - `setTimeout`/`setInterval` (and their clears), `Date` and `performance` are virtual, starting at `epochMs`. `performance.now()` starts at 0, like a page that just loaded.
-   - Microtasks, `process.nextTick` and `setImmediate` stay real, so promises and I/O work.
+   - Microtasks and Node's `process.nextTick` and `setImmediate` stay real, so promises and I/O work. (Node's globals are hidden from the game in step 6; host code keeps its own references.)
    - Between timers, the clock yields to the real event loop through the import barrier, so virtual time never moves while a script is loading. This relies on a fake-timers internal; see the comment in `clock.ts`.
    - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`. An exception a callback throws is logged as uncaught, and the clock carries on; fake-timers would rethrow it.
-6. **The engine bundle** (`loadEngine`), after removing `JEST_WORKER_ID` from the environment (the game reads it while loading). Then the page's globals (`installPageGlobals`), the barrier-aware import function (`setScriptImport`), the event listener (`setGameEventListener`) and the prompt rules (`setPromptAnswerer`).
+6. **The engine bundle** (`loadEngine`), after two things:
+   - `JEST_WORKER_ID` is removed from the environment (the game reads it while loading).
+   - **Node's globals are hidden** (`src/host/parity/node-globals.ts`): `process`, `Buffer`, `global`, `setImmediate` and `clearImmediate`, as a browser has none of them. The game's libraries then take their browser paths while loading, and the game installs jszip's `setImmediate` polyfill on the window, which the bare names then follow, as in a browser. Host code imports `process` and `Buffer` from `node:` modules. Node's own internals still find them, by who's asking, and fake-indexeddb schedules on the real `setImmediate`.
+
+   Then the page's globals (`installPageGlobals`), the barrier-aware import function (`setScriptImport`), the event listener (`setGameEventListener`) and the prompt rules (`setPromptAnswerer`).
 
 ## Browser globals, errors and network
 
@@ -326,7 +331,6 @@ Deliberate differences, and the gaps still open:
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
 - **No windows and no network.** Tail windows don't exist: `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail calls do nothing. `ns.ui.windowSize()` is a fixed 1024×768. The simulation is offline ([Browser globals, errors and network](#browser-globals-errors-and-network)).
 - **A simulated player at the UI.** Prompt rules answer at once, and error popups are closed at once ([Prompts](#prompts), [Events](#events)).
-- **Node's globals are visible to scripts** (`process`, `Buffer`, `setImmediate`), which a browser doesn't have. A gap: [#57](https://github.com/UnderMyBed/bitburner-agent/issues/57).
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
 
 The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists the open gaps and the deliberate differences.
@@ -351,7 +355,7 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | `src/simulation.ts`, `src/options.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, option resolution (epoch, reading saves), the RPC client, the message types |
 | `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
 | `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), prompt rules (`prompts.ts`), machine-independent paths (`paths.ts`), heap and CPU profile measurement (`measure.ts`), engine loading |
-| `src/host/parity/` | Browser-parity fixes: locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, no network |
+| `src/host/parity/` | Browser-parity fixes: locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, no network, Node's globals hidden |
 | `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts`, `typecheck-bundle.ts` (run by the root `npm run` scripts), `bench.ts` (`npm run bench -w @bitburner-agent/sim`) |
 | `tsconfig.bundle.json` | The bundled sources' typecheck against the game's types ([Typecheck boundary](#typecheck-boundary)) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` holds child-process probes and save helpers (decoding, and editing saves into test fixtures) |

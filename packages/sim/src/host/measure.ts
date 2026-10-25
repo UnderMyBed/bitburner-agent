@@ -1,5 +1,7 @@
 // Measuring the host itself, for benchmarks: its heap after a full collection, and CPU profiles.
+
 import { Session } from "node:inspector/promises";
+import process from "node:process";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import type { CpuProfile } from "../protocol.ts";

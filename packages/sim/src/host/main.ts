@@ -1,7 +1,9 @@
 // Entry point of a simulation process (forked by Simulation.start). Waits for its options, sets up the host and
 // boots the fixture, then answers requests one at a time.
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
+import process from "node:process";
 import type { EngineApi } from "../engine/api.ts";
 import {
   type HostFixture,

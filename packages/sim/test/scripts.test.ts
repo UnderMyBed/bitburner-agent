@@ -267,6 +267,34 @@ describe("script API", () => {
     expect((await sim.ps("home")).map((p) => p.pid)).toEqual([first.pid, third.pid]);
   });
 
+  test("player scripts see a browser's globals, not Node's: no process, Buffer or global, and the game's setImmediate", async () => {
+    const sim = await newGame(1);
+    const names = ["process", "Buffer", "global", "setImmediate", "clearImmediate"];
+    const probe = names
+      .map((name) => `typeof ${name} + "/" + typeof globalThis.${name} + "/" + typeof eval("window").${name}`)
+      .join(' + " " + ');
+    // A browser has no setImmediate, so the game's jszip installs a polyfill on the window, and a browser's window is
+    // the global object. Node's returns an Immediate object; the polyfill returns a number.
+    const immediate = 'setImmediate === eval("window").setImmediate) + " " + typeof setImmediate(() => {})';
+    await sim.writeFile(
+      "home",
+      "node.js",
+      // The callback runs on a later task, while the script sleeps.
+      `export async function main(ns) { ns.print(${probe}); ns.print((${immediate}); let ran = false; setImmediate(() => { ran = true; }); await ns.sleep(100); ns.print(ran ? "ran" : "didn't run"); }`,
+    );
+    const { pid } = await sim.run("home", "node.js");
+    await sim.advance(1000);
+    const node = "undefined/undefined/undefined";
+    const browser = "function/function/function";
+    expect(await sim.logs(pid)).toEqual([
+      [node, node, node, browser, browser].join(" "),
+      "true number",
+      "sleep: Sleeping for 0.100 seconds.",
+      "ran",
+      "Script finished running",
+    ]);
+  });
+
   test("measuring the heap doesn't expose gc to player scripts", async () => {
     const sim = await newGame(1);
     expect(await sim.diagnostics.heap()).toBeGreaterThan(0);

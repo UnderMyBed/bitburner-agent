@@ -1,4 +1,5 @@
 import path from "node:path";
+import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");

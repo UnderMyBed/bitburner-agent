@@ -1,4 +1,5 @@
 import { JSDOM } from "jsdom";
+import { realTimers } from "./clock.ts";
 
 /** Browser APIs the game uses through `window.` as well as bare: they must resolve to the same (virtual) objects. */
 /**
@@ -17,6 +18,23 @@ const SHARED_WITH_GLOBAL = [
   "performance",
   "crypto",
 ];
+
+/**
+ * `window.postMessage` as a browser has it, for messages to the page itself. jsdom's leaves the event's `source` and
+ * `origin` unset (browser/Window.js), and the game's setImmediate polyfill (jszip's) ignores messages whose `source`
+ * isn't the window, so its callbacks would never run. The message is delivered on a later real task, as in a browser.
+ */
+function installPostMessage(window: Window & typeof globalThis): void {
+  window.postMessage = function postMessage(...args: unknown[]) {
+    if (args.length < 2) throw new TypeError("'postMessage' requires 2 arguments: 'message' and 'targetOrigin'");
+    const [message, targetOrigin] = args;
+    const origin = window.location.origin;
+    if (targetOrigin !== "*" && targetOrigin !== "/" && new URL(String(targetOrigin)).origin !== origin) return;
+    realTimers.setImmediate(() => {
+      window.dispatchEvent(new window.MessageEvent("message", { data: message, origin, source: window }));
+    });
+  } as typeof window.postMessage;
+}
 
 /**
  * Installs a jsdom window as the browser globals the engine expects at import time. Must run before the engine
@@ -61,6 +79,8 @@ export function installDom(): JSDOM {
   window.cancelAnimationFrame = (handle: ReturnType<typeof setTimeout>) => clearTimeout(handle);
   globalThis.requestAnimationFrame = window.requestAnimationFrame as typeof requestAnimationFrame;
   globalThis.cancelAnimationFrame = window.cancelAnimationFrame as typeof cancelAnimationFrame;
+
+  installPostMessage(dom.window as unknown as Window & typeof globalThis);
 
   const document = dom.window.document as unknown as { adoptedStyleSheets?: unknown[] };
   if (!Array.isArray(document.adoptedStyleSheets)) document.adoptedStyleSheets = [];
