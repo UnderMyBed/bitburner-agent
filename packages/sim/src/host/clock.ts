@@ -1,5 +1,52 @@
-import FakeTimers from "@sinonjs/fake-timers";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { compileFunction } from "node:vm";
 import { reportUncaughtException } from "./parity/errors.ts";
+
+type FakeTimersModule = typeof import("@sinonjs/fake-timers");
+
+/**
+ * fake-timers (pinned at 15.4.0) finds the next timer due in a range by taking its heap's earliest timer if that one is
+ * in range, and otherwise by scanning every timer (`firstTimerInRange`, fake-timers-src.js:1443-1473). The simulator
+ * steps exactly to each next due moment, so once that moment's timers have fired the earliest one left is past the
+ * range, and every step scanned every pending timer, twice: a cost that grows with the square of the scripts running
+ * (#74). When the earliest timer is due after the range, every timer is (the heap orders them by due time), so the
+ * scan would find nothing: this returns null at once, with the same result.
+ */
+const SCAN_FROM = `        const first = clock.timerHeap.peek();
+        if (first && inRange(from, to, first)) {
+            return first;
+        }
+`;
+const SCAN_TO = `${SCAN_FROM}        if (!first || first.callAt > to) {
+            return null;
+        }
+`;
+
+/** fake-timers' source with the empty-range scan skipped. Throws if the source isn't the one this patch was made for. */
+export function skipEmptyTimerScans(source: string): string {
+  if (source.split(SCAN_FROM).length !== 2) {
+    throw new Error(
+      "fake-timers' firstTimerInRange isn't the one skipEmptyTimerScans patches (packages/sim/src/host/clock.ts): " +
+        "re-check it against the new version, then update or remove the patch (#74).",
+    );
+  }
+  return source.replace(SCAN_FROM, SCAN_TO);
+}
+
+/** fake-timers, loaded from its own source with `skipEmptyTimerScans` applied; node_modules stays as installed. */
+function loadFakeTimers(): FakeTimersModule {
+  const file = createRequire(import.meta.url).resolve("@sinonjs/fake-timers");
+  const source = skipEmptyTimerScans(readFileSync(file, "utf8"));
+  const module = { exports: {} as unknown };
+  const run = compileFunction(source, ["exports", "require", "module", "__filename", "__dirname"], { filename: file });
+  run(module.exports, createRequire(file), module, file, path.dirname(file));
+  return module.exports as FakeTimersModule;
+}
+
+/** The fake-timers the clock uses, patched. Exported for tests. */
+export const FakeTimers = loadFakeTimers();
 
 /**
  * Real timer functions, captured when this module loads (before the clock is faked and Node's globals are hidden), for
