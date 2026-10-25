@@ -16,7 +16,7 @@
 
 - **Never edited in place.** The files stay exactly as recorded; `test/fork.test.ts` checks every file against the manifest, byte for byte. Git leaves their bytes alone: the root `.gitattributes` (and the fork's own) mark them `-text`.
 - **A change would be a patch.** If the baseline ever needs a file changed, the change would go in `packages/legacy/patches/`, with its reason, applied when the files are written into a game. There are none.
-- **`fork/README.md` and `fork/CLAUDE.md` are the fork's own docs.** They describe the archived fork as it was ("this repo", its remotes, its install steps), not this repository, and are kept only because the copy is exact. The repository's `.claude/settings.json` keeps Claude Code from loading `fork/CLAUDE.md` as instructions (`claudeMdExcludes`).
+- **`fork/README.md` and `fork/CLAUDE.md` are the fork's own docs.** They describe the archived fork as it was ("this repo", its remotes, its install steps), not this repository, and are kept only because the copy is exact. The repository's `.claude/settings.json` excludes `fork/CLAUDE.md` from Claude Code's memory (`claudeMdExcludes`), for sessions started at the repository root.
 - **The fork's own `.gitignore` ignores `*.txt`**, so `fork/reserve.txt` was added with `git add -f`. It's tracked; the rule only matters when adding files, which nobody should.
 
 ## Checking it against the source
