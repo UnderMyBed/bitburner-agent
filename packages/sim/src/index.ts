@@ -1,3 +1,4 @@
+export { growthPerDay, rigId } from "./bench/report.ts";
 export type { EngineApi } from "./engine/api.ts";
 export { buildEngine } from "./engine/build.ts";
 export { formatRun } from "./scenario/report.ts";

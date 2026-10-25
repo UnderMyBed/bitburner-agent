@@ -3,46 +3,48 @@
 > **Status:** the fork is vendored ([#32](https://github.com/UnderMyBed/bitburner-agent/issues/32)), and its BN1 baseline runs ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33), [baselines](../../docs/sim/baselines.md)). The reflex adapters come later.
 
 The legacy fork's scripts, vendored unchanged, for:
-- **The baseline now.** The fork's BN1 time-to-destroy from a BN1 + SF4.3 start is what the agent is measured against ([architecture §12.3](../../docs/architecture.md#123-migration-from-the-fork-strangler-pattern)).
+- **The baseline now.** The fork's BN1 time-to-destroy, from BN1 with SF1.1 and SF4.3, is what the agent is measured against ([architecture §12.3](../../docs/architecture.md#123-migration-from-the-fork-strangler-pattern)).
 - **Legacy reflexes later.** Its proven managers (the batcher in `daemon.js`, `stockmaster.js`, `gangs.js`, `bladeburner.js`) will run under the agent through adapters in this package, until our own replacements prove at least as good (architecture §12.3).
 
 The files are in [`fork/`](fork/), exactly as recorded. [`PROVENANCE.md`](PROVENANCE.md) says where they came from and the rules: `fork/` is never edited in place, and a change would be a patch. They're MIT-licensed, © 2021 Alain Bryden ([`fork/LICENSE`](fork/LICENSE)). `fork/README.md` and `fork/CLAUDE.md` are the fork's own docs, about the fork as it was, not about this repository. The repository's [`.claude/settings.json`](../../.claude/settings.json) excludes `fork/CLAUDE.md` from Claude Code's memory (`claudeMdExcludes`), for sessions started at the repository root, where Claude Code reads that file.
 
 ```ts
-import { Simulation } from "@bitburner-agent/sim";
-import { gameFiles } from "@bitburner-agent/legacy";
+import { runSeed } from "@bitburner-agent/sim";
+import { baselineScenario } from "@bitburner-agent/legacy";
 
-const sim = await Simulation.start({ seed: 1, epochMs, fixture: { kind: "bitnode", n: 1, sourceFiles: { 4: 3 } } });
-for (const { path, content } of gameFiles()) {
-  await sim.writeFile("home", path, content);
-}
-await sim.run("home", "autopilot.js", { args: ["--disable-casino"] });
+// One seed of the baseline, for a virtual hour.
+const result = await runSeed(baselineScenario({ durationMs: 60 * 60 * 1000 }), 1);
 ```
 
 - `gameFiles()`: what a game needs: the scripts (`.js`) and the text files they read (`.txt`).
 - `forkFiles()`: every vendored file, in path order, as text (the fork is all UTF-8; some files keep CRLF line endings).
 - `forkManifest()`, `FORK`: the source, commit, tree and per-file sha256, from [`manifest.json`](manifest.json).
 - `FORK_DIR`: where the files are.
+- `baselineScenario(overrides?)`, `DAY`: the baseline ([below](#the-baseline)). `overrides` replace top-level fields, for tests.
+- `formatHeaps(run)`, `baselineRow(run, meta)`, `seedHeapGrowth(result)`, `dailyHeapMb(result)`: the baseline's heap table and its row for `docs/sim/baselines.md` (`src/report.ts`).
 
 ## The baseline
 
 `baselineScenario()` (`src/baseline.ts`) is the fork's BN1 baseline: what the agent's planner has to beat (M4). Results and how to read them: [docs/sim/baselines.md](../../docs/sim/baselines.md).
-- **Start:** BN1 entered with SF4.3, a fresh BitNode with 8 GB of home RAM and $1,000. The fork's game files and `bootstrap.js` are on home.
-- **Scripted early game** (`src/bootstrap.js`, owner decisions log #25): an in-game script a player could write. With SF4.3, Singularity costs only a few GB, so it fits in 8 GB. It hacks n00dles and buys home RAM until home has 16 GB, the least the fork runs unattended on, then spawns `autopilot.js --disable-casino`. Its time counts in the baseline.
-- **End:** the run passes when the fork destroys the BitNode, and stops at the BitVerse either way. It gives up after 30 virtual days. Seeds 1–8.
+- **Start** (owner decisions log #28): BN1 with SF1.1 and SF4.3, the least a player can hold along with SF4.3; the game makes it BN1.2. SF1 starts home at 32 GB of RAM, so the fork runs unattended from the start.
+- **Play:** the fork's game files on home, and `autopilot.js --disable-casino`, as a player starts it.
+- **End:** the run passes when the fork destroys the BitNode, and stops there or at the BitVerse. It gives up after 30 virtual days. Seeds 1–8.
 
 ```
 npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--json out.json]
 ```
 
-It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)) and each run's heap, measured at the start and every virtual day. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. It runs one seed at a time unless `--workers` says otherwise: a seed is heavy, roughly 14 real minutes per virtual day at best ([baselines](../../docs/sim/baselines.md#running-it)).
+It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each seed's heap (start, end, largest, growth per virtual day), and the run's row for the baselines page. `--json` paths are relative to where you ran npm. It exits 0 if every seed destroyed the BitNode, 1 if any didn't, and 2 if it couldn't run. It runs one seed at a time unless `--workers` says otherwise: a seed is heavy, about 14 real minutes per virtual day at best and several hours once the fork runs tens of thousands of scripts ([baselines](../../docs/sim/baselines.md#running-it)).
 
 ## Checks
 
-`test/baseline.test.ts`, the baseline's CI smoke test:
-- the scenario is a fresh BN1 with SF4.3, and runs the bootstrap
-- the bootstrap fits in 8 GB and makes progress within a virtual hour
-- with 16 GB, the bootstrap hands over to `autopilot.js`
+`test/baseline.test.ts`, the baseline's CI smoke tests:
+- the scenario starts in BN1 with SF1.1 and SF4.3 and runs `autopilot.js --disable-casino`, stopping at the destroy, for up to 30 days, seeds 1–8
+- home starts at 32 GB, and within 5 virtual minutes the fork runs unattended: `daemon.js` and the SF4-only `work-for-factions.js` start
+- the fork makes progress (money, hacking level) within a virtual hour
+- the CLI refuses bad arguments with exit 2
+
+`test/report.test.ts`: the heap's daily samples and growth, the heap table, and the release row.
 
 `test/fork.test.ts`:
 - every file matches the manifest byte for byte, with nothing missing or extra; `forkFiles()` gives exactly those bytes; `PROVENANCE.md` agrees with the manifest
@@ -53,6 +55,5 @@ Biome and the typecheck skip `fork/`: it's someone else's code, kept as it is.
 
 ## How the fork behaves headless
 
-- **On 8 GB of home RAM without SF4,** `autopilot.js` starts `daemon.js` and exits, saying home RAM is too small to keep it running and that a player should run it again after buying RAM (`autopilot.js` `shouldWeKeepRunning`).
-- **On 8 GB with SF4 (the baseline's BN1 + SF4.3),** it stays up in principle, but its temp scripts (`getNsDataThroughFile`) don't fit in RAM: it can't read its Source-Files, falls back to "no SF4", and exits the same way. `daemon.js` then schedules nothing, because its `analyze-hack.js` helper doesn't fit beside it on home either. Both are the game's own RAM checks. In the fork's design, the player buys the first home RAM upgrades by hand; from 16 GB it runs unattended. The baseline therefore starts with a scripted early game, `src/bootstrap.js`, that buys home RAM to 16 GB, then hands over ([The baseline](#the-baseline)).
+- **On 8 GB of home RAM** (a start without SF1), `autopilot.js` can't stay up. Without SF4 it starts `daemon.js` and exits, saying home RAM is too small and that a player should run it again after buying RAM (`autopilot.js` `shouldWeKeepRunning`). With SF4, its temp scripts (`getNsDataThroughFile`) don't fit in RAM, so it can't read its Source-Files, falls back to "no SF4", and exits the same way; `daemon.js` then schedules nothing, because its `analyze-hack.js` helper doesn't fit beside it. Both are the game's own RAM checks. From 16 GB it runs unattended. The baseline starts with SF1.1, so home has 32 GB.
 - **The page:** scripts that draw on the game's page (`stats.js`'s HUD, `casino.js`, `scan.js`) find nothing to draw on headless.

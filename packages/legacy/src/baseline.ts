@@ -1,29 +1,28 @@
-// The fork baseline (#33, architecture §12.3): the legacy fork from a fresh BN1 with SF4.3, played to a destroy in the
-// simulator. Its time-to-destroy is what the agent's planner has to beat (M4).
-import { readFileSync } from "node:fs";
-import path from "node:path";
+// The fork baseline (#33, architecture §12.3): the legacy fork from BN1 with SF1.1 and SF4.3, played to a destroy in
+// the simulator. Its time-to-destroy is what the agent's planner has to beat (M4).
 import { type Scenario, validateScenario } from "@bitburner-agent/sim";
 import { gameFiles } from "./index.ts";
 
-const DAY = 24 * 60 * 60 * 1000;
-
-/** The scripted early game: what a player does first, until the fork fits in home RAM (bootstrap.js). */
-export const BOOTSTRAP = readFileSync(path.resolve(import.meta.dirname, "bootstrap.js"), "utf8");
+/** A virtual day, in ms: the baseline's checkpoint interval. */
+export const DAY = 24 * 60 * 60 * 1000;
 
 /**
- * The baseline scenario: BN1 entered with SF4.3, so 8 GB of home RAM and $1000. The fork's game files and the bootstrap
- * are on home, and the bootstrap runs, then hands over to `autopilot.js --disable-casino`. A run passes when the fork
- * destroys the BitNode; it stops at the BitVerse either way, and gives up after 30 virtual days.
+ * The baseline scenario (owner decisions log #28): BN1 re-entered with SF1.1 and SF4.3, the least a player can hold
+ * along with SF4.3, which the game makes BN1.2. SF1 starts home at 32 GB, so the fork runs unattended from the start:
+ * its game files are on home and `autopilot.js --disable-casino` runs, as a player starts it. A run passes when the
+ * fork destroys the BitNode; it stops there (or at the BitVerse, if that comes first), and gives up after 30 virtual
+ * days.
+ *
+ * `overrides` replace top-level fields (a shallow merge), for tests; the baseline itself never overrides.
  */
 export function baselineScenario(overrides: Partial<Scenario> = {}): Scenario {
   const scenario: unknown = {
-    name: "legacy-bn1-sf4: the fork from a fresh BN1 with SF4.3, after a scripted early game",
-    fixture: { kind: "bitnode", n: 1, sourceFiles: { 4: 3 } },
+    name: "legacy-bn1: the fork from BN1 with SF1.1 and SF4.3",
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } },
     epochMs: Date.UTC(2026, 0, 1),
-    files: {
-      home: { ...Object.fromEntries(gameFiles().map((file) => [file.path, file.content])), "bootstrap.js": BOOTSTRAP },
-    },
-    run: [{ script: "bootstrap.js" }],
+    files: { home: Object.fromEntries(gameFiles().map((file) => [file.path, file.content])) },
+    // --disable-casino: casino.js plays through the game's page and reloads the game, which a headless run can't.
+    run: [{ script: "autopilot.js", args: ["--disable-casino"] }],
     durationMs: 30 * DAY,
     checkpointEveryMs: DAY,
     stopWhen: [{ event: "bitnodeDestroyed" }],

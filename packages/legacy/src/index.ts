@@ -46,3 +46,6 @@ export function forkFiles(): ForkFile[] {
 export function gameFiles(): ForkFile[] {
   return forkFiles().filter((file) => file.path.endsWith(".js") || file.path.endsWith(".txt"));
 }
+
+export { baselineScenario, DAY } from "./baseline.ts";
+export { baselineRow, dailyHeapMb, formatHeaps, type RowMeta, seedHeapGrowth } from "./report.ts";
