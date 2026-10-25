@@ -1,4 +1,6 @@
+import { createRequire } from "node:module";
 import { afterAll, describe, expect, test } from "vitest";
+const require = createRequire(import.meta.url);
 import { NODE_GLOBALS } from "../src/host/parity/node-globals.ts";
 import { Simulation, type SimulationOptions } from "../src/simulation.ts";
 
@@ -319,13 +321,21 @@ describe("script API", () => {
     ]);
   });
 
-  test.skip("saves still work after a script changes how stack traces are made", async () => {
+  test("saves still work after a script changes how stack traces are made", async () => {
+    const say = (m: string) => require("node:fs").writeSync(2, `DIAG ${m}\n`);
+    say("start");
     const sim = await newGame(1);
+    say("started");
     const script = `export async function main(ns) { Error.stackTraceLimit = 2; Error.prepareStackTrace = () => "x"; }`;
     await sim.writeFile("home", "stacks.js", script);
+    say("written");
     await sim.run("home", "stacks.js");
+    say("ran");
     await sim.advance(1000);
-    expect((await sim.save()).length).toBeGreaterThan(1000);
+    say(`advanced heap=${await sim.diagnostics.heap()}`);
+    const save = await sim.save();
+    say(`saved ${save.length}`);
+    expect(save.length).toBeGreaterThan(1000);
   });
 
   test("postMessage reaches the page as in a browser: bare or on window, with source and origin, filtered by target", async () => {
