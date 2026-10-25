@@ -101,6 +101,6 @@ This is a personal project made public. Issues and PRs are welcome, but there is
 
 ## License
 
-[MIT](LICENSE). Bitburner itself is licensed separately (Apache 2.0 with Commons Clause). It is referenced as a submodule and is not part of this project's source. Any code ported from the game lives under a clearly marked directory carrying the game's license notice.
+[MIT](LICENSE). Bitburner itself is licensed separately (Apache 2.0 with Commons Clause). It is referenced as a submodule and is not part of this project's source. Any code ported from the game lives under a clearly marked directory carrying the game's license notice. [`packages/legacy/fork/`](packages/legacy/fork/) is the retired legacy fork's code, MIT © 2021 Alain Bryden, vendored unchanged with its license ([provenance](packages/legacy/PROVENANCE.md)).
 
 *Not affiliated with or endorsed by the Bitburner developers.*

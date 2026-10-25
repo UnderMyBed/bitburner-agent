@@ -98,7 +98,7 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
 | `npm run sim -- <scenario.json>` | Run a simulator scenario across seeds and print the results ([docs/sim/scenarios.md](docs/sim/scenarios.md)) |
 
-Code lives in npm workspaces under `packages/` (see architecture §12.2). `spikes/` is throwaway and excluded from the gates.
+Code lives in npm workspaces under `packages/` (see architecture §12.2). `spikes/` is throwaway and excluded from the gates. `packages/legacy/fork/` is vendored third-party JS: Biome skips it, it's never edited, and `packages/legacy/test/fork.test.ts` checks its bytes.
 
 ## Rules of engagement
 
