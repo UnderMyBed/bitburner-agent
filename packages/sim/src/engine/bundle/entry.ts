@@ -1,6 +1,11 @@
 // Bundled together with the game's source into dist/engine.cjs. Not typechecked by the repo's tsc: it imports the
 // game, which builds under its own TypeScript setup. Keep it minimal; its exports must match EngineApi (../api.ts).
-import { getBitNodeLevel } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { getBitNodeMultipliers } from "../../../../../vendor/bitburner-src/src/BitNode/BitNode";
+import { currentNodeMults } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeMultipliers";
+import {
+  getBitNodeLevel,
+  getDefaultBitNodeOptions,
+} from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { save as saveToIndexedDb } from "../../../../../vendor/bitburner-src/src/db";
 import { Engine } from "../../../../../vendor/bitburner-src/src/engine";
@@ -16,6 +21,7 @@ import {
 import { isLegacyScript, resolveScriptFilePath } from "../../../../../vendor/bitburner-src/src/Paths/ScriptFilePath";
 import { resolveTextFilePath } from "../../../../../vendor/bitburner-src/src/Paths/TextFilePath";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
+import { enterBitNode } from "../../../../../vendor/bitburner-src/src/RedPill";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
@@ -67,6 +73,35 @@ export async function bootSave(saveData: SaveData) {
   await saveToIndexedDb(saveData);
   await Engine.load(saveData);
   afterUiMount();
+}
+
+/**
+ * A new game, then BitNode `n` entered with the given Source-Files, as b1t_flum3.exe does: through the game's own
+ * `enterBitNode` (RedPill.tsx), which resets the game for the new BitNode without granting a Source-File. The game's
+ * own tests set up the same way (test/jest/Utilities.ts). A player entering a BitNode has long finished the tutorial.
+ */
+export async function bootBitNode(n: number, sourceFiles: Record<string, number>) {
+  await bootNewGame("skipped");
+  for (const [bitNode, level] of Object.entries(sourceFiles)) Player.sourceFiles.set(Number(bitNode), level);
+  enterBitNode(true, Player.bitNodeN, n, getDefaultBitNodeOptions());
+  leaveCinematic();
+}
+
+/**
+ * Entering BitNode 6 shows the Bladeburner cinematic, which only its Continue button leaves (BladeburnerCinematic.tsx
+ * onDone), and which hides messages. A fixture starts as a player who has clicked it.
+ */
+function leaveCinematic() {
+  if (Router.page() === Page.BladeburnerCinematic) Router.toPage(Page.Terminal);
+}
+
+/** The BitVerse portal's call (PortalModal.tsx): destroys the current BitNode, granting its Source-File. Test-only. */
+export function enterBitNodeByPortal(n: number) {
+  enterBitNode(false, Player.bitNodeN, n, getDefaultBitNodeOptions());
+}
+
+export function bitNodeMultipliers(n: number, level: number): Record<string, number> {
+  return { ...getBitNodeMultipliers(n, level) };
 }
 
 let report: (event: GameEvent) => void = () => {};
@@ -125,6 +160,7 @@ export function gameDiagnostics() {
     page: Router.page(),
     focus: Player.focus,
     exploits: [...Player.exploits],
+    bitNodeMultipliers: { ...currentNodeMults },
     testEnvironment: CONSTANTS.isInTestEnvironment,
     contracts: GetAllServers()
       .flatMap((server) => server.contracts.map((contract) => `${server.hostname}:${contract.fn}`))

@@ -95,6 +95,11 @@ await sim.close();
 A fixture is the game state a simulation starts from.
 - **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`.
   - **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
+- **`{ kind: "bitnode", n, sourceFiles }`** starts BitNode `n` with the given Source-Files (`{ [BitNode]: level }`, e.g. `{ 4: 3 }`). It boots a new game, sets the Source-Files, and enters the BitNode through the game's own `enterBitNode` (`RedPill.tsx`), as `b1t_flum3.exe` does. That resets everything for the new BitNode without granting a Source-File. The game's own tests set up the same way.
+  - **The level follows from the Source-Files,** as in the game: BitNode `n` at level L means `sourceFiles[n] = L - 1`. So `{ n: 4, sourceFiles: { 4: 2 } }` is BN4.3. Levels are 1-3, except SF12, which has no cap.
+  - **It equals arriving by a real destroy** (the BitVerse portal's `enterBitNode(false, …)`), with two exceptions, both from the game's flume path (`Prestige.ts:363`, `:373`). A real destroy with SF5 adds 300 intelligence exp, and the first destroy shows a congratulation dialog. The fixture does neither. Tests compare the two on Source-Files, BitNode and level, multipliers, home RAM, money, augmentations, factions and intelligence.
+  - **The tutorial is over,** as for anyone entering a BitNode.
+  - **BitNode 6** opens on the Bladeburner cinematic; the fixture leaves it as the Continue button does.
 - **`{ kind: "save", bytes | path, offlineMs? }`** loads a save through the game's own `Engine.load`: migration, offline progress, restarting the saved scripts. See [Saves](#saves).
 - **After loading, every fixture does what the UI does once mounted:** it picks the start page (see [Pages](#pages-and-the-bitverse)) and emits `MainUILoaded`, which starts saved scripts and autoexec.
 - **For every fixture, autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.

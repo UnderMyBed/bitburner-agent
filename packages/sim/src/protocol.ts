@@ -17,8 +17,19 @@ export type SaveFixture = { kind: "save"; offlineMs?: number } & (
   | { path: string; bytes?: never }
 );
 
+/**
+ * Entering BitNode `n` with the given Source-Files (number → level), from a new game, through the game's own
+ * `enterBitNode` as b1t_flum3.exe does. The BitNode's level follows from the Source-Files, as in the game: BitNode n at
+ * level L means `sourceFiles[n] = L - 1`.
+ */
+export interface BitNodeFixture {
+  kind: "bitnode";
+  n: number;
+  sourceFiles: Record<number, number>;
+}
+
 /** The game state a simulation starts from. */
-export type Fixture = { kind: "new"; tutorial: Tutorial } | SaveFixture;
+export type Fixture = { kind: "new"; tutorial: Tutorial } | BitNodeFixture | SaveFixture;
 
 /**
  * A fixture as the host receives it. Only kinds that need work in the parent differ from `Fixture`: a save arrives
@@ -195,6 +206,8 @@ export interface GameDiagnostics {
   exploits: string[];
   /** `CONSTANTS.isInTestEnvironment`: true would change game behaviour (it must be false, as in a browser). */
   testEnvironment: boolean;
+  /** The current BitNode's multipliers (`currentNodeMults`), by name. */
+  bitNodeMultipliers: Record<string, number>;
   /** Every coding contract, as "host:file", sorted. */
   contracts: string[];
   /** Real milliseconds the host took to load the engine and boot the fixture. */
@@ -254,6 +267,13 @@ export interface HostMethods {
   "diagnostics.toPage"(params: { page: string; flume?: boolean }): void;
   /** `Router.back()`, as the UI's Back buttons call it. Test-only, like `diagnostics.toPage`. */
   "diagnostics.back"(params: Record<string, never>): void;
+  /**
+   * Enters BitNode `n` as the BitVerse's portal does (`enterBitNode(false, Player.bitNodeN, n, defaults)`): the current
+   * BitNode's Source-File goes up a level. Test-only: scenarios get their own way in #30.
+   */
+  "diagnostics.enterBitNode"(params: { n: number }): void;
+  /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
+  "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** Writes `message` to stderr and exits with `code`. */
   "diagnostics.crash"(params: { code: number; message: string }): never;
 }
@@ -302,6 +322,27 @@ function validatePrompts(prompts: PromptRule[]): void {
   }
 }
 
+/** The game's BitNodes (BitNode/Constants.ts validBitNodes), and how far each Source-File goes. */
+const BITNODES = 15;
+const maxSourceFileLevel = (n: number) => (n === 12 ? Number.MAX_SAFE_INTEGER : 3);
+
+function validateBitNodeFixture({ n, sourceFiles }: BitNodeFixture): void {
+  const isBitNode = (value: number) => Number.isInteger(value) && value >= 1 && value <= BITNODES;
+  if (!isBitNode(n)) throw new RangeError(`a BitNode fixture needs n in 1-${BITNODES}, got ${JSON.stringify(n)}`);
+  if (typeof sourceFiles !== "object" || sourceFiles === null || Array.isArray(sourceFiles)) {
+    throw new RangeError("a BitNode fixture needs sourceFiles: { [BitNode]: level }, e.g. {} or { 4: 3 }");
+  }
+  for (const [key, level] of Object.entries(sourceFiles)) {
+    const bitNode = Number(key);
+    if (!isBitNode(bitNode)) throw new RangeError(`no Source-File ${key}: BitNodes are 1-${BITNODES}`);
+    if (!Number.isInteger(level) || level < 1 || level > maxSourceFileLevel(bitNode)) {
+      throw new RangeError(
+        `Source-File ${key} level must be an integer from 1 to ${bitNode === 12 ? "any" : 3}, got ${JSON.stringify(level)}`,
+      );
+    }
+  }
+}
+
 function validateFixture(fixture: HostFixture): void {
   switch (fixture.kind) {
     case "new":
@@ -310,6 +351,9 @@ function validateFixture(fixture: HostFixture): void {
           `a new-game fixture needs tutorial: "running" or "skipped", got ${JSON.stringify(fixture.tutorial)}`,
         );
       }
+      return;
+    case "bitnode":
+      validateBitNodeFixture(fixture);
       return;
     case "save":
       if ((fixture.format !== "gzip" && fixture.format !== "base64") || typeof fixture.data !== "string") {

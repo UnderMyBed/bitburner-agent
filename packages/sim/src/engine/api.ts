@@ -30,6 +30,15 @@ export interface EngineApi {
   bootNewGame(tutorial: Tutorial): Promise<void>;
   /** Loads a save through the game's own `Engine.load` (stored in IndexedDB first, as the browser would have it). */
   bootSave(saveData: string | Uint8Array): Promise<void>;
+  /**
+   * A new game, then BitNode `n` entered with `sourceFiles` (BitNode → level) through the game's own `enterBitNode`,
+   * as b1t_flum3.exe does. Leaves BitNode 6's cinematic as its Continue button does.
+   */
+  bootBitNode(n: number, sourceFiles: Record<string, number>): Promise<void>;
+  /** The BitVerse portal's `enterBitNode(false, Player.bitNodeN, n, defaults)`. Test-only. */
+  enterBitNodeByPortal(n: number): void;
+  /** The game's own `getBitNodeMultipliers(n, level)`. */
+  bitNodeMultipliers(n: number, level: number): Record<string, number>;
   /** The game's own save: gzip bytes. */
   saveBytes(): Promise<Uint8Array>;
   /** The game-side fields of a summary (the host adds `virtualMs`). */
@@ -78,6 +87,9 @@ const API_FUNCTIONS = {
   performanceNow: true,
   bootNewGame: true,
   bootSave: true,
+  bootBitNode: true,
+  enterBitNodeByPortal: true,
+  bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,
   saveJson: true,

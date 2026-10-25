@@ -17,10 +17,13 @@ import {
 import { RpcClient } from "./rpc.ts";
 
 export type {
+  BitNodeFixture,
   EventPage,
   Fixture,
+  GameEvent,
   GameSummary,
   ProcessInfo,
+  PromptRule,
   RunOptions,
   RunResult,
   ScriptArg,
@@ -160,6 +163,9 @@ export class Simulation {
     toPage: (page: string, flume = false) => this.rpc.call("diagnostics.toPage", { page, flume }),
     /** Test-only, like `toPage`. */
     back: () => this.rpc.call("diagnostics.back", {}),
+    /** Test-only: enters BitNode `n` as the BitVerse's portal does, granting the current BitNode's Source-File. */
+    enterBitNode: (n: number) => this.rpc.call("diagnostics.enterBitNode", { n }),
+    bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),
   };
 

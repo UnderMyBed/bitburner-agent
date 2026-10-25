@@ -29,6 +29,8 @@ function bootFixture(engine: EngineApi, fixture: HostFixture): Promise<void> {
   switch (fixture.kind) {
     case "new":
       return engine.bootNewGame(fixture.tutorial);
+    case "bitnode":
+      return engine.bootBitNode(fixture.n, fixture.sourceFiles);
     case "save":
       // The game takes gzip saves as bytes and the web export as its base64 text.
       return engine.bootSave(
@@ -141,6 +143,11 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       engine.routerBack();
     },
+    "diagnostics.enterBitNode": ({ n }) => {
+      booted();
+      engine.enterBitNodeByPortal(n);
+    },
+    "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.crash": ({ code, message }) => {
       writeSync(2, `${message}\n`);
       process.exit(code);
