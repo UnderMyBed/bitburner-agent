@@ -31,13 +31,29 @@ function callTimersWithWindowAsThis(): void {
 /**
  * Fakes timers, Date and performance from `epochMs`. Microtasks, nextTick and setImmediate stay real, so promises
  * and I/O still work. Window's copies follow these globals (installDom), so both access paths are virtual.
+ *
+ * `betweenTimers` is how the clock yields to the real event loop after each timer it fires while advancing. It
+ * receives the continuation and must run it on a real macrotask, possibly later: the import barrier uses it to hold
+ * virtual time while a script module is still loading.
  */
-export function installClock(epochMs: number): VirtualClock {
-  const clock = FakeTimers.withGlobal(globalThis).install({
-    now: epochMs,
-    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
-    loopLimit: 1e9,
-  });
+export function installClock(epochMs: number, betweenTimers?: (continueTick: () => void) => void): VirtualClock {
+  // This relies on a fake-timers internal (pinned at 15.4.0): `withGlobal` captures
+  // `originalSetTimeout = _global.setImmediate || _global.setTimeout` (fake-timers-src.js:1748), and tickAsync yields
+  // through it after every timer it fires (:2232). Lend it `betweenTimers` for that moment only; the real setImmediate
+  // stays installed for everyone else. If an upgrade moves that capture, the test "a script started in the middle of
+  // an advance begins at the same virtual time, however slow its import" fails.
+  const realSetImmediate = globalThis.setImmediate;
+  if (betweenTimers) globalThis.setImmediate = betweenTimers as unknown as typeof setImmediate;
+  let clock: ReturnType<ReturnType<typeof FakeTimers.withGlobal>["install"]>;
+  try {
+    clock = FakeTimers.withGlobal(globalThis).install({
+      now: epochMs,
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+      loopLimit: 1e9,
+    });
+  } finally {
+    globalThis.setImmediate = realSetImmediate;
+  }
   callTimersWithWindowAsThis();
   return {
     now: () => clock.now,
