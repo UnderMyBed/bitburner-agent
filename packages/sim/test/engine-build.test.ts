@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { PINNED_GAME } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
 import {
@@ -151,35 +153,62 @@ describe("engine bundle", () => {
     expect(bundle).toContain("moduleCache.set(newCode, new StrongRef(script.mod))");
     expect(bundle).toMatch(/var cleanup = new InertFinalizationRegistry\(/);
     expect(bundle.match(/new (StrongRef|InertFinalizationRegistry)\(/g)).toHaveLength(2);
+    // Nothing else in the bundle, the game's dependencies included, can see the collector run.
+    expect(bundle).not.toMatch(/new (WeakRef|FinalizationRegistry)\(/);
   });
 });
 
 describe("holdModules", () => {
-  const cache = "const c = new Map();\nconst r = new FinalizationRegistry(() => {});\nc.set(k, new WeakRef(m));";
+  const cache =
+    "const moduleCache = new Map();\nconst cleanup = new FinalizationRegistry(() => {});\n" +
+    "moduleCache.set(newCode, new WeakRef(m));";
 
-  test("imports the strong stand-ins into the module cache's source, which is otherwise unchanged", () => {
-    const [first, ...rest] = holdModules(cache).split("\n");
-    expect(first).toMatch(/^import \{ WeakRef, FinalizationRegistry \} from ".*\/stubs\/strong-refs\.ts";$/);
-    expect(rest.join("\n")).toBe(cache);
+  test("imports the strong stand-ins on the cache's first line, so its line numbers stay the game's", () => {
+    const patched = holdModules(cache);
+    expect(patched.split("\n")).toHaveLength(cache.split("\n").length);
+    const [, importLine, rest] =
+      /^(import \{ WeakRef, FinalizationRegistry \} from "[^"]*"; )([\s\S]*)$/.exec(patched) ?? [];
+    expect(importLine).toMatch(/\/stubs\/strong-refs\.ts"; $/);
+    expect(rest).toBe(cache);
   });
 
   test.each([
-    ["a WeakRef", cache.replace("new WeakRef(m)", "m")],
-    ["a FinalizationRegistry", cache.replace("new FinalizationRegistry(() => {})", "null")],
-  ])("fails the build once the cache no longer makes %s, so the patch goes", (_, source) => {
+    ["the cache stops making WeakRefs", cache.replace("new WeakRef(m)", "m")],
+    ["only something else makes a WeakRef", `${cache.replace("new WeakRef(m)", "m")}\nconst other = new WeakRef(x);`],
+    ["the cache stops using a FinalizationRegistry", cache.replace("new FinalizationRegistry(() => {})", "null")],
+  ])("fails the build once %s, so the patch goes", (_, source) => {
     expect(() => holdModules(source)).toThrow(/remove holdModules/);
   });
 });
 
 describe("the strong stand-ins", () => {
-  test("a StrongRef always returns its target; the registry never calls back", async () => {
-    const { WeakRef: Strong, FinalizationRegistry: Inert } = await import("../src/engine/bundle/stubs/strong-refs.ts");
-    const target = {};
-    expect(new Strong(target).deref()).toBe(target);
-    const registry = new Inert(() => {
-      throw new Error("called back");
-    });
-    expect(registry.register(target, "key")).toBeUndefined();
-    expect(registry.unregister(target)).toBe(false);
+  // A full collection, as measure.ts takes one: the real WeakRef would drop the target and the real registry would
+  // call back, so each assertion fails on the globals the stand-ins replace.
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("a StrongRef keeps its target through a collection", async () => {
+    const { WeakRef: Strong } = await import("../src/engine/bundle/stubs/strong-refs.ts");
+    // Made in another function, so nothing here holds the target but the ref.
+    const ref = (() => new Strong({ kept: true }))();
+    await nextTask(); // a WeakRef keeps its target until the current task ends
+    gc();
+    expect(ref.deref()).toEqual({ kept: true });
+  });
+
+  test("the registry never calls back, even once its targets are collected", async () => {
+    const { FinalizationRegistry: Inert } = await import("../src/engine/bundle/stubs/strong-refs.ts");
+    const held: string[] = [];
+    const registry = new Inert((heldValue: string) => held.push(heldValue));
+    (() => {
+      for (let i = 0; i < 100; i++) registry.register({}, `target ${i}`);
+    })();
+    for (let i = 0; i < 3; i++) {
+      gc();
+      await nextTask();
+    }
+    expect(held).toEqual([]);
+    expect(registry.unregister({})).toBe(false);
   });
 });

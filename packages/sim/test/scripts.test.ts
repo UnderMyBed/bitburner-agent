@@ -155,12 +155,13 @@ describe("running scripts", () => {
   });
 
   test("garbage collection doesn't change results: compiled modules are held, as upstream dev holds them", async () => {
-    // The game caches each compiled module by its source, through a WeakRef (NetscriptJSEvaluator.ts:41-46). A module
-    // the collector frees comes back fresh, its module-level state reset, so a script that keeps state at module level
-    // (as the legacy fork does) would act on when the collector ran (#73). Here a file changes and changes back, which
-    // leaves its first module only in the cache; one game then collects garbage before the second run.
+    // The game caches each compiled module by its source, through a WeakRef (NetscriptJSEvaluator.ts:41-47, :223-224).
+    // A module the collector frees comes back fresh, its module-level state reset, so a script that keeps state at
+    // module level (as the legacy fork does) would behave differently depending on when the collector ran (#73). Here a
+    // file changes and changes back, which leaves its first module only in the cache; one game then collects garbage
+    // before the second run. The count also goes to a file, so it reaches the save and the state hash.
     const counter = (note = "") =>
-      `let runs = 0;\nexport async function main(ns) { runs++; ns.print("run " + runs); }${note}`;
+      `let runs = 0;\nexport async function main(ns) { runs++; ns.print("run " + runs); ns.write("runs.txt", String(runs), "w"); }${note}`;
     const [kept, collected] = await Promise.all([newGame(1), newGame(1)]);
     const counts: string[][] = [];
     for (const sim of [kept, collected]) {

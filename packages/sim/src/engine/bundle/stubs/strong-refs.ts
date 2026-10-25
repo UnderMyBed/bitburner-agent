@@ -1,6 +1,7 @@
-// The `WeakRef` and `FinalizationRegistry` the game's module cache gets (NetscriptJSEvaluator.ts:41-46; imported into
-// that file alone by build.ts, `holdModules`). The cache then holds every compiled module, as upstream dev does
-// (8e385f31, "Removed weakRef from moduleCache"), so garbage collection can't change what scripts do (#73).
+// Stand-ins for the `WeakRef` and `FinalizationRegistry` of the game's script module cache (NetscriptJSEvaluator.ts:41-47,
+// :223-224), imported into that file alone by build.ts (`holdModules`). The cache then holds every compiled module, as
+// upstream dev does (8e385f31, "Removed weakRef from moduleCache"), so garbage collection can't change what scripts do
+// (#73).
 
 /** A `WeakRef` that holds its target: `deref()` always returns it. */
 export class StrongRef<T extends object> {

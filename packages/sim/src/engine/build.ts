@@ -70,7 +70,8 @@ export function collectEngineInputs(): EngineInputs {
 
 // The module mapping, derived from the game's jest.config.js and webpack.config.js. Differences from Jest, all
 // documented in packages/sim/README.md: `?raw` imports load as text (Jest uses a file mock), `@swc/wasm-web` is a
-// stub (Jest maps it to native @swc/core), and `@nsdefs` needs no mapping (its imports are type-only and erased).
+// stub (Jest maps it to native @swc/core), `@nsdefs` needs no mapping (its imports are type-only and erased), and the
+// script module cache gets strong `WeakRef`/`FinalizationRegistry` stand-ins (`holdModules`).
 const stubDir = path.join(enginePaths.bundleSourceDir, "stubs");
 const aliases: Record<string, string> = {
   "@player": path.join(enginePaths.gameRoot, "src/Player.ts"),
@@ -99,7 +100,7 @@ function gameModules(): esbuild.Plugin {
         loader: "text",
       }));
       build.onResolve({ filter: aliasFilter }, (args) => ({ path: aliases[args.path] }));
-      build.onLoad({ filter: /[\\/]src[\\/]NetscriptJSEvaluator\.ts$/ }, (args) => ({
+      build.onLoad({ filter: new RegExp(`^${escapeRegExp(moduleCacheFile)}$`) }, (args) => ({
         contents: holdModules(readFileSync(args.path, "utf8")),
         loader: "ts",
       }));
@@ -107,22 +108,26 @@ function gameModules(): esbuild.Plugin {
   };
 }
 
+/** The game's script module cache (NetscriptJSEvaluator.ts:41-47, :223-224). */
+const moduleCacheFile = path.join(enginePaths.gameRoot, "src", "NetscriptJSEvaluator.ts");
+
 /**
  * The game's module cache holds each compiled module through a `WeakRef` and drops its entry from a
- * `FinalizationRegistry` callback (NetscriptJSEvaluator.ts:41-46, :223). A module the collector frees comes back
- * fresh, its module-level state reset, so results would depend on when the collector runs (#73). This imports strong
- * stand-ins into that file alone (stubs/strong-refs.ts), so the cache holds every module, as upstream dev's does.
- * Throws if the file stops using them, so the patch goes when a version bump makes it unnecessary.
+ * `FinalizationRegistry` callback. A module the collector frees comes back fresh, its module-level state reset, so
+ * results would depend on when the collector runs (#73). This imports strong stand-ins into that file alone
+ * (stubs/strong-refs.ts), so the cache holds every module, as upstream dev's does. The import goes on the file's first
+ * line, so its line numbers stay the game's. Throws once the cache no longer uses them, so the patch goes when a
+ * version bump makes it unnecessary.
  */
 export function holdModules(source: string): string {
-  if (!/new WeakRef\(/.test(source) || !/new FinalizationRegistry\(/.test(source)) {
+  if (!/moduleCache\.set\([^;]*new WeakRef\(/.test(source) || !/cleanup = new FinalizationRegistry\(/.test(source)) {
     throw new Error(
-      "NetscriptJSEvaluator.ts no longer makes a WeakRef and a FinalizationRegistry: re-check the module cache, " +
-        "then remove holdModules (packages/sim/src/engine/build.ts) and its row in docs/sim/parity.md (#73).",
+      "NetscriptJSEvaluator.ts's module cache no longer uses a WeakRef and a FinalizationRegistry: remove " +
+        "holdModules, as the module-cache row in docs/sim/parity.md lists (#73).",
     );
   }
   const stub = path.join(stubDir, "strong-refs.ts").replaceAll("\\", "/");
-  return `import { WeakRef, FinalizationRegistry } from ${JSON.stringify(stub)};\n${source}`;
+  return `import { WeakRef, FinalizationRegistry } from ${JSON.stringify(stub)}; ${source}`;
 }
 
 function packageOf(input: string): string {
