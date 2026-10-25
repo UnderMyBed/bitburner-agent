@@ -50,7 +50,9 @@ export function formatHeader(): string {
 export function formatRow(row: BenchRow): string {
   const speeds = WORKLOADS.map((w) => (row.speeds[w] === undefined ? "-" : `${row.speeds[w]}x`));
   const { startMb, endMb, perDayMb } = row.heap;
-  const growth = `${perDayMb >= 0 ? "+" : ""}${mb(perDayMb)}`;
+  // Rounded first, so a tiny shrink shows as +0.0, not -0.0.
+  const shown = Number(perDayMb.toFixed(1)) || 0;
+  const growth = `${shown >= 0 ? "+" : ""}${mb(shown)}`;
   return tableLine([row.date, row.commit, row.rig, row.node, ...speeds, mb(startMb), mb(endMb), growth]);
 }
 

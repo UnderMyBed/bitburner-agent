@@ -62,6 +62,7 @@ describe("benchmark rows", () => {
 
   test("heap shrinking shows as a negative growth", () => {
     expect(formatRow(row({ heap: { startMb: 10, endMb: 9, perDayMb: -0.5 } }))).toContain("| -0.5 MB |");
+    expect(formatRow(row({ heap: { startMb: 10, endMb: 9, perDayMb: -0.04 } }))).toContain("| +0.0 MB |");
   });
 
   test("parsing reads back what formatting wrote, in file order, skipping everything else", () => {
