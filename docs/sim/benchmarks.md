@@ -41,7 +41,15 @@ Exit codes: 0 nothing regressed, 1 something did, 2 it couldn't run.
 
 ## Results
 
-The reference rig is the owner's machine. Rows are appended at the end of this file, so keep the table last.
+The reference rig is the owner's machine. Dates are UTC. The commit is the one benchmarked; a pull request's commits stay reachable from the pull request after it's squashed.
+
+Reading the first row (2026-10-25, the reference rig):
+- **lean** is about 27× the 1000× target.
+- **churn** is the heavy script-churn class. Spike S1 measured 50–700× for that class ([architecture §9.1](../architecture.md#9-simulator)), and it isn't held to the target.
+- **The heap doesn't grow.** It drops once between days 2 and 3 (about 104 to 93 MB), then stays within 0.2 MB to day 7.
+
+Rows are appended at the end of this file, so keep the table last.
 
 | Date | Commit | Rig | Node | lean | batch | churn | copies | Heap start | Heap end | Heap growth per day |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-25 | 75cada7 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26899x | 9630x | 284x | 9809x | 102.8 MB | 93.0 MB | -2.0 MB |
