@@ -53,6 +53,7 @@ describe("collectEngineInputs", () => {
     const sources = collectBundleSources(enginePaths.bundleSourceDir);
     expect(Object.keys(sources).sort()).toEqual([
       "entry.ts",
+      "page.ts",
       "router.ts",
       "stubs/node-builtin.js",
       "stubs/null.cjs",

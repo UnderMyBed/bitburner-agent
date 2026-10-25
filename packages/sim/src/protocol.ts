@@ -71,7 +71,23 @@ export interface SimulationOptions {
   epochMs?: number;
   /** Without a fixture the engine is loaded but no game is booted. */
   fixture?: Fixture;
+  /**
+   * How `ns.prompt` is answered, since there is no player to answer it. The first rule whose `match` is part of the
+   * prompt's text gives the answer. A prompt no rule matches stays open, as with nobody at the screen, until a newer
+   * prompt replaces it (which closes it as dismissing does).
+   */
+  prompts?: PromptRule[];
   testHooks?: TestHooks;
+}
+
+export interface PromptRule {
+  /** Matches a prompt whose text contains this (case-sensitive). */
+  match: string;
+  /**
+   * `true`/`false` for a yes/no prompt; the text for a text prompt; one of the choices for a select prompt. An answer
+   * a player couldn't give fails the script's `ns.prompt` call.
+   */
+  answer: string | boolean;
 }
 
 /** What the host process receives: the epoch decided and the fixture resolved. */
@@ -79,6 +95,7 @@ export interface HostOptions {
   seed: number;
   epochMs: number;
   fixture?: HostFixture;
+  prompts?: PromptRule[];
   testHooks?: TestHooks;
 }
 
@@ -90,23 +107,54 @@ export interface BitVerseReached {
   destroyedBitNode: number;
 }
 
-/** Things that happened in the game that a browser would have shown or done outside the page. */
-/** `at` is the virtual epoch time it happened, or 0 if it happened while the host was still being set up. */
-export type SimEvent =
-  /** The game started a file download (an `<a download>` click), e.g. a save export or a pre-v3 backup. */
-  | { type: "download"; at: number; filename: string; bytes: number }
+/** A prompt as the game raised it (`ns.prompt`), for the harness to answer. */
+export interface PromptRequest {
+  text: string;
+  /** "boolean" is a yes/no prompt (the game's default type). */
+  kind: "boolean" | "text" | "select";
+  /** A select prompt's options; empty otherwise. */
+  choices: string[];
+}
+
+/**
+ * Events the game itself raises for its UI, which the engine bundle reports to the host. React content (alerts and
+ * toasts built from components) is reduced to its text.
+ */
+export type GameEvent =
+  /** A popup: `ns.alert`, a message arriving, `dialogBoxCreate` anywhere in the game. */
+  | { type: "alert"; text: string }
+  /** A toast: `ns.toast`, achievements, saves… The variants are the game's `ToastVariant` (ui/Enums.ts). */
+  | { type: "toast"; text: string; variant: "success" | "warning" | "error" | "info" }
   /**
-   * The game (or a library in it) wrote an error or warning to the console. Machine-specific file paths in the
-   * message are replaced by `<repo>`, so the log reads the same on every machine.
+   * An error the game reports in its error popup: a script error, or a promise rejection nobody handled. Each popup is
+   * closed at once (as its Close button does), so every error is reported, repeats included, unless the game's
+   * settings suppress error popups (then the game reports none).
    */
-  | { type: "console"; at: number; level: "error" | "warn"; message: string }
+  | { type: "error"; errorType: string; message: string; host: string; script: string; pid: number | null }
+  /** `ns.prompt`, and the answer a `PromptRule` gave it; with no matching rule, nobody answered (`answer` is null). */
+  | ({ type: "prompt"; answer: string | boolean | null; answeredBy: "rule" | "nobody" } & PromptRequest)
   /**
    * The game went to the BitVerse page, where the player picks the next BitNode: a BitNode was destroyed (or, with
    * `flume`, left early by b1t_flum3.exe), or a save loaded there. Navigating there kills every running script, as
    * the real router does; a save that starts there restarts its saved scripts as usual. The game then waits there
    * until something enters a BitNode.
    */
-  | ({ type: "bitverseReached"; at: number } & BitVerseReached);
+  | ({ type: "bitverseReached" } & BitVerseReached);
+
+/**
+ * Things that happened in the game that a browser would have shown or done outside the page, in order. `at` is the
+ * virtual epoch time it happened, or 0 if it happened while the host was still being set up.
+ */
+export type SimEvent = { at: number } & (
+  | GameEvent
+  /** The game started a file download (an `<a download>` click), e.g. a save export or a pre-v3 backup. */
+  | { type: "download"; filename: string; bytes: number }
+  /**
+   * An error or warning on the console: from the game, a library, or an uncaught error (as a browser logs it).
+   * Machine-specific file paths in the message are replaced by `<repo>`, so the log reads the same on every machine.
+   */
+  | { type: "console"; level: "error" | "warn"; message: string }
+);
 
 /** A page of the event log: events from position `since` on, and where the next page starts. */
 export interface EventPage {
@@ -143,6 +191,10 @@ export interface GameDiagnostics {
   page: string;
   /** `Player.focus`: whether the player is focused on their current work. */
   focus: boolean;
+  /** `Player.exploits`: the game's anti-cheat findings. A simulation must never earn any by accident. */
+  exploits: string[];
+  /** `CONSTANTS.isInTestEnvironment`: true would change game behaviour (it must be false, as in a browser). */
+  testEnvironment: boolean;
   /** Every coding contract, as "host:file", sorted. */
   contracts: string[];
   /** Real milliseconds the host took to load the engine and boot the fixture. */
@@ -229,11 +281,24 @@ export function validateHostOptions(options: HostOptions): void {
     throw new RangeError(`epochMs must be a non-negative integer, got ${epochMs}`);
   }
   if (options.fixture !== undefined) validateFixture(options.fixture);
+  if (options.prompts !== undefined) validatePrompts(options.prompts);
   const delay = options.testHooks?.importDelayMs;
   if (delay && !(Number.isInteger(delay[0]) && Number.isInteger(delay[1]) && 0 <= delay[0] && delay[0] <= delay[1])) {
     throw new RangeError(
       `testHooks.importDelayMs must be [min, max] integers with 0 <= min <= max, got ${JSON.stringify(delay)}`,
     );
+  }
+}
+
+function validatePrompts(prompts: PromptRule[]): void {
+  const valid = (rule: PromptRule) =>
+    typeof rule === "object" &&
+    rule !== null &&
+    typeof rule.match === "string" &&
+    rule.match !== "" &&
+    (typeof rule.answer === "string" || typeof rule.answer === "boolean");
+  if (!Array.isArray(prompts) || !prompts.every(valid)) {
+    throw new RangeError("prompts must be rules of { match: non-empty text, answer: text or true/false }");
   }
 }
 

@@ -391,7 +391,9 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 - **Engine:** the real `vendor/bitburner-src` code, bundled for plain Node with esbuild (the module mapping from the game's `jest.config.js`), on jsdom globals. It boots through the game's own `Engine.load`: the new-game path, or the real save-load path including migration and offline progress.
 - **Browser parity layer:** the harness reproduces what the browser and UI provide implicitly, and each item gets a test. The [parity audit](sim/parity.md) is the full inventory, with each item's disposition and test:
-  - `window === globalThis` globals (`sprintf`, lodash `_`): planned, [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)
+  - the page's globals (`sprintf`, lodash `_`, `React`), shared between `window` and the global object
+  - the UI's popups, toasts, error popup and prompts, as sim events; prompts answered by scenario rules, or left open as with nobody at the screen
+  - uncaught errors handled as a browser does; no network
   - browser timer semantics (callbacks run with `this` = `window`), a pinned default locale and time zone
   - `MainUILoaded`, which starts saved scripts and autoexec
   - a headless router with the real router's side effects
@@ -416,6 +418,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 ### 9.2 Fidelity gaps (known and accepted)
 - The headless simulator doesn't render the UI, so code that reads the game's DOM fails there (our `ui` effectors, parts of the legacy fork). UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
 - The browser parity layer (§9.1) is hand-written. A missed side effect of the UI is a silent fidelity gap, so the layer is re-audited ([parity audit](sim/parity.md)) whenever the pinned version moves.
+- The simulator differs from a browser on purpose in a few places, listed in the [parity audit's summary](sim/parity.md#summary): a simulated player at the UI (prompt rules, error popups closed at once), no network, no windows, autosave off.
 - Timing contention under load (batch landing jitter) is modelled with injected jitter that we calibrate from real telemetry.
 - Offline progress and save/reload are exercised through the engine's real load path using serialised saves.
 

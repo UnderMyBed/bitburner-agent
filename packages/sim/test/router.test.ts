@@ -1,24 +1,17 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { enginePaths } from "../src/engine/paths.ts";
-import { type SimEvent, Simulation, type SimulationOptions } from "../src/simulation.ts";
+import type { SimEvent, Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
 import { editSave, withBitNodeFinished, withSingularity } from "./helpers/save-edit.ts";
+import { runScript, useSimulations } from "./helpers/sim.ts";
 
 // The headless router (src/engine/bundle/router.ts) stands in for the one GameRoot builds when it renders. Each test
 // here fails on the game's pre-mount stub, which is what headless play had before it.
 
 const EPOCH = Date.UTC(2026, 0, 1);
-const open: Simulation[] = [];
-async function start(options: SimulationOptions): Promise<Simulation> {
-  const sim = await Simulation.start(options);
-  open.push(sim);
-  return sim;
-}
-afterAll(async () => {
-  await Promise.all(open.map((sim) => sim.close()));
-});
+const start = useSimulations();
 
 const newGame = () => start({ seed: 5, epochMs: EPOCH, fixture: { kind: "new", tutorial: "skipped" } });
 const fromSave = (bytes: Uint8Array) => start({ seed: 5, fixture: { kind: "save", bytes } });
@@ -36,23 +29,6 @@ const withHackingExp = (bytes: Uint8Array) =>
   editSave(bytes, ({ PlayerSave }) => {
     PlayerSave.data.exp.hacking = 1_000;
   });
-
-let scripts = 0;
-/** Runs a script for `ms` of virtual time. `out` is what it passed to `out(…)`; `log` is its whole log. */
-async function runScript(sim: Simulation, body: string, ms = 1_000): Promise<{ out: unknown[]; log: string[] }> {
-  const name = `script${++scripts}.js`;
-  await sim.writeFile(
-    "home",
-    name,
-    `export async function main(ns) {\nns.disableLog("ALL");\nconst out = (v) => ns.print("out:" + JSON.stringify(v));\n${body}\n}`,
-  );
-  const { pid, error } = await sim.run("home", name);
-  expect(error).toBeUndefined();
-  await sim.advance(ms);
-  const log = await sim.logs(pid);
-  const out = log.filter((line) => line.startsWith("out:")).map((line) => JSON.parse(line.slice(4)) as unknown);
-  return { out, log };
-}
 
 /** The messages on home after a minute: message checks run every 30 s or so. */
 async function messagesAfterAMinute(sim: Simulation): Promise<unknown> {

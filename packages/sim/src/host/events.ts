@@ -1,13 +1,12 @@
 // The sim event log: things the game did that a browser would have shown or done outside the page. Recorded in the
 // order they happen. Module-level state is fine here: each simulation process holds exactly one game.
 import { resolveObjectURL } from "node:buffer";
-import path from "node:path";
 import { format } from "node:util";
-import type { BitVerseReached, EventPage, SimEvent } from "../protocol.ts";
+import type { EventPage, GameEvent, SimEvent } from "../protocol.ts";
+import { withoutMachinePaths } from "./paths.ts";
 
 /** The most recent events kept; older ones are dropped (and counted). A long run of noisy scripts stays bounded. */
 const KEEP = 10_000;
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 
 let kept: SimEvent[] = [];
 let dropped = 0;
@@ -33,12 +32,6 @@ export function events(since: number): EventPage {
   return { events: kept.slice(start - dropped), next: dropped + kept.length, dropped: Math.max(0, dropped - since) };
 }
 
-/** Stack traces name files on this machine; make them read the same everywhere. */
-function withoutMachinePaths(message: string): string {
-  const fileUrl = `file:///${REPO_ROOT.replaceAll("\\", "/")}`;
-  return message.replaceAll(fileUrl, "<repo>").replaceAll(REPO_ROOT, "<repo>");
-}
-
 /**
  * Console errors and warnings become events (and still reach stderr, for the output tail on a crash). Node's own
  * process warnings (`(node:<pid>) …`) come through console.error too; they're about the host, not the game. Call once.
@@ -56,9 +49,9 @@ export function captureConsole(): void {
   }
 }
 
-/** The game reached the BitVerse page (see the headless router, src/engine/bundle/router.ts). */
-export function bitverseReached({ flume, destroyedBitNode }: BitVerseReached): void {
-  record({ type: "bitverseReached", at: now(), flume, destroyedBitNode });
+/** Something the game raised for its UI, or the router's arrival at the BitVerse (src/engine/bundle/). */
+export function gameEvent(event: GameEvent): void {
+  record({ ...event, at: now() });
 }
 
 /**
