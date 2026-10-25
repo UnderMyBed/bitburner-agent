@@ -7,7 +7,7 @@ import { writeSync } from "node:fs";
 import { registerHooks } from "node:module";
 import process from "node:process";
 import type { TestHooks } from "../protocol.ts";
-import { realTimers } from "./clock.ts";
+import { beginTask, realTimers } from "./clock.ts";
 
 const SCHEME = "blob:sim/";
 /**
@@ -112,7 +112,11 @@ export function installScriptModules(testHooks: TestHooks = {}): ScriptLoader {
       );
       previousImport = settled.catch(() => {});
       try {
-        return await settled;
+        const loaded = await settled;
+        // A browser evaluates a new module in a task of its own, so the script's main() starts at nesting level 0,
+        // however deep the timer that started it (#80).
+        beginTask();
+        return loaded;
       } finally {
         realTimers.clearTimeout(watchdog);
         const remaining = (importing.get(url) ?? 1) - 1;

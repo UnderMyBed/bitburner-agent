@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
-import { browserDelay, FAKE_TIMERS_VERSION, FakeTimers, nestedDelay, skipEmptyTimerScans } from "../src/host/clock.ts";
+import {
+  browserDelay,
+  FAKE_TIMERS_VERSION,
+  FakeTimers,
+  nestedDelay,
+  STEAM_ELECTRON,
+  skipEmptyTimerScans,
+} from "../src/host/clock.ts";
 
 const require = createRequire(import.meta.url);
 const installed = readFileSync(require.resolve("@sinonjs/fake-timers"), "utf8");
@@ -112,6 +119,16 @@ describe("timer delays, as Chromium takes them (#80)", () => {
     ["a Symbol", Symbol("delay")],
   ])("a delay that is %s throws a TypeError, as WebIDL's ToNumber does", (_, timeout) => {
     expect(() => browserDelay(timeout)).toThrow(TypeError);
+  });
+
+  test("the timer model follows the Electron in Steam's build: a change of Electron means re-checking it", () => {
+    // Chromium's nesting rules (MAX_TIMER_NESTING_LEVEL, MIN_NESTED_TIMER_MS, no 1 ms floor on intervals) are read from
+    // the Chromium of this Electron (docs/sim/parity.md, "Re-auditing"). If the game moves to another, re-read
+    // dom_timer.cc and features.cc at its Chromium tag, then update STEAM_ELECTRON.
+    const lock = JSON.parse(
+      readFileSync(new URL("../../../vendor/bitburner-src/package-lock.json", import.meta.url), "utf8"),
+    ) as { packages: Record<string, { version?: string }> };
+    expect(lock.packages["node_modules/electron"]?.version).toBe(STEAM_ELECTRON);
   });
 
   test.each([

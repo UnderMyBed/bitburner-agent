@@ -419,7 +419,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 ### 9.2 Fidelity gaps (known and accepted)
 - The headless simulator doesn't render the UI, so code that reads the game's DOM fails there (our `ui` effectors, parts of the legacy fork). UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
 - The browser parity layer (§9.1) is hand-written. A missed side effect of the UI is a silent fidelity gap, so the layer is re-audited ([parity audit](sim/parity.md)) whenever the pinned version moves.
-- The simulator differs from a browser on purpose in a few places, listed in the [parity audit's summary](sim/parity.md#summary): a simulated player at the UI (prompt rules, error popups closed at once), no network, no windows, autosave off, and compiled script modules never dropped.
+- The simulator differs from a browser on purpose in a few places, all listed in the [parity audit's summary](sim/parity.md#summary): for example a simulated player at the UI (prompt rules, error popups closed at once), no network and no windows.
 - Timing contention under load (batch landing jitter) is modelled with injected jitter that we calibrate from real telemetry.
 - Offline progress and save/reload are exercised through the engine's real load path using serialised saves.
 

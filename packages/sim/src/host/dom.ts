@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import { realTimers } from "./clock.ts";
+import { beginTask, realTimers } from "./clock.ts";
 
 /** Browser APIs the game uses through `window.` as well as bare: they must resolve to the same (virtual) objects. */
 /**
@@ -41,6 +41,7 @@ function installPostMessage(window: Window & typeof globalThis): void {
     }
     const data = structuredClone(message);
     realTimers.setImmediate(() => {
+      beginTask(); // a task of its own, so a timer it sets isn't nested
       window.dispatchEvent(new window.MessageEvent("message", { data, origin, source: window }));
     });
   } as typeof window.postMessage;
@@ -86,8 +87,12 @@ export function installDom(): JSDOM {
     });
   }
   // Animation frames on the global timers too (jsdom's own run on real time). ~60 fps, like a browser.
+  // A frame is a rendering task, not a timer: its callback starts at nesting level 0.
   window.requestAnimationFrame = (callback: (time: number) => void) =>
-    setTimeout(() => callback(performance.now()), 16);
+    setTimeout(() => {
+      beginTask();
+      callback(performance.now());
+    }, 16);
   window.cancelAnimationFrame = (handle: ReturnType<typeof setTimeout>) => clearTimeout(handle);
   globalThis.requestAnimationFrame = window.requestAnimationFrame as typeof requestAnimationFrame;
   globalThis.cancelAnimationFrame = window.cancelAnimationFrame as typeof cancelAnimationFrame;
