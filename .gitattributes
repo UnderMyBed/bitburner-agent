@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.gz binary
+# The vendored legacy fork stays byte-for-byte as recorded (packages/legacy/PROVENANCE.md).
+packages/legacy/fork/** -text

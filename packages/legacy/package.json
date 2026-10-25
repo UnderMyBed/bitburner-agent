@@ -1,0 +1,11 @@
+{
+  "name": "@bitburner-agent/legacy",
+  "private": true,
+  "description": "The retired legacy fork's scripts, vendored unchanged: the baseline the agent is measured against.",
+  "license": "MIT",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "devDependencies": {
+    "@bitburner-agent/sim": "*"
+  }
+}

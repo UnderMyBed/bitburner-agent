@@ -526,7 +526,7 @@ packages/
   bridge/       RFA server + control channel
   sim/          engine bundle, browser parity layer, virtual clock, scenarios, chaos, worker pool (ADR 0007)
   dashboard/    local web UI
-  legacy/       retired-fork scripts (MIT, with notice) + adapters that run them as reflexes; also the simulator baseline
+  legacy/       retired-fork scripts (MIT, with notice; fork/ is byte-for-byte, see PROVENANCE.md) + adapters that run them as reflexes; also the simulator baseline
 spikes/         throwaway experiments; findings in docs/spikes/
 vendor/         bitburner-src submodule (pinned, read-only)
 ```
