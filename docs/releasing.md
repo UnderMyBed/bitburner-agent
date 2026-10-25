@@ -25,7 +25,9 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
    - the workloads: `npm run sim -- packages/sim/scenarios/<name>.json` for each `.json` file there
    - the baselines (the legacy-fork BN1 baseline, [#33](https://github.com/UnderMyBed/bitburner-agent/issues/33)): the full seed run, with results written up in `docs/sim/baselines.md`
    - the benchmarks, on the reference rig: `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md` ([benchmarks](sim/benchmarks.md)). Post the printed row. A regression (exit 1) isn't recorded. Find the cause before going on: fix it, or say on the review issue why it's accepted and record it with `-- --accept` ([regressions](sim/benchmarks.md#regressions)).
-   - the forward check against upstream `dev` ([ADR 0009](decisions/0009-upstream-watchers-on-demand.md)): `gh workflow run forward-check.yml -R UnderMyBed/bitburner-agent`. It updates (or closes) the "Upcoming game changes (upstream dev)" issue; link that issue. The `stable` watcher joins this step with [#22](https://github.com/UnderMyBed/bitburner-agent/issues/22).
+   - the upstream watchers ([ADR 0009](decisions/0009-upstream-watchers-on-demand.md)):
+     - `gh workflow run stable-watch.yml -R UnderMyBed/bitburner-agent`. If `stable` has moved past the pinned game, it opens or updates the "Upstream stable moved" issue. Link it, and decide whether the bump goes in this release.
+     - `gh workflow run forward-check.yml -R UnderMyBed/bitburner-agent`. It updates or closes the "Upcoming game changes (upstream dev)" issue. Link that issue.
    - once they exist: the end-to-end suite (E2, from M2) and the chaos suite (from M3)
 
 3. **Review the milestone.** An independent reviewer (a fresh agent session, as for PR reviews) checks it, and the result is posted on the review issue in this form:

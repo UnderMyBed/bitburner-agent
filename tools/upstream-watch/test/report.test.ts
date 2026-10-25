@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BODY_LIMIT, changeCount, codeSpan, type ForwardReport, renderReport } from "../src/report.ts";
+import { BODY_LIMIT, changeCount, codeSpan, type ForwardReport, renderReport, reportFile } from "../src/report.ts";
 
 const empty: ForwardReport = {
   pinned: { sha: "1da7316ff0000000000000000000000000000000", version: "3.0.1" },
@@ -101,5 +101,49 @@ describe("renderReport", () => {
     expect(text.length).toBeLessThanOrEqual(60_000);
     expect(text).toContain("The raw diff is cut short");
     expect(text).toContain("| `hack` | `0.1` | `0.15` |");
+  });
+});
+
+describe("renderReport for the stable watcher", () => {
+  const stable = { ...full, upstream: { ...full.upstream, ref: "stable" } };
+
+  test("when stable has moved: says a Steam update is coming, and lists the bump steps first", () => {
+    const text = renderReport(stable, "stable");
+    expect(text).toMatch(/^Upstream `stable` has moved: v3\.0\.2 \(`b1b3376b50`, committed 2026-10-18\)/);
+    expect(text).toContain("Steam ships from `stable`, so a Steam update is coming.");
+    expect(text).toContain("0010-stable-watcher-opens-an-issue.md");
+    const steps = text.indexOf("## Bump steps");
+    expect(steps).toBeGreaterThan(0);
+    expect(steps).toBeLessThan(text.indexOf("## API surface"));
+    expect(text).toContain("git -C vendor/bitburner-src checkout b1b3376b50fdeef45e26696f23db870cd89d7582");
+    expect(text).toContain("`PINNED_GAME`");
+    expect(text).toContain("docs/sim/parity.md#re-auditing-after-a-version-bump");
+    expect(text).not.toContain("0005-forward-compat-dev-branch.md");
+  });
+
+  test("when stable is the pinned commit: says there's nothing to do, with no bump steps", () => {
+    const same = { ...empty, upstream: { ...empty.upstream, ref: "stable", sha: empty.pinned.sha } };
+    const text = renderReport(same, "stable");
+    expect(text).toMatch(/^Upstream `stable` is the pinned commit/);
+    expect(text).not.toContain("## Bump steps");
+  });
+
+  test("the dev watcher's report is the default", () => {
+    expect(renderReport(full)).toBe(renderReport(full, "dev"));
+    expect(renderReport(full)).not.toContain("## Bump steps");
+  });
+});
+
+describe("reportFile", () => {
+  test("carries the counts, whether the ref moved, both commits and the Markdown", () => {
+    expect(reportFile(full, "stable")).toEqual({
+      changes: 9,
+      moved: true,
+      pinned: full.pinned,
+      upstream: { ref: "dev", sha: full.upstream.sha, version: "3.0.2" },
+      markdown: renderReport(full, "stable"),
+    });
+    const same = { ...empty, upstream: { ...empty.upstream, sha: empty.pinned.sha } };
+    expect(reportFile(same)).toMatchObject({ changes: 0, moved: false });
   });
 });

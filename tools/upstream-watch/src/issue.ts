@@ -31,3 +31,13 @@ export function planIssue(
   const latest = ours[0];
   return latest ? { kind: "reopen", number: latest.number } : { kind: "create" };
 }
+
+/** A title template with `{version}` and `{sha}` (the first 10 characters) filled in from the upstream commit. */
+export function fillTitle(template: string, upstream: { version: string; sha: string }): string {
+  return template.replaceAll("{version}", upstream.version).replaceAll("{sha}", upstream.sha.slice(0, 10));
+}
+
+/** Whether a report has something to publish: listed changes (`on: "changes"`), or any move of the ref (`"moved"`). */
+export function hasNews(report: { changes: number; moved: boolean }, on: "changes" | "moved"): boolean {
+  return on === "moved" ? report.moved : report.changes > 0;
+}

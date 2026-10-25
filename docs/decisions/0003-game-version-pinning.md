@@ -1,6 +1,6 @@
 # 0003 — Game version pinning and Steam patch strategy
 
-- **Status:** Accepted (2026-10-24). Amended by [0009](0009-upstream-watchers-on-demand.md).
+- **Status:** Accepted (2026-10-24). Amended by [0009](0009-upstream-watchers-on-demand.md) and [0010](0010-stable-watcher-opens-an-issue.md).
 
 ## Context
 The campaign is played on Steam, which updates the game whenever it chooses. The simulator, the source builds and the in-game code's types all depend on an exact game version. A silent update could break the agent mid-campaign.

@@ -1,13 +1,17 @@
-// The upstream watcher's command line (tools/upstream-watch/README.md).
+// The upstream watchers' command line (tools/upstream-watch/README.md).
 //
-//   node tools/upstream-watch/cli.ts report --game <clone> --ref <ref> [--pinned <sha>] [--out report.json]
-//     Compares the pinned game with <ref> in a clone of the game's repository and prints the report as Markdown.
+//   node tools/upstream-watch/cli.ts report --game <clone> --ref <ref> [--watcher dev|stable] [--pinned <sha>]
+//       [--out report.json]
+//     Compares the pinned game with <ref> in a clone of the game's repository and prints the report as Markdown, in
+//     the dev forward check's form (the default) or the stable watcher's, which leads with the bump steps.
 //     --out also writes it as JSON for `publish`: { changes, moved, pinned, upstream, markdown }.
 //
 //   node tools/upstream-watch/cli.ts publish --report report.json --title <title> [--prefix <prefix>]
-//       [--when-empty close|leave] [--repo owner/name] [--dry-run]
+//       [--on changes|moved] [--when-empty close|leave] [--repo owner/name] [--dry-run]
 //     Updates the watcher's one tracking issue (found by title prefix, default the title) through the gh CLI:
-//     creates, updates or reopens it when there are changes; closes it, or leaves it, when there are none.
+//     creates, updates or reopens it when there's something to report; closes it, or leaves it, when there isn't.
+//     Something to report is listed changes (`--on changes`, the default) or any move of the ref (`--on moved`).
+//     The title may use {version} and {sha}, filled from the upstream commit.
 //     --repo defaults to $GITHUB_REPOSITORY, then this repository. --dry-run prints the plan and the body only.
 //
 // Exits 0 on success and 2 on bad usage or failure.
@@ -16,27 +20,18 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { buildReport, pinnedCommit } from "./src/git.ts";
-import { type ExistingIssue, planIssue } from "./src/issue.ts";
-import { changeCount, renderReport } from "./src/report.ts";
+import { type ExistingIssue, fillTitle, hasNews, planIssue } from "./src/issue.ts";
+import { type ReportFile, reportFile } from "./src/report.ts";
 import { readWatchlist } from "./src/watchlist.ts";
 
 const USAGE = `usage:
-  node tools/upstream-watch/cli.ts report --game <clone> --ref <ref> [--pinned <sha>] [--out report.json]
+  node tools/upstream-watch/cli.ts report --game <clone> --ref <ref> [--watcher dev|stable] [--pinned <sha>]
+      [--out report.json]
   node tools/upstream-watch/cli.ts publish --report report.json --title <title> [--prefix <prefix>]
-      [--when-empty close|leave] [--repo owner/name] [--dry-run]`;
+      [--on changes|moved] [--when-empty close|leave] [--repo owner/name] [--dry-run]`;
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const WATCHLIST = path.join(import.meta.dirname, "watchlist.txt");
 const LABEL = "upstream-watch";
-
-interface ReportFile {
-  /** Changed declarations, RAM costs and watched commits. */
-  changes: number;
-  /** Whether the ref is another commit than the pinned one, changes or not. */
-  moved: boolean;
-  pinned: { sha: string; version: string };
-  upstream: { ref: string; sha: string; version: string };
-  markdown: string;
-}
 
 type Values = Record<string, string | boolean | undefined>;
 
@@ -48,16 +43,11 @@ function report(values: Values): void {
     throw new RangeError("report needs --game and --ref");
   }
   if (!isRef(values.ref)) throw new RangeError(`--ref: a branch, tag or commit, got "${values.ref}"`);
+  const watcher = values.watcher ?? "dev";
+  if (watcher !== "dev" && watcher !== "stable") throw new RangeError("--watcher: dev or stable");
   const pinned = typeof values.pinned === "string" ? values.pinned : pinnedCommit(REPO_ROOT);
   const result = buildReport(values.game, pinned, values.ref, readWatchlist(WATCHLIST));
-  const { sha, version, ref } = result.upstream;
-  const file: ReportFile = {
-    changes: changeCount(result),
-    moved: sha !== result.pinned.sha,
-    pinned: result.pinned,
-    upstream: { ref, sha, version },
-    markdown: renderReport(result),
-  };
+  const file = reportFile(result, watcher);
   console.log(file.markdown);
   if (typeof values.out === "string") writeFileSync(values.out, `${JSON.stringify(file, null, 2)}\n`);
 }
@@ -68,27 +58,30 @@ function publish(values: Values): void {
   }
   const whenEmpty = values["when-empty"] ?? "close";
   if (whenEmpty !== "close" && whenEmpty !== "leave") throw new RangeError("--when-empty: close or leave");
+  const on = values.on ?? "changes";
+  if (on !== "changes" && on !== "moved") throw new RangeError("--on: changes or moved");
   const repo =
     typeof values.repo === "string" ? values.repo : (process.env.GITHUB_REPOSITORY ?? "UnderMyBed/bitburner-agent");
-  const { changes, markdown } = JSON.parse(readFileSync(values.report, "utf8")) as ReportFile;
+  const file = JSON.parse(readFileSync(values.report, "utf8")) as ReportFile;
+  const { changes, moved, upstream, markdown } = file;
+  const title = fillTitle(values.title, upstream);
   const gh = (...args: string[]) => execFileSync("gh", [...args, "--repo", repo], { encoding: "utf8" });
   const issues = JSON.parse(
     gh("issue", "list", "--label", LABEL, "--state", "all", "--limit", "200", "--json", "number,state,title"),
   ) as ExistingIssue[];
-  const prefix = typeof values.prefix === "string" ? values.prefix : values.title;
-  const action = planIssue(issues, prefix, { changes: changes > 0, whenEmpty });
-  console.log(`${changes} change(s): ${action.kind}${"number" in action ? ` #${action.number}` : ""}`);
+  const prefix = typeof values.prefix === "string" ? values.prefix : title;
+  const action = planIssue(issues, prefix, { changes: hasNews(file, on), whenEmpty });
+  console.log(`${changes} change(s), moved: ${moved}: ${action.kind}${"number" in action ? ` #${action.number}` : ""}`);
   if (values["dry-run"]) {
-    console.log(`\n--- title: ${values.title}\n${markdown}`);
+    console.log(`\n--- title: ${title}\n${markdown}`);
     return;
   }
   const bodyFile = path.join(path.dirname(path.resolve(values.report)), "issue-body.md");
   writeFileSync(bodyFile, markdown);
-  const edit = (number: number) =>
-    gh("issue", "edit", String(number), "--title", values.title as string, "--body-file", bodyFile);
+  const edit = (number: number) => gh("issue", "edit", String(number), "--title", title, "--body-file", bodyFile);
   switch (action.kind) {
     case "create":
-      gh("issue", "create", "--title", values.title, "--label", LABEL, "--body-file", bodyFile);
+      gh("issue", "create", "--title", title, "--label", LABEL, "--body-file", bodyFile);
       break;
     case "reopen":
       // If the edit fails after the reopen, the issue is open with its old body until the next run updates it.
@@ -124,6 +117,8 @@ try {
       report: { type: "string" },
       title: { type: "string" },
       prefix: { type: "string" },
+      watcher: { type: "string" },
+      on: { type: "string" },
       "when-empty": { type: "string" },
       repo: { type: "string" },
       "dry-run": { type: "boolean" },
