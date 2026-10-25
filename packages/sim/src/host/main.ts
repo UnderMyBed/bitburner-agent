@@ -89,7 +89,7 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       return Buffer.from(await withoutRandomDraws(() => engine.saveBytes())).toString("base64");
     },
-    events: () => events(),
+    events: ({ since }) => events(since),
     writeFile: ({ host, path, content }) => {
       booted();
       engine.writeFile(host, path, content);

@@ -4,19 +4,20 @@ import path from "node:path";
 import { resolveOptions } from "./options.ts";
 import {
   describeExit,
+  type EventPage,
   type GameSummary,
   type HostMessage,
   type HostOptions,
   type ProcessInfo,
   type RunOptions,
   type RunResult,
-  type SimEvent,
   type SimulationOptions,
   validateAdvance,
 } from "./protocol.ts";
 import { RpcClient } from "./rpc.ts";
 
 export type {
+  EventPage,
   Fixture,
   GameSummary,
   ProcessInfo,
@@ -117,9 +118,12 @@ export class Simulation {
     return new Uint8Array(Buffer.from(await this.rpc.call("save", {}), "base64"));
   }
 
-  /** What the game did that a browser would have shown or done outside the page (downloads, console errors). */
-  events(): Promise<SimEvent[]> {
-    return this.rpc.call("events", {});
+  /**
+   * What the game did that a browser would have shown or done outside the page (downloads, console errors), from
+   * position `since` on. Pass the returned `next` to read only what's new.
+   */
+  events(since = 0): Promise<EventPage> {
+    return this.rpc.call("events", { since });
   }
 
   /** Writes a script or text file on a server, as a player saving it in the editor would. */

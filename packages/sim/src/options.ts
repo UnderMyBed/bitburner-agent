@@ -1,7 +1,13 @@
 // Turns the public SimulationOptions into what the host receives: the epoch decided and a save fixture read.
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import { type HostFixture, type HostOptions, type SimulationOptions, validateHostOptions } from "./protocol.ts";
+import {
+  type HostFixture,
+  type HostOptions,
+  type SaveFixture,
+  type SimulationOptions,
+  validateHostOptions,
+} from "./protocol.ts";
 
 export function resolveOptions(options: SimulationOptions): HostOptions {
   const { fixture, epochMs, ...rest } = options;
@@ -20,14 +26,15 @@ export function resolveOptions(options: SimulationOptions): HostOptions {
     throw new RangeError(`offlineMs must be a non-negative integer, got ${offlineMs}`);
   }
   const bytes = readSaveBytes(fixture);
-  const { hostFixture, json } = decodeSave(bytes);
+  const { hostFixture, json } = parseSaveFile(bytes);
   const lastUpdate = playerLastUpdate(json);
   const resolved: HostOptions = { ...rest, epochMs: lastUpdate + offlineMs, fixture: hostFixture };
   validateHostOptions(resolved);
   return resolved;
 }
 
-function readSaveBytes(fixture: { bytes?: Uint8Array; path?: string }): Uint8Array {
+function readSaveBytes(fixture: SaveFixture): Uint8Array {
+  // The type allows only one of them; plain JavaScript callers (e.g. a JSON scenario) get a clear error instead.
   if ((fixture.bytes === undefined) === (fixture.path === undefined)) {
     throw new RangeError("a save fixture needs exactly one of bytes or path");
   }
@@ -35,13 +42,19 @@ function readSaveBytes(fixture: { bytes?: Uint8Array; path?: string }): Uint8Arr
 }
 
 /** The game writes saves as gzip bytes (Steam/Electron `.json.gz`) or, in the web build's export, as base64 text. */
-function decodeSave(bytes: Uint8Array): { hostFixture: HostFixture; json: string } {
+function parseSaveFile(bytes: Uint8Array): { hostFixture: HostFixture; json: string } {
   const isGzip = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
   if (isGzip) {
-    return {
-      hostFixture: { kind: "save", format: "gzip", data: Buffer.from(bytes).toString("base64") },
-      json: gunzipSync(bytes).toString("utf8"),
-    };
+    let json: string;
+    try {
+      json = gunzipSync(bytes).toString("utf8");
+    } catch (error) {
+      throw new Error(`Not a valid .json.gz save (gzip: ${(error as Error).message})`);
+    }
+    return { hostFixture: { kind: "save", format: "gzip", data: Buffer.from(bytes).toString("base64") }, json };
+  }
+  if (bytes[0] === 0x7b /* "{" */) {
+    throw new Error("A save must be gzip bytes (.json.gz) or the web build's base64 export, not plain JSON");
   }
   const text = Buffer.from(bytes).toString("utf8").trim();
   return {

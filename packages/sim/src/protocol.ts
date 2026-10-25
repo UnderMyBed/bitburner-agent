@@ -1,5 +1,5 @@
-// Messages between a Simulation (parent) and its host process (child), over Node IPC. Every message carries a
-// `type`, so new kinds (e.g. host events in later tasks) can be added without ambiguity.
+// The types a Simulation (parent) and its host process (child) share: options, fixtures, results, and the messages
+// between them over Node IPC. Every message carries a `type`, so new kinds can be added without ambiguity.
 
 /**
  * A new game starts the interactive tutorial; "skipped" ends it as the Skip button does. On v3.0.1 a running tutorial
@@ -7,20 +7,24 @@
  */
 export type Tutorial = "running" | "skipped";
 
-/** The game state a simulation starts from. */
-export type Fixture =
-  | { kind: "new"; tutorial: Tutorial }
-  /**
-   * A save, as the game writes it: a Steam/Electron `.json.gz` file or the web build's base64 export. The virtual
-   * epoch is the save's own `lastUpdate` plus `offlineMs` (default 0), so the game's real offline-progress path runs.
-   */
-  | { kind: "save"; bytes?: Uint8Array; path?: string; offlineMs?: number };
+/**
+ * A save, as the game writes it: a Steam/Electron `.json.gz` file or the web build's base64 export, given as bytes or
+ * as a file path (the only form a JSON scenario can use). The virtual epoch is the save's own `lastUpdate` plus
+ * `offlineMs` (default 0), so the game's real offline-progress path runs.
+ */
+export type SaveFixture = { kind: "save"; offlineMs?: number } & (
+  | { bytes: Uint8Array; path?: never }
+  | { path: string; bytes?: never }
+);
 
-/** A fixture as the host receives it: a save already read, its format known. */
-export type HostFixture =
-  | { kind: "new"; tutorial: Tutorial }
-  /** `data` is the gzip bytes in base64 (`gzip`) or the web export's base64 text itself (`base64`). */
-  | { kind: "save"; format: "gzip" | "base64"; data: string };
+/** The game state a simulation starts from. */
+export type Fixture = { kind: "new"; tutorial: Tutorial } | SaveFixture;
+
+/**
+ * A fixture as the host receives it. Only kinds that need work in the parent differ from `Fixture`: a save arrives
+ * already read, its format known (`data` is the gzip bytes in base64, or the web export's base64 text itself).
+ */
+export type HostFixture = Exclude<Fixture, SaveFixture> | { kind: "save"; format: "gzip" | "base64"; data: string };
 
 /**
  * Test-only knobs for the simulator's own tests. Never use them in scenarios: with the barrier disabled, the
@@ -79,11 +83,23 @@ export interface HostOptions {
 }
 
 /** Things that happened in the game that a browser would have shown or done outside the page. */
+/** `at` is the virtual epoch time it happened, or 0 if it happened while the host was still being set up. */
 export type SimEvent =
   /** The game started a file download (an `<a download>` click), e.g. a save export or a pre-v3 backup. */
   | { type: "download"; at: number; filename: string; bytes: number }
-  /** The game (or a library in it) wrote an error or warning to the console. */
+  /**
+   * The game (or a library in it) wrote an error or warning to the console. Machine-specific file paths in the
+   * message are replaced by `<repo>`, so the log reads the same on every machine.
+   */
   | { type: "console"; at: number; level: "error" | "warn"; message: string };
+
+/** A page of the event log: events from position `since` on, and where the next page starts. */
+export interface EventPage {
+  events: SimEvent[];
+  next: number;
+  /** Events older than the kept window, no longer available (the log keeps the most recent ones). */
+  dropped: number;
+}
 
 /** A fixed-schema snapshot of the game, for tests and reports. */
 export interface GameSummary {
@@ -144,8 +160,8 @@ export interface HostMethods {
   stateHash(params: Record<string, never>): string;
   /** The game's own save, gzip bytes in base64 (the Steam `.json.gz` format). */
   save(params: Record<string, never>): string;
-  /** Everything recorded in the event log since the simulation started, in order. */
-  events(params: Record<string, never>): SimEvent[];
+  /** The event log from position `since` (default 0) on, in order. */
+  events(params: { since: number }): EventPage;
   /** Writes a script or text file, as a player saving it in the editor would. */
   writeFile(params: { host: string; path: string; content: string }): void;
   /** Starts a script as the terminal's `run` does: the game's own RAM check, pid and messages. */

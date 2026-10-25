@@ -71,7 +71,10 @@ function afterUiMount() {
 
 /** The game's own save: gzip bytes, as the Steam build writes them. */
 export async function saveBytes() {
-  return (await saveObject.getSaveData()) as Uint8Array;
+  // getSaveData gzips only if CompressionStream exists (SaveDataUtils.ts canUseBinaryFormat); the host provides one.
+  const data = await saveObject.getSaveData();
+  if (typeof data === "string") throw new Error("The game saved base64 text, not gzip: CompressionStream is missing");
+  return data;
 }
 
 export function gameSummary() {
