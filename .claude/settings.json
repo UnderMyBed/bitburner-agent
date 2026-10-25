@@ -1,0 +1,3 @@
+{
+  "claudeMdExcludes": ["**/packages/legacy/fork/CLAUDE.md"]
+}
