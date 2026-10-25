@@ -245,6 +245,42 @@ describe("running scripts", () => {
     expect(lines).toContain('tasks {"fromMessage":0,"fromFrame":1}');
   });
 
+  test.each([
+    ["imports at full speed", {}],
+    ["slow imports", SLOW_IMPORTS],
+  ])(
+    "starting a new script doesn't reset the importer's level (%s); a message during the import is a task of its own",
+    async (_, extra) => {
+      // In Chromium the parent's microtasks all run at its level, and the child's module loads in a later task. Node can
+      // settle the import inside the parent's microtasks, so the host waits for a real task before resetting (#80).
+      const sim = await newGame(1, extra);
+      const deep =
+        "await new Promise((done) => { let n = 0; const go = () => (++n < 10 ? setTimeout(go, 0) : done()); setTimeout(go, 0); });";
+      const parent = `export async function main(ns) {
+      ${deep}
+      ns.run("child-a.js");
+      for (let i = 0; i < 20; i++) await null;
+      const afterRun = await new Promise((done) => { const s = Date.now(); setTimeout(() => done(Date.now() - s), 0); });
+      ${deep}
+      ns.run("child-b.js");
+      const fromMessage = await new Promise((done) => setImmediate(() => { const s = Date.now(); setTimeout(() => done(Date.now() - s), 0); }));
+      ns.print(JSON.stringify({ afterRun, fromMessage }));
+      await ns.sleep(100);
+    }`;
+      for (const name of ["child-a.js", "child-b.js"]) {
+        await sim.writeFile("home", name, `export async function main(ns) { await ns.sleep(10); } // ${name}`);
+      }
+      await sim.writeFile("home", "parent.js", parent);
+      const { pid } = await sim.run("home", "parent.js");
+      await sim.runUntil(5000, { stopWhen: [{ scriptExited: "parent.js" }] });
+      const line = (await sim.logs(pid)).find((entry) => entry.startsWith("{"));
+      // The parent is still past level 6 after ns.run, so its 0 ms timer waits 4 ms, however long the import takes. A
+      // message is a task of its own: its 0 ms timer isn't clamped. It waits fake-timers' 1 ms, since the import holds
+      // the clock mid-advance, at either import speed.
+      expect(JSON.parse(line ?? "{}")).toEqual({ afterRun: 4, fromMessage: 1 });
+    },
+  );
+
   test("intervals: callbacks run at their own level, a long one keeps its period, a moved one clears however it's named", async () => {
     const sim = await newGame(1);
     const script = `export async function main(ns) {

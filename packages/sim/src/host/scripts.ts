@@ -112,11 +112,20 @@ export function installScriptModules(testHooks: TestHooks = {}): ScriptLoader {
       );
       previousImport = settled.catch(() => {});
       try {
-        const loaded = await settled;
-        // A browser evaluates a new module in a task of its own, so the script's main() starts at nesting level 0,
-        // however deep the timer that started it (#80).
+        // A browser settles a new module's import in a task of its own, after the task that asked for it has run its
+        // microtasks: so the importer's code keeps its timer nesting level, and the script's main() starts at 0 (#80).
+        // Node settles a blob: import within the asking task, after however many microtask turns it takes, so wait for
+        // a real task before resetting the level, whichever way the import went.
+        let outcome: { ok: true; module: unknown } | { ok: false; error: unknown };
+        try {
+          outcome = { ok: true, module: await settled };
+        } catch (error) {
+          outcome = { ok: false, error };
+        }
+        await new Promise<void>((resolve) => realTimers.setImmediate(resolve));
         beginTask();
-        return loaded;
+        if (!outcome.ok) throw outcome.error;
+        return outcome.module as Awaited<typeof settled>;
       } finally {
         realTimers.clearTimeout(watchdog);
         const remaining = (importing.get(url) ?? 1) - 1;
