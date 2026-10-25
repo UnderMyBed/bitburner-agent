@@ -60,10 +60,13 @@ export function installScriptModules(testHooks: TestHooks = {}): ScriptLoader {
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier.startsWith(SCHEME)) return { url: specifier, shortCircuit: true };
-      // A player script can only import other scripts: the game rewrites their imports to blob: URLs. A browser
-      // can't resolve anything else from a blob: module (`node:fs`, a bare package name), and the simulator is
-      // offline (`https:`).
-      if (context.parentURL?.startsWith(SCHEME)) {
+      // From a player script, as from a blob: module in a browser: other scripts (the game rewrites their imports to
+      // blob: URLs) and data: URLs load. Relative paths, bare package names and `node:` built-ins don't resolve. A
+      // browser would fetch http(s): URLs, but the simulator is offline.
+      if (context.parentURL?.startsWith(SCHEME) && !specifier.startsWith("data:")) {
+        if (/^https?:/.test(specifier)) {
+          throw new TypeError(`Failed to fetch dynamically imported module: ${specifier} (the simulator is offline)`);
+        }
         throw new TypeError(`Failed to resolve module specifier "${specifier}"`);
       }
       return nextResolve(specifier, context);

@@ -1,13 +1,12 @@
 // The sim event log: things the game did that a browser would have shown or done outside the page. Recorded in the
 // order they happen. Module-level state is fine here: each simulation process holds exactly one game.
 import { resolveObjectURL } from "node:buffer";
-import path from "node:path";
 import { format } from "node:util";
 import type { EventPage, GameEvent, SimEvent } from "../protocol.ts";
+import { withoutMachinePaths } from "./paths.ts";
 
 /** The most recent events kept; older ones are dropped (and counted). A long run of noisy scripts stays bounded. */
 const KEEP = 10_000;
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 
 let kept: SimEvent[] = [];
 let dropped = 0;
@@ -31,24 +30,6 @@ export function markClockReady(): void {
 export function events(since: number): EventPage {
   const start = Math.max(since, dropped);
   return { events: kept.slice(start - dropped), next: dropped + kept.length, dropped: Math.max(0, dropped - since) };
-}
-
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** A path in the repository, as a path (either separator) or a file URL, with the rest of the path after the root. */
-const REPO_PATH = new RegExp(
-  `(?:file://)?/?(?:${[...new Set([REPO_ROOT, REPO_ROOT.replaceAll("\\", "/")])].map(escapeRegExp).join("|")})([\\\\/][^\\s:()"']*)?`,
-  "g",
-);
-
-/**
- * Stack traces and messages name files on this machine; make them read the same everywhere: `<repo>/path/to/file`,
- * with forward slashes, whatever the machine's root and separator.
- */
-export function withoutMachinePaths(message: string): string {
-  return message.replace(
-    REPO_PATH,
-    (_match, rest: string | undefined) => `<repo>${(rest ?? "").replaceAll("\\", "/")}`,
-  );
 }
 
 /**

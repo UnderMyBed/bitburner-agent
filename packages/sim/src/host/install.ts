@@ -5,7 +5,7 @@ import { installDom } from "./dom.ts";
 import { captureConsole, captureDownloads, gameEvent, markClockReady } from "./events.ts";
 import { loadEngine } from "./load-engine.ts";
 import { installSyncCompression } from "./parity/compression.ts";
-import { installMachineIndependentStacks, installUnhandledRejections } from "./parity/errors.ts";
+import { installMachineIndependentStacks, installUncaughtErrors } from "./parity/errors.ts";
 import { pinDefaultLocale } from "./parity/locale.ts";
 import { goOffline } from "./parity/network.ts";
 import { installIndexedDb } from "./parity/storage.ts";
@@ -31,7 +31,7 @@ export function installHost({ seed, epochMs, prompts, testHooks }: HostOptions):
   installIndexedDb(browser);
   installSyncCompression();
   goOffline();
-  installUnhandledRejections();
+  installUncaughtErrors();
   captureDownloads(browser);
   pinDefaultLocale("en-US");
   installSeededRandom(seed);

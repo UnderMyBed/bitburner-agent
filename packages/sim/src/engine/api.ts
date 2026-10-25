@@ -49,8 +49,11 @@ export interface EngineApi {
    * booting.
    */
   setGameEventListener(listener: (event: GameEvent) => void): void;
-  /** Who answers `ns.prompt`, in the player's place. Call before booting. */
-  setPromptAnswerer(answer: (prompt: PromptRequest) => string | boolean): void;
+  /**
+   * Who answers `ns.prompt`, in the player's place: an answer, or `undefined` to leave the prompt open, as for a player
+   * who isn't there. Call before booting.
+   */
+  setPromptAnswerer(answer: (prompt: PromptRequest) => string | boolean | undefined): void;
   /** The router's page history, newest first: runtime state the save doesn't hold, so the state hash adds it. */
   routerPages(): string[];
   /** Navigates as game code does (`Router.toPage`): a simple page, or the BitVerse. Test-only. */

@@ -73,7 +73,8 @@ export interface SimulationOptions {
   fixture?: Fixture;
   /**
    * How `ns.prompt` is answered, since there is no player to answer it. The first rule whose `match` is part of the
-   * prompt's text gives the answer; a prompt no rule matches gets what dismissing it gives (see `PromptAnswer`).
+   * prompt's text gives the answer. A prompt no rule matches stays open, as with nobody at the screen, until a newer
+   * prompt replaces it (which closes it as dismissing does).
    */
   prompts?: PromptRule[];
   testHooks?: TestHooks;
@@ -82,7 +83,10 @@ export interface SimulationOptions {
 export interface PromptRule {
   /** Matches a prompt whose text contains this (case-sensitive). */
   match: string;
-  /** `true`/`false` for a yes/no prompt; the text, or the chosen option, for a text or select prompt. */
+  /**
+   * `true`/`false` for a yes/no prompt; the text for a text prompt; one of the choices for a select prompt. An answer
+   * a player couldn't give fails the script's `ns.prompt` call.
+   */
   answer: string | boolean;
 }
 
@@ -119,15 +123,16 @@ export interface PromptRequest {
 export type GameEvent =
   /** A popup: `ns.alert`, a message arriving, `dialogBoxCreate` anywhere in the game. */
   | { type: "alert"; text: string }
-  /** A toast: `ns.toast`, achievements, saves… */
+  /** A toast: `ns.toast`, achievements, saves… The variants are the game's `ToastVariant` (ui/Enums.ts). */
   | { type: "toast"; text: string; variant: "success" | "warning" | "error" | "info" }
   /**
-   * An error the game reports in its error popup: a script error, or an uncaught one. The host dismisses each popup
-   * at once (as the popup's close does), so every error is reported, repeats included.
+   * An error the game reports in its error popup: a script error, or a promise rejection nobody handled. Each popup is
+   * closed at once (as its Close button does), so every error is reported, repeats included, unless the game's
+   * settings suppress error popups (then the game reports none).
    */
   | { type: "error"; errorType: string; message: string; host: string; script: string; pid: number | null }
-  /** `ns.prompt`, and how it was answered: by a `PromptRule`, or as dismissing it would. */
-  | ({ type: "prompt"; answer: string | boolean; answeredBy: "rule" | "default" } & PromptRequest)
+  /** `ns.prompt`, and the answer a `PromptRule` gave it; with no matching rule, nobody answered (`answer` is null). */
+  | ({ type: "prompt"; answer: string | boolean | null; answeredBy: "rule" | "nobody" } & PromptRequest)
   /**
    * The game went to the BitVerse page, where the player picks the next BitNode: a BitNode was destroyed (or, with
    * `flume`, left early by b1t_flum3.exe), or a save loaded there. Navigating there kills every running script, as

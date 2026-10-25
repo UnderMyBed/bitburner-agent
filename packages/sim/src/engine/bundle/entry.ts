@@ -27,10 +27,10 @@ import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
 import type { GameEvent, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
-import { setGameEventListener as captureUi, installPageGlobals, setPromptAnswerer } from "./page.ts";
+import { answerPrompts, captureUi, installPageGlobals } from "./page.ts";
 import { mountRouter, routerPages } from "./router.ts";
 
-export { installPageGlobals, setPromptAnswerer };
+export { answerPrompts as setPromptAnswerer, installPageGlobals };
 
 export function versionNumber() {
   return CONSTANTS.VersionNumber;
