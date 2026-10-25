@@ -3,7 +3,7 @@
 import { resolveObjectURL } from "node:buffer";
 import path from "node:path";
 import { format } from "node:util";
-import type { EventPage, SimEvent } from "../protocol.ts";
+import type { BitVerseReached, EventPage, SimEvent } from "../protocol.ts";
 
 /** The most recent events kept; older ones are dropped (and counted). A long run of noisy scripts stays bounded. */
 const KEEP = 10_000;
@@ -57,7 +57,7 @@ export function captureConsole(): void {
 }
 
 /** The game reached the BitVerse page (see the headless router, src/engine/bundle/router.ts). */
-export function bitverseReached({ flume, destroyedBitNode }: { flume: boolean; destroyedBitNode: number }): void {
+export function bitverseReached({ flume, destroyedBitNode }: BitVerseReached): void {
   record({ type: "bitverseReached", at: now(), flume, destroyedBitNode });
 }
 

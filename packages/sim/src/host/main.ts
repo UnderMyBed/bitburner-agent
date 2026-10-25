@@ -79,11 +79,12 @@ async function start(options: HostOptions): Promise<Host> {
     },
     stateHash: async () => {
       booted();
-      // The random state is part of the hash, because the save alone doesn't record where the seeded streams are,
-      // and two equal saves could still diverge.
+      // The random state and the router's pages are part of the hash: the save doesn't record them, and two equal
+      // saves could still diverge (the page decides message delivery, isBusy, ns.spawn…).
       const random = randomState();
+      const pages = engine.routerPages();
       const save = await withoutRandomDraws(() => engine.saveJson());
-      return createHash("sha256").update(save).update(JSON.stringify(random)).digest("hex");
+      return createHash("sha256").update(save).update(JSON.stringify({ random, pages })).digest("hex");
     },
     save: async () => {
       booted();

@@ -2,7 +2,7 @@
 
 The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node, running on a virtual clock and deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
-> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game in a child process on a virtual clock, runs player scripts, and is deterministic from a seed. Saves and scenarios follow in later tasks.
+> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game or a save in a child process on a virtual clock, runs player scripts with a headless UI router, and is deterministic from a seed. Scenarios follow in a later task.
 
 ## Setup
 
@@ -49,7 +49,7 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Everything else here is typechecked as usual. `api.ts` is the typed boundary: `assertEngineApi` checks the bundle's exports at load.
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`) import the game's source. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Everything else here is typechecked as usual. esbuild only strips types, so nothing typechecks these files: tests are their only guard, so keep them small.
 
 The entry stays minimal. Its exports must match **`EngineApi`** (`src/engine/api.ts`), the typed interface our code uses; `loadEngine()` checks that at runtime with `assertEngineApi`. `EngineApi` contains functions only.
 
@@ -86,15 +86,16 @@ await sim.close();
   - `clock()`: the engine's view of time
   - `game()`: tutorial state, autosave setting, the current page and `Player.focus`, coding contracts, host boot time, default and pinned locale
   - `random(n)`: samples of the seeded streams
-  - `toPage(page, flume?)` and `back()`: navigate as game code does (see [Pages](#pages-and-the-bitverse))
+  - `toPage(page, flume?)` and `back()`: navigate as game code does (see [Pages](#pages-and-the-bitverse)). **Test-only:** they change game state (going to the BitVerse kills every script), and scenarios must not use them.
   - `crash(code, message)`
 
 ### Fixtures
 
 A fixture is the game state a simulation starts from.
-- **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`. It then does what the UI does once mounted: it picks the start page (see [Pages](#pages-and-the-bitverse)) and emits `MainUILoaded`, which starts saved scripts and autoexec.
+- **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`.
   - **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
 - **`{ kind: "save", bytes | path, offlineMs? }`** loads a save through the game's own `Engine.load`: migration, offline progress, restarting the saved scripts. See [Saves](#saves).
+- **After loading, every fixture does what the UI does once mounted:** it picks the start page (see [Pages](#pages-and-the-bitverse)) and emits `MainUILoaded`, which starts saved scripts and autoexec.
 - **For every fixture, autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.
 - **Without a fixture** the engine is loaded but no game is booted. That's only useful for testing the harness, and `summary()`/`stateHash()` refuse.
 
@@ -139,11 +140,13 @@ More event kinds (alerts, dialogs, prompts) come with the browser-parity layer (
 
 ### Pages and the BitVerse
 
-Game logic reads which page the player is on and navigates between pages. In the browser, `GameRoot` provides that Router when it renders; headless nothing renders, so the host provides a headless router with the same behaviour (`src/engine/bundle/router.ts`):
-- **The start page** follows the save, as the game decides it: the BitVerse if the BitNode is finished, the Work page if work is in progress, otherwise the Terminal.
+Game logic reads which page the player is on and navigates between pages. In the browser, `GameRoot` provides that Router when it renders. Headless nothing renders, so the simulator provides a headless router with the same behaviour, bundled with the game (`src/engine/bundle/router.ts`):
+- **The start page** follows the save, as the game decides it: the BitVerse if the BitNode is finished, the Work page if work is in progress, otherwise the Terminal. A save the game can't make sense of starts on the Recovery page.
 - **Page state and history** are the real router's: game logic sees the current page (Singularity's `isBusy`, `ns.spawn`, Bladeburner, message delivery), and `back()` walks a 10-page history.
-- **Side effects** are the real router's: going to the Travel page moves the player to the Travel Agency, leaving the Work page ends focus, and going to the BitVerse kills every script and checks achievements.
-- **The BitVerse** is where a player picks the next BitNode, in the UI. Headless, arriving there (including a save that starts there) records a `bitverseReached` event, and nothing more happens until something enters a BitNode. Scenarios decide what that is ([#30](https://github.com/UnderMyBed/bitburner-agent/issues/30)). `ns.singularity.destroyW0r1dD43m0n` and `b1tflum3` skip the BitVerse and enter the next BitNode directly.
+- **Side effects** are the real router's: going to the Travel page moves the player to the Travel Agency, leaving the Work page ends focus, and going to the BitVerse kills every script and checks achievements. The Work page also does what its component does: once the work ends, it goes back to the Terminal.
+- **The BitVerse** is where a player picks the next BitNode, in the UI. Headless, arriving there records a `bitverseReached` event, also when a save starts there. Then the game waits: navigating there killed every script, and a save that starts there restarts only its saved scripts. Scenarios decide what enters the next BitNode ([#30](https://github.com/UnderMyBed/bitburner-agent/issues/30)). `ns.singularity.destroyW0r1dD43m0n` and `b1tflum3` skip the BitVerse and enter the next BitNode directly.
+- **Entering BitNode 6** lands on the Bladeburner cinematic, which only its Continue button leaves. Headless, as with a player who never clicks, the game stays there with messages hidden until something navigates to the Terminal.
+- **The page is part of the state hash.** The save doesn't hold it, and it decides what happens next.
 
 The [parity audit](../../docs/sim/parity.md#2-the-router-srcuigameroottsx) lists every router behaviour and its test.
 
@@ -178,7 +181,7 @@ await sim.kill(pid);    // false if no such script is running
 
 - **`stateHash()`** is the sha256 of the game's own save JSON (`saveObject.getSaveData()`, decoded), plus the positions of the seeded random streams.
   - The save covers everything the game persists: player, servers, scripts and their logs, factions, companies, the stock market, settings…
-  - The random positions are added because the save doesn't record them, and two equal saves could still diverge.
+  - The random positions and the router's page history are added because the save doesn't record them, and two equal saves could still diverge.
   - **Not covered:** the engine's cycle counters and pending timers. Equal hashes mean equal persisted state and randomness, not a byte-identical process.
   - Hashing has no side effects. Serialising the save draws from `Math.random` (the game builds a throwaway `PlayerObject`), so the host restores the random state afterwards.
 - **`summary()`** returns a fixed schema (`GameSummary`):
@@ -216,7 +219,7 @@ Other packages only use `Simulation`; the rest of this section describes the hos
    - Microtasks, `process.nextTick` and `setImmediate` stay real, so promises and I/O work.
    - Between timers, the clock yields to the real event loop through the import barrier, so virtual time never moves while a script is loading. This relies on a fake-timers internal; see the comment in `clock.ts`.
    - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`.
-6. **The engine bundle** (`loadEngine`), which then gets the barrier-aware import function (`setScriptImport`).
+6. **The engine bundle** (`loadEngine`), which then gets the barrier-aware import function (`setScriptImport`) and the listener for `bitverseReached` events (`setBitVerseListener`).
 
 ## Known gaps
 

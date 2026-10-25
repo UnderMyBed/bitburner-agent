@@ -26,8 +26,8 @@ import { isSimplePage, Page } from "../../../../../vendor/bitburner-src/src/ui/R
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
-import type { ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
-import { type BitVerseReached, mountRouter } from "./router.ts";
+import type { BitVerseReached, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import { mountRouter, routerPages } from "./router.ts";
 
 export function versionNumber() {
   return CONSTANTS.VersionNumber;
@@ -66,6 +66,13 @@ export async function bootSave(saveData: SaveData) {
   afterUiMount();
 }
 
+let onBitVerse: (reached: BitVerseReached) => void = () => {};
+
+/** Who hears arrivals at the BitVerse once booting mounts the headless router (router.ts). Call before booting. */
+export function setBitVerseListener(listener: (reached: BitVerseReached) => void) {
+  onBitVerse = listener;
+}
+
 function afterUiMount() {
   mountRouter(onBitVerse); // GameRoot's first render
   UIEventEmitter.emit(UIEventType.MainUILoaded); // GameRoot emits this on mount: starts saved scripts and autoexec
@@ -100,6 +107,8 @@ export function gameSummary() {
   };
 }
 
+export { routerPages };
+
 /** The game's own save, as JSON text. */
 export async function saveJson() {
   return decodeSaveData(await saveObject.getSaveData());
@@ -117,13 +126,6 @@ export function gameDiagnostics() {
   };
 }
 
-let onBitVerse: (reached: BitVerseReached) => void = () => {};
-
-/** Who hears arrivals at the BitVerse, once booting mounts the headless router (router.ts). Call before booting. */
-export function installRouter(listener: (reached: BitVerseReached) => void) {
-  onBitVerse = listener;
-}
-
 /** Navigates as game code does (`Router.toPage`). Test-only: simple pages, and the BitVerse. */
 export function toPage(page: string, flume: boolean) {
   if (page === Page.BitVerse) return Router.toPage(Page.BitVerse, { flume, quick: true });
@@ -131,6 +133,7 @@ export function toPage(page: string, flume: boolean) {
   Router.toPage(page as SimplePage);
 }
 
+/** `Router.back()`, as the UI's Back buttons call it. Test-only. */
 export function routerBack() {
   Router.back();
 }

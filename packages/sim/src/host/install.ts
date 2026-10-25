@@ -34,6 +34,6 @@ export function installHost({ seed, epochMs, testHooks }: HostOptions): {
   markClockReady();
   const engine = loadEngine();
   engine.setScriptImport(scripts.doImport);
-  engine.installRouter(bitverseReached);
+  engine.setBitVerseListener(bitverseReached);
   return { clock, engine, scripts };
 }

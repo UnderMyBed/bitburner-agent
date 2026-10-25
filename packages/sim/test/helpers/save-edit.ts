@@ -24,7 +24,7 @@ export function editSave(bytes: Uint8Array, edit: (parts: SaveParts) => void): U
   return new Uint8Array(gzipSync(JSON.stringify(outer)));
 }
 
-/** Gives the player Source-File 4.3 (Singularity at full RAM cost) and 1 TB of home RAM to run it. */
+/** Gives the player Source-File 4.3 (Singularity functions at their base RAM cost) and 1 TB of home RAM to run them. */
 export function withSingularity(bytes: Uint8Array): Uint8Array {
   return editSave(bytes, ({ PlayerSave, AllServersSave }) => {
     PlayerSave.data.sourceFiles.data.push([4, 3]);

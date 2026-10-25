@@ -391,7 +391,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 - **Engine:** the real `vendor/bitburner-src` code, bundled for plain Node with esbuild (the module mapping from the game's `jest.config.js`), on jsdom globals. It boots through the game's own `Engine.load`: the new-game path, or the real save-load path including migration and offline progress.
 - **Browser parity layer:** the harness reproduces what the browser and UI provide implicitly, and each item gets a test. The [parity audit](sim/parity.md) is the full inventory, with each item's disposition and test:
-  - `window === globalThis` globals (`sprintf`, lodash `_`)
+  - `window === globalThis` globals (`sprintf`, lodash `_`): planned, [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)
   - browser timer semantics (callbacks run with `this` = `window`), a pinned default locale and time zone
   - `MainUILoaded`, which starts saved scripts and autoexec
   - a headless router with the real router's side effects
@@ -406,7 +406,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
   - Execution is single-threaded and every timer is virtual, so script interleaving is a function of the seed. A replay test proves it: same seed, same state hash, on any machine. The state hash is the sha256 of the game's own save plus the seeded streams' positions.
 - **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine.
 - **`sim` effectors** call engine internals directly (e.g. the function a UI button calls). They never grant Source-Files to unlock Singularity, because that would change the state under test.
-- **Scenario fixtures:** starting states (each BitNode entry with a given Source-File set, plus odd mid-run states) are built through the engine's own prestige functions. Real Steam saves join as fixtures under the one-way save rule (§9.4).
+- **Scenario fixtures:** starting states (each BitNode entry with a given Source-File set, plus odd mid-run states) are built through the engine's own prestige functions. The simulator's own tests may also edit saves the simulator made (e.g. to mark a BitNode finished); edited saves never leave the simulator. Real Steam saves join as fixtures under the one-way save rule (§9.4).
 - **Speed (measured in S1):** it depends on the workload, because the engine does whatever work the in-game scripts cause.
   - 10,000–37,000× for lean hacking workloads.
   - 50–700× for heavy script churn or IPvGO-scale compute (the legacy fork from a real save ran at 50–78×).

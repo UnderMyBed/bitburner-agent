@@ -1,4 +1,12 @@
-import type { GameDiagnostics, GameSummary, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../protocol.ts";
+import type {
+  BitVerseReached,
+  GameDiagnostics,
+  GameSummary,
+  ProcessInfo,
+  RunResult,
+  ScriptArg,
+  Tutorial,
+} from "../protocol.ts";
 
 /**
  * The typed boundary between our code and the engine bundle. `bundle/entry.ts` (bundled together with the game, and
@@ -34,10 +42,12 @@ export interface EngineApi {
    * its first render. `listener` hears every arrival at the BitVerse page, including a game that starts there. Call
    * before booting.
    */
-  installRouter(listener: (reached: { flume: boolean; destroyedBitNode: number }) => void): void;
-  /** Navigates as game code does (`Router.toPage`): a simple page, or the BitVerse. For tests. */
+  setBitVerseListener(listener: (reached: BitVerseReached) => void): void;
+  /** The router's page history, newest first: runtime state the save doesn't hold, so the state hash adds it. */
+  routerPages(): string[];
+  /** Navigates as game code does (`Router.toPage`): a simple page, or the BitVerse. Test-only. */
   toPage(page: string, flume: boolean): void;
-  /** `Router.back()`. For tests. */
+  /** `Router.back()`. Test-only. */
   routerBack(): void;
   /** Sets the game's hook for importing player-script modules. */
   setScriptImport(doImport: (url: string) => Promise<unknown>): void;
@@ -61,7 +71,8 @@ const API_FUNCTIONS = {
   gameSummary: true,
   saveJson: true,
   gameDiagnostics: true,
-  installRouter: true,
+  setBitVerseListener: true,
+  routerPages: true,
   toPage: true,
   routerBack: true,
   setScriptImport: true,
