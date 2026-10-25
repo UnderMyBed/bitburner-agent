@@ -2,7 +2,7 @@ import type { EngineApi } from "../engine/api.ts";
 import type { HostOptions } from "../protocol.ts";
 import { installClock, type VirtualClock } from "./clock.ts";
 import { installDom } from "./dom.ts";
-import { captureConsole, captureDownloads, markClockReady } from "./events.ts";
+import { bitverseReached, captureConsole, captureDownloads, markClockReady } from "./events.ts";
 import { loadEngine } from "./load-engine.ts";
 import { installSyncCompression } from "./parity/compression.ts";
 import { pinDefaultLocale } from "./parity/locale.ts";
@@ -34,5 +34,6 @@ export function installHost({ seed, epochMs, testHooks }: HostOptions): {
   markClockReady();
   const engine = loadEngine();
   engine.setScriptImport(scripts.doImport);
+  engine.setBitVerseListener(bitverseReached);
   return { clock, engine, scripts };
 }

@@ -156,6 +156,10 @@ export class Simulation {
     clock: () => this.rpc.call("diagnostics.clock", {}),
     game: () => this.rpc.call("diagnostics.game", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
+    /** Test-only: changes game state (going to the BitVerse kills every script). Scenarios must not use it. */
+    toPage: (page: string, flume = false) => this.rpc.call("diagnostics.toPage", { page, flume }),
+    /** Test-only, like `toPage`. */
+    back: () => this.rpc.call("diagnostics.back", {}),
     crash: (code: number, message: string) => this.rpc.call("diagnostics.crash", { code, message }),
   };
 

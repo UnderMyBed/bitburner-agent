@@ -74,6 +74,7 @@ Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHu
 | [`docs/mechanics/`](docs/mechanics/) | First-principles mechanics references with `file:line` citations into the game source |
 | [`docs/research/`](docs/research/) | Community tooling, benchmarks and strategies |
 | [`docs/spikes/`](docs/spikes/) | Spike reports; the throwaway code is in [`spikes/`](spikes/) |
+| [`docs/sim/`](docs/sim/) | The simulator's browser [parity audit](docs/sim/parity.md): what the browser and UI provide, and what the simulator does about each |
 
 ## Supported game version
 

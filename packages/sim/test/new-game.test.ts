@@ -121,8 +121,8 @@ describe("determinism", () => {
     await sim.advance(HOUR);
     expect({ atBoot, afterOneHour: await sim.stateHash() }).toMatchInlineSnapshot(`
       {
-        "afterOneHour": "e43584f65c9c9056f8f1c182464970e7f228639503554f5392b9cd764731be04",
-        "atBoot": "dd797305d1ea8220ac4405c6d3999ef55c9d2898914fb8716085dd03f857272f",
+        "afterOneHour": "50358f69285fde103e37d175521ec0d5e8ebe9f3732810bf65bad60023bc2935",
+        "atBoot": "cdf8baa107eababbe2c3358bcb916b95f8d5ebece3b42c67cbd9dc8b23a599be",
       }
     `);
   });

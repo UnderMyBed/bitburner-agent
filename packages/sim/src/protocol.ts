@@ -82,6 +82,14 @@ export interface HostOptions {
   testHooks?: TestHooks;
 }
 
+/** The game arrived at the BitVerse page, where a player picks the next BitNode (see `bitverseReached`). */
+export interface BitVerseReached {
+  /** Left early with b1t_flum3.exe, rather than by destroying the BitNode. */
+  flume: boolean;
+  /** The BitNode the player is leaving: the one the BitVerse page shows as destroyed (`Player.bitNodeN`). */
+  destroyedBitNode: number;
+}
+
 /** Things that happened in the game that a browser would have shown or done outside the page. */
 /** `at` is the virtual epoch time it happened, or 0 if it happened while the host was still being set up. */
 export type SimEvent =
@@ -91,7 +99,14 @@ export type SimEvent =
    * The game (or a library in it) wrote an error or warning to the console. Machine-specific file paths in the
    * message are replaced by `<repo>`, so the log reads the same on every machine.
    */
-  | { type: "console"; at: number; level: "error" | "warn"; message: string };
+  | { type: "console"; at: number; level: "error" | "warn"; message: string }
+  /**
+   * The game went to the BitVerse page, where the player picks the next BitNode: a BitNode was destroyed (or, with
+   * `flume`, left early by b1t_flum3.exe), or a save loaded there. Navigating there kills every running script, as
+   * the real router does; a save that starts there restarts its saved scripts as usual. The game then waits there
+   * until something enters a BitNode.
+   */
+  | ({ type: "bitverseReached"; at: number } & BitVerseReached);
 
 /** A page of the event log: events from position `since` on, and where the next page starts. */
 export interface EventPage {
@@ -124,6 +139,10 @@ export interface GameDiagnostics {
   tutorialRunning: boolean;
   /** The game's own setting (0: the harness turned autosave off). */
   autosaveInterval: number;
+  /** The page the game's Router is on, as its `Page` value: e.g. "Terminal", "BitVerse", "Bladeburner Cinematic". */
+  page: string;
+  /** `Player.focus`: whether the player is focused on their current work. */
+  focus: boolean;
   /** Every coding contract, as "host:file", sorted. */
   contracts: string[];
   /** Real milliseconds the host took to load the engine and boot the fixture. */
@@ -175,6 +194,14 @@ export interface HostMethods {
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   "diagnostics.random"(params: { count: number }): RandomSample;
+  /**
+   * Navigates as game code does (`Router.toPage`): a simple page by its `Page` value, or "BitVerse" (only then is
+   * `flume` used). Test-only: it changes game state (going to the BitVerse kills every script), and scenarios must not
+   * use it.
+   */
+  "diagnostics.toPage"(params: { page: string; flume?: boolean }): void;
+  /** `Router.back()`, as the UI's Back buttons call it. Test-only, like `diagnostics.toPage`. */
+  "diagnostics.back"(params: Record<string, never>): void;
   /** Writes `message` to stderr and exits with `code`. */
   "diagnostics.crash"(params: { code: number; message: string }): never;
 }
