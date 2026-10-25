@@ -25,7 +25,7 @@ While it runs, it prints a progress line per seed at the end of each virtual day
 
 **It's heavy.** Measured on one seed, on the earlier SF4.3-only start with 8 GB ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33), [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)). The SF1.1 start will shift the timings; the first recorded run replaces these figures:
 - The fork plays IPvGO all the time. The game paces Go moves with virtual-time sleeps, which cost nothing in the simulator, while each move's CPU work is real. That holds the fork to about 100× real time, about 14 real minutes per virtual day.
-- From about one virtual day in, the fork's batching runs tens of thousands of scripts, and the speed falls to 3–11×: several real hours per virtual day ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74)).
+- From about one virtual day in, the fork's batching runs thousands, then tens of thousands, of scripts. Before #74's clock fix the speed fell to 11× at about 1,800 scripts, 6× at about 23,000 and 3× at about 144,000: several real hours per virtual day. The fix about doubles the speed with tens of thousands of scripts running ([benchmarks](benchmarks.md#scaling-with-running-scripts)); the first recorded run will show the fork's.
 - Each simulation process grew to about 3.4 GB.
 
 So by default ([#75](https://github.com/UnderMyBed/bitburner-agent/issues/75)):
