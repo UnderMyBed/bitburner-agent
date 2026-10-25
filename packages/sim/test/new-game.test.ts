@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { type Fixture, Simulation } from "../src/simulation.ts";
 
 const EPOCH = Date.UTC(2026, 0, 1);
@@ -9,8 +9,9 @@ async function newGame(seed: number, tutorial: "running" | "skipped" = "skipped"
   open.push(sim);
   return sim;
 }
-afterAll(async () => {
-  await Promise.all(open.map((sim) => sim.close()));
+// Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((sim) => sim.close()));
 });
 
 describe("new-game fixture", () => {

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { type SimEvent, Simulation, type SimulationOptions } from "../src/simulation.ts";
 import { decodeSave, diffPaths } from "./helpers/save-diff.ts";
 
@@ -19,10 +19,11 @@ async function start(options: SimulationOptions): Promise<Simulation> {
 const newGame = (seed: number) => start({ seed, epochMs: EPOCH, fixture: { kind: "new", tutorial: "skipped" } });
 const fromSave = (seed: number, bytes: Uint8Array, offlineMs = 0) =>
   start({ seed, fixture: { kind: "save", bytes, offlineMs } });
-afterAll(async () => {
-  await Promise.all(open.map((sim) => sim.close()));
-  rmSync(scratch, { recursive: true, force: true });
+// Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((sim) => sim.close()));
 });
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 const isDownload = (e: SimEvent): e is Extract<SimEvent, { type: "download" }> => e.type === "download";
 const isConsole = (e: SimEvent): e is Extract<SimEvent, { type: "console" }> => e.type === "console";

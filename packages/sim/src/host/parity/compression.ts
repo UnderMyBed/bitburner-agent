@@ -2,6 +2,7 @@
 // Node runs those on its thread pool in real time, so while a script awaits a save (e.g. ns.singularity.getSaveData),
 // virtual time would keep running by however long the machine took: not deterministic. These stand-ins do the same
 // gzip work synchronously, when the stream is closed, so no real time passes inside the game.
+import { Buffer } from "node:buffer";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 function bytesOf(chunk: unknown): Uint8Array {

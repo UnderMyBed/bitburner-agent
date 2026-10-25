@@ -2,8 +2,10 @@
 // script's source when the game makes its Blob, hands out in-memory `blob:sim/<n>` URLs (n fixed-width), and serves them
 // through a synchronous module hook, which is what the browser does with real Blob URLs. (data: URLs, as in the
 // game's Jest setup, would nest each child module's encoded source inside every module that imports it.)
+
 import { writeSync } from "node:fs";
 import { registerHooks } from "node:module";
+import process from "node:process";
 import type { TestHooks } from "../protocol.ts";
 import { realTimers } from "./clock.ts";
 

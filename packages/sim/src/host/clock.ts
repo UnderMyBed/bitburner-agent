@@ -1,7 +1,10 @@
 import FakeTimers from "@sinonjs/fake-timers";
 import { reportUncaughtException } from "./parity/errors.ts";
 
-/** Real timer functions, captured before the clock is faked, for the harness's own use (the import barrier, #26). */
+/**
+ * Real timer functions, captured when this module loads (before the clock is faked and Node's globals are hidden), for
+ * the harness's own use: the import barrier, `window.postMessage` (dom.ts) and IndexedDB's scheduler (storage.ts).
+ */
 export const realTimers = { setTimeout, clearTimeout, setImmediate };
 
 export interface VirtualClock {

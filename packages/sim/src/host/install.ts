@@ -8,6 +8,7 @@ import { installSyncCompression } from "./parity/compression.ts";
 import { installMachineIndependentStacks, installUncaughtErrors } from "./parity/errors.ts";
 import { pinDefaultLocale } from "./parity/locale.ts";
 import { goOffline } from "./parity/network.ts";
+import { hideNodeGlobals } from "./parity/node-globals.ts";
 import { installIndexedDb } from "./parity/storage.ts";
 import { promptAnswerer } from "./prompts.ts";
 import { installSeededRandom } from "./random.ts";
@@ -47,9 +48,11 @@ export function installHost({ seed, epochMs, prompts, testHooks }: HostOptions):
     }),
   );
   markClockReady();
-  // There is no `process` in a browser. The game reads this one while loading (Constants.ts isInTestEnvironment), and
-  // it would change game behaviour; a test runner may have set it for this process.
-  delete process.env.JEST_WORKER_ID;
+  // Before the engine loads, so its libraries see no Node and take their browser paths, as on Steam (e.g.
+  // convert-source-map picks atob over Buffer when it loads). That also keeps a test runner's JEST_WORKER_ID from the
+  // game (Constants.ts isInTestEnvironment reads `globalThis.process?.env`). Host code has its own references, taken
+  // when its modules loaded (`node:` imports, `realTimers`).
+  hideNodeGlobals(window);
   const engine = loadEngine();
   engine.installPageGlobals();
   engine.setScriptImport(scripts.doImport);

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { sfc32 } from "../src/host/rng.ts";
 import { Simulation } from "../src/simulation.ts";
 
@@ -9,8 +9,9 @@ async function start(seed: number, epochMs = EPOCH): Promise<Simulation> {
   open.push(sim);
   return sim;
 }
-afterAll(async () => {
-  await Promise.all(open.map((sim) => sim.close()));
+// Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((sim) => sim.close()));
 });
 
 describe("Simulation (host environment, no game booted)", () => {

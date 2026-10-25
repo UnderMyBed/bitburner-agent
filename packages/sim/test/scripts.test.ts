@@ -1,4 +1,5 @@
-import { afterAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
+import { NODE_GLOBALS } from "../src/host/parity/node-globals.ts";
 import { Simulation, type SimulationOptions } from "../src/simulation.ts";
 
 const EPOCH = Date.UTC(2026, 0, 1);
@@ -13,8 +14,9 @@ async function newGame(seed: number, extra: Partial<SimulationOptions> = {}): Pr
   open.push(sim);
   return sim;
 }
-afterAll(async () => {
-  await Promise.all(open.map((sim) => sim.close()));
+// Each test's simulations close when it ends: a file's worth at once would crowd a CI runner's memory.
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((sim) => sim.close()));
 });
 
 // The reference workloads from spike S1.
@@ -265,6 +267,98 @@ describe("script API", () => {
     expect((await sim.summary()).homeRamUsed).toBeLessThan(used);
     expect(await sim.kill(second.pid)).toBe(false);
     expect((await sim.ps("home")).map((p) => p.pid)).toEqual([first.pid, third.pid]);
+  });
+
+  test("player scripts see a browser's globals, not Node's: no process, Buffer or global, and the game's setImmediate", async () => {
+    const sim = await newGame(1);
+    const names = NODE_GLOBALS;
+    const probe = names
+      .map((name) => `typeof ${name} + "/" + typeof globalThis.${name} + "/" + typeof eval("window").${name}`)
+      .join(' + " " + ');
+    // A browser has no setImmediate, so the game's jszip installs a polyfill on the window, and a browser's window is
+    // the global object. Node's returns an Immediate object; the polyfill returns a number.
+    const immediate = 'setImmediate === eval("window").setImmediate) + " " + typeof setImmediate(() => {})';
+    await sim.writeFile(
+      "home",
+      "node.js",
+      // The callback runs on a later task, while the script sleeps.
+      `export async function main(ns) { ns.print(${probe}); ns.print((${immediate}); let ran = false; setImmediate(() => { ran = true; }); await ns.sleep(100); ns.print(ran ? "ran" : "didn't run"); }`,
+    );
+    const { pid } = await sim.run("home", "node.js");
+    await sim.advance(1000);
+    const node = "undefined/undefined/undefined";
+    const browser = "function/function/function";
+    expect(names).toEqual(["process", "Buffer", "global", "setImmediate", "clearImmediate"]);
+    expect(await sim.logs(pid)).toEqual([
+      [node, node, node, browser, browser].join(" "),
+      "true number",
+      "sleep: Sleeping for 0.100 seconds.",
+      "ran",
+      "Script finished running",
+    ]);
+  });
+
+  test("no route leads a script to Node's process, Buffer or global", async () => {
+    const sim = await newGame(1);
+    const routes = [
+      // Not on the global object at all, as in a browser: no property, no accessor to call from elsewhere.
+      `["process", "Buffer", "global"].map((name) => (name in globalThis) + "/" + Object.getOwnPropertyDescriptor(globalThis, name)).join(" ")`,
+      // Code that names itself like Node's own.
+      `new Function("return typeof process\\n//# sourceURL=node:evil")()`,
+      `(() => { const k = "x (node:y"; return typeof ({ [k]() { return globalThis.process; } })[k](); })()`,
+      `(() => { Error.prepareStackTrace = () => "a\\nb\\nc\\nat node:x"; const t = typeof globalThis.process; delete Error.prepareStackTrace; return t; })()`,
+    ];
+    const lines = routes.map((route) => `ns.print(String(${route}));`).join(" ");
+    await sim.writeFile("home", "escape.js", `export async function main(ns) { ${lines} }`);
+    const { pid } = await sim.run("home", "escape.js");
+    await sim.advance(1000);
+    expect((await sim.logs(pid)).slice(0, routes.length)).toEqual([
+      "false/undefined false/undefined false/undefined",
+      "undefined",
+      "undefined",
+      "undefined",
+    ]);
+  });
+
+  test("saves still work after a script changes how stack traces are made", async () => {
+    const sim = await newGame(1);
+    const script = `export async function main(ns) { Error.stackTraceLimit = 2; Error.prepareStackTrace = () => "x"; }`;
+    await sim.writeFile("home", "stacks.js", script);
+    await sim.run("home", "stacks.js");
+    await sim.advance(1000);
+    expect((await sim.save()).length).toBeGreaterThan(1000);
+  });
+
+  test("postMessage reaches the page as in a browser: bare or on window, with source and origin, filtered by target", async () => {
+    const sim = await newGame(1);
+    const script = `export async function main(ns) {
+      const seen = [];
+      const sent = { n: 1 };
+      let copied = "no object";
+      window.addEventListener("message", (e) => {
+        // The message is a structured clone: an equal copy, not the object sent.
+        if (typeof e.data === "object") copied = String(e.data !== sent && e.data.n === 1);
+        else seen.push([e.data, e.source === window, e.origin].join("/"));
+      });
+      window.postMessage(sent, "*");
+      ns.print(String(globalThis.postMessage === window.postMessage));
+      postMessage("star", "*");
+      window.postMessage("self", { targetOrigin: "/" });
+      window.postMessage("default");
+      window.postMessage("elsewhere", "https://example.com");
+      let bad = "none";
+      try { window.postMessage("bad", "not a url"); } catch (e) { bad = e.name; }
+      await ns.sleep(100);
+      ns.print(seen.join(" ") + " " + bad + " " + copied);
+    }`;
+    await sim.writeFile("home", "pm.js", script.replaceAll("window", 'eval("window")'));
+    const { pid } = await sim.run("home", "pm.js");
+    await sim.advance(1000);
+    const logs = await sim.logs(pid);
+    expect(logs[0]).toBe("true");
+    expect(logs.at(-2)).toBe(
+      "star/true/https://bitburner.local self/true/https://bitburner.local default/true/https://bitburner.local SyntaxError true",
+    );
   });
 
   test("measuring the heap doesn't expose gc to player scripts", async () => {
