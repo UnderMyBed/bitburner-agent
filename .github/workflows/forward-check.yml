@@ -1,6 +1,6 @@
-# Advisory forward check against upstream `dev` (ADR 0005, tools/upstream-watch/README.md). It keeps one tracking
-# issue up to date and never blocks anything: it runs only when dispatched (every release runs it, docs/releasing.md
-# step 2), never on pull requests, and isn't a required check.
+# Advisory forward check against upstream `dev` (ADR 0005, 0009, tools/upstream-watch/README.md). It keeps one tracking
+# issue up to date and closes it when there's nothing to report. It runs only when dispatched (every release runs it,
+# docs/releasing.md step 2), never on pull requests, and isn't a required check.
 name: Forward check (upstream dev)
 
 on:
@@ -10,6 +10,10 @@ on:
         description: Upstream ref to compare with the pinned game (a branch as origin/<name>, a tag or a commit)
         default: origin/dev
         required: true
+      dry_run:
+        description: Print what it would do, and touch no issue
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -18,52 +22,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Reads upstream content, so it gets nothing but read access to this repository.
-  report:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    outputs:
-      report: ${{ steps.report.outputs.report }}
-    steps:
-      # No submodule needed: the pinned commit is read from the gitlink.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-      - name: Clone the game's history (blobless)
-        run: git clone --quiet --filter=blob:none --no-checkout https://github.com/bitburner-official/bitburner-src.git "$RUNNER_TEMP/game"
-      - name: Build the report
-        id: report
-        env:
-          REF: ${{ inputs.ref }} # through the environment, never interpolated into the script
-        run: |
-          node tools/upstream-watch/cli.ts report --game "$RUNNER_TEMP/game" --ref "$REF" --out "$RUNNER_TEMP/report.json"
-          echo "report=$(jq -c . "$RUNNER_TEMP/report.json")" >> "$GITHUB_OUTPUT"
-
-  # Only runs our CLI on the finished report: it can write issues.
-  publish:
-    needs: report
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  watch:
+    uses: ./.github/workflows/upstream-watch.yml
     permissions:
       contents: read
       issues: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-      - name: Update the tracking issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPORT: ${{ needs.report.outputs.report }} # through the environment, never interpolated into the script
-        run: |
-          printf '%s' "$REPORT" > "$RUNNER_TEMP/report.json"
-          node tools/upstream-watch/cli.ts publish --report "$RUNNER_TEMP/report.json" \
-            --title "Upcoming game changes (upstream dev)" --when-empty close
+    with:
+      ref: ${{ inputs.ref }}
+      watcher: dev
+      title: Upcoming game changes (upstream dev)
+      prefix: Upcoming game changes (upstream dev)
+      publish_on: changes
+      when_empty: close
+      dry_run: ${{ inputs.dry_run }}

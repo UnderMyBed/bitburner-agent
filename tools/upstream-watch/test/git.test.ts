@@ -70,7 +70,10 @@ describe("buildReport", () => {
     );
     const report = buildReport(temp, pinned, "dev", ["src/Watched/", "src/Constants.ts"]);
     expect(report.pinned).toEqual({ sha: pinned, version: "3.0.1" });
-    expect(report.upstream).toMatchObject({ ref: "dev", sha: git("rev-parse", "dev"), version: "3.0.2" });
+    expect(report.upstream).toMatchObject({ ref: "dev", sha: git("rev-parse", "dev"), version: "3.0.2", ahead: true });
+    // Compared the other way round, the ref is behind: it differs, but isn't ahead.
+    expect(buildReport(temp, git("rev-parse", "dev"), pinned, []).upstream.ahead).toBe(false);
+    expect(buildReport(temp, pinned, pinned, []).upstream.ahead).toBe(false);
     expect(report.upstream.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(report.api).toEqual({
       added: [],

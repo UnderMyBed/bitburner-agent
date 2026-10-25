@@ -64,14 +64,19 @@ function publish(values: Values): void {
     typeof values.repo === "string" ? values.repo : (process.env.GITHUB_REPOSITORY ?? "UnderMyBed/bitburner-agent");
   const file = JSON.parse(readFileSync(values.report, "utf8")) as ReportFile;
   const { changes, moved, upstream, markdown } = file;
+  if (/\{(version|sha)\}/.test(values.title) && typeof values.prefix !== "string") {
+    throw new RangeError(
+      "--prefix is needed when --title has {version} or {sha}: the filled title changes between runs",
+    );
+  }
   const title = fillTitle(values.title, upstream);
   const gh = (...args: string[]) => execFileSync("gh", [...args, "--repo", repo], { encoding: "utf8" });
   const issues = JSON.parse(
     gh("issue", "list", "--label", LABEL, "--state", "all", "--limit", "200", "--json", "number,state,title"),
   ) as ExistingIssue[];
   const prefix = typeof values.prefix === "string" ? values.prefix : title;
-  const action = planIssue(issues, prefix, { changes: hasNews(file, on), whenEmpty });
-  console.log(`${changes} change(s), moved: ${moved}: ${action.kind}${"number" in action ? ` #${action.number}` : ""}`);
+  const action = planIssue(issues, prefix, { news: hasNews(file, on), whenEmpty });
+  console.log(`${changes} change(s), moved ${moved} → ${action.kind}${"number" in action ? ` #${action.number}` : ""}`);
   if (values["dry-run"]) {
     console.log(`\n--- title: ${title}\n${markdown}`);
     return;

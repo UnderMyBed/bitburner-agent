@@ -1,16 +1,22 @@
 import { describe, expect, test } from "vitest";
-import { BODY_LIMIT, changeCount, codeSpan, type ForwardReport, renderReport, reportFile } from "../src/report.ts";
+import { BODY_LIMIT, changeCount, codeSpan, renderReport, reportFile, type WatchReport } from "../src/report.ts";
 
-const empty: ForwardReport = {
+const empty: WatchReport = {
   pinned: { sha: "1da7316ff0000000000000000000000000000000", version: "3.0.1" },
-  upstream: { ref: "dev", sha: "b1b3376b50fdeef45e26696f23db870cd89d7582", version: "3.0.2", date: "2026-10-18" },
+  upstream: {
+    ref: "dev",
+    sha: "b1b3376b50fdeef45e26696f23db870cd89d7582",
+    version: "3.0.2",
+    date: "2026-10-18",
+    ahead: true,
+  },
   api: { added: [], removed: [], changed: [] },
   rawApiDiff: "",
   ram: [],
   commits: [],
 };
 
-const full: ForwardReport = {
+const full: WatchReport = {
   ...empty,
   api: {
     added: ["type GangTaskName"],
@@ -107,22 +113,45 @@ describe("renderReport", () => {
 describe("renderReport for the stable watcher", () => {
   const stable = { ...full, upstream: { ...full.upstream, ref: "stable" } };
 
-  test("when stable has moved: says a Steam update is coming, and lists the bump steps first", () => {
+  test("when stable has moved ahead: says a Steam update is coming, and lists the bump steps first", () => {
     const text = renderReport(stable, "stable");
-    expect(text).toMatch(/^Upstream `stable` has moved: v3\.0\.2 \(`b1b3376b50`, committed 2026-10-18\)/);
+    expect(text).toMatch(
+      /^Upstream `stable` has moved ahead of the pinned game, v3\.0\.1 \(`1da7316ff0`\), to v3\.0\.2 \(`b1b3376b50`, committed 2026-10-18\)/,
+    );
     expect(text).toContain("Steam ships from `stable`, so a Steam update is coming.");
     expect(text).toContain("0010-stable-watcher-opens-an-issue.md");
     const steps = text.indexOf("## Bump steps");
     expect(steps).toBeGreaterThan(0);
     expect(steps).toBeLessThan(text.indexOf("## API surface"));
-    expect(text).toContain("git -C vendor/bitburner-src checkout b1b3376b50fdeef45e26696f23db870cd89d7582");
+    // A shallow fetch of exactly that commit: a plain `fetch origin stable` in the shallow submodule pulls years of history.
+    expect(text).toContain(
+      "`git -C vendor/bitburner-src fetch --depth 1 origin b1b3376b50fdeef45e26696f23db870cd89d7582`, then `git -C vendor/bitburner-src checkout FETCH_HEAD`",
+    );
     expect(text).toContain("`PINNED_GAME`");
     expect(text).toContain("docs/sim/parity.md#re-auditing-after-a-version-bump");
+    // The pinned version is written in docs too: the steps say what to search for.
+    expect(text).toContain("search the repository for `3.0.1` and `1da7316ff`");
     expect(text).not.toContain("0005-forward-compat-dev-branch.md");
   });
 
+  test("a move with no listed changes still gets the bump steps", () => {
+    const quiet = { ...empty, upstream: { ...stable.upstream } };
+    const text = renderReport(quiet, "stable");
+    expect(text).toContain("## Bump steps");
+    expect(text).toContain("**No changes.**");
+  });
+
+  test("when stable differs but isn't ahead (rewound, or a test ref): says so, with no bump steps", () => {
+    const behind = { ...stable, upstream: { ...stable.upstream, ahead: false } };
+    const text = renderReport(behind, "stable");
+    expect(text).toMatch(
+      /^Upstream `stable` differs from the pinned game, v3\.0\.1 \(`1da7316ff0`\), but isn't ahead of it/,
+    );
+    expect(text).not.toContain("## Bump steps");
+  });
+
   test("when stable is the pinned commit: says there's nothing to do, with no bump steps", () => {
-    const same = { ...empty, upstream: { ...empty.upstream, ref: "stable", sha: empty.pinned.sha } };
+    const same = { ...empty, upstream: { ...empty.upstream, ref: "stable", sha: empty.pinned.sha, ahead: false } };
     const text = renderReport(same, "stable");
     expect(text).toMatch(/^Upstream `stable` is the pinned commit/);
     expect(text).not.toContain("## Bump steps");
@@ -135,15 +164,16 @@ describe("renderReport for the stable watcher", () => {
 });
 
 describe("reportFile", () => {
-  test("carries the counts, whether the ref moved, both commits and the Markdown", () => {
+  test("carries the counts, whether the ref moved and is ahead, both commits and the Markdown", () => {
     expect(reportFile(full, "stable")).toEqual({
       changes: 9,
       moved: true,
+      ahead: true,
       pinned: full.pinned,
       upstream: { ref: "dev", sha: full.upstream.sha, version: "3.0.2" },
       markdown: renderReport(full, "stable"),
     });
-    const same = { ...empty, upstream: { ...empty.upstream, sha: empty.pinned.sha } };
-    expect(reportFile(same)).toMatchObject({ changes: 0, moved: false });
+    const same = { ...empty, upstream: { ...empty.upstream, sha: empty.pinned.sha, ahead: false } };
+    expect(reportFile(same)).toMatchObject({ changes: 0, moved: false, ahead: false });
   });
 });
