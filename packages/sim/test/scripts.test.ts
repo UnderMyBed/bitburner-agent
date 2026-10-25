@@ -1,6 +1,8 @@
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, test } from "vitest";
+
 const require = createRequire(import.meta.url);
+
 import { NODE_GLOBALS } from "../src/host/parity/node-globals.ts";
 import { Simulation, type SimulationOptions } from "../src/simulation.ts";
 
