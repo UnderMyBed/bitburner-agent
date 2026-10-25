@@ -202,7 +202,7 @@ await sim.kill(pid);    // false if no such script is running
   - `writeFile` accepts script and text files.
   - `logs` covers running scripts and the game's list of recently finished ones (`Settings.MaxRecentScriptsCapacity`, 50 by default). For any other pid it throws, whereas `kill` returns false.
 - **Script modules.** The game imports scripts from `blob:` URLs, which Node can't import.
-  - The host captures each script's source when the game creates its Blob, and hands out short `blob:sim/<n>` URLs served by a synchronous module hook (`src/host/scripts.ts`).
+  - The host captures each script's source when the game creates its Blob, and hands out short `blob:sim/<n>` URLs served by a synchronous module hook (`src/host/scripts.ts`). Stack frames don't show these URLs: they show the `//# sourceURL=home/<file>` the game appends, as in a browser.
   - Other Blobs, e.g. a save export, keep Node's own object URLs.
   - The game revokes a script's URL right after starting its import, relying on browser semantics. So an import in progress keeps its source until it finishes.
 - **The import barrier.** Importing a module takes real time, and virtual time must not move meanwhile. Otherwise when a script starts, and everything that follows, would depend on how fast the machine is. The barrier has two layers:

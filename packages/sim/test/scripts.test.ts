@@ -104,6 +104,28 @@ describe("running scripts", () => {
     expect(prefix).toMatch(/^blob:/);
     expect(prefix).not.toBe("blob:sim/");
   });
+
+  test("an error is attributed to the module it came from, however many modules are loaded", async () => {
+    // The game names the script in an error's stack by finding a module URL, then a file name, inside each stack line
+    // (Netscript/ErrorMessages.ts). With a dozen modules, some blob:sim/ URL is a prefix of another (…/1 in …/12), so
+    // attribution must not depend on them: frames carry the game's `//# sourceURL=home/<file>` instead, as in a browser.
+    const sim = await newGame(1);
+    const libs = Array.from({ length: 12 }, (_, i) => `lib${String(i + 1).padStart(2, "0")}.js`);
+    // Each source differs: the game shares one module between scripts with identical code (its moduleCache).
+    for (const lib of libs) await sim.writeFile("home", lib, `export function fail(ns) { ns.hack(42); } // ${lib}`);
+    const attributed: string[] = [];
+    for (const k of libs.keys()) {
+      const imports = libs.map((name, i) => `import * as l${i} from "./${name}";`).join("\n");
+      await sim.writeFile("home", `root${k}.js`, `${imports}\nexport async function main(ns) { l${k}.fail(ns); }`);
+      const { pid } = await sim.run("home", `root${k}.js`);
+      await sim.advance(1000);
+      const error = (await sim.events()).events.find((e) => e.type === "error" && e.pid === pid);
+      // The stack lines name each frame's script: "lib07.js:L1@Module.fail".
+      const message = error?.type === "error" ? error.message : "";
+      attributed.push(/(lib\d\d\.js):L\d+@Module\.fail/.exec(message)?.[1] ?? message);
+    }
+    expect(attributed).toEqual(libs);
+  });
 });
 
 describe("import barrier", () => {

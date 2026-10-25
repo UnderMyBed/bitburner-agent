@@ -13,12 +13,11 @@ The simulator runs the real game headless: Node, jsdom, a virtual clock, no Reac
 
 ## Summary
 
-The headless router (§2, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)) and the page layer (§3, §4; [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)) close the gaps the first audit found. Two remain open:
+The headless router (§2, [#28](https://github.com/UnderMyBed/bitburner-agent/issues/28)) and the page layer (§3, §4; [#47](https://github.com/UnderMyBed/bitburner-agent/issues/47)) close the gaps the first audit found. One remains open:
 
 | Gap | Effect headless | Issue |
 |---|---|---|
 | Node's globals reach player scripts (4.14) | A script can use `process` (the file system, real time), `Buffer` and a real-time `setImmediate`, none of which a browser has | [#57](https://github.com/UnderMyBed/bitburner-agent/issues/57) |
-| Script URLs can prefix each other (§8) | An error in one script can be attributed to another in the game's error messages | [#58](https://github.com/UnderMyBed/bitburner-agent/issues/58) |
 
 The by-design differences:
 - **Saves and fixtures:** autosave is off (1.7); every new game chooses whether the tutorial runs (1.10); a save the game can't load fails the simulation's start instead of opening the Recovery page (2.3).
@@ -173,7 +172,7 @@ What the host provides so the above works.
 | The game's `moduleCache` holds modules by `WeakRef` (`NetscriptJSEvaluator.ts`), so whether rewriting a file back to old content recompiles depends on garbage collection | — | irrelevant to results: imports complete in order regardless (`scripts.test.ts`) |
 | Script modules that await a timer at top level can't load (the barrier holds virtual time) | `host/scripts.ts` (a watchdog fails loudly after 30 s real time) | by design: README "Differences from a browser"; `scripts.test.ts` ("a module that can never finish loading fails loudly…") |
 | What player scripts can import. The game refuses static imports of anything but scripts in its RAM check. For dynamic imports the module hook does what a browser does from a `blob:` module: `data:` URLs load; relative paths, bare names and `node:` built-ins don't resolve. `http(s):` URLs, which a browser would fetch, fail because the simulator is offline (**by design**) | `host/scripts.ts` (resolve hook) | handled: `page.test.ts` ("scripts import other scripts and data: URLs…") |
-| Script modules' URLs (`blob:sim/<n>`) can prefix each other, and the game attributes stack frames by substring (`Netscript/ErrorMessages.ts:39`) | `host/scripts.ts` | gap: [#58](https://github.com/UnderMyBed/bitburner-agent/issues/58) |
+| Which script a stack frame belongs to. The game attributes frames by substring (`Netscript/ErrorMessages.ts:39`): first the module URLs, then the file names. The game ends every module with `//# sourceURL=<host>/<file>` (`NetscriptJSEvaluator.ts:195`), and V8 names frames by it, as a browser does. So frames read `home/lib.js:1:38`, never `blob:sim/<n>`, and the URLs (which could prefix each other) never decide | — | handled: `scripts.test.ts` ("an error is attributed to the module it came from…", 12 modules); [#58](https://github.com/UnderMyBed/bitburner-agent/issues/58) |
 | No rendered UI: scripts that read the game's DOM (HUD values, buttons) find nothing | — | by design: README "Differences from a browser"; covered by E2 tests on a browser build (architecture §9.4) |
 | TS/JSX player scripts (the game's swc is stubbed) | `engine/bundle/stubs/swc.js` | by design: README "Differences from a browser"; our in-game code is plain JS |
 
