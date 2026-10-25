@@ -6,30 +6,40 @@ import { reportUncaughtException } from "./parity/errors.ts";
 
 type FakeTimersModule = typeof import("@sinonjs/fake-timers");
 
-/**
- * fake-timers (pinned at 15.4.0) finds the next timer due in a range by taking its heap's earliest timer if that one is
- * in range, and otherwise by scanning every timer (`firstTimerInRange`, fake-timers-src.js:1443-1473). The simulator
- * steps exactly to each next due moment, so once that moment's timers have fired the earliest one left is past the
- * range, and every step scanned every pending timer, twice: a cost that grows with the square of the scripts running
- * (#74). When the earliest timer is due after the range, every timer is (the heap orders them by due time), so the
- * scan would find nothing: this returns null at once, with the same result.
- */
-const SCAN_FROM = `        const first = clock.timerHeap.peek();
-        if (first && inRange(from, to, first)) {
+/** The fake-timers version the patch was made for; package.json pins it. */
+export const FAKE_TIMERS_VERSION = "15.4.0";
+/** The lines the patch anchors on, in `firstTimerInRange` (fake-timers-src.js:1454-1456). */
+const SCAN_FROM = `        if (first && inRange(from, to, first)) {
             return first;
         }
 `;
-const SCAN_TO = `${SCAN_FROM}        if (!first || first.callAt > to) {
-            return null;
-        }
+/** The same, with the early return added on the closing brace's line, so every line keeps its installed number. */
+const SCAN_TO = `        if (first && inRange(from, to, first)) {
+            return first;
+        } if (!first || first.callAt > to) { return null; }
 `;
 
-/** fake-timers' source with the empty-range scan skipped. Throws if the source isn't the one this patch was made for. */
-export function skipEmptyTimerScans(source: string): string {
-  if (source.split(SCAN_FROM).length !== 2) {
+/**
+ * fake-timers' source, with its scan of every timer skipped when none is due (#74).
+ *
+ * fake-timers finds the next timer due in a range by taking its heap's earliest timer if that one is in range, and
+ * otherwise by scanning every timer (`firstTimerInRange`, fake-timers-src.js:1443-1473). The simulator steps exactly to
+ * each next due moment, so once that moment's timers have fired the earliest one left is past the range: every step
+ * scanned every pending timer, twice, a cost that grew with the square of the scripts running. When the earliest timer
+ * is due after the range, so is every timer, since the heap orders them by due time, and the scan would find nothing:
+ * this returns null at once.
+ *
+ * That holds while the heap's order follows due times, which fake-timers breaks in two ways: idle callbacks sort last
+ * whatever their due time (the host doesn't fake `requestIdleCallback`), and an interval with no numeric delay is due
+ * at NaN (a script's `setInterval(fn)`; #80). Throws if the version or the patched lines aren't the ones this was made
+ * for, so an upgrade can't keep the patch without a re-check.
+ */
+export function skipEmptyTimerScans(source: string, version: string): string {
+  if (version !== FAKE_TIMERS_VERSION || source.split(SCAN_FROM).length !== 2) {
     throw new Error(
-      "fake-timers' firstTimerInRange isn't the one skipEmptyTimerScans patches (packages/sim/src/host/clock.ts): " +
-        "re-check it against the new version, then update or remove the patch (#74).",
+      `fake-timers ${version} isn't the ${FAKE_TIMERS_VERSION} skipEmptyTimerScans patches ` +
+        "(packages/sim/src/host/clock.ts): re-check firstTimerInRange, compareTimers and the timer heap against the " +
+        "new version, then update or remove the patch (#74).",
     );
   }
   return source.replace(SCAN_FROM, SCAN_TO);
@@ -38,13 +48,15 @@ export function skipEmptyTimerScans(source: string): string {
 /** fake-timers, loaded from its own source with `skipEmptyTimerScans` applied; node_modules stays as installed. */
 function loadFakeTimers(): FakeTimersModule {
   const file = createRequire(import.meta.url).resolve("@sinonjs/fake-timers");
-  const source = skipEmptyTimerScans(readFileSync(file, "utf8"));
+  const { version } = JSON.parse(readFileSync(path.join(path.dirname(file), "../package.json"), "utf8")) as {
+    version: string;
+  };
+  const source = skipEmptyTimerScans(readFileSync(file, "utf8"), version);
   const module = { exports: {} as unknown };
   const run = compileFunction(source, ["exports", "require", "module", "__filename", "__dirname"], { filename: file });
   run(module.exports, createRequire(file), module, file, path.dirname(file));
   return module.exports as FakeTimersModule;
 }
-
 /** The fake-timers the clock uses, patched. Exported for tests. */
 export const FakeTimers = loadFakeTimers();
 
