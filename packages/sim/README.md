@@ -2,7 +2,7 @@
 
 The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node, running on a virtual clock and deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
-> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game or a save in a child process on a virtual clock, runs player scripts with a headless UI router, and is deterministic from a seed. Scenarios follow in a later task.
+> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). So far it boots a new game, a save or a BitNode with chosen Source-Files in a child process on a virtual clock, runs player scripts with a headless UI router, and is deterministic from a seed. Scenarios follow in a later task.
 
 ## Setup
 
@@ -78,6 +78,7 @@ await sim.close();
   - `seed` is an unsigned 32-bit integer (wider values would alias).
   - `epochMs` and every `advance(ms)` are non-negative integers. `NaN` or `Infinity` would corrupt or hang the clock. `epochMs` is required, except with a save fixture, which refuses it; `offlineMs` is a non-negative integer.
   - `prompts` rules each need a non-empty `match` and a text or `true`/`false` answer.
+  - A BitNode fixture's `n` and Source-File numbers are 1-15, written as plain integers. Source-File levels are 1-3, except SF12's, which go to 1,000,000.
 - **Requests** go over Node IPC as typed messages (`src/protocol.ts`, `src/rpc.ts`).
   - The host runs them **one at a time**. A call made during an `advance` waits for it to finish; otherwise it would see the game part-way through, at a point set by real IPC timing. Each request also waits for script imports to finish (see [the import barrier](#scripts)).
   - If the process ends, or a message can't be delivered, pending and later calls reject. The error has the exit code (or signal) and the last 8,192 characters of the process's combined stdout and stderr.
@@ -85,9 +86,11 @@ await sim.close();
 - **`close()`** ends the process; pending calls reject. It's safe to call twice.
 - **`diagnostics`** exist for tests and troubleshooting:
   - `clock()`: the engine's view of time
-  - `game()`: tutorial state, autosave setting, the current page and `Player.focus`, exploits earned (always none), whether the game thinks it's under a test runner (always false), coding contracts, host boot time, default and pinned locale
+  - `game()`: tutorial state, autosave setting, the current page and `Player.focus`, the current BitNode's multipliers, exploits earned (always none), whether the game thinks it's under a test runner (always false), coding contracts, host boot time, default and pinned locale
   - `random(n)`: samples of the seeded streams
   - `toPage(page, flume?)` and `back()`: navigate as game code does (see [Pages](#pages-and-the-bitverse)). **Test-only:** they change game state (going to the BitVerse kills every script), and scenarios must not use them.
+  - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios get their own way in #30.
+  - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `crash(code, message)`
 
 ### Fixtures
@@ -95,8 +98,18 @@ await sim.close();
 A fixture is the game state a simulation starts from.
 - **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`.
   - **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
+- **`{ kind: "bitnode", n, sourceFiles }`** starts BitNode `n` with the given Source-Files (`{ [BitNode]: level }`, e.g. `{ 4: 3 }`). It boots a new game, sets the Source-Files, and enters the BitNode through the game's own `enterBitNode` (`RedPill.tsx`), as `b1t_flum3.exe` does. That resets everything for the new BitNode without granting a Source-File. The game's own tests set up the same way.
+  - **The level** is the BitNode's own Source-File level + 1, capped at 3 except in BitNode 12, as the game's `getBitNodeLevel` computes it. So `{ n: 4, sourceFiles: { 4: 2 } }` is BN4.3, and so is `{ 4: 3 }`.
+  - **It is a player with these Source-Files and no other history.** Compared with arriving by a real destroy of BitNode d (the portal's `enterBitNode(false, …)`, from the same Source-Files with SF d one level lower), the saved player and home server are identical, except:
+    - A real destroy with SF5 adds 300 intelligence exp, and the first destroy of BN1 shows a congratulation dialog: the flume path does neither (`prestigeSourceFile`'s `isFlume` checks).
+    - A real destroy shows the Source-File dialog ("You received a Source-File…"); the fixture's event log has none.
+    - What a real player carries between BitNodes starts fresh: intelligence earned in earlier BitNodes, Covenant sleeves and sleeve memory, faction discovery, total playtime, achievements, exploits.
+  - **Some fixtures are states no player can reach,** such as BN4 with no Source-Files: `b1t_flum3.exe` needs a Source-File. They're a convenience for tests.
+  - **The tutorial is over,** as for anyone entering a BitNode.
+  - **BitNode 6** opens on the Bladeburner cinematic; the fixture leaves it as the Continue button does. BitNodes 3, 6, 7, 10 and 13 (and 12 above SF12.100) show the game's welcome dialog 200 ms after entry: it arrives as an `alert` event in the first `advance`.
+  - **If entering the BitNode fails,** which puts the game in recovery mode, the simulation fails to start.
 - **`{ kind: "save", bytes | path, offlineMs? }`** loads a save through the game's own `Engine.load`: migration, offline progress, restarting the saved scripts. See [Saves](#saves).
-- **After loading, every fixture does what the UI does once mounted:** it picks the start page (see [Pages](#pages-and-the-bitverse)) and emits `MainUILoaded`, which starts saved scripts and autoexec.
+- **After loading, every fixture does what the UI does once mounted:** it picks the start page (see [Pages](#pages-and-the-bitverse)) and emits `MainUILoaded`, which starts saved scripts and autoexec. A BitNode fixture does this on its new game, before entering the BitNode, as in a browser, where the UI is already up when a player flumes.
 - **For every fixture, autosave is turned off;** the harness takes its own snapshots. This is a deliberate divergence from a real game, which autosaves every 60 s. Each autosave serialises the game (costly at simulation speed) and, as a side effect, draws one `Math.random`. Gameplay doesn't depend on either.
 - **Without a fixture** the engine is loaded but no game is booted. That's only useful for testing the harness, and `summary()`/`stateHash()` refuse.
 
@@ -162,7 +175,7 @@ Game logic reads which page the player is on and navigates between pages. In the
 - **Page state and history** are the real router's: game logic sees the current page (Singularity's `isBusy`, `ns.spawn`, Bladeburner, message delivery), and `back()` walks a 10-page history.
 - **Side effects** are the real router's: going to the Travel page moves the player to the Travel Agency, leaving the Work page ends focus, and going to the BitVerse kills every script and checks achievements. The Work page also does what its component does: once the work ends, it goes back to the Terminal.
 - **The BitVerse** is where a player picks the next BitNode, in the UI. Headless, arriving there records a `bitverseReached` event, also when a save starts there. Then the game waits: navigating there killed every script, and a save that starts there restarts only its saved scripts. Scenarios decide what enters the next BitNode ([#30](https://github.com/UnderMyBed/bitburner-agent/issues/30)). `ns.singularity.destroyW0r1dD43m0n` and `b1tflum3` skip the BitVerse and enter the next BitNode directly.
-- **Entering BitNode 6** lands on the Bladeburner cinematic, which only its Continue button leaves. Headless, as with a player who never clicks, the game stays there with messages hidden until something navigates to the Terminal.
+- **Entering BitNode 6** lands on the Bladeburner cinematic, which only its Continue button leaves. Headless, as with a player who never clicks, the game stays there with messages hidden until something navigates to the Terminal. (A BitNode fixture leaves it; see [Fixtures](#fixtures).)
 - **The page is part of the state hash.** The save doesn't hold it, and it decides what happens next.
 
 The [parity audit](../../docs/sim/parity.md#2-the-router-srcuigameroottsx) lists every router behaviour and its test.

@@ -4,8 +4,8 @@ import { gunzipSync, gzipSync } from "node:zlib";
 type SaveParts = Record<string, any>;
 
 /**
- * Re-encodes a save after editing it, to build test fixtures the game can't easily reach on its own (a finished
- * BitNode, a Source-File). `edit` gets the save's parts (PlayerSave, AllServersSave…) already parsed. Test-only:
+ * Re-encodes a save after editing it, to build test fixtures that are slow to reach by playing (a finished BitNode,
+ * trained stats). For Source-Files, prefer a BitNode fixture: it enters the BitNode as the game does. `edit` gets the save's parts (PlayerSave, AllServersSave…) already parsed. Test-only:
  * edited saves never leave the simulator.
  */
 export function editSave(bytes: Uint8Array, edit: (parts: SaveParts) => void): Uint8Array {
