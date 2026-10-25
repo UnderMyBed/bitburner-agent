@@ -1,10 +1,11 @@
-// npm run bench -w @bitburner-agent/sim [-- --dry-run | -- --profile <workload> [--out file.cpuprofile]]
+// npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept] | [-- --profile <workload> [--out file.cpuprofile]]
 // Benchmarks the simulator: each workload's median speed over its seeds, and the heap over a 7-virtual-day lean run.
-// Appends the results as a row of docs/sim/benchmarks.md and flags anything more than 20% worse than the last row
-// from this machine. Exits 0 if nothing regressed, 1 if something did, and 2 if it couldn't run.
+// Appends the results as a row of docs/sim/benchmarks.md, unless they regressed: more than 20% worse than the last
+// row from this machine (docs/sim/benchmarks.md has the rules). A regressed row is recorded only with --accept.
+// Exits 0 if nothing regressed, 1 if something did, and 2 if it couldn't run.
 // With --profile, it instead profiles one run of a workload, writes the profile and prints where the time went.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { topSelfTime } from "../src/bench/profile.ts";
@@ -15,6 +16,7 @@ import {
   parseRows,
   regressions,
   rigId,
+  rowText,
   WORKLOADS,
   type Workload,
 } from "../src/bench/report.ts";
@@ -24,7 +26,7 @@ import { runScenario, startScenario } from "../src/scenario/run.ts";
 import { loadScenario, scenarioSeeds } from "../src/scenario/spec.ts";
 
 const USAGE =
-  "usage: npm run bench -w @bitburner-agent/sim [-- --dry-run | -- --profile <workload> [--out file.cpuprofile]]";
+  "usage: npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept] | [-- --profile <workload> [--out file.cpuprofile]]";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const RESULTS = path.join(REPO_ROOT, "docs/sim/benchmarks.md");
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -66,7 +68,8 @@ function commit(): string {
   return `${git("rev-parse", "--short", "HEAD")}${changed ? "-dirty" : ""}`;
 }
 
-async function bench(dryRun: boolean): Promise<string[]> {
+/** Measures, prints the row and records it unless that's a dry run, or it regressed and isn't accepted. */
+async function bench({ dryRun, accept }: { dryRun: boolean; accept: boolean }): Promise<string[]> {
   const speeds = {} as Record<Workload, number>;
   for (const workload of WORKLOADS) {
     speeds[workload] = await speedOf(workload);
@@ -82,11 +85,15 @@ async function bench(dryRun: boolean): Promise<string[]> {
     speeds,
     heap: { startMb: daily[0] as number, endMb: daily.at(-1) as number, perDayMb: growthPerDay(daily) },
   };
-  const line = formatRow(row);
-  const found = regressions(row, parseRows(readFileSync(RESULTS, "utf8")));
-  console.log(`\n${line}`);
+  const markdown = readFileSync(RESULTS, "utf8");
+  const earlier = parseRows(markdown);
+  const found = regressions(row, earlier);
+  console.log(`\n${formatRow(row)}`);
+  if (!earlier.some((r) => r.rig === row.rig)) console.log(`(no earlier row from rig ${row.rig}: nothing compared)`);
   if (dryRun) console.log("(dry run: not recorded)");
-  else appendFileSync(RESULTS, `${line}\n`);
+  else if (found.length > 0 && !accept)
+    console.log("(regressed: not recorded; see docs/sim/benchmarks.md#regressions)");
+  else appendFileSync(RESULTS, rowText(markdown, row));
   return found;
 }
 
@@ -102,6 +109,7 @@ async function profile(workload: Workload, out: string): Promise<void> {
     await sim.close();
   }
   if (!result) throw new Error("the host returned no profile");
+  mkdirSync(path.dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(result));
   console.log(`${workload}: profile written to ${out}\n\nself time  share  function`);
   for (const { function: name, ms, share } of topSelfTime(result)) {
@@ -111,16 +119,44 @@ async function profile(workload: Workload, out: string): Promise<void> {
 
 const isWorkload = (name: string): name is Workload => (WORKLOADS as readonly string[]).includes(name);
 
-try {
+/** The options, checked before anything slow runs. */
+function options() {
   const { values } = parseArgs({
-    options: { "dry-run": { type: "boolean" }, profile: { type: "string" }, out: { type: "string" } },
+    options: {
+      "dry-run": { type: "boolean", default: false },
+      accept: { type: "boolean", default: false },
+      profile: { type: "string" },
+      out: { type: "string" },
+    },
   });
+  if (values.profile === undefined) {
+    if (values.out !== undefined) throw new RangeError("--out goes with --profile");
+    if (values["dry-run"] && values.accept) throw new RangeError("--dry-run and --accept don't go together");
+    return { mode: "bench" as const, dryRun: values["dry-run"], accept: values.accept };
+  }
+  if (!isWorkload(values.profile)) throw new RangeError(`--profile: one of ${WORKLOADS.join(", ")}`);
+  if (values["dry-run"] || values.accept)
+    throw new RangeError("--profile doesn't record a row: no --dry-run or --accept");
+  // npm runs this from packages/sim; a relative --out is from where npm was run. The default is gitignored.
+  const out = values.out
+    ? path.resolve(process.env.INIT_CWD ?? process.cwd(), values.out)
+    : path.join(REPO_ROOT, ".reports", `${values.profile}.cpuprofile`);
+  return { mode: "profile" as const, workload: values.profile, out };
+}
+
+let chosen: ReturnType<typeof options>;
+try {
+  chosen = options();
+} catch (error) {
+  console.error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
+  process.exit(2);
+}
+try {
   await buildEngine();
-  if (values.profile !== undefined) {
-    if (!isWorkload(values.profile)) throw new RangeError(`--profile: one of ${WORKLOADS.join(", ")}\n${USAGE}`);
-    await profile(values.profile, values.out ?? `${values.profile}.cpuprofile`);
+  if (chosen.mode === "profile") {
+    await profile(chosen.workload, chosen.out);
   } else {
-    const found = await bench(values["dry-run"] ?? false);
+    const found = await bench(chosen);
     for (const regression of found) console.error(`REGRESSION ${regression}`);
     process.exitCode = found.length > 0 ? 1 : 0;
   }

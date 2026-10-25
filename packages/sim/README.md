@@ -260,13 +260,14 @@ npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--
 
 ## Benchmarks
 
-The benchmark measures each workload's speed and the heap over a 7-virtual-day lean run. It appends a row to [docs/sim/benchmarks.md](../../docs/sim/benchmarks.md) and flags anything more than 20% worse than the last row from the same machine. It runs before every release and isn't part of CI.
+The benchmark measures each workload's speed and the heap over a 7-virtual-day lean run. It appends a row to [docs/sim/benchmarks.md](../../docs/sim/benchmarks.md), unless the row regressed compared with the last row from the same machine (`--accept` records it anyway). It runs before every release and isn't part of CI.
 
 ```
-npm run bench -w @bitburner-agent/sim [-- --dry-run | -- --profile <workload> [--out file.cpuprofile]]
+npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept]
+npm run bench -w @bitburner-agent/sim -- --profile <workload> [--out file.cpuprofile]
 ```
 
-`--profile` writes a CPU profile of one run and prints the functions with the most self time. The benchmarks doc covers what's measured, regressions and profiling.
+`--profile` writes a CPU profile of one run (to `.reports/` by default) and prints the functions with the most self time. The benchmarks doc covers what's measured, the regression rules and profiling.
 
 ## Determinism
 

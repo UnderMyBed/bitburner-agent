@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { topSelfTime } from "../src/bench/profile.ts";
@@ -9,6 +10,7 @@ import {
   parseRows,
   regressions,
   rigId,
+  rowText,
   WORKLOADS,
 } from "../src/bench/report.ts";
 import type { CpuProfile } from "../src/protocol.ts";
@@ -32,7 +34,12 @@ describe("rigId", () => {
     expect(rigId("ci-runner", [cpu("x")], 2 ** 30)).toBe("ci-runner");
   });
 
-  test("otherwise names the CPU model, core count and memory, without trademarks or clock speed", () => {
+  test("refuses a BENCH_RIG that would break the table", () => {
+    expect(() => rigId("a|b", [cpu("x")], 2 ** 30)).toThrow(/BENCH_RIG/);
+    expect(() => rigId("a\nb", [cpu("x")], 2 ** 30)).toThrow(/BENCH_RIG/);
+  });
+
+  test("otherwise names the CPU model, logical CPU count and memory, without trademarks or clock speed", () => {
     const cpus = Array.from({ length: 16 }, () => cpu("AMD Ryzen 9 7950X 16-Core Processor"));
     expect(rigId(undefined, cpus, 64 * 2 ** 30)).toBe("amd-ryzen-9-7950x-16c-64g");
     expect(rigId("", [cpu("Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz")], 15.6 * 2 ** 30)).toBe(
@@ -73,6 +80,48 @@ describe("benchmark rows", () => {
     ].join("\r\n");
     expect(parseRows(markdown)).toEqual([row(), second]);
   });
+
+  test("columns are read by their header, so a table from before a workload was added still parses", () => {
+    const older = [
+      "| Date | Commit | Rig | Node | lean | batch | Heap start | Heap end | Heap growth per day |",
+      "|---|---|---|---|---|---|---|---|---|",
+      "| 2026-01-02 | aaa | rig-a | v24 | 100x | 50x | 10.0 MB | 11.0 MB | +0.1 MB |",
+    ].join("\n");
+    expect(parseRows(`${older}\n\n${formatHeader()}\n${formatRow(row())}\n`)).toEqual([
+      {
+        date: "2026-01-02",
+        commit: "aaa",
+        rig: "rig-a",
+        node: "v24",
+        speeds: { lean: 100, batch: 50 },
+        heap: { startMb: 10, endMb: 11, perDayMb: 0.1 },
+      },
+      row(),
+    ]);
+  });
+
+  test("a row with a value that isn't a number is skipped, not read as some other number", () => {
+    for (const bad of ["n/a", "1,000x", "", "12 MBx"]) {
+      const line = formatRow(row()).replace("| 9000x |", `| ${bad} |`);
+      expect(parseRows(`${formatHeader()}\n${line}\n`), bad).toEqual([]);
+    }
+  });
+
+  test("the text to append starts a new table when the file's last header isn't the current one", () => {
+    const current = `# Results\n\n${formatHeader()}\n${formatRow(row())}\n`;
+    expect(rowText(current, row())).toBe(`${formatRow(row())}\n`);
+    expect(rowText(current.trimEnd(), row())).toBe(`\n${formatRow(row())}\n`);
+    const older =
+      "| Date | Commit | Rig | Node | lean | Heap start | Heap end | Heap growth per day |\n|---|---|---|---|---|---|---|---|\n";
+    expect(rowText(older, row())).toBe(`\n${formatHeader()}\n${formatRow(row())}\n`);
+    expect(rowText("# Results\n", row())).toBe(`\n${formatHeader()}\n${formatRow(row())}\n`);
+  });
+
+  test("the real results file ends with the current header's table, and its rows parse", () => {
+    const markdown = readFileSync(path.join(REPO_ROOT, "docs/sim/benchmarks.md"), "utf8");
+    expect(rowText(markdown, row())).toBe(`${formatRow(row())}\n`);
+    expect(parseRows(markdown).length).toBeGreaterThan(0);
+  });
 });
 
 describe("regressions", () => {
@@ -91,7 +140,12 @@ describe("regressions", () => {
     ];
     // lean: 7999 is just over 20% slower than 10000; churn: 3200 is exactly 20%, which is allowed.
     const now = row({ speeds: { lean: 7999, batch: 9000, churn: 3200, copies: 7000 } });
-    expect(regressions(now, earlier)).toEqual(["lean: 7999x is 20% slower than 2026-10-24 (last), at 10000x"]);
+    expect(regressions(now, earlier)).toEqual(["lean: 7999x is 20.0% slower than 2026-10-24 (last), at 10000x"]);
+  });
+
+  test("a workload the last row doesn't have isn't compared", () => {
+    const earlier = [row({ speeds: { lean: 26000 } })];
+    expect(regressions(row({ speeds: { lean: 26000, batch: 1, churn: 1, copies: 1 } }), earlier)).toEqual([]);
   });
 
   test("heap growth per day more than 20% above the last row's is one, unless it's under 1 MB a day", () => {
@@ -99,6 +153,8 @@ describe("regressions", () => {
     const growth = (perDayMb: number) => regressions(row({ heap: { startMb: 100, endMb: 110, perDayMb } }), earlier);
     expect(growth(2.4)).toEqual([]);
     expect(growth(2.5)).toEqual(["heap: grows 2.5 MB a day, more than 2026-10-24 (abc1234) (2.0 MB a day)"]);
+    // Compared as recorded, to 0.1 MB: 2.44 is 2.4, not over the line.
+    expect(growth(2.44)).toEqual([]);
     // From shrinking before, any real growth counts; tiny growth never does.
     const shrinking = [row({ heap: { startMb: 100, endMb: 99, perDayMb: -1 } })];
     const from = (perDayMb: number) => regressions(row({ heap: { startMb: 0, endMb: 0, perDayMb } }), shrinking);
@@ -108,39 +164,55 @@ describe("regressions", () => {
 });
 
 describe("growthPerDay", () => {
-  test("is the least-squares slope through the daily samples, leaving out the first day's warm-up", () => {
-    // Day 0 to 1 is warm-up (100 to 150); from then on it grows 2 a day, with noise either side.
-    expect(growthPerDay([100, 150, 152.5, 153.5, 156.5, 157.5])).toBeCloseTo(1.9, 10);
-    expect(growthPerDay([100, 150, 150, 150])).toBe(0);
+  test("is the median day-to-day change, leaving out the first day's warm-up", () => {
+    // Day 0 to 1 is warm-up (100 to 150); from then on it grows about 2 a day.
+    expect(growthPerDay([100, 150, 152.5, 153.5, 156.5, 158.5, 160.5])).toBe(2);
     expect(growthPerDay([100, 150, 149, 148])).toBe(-1);
+    expect(growthPerDay([100, 150, 151, 154])).toBe(2);
   });
 
-  test("needs two samples after the warm-up", () => {
+  test("isn't moved by a one-off step: a cache filling or emptying once isn't a trend", () => {
+    expect(growthPerDay([103, 104.2, 104.2, 92.8, 92.8, 93, 92.9, 93])).toBe(0);
+    expect(growthPerDay([100, 104, 104, 110, 110, 110, 110, 110])).toBe(0);
+  });
+
+  test("needs a day after the warm-up", () => {
     expect(() => growthPerDay([100, 150])).toThrow(RangeError);
   });
 });
 
 describe("topSelfTime", () => {
-  const frame = (functionName: string, url: string, lineNumber: number) => ({ functionName, url, lineNumber });
+  const frame = (functionName: string, url: string, lineNumber: number, columnNumber = 0) => ({
+    functionName,
+    url,
+    lineNumber,
+    columnNumber,
+  });
+  const game = path.join(REPO_ROOT, "game.js");
+  // Samples at t = 1000, 2000, 4500, 6500, 8500; the profile ends at 9000. Each sample's time runs to the next
+  // sample, as DevTools counts it, and the last one's to the end.
   const profile: CpuProfile = {
     nodes: [
       { id: 1, callFrame: frame("(root)", "", -1), children: [2, 4] },
-      { id: 2, callFrame: frame("tick", path.join(REPO_ROOT, "game.js"), 9), children: [3] },
-      { id: 3, callFrame: frame("", path.join(REPO_ROOT, "game.js"), 41) },
+      { id: 2, callFrame: frame("tick", game, 9), children: [3] },
+      { id: 3, callFrame: frame("", game, 41, 7) },
       // The same function as node 2, reached another way: it adds up with it.
-      { id: 4, callFrame: frame("tick", path.join(REPO_ROOT, "game.js"), 9) },
+      { id: 4, callFrame: frame("tick", game, 9) },
+      // Another function on the same line: kept apart by its column.
+      { id: 5, callFrame: frame("", game, 41, 30) },
     ],
     startTime: 0,
-    endTime: 10_000,
-    // The last sample is of no known node: it doesn't count.
-    samples: [2, 3, 4, 3, 99],
-    timeDeltas: [1000, 2500, 3000, 2500, 1000],
+    endTime: 9000,
+    // The third sample is of no known node: it doesn't count.
+    samples: [2, 3, 99, 4, 5],
+    timeDeltas: [1000, 1000, 2500, 2000, 2000],
   };
 
-  test("adds each sample's time to the function running, keyed by name, file and line, biggest first", () => {
+  test("adds each sample's time to the function running, keyed by name and position, biggest first", () => {
     expect(topSelfTime(profile)).toEqual([
-      { function: "(anonymous) (<repo>/game.js:42)", ms: 5, share: 5 / 9 },
-      { function: "tick (<repo>/game.js:10)", ms: 4, share: 4 / 9 },
+      { function: "tick (<repo>/game.js:10:1)", ms: 3, share: 3 / 6 },
+      { function: "(anonymous) (<repo>/game.js:42:8)", ms: 2.5, share: 2.5 / 6 },
+      { function: "(anonymous) (<repo>/game.js:42:31)", ms: 0.5, share: 0.5 / 6 },
     ]);
   });
 
@@ -150,6 +222,7 @@ describe("topSelfTime", () => {
       nodes: [{ id: 1, callFrame: frame("(idle)", "", -1) }],
       samples: [1],
       timeDeltas: [5],
+      endTime: 10,
     };
     expect(topSelfTime(native)).toEqual([{ function: "(idle)", ms: 0.005, share: 1 }]);
     expect(topSelfTime(profile, 1)).toHaveLength(1);

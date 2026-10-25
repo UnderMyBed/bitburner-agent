@@ -299,7 +299,11 @@ export interface RandomSample {
 
 /** A V8 CPU profile (the `.cpuprofile` format): call-tree nodes, and which node each sample was in. */
 export interface CpuProfile {
-  nodes: { id: number; callFrame: { functionName: string; url: string; lineNumber: number }; children?: number[] }[];
+  nodes: {
+    id: number;
+    callFrame: { functionName: string; url: string; lineNumber: number; columnNumber: number };
+    children?: number[];
+  }[];
   startTime: number;
   endTime: number;
   samples: number[];

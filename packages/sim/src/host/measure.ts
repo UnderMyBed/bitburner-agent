@@ -4,14 +4,20 @@ import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import type { CpuProfile } from "../protocol.ts";
 
+let collect: (() => void) | null = null;
+
 /**
  * A full garbage collection. `--expose-gc` would put `gc` on the global object, where player scripts could see it;
- * setting the flag at run time and taking `gc` from a fresh context keeps it private.
+ * setting the flag at run time and taking `gc` from a fresh context keeps it private. It's set on first use, so only
+ * simulations that measure their heap change a V8 flag after startup.
  */
-const collectGarbage: () => void = (() => {
-  setFlagsFromString("--expose-gc");
-  return runInNewContext("gc") as () => void;
-})();
+function collectGarbage(): void {
+  if (!collect) {
+    setFlagsFromString("--expose-gc");
+    collect = runInNewContext("gc") as () => void;
+  }
+  collect();
+}
 
 /** The V8 heap in use, in bytes, after a full garbage collection. */
 export function heapUsed(): number {
@@ -26,16 +32,25 @@ export async function startProfile(): Promise<void> {
   if (profiling) throw new Error("a profile is already running");
   const session = new Session();
   session.connect();
-  await session.post("Profiler.enable");
-  await session.post("Profiler.start");
+  try {
+    await session.post("Profiler.enable");
+    await session.post("Profiler.start");
+  } catch (error) {
+    session.disconnect();
+    throw error;
+  }
   profiling = session;
 }
 
 /** Stops the CPU profile and returns it. */
 export async function stopProfile(): Promise<CpuProfile> {
   if (!profiling) throw new Error("no profile is running");
-  const { profile } = (await profiling.post("Profiler.stop")) as { profile: CpuProfile };
-  profiling.disconnect();
+  const session = profiling;
   profiling = null;
-  return profile;
+  try {
+    const { profile } = (await session.post("Profiler.stop")) as { profile: CpuProfile };
+    return profile;
+  } finally {
+    session.disconnect();
+  }
 }
