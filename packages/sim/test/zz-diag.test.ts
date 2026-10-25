@@ -22,9 +22,15 @@ test("diag: the stack-settings scenario on Linux", async () => {
   say("advanced");
   const save = await sim.save();
   say(`saved ${save.length}`);
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 5000));
-    say(execSync("ps -eo pid,rss,pcpu,args --sort=-rss | head -4", { encoding: "utf8" }).replaceAll("\n", " | "));
+    say(
+      execSync("ps -eo pid,rss,pcpu,args --sort=-pcpu | head -5; df -h / | tail -1", { encoding: "utf8" }).replaceAll(
+        "\n",
+        " | ",
+      ),
+    );
+    say(`tail: ${JSON.stringify((sim as unknown as { rpc: { tail: () => string } }).rpc ? "" : "")}`);
   }
   expect(save.length).toBeGreaterThan(1000);
-}, 60_000);
+}, 90_000);
