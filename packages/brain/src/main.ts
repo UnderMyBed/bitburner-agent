@@ -1,6 +1,6 @@
 // npm run brain -- --data-dir <dir>: the long-running brain process (architecture D1). In M2 it runs the control
 // channel and stores what the Agent reports, serves the Remote File API, over which it deploys the in-game code and
-// backs up the game's save, and serves the dashboard; the supervisor joins it in a later task (#94).
+// backs up the game's save, serves the dashboard, and (for Steam, on Windows) supervises the game itself.
 import path from "node:path";
 import process from "node:process";
 import {
@@ -19,7 +19,9 @@ import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
 import { setSupervisionPaused } from "./supervision.ts";
+import { Supervisor } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
+import { WindowsGameProcess } from "./windows-game-process.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
 const MAX_LOG_LINE_LENGTH = 500;
@@ -96,6 +98,17 @@ try {
     },
     onRejectedOrigin: (origin) => channel.reportRejectedOrigin(`${origin} (Remote File API)`),
   });
+  // Only Steam's game is supervised, and only on Windows: a brain for a source build (E2), or a test's, must never
+  // launch or kill it.
+  const supervising = config.environment === "E0" && process.platform === "win32";
+  if (supervising) {
+    new Supervisor({
+      gameProcess: new WindowsGameProcess({ steamAppId: config.steamAppId, gameExecutable: config.gameExecutable }),
+      store,
+      context: deployerReleaseContext,
+      clock: systemClock,
+    });
+  }
   const dashboardServer = await startDashboardServer({
     port: config.dashboardPort,
     status: () =>
@@ -105,6 +118,7 @@ try {
         brainRelease: release,
         brainStartedAtMs: startedAtMs,
         brainStartedEventId: startedEventId,
+        supervising,
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -122,6 +136,11 @@ try {
       `every ${config.saveBackupIntervalMinutes} min, the newest ${config.saveBackupsKept} kept`,
   );
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
+  log(
+    supervising
+      ? `supervising the game: Steam app ${config.steamAppId}, ${config.gameExecutable}, checked every 30 s`
+      : `not supervising the game: only Steam's (E0) is, on Windows (this is ${config.environment} on ${process.platform})`,
+  );
 
   let stopping = false;
   const shutDown = async () => {

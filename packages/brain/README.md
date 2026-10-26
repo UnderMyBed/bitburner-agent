@@ -1,6 +1,6 @@
 # @bitburner-agent/brain
 
-The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)). The supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) joins it next.
+The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)), and, for Steam on Windows, [supervises](#supervision) the game itself ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)).
 
 ## Running it
 
@@ -36,6 +36,8 @@ Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 | `token` | 32 random bytes, hex | The control channel's shared secret, generated once |
 | `saveBackupIntervalMinutes` | 30 | How often the game's save is backed up, besides once on each RFA connection |
 | `saveBackupsKept` | 96 | How many save backups to keep per environment, the newest: two days at 30 minutes |
+| `steamAppId` | 1812820 | Bitburner's Steam app ID, which the [supervisor](#supervision) launches (E0 on Windows only) |
+| `gameExecutable` | `bitburner.exe` | The game's executable, as tasklist shows it: a file name, no folder |
 
 A config that isn't valid stops the brain, naming the file and the problem:
 - invalid JSON, or not an object;
@@ -43,9 +45,10 @@ A config that isn't valid stops the brain, naming the file and the problem:
 - ports out of range, or two the same;
 - no allowed origins;
 - a token that isn't 64 hex digits;
-- a backup interval that isn't a number of minutes above 0 and at most 35791 (the longest a timer can wait, about 24.8 days), or a count kept that isn't a whole number of at least 1.
+- a backup interval that isn't a number of minutes above 0 and at most 35791 (the longest a timer can wait, about 24.8 days), or a count kept that isn't a whole number of at least 1;
+- a Steam app ID that isn't a whole number, or a game executable that isn't a bare `.exe` file name.
 
-A config from before the backup fields existed is refused too, naming one missing field and its default at a time. Add both (`"saveBackupIntervalMinutes": 30, "saveBackupsKept": 96`), or start from a fresh data directory.
+A config from before the backup and supervision fields existed is refused too, naming one missing field and its default at a time. Add them (`"saveBackupIntervalMinutes": 30, "saveBackupsKept": 96, "steamAppId": 1812820, "gameExecutable": "bitburner.exe"`), or start from a fresh data directory.
 
 A port of 0 picks any free port, which is for tests only: the game's RFA settings can't name it, and a control port of 0 changes at every start, so every start would be a new deployment.
 
@@ -56,7 +59,7 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap r
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
-| `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and, from #94, the supervisor's `relaunch`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
+| `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and the supervisor's `relaunch`, `supervisionGaveUp`, `supervisionFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch) and `supervision.gaveUpAtMs` (the supervisor's give-up, #94) |
 
 - **Every snapshot and event is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
@@ -122,7 +125,7 @@ A local page showing whether the skeleton is healthy, its alerts, and the superv
   - "The brain couldn't answer": the brain failed to build the status (it logs why);
   - "The dashboard couldn't show the brain's status": the page itself failed.
 - **The supervision switch:** while supervision runs, the button pauses it; otherwise (paused, or given up) it resumes it, and resuming also clears a give-up. Paused, the supervisor won't relaunch the game, so it can be closed on purpose. The switch is kept in the store's `settings`, so it survives restarts of the brain. A switch the brain refuses says so under the button.
-  - **Until the supervisor lands (#94), nothing reads the switch:** "running" only means it isn't paused.
+  - **A brain that doesn't supervise** (anything but Steam's game on Windows) shows supervision "off": nothing reads the switch there.
   - **The contract with the supervisor** (`src/supervision.ts`): it reads the switch with `readSupervisionSwitch` before every launch; it records a give-up with `recordSupervisionGaveUp` (the `supervision.gaveUpAtMs` setting); and it records each launch as a `relaunch` event (`RELAUNCH_EVENT_KIND`), with its cause as `{ cause }`. The dashboard lists the newest 10.
 - **Alerts** are rules over the store, evaluated each time the page asks, so there's no alert state to get out of step.
   - **"Since the brain started"** means after the brain's own `brainStarted` event, which it records once its in-game build is ready. That's this run of the brain, whatever the clock does.
@@ -150,6 +153,27 @@ A local page showing whether the skeleton is healthy, its alerts, and the superv
     - 413: a body over 1 KiB;
     - 404 or 405: another path or method;
     - 500: the brain failed, and logs why. The server carries on.
+
+## Supervision
+
+The brain keeps the game itself running, for unattended play ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); architecture §10.2, R9). It's process management only: nothing touches the game's code or its save.
+
+- **Only Steam's game (E0), on Windows.** A brain for a source build (E2), or one on another system, never launches or kills anything; its dashboard shows supervision "off".
+- **Every 30 s, unless paused or given up:**
+  - **Not running** → launch it through Steam (`cmd /c start "" steam://rungameid/1812820`), as a player does. Cause: `notRunning`. This also starts the game at logon: whatever starts the brain at logon (#95) starts the game with it.
+  - **Running, but no fast snapshot for 5 minutes** → kill it (`taskkill /IM bitburner.exe /T /F`) and launch it. Cause: `silent`.
+    - This covers a frozen page, and an Agent that died while the game runs: a reload brings it back through autoexec.
+    - At most the progress since the last autosave (60 s by default) is lost.
+    - The heartbeat comes even when home is full and no worker can run, so a full home never looks silent.
+  - **Grace:** silence counts only 5 minutes after the brain starts and after each launch, so the game can load and the Agent boot.
+  - **Running** is what `tasklist /FI "IMAGENAME eq bitburner.exe" /FO CSV /NH` lists, matched by image name (its "no tasks" message is in the system's language, so it isn't read).
+- **At most 3 relaunches in any hour.** A 4th would mean a crash loop, so the supervisor gives up instead: the dashboard's `supervisionGaveUp` alert. It stays given up, across restarts of the brain, until you resume supervision on the dashboard. Resuming starts the count afresh. The count comes from the store, so a brain that keeps restarting can't get round it.
+- **Paused** (the dashboard's switch): nothing is launched or killed, so you can close the game on purpose.
+- **Recorded:** each launch is a `relaunch` event with its cause. Also recorded:
+  - a give-up, as `supervisionGaveUp`, with the relaunches in the last hour;
+  - a command that failed (Steam missing, say), as `supervisionFailed`, with the failure. The next check tries again.
+- **Config:** `steamAppId` (1812820, verified on the reference rig) and `gameExecutable` (`bitburner.exe`).
+- **The owner's check** on the reference rig is recorded on #94: game closed, Agent killed, paused.
 
 ## The gap report
 
@@ -243,6 +267,7 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/save-backups.ts` | The save backups |
 | `src/dashboard/` | The dashboard: `server.ts` (HTTP), `status.ts` (what it shows), `alerts.ts` (the rules), `page.html` (the page) |
 | `src/supervision.ts` | The supervision switch, in the store's settings |
+| `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver |

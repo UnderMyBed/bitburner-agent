@@ -28,6 +28,10 @@ export interface BrainConfig {
   saveBackupIntervalMinutes: number;
   /** How many save backups to keep, the newest, per environment. */
   saveBackupsKept: number;
+  /** Bitburner's Steam app ID, which the supervisor launches through Steam (#94; E0 on Windows only). */
+  steamAppId: number;
+  /** The game's executable name, as tasklist shows it. */
+  gameExecutable: string;
 }
 
 /**
@@ -69,6 +73,9 @@ export function defaultConfig(): BrainConfig {
     saveBackupIntervalMinutes: 30,
     // Two days at 30 minutes.
     saveBackupsKept: 96,
+    // Verified on the reference rig: steamapps/appmanifest_1812820.acf names Bitburner (#94).
+    steamAppId: 1812820,
+    gameExecutable: "bitburner.exe",
   };
 }
 
@@ -123,6 +130,13 @@ function configProblem(config: unknown): string | null {
   }
   if (!Number.isInteger(saveBackupsKept) || (saveBackupsKept as number) < 1) {
     return "saveBackupsKept must be a whole number, at least 1 (the default is 96)";
+  }
+  if (!Number.isInteger(fields.steamAppId) || (fields.steamAppId as number) < 1) {
+    return "steamAppId must be a Steam app ID, a whole number (Bitburner's is 1812820)";
+  }
+  // A bare file name: it goes into tasklist's filter and taskkill's arguments.
+  if (typeof fields.gameExecutable !== "string" || !/^[\w .-]+\.exe$/i.test(fields.gameExecutable)) {
+    return "gameExecutable must be the game's .exe file name, with no folder (the default is bitburner.exe)";
   }
   return null;
 }

@@ -383,7 +383,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - **Built in M2** ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); [`packages/brain`](../packages/brain/README.md#the-dashboard)): skeleton health (the Agent, the last snapshot per tier, key game values, gaps over 24 h), alerts, recent events, and the supervision switch (§10.2).
   - **Later (M4 on):** the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, and a timeline of BitNodes and installs.
 - **Alerts** appear **on the dashboard only**: no push notifications. They're rules over the store, evaluated whenever the dashboard reads status.
-  - **Built in M2:** the Agent silent (no heartbeat for 60 s with the brain up), a version hold, a failed deploy, and the supervisor giving up (raised once the supervisor lands, #94). A brain that's down shows as "brain unreachable".
+  - **Built in M2:** the Agent silent (no heartbeat for 60 s with the brain up), a version hold, a failed deploy, and the supervisor giving up (#94). A brain that's down shows as "brain unreachable".
   - **Later:** a stall (no progress on the route's critical path for X minutes) needs a route, so it comes with the planner (M4). A reflex crash loop comes with reflexes (M3), and estimate error above a threshold with the fast model (M4).
 - **Campaign report:** generated from telemetry: clear time, cycles and installs per BitNode, per release. It's our benchmark in place of community numbers.
 
@@ -499,18 +499,21 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 
 ### 10.2 Recovery: the game is relaunched automatically
 The goal is unattended play (C9), so recovery doesn't wait for a human.
+Built in M2 ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); [`packages/brain`](../packages/brain/README.md#supervision)).
 - **Who:**
-  - The same Windows Task Scheduler setup that supervises the brain (D1) also starts Bitburner at logon, through Steam (`steam://rungameid/<appid>`).
+  - **One scheduled task.** Windows Task Scheduler starts the brain at logon and restarts it on failure (D1, #95). The brain's supervisor then launches Bitburner through Steam (`steam://rungameid/1812820`), because it isn't running, so the same task starts both.
   - Autoexec then runs `agent/boot.js` (§5.7), so a reboot is a short interruption, not a stop.
-- **Dead game** (process gone): the brain's supervisor relaunches it the same way.
-- **Frozen game** (process alive, no snapshot for N minutes, and the Agent unreachable):
+  - Only the brain serving Steam's game (E0) on Windows supervises; a source build's brain (E2) never launches or kills anything.
+- **Dead game** (process gone): the supervisor relaunches it the same way, within its 30 s check.
+- **Silent game** (process alive, but no heartbeat for 5 minutes, after a 5-minute grace from the brain's start or the last launch):
   - The supervisor ends the game process and relaunches it.
+  - This covers a frozen page, and an Agent that died while the game runs: the brain has no other way to restart it, and a reload brings it back through autoexec.
   - At most the progress since the last autosave is lost, plus the time offline.
   - This is process management only. Nothing touches game code or the save.
 - **Guards:**
-  - Relaunches are rate-limited. After K failures in an hour the supervisor stops and raises a dashboard alert, so we don't get a crash loop.
-  - Every relaunch is logged with its cause.
-- **Pause switch:** the dashboard has a "pause supervision" toggle. While it's on, nothing is relaunched, so the owner can close the game deliberately without the supervisor fighting them.
+  - At most 3 relaunches in any hour, counted from the store, so a restarting brain can't get round it. A 4th means the supervisor gives up and raises a dashboard alert, so we don't get a crash loop. It stays given up until the owner resumes it.
+  - Every launch is recorded with its cause (`relaunch` events).
+- **Pause switch:** the dashboard has a "pause supervision" toggle. While it's on, nothing is relaunched, so the owner can close the game deliberately without the supervisor fighting them. Resuming also clears a give-up.
 
 ---
 

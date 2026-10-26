@@ -87,6 +87,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     brainRelease: "v0.2.0",
     brainStartedAtMs,
     brainStartedEventId,
+    supervising: true,
     nowMs: NOW_MS,
   });
   store.close();
@@ -222,6 +223,13 @@ test("gave up, from the real builder: the Agent gone, a relaunch listed, and the
   (document.querySelector("#supervision button") as HTMLButtonElement).click();
   await settle();
   expect(requests.find((request) => request.method === "POST")?.body).toBe('{"paused":false}');
+});
+
+test("supervision off says so", async () => {
+  const off: DashboardStatus = { ...BUSY_STATUS, supervision: { ...BUSY_STATUS.supervision, state: "off" } };
+  const { document } = await openPage(() => ({ status: 200, body: off }));
+  expectDataShown(document);
+  expect(textOf(document, "#supervision")).toContain("Supervision: off: this brain doesn't supervise the game");
 });
 
 test("the brain's data goes in as text, never as HTML", async () => {

@@ -128,7 +128,12 @@ function render(status) {
 
   const supervision = status.supervision;
   pauseNext = supervision.state === "running";
-  const stateText = { running: "running", paused: "paused: nothing is relaunched", gaveUp: "gave up after too many relaunches" };
+  const stateText = {
+    off: "off: this brain doesn't supervise the game (only Steam's is, on Windows)",
+    running: "running",
+    paused: "paused: nothing is relaunched",
+    gaveUp: "gave up after too many relaunches",
+  };
   document.querySelector("#supervision div").replaceChildren(
     element("div", `Supervision: ${stateText[supervision.state]}`, supervision.state === "running" ? "ok" : "bad"),
     ...supervision.relaunches.map((relaunch) => element("div", `Relaunched ${time(relaunch.atMs)}: ${JSON.stringify(relaunch.detail)}`)),

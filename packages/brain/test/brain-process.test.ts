@@ -54,6 +54,8 @@ test("the config and its token are created once, and kept", () => {
     dashboardPort: 12527,
     saveBackupIntervalMinutes: 30,
     saveBackupsKept: 96,
+    steamAppId: 1812820,
+    gameExecutable: "bitburner.exe",
   });
   expect(loadOrCreateConfig(dataDirectory)).toEqual(first);
 });
@@ -67,6 +69,9 @@ test.each([
   ["a zero backup interval", { saveBackupIntervalMinutes: 0 }, /above 0 and at most 35791 \(the default is 30\)/],
   ["an interval a timer can't wait", { saveBackupIntervalMinutes: 35792 }, /above 0 and at most 35791/],
   ["no backups-kept count", { saveBackupsKept: undefined }, /saveBackupsKept must be a whole number/],
+  ["no Steam app ID", { steamAppId: undefined }, /steamAppId must be a Steam app ID/],
+  ["a game executable with a folder", { gameExecutable: "C:\\Games\\bitburner.exe" }, /gameExecutable must be/],
+  ["a game executable that isn't an .exe", { gameExecutable: "bitburner" }, /gameExecutable must be/],
   ["no backups kept", { saveBackupsKept: 0 }, /saveBackupsKept must be a whole number, at least 1/],
   ["a fraction of a backup kept", { saveBackupsKept: 2.5 }, /saveBackupsKept must be a whole number, at least 1/],
 ])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
