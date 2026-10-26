@@ -5,6 +5,8 @@
   "license": "MIT",
   "type": "module",
   "devDependencies": {
+    "@bitburner-agent/brain": "*",
+    "@bitburner-agent/core": "*",
     "@bitburner-agent/sim": "*",
     "playwright": "1.59.1",
     "ws": "8.22.0"

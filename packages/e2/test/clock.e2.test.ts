@@ -9,7 +9,8 @@ import {
   exitTutorial,
   freshGame,
   MAX_GAME_SPEEDUP,
-  TERMINAL_INPUT,
+  terminalText,
+  typeCommand,
   waitForTerminal,
 } from "../src/game.ts";
 import { useE2 } from "./helpers/environment.ts";
@@ -22,17 +23,11 @@ const TEN_GAME_MINUTES_MS = 600_000;
  * (Date.now() moving proves only the clock).
  */
 async function expectEngineRunning(page: Page): Promise<void> {
-  await page.locator(TERMINAL_INPUT).click();
-  await page.keyboard.type("analyze");
-  await page.keyboard.press("Enter");
-  const { gameMs } = await advanceUntil(
-    page,
-    async () => (await page.locator("#terminal").innerText()).includes("Root Access:"),
-    {
-      gameTimeoutMs: 5_000,
-      realTimeoutMs: 30_000,
-    },
-  );
+  await typeCommand(page, "analyze");
+  const { gameMs } = await advanceUntil(page, async () => (await terminalText(page)).includes("Root Access:"), {
+    gameTimeoutMs: 5_000,
+    realTimeoutMs: 30_000,
+  });
   expect(gameMs).toBeGreaterThanOrEqual(1_000);
 }
 

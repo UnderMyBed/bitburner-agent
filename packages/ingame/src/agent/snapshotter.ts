@@ -12,6 +12,7 @@ import {
   deployedFilePath,
   type FastSnapshotData,
   type FastWorkerData,
+  SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_WORKER_PORT,
   type SnapshotMessage,
   type SnapshotTier,
@@ -20,11 +21,14 @@ import {
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 
-export const SNAPSHOT_ROUND_MS = 2_000;
+export const SNAPSHOT_ROUND_MS = SNAPSHOT_TIER_PERIOD_MS.fast;
 /** How often a wait checks whether its worker is still running. */
 const WORKER_POLL_MS = 20;
 /** Rounds from one snapshot of the tier to the next. */
-const ROUNDS_BETWEEN = { medium: 5, slow: 30 } as const;
+const ROUNDS_BETWEEN = {
+  medium: SNAPSHOT_TIER_PERIOD_MS.medium / SNAPSHOT_ROUND_MS,
+  slow: SNAPSHOT_TIER_PERIOD_MS.slow / SNAPSHOT_ROUND_MS,
+} as const;
 
 /** The page's JS heap, where the browser reports it (Chromium does; the simulator doesn't). */
 function pageHeapUsedBytes(): number | null {

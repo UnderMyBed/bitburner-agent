@@ -13,6 +13,7 @@ import {
   deployedFilePath,
   type FastSnapshotData,
   type MediumSnapshotData,
+  SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
   type SnapshotMessage,
   snapshotWorkerFileName,
@@ -38,8 +39,6 @@ const STEP_MS = 100;
 const SNAPSHOT_ROUND_MS = 2_000;
 /** The Agent's first reconnection delay (agent.ts). */
 const FIRST_RECONNECT_DELAY_MS = 1_000;
-/** Each tier's cadence: every round, every 5th, every 30th. */
-const TIER_PERIOD_MS = { fast: 2_000, medium: 10_000, slow: 60_000 } as const;
 const BRAIN_RELEASE = "skeleton-test";
 
 const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "skeleton-"));
@@ -164,7 +163,7 @@ test("8 GB fresh start: for 10 virtual minutes every tier arrives within the Age
     expect(sequenceNumbersOfTier(storedRows, tier), tier).toEqual(oneUpTo(count));
   }
   // …and at its cadence: each tier's snapshots its period apart, give or take a step.
-  for (const [tier, periodMs] of Object.entries(TIER_PERIOD_MS)) {
+  for (const [tier, periodMs] of Object.entries(SNAPSHOT_TIER_PERIOD_MS)) {
     const receivedAt = rowsOfTier(storedRows, tier).map((row) => row.receivedAtMs);
     for (let index = 1; index < receivedAt.length; index++) {
       const intervalMs = (receivedAt[index] as number) - (receivedAt[index - 1] as number);

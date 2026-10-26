@@ -1,5 +1,5 @@
-// Fixtures for E2 tests: a browser, the game opened from a save or brand new, the tutorial exited, and game time
-// moved on (packages/e2/README.md).
+// Fixtures for E2 tests: a browser, the game opened from a save or brand new, the tutorial exited, the terminal typed in
+// and read, and game time moved on (packages/e2/README.md).
 //
 // Time is split. Playwright's clock fakes the page's timers, `Date` and `performance`, so game time moves only when a
 // test advances it. Script imports and WebSockets still run in real time, so game time moves in small steps, at most
@@ -188,6 +188,21 @@ export async function freshGame(
     await page.goto(server.origin);
     await waitForTerminal(page);
   });
+}
+
+/**
+ * Types `command` into the game's terminal and presses Enter. It focuses the input rather than clicking it: a toast
+ * (which closes on a game timer, so stays while game time stands still) can lie over it.
+ */
+export async function typeCommand(page: Page, command: string): Promise<void> {
+  await page.locator(TERMINAL_INPUT).focus();
+  await page.keyboard.type(command);
+  await page.keyboard.press("Enter");
+}
+
+/** The terminal's output so far. */
+export function terminalText(page: Page): Promise<string> {
+  return page.locator("#terminal").innerText();
 }
 
 /** Clicks the tutorial's "Exit Tutorial" button, and waits for the tutorial to close. */
