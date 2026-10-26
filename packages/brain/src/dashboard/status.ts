@@ -66,8 +66,11 @@ export interface DashboardStatus {
   /** The newest 50, newest first. */
   events: { atMs: number; kind: string; detail: unknown }[];
   supervision: {
-    /** Paused takes precedence: while paused, nothing is relaunched either way. */
-    state: "running" | "paused" | "gaveUp";
+    /**
+     * `off` where this brain doesn't supervise (only Steam's game is, on Windows). Otherwise paused takes precedence:
+     * while paused, nothing is relaunched either way.
+     */
+    state: "off" | "running" | "paused" | "gaveUp";
     paused: boolean;
     gaveUpAtMs: number | null;
     /** The supervisor's newest relaunches (#94), newest first. */
@@ -82,6 +85,8 @@ export interface DashboardStatusOptions {
   brainStartedAtMs: number;
   /** The id of this run's `brainStarted` event: "since the brain started" is every event stored after it. */
   brainStartedEventId: number;
+  /** Whether this brain runs the supervisor (#94). */
+  supervising: boolean;
   nowMs: number;
 }
 
@@ -97,6 +102,7 @@ export function buildDashboardStatus({
   brainRelease,
   brainStartedAtMs,
   brainStartedEventId,
+  supervising,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -177,7 +183,13 @@ export function buildDashboardStatus({
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
       .map(({ atMs, kind, detail }) => ({ atMs, kind, detail })),
     supervision: {
-      state: supervision.paused ? "paused" : supervision.gaveUpAtMs !== null ? "gaveUp" : "running",
+      state: !supervising
+        ? "off"
+        : supervision.paused
+          ? "paused"
+          : supervision.gaveUpAtMs !== null
+            ? "gaveUp"
+            : "running",
       paused: supervision.paused,
       gaveUpAtMs: supervision.gaveUpAtMs,
       relaunches: store

@@ -37,6 +37,7 @@ const status = (nowMs: number) =>
     brainRelease: "v0.2.0",
     brainStartedAtMs: STARTED_AT_MS,
     brainStartedEventId,
+    supervising: true,
     nowMs,
   });
 
@@ -252,6 +253,20 @@ test("only this run of the brain counts for the Agent and the alerts, by order, 
   expect(built.alerts).toEqual([]);
   // They're still in the recent events: both starts and the three between.
   expect(built.events).toHaveLength(5);
+});
+
+test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supervision off, paused or not", () => {
+  setSupervisionPaused(store, true);
+  const built = buildDashboardStatus({
+    store,
+    environment: "E0",
+    brainRelease: "v0.2.0",
+    brainStartedAtMs: STARTED_AT_MS,
+    brainStartedEventId,
+    supervising: false,
+    nowMs: STARTED_AT_MS + 1_000,
+  });
+  expect(built.supervision).toMatchObject({ state: "off", paused: true });
 });
 
 test("the recent events are the last 50", () => {

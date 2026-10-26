@@ -128,12 +128,21 @@ function render(status) {
 
   const supervision = status.supervision;
   pauseNext = supervision.state === "running";
-  const stateText = { running: "running", paused: "paused: nothing is relaunched", gaveUp: "gave up after too many relaunches" };
+  const stateText = {
+    off: "off: only a brain for Steam's game, on Windows, supervises it",
+    running: "running",
+    paused: "paused: nothing is relaunched",
+    gaveUp: "gave up after too many relaunches",
+  };
+  const stateStyle = { off: "muted", running: "ok", paused: "bad", gaveUp: "bad" };
   document.querySelector("#supervision div").replaceChildren(
-    element("div", `Supervision: ${stateText[supervision.state]}`, supervision.state === "running" ? "ok" : "bad"),
+    element("div", `Supervision: ${stateText[supervision.state]}`, stateStyle[supervision.state]),
     ...supervision.relaunches.map((relaunch) => element("div", `Relaunched ${time(relaunch.atMs)}: ${JSON.stringify(relaunch.detail)}`)),
   );
-  document.querySelector("#supervision button").textContent = pauseNext ? "Pause supervision" : "Resume supervision";
+  const switchButton = document.querySelector("#supervision button");
+  switchButton.textContent = pauseNext ? "Pause supervision" : "Resume supervision";
+  // Off, nothing reads the switch: no button to suggest otherwise.
+  switchButton.hidden = supervision.state === "off";
 
   const events = document.querySelector("#events table");
   events.replaceChildren(

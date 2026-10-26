@@ -238,6 +238,38 @@ export class TelemetryStore {
     return row ? eventOfRow(row) : null;
   }
 
+  /** The id of the newest event of one of `kinds`, or 0 if there's none. */
+  latestEventId({ environment, kinds }: { environment: Environment; kinds: string[] }): number {
+    const row = this.#database
+      .prepare(
+        `SELECT id FROM events WHERE environment = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(environment, ...kinds) as { id: number } | undefined;
+    return row?.id ?? 0;
+  }
+
+  /** How many events of `kinds` were stored after the event `afterEventId`, at or after `sinceMs`. */
+  countEvents({
+    environment,
+    kinds,
+    afterEventId,
+    sinceMs,
+  }: {
+    environment: Environment;
+    kinds: string[];
+    afterEventId: number;
+    sinceMs: number;
+  }): number {
+    const row = this.#database
+      .prepare(
+        `SELECT COUNT(*) AS count FROM events WHERE environment = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+          AND id > ? AND at_ms >= ?`,
+      )
+      .get(environment, ...kinds, afterEventId, sinceMs) as { count: number };
+    return row.count;
+  }
+
   getSetting(key: string): string | null {
     const row = this.#database.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
       | { value: string }
