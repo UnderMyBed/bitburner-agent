@@ -1,6 +1,6 @@
 # @bitburner-agent/brain
 
-The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). The dashboard ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)) and supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) join it next.
+The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)). The supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) joins it next.
 
 ## Running it
 
@@ -11,7 +11,7 @@ npm run brain -- --data-dir D:\bitburner-agent
 Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 
 - **There's no default data directory.** It holds bulk data (the store, the save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
-- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the two ports, and where the save backups go.
+- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the two ports, where the save backups go, and the dashboard's address.
 - **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`git clone --recurse-submodules`), or the brain stops at start, saying which file is missing.
 - **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
@@ -51,13 +51,13 @@ A port of 0 picks any free port, which is for tests only: the game's RFA setting
 
 ## The telemetry store
 
-SQLite through Node's built-in `node:sqlite`, in WAL mode so the dashboard can read while the brain writes (architecture §7, §11).
+SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap report's command) never blocks the brain's writes (architecture §7, §11).
 
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
 | `events` | Everything else the brain's parts report: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deployFailed`, `versionDrift`; and the save backups' `saveBackup`, `saveBackupRotationFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
-| `settings` | Switches the dashboard sets, e.g. pausing supervision (#93, #94) |
+| `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch) and `supervision.gaveUpAtMs` (the supervisor's give-up, #94) |
 
 - **Every row is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
   - the brain's `git describe` ("unknown" without git, which the startup log shows);
@@ -104,6 +104,39 @@ The brain backs up the game's save over the Remote File API (`getSaveFile`; arch
   - Backups are personal data. They live in the data directory, outside the repository; never commit one.
 - **In the simulator:** a backup loads as a save fixture as it is (`{ kind: "save", path }`), to the same state as the game's own save at that moment (`test/save-backup-round-trip.test.ts`).
 - **Backups before irreversible intents** (R8) come with intents, in M3 (#11).
+
+## The dashboard
+
+A local page showing whether the skeleton is healthy, its alerts, and the supervision switch ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
+
+- **What it shows,** refreshed every 2 s from the store:
+  - **Alerts:** the ones holding now (below).
+  - **Agent:** connected or not, and since when, as of this run of the brain; its deployment and session; the game's version, and whether it's the pinned one.
+  - **Last snapshot per tier:** when each tier last arrived, and how long ago.
+  - **Game:** from the latest fast and medium snapshots: money, hacking level, home RAM used of its total, scripts on home, the page's heap, and the tiers the Agent is skipping (`degradedTiers`).
+  - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now. After a fresh start, the time before the first snapshot shows as a gap.
+  - **Supervision:** running, paused, or gave up; the supervisor's recent relaunches (#94); and the switch.
+  - **Recent events:** the last 50, newest first, including rejected connections and their origin.
+- **Brain unreachable:** when the page can't reach the brain (it stopped, or crashed), it says so in place of the data, rather than showing stale numbers.
+- **The supervision switch:** "Pause supervision" stops the supervisor relaunching the game (#94), so the game can be closed on purpose. "Resume supervision" unpauses, which also clears a give-up. It's kept in the store's `settings` (`supervision.paused`), so it survives restarts of the brain, and it's what the supervisor reads (`src/supervision.ts`).
+- **Alerts** are rules over the store, evaluated each time the page asks, so there's no alert state to get out of step. "Since the brain started" means this run of the brain:
+
+  | Alert | When | Clears |
+  |---|---|---|
+  | `agentSilent` | No fast snapshot for over 60 s, counted from the brain's start if none came since | When the next one arrives |
+  | `versionDrift` | The brain went on hold since it started: the game isn't the pinned version (#91) | When the brain restarts (a hold lasts the brain's run) |
+  | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or the brain restarts |
+  | `supervisionGaveUp` | The supervisor stopped after too many relaunches (#94) | When supervision is unpaused |
+
+  The stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
+- **Security** (owner decision 20, localhost only):
+  - it listens on `127.0.0.1` only;
+  - it refuses (403) a request whose `Host` isn't `127.0.0.1:<port>` or `localhost:<port>`, so a web page can't reach it by DNS rebinding;
+  - it refuses a `POST` whose `Origin` isn't the dashboard's own, so another page can't flip the switch;
+  - the page can't be framed by another page, and everything from the brain is shown as text, never as HTML.
+- **The API** (the page's; for scripts, the same rules apply):
+  - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`);
+  - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch.
 
 ## The gap report
 
@@ -195,6 +228,8 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/gap-report.ts`, `src/gaps-cli.ts` | The gap report and its command (`npm run gaps`) |
 | `src/simulated-game.ts` | The lockstep driver |
 | `src/save-backups.ts` | The save backups |
+| `src/dashboard/` | The dashboard: `server.ts` (HTTP), `status.ts` (what it shows), `alerts.ts` (the rules), `page.html` (the page) |
+| `src/supervision.ts` | The supervision switch, in the store's settings |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver |

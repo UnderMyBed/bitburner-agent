@@ -63,6 +63,34 @@ const SCHEMA = `
   );
 `;
 
+const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
+  missed_before, data`;
+const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
+
+function snapshotOfRow(row: Record<string, string | number>): RecordContext & StoredSnapshot {
+  return {
+    environment: row.environment as Environment,
+    release: row.release as string,
+    agentSessionId: row.agent_session_id as string,
+    tier: row.tier as string,
+    sequenceNumber: row.sequence_number as number,
+    gameTimeMs: row.game_time_ms as number,
+    receivedAtMs: row.received_at_ms as number,
+    missedBefore: row.missed_before as number,
+    data: JSON.parse(row.data as string) as unknown,
+  };
+}
+
+function eventOfRow(row: Record<string, string | number>): RecordContext & StoredEvent {
+  return {
+    environment: row.environment as Environment,
+    release: row.release as string,
+    atMs: row.at_ms as number,
+    kind: row.kind as string,
+    detail: JSON.parse(row.detail as string) as unknown,
+  };
+}
+
 export class TelemetryStore {
   readonly #database: DatabaseSync;
 
@@ -116,22 +144,26 @@ export class TelemetryStore {
   /** Every snapshot from an environment, in the order stored. */
   snapshots({ environment }: { environment: Environment }): (RecordContext & StoredSnapshot)[] {
     const rows = this.#database
-      .prepare(
-        `SELECT environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
-          missed_before, data FROM snapshots WHERE environment = ? ORDER BY id`,
-      )
+      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? ORDER BY id`)
       .all(environment) as Record<string, string | number>[];
-    return rows.map((row) => ({
-      environment: row.environment as Environment,
-      release: row.release as string,
-      agentSessionId: row.agent_session_id as string,
-      tier: row.tier as string,
-      sequenceNumber: row.sequence_number as number,
-      gameTimeMs: row.game_time_ms as number,
-      receivedAtMs: row.received_at_ms as number,
-      missedBefore: row.missed_before as number,
-      data: JSON.parse(row.data as string) as unknown,
-    }));
+    return rows.map(snapshotOfRow);
+  }
+
+  /** The newest snapshot of a tier, by when it arrived (the dashboard), or null if there's none. */
+  latestSnapshot({
+    environment,
+    tier,
+  }: {
+    environment: Environment;
+    tier: string;
+  }): (RecordContext & StoredSnapshot) | null {
+    const row = this.#database
+      .prepare(
+        `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
+          ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
+      )
+      .get(environment, tier) as Record<string, string | number> | undefined;
+    return row ? snapshotOfRow(row) : null;
   }
 
   /** When each fast snapshot arrived, in a window: the gap report's input. */
@@ -156,15 +188,45 @@ export class TelemetryStore {
   /** Every event from an environment, in the order stored. */
   events({ environment }: { environment: Environment }): (RecordContext & StoredEvent)[] {
     const rows = this.#database
-      .prepare("SELECT environment, release, at_ms, kind, detail FROM events WHERE environment = ? ORDER BY id")
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? ORDER BY id`)
       .all(environment) as Record<string, string | number>[];
-    return rows.map((row) => ({
-      environment: row.environment as Environment,
-      release: row.release as string,
-      atMs: row.at_ms as number,
-      kind: row.kind as string,
-      detail: JSON.parse(row.detail as string) as unknown,
-    }));
+    return rows.map(eventOfRow);
+  }
+
+  /** The newest `limit` events from an environment, of `kinds` if given, newest first (the dashboard). */
+  recentEvents({
+    environment,
+    limit,
+    kinds,
+  }: {
+    environment: Environment;
+    limit: number;
+    kinds?: string[];
+  }): (RecordContext & StoredEvent)[] {
+    const ofKinds = kinds ? `AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
+    const rows = this.#database
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? ${ofKinds} ORDER BY id DESC LIMIT ?`)
+      .all(environment, ...(kinds ?? []), limit) as Record<string, string | number>[];
+    return rows.map(eventOfRow);
+  }
+
+  /** The newest event of one of `kinds` stored at or after `sinceMs`, or null (the dashboard's alerts). */
+  latestEvent({
+    environment,
+    kinds,
+    sinceMs,
+  }: {
+    environment: Environment;
+    kinds: string[];
+    sinceMs: number;
+  }): (RecordContext & StoredEvent) | null {
+    const row = this.#database
+      .prepare(
+        `SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND at_ms >= ?
+          AND kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY id DESC LIMIT 1`,
+      )
+      .get(environment, sinceMs, ...kinds) as Record<string, string | number> | undefined;
+    return row ? eventOfRow(row) : null;
   }
 
   getSetting(key: string): string | null {

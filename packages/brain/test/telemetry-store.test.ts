@@ -96,6 +96,49 @@ test("events round-trip in order, tagged", () => {
   ]);
 });
 
+const snapshotAt = (receivedAtMs: number, tier: string, data: unknown = null) => ({
+  agentSessionId: "s",
+  tier,
+  sequenceNumber: receivedAtMs,
+  gameTimeMs: 0,
+  receivedAtMs,
+  missedBefore: 0,
+  data,
+});
+
+test("the latest snapshot of a tier, by when it arrived, in an environment; null if there's none", () => {
+  store.recordSnapshot(context, snapshotAt(3_000, "fast", { n: 3 }));
+  store.recordSnapshot(context, snapshotAt(1_000, "fast", { n: 1 }));
+  store.recordSnapshot(context, snapshotAt(5_000, "medium", { n: 5 }));
+  store.recordSnapshot({ environment: "E0", release: "r" }, snapshotAt(9_000, "fast", { n: 9 }));
+  expect(store.latestSnapshot({ environment: "E1", tier: "fast" })).toMatchObject({
+    receivedAtMs: 3_000,
+    data: { n: 3 },
+  });
+  expect(store.latestSnapshot({ environment: "E1", tier: "slow" })).toBeNull();
+});
+
+test("recent events newest first, up to a limit; and the latest of some kinds since a time", () => {
+  for (const [atMs, kind] of [
+    [1, "deployed"],
+    [2, "agentConnected"],
+    [3, "deployFailed"],
+    [4, "agentDisconnected"],
+  ] as const) {
+    store.recordEvent(context, { atMs, kind, detail: { atMs } });
+  }
+  store.recordEvent({ environment: "E0", release: "r" }, { atMs: 5, kind: "deployed", detail: {} });
+  expect(store.recentEvents({ environment: "E1", limit: 3 }).map((event) => event.atMs)).toEqual([4, 3, 2]);
+  expect(
+    store.recentEvents({ environment: "E1", limit: 5, kinds: ["deployed", "deployFailed"] }).map((event) => event.atMs),
+  ).toEqual([3, 1]);
+  expect(store.latestEvent({ environment: "E1", kinds: ["deployed", "deployFailed"], sinceMs: 0 })).toMatchObject({
+    atMs: 3,
+    kind: "deployFailed",
+  });
+  expect(store.latestEvent({ environment: "E1", kinds: ["deployed"], sinceMs: 2 })).toBeNull();
+});
+
 test("settings are kept across reopening the store", () => {
   store.setSetting("supervisionPaused", "true");
   store.close();
