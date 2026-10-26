@@ -228,8 +228,8 @@ test("a killed Agent closes its connection at once", async () => {
   await runUntil(() => eventsOfType(events, "agentDisconnected").length === 1, 100);
 });
 
-// Handlers that called ns would pass this today: frames only arrive while main awaits the queue, not ns.sleep. The
-// rule is pinned once main sleeps while connected, between snapshots (#89).
+// Frames arriving while the Agent sleeps between snapshot rounds (where a handler that called ns would be killed):
+// snapshots.test.ts.
 test("unknown and malformed frames from the brain are ignored: the Agent stays up and connected", async () => {
   const { simulation, game, events, connections, runUntil } = await gameWithAgent();
   await runUntil(() => eventsOfType(events, "agentConnected").length === 1, 5_000);

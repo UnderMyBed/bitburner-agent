@@ -32,7 +32,7 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
   }
 });
 
-test("the Agent and its largest worker's budgets fit in a fresh save's 8 GB home", () => {
+test("the Agent's budget plus its largest worker's fits in a fresh save's 8 GB home", () => {
   const largestWorkerBudget = Math.max(
     ...Object.entries(budgets)
       .filter(([fileName]) => fileName.startsWith("snapshot-"))

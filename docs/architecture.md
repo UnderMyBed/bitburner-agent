@@ -264,7 +264,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - **Socket handlers never call `ns`.** While a script awaits a call the game delays, such as `ns.sleep` or `hack`, the game kills it for an `ns` call from any other callback. So the handlers only queue events, and the main loop acts on them ([lifecycle and details](../packages/ingame/README.md#the-agent)).
 - **Observe-only (M2):** before the reconciler exists (M3), the Agent launches and kills nothing except its own workers and `agent/boot.js`.
 - Expensive calls go to **worker scripts**: tiny, single-purpose, short-lived. They write their results to a port or file. This is the fork's `getNsDataThroughFile` pattern, formalised.
-- **RAM reservation:** the agent and its workers get a fixed reserved slice of home RAM, sized from measured worker peaks. Reflexes, the batcher in particular, receive their RAM budget from the reconciler and never use the reservation. On an 8 GB start the reservation is the first claim on RAM. When RAM is starved, the agent drops to slower snapshot tiers instead of growing.
+- **RAM reservation:** the agent and its workers get a fixed reserved slice of home RAM, sized from measured worker peaks. Reflexes, the batcher in particular, receive their RAM budget from the reconciler and never use the reservation. On an 8 GB start the reservation is the first claim on RAM. When RAM is starved, the Agent skips the tiers whose workers can't start, naming them in the heartbeat, instead of growing (§5.2).
 
 ### 5.2 Snapshotter
 - **Tiered cadence:**
@@ -272,21 +272,21 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
   | Tier | Cadence | Contents |
   |---|---|---|
   | static | once per Agent start (so once per reset), resent after each welcome | server max money, min security, required hack level, ports; faction/aug catalogue; BitNode multipliers |
-  | slow | 60 s | factions and rep, owned/queued augs, the big subsystems (gang, corp, Bladeburner, sleeves, Dark Net) |
-  | medium | 10 s | player stats and exp, server money and security, purchased servers |
+  | slow | 60 s | factions and rep, owned/queued augs, purchased servers, the big subsystems (gang, corp, Bladeburner, sleeves, Dark Net) |
+  | medium | 10 s | player stats and exp, server money, security, RAM and cores |
   | fast | 2 s | money, player focus, running scripts, reflex health metrics |
 
 - Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps. Tiers are merged into one model on the brain side.
 - **M2 contents (#89):** what can be read cheaply without Singularity ([each tier's data](bridge/protocol.md#each-tiers-data)):
-  - static: the servers' fixed fields;
+  - static: the servers' fixed fields (max money, min security, required hacking level, ports needed);
   - slow: the reset info (installed augmentations, Source-Files, the BitNode) and the purchased servers;
-  - medium: the player, and every server's money, security and access;
+  - medium: the player, and every server's RAM, cores, money, security and access;
   - fast: money, home's RAM and the scripts on home.
 
   Reputation, queued augmentations and current work need Singularity, so they come later (M3/M4).
-- **Static once per Agent start:** installing augmentations or changing BitNode kills every script, so a reset always means a new Agent. The Agent keeps the static data and resends it after each welcome. Fields that change, such as admin rights and backdoors, are in medium.
+- **Static once per Agent start:** installing augmentations or changing BitNode kills every script, so a reset always means a new Agent. The Agent keeps the static data and resends it after each welcome. Its server list is as of the Agent's start. Medium scans afresh, so it has servers that appear later (purchased ones, darkweb), and it carries what changes: RAM and cores (home and purchased servers are upgraded), admin rights and backdoors.
 - **The fast snapshot is the heartbeat:** it's sent every 2 s even when no worker can run, with `game: null` and the skipped tiers in `degradedTiers`. A full home never looks like a dead game.
-- **Workers** run one at a time, as temporary scripts, and report through a port. One that can't start or doesn't report within 5 s leaves its tier skipped until it next succeeds ([details](../packages/ingame/README.md#snapshots)).
+- **Workers** run one at a time, as temporary scripts, and report through a port. Every wait ends with its 2 s round, so the heartbeat is never more than 4 s apart, whatever the workers do. A worker that can't start, doesn't report in its round or is still running leaves its tier skipped that time, and named in `degradedTiers` until it next succeeds ([details](../packages/ingame/README.md#snapshots)).
 
 ### 5.3 Reconciler
 - **Namespace ownership:** the reconciler manages only the scripts it owns: everything under `/agent/`, plus legacy reflexes it launched itself. It never kills or modifies anything else. Foreign scripts' RAM is counted as unavailable.
@@ -480,7 +480,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R7 | **Explainability.** Every desired-state version links to its decision record. |
 | R8 | **Rate-limited and confirmed irreversibles.** Installs and flumes require the guard to pass on two consecutive snapshots, and a save backup is taken first (§6). |
 | R9 | **Liveness.** The brain detects a dead or frozen game (no snapshot for N minutes while the brain is up) and a stalled route (no critical-path progress), and alerts on the dashboard. See §10.2 for automatic recovery. |
-| R10 | **Long-run hygiene (24/7).** The game compiles each distinct script source into a module that is never garbage-collected (S1). So in-game code never generates scripts with unique source text: variation goes in arguments and ports, not code. On v3.0.1 the game's cache holds those modules weakly, so a source that returns after a garbage collection compiles, and leaks, a new module, with its module-level variables reset. In-game code therefore keeps no state at module level that it relies on either lasting or resetting. (The simulator holds every module, as upstream dev does: [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73).) Reflex state is bounded. The Agent reports the page's heap use (`performance.memory`, free through `eval("window")`), so growth is visible before it hurts. |
+| R10 | **Long-run hygiene (24/7).** The game compiles each distinct script source into a module that is never garbage-collected (S1). So in-game code never generates scripts with unique source text: variation goes in arguments and ports, not code. On v3.0.1 the game's cache holds those modules weakly, so a source that returns after a garbage collection compiles, and leaks, a new module, with its module-level variables reset. In-game code therefore keeps no state at module level that it relies on either lasting or resetting. (The simulator holds every module, as upstream dev does: [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73).) Reflex state is bounded. The Agent reports the page's heap use (`performance.memory`, a global scripts can read for free) in every fast snapshot (`pageHeapUsedBytes`), so growth is visible before it hurts. |
 | R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps
@@ -594,7 +594,7 @@ Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-a
 | Game process dead, frozen or bloated (24/7 run) | Lost wall-clock time | Liveness detection and recovery (R9, §10.2); heap monitoring and no code generation (R10); save backups |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher issues, runtime hold, save backups (§12.4) |
 | UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
-| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; the Agent degrades to a slow cadence when RAM-starved |
+| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2) |
 
 ---
 

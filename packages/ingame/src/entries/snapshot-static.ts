@@ -12,8 +12,6 @@ export function main(ns: NS): void {
       const server = ns.getServer(hostname);
       return {
         hostname,
-        maxRam: server.maxRam,
-        cpuCores: server.cpuCores,
         purchasedByPlayer: server.purchasedByPlayer,
         moneyMax: server.moneyMax,
         minDifficulty: server.minDifficulty,

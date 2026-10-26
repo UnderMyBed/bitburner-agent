@@ -17,7 +17,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 | `test/` | Tests (Node), which test the built bundles in the simulator |
 | `ram-budget.json` | Each bundle's RAM budget, in GB |
 
-In-game code imports `@bitburner-agent/core` (for the deploy layout, the control protocol and the snapshot types) and its own modules. The bundle includes them; nothing is imported at runtime.
+In-game code imports `@bitburner-agent/core` (for the deploy layout, the control protocol, and the snapshot types and port) and its own modules. The bundle includes them; nothing is imported at runtime.
 
 ## Build
 
@@ -55,13 +55,13 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | Script | Calls | RAM (budget) |
 |---|---|---|
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (2.7) |
-| `agent.js` | `run` (1.0 GB); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.6 GB (3.0) |
+| `agent.js` | `run` (1.0 GB), `isRunning` (0.1 GB); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (3.0) |
 | `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
 | `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB) | 4.3 GB (4.3) |
-| `snapshot-fast.js` | `getPlayer` (0.5 GB), `ps` (0.2 GB), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.4 GB (2.4) |
+| `snapshot-fast.js` | `ps` (0.2 GB), `getServerMoneyAvailable` (0.1 GB; on home it gives the player's money, where `getPlayer` costs 0.5), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.0 GB (2.0) |
 
-The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 6.9 GB, within a fresh save's 8 GB home; a test checks the budgets keep it so.
+The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 7.0 GB, within a fresh save's 8 GB home; a test checks the budgets (7.3 GB) keep it so.
 
 ## Deploy layout
 
@@ -71,7 +71,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts, e.g. `agent.js` |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js` and its `snapshot-<tier>.js` workers |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -99,7 +99,7 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 **Lifecycle:**
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
-3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a close) after each round, so within 2 s.
+3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s.
 4. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 5. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
@@ -117,22 +117,25 @@ The tests show both sides: frames arriving while the Agent sleeps don't kill it 
 
 ## Snapshots
 
-Each round (every 2 s while welcomed) the Agent runs the tiers that are due, one worker at a time (architecture §5.2; each tier's data: [protocol](../../docs/bridge/protocol.md#each-tiers-data)):
-1. **fast**, every round, then sends it whatever happened: it's the heartbeat;
-2. **static**, until it has it once; it keeps it for its life and resends it after each welcome;
-3. **slow** every 60 s and **medium** every 10 s, both at once after each welcome.
+Each round (every 2 s while welcomed) the Agent runs the tiers that are due, one worker at a time, in this order (architecture §5.2; each tier's data: [protocol](../../docs/bridge/protocol.md#each-tiers-data)):
+1. **fast**, every round, sent whatever happened: it's the heartbeat;
+2. **medium** every 5th round (10 s) and **slow** every 30th (60 s), both in the first round after each welcome. Cadence counts rounds, not clock time, so a clock that steps doesn't skew it;
+3. **static**, until it has it once. It keeps it for its life and resends it after each welcome, with the time it was read. Its server list is as of the Agent's start; servers that appear later (purchased ones, darkweb) are in medium, which also carries each server's RAM and cores, since those change.
 
-**Workers** (`agent/<deploymentId>/snapshot-<tier>.js`) are short-lived and hold the costly NS calls, so the Agent stays at 2.6 GB:
+**Workers** (`agent/<deploymentId>/snapshot-<tier>.js`) are short-lived and hold the costly NS calls, so the Agent stays at 2.7 GB:
 - The Agent runs each as a **temporary** script (`ns.run(file, { temporary: true })`), with no arguments, so a save never holds one.
 - The worker reads the game and writes `{ workerPid, gameTimeMs, data }` to port 89001 (`SNAPSHOT_WORKER_PORT`), then exits.
-- The Agent waits for a report carrying that worker's pid, for up to 5 s. A report from an earlier worker that came too late is skipped. While it waits it uses `ns.asleep`, not `ns.sleep`: a `sleep` that lost the race would leave the script marked busy, and its next `ns` call would get it killed.
+- The Agent takes the report carrying that worker's pid, skipping anything else on the port (such as a report that came too late), and waits for the worker to exit, so its RAM is free for the next one. It checks `ns.isRunning` every 20 ms, so a worker that exits without a report costs no more than that.
+- **Every wait ends with the round**, 2 s after it started. So a round never runs past 2 s, and the heartbeat is never more than two rounds (4 s) apart, under the gap threshold (6 s), whatever the workers do.
+- While it waits it uses `ns.asleep`, not `ns.sleep`: a `sleep` that lost the race would leave the script marked busy, and its next `ns` call would get it killed. And it calls `ns.isRunning` before reading the port, so an Agent that has been killed ends there, before it can read a report meant for the next Agent.
+- **Never a second copy:** while a tier's last worker is still running, the tier isn't started again. The Agent doesn't kill a worker that hangs (that would need `kill`, 0.5 GB, over its budget). Only a bug could make one hang: each keeps its RAM until it exits, which can starve the larger workers meanwhile.
 
-**Degraded:** a worker that can't start (home is full) or doesn't report within 5 s leaves its tier skipped this time, and the tier is named in the fast snapshot's `degradedTiers` until it next succeeds. A skipped slow or medium tier is tried again at its next slot; static, every round until it succeeds. The fast snapshot is still sent, with `game: null`. So on a full home the brain sees a live but blind Agent, never a dead one. The Agent logs a tier being skipped or coming back, not every round.
+**Degraded:** a worker that can't start (home is full), exits without a report, doesn't report before the round ends, or is still running from before leaves its tier skipped that time. A tier with no time left in the round is skipped too. A skipped tier is named in the fast snapshot's `degradedTiers` until it next succeeds, and stays due, so it's tried again next round. When the fast worker itself is skipped, the fast snapshot is still sent, with `game: null`. So on a full home the brain sees a live but blind Agent, never a dead one. The Agent logs a tier being skipped or coming back, not every round.
 
-A timed-out worker delays its round by 5 s. The fast tier goes first in each round, so with one broken worker the heartbeat stays within the gap threshold (6 s); two timing out in the same round would show as a gap.
+While the new-game tutorial runs, finished scripts never free their RAM (architecture §5.7), so the workers soon can't start and every tier degrades. The tutorial is ended before the Agent starts.
 
 ## Hygiene and tests
 
 **Hygiene:** no state at module level, since the game may or may not reuse a module (architecture R10); time from `Date.now()` and randomness from `Math.random()` only, both virtual in the simulator (R11).
 
-**Tests:** `packages/brain/test/agent.test.ts` (the connection and lifecycle) and `snapshots.test.ts` (the tiers, a full home, a broken worker, a reload) run the built Agent and its workers in the simulator against the brain's real `ControlChannel`, on the lockstep driver, in virtual time. They live in `brain` because they need both sides, and `ingame` doesn't depend on the brain. `ingame` exports its build (`@bitburner-agent/ingame/build`) for them.
+**Tests:** `packages/brain/test/agent.test.ts` (the connection and lifecycle) and `snapshots.test.ts` (the tiers, a full home, workers that crash, hang or report late, a reload) run the built Agent and its workers in the simulator against the brain's real `ControlChannel`, on the lockstep driver, in virtual time. They live in `brain` because they need both sides, and `ingame` doesn't depend on the brain. `ingame` exports its build (`@bitburner-agent/ingame/build`) for them.

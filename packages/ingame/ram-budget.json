@@ -1,7 +1,7 @@
 {
   "agent.js": 3.0,
   "boot.js": 2.7,
-  "snapshot-fast.js": 2.4,
+  "snapshot-fast.js": 2.0,
   "snapshot-medium.js": 4.3,
   "snapshot-slow.js": 3.65,
   "snapshot-static.js": 3.8

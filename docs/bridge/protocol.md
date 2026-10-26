@@ -36,20 +36,20 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 | `gameTimeMs` | The game's `Date.now()` when it was taken |
 | `data` | The tier's contents: see below |
 
-**The fast snapshot is the heartbeat.** The Agent sends it every 2 s whatever happens, with what it knows itself and the fast worker's data, or `null` when no worker could run. So liveness never depends on a worker getting RAM, and there's no separate heartbeat message.
+**The fast snapshot is the heartbeat.** The Agent sends it every 2 s, with what it knows itself and the fast worker's data, or `null` when that worker couldn't start or didn't report. Each round ends within 2 s, whatever the workers do, so fast snapshots are never more than 4 s apart. Liveness never depends on a worker getting RAM, and there's no separate heartbeat message.
 
 ### Each tier's `data`
 
-The types are in `packages/core/src/snapshots.ts`. Server and player fields keep the game's own names (`ns.getServer`, `ns.getPlayer`). Fields the game leaves undefined are absent.
+The types are in `packages/core/src/snapshots.ts`. Server and player fields keep the game's own names (`ns.getServer`, `ns.getPlayer`). Fields the game leaves undefined are absent: the hacking fields below, for Hacknet servers only. Home and purchased servers have the game's defaults (`moneyMax` 0, so "can be hacked" is `moneyMax > 0`).
 
 | Tier | When | `data` |
 |---|---|---|
-| `static` | Once per Agent start; resent, unchanged, after each `welcome` | `servers`: every server `scan` reaches from home, each with `hostname`, `maxRam`, `cpuCores`, `purchasedByPlayer`, and, for hackable ones, `moneyMax`, `minDifficulty`, `requiredHackingSkill`, `numOpenPortsRequired` |
-| `slow` | Every 60 s | `resetInfo`: `ns.getResetInfo()` with its Maps as objects (`ownedAugs`: augmentation → level, `ownedSF`: Source-File → level, `bitNodeOptions.sourceFileOverrides`), plus `lastAugReset`, `lastNodeReset`, `currentNode`. `purchasedServers`: their hostnames |
-| `medium` | Every 10 s | `player`: `ns.getPlayer()` whole (skills, exp, money, city, location, factions, jobs, karma, multipliers…). `servers`: each reachable server's `hostname`, `hasAdminRights`, `backdoorInstalled`, `moneyAvailable`, `hackDifficulty` |
-| `fast` | Every 2 s | `degradedTiers`: the tiers whose worker couldn't start or didn't report on its last attempt. `pageHeapUsedBytes`: the page's JS heap, `null` where the browser doesn't report it. `game`: the fast worker's `money`, `homeRamUsed` (the Agent and the worker included), `homeMaxRam` and `homeProcesses` (each with `pid`, `filename`, `threads`, `args`, `temporary`), or `null` when the worker couldn't run |
+| `static` | Once per Agent start; resent, unchanged, after each `welcome` | `servers`: every server `scan` reaches from home at the Agent's start, each with `hostname`, `purchasedByPlayer`, `moneyMax`, `minDifficulty`, `requiredHackingSkill`, `numOpenPortsRequired` |
+| `slow` | Every 60 s | `resetInfo`: `ns.getResetInfo()` (`lastAugReset`, `lastNodeReset`, `currentNode`, `ownedAugs`, `ownedSF`, `bitNodeOptions`) with its Maps as objects: `ownedAugs` (augmentation → level), `ownedSF` (Source-File → level), `bitNodeOptions.sourceFileOverrides`. `purchasedServers`: their hostnames |
+| `medium` | Every 10 s | `player`: `ns.getPlayer()` whole (skills, exp, money, city, location, factions, jobs, karma, multipliers…). `servers`: every server `scan` reaches now, each with `hostname`, `maxRam`, `cpuCores`, `hasAdminRights`, `backdoorInstalled`, `moneyAvailable`, `hackDifficulty` |
+| `fast` | Every 2 s | `degradedTiers`: the tiers skipped on their last attempt (the worker couldn't start, didn't report in its round, or was still running from before). `pageHeapUsedBytes`: the page's JS heap, `null` where the browser doesn't report it. `game`: the fast worker's `money`, `homeRamUsed` (the Agent and the worker included), `homeMaxRam` and `homeProcesses` (each with `pid`, `filename`, `threads`, `args`, `temporary`), or `null` when the fast worker was skipped |
 
-`gameTimeMs` is when the worker read the game (for the fast tier without a worker, when the round started).
+`gameTimeMs` is when the worker read the game: for a resent static, when it was first read; for a fast snapshot without the worker's data, when the round started.
 
 ## Brain → Agent
 

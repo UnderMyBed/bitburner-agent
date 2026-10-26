@@ -8,7 +8,8 @@
 //   acts on them.
 // - It keeps no state at module level (architecture R10): the game may or may not reuse a module.
 //
-// RAM: `run` (1.0 GB) is the one function referenced that costs anything; the rest are free (ram-budget.json).
+// RAM: `run` (1.0 GB) and `isRunning` (0.1 GB) are the functions referenced that cost anything; the rest are free
+// (ram-budget.json).
 import {
   AGENT_CONFIG_FILE_NAME,
   BOOT_SCRIPT,
@@ -119,7 +120,9 @@ export async function main(ns: NS): Promise<void> {
         // meanwhile.
         const roundStartedAtMs = Date.now();
         await snapshotter.takeRound((message) => connection.send(encodeControlMessage(message)));
-        await ns.sleep(Math.max(0, roundStartedAtMs + SNAPSHOT_ROUND_MS - Date.now()));
+        // Clamped, so a clock that steps back can't stretch the sleep.
+        const untilNextRoundMs = roundStartedAtMs + SNAPSHOT_ROUND_MS - Date.now();
+        await ns.sleep(Math.min(Math.max(0, untilNextRoundMs), SNAPSHOT_ROUND_MS));
       } else if (event.kind === "opened") {
         connection.send(
           encodeControlMessage({

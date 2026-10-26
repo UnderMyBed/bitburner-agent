@@ -18,6 +18,9 @@ import type { Simulation, SimulationOptions } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { expect, test } from "vitest";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps } from "../src/gap-report.ts";
+
+const SNAPSHOT_ROUND_MS = 2_000;
+
 import {
   attachBrain,
   type BrainOnSimulation,
@@ -44,9 +47,39 @@ const connectedCount = (events: ControlChannelEvent[]) =>
   events.filter((event) => event.type === "agentConnected").length;
 const fastData = (snapshot: SnapshotMessage | undefined) => snapshot?.data as FastSnapshotData;
 
-async function gameWithAgent(options: Partial<SimulationOptions> = {}) {
-  const simulation = await start({ ...NEW_GAME_WITH_NETWORK, ...options });
+/** Stand-in workers that never report: one exits at once, one hangs (holding 1.6 GB), one reports 6 s late. */
+const BROKEN_WORKERS = {
+  exits: "export function main(ns) {}",
+  hangs: "export async function main(ns) { await ns.asleep(1e9); }",
+  late: `export async function main(ns) {
+           await ns.sleep(6_000);
+           ns.writePort(${SNAPSHOT_WORKER_PORT}, { workerPid: ns.pid, gameTimeMs: Date.now(), data: { late: true } });
+         }`,
+};
+type BrokenWorkers = Partial<Record<SnapshotTier, keyof typeof BROKEN_WORKERS>>;
+
+async function breakWorkers(simulation: Simulation, brokenWorkers: BrokenWorkers): Promise<void> {
+  for (const [tier, how] of Object.entries(brokenWorkers) as [SnapshotTier, keyof typeof BROKEN_WORKERS][]) {
+    await simulation.writeFile(
+      "home",
+      deployedFilePath("deployment-a", snapshotWorkerFileName(tier)),
+      BROKEN_WORKERS[how],
+    );
+  }
+}
+
+const noFastGapsSince = (brain: BrainOnSimulation, sinceMs: number) =>
+  findGaps(receivedAtOf(brain.events, "fast"), {
+    sinceMs,
+    untilMs: brain.game.clock.now(),
+    thresholdMs: DEFAULT_GAP_THRESHOLD_MS,
+  }).gaps;
+
+async function gameWithAgent(options: Partial<SimulationOptions> & { brokenWorkers?: BrokenWorkers } = {}) {
+  const { brokenWorkers = {}, ...simulationOptions } = options;
+  const simulation = await start({ ...NEW_GAME_WITH_NETWORK, ...simulationOptions });
   await writeDeployment(simulation, await bundles(), "deployment-a");
+  await breakWorkers(simulation, brokenWorkers);
   const brain = await attachBrain(simulation, { stepMs: STEP_MS });
   expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
   await brain.runUntil(() => connectedCount(brain.events) === 1, 5_000);
@@ -67,7 +100,8 @@ test("over 10 virtual minutes, each tier arrives at its cadence, numbered 1, 2, 
   const { game, events } = await gameWithAgent();
   const welcomedAtMs = game.clock.now();
   await game.run(TEN_MINUTES_MS);
-  const expectedCounts = { static: 1, slow: 10, medium: 60, fast: 300 };
+  expect(snapshotsOf(events, "static")).toHaveLength(1);
+  const expectedCounts = { slow: 10, medium: 60, fast: 300 };
   for (const [tier, expectedCount] of Object.entries(expectedCounts) as [SnapshotTier, number][]) {
     const snapshots = snapshotsOf(events, tier);
     expect(snapshots.length, tier).toBeGreaterThanOrEqual(expectedCount - 1);
@@ -96,24 +130,31 @@ test("each tier's contents: the servers, the reset info, the player, and home", 
   expect(hostnames).toEqual(expect.arrayContaining(["home", "n00dles", "The-Cave", "run4theh111z"]));
   expect(new Set(hostnames).size).toBe(hostnames.length);
   expect(staticData.servers.find((server) => server.hostname === "n00dles")).toMatchObject({
-    maxRam: 4,
     moneyMax: expect.any(Number),
     requiredHackingSkill: 1,
     numOpenPortsRequired: 0,
     purchasedByPlayer: false,
   });
+  // Home has the game's defaults for a server that can't be hacked.
+  expect(staticData.servers.find((server) => server.hostname === "home")).toMatchObject({ moneyMax: 0 });
   const slowData = snapshotsOf(events, "slow")[0]?.data as SlowSnapshotData;
   expect(slowData.resetInfo).toMatchObject({ currentNode: 1, ownedAugs: {}, ownedSF: {} });
   expect(slowData.purchasedServers).toEqual([]);
   const mediumData = snapshotsOf(events, "medium")[0]?.data as MediumSnapshotData;
   expect(mediumData.player).toMatchObject({ money: expect.any(Number), city: "Sector-12", skills: expect.any(Object) });
   expect(mediumData.servers.map((server) => server.hostname)).toEqual(hostnames);
-  expect(mediumData.servers.find((server) => server.hostname === "home")).toMatchObject({ hasAdminRights: true });
+  expect(mediumData.servers.find((server) => server.hostname === "home")).toMatchObject({
+    maxRam: 8,
+    cpuCores: 1,
+    hasAdminRights: true,
+  });
+  expect(mediumData.servers.find((server) => server.hostname === "n00dles")).toMatchObject({ maxRam: 4 });
   const fast = fastData(snapshotsOf(events, "fast")[0]);
   expect(fast).toMatchObject({
     degradedTiers: [],
     pageHeapUsedBytes: null,
-    game: { money: expect.any(Number), homeRamUsed: 2.6 + 2.4, homeMaxRam: 8 },
+    // The Agent (2.7 GB) and the fast worker (2.0 GB).
+    game: { money: expect.any(Number), homeRamUsed: 4.7, homeMaxRam: 8 },
   });
   // The Agent, and the fast worker itself: both temporary, so a reload brings back neither (only autoexec does).
   expect(fast.game?.homeProcesses).toMatchObject([
@@ -146,7 +187,7 @@ test("on a full home the heartbeat goes on for 10 virtual minutes, naming the sk
   const brain = await gameWithAgent();
   const { simulation, game, events } = brain;
   await untilFullSnapshot(brain, 0, 10_000);
-  // 4.8 GB taken: with the Agent's 2.6, 0.6 GB stay free, too little for any worker.
+  // 4.8 GB taken: with the Agent's 2.7, 0.5 GB stay free, too little for any worker.
   await simulation.writeFile("home", "hold-ram.js", "export async function main(ns) { await ns.sleep(1e9); }");
   const { pid: holderPid } = await simulation.run("home", "hold-ram.js", { threads: 3 });
   const filledAtMs = game.clock.now();
@@ -165,50 +206,73 @@ test("on a full home the heartbeat goes on for 10 virtual minutes, naming the sk
 
   await simulation.kill(holderPid);
   const freedAtMs = game.clock.now();
+  // A skipped tier stays due, so it comes back within two rounds, not at its next slot (60 s, for slow).
   await brain.runUntil(
     () => snapshotsOf(events, "slow", freedAtMs).length > 0 && snapshotsOf(events, "medium", freedAtMs).length > 0,
-    70_000,
+    2 * SNAPSHOT_ROUND_MS + STEP_MS,
   );
   await game.run(2_000);
   expect(fastData(snapshotsOf(events, "fast").at(-1))).toMatchObject({ degradedTiers: [], game: { homeMaxRam: 8 } });
 });
 
-test("a worker that never reports times out after 5 s: its tier is skipped and named, and the heartbeat goes on", async () => {
+test("workers that exit without reporting: their tiers are skipped and named, and rounds stay 2 s apart", async () => {
   const brain = await gameWithAgent();
   const { simulation, game, events } = brain;
   await untilFullSnapshot(brain, 0, 10_000);
-  await simulation.writeFile(
-    "home",
-    deployedFilePath("deployment-a", snapshotWorkerFileName("medium")),
-    "export async function main(ns) {}",
-  );
+  await breakWorkers(simulation, { fast: "exits", medium: "exits", slow: "exits" });
   const brokenAtMs = game.clock.now();
-  await game.run(60_000);
-  expect(snapshotsOf(events, "medium", brokenAtMs)).toEqual([]);
-  expect(fastData(snapshotsOf(events, "fast").at(-1)).degradedTiers).toEqual(["medium"]);
-  // Each timed-out attempt delays one round by up to 5 s, never past the gap threshold.
-  expect(
-    findGaps(receivedAtOf(events, "fast"), {
-      sinceMs: brokenAtMs,
-      untilMs: game.clock.now(),
-      thresholdMs: DEFAULT_GAP_THRESHOLD_MS,
-    }).gaps,
-  ).toEqual([]);
+  // Past slow's next slot, 60 s after the first full round.
+  await game.run(70_000);
+  expect(snapshotsOf(events, "medium", brokenAtMs + STEP_MS)).toEqual([]);
+  expect(snapshotsOf(events, "slow", brokenAtMs + STEP_MS)).toEqual([]);
+  const fastSince = snapshotsOf(events, "fast", brokenAtMs + 2 * SNAPSHOT_ROUND_MS);
+  expect(fastSince.length).toBeGreaterThanOrEqual(33);
+  expect(fastSince.every((snapshot) => fastData(snapshot).game === null)).toBe(true);
+  expect(fastData(fastSince.at(-1)).degradedTiers.sort()).toEqual(["fast", "medium", "slow"]);
+  expect(noFastGapsSince(brain, brokenAtMs)).toEqual([]);
+  // The Agent stops waiting as soon as a worker exits without a report: each fast snapshot arrives within a step or
+  // two of its round's start, not at the round's end.
+  const fastEvents = events.filter(
+    (event) => event.type === "snapshotReceived" && event.snapshot.tier === "fast" && event.atMs > brokenAtMs + 4_000,
+  );
+  for (const event of fastEvents) {
+    if (event.type === "snapshotReceived") expect(event.atMs - event.snapshot.gameTimeMs).toBeLessThan(500);
+  }
 });
 
-test("a report that comes after its worker timed out is never taken for the next worker's", async () => {
+test("a worker that hangs is waited for only until its round ends, and never started twice", async () => {
+  const brain = await gameWithAgent();
+  const { simulation, game, events } = brain;
+  await untilFullSnapshot(brain, 0, 10_000);
+  await breakWorkers(simulation, { medium: "hangs" });
+  const brokenAtMs = game.clock.now();
+  await game.run(60_000);
+  const mediumWorker = deployedFilePath("deployment-a", snapshotWorkerFileName("medium"));
+  expect((await simulation.ps("home")).filter((process) => process.filename === mediumWorker)).toHaveLength(1);
+  expect(snapshotsOf(events, "fast", brokenAtMs).length).toBeGreaterThanOrEqual(29);
+  expect(fastData(snapshotsOf(events, "fast").at(-1)).degradedTiers).toEqual(["medium"]);
+  expect(noFastGapsSince(brain, brokenAtMs)).toEqual([]);
+});
+
+test("with static's worker hanging from the start, the heartbeat has no gap, and what fits still arrives", async () => {
+  const brain = await gameWithAgent({ brokenWorkers: { static: "hangs" } });
+  const welcomedAtMs = brain.game.clock.now();
+  await brain.game.run(30_000);
+  expect(snapshotsOf(brain.events, "static")).toEqual([]);
+  // The first round's medium and slow ran before static hung. After that the hung worker's 1.6 GB leaves room for
+  // slow's worker (3.65 GB) but not medium's (4.3 GB), so medium is skipped too.
+  expect(snapshotsOf(brain.events, "slow")).toHaveLength(1);
+  expect(snapshotsOf(brain.events, "medium")).toHaveLength(1);
+  expect(fastData(snapshotsOf(brain.events, "fast").at(-1)).degradedTiers.sort()).toEqual(["medium", "static"]);
+  expect(noFastGapsSince(brain, welcomedAtMs)).toEqual([]);
+});
+
+test("a report that comes after its round ended is never taken for the next worker's", async () => {
   const brain = await gameWithAgent();
   const { simulation, game, events } = brain;
   await untilFullSnapshot(brain, 0, 10_000);
   // A medium worker that reports 6 s late: its report sits on the port when the next fast worker runs.
-  await simulation.writeFile(
-    "home",
-    deployedFilePath("deployment-a", snapshotWorkerFileName("medium")),
-    `export async function main(ns) {
-       await ns.sleep(6_000);
-       ns.writePort(${SNAPSHOT_WORKER_PORT}, { workerPid: ns.pid, gameTimeMs: Date.now(), data: { late: true } });
-     }`,
-  );
+  await breakWorkers(simulation, { medium: "late" });
   const lateAtMs = game.clock.now();
   await game.run(30_000);
   const fastSince = snapshotsOf(events, "fast", lateAtMs);

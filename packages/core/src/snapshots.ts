@@ -22,14 +22,18 @@ export interface SnapshotWorkerReport {
   data: unknown;
 }
 
-/** static: once per Agent start. Every server `scan` reaches from home, with the fields that don't change. */
+/**
+ * static: once per Agent start. Every server `scan` reaches from home at that time, with the fields that never change
+ * for a server. Servers that appear later (purchased ones, darkweb) are in medium.
+ */
 export interface StaticSnapshotData {
   servers: {
     hostname: string;
-    maxRam: number;
-    cpuCores: number;
     purchasedByPlayer: boolean;
-    /** Absent for servers that can't be hacked (home, purchased servers). */
+    /**
+     * Absent for Hacknet servers only. Home and purchased servers have the game's defaults (`moneyMax` 0, so they
+     * can't be hacked; `numOpenPortsRequired` 5).
+     */
     moneyMax?: number;
     minDifficulty?: number;
     requiredHackingSkill?: number;
@@ -52,13 +56,17 @@ export interface SlowSnapshotData {
   purchasedServers: string[];
 }
 
-/** medium: every 10 s. `ns.getPlayer()` whole, and every server's money, security and access. */
+/** medium: every 10 s. `ns.getPlayer()` whole, and every reachable server's RAM, cores, money, security and access. */
 export interface MediumSnapshotData {
   /** Skills, exp, money, city, location, factions, jobs, karma, multipliers and the rest of `ns.getPlayer()`. */
   player: Record<string, unknown>;
   servers: {
     hostname: string;
+    /** These change: home's RAM and cores with upgrades, purchased servers' RAM with theirs. */
+    maxRam: number;
+    cpuCores: number;
     hasAdminRights: boolean;
+    /** These three are absent for Hacknet servers only. */
     backdoorInstalled?: boolean;
     moneyAvailable?: number;
     hackDifficulty?: number;
