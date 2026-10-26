@@ -53,6 +53,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 4. **Close out the docs, in one PR:**
    - the new rows and reports from step 2 (`docs/sim/benchmarks.md`, `docs/sim/baselines.md`)
    - the README's status and roadmap, and plan.md's status, showing the milestone done
+   - anything in the README that waited on the milestone, such as "Getting started"
 
    Only docs may change between the candidate commit and the tag. Check that with `git diff --stat <candidate> origin/main`: everything listed must be `docs/` or `*.md`. If code changed, go back to step 1.
 
@@ -71,7 +72,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
    gh release edit v0.<n>.0 -R UnderMyBed/bitburner-agent --draft=false
    ```
 
-   Then link the release from the review issue, close the release task and the review issue, and close the milestone:
+   Then link the release from the review issue, close the release task, the review issue and any epic still open in the milestone (an epic whose last criterion is the release), and close the milestone:
 
    ```
    gh api repos/UnderMyBed/bitburner-agent/milestones --jq '.[] | select(.title | startswith("M<n> ")) | .number'
