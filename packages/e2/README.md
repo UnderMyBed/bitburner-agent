@@ -15,7 +15,7 @@ npm run e2:install     # once: Playwright's Chromium headless shell
 npm run e2             # all E2 tests; npm run e2 -- clock runs the files whose names match
 ```
 
-- The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
+- The whole suite takes about 90 s on the reference rig (12 tests; the skeleton's five start a brain each, which builds the in-game code). The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
 - On Linux, Chromium may need system libraries: `npx playwright install-deps chromium`.
 - E2 builds and downloads go under the repository's gitignored `.cache/e2/`, so deleting that folder undoes `e2:build` and `e2:install`. The exception is babel's cache, which the game's webpack config keeps in the submodule's gitignored `node_modules/.cache/`. Builds of earlier commits stay there, about 117 MB each, until you delete them.
 
@@ -62,8 +62,9 @@ The package's other tests (`test/*.test.ts`: the static server, the build's chec
 | `exitTutorial(page)` | Clicks "Exit Tutorial" and waits for the tutorial to close |
 | `waitForTerminal(page)`, `TERMINAL_INPUT` | The game loaded: its terminal input is on the page |
 | `advanceGameTime(page, ms)`, `advanceUntil(page, condition, { realTimeoutMs, gameTimeoutMs })` | Game time, below |
+| `typeCommand(page, command)`, `terminalText(page)` | Types a command into the terminal (focusing the input, not clicking it) and presses Enter; the terminal's output so far |
 | `closeGame(page)` | Closes the page's browser context |
-| `simulatorSave({ gameSettings, prepare })`, `moneyInSave(save)` (`test/helpers/saves.ts`) | A save from the simulator: a new game, with `prepare` writing files, running scripts or moving time first, and `gameSettings` (the Remote API's address and port, autoexec) saved in it |
+| `simulatorSave({ gameSettings, prepare })`, `moneyInSave(save)` (`test/helpers/saves.ts`) | A save from the simulator: a new game, with `prepare` writing files, running scripts or moving time first, and `gameSettings` (the Remote API's address and port, autoexec) saved in it, with the game's default autosave (every 60 s) on |
 
 - **Saves come from the simulator.** That's allowed: saves only flow from Steam into test environments, never back.
 - **The game's settings live in the save**, so a test sets the RFA port or autoexec by making the save with them.
@@ -91,13 +92,18 @@ Script imports and WebSockets still run in real time. So:
 `test/skeleton.e2.test.ts` is M2's exit criterion on the real page ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97); architecture §13): "connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start". It uses the game's own Remote File API client and network, a real brain and the built Agent.
 
 - **A real brain** (`test/helpers/brain.ts`): `packages/brain/src/main.ts` in its own process, with a data directory and free ports of the test's own.
-  - Its `config.json` is environment E2, so it never supervises Steam's game, and allows the test page's origin.
+  - Its `config.json` is environment E2, so it never supervises Steam's game, and allows the test page's origin. `startBrain` refuses a config that isn't E2: an E0 brain on Windows launches and kills Steam's Bitburner.
   - The config is written once and kept, so a brain started again on the same ports keeps its token.
   - Tests read its store read-only while it runs (`readStore`), and its log is printed when a test fails.
 - **Autosave on.** The simulator turns autosave off, and its saves carry that. `simulatorSave` turns the game's default (every 60 s) back on, because a deploy is in the save only after an autosave (#91).
 - **Typing focuses the terminal** (`typeCommand`) rather than clicking it: a toast can lie over it, and toasts close on a game timer, so one stays while game time stands still.
-- **Cadence is checked on `gameTimeMs`**, since the brain's receive times are real time, at ×20.
-- **The page heap isn't measured on E2.** Playwright's fake `performance` has no `memory.usedJSHeapSize`, so the fast snapshot's `pageHeapUsedBytes` is missing. The Steam soak (#99) measures it.
+- **Cadence is checked on `gameTimeMs`** ([game time](#game-time)).
+- **The page heap isn't measured on E2.** Playwright's fake `performance` has a `memory` without `usedJSHeapSize`, so the Agent reads `undefined`, and the fast snapshot's `pageHeapUsedBytes` arrives missing (not `null`, which the Agent sends where there's no `memory` at all). Measuring it on Steam is left to the soak (#99).
+- **Debugging a failing test.**
+  - Run one test with `npm run e2 -- skeleton -t "reconnect"`.
+  - When a test fails, each brain it started prints its log (the `brain:` lines: deploys, connections, refusals) under "Brain N's log (<data directory>)".
+  - The data directory, with `config.json` and `telemetry.sqlite`, is a temporary `e2-skeleton-*` folder, deleted when the file finishes. To keep it, comment out the `afterAll` in `skeleton.e2.test.ts`.
+  - The Agent's own log is in the game: to see it, run headed (see `e2:install`) and `tail` it.
 
 ## What the tests show
 
@@ -108,7 +114,7 @@ Results on the reference rig:
 | `test/game.e2.test.ts` | Four checks: <ul><li>a simulator-made save, with money earned by hacking, loads to the Terminal, and the overview shows the save's money;</li><li>with the unload prompt armed, a reload gets through and loads the game again;</li><li>a brand-new game starts in the tutorial, `exitTutorial` closes it, and `free` shows 8.00GB;</li><li>a script autoexec starts on load imports another, sleeps 1 s and prints, all within 5 s of game time: it finished after 1,200 ms.</li></ul> |
 | `test/pacing.e2.test.ts` | A WebSocket reply 100 ms late in real time arrives within 5 s of game time: after 1,400 ms. Unpaced, it would have taken over 12 s |
 | `test/remote-api.e2.test.ts` | The game's Remote File API client connects to a local WebSocket server named in the save's settings, in 10 loads of 10. Game time runs in real time during each load, so the game's 2 s connection timer (`vendor/bitburner-src/src/index.tsx:37`) races the load. Every load connected 2,000 ms of game time after the Terminal appeared (200 ms steps): the timer starts when the main bundle runs, late in a load of about 0.7 s, so the settings were always in first. A load in this mode leaves game time still afterwards |
-| `test/skeleton.e2.test.ts` | Five tests: <ul><li>**deploy and start:** a save naming the brain's RFA and autoexec `agent/boot.js`; the game connects, the brain deploys and backs up the save; past an autosave and a reload, autoexec starts the Agent, it's welcomed, and the next RFA connection finds the deploy current;</li><li>**snapshots:** over 2 game minutes every tier in the right number, numbered 1, 2, 3… with none missed, at its cadence in game time. The most an interval was off its period, over two runs: fast 40 ms, medium 60–80 ms, slow 100–120 ms;</li><li>**reload:** a reload brings the Agent back through autoexec, in a new session, with a full snapshot;</li><li>**reconnect:** the brain stopped and started again on the same ports; the game's RFA client and the Agent reconnected 3 s of game time after, the Agent's session and numbering carrying on;</li><li>**8 GB fresh start:** a new game, the tutorial exited, the Remote API and autoexec set through the Options UI and the first `run agent/boot.js` typed, as the owner does. Over 2 game minutes, home stays 8 GB, every tier arrives, each fast snapshot sees the Agent and at most one worker, and the game's `mem` gives the Agent 2.7 GB and the workers 2.0–4.3 GB: 7.0 GB at the peak (Q1, #34).</li></ul> |
+| `test/skeleton.e2.test.ts` | Five tests: <ul><li>**deploy and start:** a save naming the brain's RFA and autoexec `agent/boot.js`; the game connects, the brain deploys and backs up the save; past an autosave and a reload, autoexec starts the Agent, it's welcomed (running the deployed code, not told to restart), and the next RFA connection finds the deploy current;</li><li>**snapshots:** over 2 game minutes every tier in the right number (static exactly once), numbered 1, 2, 3… with none missed, at its cadence in game time; no failed deploy, refused connection, version drift or failed backup rotation. The most an interval was off its period, over five runs: fast 0–40 ms, medium 60–80 ms, slow 80–120 ms;</li><li>**reload:** a reload brings the Agent back through autoexec, in a new session, with a full snapshot;</li><li>**reconnect:** the brain killed (no clean shutdown) and started again on the same ports; the game's RFA client and the Agent reconnected about 3 s of game time after; welcomed again, the Agent sent a full snapshot, its session and every tier's numbering carrying on. (The first rows after a brain restart count stored snapshots as missed: #119.)</li><li>**8 GB fresh start:** a new game, the tutorial exited, the Remote API and autoexec set through the Options UI and the first `run agent/boot.js` typed, as the owner does. Over 2 game minutes, home stays 8 GB, every tier arrives in the right number with none ever skipped for RAM, and each fast snapshot sees the Agent and its own worker, at most 4.7 GB in use. The game's `mem` gives the Agent 2.7 GB, the workers 2.0–4.3 GB and `boot.js` 2.7 GB, so the peak, computed, is 7.0 GB (Q1, #34); only the simulator's skeleton suite sees that peak as it happens (`homePeak`).</li></ul> |
 | `test/clock.e2.test.ts` | 10 minutes of game time, exactly, within the ×20 limit; the engine still running on it (`analyze` finishes after its 1 s of game time; a moving `Date.now()` proves only the clock); and a reload after it, which keeps game time, with the engine running again |
 
 ## Layout
@@ -126,5 +132,5 @@ Results on the reference rig:
 | `test/*.e2.test.ts` | E2 tests (browser) |
 | `test/helpers/environment.ts` | `useE2()`: the server and browser for a test file |
 | `test/helpers/saves.ts` | Simulator-made saves, with the game's default autosave |
-| `test/helpers/brain.ts` | A real brain for a test, and its store read |
+| `test/helpers/brain.ts` | A real brain process for a test (`startBrain`, `freeBrainPorts`), and a read-only view of its store (`readStore`) |
 | `test/*.test.ts` | Unit tests (no browser, in CI) |

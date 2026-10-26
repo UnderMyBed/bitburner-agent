@@ -1,5 +1,5 @@
-// Fixtures for E2 tests: a browser, the game opened from a save or brand new, the tutorial exited, and game time
-// moved on (packages/e2/README.md).
+// Fixtures for E2 tests: a browser, the game opened from a save or brand new, the tutorial exited, the terminal typed in
+// and read, and game time moved on (packages/e2/README.md).
 //
 // Time is split. Playwright's clock fakes the page's timers, `Date` and `performance`, so game time moves only when a
 // test advances it. Script imports and WebSockets still run in real time, so game time moves in small steps, at most

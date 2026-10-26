@@ -137,7 +137,7 @@ test("told to restart, the Agent hands over to boot.js, which starts the deploye
 test("the handover also works with another script on home: boot.js waits for the old Agent to free its RAM", async () => {
   const { simulation, channel, events, runUntil } = await gameWithAgent("deployment-a");
   await runUntil(() => eventsOfType(events, "agentConnected").length === 1, 5_000);
-  // 1.6 GB taken: the old Agent, boot.js and the new Agent (7.9 GB) can't all be in RAM at once.
+  // 1.6 GB taken: the old Agent, boot.js and the new Agent (8.1 GB) can't all be in RAM at once.
   await simulation.writeFile("home", "hold-ram.js", "export async function main(ns) { await ns.sleep(1e9); }");
   await simulation.run("home", "hold-ram.js");
   await writeDeployment(simulation, await bundles(), "deployment-b");

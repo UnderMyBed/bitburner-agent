@@ -9,6 +9,7 @@ export {
   type ParsedMessage,
   parseAgentMessage,
   parseBrainMessage,
+  SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
   type SnapshotMessage,
   type SnapshotTier,

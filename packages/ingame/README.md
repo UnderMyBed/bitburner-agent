@@ -61,7 +61,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB) | 4.3 GB (4.3) |
 | `snapshot-fast.js` | `ps` (0.2 GB), `getServerMoneyAvailable` (0.1 GB; on home it gives the player's money, where `getPlayer` costs 0.5), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.0 GB (2.0) |
 
-The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 7.0 GB, within a fresh save's 8 GB home; a test checks the budgets (7.3 GB) keep it so. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) checks home's RAM while the Agent actually runs, in a simulated 8 GB fresh start.
+The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 7.0 GB, within a fresh save's 8 GB home; a test checks the budgets (7.3 GB) keep it so. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) checks home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
 ## Deploy layout
 
@@ -84,7 +84,7 @@ It starts the deployed Agent if it isn't running, and does nothing else (archite
 2. given an Agent's pid (an Agent handing over passes its own), waits until that Agent has exited;
 3. if `agent/<deploymentId>/agent.js` isn't running on home, runs it as a **temporary** script.
 
-Why it waits: the game starts `boot.js` while the Agent that ran it is still running. Until that Agent exits, its 2.6 GB isn't free, and old Agent, `boot.js` and new Agent together need 7.9 GB, so with anything else on an 8 GB home the new one couldn't start. And if the deployed Agent is the one handing over, `boot.js` would see it still running and start nothing.
+Why it waits: the game starts `boot.js` while the Agent that ran it is still running. Until that Agent exits, its 2.7 GB isn't free, and old Agent, `boot.js` and new Agent together need 8.1 GB, more than an 8 GB home has, so the new one couldn't start. And if the deployed Agent is the one handing over, `boot.js` would see it still running and start nothing.
 
 It's safe to run any number of times. When nothing is deployed, `current.txt` doesn't hold a deployment id, or the Agent can't start, it says so in the terminal and in its log; for a failed start, the game's own reason (a missing file, too little RAM, a script it can't parse) is in the log too.
 

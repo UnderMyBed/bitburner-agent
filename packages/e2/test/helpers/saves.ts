@@ -47,9 +47,3 @@ export function moneyInSave(save: Uint8Array): number {
   const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { PlayerSave: string } };
   return (JSON.parse(saveObject.data.PlayerSave) as { data: { money: number } }).data.money;
 }
-
-/** The settings the save holds. */
-export function settingsInSave(save: Uint8Array): Record<string, unknown> {
-  const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { SettingsSave: string } };
-  return JSON.parse(saveObject.data.SettingsSave) as Record<string, unknown>;
-}

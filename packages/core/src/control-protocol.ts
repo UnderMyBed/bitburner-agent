@@ -10,6 +10,11 @@ export const CONTROL_PROTOCOL_VERSION = 1;
 /** Snapshot tiers, slowest first (architecture §5.2). The fast snapshot is the heartbeat. */
 export const SNAPSHOT_TIERS = ["static", "slow", "medium", "fast"] as const;
 export type SnapshotTier = (typeof SNAPSHOT_TIERS)[number];
+/**
+ * How often each tier is sent, in game time (docs/bridge/protocol.md): the fast tier every round, the others every so
+ * many rounds. The static tier is sent once per Agent start, and again after each welcome.
+ */
+export const SNAPSHOT_TIER_PERIOD_MS = { fast: 2_000, medium: 10_000, slow: 60_000 } as const;
 
 /** `ns.ui.getGameInfo()`'s fields, reported for the version check against the pinned game (the deployer, #91). */
 export interface GameInfo {
