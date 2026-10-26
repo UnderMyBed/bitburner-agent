@@ -492,7 +492,12 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps
-1. Install Steam, set the RFA port, set autoexec to `agent/boot.js` in game options, and install the brain's scheduled task (one setup script; the brain launches the game itself, so pause supervision while setting up). Once the brain has deployed, run `agent/boot.js` once in the game's terminal: autoexec fires at load, before the first deploy exists. One time (#95).
+1. One time, following [docs/setup.md](setup.md) (#95):
+   - install Steam;
+   - install the brain's scheduled task (one setup script; the brain launches the game itself, so pause supervision while setting up);
+   - in the game's options, set the Remote API to address `127.0.0.1` (the brain listens there only, not on `localhost`) and port 12525, with a reconnection delay above 0, and click Connect (changing the settings alone doesn't connect);
+   - set autoexec to `agent/boot.js`;
+   - once the brain has deployed, run `agent/boot.js` once in the game's terminal: autoexec fires at load, before the first deploy exists.
 2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
 4. Interruptions outside the game (Windows reboots, Steam client updates, power loss) are recovered automatically (§10.2). A human is needed only if recovery gives up and raises an alert.
