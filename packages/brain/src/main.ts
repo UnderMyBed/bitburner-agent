@@ -1,6 +1,6 @@
 // npm run brain -- --data-dir <dir>: the long-running brain process (architecture D1). In M2 it runs the control
-// channel and stores what the Agent reports, and serves the Remote File API, over which it deploys the in-game code and
-// backs up the game's save; the dashboard and supervisor join it in later tasks.
+// channel and stores what the Agent reports, serves the Remote File API, over which it deploys the in-game code and
+// backs up the game's save, and serves the dashboard; the supervisor joins it in a later task (#94).
 import path from "node:path";
 import process from "node:process";
 import {
@@ -12,10 +12,13 @@ import {
 } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
+import { startDashboardServer } from "./dashboard/server.ts";
+import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
 import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
+import { setSupervisionPaused } from "./supervision.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
@@ -37,6 +40,13 @@ try {
   await buildInGameBundles({ outputDirectory: buildDirectory });
   const build = readInGameBuild(buildDirectory);
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  // This run of the brain starts here, after the build: everything stored after this event is this run's, for the
+  // dashboard, and the Agent gets its 60 s to reconnect from now.
+  const startedAtMs = systemClock.now();
+  const startedEventId = store.recordEvent(
+    { environment: config.environment, release },
+    { atMs: startedAtMs, kind: BRAIN_STARTED_EVENT_KIND, detail: { release } },
+  );
   const channel = new ControlChannel({ token: config.token, clock: systemClock });
   recordChannelEvents(channel, store, { environment: config.environment, brainRelease: release });
   channel.subscribe((event) => {
@@ -86,6 +96,23 @@ try {
     },
     onRejectedOrigin: (origin) => channel.reportRejectedOrigin(`${origin} (Remote File API)`),
   });
+  const dashboardServer = await startDashboardServer({
+    port: config.dashboardPort,
+    status: () =>
+      buildDashboardStatus({
+        store,
+        environment: config.environment,
+        brainRelease: release,
+        brainStartedAtMs: startedAtMs,
+        brainStartedEventId: startedEventId,
+        nowMs: systemClock.now(),
+      }),
+    setSupervisionPaused: (paused) => {
+      setSupervisionPaused(store, paused);
+      log(`supervision ${paused ? "paused" : "resumed"} from the dashboard`);
+    },
+    onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
+  });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
   log(`deploys ${deployer.deploymentId}`);
   log(`control channel on 127.0.0.1:${controlServer.port}`);
@@ -94,6 +121,7 @@ try {
     `save backups in ${path.join(dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME, config.environment)}, ` +
       `every ${config.saveBackupIntervalMinutes} min, the newest ${config.saveBackupsKept} kept`,
   );
+  log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
 
   let stopping = false;
   const shutDown = async () => {
@@ -104,6 +132,7 @@ try {
     stopLoggingDeploys();
     stopRecordingBackups();
     stopLoggingBackups();
+    await dashboardServer.close();
     await remoteFileApiServer.close();
     await controlServer.close();
     store.close();

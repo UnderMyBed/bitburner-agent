@@ -12,6 +12,8 @@
   "devDependencies": {
     "@bitburner-agent/core": "*",
     "@bitburner-agent/sim": "*",
+    "@types/jsdom": "30.0.0",
+    "jsdom": "30.1.2",
     "ws": "8.22.0"
   }
 }

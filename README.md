@@ -84,7 +84,7 @@ Bitburner **v3.0.1** (VersionNumber 51), the current Steam release. The game sou
 
 ## Getting started
 
-There's nothing to connect to the game yet: the bridge and the in-game agent come in M2. What runs today is the simulator, and the legacy fork's baseline in it. You need Node 24 (`.node-version`).
+M2 is under way: the brain (`npm run brain -- --data-dir <dir>`, [packages/brain](packages/brain/README.md)) deploys the in-game Agent, stores what it reports, backs up the save, and serves a dashboard at http://127.0.0.1:12527/. Setting it up against Steam comes with #95. The simulator runs too, with the legacy fork's baseline in it. You need Node 24 (`.node-version`).
 
 ```sh
 git clone --recurse-submodules https://github.com/UnderMyBed/bitburner-agent.git

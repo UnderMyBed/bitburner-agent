@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bitburner-agent</title>
+<style>
+  :root { --bad: #b3261e; --ok: #1e6b3a; --muted: #666; --line: #ddd; --background: #fff; --text: #111; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bad: #ff8a80; --ok: #7bd88f; --muted: #aaa; --line: #333; --background: #121212; --text: #eee; }
+  }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; background: var(--background); color: var(--text); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; }
+  .muted { color: var(--muted); }
+  .bad { color: var(--bad); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  table { border-collapse: collapse; }
+  td, th { text-align: left; padding: 2px 12px 2px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  #problem { padding: 10px; border: 2px solid var(--bad); color: var(--bad); font-weight: 600; }
+  code { font-size: 12px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>bitburner-agent</h1>
+<div class="muted" id="brain"></div>
+<div id="problem" hidden></div>
+<main hidden>
+  <section id="alerts"><h2>Alerts</h2><div></div></section>
+  <section id="agent"><h2>Agent</h2><table></table></section>
+  <section id="tiers"><h2>Last snapshot per tier</h2><table></table></section>
+  <section id="values"><h2>Game</h2><table></table></section>
+  <section id="gaps"><h2>Gaps in the last 24 h</h2><div></div></section>
+  <section id="supervision">
+    <h2>Supervision</h2><div></div><button type="button">Pause supervision</button>
+    <div class="bad" id="switch-problem" hidden></div>
+  </section>
+  <section id="events"><h2>Recent events</h2><table></table></section>
+</main>
+<script>
+"use strict";
+// The dashboard (#93): polls the brain's status every 2 s and shows it. Everything from the brain goes in as text,
+// never as HTML: rejected origins in the events come from other pages.
+const POLL_MS = 2000;
+/** What the switch sends next: resume unless supervision is running. */
+let pauseNext = true;
+
+const element = (tag, text, className) => {
+  const created = document.createElement(tag);
+  if (text !== undefined) created.textContent = text;
+  if (className) created.className = className;
+  return created;
+};
+const time = (ms) => (ms === null ? "never" : new Date(ms).toLocaleString());
+const seconds = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+const orNone = (value, format = String) => (value === null || value === undefined ? "—" : format(value));
+const megabytes = (bytes) => `${(bytes / 1024 / 1024).toFixed(0)} MB`;
+
+function fillTable(table, rows) {
+  table.replaceChildren(
+    ...rows.map(([label, value, className]) => {
+      const row = element("tr");
+      row.append(element("th", label), element("td", value, className));
+      return row;
+    }),
+  );
+}
+
+/** Shows `message` in place of the data, which isn't current; null shows the data. */
+function showProblem(message) {
+  const problem = document.querySelector("#problem");
+  problem.textContent = message ?? "";
+  problem.hidden = message === null;
+  document.querySelector("main").hidden = message !== null;
+}
+
+function render(status) {
+  document.querySelector("#brain").textContent =
+    `${status.environment} · brain ${status.brainRelease}, up since ${time(status.brainStartedAtMs)}`;
+
+  const alerts = document.querySelector("#alerts div");
+  alerts.replaceChildren(
+    ...(status.alerts.length === 0
+      ? [element("div", "None.", "ok")]
+      : status.alerts.map((alert) => element("div", `${alert.name} since ${time(alert.sinceMs)}: ${alert.detail}`, "bad"))),
+  );
+
+  const agent = status.agent;
+  fillTable(document.querySelector("#agent table"), [
+    ["Connected", agent.connected ? "yes" : "no", agent.connected ? "ok" : "bad"],
+    [agent.connected ? "Since" : "Last seen", time(agent.sinceMs)],
+    ["Deployment", orNone(agent.deploymentId)],
+    ["Session", orNone(agent.agentSessionId)],
+    ["Game", agent.game ? `${agent.game.version} (${agent.game.commit}, ${agent.game.platform})` : "—"],
+    ["Version", agent.game === null ? "—" : agent.versionDrift === null ? "the pinned one" : `not pinned: ${agent.versionDrift}`,
+      agent.versionDrift === null ? "" : "bad"],
+  ]);
+
+  fillTable(
+    document.querySelector("#tiers table"),
+    Object.entries(status.tiers).map(([tier, last]) => [
+      tier,
+      last === null ? "none yet" : `${seconds(last.ageMs)} ago (${time(last.receivedAtMs)})`,
+    ]),
+  );
+
+  const values = status.values;
+  fillTable(document.querySelector("#values table"), [
+    ["Money", orNone(values.money, (money) => `$${Math.round(money).toLocaleString()}`)],
+    ["Hacking level", orNone(values.hackingLevel)],
+    ["Home RAM", values.homeRamUsed === null ? "—" : `${values.homeRamUsed} of ${values.homeMaxRam} GB`],
+    ["Scripts on home", orNone(values.homeScripts)],
+    ["Page heap", orNone(values.pageHeapUsedBytes, megabytes)],
+    ["Degraded tiers", values.degradedTiers.length === 0 ? "none" : values.degradedTiers.join(", "),
+      values.degradedTiers.length === 0 ? "" : "bad"],
+  ]);
+
+  const gaps = status.gaps;
+  document.querySelector("#gaps div").replaceChildren(
+    element("div", `${gaps.count} fast snapshots, longest interval ${seconds(gaps.longestIntervalMs)}, threshold ${seconds(gaps.thresholdMs)}.`),
+    ...(gaps.gapCount === 0
+      ? [element("div", "No gaps.", "ok")]
+      : [
+          element("div", `${gaps.gapCount} gaps, ${seconds(gaps.totalGapMs)} in all${gaps.gapCount > gaps.newestGaps.length ? `; the newest ${gaps.newestGaps.length}:` : ":"}`, "bad"),
+          ...gaps.newestGaps.map((gap) => element("div", `${time(gap.fromMs)} to ${time(gap.toMs)} (${seconds(gap.lengthMs)})`)),
+        ]),
+  );
+
+  const supervision = status.supervision;
+  pauseNext = supervision.state === "running";
+  const stateText = { running: "running", paused: "paused: nothing is relaunched", gaveUp: "gave up after too many relaunches" };
+  document.querySelector("#supervision div").replaceChildren(
+    element("div", `Supervision: ${stateText[supervision.state]}`, supervision.state === "running" ? "ok" : "bad"),
+    ...supervision.relaunches.map((relaunch) => element("div", `Relaunched ${time(relaunch.atMs)}: ${JSON.stringify(relaunch.detail)}`)),
+  );
+  document.querySelector("#supervision button").textContent = pauseNext ? "Pause supervision" : "Resume supervision";
+
+  const events = document.querySelector("#events table");
+  events.replaceChildren(
+    ...status.events.map((event) => {
+      const row = element("tr");
+      const detail = element("td");
+      detail.append(element("code", JSON.stringify(event.detail)));
+      row.append(element("td", time(event.atMs)), element("td", event.kind), detail);
+      return row;
+    }),
+  );
+}
+
+async function refresh() {
+  let response;
+  try {
+    response = await fetch("/api/status", { cache: "no-store" });
+  } catch {
+    return showProblem("Brain unreachable: the dashboard can't reach the brain, so nothing here is current.");
+  }
+  if (!response.ok) {
+    return showProblem(`The brain couldn't answer (HTTP ${response.status}): see its log. Nothing here is current.`);
+  }
+  try {
+    render(await response.json());
+    showProblem(null);
+  } catch (error) {
+    showProblem(`The dashboard couldn't show the brain's status: ${error}`);
+  }
+}
+
+document.querySelector("#supervision button").addEventListener("click", async () => {
+  const switchProblem = document.querySelector("#switch-problem");
+  switchProblem.hidden = true;
+  try {
+    const response = await fetch("/api/supervision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused: pauseNext }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch (error) {
+    switchProblem.textContent = `The switch didn't change: ${error.message}`;
+    switchProblem.hidden = false;
+  }
+  await refresh();
+});
+
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>

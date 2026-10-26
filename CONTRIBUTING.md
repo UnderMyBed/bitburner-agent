@@ -98,7 +98,7 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 | `npm run typecheck` | Two steps. First TypeScript, strict (unused locals/parameters are errors): every `tsconfig.json` in the repository, each in its own environment ([TypeScript configs](#typescript-configs)), failing if any `.ts` file isn't covered by one. Then the simulator's bundled sources, against the game's types with the game's own TypeScript and options; this needs `npm run setup:engine` (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)). No emit: Node runs `.ts` directly |
 | `npm run lint` / `npm run lint:fix` | Biome lint and format check, warnings are errors / apply fixes |
 | `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/` and `tools/`. Builds the engine bundle first if it's stale, so it needs `npm run setup:engine` once |
-| `npm run brain -- --data-dir <dir>` | Run the brain process: the control channel and the telemetry store ([`packages/brain`](packages/brain/README.md)) |
+| `npm run brain -- --data-dir <dir>` | Run the brain process: the control channel, the deployer, the save backups, the telemetry store, and the dashboard on `127.0.0.1:12527` ([`packages/brain`](packages/brain/README.md)) |
 | `npm run gaps -- --data-dir <dir> --since <ISO time>` | List gaps in the stored fast snapshots; exits 0 only when there are none ([`packages/brain`](packages/brain/README.md#the-gap-report)) |
 | `npm run build -w @bitburner-agent/ingame` | Bundle the in-game scripts into `packages/ingame/dist/`, with a manifest ([`packages/ingame`](packages/ingame/README.md)). Tests build their own copy |
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
@@ -119,7 +119,7 @@ Code runs in three environments, and each file is typechecked in its own (archit
 | Everything else: other packages, the tests, build scripts, `tools/`, the root's own files | the package's `tsconfig.json` (for `ingame`, its build script and tests); `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node |
 
 - Every config extends `tsconfig.base.json` (the shared strict options, environment-neutral) or `tsconfig.node.json` (the same, plus Node types).
-- **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.
+- **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom), `packages/brain` (its dashboard page test) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.
 - **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. `ingame`'s tests test the built bundles in the simulator; they don't import in-game sources (a Node config doing so would have to map `@nsdefs` too).
 - `npm run typecheck` (`tools/typecheck`) finds every `tsconfig.json` and fails on any TypeScript file none of them covers. Its tests check each config's environment with probe files, so a change that lets Node or the DOM back in fails CI.
 

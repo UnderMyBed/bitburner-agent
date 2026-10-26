@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 export const ENVIRONMENTS = ["E0", "E1", "E2"] as const;
 export type Environment = (typeof ENVIRONMENTS)[number];
 
-/** How long a write waits for a reader's lock before failing, so the dashboard reading never fails the brain's writes. */
+/** How long a write waits for a reader's lock before failing, so a reader (the gap report's command) never fails a write. */
 const BUSY_TIMEOUT_MS = 5_000;
 
 /** Who produced a record: every row carries it, so releases and environments can be compared (§7, §11). */
@@ -57,11 +57,40 @@ const SCHEMA = `
     kind TEXT NOT NULL,
     detail TEXT NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS events_by_kind ON events (environment, kind, id);
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
 `;
+
+const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
+  missed_before, data`;
+const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
+
+function snapshotOfRow(row: Record<string, string | number>): RecordContext & StoredSnapshot {
+  return {
+    environment: row.environment as Environment,
+    release: row.release as string,
+    agentSessionId: row.agent_session_id as string,
+    tier: row.tier as string,
+    sequenceNumber: row.sequence_number as number,
+    gameTimeMs: row.game_time_ms as number,
+    receivedAtMs: row.received_at_ms as number,
+    missedBefore: row.missed_before as number,
+    data: JSON.parse(row.data as string) as unknown,
+  };
+}
+
+function eventOfRow(row: Record<string, string | number>): RecordContext & StoredEvent {
+  return {
+    environment: row.environment as Environment,
+    release: row.release as string,
+    atMs: row.at_ms as number,
+    kind: row.kind as string,
+    detail: JSON.parse(row.detail as string) as unknown,
+  };
+}
 
 export class TelemetryStore {
   readonly #database: DatabaseSync;
@@ -70,7 +99,10 @@ export class TelemetryStore {
     this.#database = database;
   }
 
-  /** Opens (creating if needed) the store at `filePath`, in WAL mode so a reader (the dashboard) never blocks a write. */
+  /**
+   * Opens (creating if needed) the store at `filePath`, in WAL mode so a reader (the gap report's command) never blocks a
+   * write.
+   */
   static open(filePath: string): TelemetryStore {
     const database = new DatabaseSync(filePath, { timeout: BUSY_TIMEOUT_MS });
     database.exec("PRAGMA journal_mode = WAL;");
@@ -107,31 +139,37 @@ export class TelemetryStore {
       );
   }
 
-  recordEvent(context: RecordContext, event: StoredEvent): void {
-    this.#database
+  /** Returns the event's id: events are numbered in the order stored. */
+  recordEvent(context: RecordContext, event: StoredEvent): number {
+    const { lastInsertRowid } = this.#database
       .prepare("INSERT INTO events (environment, release, at_ms, kind, detail) VALUES (?, ?, ?, ?, ?)")
       .run(context.environment, context.release, event.atMs, event.kind, JSON.stringify(event.detail) ?? "null");
+    return Number(lastInsertRowid);
   }
 
   /** Every snapshot from an environment, in the order stored. */
   snapshots({ environment }: { environment: Environment }): (RecordContext & StoredSnapshot)[] {
     const rows = this.#database
-      .prepare(
-        `SELECT environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
-          missed_before, data FROM snapshots WHERE environment = ? ORDER BY id`,
-      )
+      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? ORDER BY id`)
       .all(environment) as Record<string, string | number>[];
-    return rows.map((row) => ({
-      environment: row.environment as Environment,
-      release: row.release as string,
-      agentSessionId: row.agent_session_id as string,
-      tier: row.tier as string,
-      sequenceNumber: row.sequence_number as number,
-      gameTimeMs: row.game_time_ms as number,
-      receivedAtMs: row.received_at_ms as number,
-      missedBefore: row.missed_before as number,
-      data: JSON.parse(row.data as string) as unknown,
-    }));
+    return rows.map(snapshotOfRow);
+  }
+
+  /**
+   * The newest snapshot of a tier, in the order stored (the dashboard), or null if there's none. By order, not time, so
+   * a clock set back can't make an older one look newer.
+   */
+  latestSnapshot({
+    environment,
+    tier,
+  }: {
+    environment: Environment;
+    tier: string;
+  }): (RecordContext & StoredSnapshot) | null {
+    const row = this.#database
+      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT 1`)
+      .get(environment, tier) as Record<string, string | number> | undefined;
+    return row ? snapshotOfRow(row) : null;
   }
 
   /** When each fast snapshot arrived, in a window: the gap report's input. */
@@ -156,15 +194,48 @@ export class TelemetryStore {
   /** Every event from an environment, in the order stored. */
   events({ environment }: { environment: Environment }): (RecordContext & StoredEvent)[] {
     const rows = this.#database
-      .prepare("SELECT environment, release, at_ms, kind, detail FROM events WHERE environment = ? ORDER BY id")
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? ORDER BY id`)
       .all(environment) as Record<string, string | number>[];
-    return rows.map((row) => ({
-      environment: row.environment as Environment,
-      release: row.release as string,
-      atMs: row.at_ms as number,
-      kind: row.kind as string,
-      detail: JSON.parse(row.detail as string) as unknown,
-    }));
+    return rows.map(eventOfRow);
+  }
+
+  /** The newest `limit` events from an environment, of `kinds` if given, newest first (the dashboard). */
+  recentEvents({
+    environment,
+    limit,
+    kinds,
+  }: {
+    environment: Environment;
+    limit: number;
+    kinds?: string[];
+  }): (RecordContext & StoredEvent)[] {
+    const ofKinds = kinds ? `AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
+    const rows = this.#database
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? ${ofKinds} ORDER BY id DESC LIMIT ?`)
+      .all(environment, ...(kinds ?? []), limit) as Record<string, string | number>[];
+    return rows.map(eventOfRow);
+  }
+
+  /**
+   * The newest event of one of `kinds` stored after the event `afterEventId`, or null (the dashboard's alerts: this run
+   * of the brain is everything after its `brainStarted` event, whatever the clock did).
+   */
+  latestEvent({
+    environment,
+    kinds,
+    afterEventId,
+  }: {
+    environment: Environment;
+    kinds: string[];
+    afterEventId: number;
+  }): (RecordContext & StoredEvent) | null {
+    const row = this.#database
+      .prepare(
+        `SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+          AND id > ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(environment, ...kinds, afterEventId) as Record<string, string | number> | undefined;
+    return row ? eventOfRow(row) : null;
   }
 
   getSetting(key: string): string | null {
@@ -178,6 +249,10 @@ export class TelemetryStore {
     this.#database
       .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(key, value);
+  }
+
+  deleteSetting(key: string): void {
+    this.#database.prepare("DELETE FROM settings WHERE key = ?").run(key);
   }
 
   close(): void {

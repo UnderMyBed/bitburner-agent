@@ -230,7 +230,9 @@ test("reload: the save loads into a new simulation, autoexec brings the Agent ba
     "agentConnected",
     "agentDisconnected",
     "agentConnected",
+    // The reloaded game's RFA connection: a backup, and its deployment found already current.
     "saveBackup",
+    "deploymentCurrent",
   ]);
   expect(brain.saveBackupEvents.every((event) => "file" in event)).toBe(true);
   await skeleton.expectHomeWithinTheAgentPlusOneWorker(reloaded);

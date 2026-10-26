@@ -126,13 +126,14 @@ describe("a deploy", () => {
     expect(events).toEqual([{ type: "deployed", atMs: clock.now(), deploymentId: id, replacedDeploymentId: null }]);
   });
 
-  test("nothing to do when current.txt already names it: the channel is told, and nothing is pushed", async () => {
+  test("nothing to do when current.txt already names it: the channel is told, nothing is pushed, and it's recorded", async () => {
     const game = newGame();
     game.files.set(CURRENT_DEPLOYMENT_FILE, `${idOf()}\n`);
     await createDeployer().accept(game);
     expect(game.requests).toEqual(["getDefinitionFile", `getFile ${CURRENT_DEPLOYMENT_FILE}`]);
     expect(channel.states).toEqual([{ deployedId: idOf(), hold: false, deployFailed: false }]);
-    expect(events).toEqual([]);
+    // So a deploy that failed earlier (say, the reply to its last push lost) shows as resolved.
+    expect(events).toEqual([{ type: "deploymentCurrent", atMs: clock.now(), deploymentId: idOf() }]);
   });
 
   test("boot.js isn't pushed when it's already the same", async () => {
