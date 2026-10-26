@@ -3,7 +3,8 @@
 //   node tools/upstream-watch/cli.ts report --game <clone> --ref <ref> [--watcher dev|stable] [--pinned <sha>]
 //       [--out report.json]
 //     Compares the pinned game with <ref> in a clone of the game's repository and prints the report as Markdown, in
-//     the dev forward check's form (the default) or the stable watcher's, which leads with the bump steps.
+//     the dev forward check's form (the default) or the stable watcher's, which leads with the bump steps. It includes
+//     the contract typecheck of packages/ingame against <ref>'s definitions, so it needs `npm ci` (TypeScript).
 //     --out also writes it as JSON for `publish`: { changes, moved, pinned, upstream, markdown }.
 //
 //   node tools/upstream-watch/cli.ts publish --report report.json --title <title> [--prefix <prefix>]
@@ -19,6 +20,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { contractTypecheck, INGAME_CONFIG } from "./src/contract-typecheck.ts";
 import { buildReport, pinnedCommit } from "./src/git.ts";
 import { type ExistingIssue, fillTitle, hasNews, planIssue } from "./src/issue.ts";
 import { type ReportFile, reportFile } from "./src/report.ts";
@@ -46,7 +48,9 @@ function report(values: Values): void {
   const watcher = values.watcher ?? "dev";
   if (watcher !== "dev" && watcher !== "stable") throw new RangeError("--watcher: dev or stable");
   const pinned = typeof values.pinned === "string" ? values.pinned : pinnedCommit(REPO_ROOT);
-  const result = buildReport(values.game, pinned, values.ref, readWatchlist(WATCHLIST));
+  const result = buildReport(values.game, pinned, values.ref, readWatchlist(WATCHLIST), (definitions) =>
+    contractTypecheck({ repositoryRoot: REPO_ROOT, configPath: INGAME_CONFIG, definitions }),
+  );
   const file = reportFile(result, watcher);
   console.log(file.markdown);
   if (typeof values.out === "string") writeFileSync(values.out, `${JSON.stringify(file, null, 2)}\n`);

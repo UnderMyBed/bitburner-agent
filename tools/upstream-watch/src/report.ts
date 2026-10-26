@@ -1,4 +1,5 @@
 // The watchers' report: what changed between the pinned game and an upstream ref, as Markdown for an issue body.
+import type { ContractTypecheck } from "./contract-typecheck.ts";
 import type { DeclarationDiff } from "./declarations.ts";
 import type { RamCostChange } from "./ram-costs.ts";
 
@@ -16,6 +17,8 @@ export interface WatchReport {
   ram: RamCostChange[];
   /** Commits touching the watchlist, newest first. */
   commits: { sha: string; title: string }[];
+  /** The in-game code typechecked against the ref's definitions (#42). */
+  typecheck: ContractTypecheck;
 }
 
 /**
@@ -101,6 +104,53 @@ function ramSection(report: WatchReport): string[] {
   ];
 }
 
+/** The compiler's output when the typecheck couldn't run is cut to this, on a line break. */
+const TYPECHECK_REASON_LIMIT = 3_000;
+
+/** `text` in a fenced block, fenced with more backticks than any run inside it. */
+function fencedBlock(text: string): string[] {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map(([run]) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [`${fence}text`, text, fence];
+}
+
+/** One line for the summary when the typecheck found errors or couldn't run; nothing when it's clean. */
+function typecheckSummary(report: WatchReport): string[] {
+  const { typecheck } = report;
+  if (!typecheck.ran) return ["**Contract typecheck:** couldn't run (below).", ""];
+  if (typecheck.errors.length === 0) return [];
+  return [`**Contract typecheck:** ${count(typecheck.errors.length, "type error")} in the in-game code (below).`, ""];
+}
+
+function typecheckSection(report: WatchReport): string[] {
+  const { typecheck } = report;
+  const intro = `\`packages/ingame\` typechecked against ${codeSpan(report.upstream.ref)}'s \`${DEFINITIONS}\` instead of the pinned one ([#42](https://github.com/UnderMyBed/bitburner-agent/issues/42)).`;
+  if (!typecheck.ran) {
+    const lineBreak = typecheck.reason.lastIndexOf("\n", TYPECHECK_REASON_LIMIT);
+    const reason =
+      typecheck.reason.length <= TYPECHECK_REASON_LIMIT
+        ? typecheck.reason
+        : `${typecheck.reason.slice(0, lineBreak > 0 ? lineBreak : TYPECHECK_REASON_LIMIT)}\n…`;
+    return [
+      intro,
+      "",
+      "**It couldn't run**, so this report says nothing about whether the in-game code still compiles. The compiler said:",
+      "",
+      ...fencedBlock(reason),
+    ];
+  }
+  if (typecheck.errors.length === 0) return [intro, "", "**None:** no type errors."];
+  return [
+    intro,
+    "",
+    `**${count(typecheck.errors.length, "type error")}:**`,
+    "",
+    "| File | Line | Message |",
+    "|---|---|---|",
+    ...capped(typecheck.errors, (e) => `| ${cell(e.file)} | ${e.line} | ${cell(e.message)} |`, "type error"),
+  ];
+}
+
 /** What to do to move the pinned game to the upstream commit: the stable watcher's issue tracks these. */
 function bumpSteps(report: WatchReport): string[] {
   const { sha } = report.upstream;
@@ -170,6 +220,7 @@ export function renderReport(report: WatchReport, watcher: Watcher = "dev"): str
     "",
     summary,
     "",
+    ...typecheckSummary(report),
     ...(watcher === "stable" && report.upstream.ahead ? bumpSteps(report) : []),
     "## API surface",
     "",
@@ -196,7 +247,7 @@ export function renderReport(report: WatchReport, watcher: Watcher = "dev"): str
     "",
     "## Contract typecheck",
     "",
-    "Not applicable yet: there's no in-game package to typecheck against the upstream definitions (#42).",
+    ...typecheckSection(report),
     "",
   ];
   const fixed = head.join("\n").length + tail.join("\n").length + 2;

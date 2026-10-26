@@ -587,7 +587,7 @@ The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit
 
    An Agent already running keeps reporting. In M3, hold also stops intents; reflexes keep running. The RFA can't tell the game's version, so a game with unchanged definitions but another version can be deployed to before its first `hello` ([the protocol](bridge/protocol.md#deploying)).
 3. **Save backups:** the brain takes rotating save backups over the RFA (§6), so a bad patch or bug can always be rolled back.
-4. **Look further ahead:** a cheap, advisory check against upstream `dev`, run on demand and at every release (ADR 0009), covers API diff, contract typecheck (once there's in-game code, #42), RAM cost diff and a commit log for a [watchlist](../tools/upstream-watch/watchlist.txt) of game source. It reports into one tracking issue and never blocks merges (ADR 0005, [`tools/upstream-watch`](../tools/upstream-watch/README.md)).
+4. **Look further ahead:** a cheap, advisory check against upstream `dev`, run on demand and at every release (ADR 0009), covers API diff, contract typecheck (the in-game code against `dev`'s definitions, #42), RAM cost diff and a commit log for a [watchlist](../tools/upstream-watch/watchlist.txt) of game source. It reports into one tracking issue and never blocks merges (ADR 0005, [`tools/upstream-watch`](../tools/upstream-watch/README.md)).
 
 Steam itself is not pinned: game updates are taken as Steam ships them.
 

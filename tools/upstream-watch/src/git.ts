@@ -1,6 +1,7 @@
 // The git reads the report needs, from a clone of the game's repository (blobless is enough).
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import type { ContractTypecheck } from "./contract-typecheck.ts";
 import { diffDeclarations, extractDeclarations } from "./declarations.ts";
 import { diffRamCosts, extractRamCosts } from "./ram-costs.ts";
 import { DEFINITIONS, RAM_COSTS, type WatchReport } from "./report.ts";
@@ -37,11 +38,21 @@ function isAncestor(game: string, ancestor: string, descendant: string): boolean
   }
 }
 
-/** Everything the report says about `ref` against the pinned commit, read from the game clone at `game`. */
-export function buildReport(game: string, pinned: string, ref: string, watchlist: string[]): WatchReport {
+/**
+ * Everything the report says about `ref` against the pinned commit, read from the game clone at `game`.
+ * `typecheck` runs the contract typecheck against the ref's definitions (contract-typecheck.ts).
+ */
+export function buildReport(
+  game: string,
+  pinned: string,
+  ref: string,
+  watchlist: string[],
+  typecheck: (upstreamDefinitions: string) => ContractTypecheck,
+): WatchReport {
   const sha = git(game, "rev-parse", `${ref}^{commit}`).trim();
   const show = (rev: string, file: string) => git(game, "show", `${rev}:${file}`);
   const log = git(game, "log", "--format=%H%x09%s", `${pinned}..${sha}`, "--", ...watchlist).trim();
+  const upstreamDefinitions = show(sha, DEFINITIONS);
   return {
     pinned: { sha: pinned, version: versionAt(game, pinned) },
     upstream: {
@@ -51,7 +62,7 @@ export function buildReport(game: string, pinned: string, ref: string, watchlist
       date: git(game, "log", "-1", "--format=%cs", sha).trim(),
       ahead: sha !== pinned && isAncestor(game, pinned, sha),
     },
-    api: diffDeclarations(extractDeclarations(show(pinned, DEFINITIONS)), extractDeclarations(show(sha, DEFINITIONS))),
+    api: diffDeclarations(extractDeclarations(show(pinned, DEFINITIONS)), extractDeclarations(upstreamDefinitions)),
     rawApiDiff: git(game, "diff", pinned, sha, "--", DEFINITIONS),
     ram: diffRamCosts(extractRamCosts(show(pinned, RAM_COSTS)), extractRamCosts(show(sha, RAM_COSTS))),
     commits:
@@ -61,5 +72,6 @@ export function buildReport(game: string, pinned: string, ref: string, watchlist
             const [commit, ...title] = line.split("\t");
             return { sha: commit as string, title: title.join("\t") };
           }),
+    typecheck: typecheck(upstreamDefinitions),
   };
 }

@@ -14,6 +14,7 @@ const empty: WatchReport = {
   rawApiDiff: "",
   ram: [],
   commits: [],
+  typecheck: { ran: true, errors: [] },
 };
 
 const full: WatchReport = {
@@ -107,6 +108,62 @@ describe("renderReport", () => {
     expect(text.length).toBeLessThanOrEqual(60_000);
     expect(text).toContain("The raw diff is cut short");
     expect(text).toContain("| `hack` | `0.1` | `0.15` |");
+  });
+});
+
+describe("renderReport's contract typecheck", () => {
+  const section = (text: string) => text.slice(text.indexOf("## Contract typecheck"));
+
+  test("no errors: says none, and adds nothing to the summary", () => {
+    const text = renderReport(empty);
+    expect(section(text)).toContain(
+      "`packages/ingame` typechecked against `dev`'s `src/ScriptEditor/NetscriptDefinitions.d.ts` instead of the pinned one",
+    );
+    expect(section(text)).toContain("**None:** no type errors.");
+    expect(text).not.toContain("**Contract typecheck:**");
+  });
+
+  test("errors: listed with file, line and message, and counted in the summary", () => {
+    const text = renderReport({
+      ...empty,
+      typecheck: {
+        ran: true,
+        errors: [
+          { file: "packages/ingame/src/agent.ts", line: 4, message: "TS2345: 'number' | 'bigint' isn't 'string'." },
+          { file: "packages/ingame/src/boot.ts", line: 12, message: "TS2339: Property 'foo' does not exist." },
+        ],
+      },
+    });
+    expect(text).toContain("**Contract typecheck:** 2 type errors in the in-game code (below).");
+    expect(section(text)).toContain("**2 type errors:**");
+    expect(section(text)).toContain(
+      "| `packages/ingame/src/agent.ts` | 4 | `TS2345: 'number' \\| 'bigint' isn't 'string'.` |",
+    );
+    expect(section(text)).toContain(
+      "| `packages/ingame/src/boot.ts` | 12 | `TS2339: Property 'foo' does not exist.` |",
+    );
+  });
+
+  test("couldn't run: says so, with the compiler's output, never 'none'", () => {
+    const text = renderReport({
+      ...empty,
+      typecheck: { ran: false, reason: "error TS5083: Cannot read file ```x```." },
+    });
+    expect(text).toContain("**Contract typecheck:** couldn't run (below).");
+    expect(section(text)).toContain("**It couldn't run**, so this report says nothing about whether");
+    // Fenced with more backticks than the output holds, so the output can't close the block.
+    expect(section(text)).toContain("````text\nerror TS5083: Cannot read file ```x```.\n````");
+    expect(section(text)).not.toContain("**None:**");
+  });
+
+  test("a long compiler output is cut, on a line break when there is one", () => {
+    const lines = Array.from({ length: 400 }, (_, i) => `line ${i} of the compiler's output`).join("\n");
+    const withLines = section(renderReport({ ...empty, typecheck: { ran: false, reason: lines } }));
+    expect(withLines).toContain("line 0 of the compiler's output");
+    expect(withLines).not.toContain("line 399");
+    expect(withLines).toMatch(/output\n…\n```/);
+    const oneLine = section(renderReport({ ...empty, typecheck: { ran: false, reason: "x".repeat(10_000) } }));
+    expect(oneLine).toContain(`\`\`\`text\n${"x".repeat(3_000)}\n…\n\`\`\``);
   });
 });
 

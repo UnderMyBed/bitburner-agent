@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
+import type { ContractTypecheck } from "../src/contract-typecheck.ts";
 import { buildReport, pinnedCommit } from "../src/git.ts";
 import { DEFINITIONS, RAM_COSTS } from "../src/report.ts";
 
@@ -68,12 +69,22 @@ describe("buildReport", () => {
       },
       "API: ports",
     );
-    const report = buildReport(temp, pinned, "dev", ["src/Watched/", "src/Constants.ts"]);
+    const typecheckedDefinitions: string[] = [];
+    const typecheck = (definitions: string): ContractTypecheck => {
+      typecheckedDefinitions.push(definitions);
+      return { ran: true, errors: [] };
+    };
+    const report = buildReport(temp, pinned, "dev", ["src/Watched/", "src/Constants.ts"], typecheck);
     expect(report.pinned).toEqual({ sha: pinned, version: "3.0.1" });
     expect(report.upstream).toMatchObject({ ref: "dev", sha: git("rev-parse", "dev"), version: "3.0.2", ahead: true });
+    // The contract typecheck is given the ref's definitions, and its result is the report's.
+    expect(typecheckedDefinitions).toEqual([
+      "export interface NS {\n  hack(host: string): Promise<number>;\n  isFullPort(port: number): boolean;\n}\n",
+    ]);
+    expect(report.typecheck).toEqual({ ran: true, errors: [] });
     // Compared the other way round, the ref is behind: it differs, but isn't ahead.
-    expect(buildReport(temp, git("rev-parse", "dev"), pinned, []).upstream.ahead).toBe(false);
-    expect(buildReport(temp, pinned, pinned, []).upstream.ahead).toBe(false);
+    expect(buildReport(temp, git("rev-parse", "dev"), pinned, [], typecheck).upstream.ahead).toBe(false);
+    expect(buildReport(temp, pinned, pinned, [], typecheck).upstream.ahead).toBe(false);
     expect(report.upstream.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(report.api).toEqual({
       added: [],
