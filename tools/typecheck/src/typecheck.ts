@@ -87,14 +87,19 @@ export function findUncoveredFiles(sourceFiles: string[], coveredFiles: Readonly
   return sourceFiles.filter((file) => !isExemptFromTypecheck(file) && !coveredFiles.has(file));
 }
 
+/** What to say about a compiler run that printed nothing: how it ended. */
+export function describeSilentCompilerRun(run: CompilerRun): string {
+  const ending = run.signal === null ? `exit code ${run.exitCode}` : `signal ${run.signal}`;
+  return `tsc ended with ${ending} and printed nothing`;
+}
+
 export function typecheckConfig(repositoryRoot: string, configPath: string): ConfigResult {
   const run = runTypescriptCompiler(repositoryRoot, ["-p", configPath]);
   const output = run.standardOutput + run.standardError;
-  const ending = run.signal === null ? `exit code ${run.exitCode}` : `signal ${run.signal}`;
   return {
     configPath,
     passed: run.exitCode === 0,
-    report: output.trim() === "" ? `tsc ended with ${ending} and printed nothing` : output,
+    report: output.trim() === "" ? describeSilentCompilerRun(run) : output,
   };
 }
 

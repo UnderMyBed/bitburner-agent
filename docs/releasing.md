@@ -36,7 +36,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 
      Post on the review issue:
      - **The stable watcher's result.** When `stable` hasn't moved, its run logs `moved false → none` and there's no issue; say so. When it has, link the "Upstream stable moved" issue and decide whether the bump goes in this release.
-     - **The forward check's result.** Link the "Upcoming game changes (upstream dev)" issue it updated, or say it closed it because nothing changed.
+     - **The forward check's result.** Link the "Upcoming game changes (upstream dev)" issue it updated, or say it closed it because nothing changed. Either way, give its contract typecheck result: "None"; the type errors (each gets an issue, so the in-game code is ready before Steam ships the change); or that it couldn't run, which is a broken check to fix before the release ([what to do](../tools/upstream-watch/README.md#maintaining-it)).
    - once they exist: the end-to-end suite (E2, from M2) and the chaos suite (from M3)
 
 3. **Review the milestone.** An independent reviewer (a fresh agent session, as for PR reviews) checks it, and the result is posted on the review issue in this form:

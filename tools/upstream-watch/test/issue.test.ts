@@ -46,11 +46,19 @@ describe("fillTitle", () => {
 });
 
 describe("hasNews", () => {
+  const ran = { contractTypecheckRan: true };
+
   test("the forward check reports listed changes; the stable watcher reports any move", () => {
-    expect(hasNews({ changes: 3, moved: true }, "changes")).toBe(true);
-    expect(hasNews({ changes: 0, moved: true }, "changes")).toBe(false);
-    expect(hasNews({ changes: 0, moved: true }, "moved")).toBe(true);
-    expect(hasNews({ changes: 0, moved: false }, "moved")).toBe(false);
+    expect(hasNews({ changes: 3, moved: true, ...ran }, "changes")).toBe(true);
+    expect(hasNews({ changes: 0, moved: true, ...ran }, "changes")).toBe(false);
+    expect(hasNews({ changes: 0, moved: true, ...ran }, "moved")).toBe(true);
+    expect(hasNews({ changes: 0, moved: false, ...ran }, "moved")).toBe(false);
+  });
+
+  test("a contract typecheck that couldn't run is news for the forward check, never for the stable watcher", () => {
+    const broken = { changes: 0, moved: false, contractTypecheckRan: false };
+    expect(hasNews(broken, "changes")).toBe(true);
+    expect(hasNews(broken, "moved")).toBe(false);
   });
 });
 

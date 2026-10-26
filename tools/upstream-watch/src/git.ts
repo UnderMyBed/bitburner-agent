@@ -1,7 +1,7 @@
-// The git reads the report needs, from a clone of the game's repository (blobless is enough).
+// The git reads the report needs, from a clone of the game's repository (blobless is enough), and the report built from them.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import type { ContractTypecheck } from "./contract-typecheck.ts";
+import type { ContractTypecheckResult } from "./contract-typecheck.ts";
 import { diffDeclarations, extractDeclarations } from "./declarations.ts";
 import { diffRamCosts, extractRamCosts } from "./ram-costs.ts";
 import { DEFINITIONS, RAM_COSTS, type WatchReport } from "./report.ts";
@@ -40,14 +40,14 @@ function isAncestor(game: string, ancestor: string, descendant: string): boolean
 
 /**
  * Everything the report says about `ref` against the pinned commit, read from the game clone at `game`.
- * `typecheck` runs the contract typecheck against the ref's definitions (contract-typecheck.ts).
+ * `runContractTypecheck` typechecks the in-game code against the ref's definitions (contract-typecheck.ts).
  */
 export function buildReport(
   game: string,
   pinned: string,
   ref: string,
   watchlist: string[],
-  typecheck: (upstreamDefinitions: string) => ContractTypecheck,
+  runContractTypecheck: (upstreamDefinitions: string) => ContractTypecheckResult,
 ): WatchReport {
   const sha = git(game, "rev-parse", `${ref}^{commit}`).trim();
   const show = (rev: string, file: string) => git(game, "show", `${rev}:${file}`);
@@ -72,6 +72,6 @@ export function buildReport(
             const [commit, ...title] = line.split("\t");
             return { sha: commit as string, title: title.join("\t") };
           }),
-    typecheck: typecheck(upstreamDefinitions),
+    contractTypecheck: runContractTypecheck(upstreamDefinitions),
   };
 }

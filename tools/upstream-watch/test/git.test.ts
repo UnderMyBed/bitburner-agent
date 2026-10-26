@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
-import type { ContractTypecheck } from "../src/contract-typecheck.ts";
+import type { ContractTypecheckResult } from "../src/contract-typecheck.ts";
 import { buildReport, pinnedCommit } from "../src/git.ts";
 import { DEFINITIONS, RAM_COSTS } from "../src/report.ts";
 
@@ -70,7 +70,7 @@ describe("buildReport", () => {
       "API: ports",
     );
     const typecheckedDefinitions: string[] = [];
-    const typecheck = (definitions: string): ContractTypecheck => {
+    const typecheck = (definitions: string): ContractTypecheckResult => {
       typecheckedDefinitions.push(definitions);
       return { ran: true, errors: [] };
     };
@@ -81,7 +81,7 @@ describe("buildReport", () => {
     expect(typecheckedDefinitions).toEqual([
       "export interface NS {\n  hack(host: string): Promise<number>;\n  isFullPort(port: number): boolean;\n}\n",
     ]);
-    expect(report.typecheck).toEqual({ ran: true, errors: [] });
+    expect(report.contractTypecheck).toEqual({ ran: true, errors: [] });
     // Compared the other way round, the ref is behind: it differs, but isn't ahead.
     expect(buildReport(temp, git("rev-parse", "dev"), pinned, [], typecheck).upstream.ahead).toBe(false);
     expect(buildReport(temp, pinned, pinned, [], typecheck).upstream.ahead).toBe(false);
