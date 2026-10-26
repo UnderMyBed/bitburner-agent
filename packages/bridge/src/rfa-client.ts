@@ -28,11 +28,24 @@ interface PendingRequest {
   timer: TimerHandle;
 }
 
+/** What `getSaveFile` gives: the game's own save, from the serialiser the Steam save uses (MessageHandlers.ts). */
+export interface GameSaveFile {
+  identifier: string;
+  /** True on Steam: `save` is the gzip bytes, one character per byte. False on a page without CompressionStream. */
+  binary: boolean;
+  save: string;
+}
+
+/**
+ * The next request id on each connection. Ids are unique per connection, not per client, so several clients can share
+ * one (the deployer and the save backups): each takes only the replies to its own requests.
+ */
+const nextIdByConnection = new WeakMap<Connection, number>();
+
 export class RfaClient {
   readonly #connection: Connection;
   readonly #clock: Clock;
   readonly #pending = new Map<number, PendingRequest>();
-  #nextId = 1;
   #closed = false;
 
   constructor(connection: Connection, clock: Clock) {
@@ -86,10 +99,22 @@ export class RfaClient {
     return expectString("getDefinitionFile", await this.#request("getDefinitionFile", null));
   }
 
+  /** The game's save, as Steam writes it (`binary`) or as base64 text (a page without CompressionStream). */
+  async getSaveFile(): Promise<GameSaveFile> {
+    const result = await this.#request("getSaveFile", null);
+    const { identifier, binary, save } = (result ?? {}) as Partial<GameSaveFile>;
+    if (typeof identifier !== "string" || typeof binary !== "boolean" || typeof save !== "string") {
+      // `?? null`: a reply with no result would otherwise stringify to undefined, and the slice throw a TypeError.
+      throw new RfaError("getSaveFile", `unexpected reply ${JSON.stringify(result ?? null).slice(0, 200)}`);
+    }
+    return { identifier, binary, save };
+  }
+
   #request(method: string, subject: string | null, params?: object): Promise<unknown> {
     const description = subject === null ? method : `${method} ${subject}`;
     if (this.#closed) return Promise.reject(new RfaError(description, "the connection closed", "closed"));
-    const id = this.#nextId++;
+    const id = nextIdByConnection.get(this.#connection) ?? 1;
+    nextIdByConnection.set(this.#connection, id + 1);
     return new Promise((resolve, reject) => {
       const timer = this.#clock.setTimeout(() => {
         const request = this.#pending.get(id);

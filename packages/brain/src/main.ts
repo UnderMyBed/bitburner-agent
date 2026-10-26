@@ -1,14 +1,21 @@
 // npm run brain -- --data-dir <dir>: the long-running brain process (architecture D1). In M2 it runs the control
-// channel and stores what the Agent reports, and serves the Remote File API, over which it deploys the in-game code;
-// the dashboard and supervisor join it in later tasks.
+// channel and stores what the Agent reports, and serves the Remote File API, over which it deploys the in-game code and
+// backs up the game's save; the dashboard and supervisor join it in later tasks.
 import path from "node:path";
 import process from "node:process";
-import { ControlChannel, Deployer, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
+import {
+  ControlChannel,
+  Deployer,
+  REMOTE_FILE_API_MAX_FRAME_BYTES,
+  startWebSocketServer,
+  systemClock,
+} from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
-import { recordChannelEvents, recordDeployerEvents } from "./record-channel-events.ts";
+import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
+import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
@@ -50,31 +57,53 @@ try {
     channel,
     clock: systemClock,
   });
-  const stopRecordingDeploys = recordDeployerEvents(deployer, store, {
-    environment: config.environment,
-    brainRelease: release,
-  });
+  // The deployer's and the save backups' events carry the brain's release plus the deployment it deploys.
+  const deployerReleaseContext = { environment: config.environment, release: `${release}+${deployer.deploymentId}` };
+  const stopRecordingDeploys = recordEvents(deployer, store, deployerReleaseContext);
   const stopLoggingDeploys = deployer.subscribe((event) =>
+    log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
+  );
+  // Each environment's backups in their own folder, so only Steam's (E0) are ever beside each other (§9.4).
+  const saveBackups = new SaveBackups({
+    dataDirectory,
+    environment: config.environment,
+    backupIntervalMs: config.saveBackupIntervalMinutes * 60_000,
+    backupsKept: config.saveBackupsKept,
+    clock: systemClock,
+  });
+  const stopRecordingBackups = recordEvents(saveBackups, store, deployerReleaseContext);
+  const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
   const remoteFileApiServer = await startWebSocketServer({
     port: config.remoteFileApiPort,
     allowedOrigins: config.allowedOrigins,
-    onConnection: (connection) => void deployer.accept(connection),
+    // The save backups' replies are the RFA's largest frames.
+    maxFrameBytes: REMOTE_FILE_API_MAX_FRAME_BYTES,
+    onConnection: (connection) => {
+      void deployer.accept(connection);
+      saveBackups.accept(connection);
+    },
     onRejectedOrigin: (origin) => channel.reportRejectedOrigin(`${origin} (Remote File API)`),
   });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
   log(`deploys ${deployer.deploymentId}`);
   log(`control channel on 127.0.0.1:${controlServer.port}`);
   log(`Remote File API on 127.0.0.1:${remoteFileApiServer.port}`);
+  log(
+    `save backups in ${path.join(dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME, config.environment)}, ` +
+      `every ${config.saveBackupIntervalMinutes} min, the newest ${config.saveBackupsKept} kept`,
+  );
 
   let stopping = false;
   const shutDown = async () => {
     if (stopping) return;
     stopping = true;
-    // A deploy the shutdown cuts short isn't a failed one: the next start deploys again.
+    // A deploy or backup the shutdown cuts short isn't a failed one: the next start deploys and backs up again.
     stopRecordingDeploys();
     stopLoggingDeploys();
+    stopRecordingBackups();
+    stopLoggingBackups();
     await remoteFileApiServer.close();
     await controlServer.close();
     store.close();

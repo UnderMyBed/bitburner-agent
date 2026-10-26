@@ -1,4 +1,4 @@
-import type { ControlChannel, Deployer } from "@bitburner-agent/bridge";
+import type { ControlChannel } from "@bitburner-agent/bridge";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
 /**
@@ -35,14 +35,13 @@ export function recordChannelEvents(
 }
 
 /**
- * Stores what the deployer reports, as events. Their release is the brain's own plus the deployment it deploys.
- * Returns a function that stops it.
+ * Stores what one of the brain's parts reports (the deployer, the save backups), as events tagged with `release`: the
+ * brain's own plus the deployment it deploys. Returns a function that stops it.
  */
-export function recordDeployerEvents(
-  deployer: Deployer,
+export function recordEvents<Event extends { type: string; atMs: number }>(
+  source: { subscribe(listener: (event: Event) => void): () => void },
   store: TelemetryStore,
-  { environment, brainRelease }: { environment: Environment; brainRelease: string },
+  context: { environment: Environment; release: string },
 ): () => void {
-  const context = { environment, release: `${brainRelease}+${deployer.deploymentId}` };
-  return deployer.subscribe(({ type, atMs, ...detail }) => store.recordEvent(context, { atMs, kind: type, detail }));
+  return source.subscribe(({ type, atMs, ...detail }) => store.recordEvent(context, { atMs, kind: type, detail }));
 }

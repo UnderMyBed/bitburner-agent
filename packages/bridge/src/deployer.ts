@@ -18,6 +18,7 @@ import {
 import type { Clock } from "./clock.ts";
 import type { Connection } from "./connection.ts";
 import type { ControlChannel, DeploymentState } from "./control-channel.ts";
+import { EventListeners } from "./event-listeners.ts";
 import { RfaClient, RfaError } from "./rfa-client.ts";
 
 const BOOT_SCRIPT_NAME = "boot.js";
@@ -62,17 +63,11 @@ export interface DeployerOptions {
 /** The ids `deploymentIdOf` makes. Cleaning up touches only these folders. */
 const GENERATED_DEPLOYMENT_ID = /^[0-9a-f]{12}$/;
 
-const raiseAsUncaught = (error: unknown) =>
-  queueMicrotask(() => {
-    throw error;
-  });
-
 export class Deployer {
   readonly deploymentId: string;
   readonly #options: DeployerOptions;
-  readonly #listeners = new Set<(event: DeployerEvent) => void>();
+  readonly #listeners: EventListeners<DeployerEvent>;
   readonly #folderFiles: Record<string, string>;
-  readonly #onListenerError: (error: unknown) => void;
   /** Kept for the brain's life: only a brain built for the new game version may deploy to it. */
   #hold = false;
   #state: DeploymentState = { deployedId: null, hold: false, deployFailed: false };
@@ -87,7 +82,7 @@ export class Deployer {
       if (typeof ramBudgets[name] !== "number") throw new Error(`${name} has no RAM budget`);
     }
     this.#options = options;
-    this.#onListenerError = options.onListenerError ?? raiseAsUncaught;
+    this.#listeners = new EventListeners(options.onListenerError);
     this.deploymentId = deploymentIdOf(options.build, options);
     const config: AgentConfig = { deploymentId: this.deploymentId, controlPort: options.controlPort };
     // Every script goes into the folder, boot.js included: its RAM is checked there before agent/boot.js changes.
@@ -103,8 +98,7 @@ export class Deployer {
 
   /** Calls `listener` with every event from now on; returns a function that stops it. */
   subscribe(listener: (event: DeployerEvent) => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    return this.#listeners.subscribe(listener);
   }
 
   /**
@@ -217,13 +211,7 @@ export class Deployer {
 
   /** A listener that throws can't stop the others, or the deploy: its error goes to `onListenerError`. */
   #emit(event: DeployerEvent): void {
-    for (const listener of this.#listeners) {
-      try {
-        listener(event);
-      } catch (error) {
-        this.#onListenerError(error);
-      }
-    }
+    this.#listeners.emit(event);
   }
 }
 

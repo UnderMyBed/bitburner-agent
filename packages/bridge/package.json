@@ -4,7 +4,10 @@
   "description": "The brain's connections to the game: the control channel to the in-game Agent, and the Remote File API server.",
   "license": "MIT",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./test-helpers": "./test/helpers/fakes.ts"
+  },
   "dependencies": {
     "@bitburner-agent/core": "*",
     "ws": "8.22.0"
