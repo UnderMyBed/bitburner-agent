@@ -166,6 +166,14 @@ export class Simulation {
     return this.rpc.call("writeFile", { host, path, content });
   }
 
+  /**
+   * A script's static RAM in GB, from the game's own calculator (the one `run` uses). Rejects with the reason if the
+   * file is missing, isn't a script, or doesn't parse.
+   */
+  staticRamUsage(host: string, path: string): Promise<number> {
+    return this.rpc.call("staticRamUsage", { host, path });
+  }
+
   /** Starts a script as the terminal's `run` does. `pid` is 0 if the game refused, with its message in `error`. */
   run(host: string, script: string, { threads = 1, args = [] }: RunOptions = {}): Promise<RunResult> {
     return this.rpc.call("run", { host, script, threads, args });

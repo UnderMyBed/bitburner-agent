@@ -376,6 +376,8 @@ export interface HostMethods {
   events(params: { since: number }): EventPage;
   /** Writes a script or text file, as a player saving it in the editor would. */
   writeFile(params: { host: string; path: string; content: string }): void;
+  /** A script's static RAM in GB, from the game's own calculator; fails with the reason if there's none. */
+  staticRamUsage(params: { host: string; path: string }): number;
   /** Starts a script as the terminal's `run` does: the game's own RAM check, pid and messages. */
   run(params: { host: string; script: string; threads: number; args: ScriptArg[] }): RunResult;
   /** Running scripts on a server, by pid. */

@@ -111,6 +111,10 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       engine.writeFile(host, path, content);
     },
+    staticRamUsage: ({ host, path }) => {
+      booted();
+      return engine.staticRamUsage(host, path);
+    },
     run: ({ host, script, threads, args }) => {
       booted();
       validateRun({ threads, args });

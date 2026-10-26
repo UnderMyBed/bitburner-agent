@@ -77,7 +77,7 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
 ### Code standards
 - **The coding standards in [CLAUDE.md](CLAUDE.md#global-coding-standards) apply to all code:** YAGNI, DRY after the second duplication, fail fast, simple first, delete aggressively, and verbose, self-documenting names.
 - **Clear and simple beats clever.** If a reviewer needs the PR description to understand the code, the code isn't clear yet.
-- **Performance matters in game:** every in-game bundle has a RAM budget enforced in CI.
+- **Performance matters in game:** every in-game bundle has a RAM budget (`packages/ingame/ram-budget.json`) enforced in CI. In-game code never names anything like an NS function: the game charges RAM by name ([`packages/ingame`](packages/ingame/README.md#ram)).
 - **Docs are part of done:** behaviour changes update the relevant doc in the same PR. Design changes get an ADR in [`docs/decisions/`](docs/decisions/).
 
 ## Setup
@@ -97,6 +97,7 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 | `npm run typecheck` | Two steps. First TypeScript, strict (unused locals/parameters are errors): every `tsconfig.json` in the repository, each in its own environment ([TypeScript configs](#typescript-configs)), failing if any `.ts` file isn't covered by one. Then the simulator's bundled sources, against the game's types with the game's own TypeScript and options; this needs `npm run setup:engine` (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)). No emit: Node runs `.ts` directly |
 | `npm run lint` / `npm run lint:fix` | Biome lint and format check, warnings are errors / apply fixes |
 | `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/` and `tools/`. Builds the engine bundle first if it's stale, so it needs `npm run setup:engine` once |
+| `npm run build -w @bitburner-agent/ingame` | Bundle the in-game scripts into `packages/ingame/dist/`, with a manifest ([`packages/ingame`](packages/ingame/README.md)). Tests build their own copy |
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
 | `npm run sim -- <scenario.json>` | Run a simulator scenario across seeds and print the results ([docs/sim/scenarios.md](docs/sim/scenarios.md)) |
 | `npm run bench -w @bitburner-agent/sim` | Benchmark the simulator's speed and memory and record a row ([docs/sim/benchmarks.md](docs/sim/benchmarks.md)); before releases, not in CI |
@@ -111,12 +112,12 @@ Code runs in three environments, and each file is typechecked in its own (archit
 | Files | Config | Environment |
 |---|---|---|
 | `packages/core/src` | `packages/core/tsconfig.json` | Neither: imported by in-game and Node code alike, so no DOM and no Node types |
-| `packages/ingame/src` | `packages/ingame/tsconfig.json` | The game's page: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` |
-| Everything else: other packages, the tests, `tools/`, the root's own files | the package's `tsconfig.json`; `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node |
+| `packages/ingame/src` | `packages/ingame/src/tsconfig.json` | The game's page: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` |
+| Everything else: other packages, the tests, build scripts, `tools/`, the root's own files | the package's `tsconfig.json` (for `ingame`, its build script and tests); `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node |
 
 - Every config extends `tsconfig.base.json` (the shared strict options, environment-neutral) or `tsconfig.node.json` (the same, plus Node types).
 - **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.
-- **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. A Node config for `ingame`'s tests must map `@nsdefs` too, if the tests import in-game sources.
+- **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. `ingame`'s tests test the built bundles in the simulator; they don't import in-game sources (a Node config doing so would have to map `@nsdefs` too).
 - `npm run typecheck` (`tools/typecheck`) finds every `tsconfig.json` and fails on any TypeScript file none of them covers. Its tests check each config's environment with probe files, so a change that lets Node or the DOM back in fails CI.
 
 ## Rules of engagement

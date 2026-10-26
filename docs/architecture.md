@@ -351,8 +351,8 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - each allows one client
   - the control channel requires a **shared token**, which the deployer writes to a file only the agent reads
 - **Version handshake:** brain and agent are built from the same release. On connect they compare build IDs, and on a mismatch the brain redeploys the agent before anything else.
-- **Atomic deploys.** Each release deploys into its own versioned folder (`/agent/<build>/…`) plus a manifest:
-  - **Ordering:** libraries first, then entry scripts are re-pushed and their RAM re-verified with `calculateRam`. This works around game issue #2907 (stale RAM cache for importers).
+- **Atomic deploys.** Each deployment (a build plus its configuration) goes into its own folder (`agent/<deploymentId>/…`; the layout is in [`packages/ingame`](../packages/ingame/README.md#deploy-layout)):
+  - **RAM:** every pushed script's RAM is verified with `calculateRam`. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise.
   - **Switch-over:** only after that does `boot.js` switch to the new build, and the reconciler restarts reflexes onto it. Old and new code never mix.
   - **Release gate:** only tagged releases are deployed to Steam.
 - **Save backups:**
@@ -513,7 +513,7 @@ real game ──telemetry──► store ◄──runs── simulator
 
 ### 12.1 Language and build
 - **TypeScript on Node** at the core: brain, bridge, simulator, dashboard, in-game code (ADR 0006).
-- In-game bundles are built per entry point with esbuild, tree-shaken and minified **without renaming NS identifiers**, then RAM-checked.
+- In-game bundles are built per entry point with esbuild, self-contained and tree-shaken but **not minified**: the game charges RAM by identifier name, so names stay as written. Each bundle's RAM is checked against its budget with the game's own calculator in CI ([`packages/ingame`](../packages/ingame/README.md#ram)).
 - **Rust (napi-rs)** only for profiled hot spots. **Python services** (GPU, ML, local LLM) only in Phase 4. Neither is present until needed.
 - Fast CI tiers run on GitHub-hosted runners. Heavy suites run locally on the reference rig through one command. There is no self-hosted runner, because the repo is public.
 

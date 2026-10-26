@@ -303,6 +303,18 @@ export function writeFile(host: string, path: string, content: string) {
   server(host).writeToContentFile(file, content);
 }
 
+/** The game's own RAM calculator, as `run` and the Remote File API's `calculateRam` call it (MessageHandlers.ts:208). */
+export function staticRamUsage(host: string, path: string): number {
+  const target = server(host);
+  const scriptPath = resolveScriptFilePath(path);
+  if (!scriptPath) throw new Error(`${path} is not a script path`);
+  const script = target.scripts.get(scriptPath);
+  if (!script) throw new Error(`There is no script ${path} on ${host}`);
+  const ramUsage = script.getRamUsage(target.scripts);
+  if (!ramUsage) throw new Error(`The game can't calculate ${path}'s RAM: the script is invalid`);
+  return ramUsage;
+}
+
 /** What the terminal's `run` does (Terminal/commands/runScript.ts), returning the outcome instead of printing it. */
 export function runScript(host: string, path: string, threads: number, args: ScriptArg[]): RunResult {
   const target = server(host);

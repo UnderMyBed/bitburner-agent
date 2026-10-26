@@ -101,6 +101,11 @@ export interface EngineApi {
   /** Sets game settings, as a player would in the options pages. A harness edit. */
   applyGameSettings(settings: GameSettingsOverride): void;
   writeFile(host: string, path: string, content: string): void;
+  /**
+   * A script's static RAM in GB, from the game's own calculator (`Script.getRamUsage`, the call `run` makes). Throws
+   * with the reason when the file is missing, isn't a script, or can't be parsed.
+   */
+  staticRamUsage(host: string, path: string): number;
   /** As the terminal's `run`: the game's own RAM check, pid and failure message. */
   runScript(host: string, path: string, threads: number, args: ScriptArg[]): RunResult;
   ps(host: string): ProcessInfo[];
@@ -138,6 +143,7 @@ const API_FUNCTIONS = {
   startRemoteFileApi: true,
   applyGameSettings: true,
   writeFile: true,
+  staticRamUsage: true,
   runScript: true,
   ps: true,
   scriptLogs: true,
