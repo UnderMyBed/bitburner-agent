@@ -9,6 +9,8 @@ import {
   BOOT_SCRIPT,
   CURRENT_DEPLOYMENT_FILE,
   deployedFilePath,
+  SNAPSHOT_TIERS,
+  snapshotWorkerFileName,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
@@ -34,7 +36,8 @@ export function useBuiltBundles(): () => Promise<(fileName: string) => string> {
   };
 }
 
-/** Writes a deployment into the simulation as the deployer would (#91): its scripts, config and token. */
+/** Writes a deployment into the simulation as the deployer would (#91): its scripts (the Agent and its snapshot
+ * workers), config and token. */
 export async function writeDeployment(
   simulation: Simulation,
   bundleSource: (fileName: string) => string,
@@ -42,7 +45,9 @@ export async function writeDeployment(
   { token = TOKEN, makeCurrent = true }: { token?: string; makeCurrent?: boolean } = {},
 ): Promise<void> {
   await simulation.writeFile("home", BOOT_SCRIPT, bundleSource("boot.js"));
-  await simulation.writeFile("home", deployedFilePath(deploymentId, AGENT_SCRIPT_NAME), bundleSource("agent.js"));
+  for (const fileName of [AGENT_SCRIPT_NAME, ...SNAPSHOT_TIERS.map(snapshotWorkerFileName)]) {
+    await simulation.writeFile("home", deployedFilePath(deploymentId, fileName), bundleSource(fileName));
+  }
   await simulation.writeFile(
     "home",
     deployedFilePath(deploymentId, AGENT_CONFIG_FILE_NAME),

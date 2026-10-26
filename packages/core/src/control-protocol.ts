@@ -39,7 +39,7 @@ export interface SnapshotMessage {
   sequenceNumber: number;
   /** The game's `Date.now()` when the snapshot was taken. */
   gameTimeMs: number;
-  /** The tier's contents (#89); `null` only when the Agent has nothing for it. */
+  /** The tier's contents: `StaticSnapshotData`, `SlowSnapshotData`, `MediumSnapshotData` or `FastSnapshotData`. */
   data: unknown;
 }
 

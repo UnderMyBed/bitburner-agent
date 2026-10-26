@@ -28,3 +28,13 @@ export {
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
 export { PINNED_GAME } from "./game-version.ts";
+export {
+  type FastSnapshotData,
+  type FastWorkerData,
+  type MediumSnapshotData,
+  type SlowSnapshotData,
+  SNAPSHOT_WORKER_PORT,
+  type SnapshotWorkerReport,
+  type StaticSnapshotData,
+  snapshotWorkerFileName,
+} from "./snapshots.ts";

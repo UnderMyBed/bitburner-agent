@@ -68,6 +68,7 @@ npm run gaps -- --data-dir D:\bitburner-agent --since 2026-10-27T00:00:00Z --unt
 ```
 
 - **What it lists:** every interval between consecutive fast snapshots (the heartbeat, every 2 s) longer than the threshold, including from the window's start to the first snapshot and from the last one to its end. It also shows the count, the first and last snapshots, and the longest interval.
+- **What it proves:** that the Agent was alive. A fast snapshot counts even when its tiers are degraded (`game: null`, [degraded snapshots](../ingame/README.md#snapshots)); whether data arrived shows in each snapshot's `degradedTiers`.
 - **Options:**
   - `--threshold-seconds`, default 6: three cadences. Exactly the threshold isn't a gap.
   - Times need a `Z` or an offset (`2026-10-27T00:00:00Z`): without one, JavaScript would read them as local time.
