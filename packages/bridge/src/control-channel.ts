@@ -1,0 +1,260 @@
+// The control channel's session logic (docs/bridge/protocol.md): authenticates the in-game Agent, keeps one at a time,
+// passes its snapshots on in order, and tells it to restart onto the deployed deployment, never in a loop.
+import {
+  type BrainMessage,
+  CONTROL_CLOSE_CODES,
+  CONTROL_PROTOCOL_VERSION,
+  encodeControlMessage,
+  type GameInfo,
+  type HelloMessage,
+  parseAgentMessage,
+  type SnapshotMessage,
+} from "@bitburner-agent/core";
+import type { Clock, TimerHandle } from "./clock.ts";
+import type { Connection } from "./connection.ts";
+
+/** How long a new connection has to send a valid hello. */
+export const HELLO_TIMEOUT_MS = 5_000;
+/**
+ * How many Agent sessions keep their sequence numbering: the current one and a few before it, so a 24/7 run with many
+ * restarts doesn't grow without limit. A session older than that which came back would count from scratch.
+ */
+export const REMEMBERED_SESSIONS = 4;
+
+export type ConnectionRejectedReason = "helloTimeout" | "wrongToken" | "badMessage" | "origin";
+
+/** What the channel reports; every `atMs` comes from its clock. */
+export type ControlChannelEvent =
+  | { type: "agentConnected"; atMs: number; agentSessionId: string; deploymentId: string; game: GameInfo }
+  | { type: "agentDisconnected"; atMs: number; agentSessionId: string }
+  /** `missedBefore`: sequence numbers skipped since the last snapshot passed on for this session and tier. */
+  | { type: "snapshotReceived"; atMs: number; snapshot: SnapshotMessage; missedBefore: number }
+  | { type: "connectionRejected"; atMs: number; reason: ConnectionRejectedReason; detail: string };
+
+/**
+ * What the deployer knows (#91): the deployment `agent/current.txt` names, as last read or written over the Remote File
+ * API (null until known), whether the brain is on hold (a game version it wasn't built for), and whether the last
+ * deploy failed.
+ */
+export interface DeploymentState {
+  deployedId: string | null;
+  hold: boolean;
+  deployFailed: boolean;
+}
+
+export interface ControlChannelOptions {
+  /** The shared secret the deployer gives the Agent (`token.txt`). */
+  token: string;
+  clock: Clock;
+  /**
+   * Where a listener's error goes, once the channel's state is settled. Default: raised as an uncaught exception (fail
+   * fast: the brain stops and is restarted, rather than carry on without its store).
+   */
+  onListenerError?: (error: unknown) => void;
+}
+
+const raiseAsUncaught = (error: unknown) =>
+  queueMicrotask(() => {
+    throw error;
+  });
+
+/** The Agent connected now: the deployer's version check reads its game info (#91). */
+export interface ConnectedAgent {
+  agentSessionId: string;
+  deploymentId: string;
+  game: GameInfo;
+}
+
+interface AgentSession extends ConnectedAgent {
+  connection: Connection;
+}
+
+export class ControlChannel {
+  readonly #token: string;
+  readonly #clock: Clock;
+  readonly #onListenerError: (error: unknown) => void;
+  readonly #listeners = new Set<(event: ControlChannelEvent) => void>();
+  #currentSession: AgentSession | null = null;
+  #deploymentState: DeploymentState = { deployedId: null, hold: false, deployFailed: false };
+  /**
+   * Deployments a restart was already sent from, for the deployed id now. Cleared when that id changes, so each
+   * outdated deployment is told to restart once per thing the deployer learns. If its Agent comes back anyway (the
+   * game reloaded a save that still names it), it's welcomed instead, and the deployer sees it (`agentConnected`).
+   */
+  readonly #restartsSentFrom = new Set<string>();
+  /** The last sequence number passed on, by session and tier, for the most recent sessions (oldest first). */
+  readonly #lastPassedOnBySession = new Map<string, Map<string, number>>();
+
+  constructor({ token, clock, onListenerError = raiseAsUncaught }: ControlChannelOptions) {
+    if (token === "") throw new Error("the control channel needs a token");
+    this.#token = token;
+    this.#clock = clock;
+    this.#onListenerError = onListenerError;
+  }
+
+  /**
+   * Calls `listener` with every event from now on; returns a function that stops it. A listener that throws doesn't
+   * disturb the channel or the other listeners: its error goes to `onListenerError` afterwards.
+   */
+  subscribe(listener: (event: ControlChannelEvent) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  connectedAgent(): ConnectedAgent | null {
+    if (!this.#currentSession) return null;
+    const { agentSessionId, deploymentId, game } = this.#currentSession;
+    return { agentSessionId, deploymentId, game };
+  }
+
+  /** The transport refused a connection from this origin before it reached the channel. */
+  reportRejectedOrigin(origin: string): void {
+    this.#emit([{ type: "connectionRejected", atMs: this.#clock.now(), reason: "origin", detail: origin }]);
+  }
+
+  /** The deployer's view changed: a connected Agent from another deployment may now be told to restart. */
+  setDeploymentState(state: DeploymentState): void {
+    if (state.deployedId !== this.#deploymentState.deployedId) this.#restartsSentFrom.clear();
+    this.#deploymentState = { ...state };
+    if (this.#currentSession) this.#restartIfOutdated(this.#currentSession);
+  }
+
+  /** Takes a new connection from the game's page: it has `HELLO_TIMEOUT_MS` to say a valid hello. */
+  accept(connection: Connection): void {
+    let session: AgentSession | null = null;
+    let closedByChannel = false;
+    const helloTimer: TimerHandle = this.#clock.setTimeout(
+      () => reject("helloTimeout", CONTROL_CLOSE_CODES.helloTimeout, ""),
+      HELLO_TIMEOUT_MS,
+    );
+    const reject = (reason: ConnectionRejectedReason, code: number, detail: string) => {
+      this.#clock.clearTimeout(helloTimer);
+      closedByChannel = true;
+      connection.close(code, reason);
+      this.#emit([{ type: "connectionRejected", atMs: this.#clock.now(), reason, detail }]);
+    };
+
+    connection.onClose(() => {
+      this.#clock.clearTimeout(helloTimer);
+      if (session && this.#currentSession === session) {
+        this.#currentSession = null;
+        this.#emit([{ type: "agentDisconnected", atMs: this.#clock.now(), agentSessionId: session.agentSessionId }]);
+      }
+    });
+
+    connection.onMessage((text) => {
+      if (closedByChannel) return;
+      // A replaced connection's frames no longer count.
+      if (session && this.#currentSession !== session) return;
+      const parsed = parseAgentMessage(text);
+      if (!parsed.ok) return reject("badMessage", CONTROL_CLOSE_CODES.badMessage, parsed.reason);
+      const message = parsed.message;
+      if (!session) {
+        if (message.type !== "hello") return reject("badMessage", CONTROL_CLOSE_CODES.badMessage, "no hello first");
+        if (message.token !== this.#token) return reject("wrongToken", CONTROL_CLOSE_CODES.wrongToken, "");
+        this.#clock.clearTimeout(helloTimer);
+        session = this.#startSession(connection, message);
+        return;
+      }
+      if (message.type === "hello") return reject("badMessage", CONTROL_CLOSE_CODES.badMessage, "a second hello");
+      if (message.agentSessionId !== session.agentSessionId) {
+        return reject("badMessage", CONTROL_CLOSE_CODES.badMessage, "a snapshot from another session");
+      }
+      this.#passOn(message);
+    });
+  }
+
+  /** An accepted hello: this Agent replaces any other, and is welcomed or told to restart. */
+  #startSession(connection: Connection, hello: HelloMessage): AgentSession {
+    const previous = this.#currentSession;
+    const session: AgentSession = {
+      connection,
+      agentSessionId: hello.agentSessionId,
+      deploymentId: hello.deploymentId,
+      game: hello.game,
+    };
+    this.#currentSession = session;
+    this.#rememberSession(session.agentSessionId);
+    previous?.connection.close(CONTROL_CLOSE_CODES.replaced, "replaced");
+    if (!this.#restartIfOutdated(session)) {
+      this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" });
+    }
+    const atMs = this.#clock.now();
+    this.#emit([
+      ...(previous ? [{ type: "agentDisconnected" as const, atMs, agentSessionId: previous.agentSessionId }] : []),
+      {
+        type: "agentConnected",
+        atMs,
+        agentSessionId: session.agentSessionId,
+        deploymentId: session.deploymentId,
+        game: session.game,
+      },
+    ]);
+    return session;
+  }
+
+  /**
+   * Tells the Agent to restart onto the deployed deployment when that is known, the brain isn't on hold, the last
+   * deploy didn't fail, and the Agent runs another one, once per outdated deployment (see `#restartsSentFrom`).
+   * Returns whether it did.
+   */
+  #restartIfOutdated(session: AgentSession): boolean {
+    const { deployedId, hold, deployFailed } = this.#deploymentState;
+    if (deployedId === null || hold || deployFailed || session.deploymentId === deployedId) return false;
+    if (this.#restartsSentFrom.has(session.deploymentId)) return false;
+    this.#restartsSentFrom.add(session.deploymentId);
+    this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: deployedId });
+    return true;
+  }
+
+  /** Keeps the numbering of the most recent sessions only. */
+  #rememberSession(agentSessionId: string): void {
+    const tiers = this.#lastPassedOnBySession.get(agentSessionId) ?? new Map<string, number>();
+    this.#lastPassedOnBySession.delete(agentSessionId);
+    this.#lastPassedOnBySession.set(agentSessionId, tiers);
+    for (const oldest of this.#lastPassedOnBySession.keys()) {
+      if (this.#lastPassedOnBySession.size <= REMEMBERED_SESSIONS) break;
+      this.#lastPassedOnBySession.delete(oldest);
+    }
+  }
+
+  #passOn(snapshot: SnapshotMessage): void {
+    const tiers = this.#lastPassedOnBySession.get(snapshot.agentSessionId);
+    if (!tiers) return;
+    const lastPassedOn = tiers.get(snapshot.tier) ?? 0;
+    // A duplicate, or one that arrived after a later one: dropped.
+    if (snapshot.sequenceNumber <= lastPassedOn) return;
+    tiers.set(snapshot.tier, snapshot.sequenceNumber);
+    this.#emit([
+      {
+        type: "snapshotReceived",
+        atMs: this.#clock.now(),
+        snapshot,
+        missedBefore: snapshot.sequenceNumber - lastPassedOn - 1,
+      },
+    ]);
+  }
+
+  #send(session: AgentSession, message: BrainMessage): void {
+    session.connection.send(encodeControlMessage(message));
+  }
+
+  /**
+   * Reports events once the channel's state is settled. Every listener hears every event; one that throws can't stop
+   * the others or leave the channel half-changed.
+   */
+  #emit(events: ControlChannelEvent[]): void {
+    const listeners = [...this.#listeners];
+    const errors: unknown[] = [];
+    for (const event of events) {
+      for (const listener of listeners) {
+        try {
+          listener(event);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    }
+    for (const error of errors) this.#onListenerError(error);
+  }
+}

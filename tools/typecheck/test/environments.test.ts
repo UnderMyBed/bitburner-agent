@@ -49,6 +49,7 @@ interface EnvironmentExpectation {
 const nodeEnvironment: EnvironmentExpectation = { allowed: [nodeGlobal, nodeModule], rejected: [domGlobal] };
 
 const expectations: Record<string, EnvironmentExpectation> = {
+  "packages/bridge/tsconfig.json": nodeEnvironment,
   "packages/core/tsconfig.json": { allowed: [], rejected: [nodeGlobal, nodeModule, domGlobal] },
   "packages/core/test/tsconfig.json": nodeEnvironment,
   "packages/ingame/src/tsconfig.json": {
