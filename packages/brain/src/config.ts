@@ -47,18 +47,19 @@ export function flagValue(argv: string[], name: string): string | undefined {
 }
 
 /**
+ * The data directory when none is given: the repository's own `.data/` (gitignored). The agent runs from the repo and
+ * keeps everything in it (owner decision 30, #122).
+ */
+export const DEFAULT_DATA_DIRECTORY = path.resolve(import.meta.dirname, "../../../.data");
+
+/**
  * The data directory from `--data-dir <dir>` or the environment variable, resolved against the directory the command
- * was run from (npm runs scripts from the repository root, and records the caller's directory in INIT_CWD). There's
- * no default: the owner picks it.
+ * was run from (npm runs scripts from the repository root, and records the caller's directory in INIT_CWD); otherwise
+ * the repository's `.data/`.
  */
 export function resolveDataDirectory(argv: string[], environmentVariables: NodeJS.ProcessEnv): string {
   const dataDirectory = flagValue(argv, "--data-dir") ?? environmentVariables[DATA_DIRECTORY_VARIABLE];
-  if (!dataDirectory) {
-    throw new Error(
-      `The brain needs a data directory: pass --data-dir <dir> or set ${DATA_DIRECTORY_VARIABLE}. ` +
-        'Put it on a non-system drive (ADR 0006; packages/brain/README.md, "Running it").',
-    );
-  }
+  if (!dataDirectory) return DEFAULT_DATA_DIRECTORY;
   return path.resolve(environmentVariables.INIT_CWD ?? process.cwd(), dataDirectory);
 }
 

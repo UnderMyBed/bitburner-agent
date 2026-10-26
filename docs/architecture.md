@@ -94,7 +94,7 @@ Simulator: same brain + same in-game bundles, running in Node against the real e
 
 **Alternative rejected:** everything in game, the way the fork works. It's RAM-starved, untestable, and needs file-based IPC.
 
-**Supervision:** the brain is an always-on process (C9). One Windows Task Scheduler task starts it at logon, so it's back after reboots; a restart loop in that task (`tools/setup/run-brain.ps1`, not Task Scheduler's own restart-on-failure) restarts it whenever it exits. No extra software is needed. Its health is visible on the dashboard. If it's down, the game is in safe mode (§5.4). The brain in turn keeps the game itself alive (§10.2).
+**Supervision:** the brain is an always-on process (C9). The owner runs it from the repository (`npm run brain`), and it runs until stopped. Nothing is installed: no service, no scheduled task, nothing outside the repo (owner decision 30, #122). So nothing restarts it after a crash or a reboot; the owner starts it again. Its health is visible on the dashboard. If it's down, the game is in safe mode (§5.4). The brain in turn keeps the game itself alive (§10.2).
 
 ### D2 — Desired-state reconciliation, not command streams
 The brain publishes a **desired state**, a versioned, declarative document. The in-game Reconciler converges reality toward it with **idempotent** steps, Kubernetes-style.
@@ -366,7 +366,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - **RAM:** every script, `boot.js` included, is pushed into the folder and measured there with `calculateRam`, the game's own calculator. Any script over its budget aborts the deploy before a shared path changes. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise; a simulator test shows the game measuring a new build's own RAM.
   - **Switch-over:** only then does the deployer update `agent/boot.js` (if it differs), and `agent/current.txt` last. It then has the old Agent restart: it runs `agent/boot.js` with its pid and exits, and `boot.js` waits for it to go, then starts the new deployment's Agent. `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
   - **Saved at the next autosave:** `pushFile` doesn't save the game. A deployment is in the save only after the next autosave (every 60 s by default). If the game reloads before then, the next RFA connection deploys again.
-  - **Release gate:** only tagged releases are deployed to Steam. That's a rule of the setup (#95): the owner runs a release checkout; the brain doesn't enforce it. The exception is a release's own Steam soak (#99), which runs the candidate commit before it's tagged.
+  - **Release gate:** only tagged releases are deployed to Steam. That's a rule of how it's run (docs/setup.md): the owner runs the brain from a release checkout; the brain doesn't enforce it. The exception is a release's own Steam soak (#99), which runs the candidate commit before it's tagged.
 - **Save backups** ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92); details in [`packages/brain`](../packages/brain/README.md#save-backups)):
   - **When:** `getSaveFile` on every RFA connection and every `saveBackupIntervalMinutes` (30 by default). From M3 there's also one **immediately before every irreversible intent** (install, BitNode change; R8, #11). Save corruption is a known open issue on 3.0.1 (#2809).
   - **What's kept:** the game's save at that moment, in the gzip format Steam writes, checked to be what the game's own Import Game accepts, in `<data dir>/saves/<environment>/`. Rotation keeps the newest `saveBackupsKept` (96: two days at the default interval) per environment. A failed or damaged backup is recorded (`saveBackup` events), never kept.
@@ -494,7 +494,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 ### 10.1 Irreducible human steps
 1. One time, following [docs/setup.md](setup.md) (#95):
    - install Steam and Bitburner;
-   - install the brain's scheduled task (one setup script). The brain launches the game itself, so pause supervision while setting up;
+   - in a clone of the repo, `npm run bootstrap`, then `npm run brain`. The brain launches the game itself, so pause supervision while setting up;
    - on a new save, exit the tutorial (until the agent does it itself, §5.7);
    - in the game's options, set the Remote API's Hostname to `127.0.0.1` (the brain listens there only, not on `localhost`) and port 12525, with a reconnection delay above 0, and click Connect (changing the settings alone doesn't connect);
    - set autoexec to `agent/boot.js`, and save the game so the settings are kept;
@@ -502,14 +502,14 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
    - resume supervision.
 2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
-4. Interruptions outside the game (Windows reboots, Steam client updates, power loss) are recovered automatically (§10.2). A human is needed only if recovery gives up and raises an alert.
+4. Interruptions of the game (it closes, freezes, or Steam restarts it) are recovered automatically while the brain runs (§10.2). A human is needed if recovery gives up and raises an alert, and to start the brain again after a reboot or a crash of the brain itself: nothing is installed to do it (owner decision 30).
 
 ### 10.2 Recovery: the game is relaunched automatically
 The goal is unattended play (C9), so recovery doesn't wait for a human.
 Built in M2 ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); [`packages/brain`](../packages/brain/README.md#supervision)).
 - **Who:**
-  - **One scheduled task.** Windows Task Scheduler starts the brain at logon, and a restart loop keeps it up (D1, #95). The brain's supervisor finds Bitburner isn't running and launches it through Steam (`steam://rungameid/1812820`), so the one task starts both.
-  - Autoexec then runs `agent/boot.js` (§5.7), so a reboot is a short interruption, not a stop.
+  - **The brain, while it runs** (`npm run brain`, from the repo; D1). Its supervisor finds Bitburner isn't running and launches it through Steam (`steam://rungameid/1812820`), so starting the brain starts both.
+  - Autoexec then runs `agent/boot.js` (§5.7). After a reboot, the owner starts the brain again, and the rest follows.
   - Only an E0 brain on Windows supervises (Steam's game); a source build's brain (E2) never launches or kills anything.
 - **Judged by checks, not clocks:** the supervisor looks every 30 s. Its waits are counted in checks, and a heartbeat counts as new by being a new snapshot, so a clock that steps can't fake silence or hide it.
 - **Dead game** (process gone): the supervisor relaunches it the same way. After a launch it waits 5 minutes before anything else, so a slow Steam (starting, logging in, updating) isn't launched over and over.

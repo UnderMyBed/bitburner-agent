@@ -13,6 +13,7 @@ import { WebSocket } from "ws";
 import {
   type BrainConfig,
   CONFIG_FILE_NAME,
+  DEFAULT_DATA_DIRECTORY,
   loadOrCreateConfig,
   resolveDataDirectory,
   STORE_FILE_NAME,
@@ -34,14 +35,16 @@ afterEach(async () => {
   rmSync(dataDirectory, { recursive: true, force: true });
 });
 
-test("without a data directory the brain refuses to start, and says how to give one", () => {
-  const run = () =>
-    execFileSync(process.execPath, [BRAIN_MAIN], {
-      env: { ...process.env, BITBURNER_AGENT_DATA_DIR: "" },
-      encoding: "utf8",
-      stdio: "pipe",
-    });
-  expect(run).toThrow(/needs a data directory: pass --data-dir <dir> or set BITBURNER_AGENT_DATA_DIR/);
+// Never by starting a brain without a data directory: that brain would run in the repository's own .data/, and a
+// config it creates there is E0, which on Windows launches Steam's game.
+test("without a data directory, the brain's is the repository's .data/ (gitignored)", () => {
+  expect(resolveDataDirectory([], { BITBURNER_AGENT_DATA_DIR: "" })).toBe(DEFAULT_DATA_DIRECTORY);
+  expect(DEFAULT_DATA_DIRECTORY).toBe(path.resolve(import.meta.dirname, "../../../.data"));
+  const ignored = execFileSync("git", ["check-ignore", ".data/telemetry.sqlite"], {
+    cwd: path.resolve(import.meta.dirname, "../../.."),
+    encoding: "utf8",
+  });
+  expect(ignored.trim()).toBe(".data/telemetry.sqlite");
 });
 
 test("the config and its token are created once, and kept", () => {

@@ -5,16 +5,14 @@ The long-running brain process (architecture D1): the bridge to the game, the te
 ## Running it
 
 ```
-npm run brain -- --data-dir D:\bitburner-agent
+npm run brain
 ```
 
-Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
-
-Unattended on Windows, a scheduled task runs it through `tools/setup/run-brain.ps1` instead, which appends its output to `<data dir>\brain.log` and restarts it after any exit ([docs/setup.md](../../docs/setup.md)). Don't also run `npm run brain` while that task runs: one brain per game.
+From the repo, in a terminal: it runs until stopped (Ctrl+C), and nothing restarts it. Nothing is installed (owner decision 30). [docs/setup.md](../../docs/setup.md) has the owner's steps, from a clone (`npm run bootstrap`) to a running skeleton. One brain per game.
 
 - **On Windows, an E0 brain (the default) runs the game itself.** Within 30 s it launches Bitburner through Steam. If no Agent reports for about 5 minutes, it kills and relaunches the game ([Supervision](#supervision)). Pause supervision on the dashboard while you set the game up.
-- **There's no default data directory.** It holds bulk data (the store, the save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
-- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, the dashboard's address, and whether it supervises the game.
+- **The data directory is the repo's `.data/`** (gitignored), so everything stays in the repo ([#122](https://github.com/UnderMyBed/bitburner-agent/issues/122)). `--data-dir <dir>` or `BITBURNER_AGENT_DATA_DIR` picks another; a relative path is taken from the directory the command was run in. Tests always give their own, since a brain in `.data/` with a new config is E0.
+- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr, and the brain exits non-zero. The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, the dashboard's address, and whether it supervises the game.
 - **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`git clone --recurse-submodules`), or the brain stops at start, saying which file is missing.
 - **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
@@ -26,7 +24,6 @@ Unattended on Windows, a scheduled task runs it through `tools/setup/run-brain.p
 | `telemetry.sqlite` | The store (below), with its WAL files |
 | `ingame-build/` | The in-game code built at start, which the brain deploys |
 | `saves/<environment>/` | The game's save backups ([below](#save-backups)) |
-| `brain.log` | The brain's output and each restart, when the scheduled task runs it ([docs/setup.md](../../docs/setup.md)) |
 
 `config.json`:
 
@@ -166,7 +163,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
 - **Setting up the game? Pause supervision on the dashboard first.** An E0 brain on Windows launches Bitburner within 30 s of starting. It kills and relaunches it if no Agent reports for about 5 minutes. That's always the case before the game's settings are made, before the first `run agent/boot.js`, and on a new save. Resume once the dashboard shows the Agent connected.
 - **Every 30 s, unless paused or given up**, it looks, and waits are counted in checks, not by the clock. So the clock stepping (time sync, waking from sleep) can't make a healthy game look silent, or hide a frozen one:
   - **Not running** → launch it through Steam (`cmd /c start "" steam://rungameid/1812820`), as a player does. Cause: `notRunning`.
-    - This also starts the game at logon: whatever starts the brain at logon (#95) starts the game with it.
+    - So starting the brain starts the game: after a reboot, `npm run brain` brings both back.
     - **After a launch it waits 10 checks (5 minutes) before doing anything else,** so Steam can start, log in or update the game. If the game still isn't running then, it launches again.
   - **Running, but no new heartbeat for 10 checks in a row** (the fast snapshot, every 2 s; about 5 minutes) → kill it (`taskkill /IM bitburner.exe /T /F`) and launch it. Cause: `silent`.
     - This covers a frozen page, and an Agent that died while the game runs: a reload brings it back through autoexec.
@@ -196,7 +193,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
 The evidence for M2's exit criterion, "live snapshots on Steam for 24 h without gaps" (architecture §13):
 
 ```
-npm run gaps -- --data-dir D:\bitburner-agent --since 2026-10-27T00:00:00Z --until 2026-10-28T00:00:00Z
+npm run gaps -- --since 2026-10-27T00:00:00Z --until 2026-10-28T00:00:00Z
 ```
 
 - **What it lists:** every interval between consecutive fast snapshots (the heartbeat, every 2 s) longer than the threshold, including from the window's start to the first snapshot and from the last one to its end. It also shows the count, the first and last snapshots, and the longest interval.

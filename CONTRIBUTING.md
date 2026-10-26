@@ -86,12 +86,13 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
 Requires Node 24 (see `.node-version`).
 
 ```sh
-git clone --recurse-submodules https://github.com/UnderMyBed/bitburner-agent.git
+git clone https://github.com/UnderMyBed/bitburner-agent.git
 cd bitburner-agent
-npm ci
-npm run setup:engine # the game's own dependencies, needed by the simulator (packages/sim)
+npm run bootstrap    # the submodule, npm ci, and the game's own dependencies (npm run setup:engine)
 npm run check        # typecheck + lint/format + tests: the same gates CI runs
 ```
+
+Everything stays in the repo: nothing is installed outside it (owner decision 30).
 
 | Command | What it does |
 |---|---|
@@ -99,9 +100,9 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 | `npm run lint` / `npm run lint:fix` | Biome lint and format check, warnings are errors / apply fixes |
 | `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/` and `tools/`, except E2's `*.e2.test.ts`. Builds the engine bundle first if it's stale, so it needs `npm run setup:engine` once |
 | `npm run e2:build` / `npm run e2:install` / `npm run e2` | E2 ([`packages/e2`](packages/e2/README.md)): build the pinned game from the submodule into `.cache/e2/<commit>/` (once per commit, about 90 s) / download Playwright's Chromium headless shell into `.cache/e2/browsers/` (once) / run the E2 tests (`*.e2.test.ts`). A heavy tier: on demand when touching `ingame/` or `bridge/`, and before releases, not in CI |
-| `npm run brain -- --data-dir <dir>` | Run the brain process: the control channel, the deployer, the save backups, the telemetry store, the dashboard on `127.0.0.1:12527`, and (an E0 brain on Windows) the game's supervisor ([`packages/brain`](packages/brain/README.md)) |
-| `npm run gaps -- --data-dir <dir> --since <ISO time>` | List gaps in the stored fast snapshots; exits 0 only when there are none ([`packages/brain`](packages/brain/README.md#the-gap-report)) |
-| `npm run setup:windows -- -DataDir <absolute dir> [-WhatIf]`, or `-- -Uninstall [-WhatIf]` | Install, or stop and remove, the brain's scheduled task on the owner's Windows machine ([docs/setup.md](docs/setup.md)). The owner's action only: tests run it with `-WhatIf` |
+| `npm run bootstrap` | A clone to working: the `vendor/bitburner-src` submodule, `npm ci`, then `npm run setup:engine`. Says each step, stops at the first failure, safe to run again ([`tools/bootstrap`](tools/bootstrap/bootstrap.ts)) |
+| `npm run brain [-- --data-dir <dir>]` | Run the brain process, from the repo, until stopped: the control channel, the deployer, the save backups, the telemetry store, the dashboard on `127.0.0.1:12527`, and (an E0 brain on Windows) the game's supervisor. Its data is in the repo's `.data/` unless given another ([`packages/brain`](packages/brain/README.md), [docs/setup.md](docs/setup.md)). Tests always give their own data directory |
+| `npm run gaps -- [--data-dir <dir>] --since <ISO time>` | List gaps in the stored fast snapshots; exits 0 only when there are none ([`packages/brain`](packages/brain/README.md#the-gap-report)) |
 | `npm run build -w @bitburner-agent/ingame` | Bundle the in-game scripts into `packages/ingame/dist/`, with a manifest ([`packages/ingame`](packages/ingame/README.md)). Tests build their own copy |
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
 | `npm run sim -- <scenario.json>` | Run a simulator scenario across seeds and print the results ([docs/sim/scenarios.md](docs/sim/scenarios.md)) |
