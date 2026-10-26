@@ -43,7 +43,7 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 | Message | Meaning |
 |---|---|
 | `welcome` | Accepted: the Agent sends all four tiers at once (a full snapshot), then each at its cadence (#89) |
-| `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits (#88) |
+| `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits, and `boot.js` starts the deployment `agent/current.txt` names (#88). If `boot.js` can't start, the Agent stays |
 
 ## Close codes, and what the Agent does
 
@@ -56,7 +56,7 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 | 4003 | The `hello`'s token is wrong | Reconnects with backoff (a new token means a new deployment, which the check below catches) |
 | 1003, 1007, 1009 | A binary frame, invalid UTF-8, a frame over 16 MiB | Reconnects with backoff |
 
-Before each reconnect, the Agent reads `agent/current.txt` (which costs no RAM). If it no longer names the Agent's deployment, the Agent runs `agent/boot.js` and exits.
+Before each reconnect, the Agent reads `agent/current.txt` (which costs no RAM). If it holds a valid id of another deployment, the Agent runs `agent/boot.js` and exits; if it's empty, missing or invalid, the Agent reconnects. If `boot.js` can't start (home is too full), the Agent carries on, so one is always running. After a 4000, it exits without reading it. The backoff is 1 s, doubling to 30 s, back to 1 s after a `welcome` ([the Agent's lifecycle](../../packages/ingame/README.md#the-agent)).
 
 Every refusal is reported (`connectionRejected`, with the reason, and the origin for a 403), so a wrong setting shows on the dashboard instead of failing silently.
 

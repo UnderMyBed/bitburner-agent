@@ -18,6 +18,7 @@ import {
   deployedFilePath,
   deploymentIdOfPath,
   encodeControlMessage,
+  isValidDeploymentId,
   parseAgentConfig,
   parseBrainMessage,
   TOKEN_FILE_NAME,
@@ -56,27 +57,36 @@ export async function main(ns: NS): Promise<void> {
   };
   const ownDeploymentId = deploymentIdOfPath(ns.getScriptName());
   if (!ownDeploymentId) {
-    reportCantStart(`${ns.getScriptName()} isn't in a deployment folder (agent/<deploymentId>/)`);
-    return;
+    return reportCantStart(`${ns.getScriptName()} isn't in a deployment folder (agent/<deploymentId>/)`);
   }
-  const parsedConfig = parseAgentConfig(ns.read(deployedFilePath(ownDeploymentId, AGENT_CONFIG_FILE_NAME)));
-  const token = ns.read(deployedFilePath(ownDeploymentId, TOKEN_FILE_NAME)).trim();
-  if (!parsedConfig.ok || token === "") {
-    reportCantStart(parsedConfig.ok ? "token.txt is empty" : `config.json has ${parsedConfig.reason}`);
-    return;
-  }
+  const configText = ns.read(deployedFilePath(ownDeploymentId, AGENT_CONFIG_FILE_NAME));
+  if (configText === "") return reportCantStart("config.json is missing or empty");
+  const parsedConfig = parseAgentConfig(configText);
+  if (!parsedConfig.ok) return reportCantStart(`config.json isn't valid (${parsedConfig.reason})`);
   const { deploymentId, controlPort } = parsedConfig.config;
+  if (deploymentId !== ownDeploymentId) {
+    return reportCantStart(`config.json names deployment ${deploymentId}, not its folder's ${ownDeploymentId}`);
+  }
+  const token = ns.read(deployedFilePath(ownDeploymentId, TOKEN_FILE_NAME)).trim();
+  if (token === "") return reportCantStart("token.txt is missing or empty");
   const agentSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const game = ns.ui.getGameInfo();
 
-  /** Starts `agent/boot.js`, which starts the deployed Agent, and ends this one. */
-  const handOverToBoot = (why: string) => {
-    ns.print(`agent: ${why}; handing over to ${BOOT_SCRIPT}`);
-    ns.run(BOOT_SCRIPT);
+  // The game logs why a start failed (no RAM, a missing file) only with run's log on.
+  ns.enableLog("run");
+  /**
+   * Starts `agent/boot.js`, which starts the deployed Agent; the caller then exits. Returns false if it couldn't (home
+   * is full): this Agent carries on, so there is always one, and tries again at its next disconnect.
+   */
+  const startedBoot = (why: string): boolean => {
+    // With this Agent's pid, boot.js waits for it to exit before starting the deployed one.
+    const started = ns.run(BOOT_SCRIPT, 1, ns.pid) !== 0;
+    ns.print(`agent: ${why}; ${started ? "handed over to" : "carrying on: couldn't start"} ${BOOT_SCRIPT}`);
+    return started;
   };
 
   let socket: WebSocket | null = null;
-  // A killed Agent must not leave its socket open: sockets outlive scripts.
+  // However it ends (returning, or killed), the Agent must not leave its socket open: sockets outlive scripts.
   ns.atExit(() => socket?.close(1000, "agent exiting"));
 
   let reconnectDelayMs = FIRST_RECONNECT_DELAY_MS;
@@ -114,9 +124,8 @@ export async function main(ns: NS): Promise<void> {
         if (event.message.type === "welcome") {
           reconnectDelayMs = FIRST_RECONNECT_DELAY_MS;
           ns.print(`agent: welcomed (session ${agentSessionId})`);
-        } else {
-          connection.close(1000, "restarting");
-          return handOverToBoot(`told to restart onto ${event.message.deploymentId}`);
+        } else if (event.message.type === "restart") {
+          if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;
         }
       } else {
         closeCode = event.code;
@@ -129,11 +138,11 @@ export async function main(ns: NS): Promise<void> {
       ns.print("agent: replaced by a newer Agent; exiting");
       return;
     }
-    // Deployed again while disconnected (a new token or port means a new deployment): the new one takes over.
+    // Deployed again while disconnected (a new token or port means a new deployment): the new one takes over. Not
+    // for an empty or invalid current.txt, which boot.js would refuse, leaving no Agent.
     const currentDeploymentId = ns.read(CURRENT_DEPLOYMENT_FILE).trim();
-    if (currentDeploymentId !== "" && currentDeploymentId !== deploymentId) {
-      return handOverToBoot(`${CURRENT_DEPLOYMENT_FILE} now names ${currentDeploymentId}`);
-    }
+    const deployedElsewhere = isValidDeploymentId(currentDeploymentId) && currentDeploymentId !== deploymentId;
+    if (deployedElsewhere && startedBoot(`${CURRENT_DEPLOYMENT_FILE} now names ${currentDeploymentId}`)) return;
     ns.print(`agent: disconnected (${closeCode}); reconnecting in ${reconnectDelayMs / 1000} s`);
     await ns.sleep(reconnectDelayMs);
     reconnectDelayMs = Math.min(reconnectDelayMs * 2, LONGEST_RECONNECT_DELAY_MS);

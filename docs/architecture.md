@@ -261,8 +261,8 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 ### 5.1 Agent
 - One persistent script, held to a **≤ 3 GB** budget that we enforce.
 - It holds the WebSocket to the brain and runs the Snapshotter and Reconciler. It never calls expensive NS functions directly.
-- **Socket handlers never call `ns`.** While a script awaits an `ns` promise such as `ns.sleep`, the game kills it for an `ns` call from any other callback. So the handlers only queue events, and the main loop acts on them ([lifecycle and details](../packages/ingame/README.md#the-agent)).
-- **Observe-only (M2):** before the reconciler exists (M3), the Agent launches and kills nothing except its own workers.
+- **Socket handlers never call `ns`.** While a script awaits a call the game delays, such as `ns.sleep` or `hack`, the game kills it for an `ns` call from any other callback. So the handlers only queue events, and the main loop acts on them ([lifecycle and details](../packages/ingame/README.md#the-agent)).
+- **Observe-only (M2):** before the reconciler exists (M3), the Agent launches and kills nothing except its own workers and `agent/boot.js`.
 - Expensive calls go to **worker scripts**: tiny, single-purpose, short-lived. They write their results to a port or file. This is the fork's `getNsDataThroughFile` pattern, formalised.
 - **RAM reservation:** the agent and its workers get a fixed reserved slice of home RAM, sized from measured worker peaks. Reflexes, the batcher in particular, receive their RAM budget from the reconciler and never use the reservation. On an 8 GB start the reservation is the first claim on RAM. When RAM is starved, the agent drops to slower snapshot tiers instead of growing.
 
@@ -354,7 +354,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 - **Version handshake:** the Agent's `hello` names its deployment and the game's version. If the deployer knows a different deployment is deployed, isn't on hold and its last deploy didn't fail, the brain tells the Agent to restart onto it, once per outdated deployment, so neither a hold, a failed deploy nor a reloaded save can cause a restart loop.
 - **Atomic deploys.** Each deployment (a build plus its configuration) goes into its own folder (`agent/<deploymentId>/…`; the layout is in [`packages/ingame`](../packages/ingame/README.md#deploy-layout)):
   - **RAM:** every pushed script's RAM is verified with `calculateRam`. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise.
-  - **Switch-over:** the deployer writes `agent/current.txt` last, then has the old Agent restart: it runs `agent/boot.js`, which starts the new deployment's Agent, and exits ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
+  - **Switch-over:** the deployer writes `agent/current.txt` last, then has the old Agent restart: it runs `agent/boot.js` with its pid and exits, and `boot.js` waits for it to go, then starts the new deployment's Agent ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
   - **Release gate:** only tagged releases are deployed to Steam.
 - **Save backups:**
   - `getSaveFile` every N minutes, with rotation, **plus immediately before every irreversible intent** (install, BitNode change). Save corruption is a known open issue on 3.0.1 (#2809).
@@ -534,7 +534,7 @@ spikes/         throwaway experiments; findings in docs/spikes/
 tools/          repository tooling run by Node, under the same gates (upstream-watch: the upstream stable and dev watchers; typecheck: every config, each in its environment)
 vendor/         bitburner-src submodule (pinned, read-only)
 ```
-- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `bridge` ← `brain`; `sim` ← `brain` for the lockstep driver only (type imports and tests: the live brain never loads the simulator); `dashboard` reads the store only. `bridge` never depends on `sim`, so the live transport stays free of the simulator. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
+- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `bridge` ← `brain`; `sim` ← `brain` for the lockstep driver only (type imports and tests: the live brain never loads the simulator); `ingame` ← `brain` for tests only (its build, to run the Agent against the control channel); `dashboard` reads the store only. `bridge` never depends on `sim`, so the live transport stays free of the simulator. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
 - **Type environments differ per package:** Node-side packages get Node types. `ingame` gets the browser `lib` plus the pinned NS definitions, read straight from the submodule as `@nsdefs` (no generated types package; the live drift check is the bridge's, §12.4), and no Node types. `core` gets neither, since both sides import it. Each package has its own config, and tests (which run in Node) have their own where the package's environment differs ([CONTRIBUTING](../CONTRIBUTING.md#typescript-configs)).
 - **Real saves stay local:** Steam save copies used as fixtures live in a gitignored folder. The public repo only carries fixtures generated by the simulator.
 
