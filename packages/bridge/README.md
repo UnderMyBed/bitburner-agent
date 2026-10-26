@@ -29,7 +29,8 @@ The protocol, close codes and rules are in [docs/bridge/protocol.md](../../docs/
 - **`Clock`:** the channel reads time and sets its hello timeout only through the clock it's given: `systemClock` live, virtual time under the simulator (architecture R11).
 - **A listener that throws** can't stop the other listeners or leave the channel half-changed: events go out once its state is settled. Its error goes to `onListenerError`, by default raised afterwards as an uncaught exception, so the brain fails fast and is restarted rather than carry on without its store.
 - **Bounded for 24/7 runs:** the channel keeps the sequence numbering of the last `REMEMBERED_SESSIONS` (4) Agent sessions only.
-- **`startWebSocketServer`** binds `127.0.0.1` and refuses an upgrade whose `Origin` isn't allowed (HTTP 403), reporting it. Nothing a client sends can crash the brain: invalid UTF-8, a binary frame or one over `MAX_FRAME_BYTES` (16 MiB) closes that connection only. A port already in use rejects the start.
+- **`startWebSocketServer`** binds `127.0.0.1` and refuses an upgrade whose `Origin` isn't allowed (HTTP 403), reporting it. Nothing a client sends can crash the brain: invalid UTF-8, a binary frame or one over the size limit closes that connection only (1009 for size). A port already in use rejects the start.
+  - **The size limit** is `maxFrameBytes`: by default `MAX_FRAME_BYTES` (16 MiB), well over the control channel's largest frame. The brain gives the RFA server `REMOTE_FILE_API_MAX_FRAME_BYTES` (128 MiB), since a `getSaveFile` reply is about twice the gzip save's size.
 
 ## The deployer and the Remote File API
 
@@ -65,4 +66,6 @@ The deploy steps are in [docs/bridge/protocol.md, "Deploying"](../../docs/bridge
 - `test/control-channel.property.test.ts`: fast-check; snapshots with duplicates, drops, reordering and reconnects.
 - `test/websocket-server.test.ts`: the real server on a random port.
 - `test/rfa-client.test.ts` and `test/deployer.test.ts`: against `FakeRfaGame` (`test/helpers/fakes.ts`), which answers as the game's `MessageHandlers.ts` and `removeFile` do, with their messages (it checks only file extensions, not whole paths). It can drop the connection, stay silent, or report a close late as `ws` does. Its `getSaveFile` answers with a Steam-style save (`steamSaveFile`).
-- **For other packages' tests:** `@bitburner-agent/bridge/test-helpers` exports these fakes (`FakeRfaGame`, `MemoryConnection`, `ManualClock`, `steamSaveFile`). The brain's save-backup tests use them.- The game's real RFA code is covered in the simulator: `packages/brain/test/deploy.test.ts`.
+- **For other packages' tests:** `@bitburner-agent/bridge/test-helpers` exports these fakes (`FakeRfaGame`, `MemoryConnection`, `ManualClock`, `steamSaveFile`). The brain's save-backup tests use them.
+- The game's real RFA code is covered in the simulator: `packages/brain/test/deploy.test.ts`, `save-backup-round-trip.test.ts` and the skeleton suite, where the deployer and the save backups share the game's connection.
+

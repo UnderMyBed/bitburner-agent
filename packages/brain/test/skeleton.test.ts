@@ -3,7 +3,7 @@
 // deployer and store, the game deploys through its own Remote File API client, and the built Agent plays its part, on
 // the lockstep driver at a fixed step. The pieces are tested on their own elsewhere (#88–#91); this tests them together,
 // on every PR.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { InGameBuild } from "@bitburner-agent/bridge";
@@ -76,9 +76,11 @@ async function freshStartWithBrain({ deliveredCopies }: Pick<SimulatedGameOption
     gameSettings: { ...BRAIN_RFA_SETTINGS, AutoexecScript: BOOT_SCRIPT },
   });
   const game = await SimulatedGame.create({ simulation, stepMs: STEP_MS, deliveredCopies });
-  const store = TelemetryStore.open(path.join(temporaryDirectory, `telemetry-${++storeCount}.sqlite`));
+  const dataDirectory = path.join(temporaryDirectory, `data-${++storeCount}`);
+  mkdirSync(dataDirectory);
+  const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
   openStores.push(store);
-  const brain = startBrainInSimulation(game, { build, recordInto: { store, brainRelease: BRAIN_RELEASE } });
+  const brain = startBrainInSimulation(game, { build, data: { store, brainRelease: BRAIN_RELEASE, dataDirectory } });
   await game.runUntil(() => brain.deployerEvents.length > 0, 10_000);
   expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
   expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
@@ -184,7 +186,9 @@ test("8 GB fresh start: for 10 virtual minutes every tier arrives within the Age
     expect(fast?.homeMaxRam).toBe(8);
   }
   expect(skeleton.gapsSince(welcomedAtMs).gaps).toEqual([]);
-  expect(skeleton.storedEventKinds()).toEqual(["deployed", "agentConnected"]);
+  // The save backup shares the RFA connection with the deploy, and both succeed.
+  expect(skeleton.storedEventKinds()).toEqual(["saveBackup", "deployed", "agentConnected"]);
+  expect(brain.saveBackupEvents).toEqual([expect.objectContaining({ file: expect.stringMatching(/^saves\/E1\//) })]);
 });
 
 test("reload: the save loads into a new simulation, autoexec brings the Agent back, and it sends a full snapshot", async () => {
@@ -217,10 +221,18 @@ test("reload: the save loads into a new simulation, autoexec brings the Agent ba
   expect(reloadedAgent).toMatchObject({ temporary: true });
   expect((await reloaded.ps("home")).filter((process) => process.filename === agentFile)).toHaveLength(1);
   // The reloaded game's RFA client reconnects (its settings came from the save), and the deployer finds its own
-  // deployment current: nothing is deployed again.
+  // deployment current: nothing is deployed again. The new connection brings a save backup of its own.
   await game.runUntil(() => brain.remoteFileApiConnections.length === 2, RFA_RECONNECT_SECONDS * 1_000 + 1_000);
   await game.run(5_000);
-  expect(skeleton.storedEventKinds()).toEqual(["deployed", "agentConnected", "agentDisconnected", "agentConnected"]);
+  expect(skeleton.storedEventKinds()).toEqual([
+    "saveBackup",
+    "deployed",
+    "agentConnected",
+    "agentDisconnected",
+    "agentConnected",
+    "saveBackup",
+  ]);
+  expect(brain.saveBackupEvents.every((event) => "file" in event)).toBe(true);
   await skeleton.expectHomeWithinTheAgentPlusOneWorker(reloaded);
 });
 

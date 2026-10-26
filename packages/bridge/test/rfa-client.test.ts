@@ -113,6 +113,10 @@ test("getSaveFile gives the game's save: its identifier, whether it's binary, an
   const malformed = client.getSaveFile();
   reply(2, { result: { binary: true, save: 7 } });
   await expect(malformed).rejects.toThrow(/getSaveFile: unexpected reply/);
+  // A reply with no result at all is an RfaError too, never a TypeError (which would crash the brain).
+  const empty = client.getSaveFile();
+  connection.receive(JSON.stringify({ jsonrpc: "2.0", id: 3 }));
+  await expect(empty).rejects.toMatchObject({ name: "RfaError", message: "getSaveFile: unexpected reply null" });
 });
 
 test("a reply of the wrong type for the method is an error, not a value", async () => {

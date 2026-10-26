@@ -1,7 +1,8 @@
-// Rotating save backups (#92, architecture §6, R8): the game's own save, taken over the Remote File API on every
-// connection and every interval, validated, filed under its environment, and rotated. Insurance against a bug or a
-// corrupted save, and a source of real starting states for the simulator: these are the bytes Steam writes to
-// bitburnerSave_*.json.gz, which the simulator loads as a save fixture and the game's Options → Import Game accepts.
+// Rotating save backups (#92, architecture §6; R8's backups before irreversible intents come with intents, M3): the
+// game's save, taken over the Remote File API on every connection and every interval, validated, filed under its
+// environment, and rotated. Insurance against a bug or a corrupted save, and a source of real starting states for the
+// simulator: a backup is the game's save at that moment in the format Steam writes to bitburnerSave_*.json.gz, which the
+// simulator loads as a save fixture and the game's Options → Import Game accepts.
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -13,48 +14,67 @@ import {
   RfaClient,
   RfaError,
 } from "@bitburner-agent/bridge";
+import type { Environment } from "./telemetry-store.ts";
 
+/** Where backups go inside the data directory: one folder per environment. */
+export const SAVE_BACKUPS_DIRECTORY_NAME = "saves";
 /** A backup's file name: its UTC time, with `-` for `:` (which Windows doesn't allow), then `.json.gz`. */
 const BACKUP_FILE_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.json\.gz$/;
+const PARTIAL_SUFFIX = ".partial";
+/** The longest delay a timer takes: Node runs a longer one after 1 ms. */
+export const MAX_BACKUP_INTERVAL_MS = 2 ** 31 - 1;
 
 export type SaveBackupEvent =
+  /** `file` is relative to the data directory, e.g. `saves/E0/2026-10-27T03-30-00.000Z.json.gz`. */
   | { type: "saveBackup"; atMs: number; file: string; sizeBytes: number }
-  | { type: "saveBackup"; atMs: number; failure: string };
+  | { type: "saveBackup"; atMs: number; failure: string }
+  /** The backup was kept, but older ones couldn't all be deleted; the next rotation tries again. */
+  | { type: "saveBackupRotationFailed"; atMs: number; failure: string };
 
 export interface SaveBackupsOptions {
-  /** This environment's backups: `<data dir>/saves/<environment>`, created when the first is written. */
-  directory: string;
-  intervalMs: number;
-  /** How many backups to keep in `directory`: the newest. */
-  kept: number;
+  dataDirectory: string;
+  /** Backups go to `<dataDirectory>/saves/<environment>`, so environments never mix (architecture §9.4). */
+  environment: Environment;
+  /** From the brain's start, at most `MAX_BACKUP_INTERVAL_MS`. */
+  backupIntervalMs: number;
+  /** How many backups to keep in this environment's folder: the newest. */
+  backupsKept: number;
   clock: Clock;
-  /** Where a listener's error goes. Default: raised as an uncaught exception, so the brain fails fast. */
-  onListenerError?: (error: unknown) => void;
 }
 
 /** A save that came back but can't be kept. */
 class DamagedSaveError extends Error {}
+/** The disk refused (full, read-only, in use): an operating system error, which has a `syscall`. */
+class DiskError extends Error {}
+
+const isOperatingSystemError = (error: unknown): error is NodeJS.ErrnoException =>
+  error instanceof Error && typeof (error as NodeJS.ErrnoException).syscall === "string";
 
 export class SaveBackups {
   readonly #options: SaveBackupsOptions;
-  readonly #listeners: EventListeners<SaveBackupEvent>;
-  /** The newest connection's client: the one the interval's backups go over. */
+  readonly #directory: string;
+  readonly #listeners = new EventListeners<SaveBackupEvent>();
+  /** The newest connection's client, while it's open: the one the interval's backups go over. */
   #client: RfaClient | null = null;
-  #taking = false;
-  /** A backup was asked for while one was under way: it's taken as soon as that one ends. */
-  #takeAgain = false;
+  #takingBackup = false;
+  /** A backup was asked for while one was under way: it's taken as soon as that one ends (several become one). */
+  #backupAskedForWhileTaking = false;
 
-  /** Starts the interval at once; the first backup comes with the game's first connection. */
+  /** Starts the interval at once; each connection brings a backup of its own. */
   constructor(options: SaveBackupsOptions) {
-    if (!(options.intervalMs > 0)) throw new RangeError("the backup interval must be positive");
-    if (!Number.isInteger(options.kept) || options.kept < 1) throw new RangeError("at least one backup must be kept");
+    if (!(options.backupIntervalMs >= 1 && options.backupIntervalMs <= MAX_BACKUP_INTERVAL_MS)) {
+      throw new RangeError(`the backup interval must be from 1 ms to ${MAX_BACKUP_INTERVAL_MS} ms`);
+    }
+    if (!Number.isInteger(options.backupsKept) || options.backupsKept < 1) {
+      throw new RangeError("at least one backup must be kept");
+    }
     this.#options = options;
-    this.#listeners = new EventListeners(options.onListenerError);
+    this.#directory = path.join(options.dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME, options.environment);
     const everyInterval = () => {
-      void this.#take();
-      options.clock.setTimeout(everyInterval, options.intervalMs);
+      void this.#takeBackup();
+      options.clock.setTimeout(everyInterval, options.backupIntervalMs);
     };
-    options.clock.setTimeout(everyInterval, options.intervalMs);
+    options.clock.setTimeout(everyInterval, options.backupIntervalMs);
   }
 
   /** Calls `listener` with every event from now on; returns a function that stops it. */
@@ -64,69 +84,115 @@ export class SaveBackups {
 
   /**
    * Takes a Remote File API connection from the game (beside the deployer, on its own client: request ids are unique
-   * per connection): a backup now, and the interval's backups over it until a newer one comes.
+   * per connection): a backup now, and the interval's backups over it until it closes or a newer one comes.
    */
   accept(connection: Connection): void {
-    this.#client = new RfaClient(connection, this.#options.clock);
-    void this.#take();
+    const client = new RfaClient(connection, this.#options.clock);
+    this.#client = client;
+    connection.onClose(() => {
+      if (this.#client === client) this.#client = null;
+    });
+    void this.#takeBackup();
   }
 
   /**
    * One at a time. A backup asked for while one is under way follows it, over the newest connection then, so a new
    * connection's backup isn't lost to one still waiting on an older connection.
    */
-  async #take(): Promise<void> {
-    if (this.#taking) {
-      this.#takeAgain = true;
+  async #takeBackup(): Promise<void> {
+    if (this.#takingBackup) {
+      this.#backupAskedForWhileTaking = true;
       return;
     }
     const client = this.#client;
-    if (!client) return this.#fail("no Remote File API connection");
-    this.#taking = true;
+    if (!client) return this.#recordFailure("no Remote File API connection");
+    this.#takingBackup = true;
     try {
       const bytes = validSaveBytes(await client.getSaveFile());
-      const file = this.#write(bytes);
-      this.#rotate();
+      const fileName = this.#writeBackup(bytes);
+      const file = path.posix.join(SAVE_BACKUPS_DIRECTORY_NAME, this.#options.environment, fileName);
       this.#listeners.emit({ type: "saveBackup", atMs: this.#options.clock.now(), file, sizeBytes: bytes.length });
+      this.#rotateBackups(fileName);
     } catch (error) {
       // The game's side, or the disk: recorded, never kept. Anything else is a bug, which crashes the brain.
-      const isFileSystemError = error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string";
-      if (!(error instanceof RfaError || error instanceof DamagedSaveError || isFileSystemError)) throw error;
-      this.#fail((error as Error).message);
+      if (!(error instanceof RfaError || error instanceof DamagedSaveError || error instanceof DiskError)) throw error;
+      this.#recordFailure(error.message);
     } finally {
-      this.#taking = false;
+      this.#takingBackup = false;
     }
-    if (this.#takeAgain) {
-      this.#takeAgain = false;
-      await this.#take();
+    if (this.#backupAskedForWhileTaking) {
+      this.#backupAskedForWhileTaking = false;
+      await this.#takeBackup();
     }
   }
 
-  #fail(failure: string): void {
+  #recordFailure(failure: string): void {
     this.#listeners.emit({ type: "saveBackup", atMs: this.#options.clock.now(), failure });
   }
 
-  /** Written under a temporary name, then renamed, so a crash never leaves half a backup among the real ones. */
-  #write(bytes: Buffer): string {
-    const { directory, clock } = this.#options;
-    mkdirSync(directory, { recursive: true });
-    const file = path.join(directory, `${new Date(clock.now()).toISOString().replaceAll(":", "-")}.json.gz`);
-    writeFileSync(`${file}.partial`, bytes);
-    renameSync(`${file}.partial`, file);
-    return file;
+  /**
+   * Written under a temporary name, then renamed, so a half-written backup is only ever a `.partial` file, which isn't
+   * counted as a backup (and is removed on failure, or by the next rotation). Two backups in the same millisecond: the
+   * second replaces the first.
+   */
+  #writeBackup(bytes: Buffer): string {
+    const fileName = `${new Date(this.#options.clock.now()).toISOString().replaceAll(":", "-")}.json.gz`;
+    const file = path.join(this.#directory, fileName);
+    try {
+      mkdirSync(this.#directory, { recursive: true });
+      writeFileSync(`${file}${PARTIAL_SUFFIX}`, bytes);
+      renameSync(`${file}${PARTIAL_SUFFIX}`, file);
+    } catch (error) {
+      rmSync(`${file}${PARTIAL_SUFFIX}`, { force: true });
+      if (!isOperatingSystemError(error)) throw error;
+      throw new DiskError(`couldn't write ${fileName}: ${error.message}`);
+    }
+    return fileName;
   }
 
-  /** Keeps the newest `kept` backups. Only files named as backups count: nothing else in the folder is touched. */
-  #rotate(): void {
-    const { directory, kept } = this.#options;
-    const backups = readdirSync(directory)
-      .filter((name) => BACKUP_FILE_NAME.test(name))
-      .sort();
-    for (const name of backups.slice(0, Math.max(0, backups.length - kept))) rmSync(path.join(directory, name));
+  /**
+   * Keeps the newest `backupsKept` backups, and removes partial ones. Only files named as backups count: nothing else
+   * in the folder is touched. The backup just written is never deleted, even if the clock went back and its name sorts
+   * first. A file that can't be deleted is reported, and the rest are still tried.
+   */
+  #rotateBackups(justWritten: string): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.#directory);
+    } catch (error) {
+      if (!isOperatingSystemError(error)) throw error;
+      this.#recordRotationFailure(`couldn't list ${this.#directory}: ${error.message}`);
+      return;
+    }
+    const backups = names.filter((name) => BACKUP_FILE_NAME.test(name) && name !== justWritten).sort();
+    const toDelete = [
+      ...backups.slice(0, Math.max(0, backups.length - (this.#options.backupsKept - 1))),
+      ...names.filter(
+        (name) => name.endsWith(PARTIAL_SUFFIX) && BACKUP_FILE_NAME.test(name.slice(0, -PARTIAL_SUFFIX.length)),
+      ),
+    ];
+    const failures: string[] = [];
+    for (const name of toDelete) {
+      try {
+        rmSync(path.join(this.#directory, name));
+      } catch (error) {
+        if (!isOperatingSystemError(error)) throw error;
+        failures.push(`${name}: ${error.message}`);
+      }
+    }
+    if (failures.length > 0) this.#recordRotationFailure(`couldn't delete ${failures.join("; ")}`);
+  }
+
+  #recordRotationFailure(failure: string): void {
+    this.#listeners.emit({ type: "saveBackupRotationFailed", atMs: this.#options.clock.now(), failure });
   }
 }
 
-/** The save's gzip bytes, once they're known to gunzip into a Bitburner save; otherwise why not. */
+/**
+ * The save's gzip bytes, once they're known to be what the game's own Import Game accepts: gzip, strict UTF-8, JSON, a
+ * `BitburnerSaveObject` whose `data.PlayerSave` is a string (SaveDataUtils.ts:25, SaveObject.ts:157-167). Otherwise a
+ * `DamagedSaveError` saying why not.
+ */
 function validSaveBytes({ binary, save }: GameSaveFile): Buffer {
   if (!binary) throw new DamagedSaveError("the game sent its save as text (binary: false), not Steam's gzip bytes");
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the range is every byte value
@@ -134,9 +200,9 @@ function validSaveBytes({ binary, save }: GameSaveFile): Buffer {
   const bytes = Buffer.from(save, "latin1");
   let json: string;
   try {
-    json = gunzipSync(bytes).toString("utf8");
+    json = new TextDecoder("utf-8", { fatal: true }).decode(gunzipSync(bytes));
   } catch (error) {
-    throw new DamagedSaveError(`the save doesn't gunzip (${(error as Error).message})`);
+    throw new DamagedSaveError(`the save doesn't gunzip into UTF-8 (${(error as Error).message})`);
   }
   let parsed: unknown;
   try {
@@ -144,8 +210,8 @@ function validSaveBytes({ binary, save }: GameSaveFile): Buffer {
   } catch (error) {
     throw new DamagedSaveError(`the save isn't JSON (${(error as Error).message})`);
   }
-  if ((parsed as { ctor?: unknown } | null)?.ctor !== "BitburnerSaveObject") {
-    throw new DamagedSaveError("the save isn't a BitburnerSaveObject");
-  }
+  const saveObject = parsed as { ctor?: unknown; data?: { PlayerSave?: unknown } } | null;
+  if (saveObject?.ctor !== "BitburnerSaveObject") throw new DamagedSaveError("the save isn't a BitburnerSaveObject");
+  if (typeof saveObject.data?.PlayerSave !== "string") throw new DamagedSaveError("the save has no player");
   return bytes;
 }

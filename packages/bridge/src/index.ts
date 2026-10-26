@@ -21,6 +21,7 @@ export { EventListeners, raiseAsUncaught } from "./event-listeners.ts";
 export { type GameSaveFile, RFA_REQUEST_TIMEOUT_MS, RfaClient, RfaError } from "./rfa-client.ts";
 export {
   MAX_FRAME_BYTES,
+  REMOTE_FILE_API_MAX_FRAME_BYTES,
   type RunningWebSocketServer,
   startWebSocketServer,
   type WebSocketServerOptions,

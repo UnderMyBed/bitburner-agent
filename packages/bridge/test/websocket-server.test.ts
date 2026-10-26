@@ -15,7 +15,10 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function start(): Promise<{ connections: Connection[]; rejectedOrigins: string[] }> {
+async function start({ maxFrameBytes }: { maxFrameBytes?: number } = {}): Promise<{
+  connections: Connection[];
+  rejectedOrigins: string[];
+}> {
   const connections: Connection[] = [];
   const rejectedOrigins: string[] = [];
   server = await startWebSocketServer({
@@ -23,6 +26,7 @@ async function start(): Promise<{ connections: Connection[]; rejectedOrigins: st
     allowedOrigins: [ALLOWED_ORIGIN],
     onConnection: (connection) => connections.push(connection),
     onRejectedOrigin: (origin) => rejectedOrigins.push(origin),
+    ...(maxFrameBytes === undefined ? {} : { maxFrameBytes }),
   });
   return { connections, rejectedOrigins };
 }
@@ -93,6 +97,14 @@ test("a binary frame closes that connection (1003)", async () => {
 
 test(`a frame over ${MAX_FRAME_BYTES / 1024 / 1024} MiB closes that connection (1009)`, async () => {
   await expectClosedAndServerAlive((client) => client.send("x".repeat(MAX_FRAME_BYTES + 1)), 1009);
+});
+
+test("a server can take larger frames (the Remote File API's save replies)", async () => {
+  const { connections } = await start({ maxFrameBytes: MAX_FRAME_BYTES + 1024 });
+  const client = await openClient();
+  const received = new Promise<string>((resolve) => (connections[0] as Connection).onMessage(resolve));
+  client.send("x".repeat(MAX_FRAME_BYTES + 1));
+  expect((await received).length).toBe(MAX_FRAME_BYTES + 1);
 });
 
 test("a port that's taken is a rejection, not a crash", async () => {

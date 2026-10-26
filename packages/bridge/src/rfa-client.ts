@@ -104,7 +104,8 @@ export class RfaClient {
     const result = await this.#request("getSaveFile", null);
     const { identifier, binary, save } = (result ?? {}) as Partial<GameSaveFile>;
     if (typeof identifier !== "string" || typeof binary !== "boolean" || typeof save !== "string") {
-      throw new RfaError("getSaveFile", `unexpected reply ${JSON.stringify(result).slice(0, 200)}`);
+      // `?? null`: a reply with no result would otherwise stringify to undefined, and the slice throw a TypeError.
+      throw new RfaError("getSaveFile", `unexpected reply ${JSON.stringify(result ?? null).slice(0, 200)}`);
     }
     return { identifier, binary, save };
   }

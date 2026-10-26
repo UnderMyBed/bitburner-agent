@@ -43,7 +43,9 @@ A config that isn't valid stops the brain, naming the file and the problem:
 - ports out of range, or two the same;
 - no allowed origins;
 - a token that isn't 64 hex digits;
-- a backup interval that isn't a positive number of minutes, or a count kept that isn't a whole number of at least 1. A config from before these fields existed is refused too, naming the field and its default, so add them.
+- a backup interval that isn't a number of minutes above 0 and at most 35791 (the longest a timer can wait, about 24.8 days), or a count kept that isn't a whole number of at least 1.
+
+A config from before the backup fields existed is refused too, naming one missing field and its default at a time. Add both (`"saveBackupIntervalMinutes": 30, "saveBackupsKept": 96`), or start from a fresh data directory.
 
 A port of 0 picks any free port, which is for tests only: the game's RFA settings can't name it, and a control port of 0 changes at every start, so every start would be a new deployment.
 
@@ -54,12 +56,12 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so the dashboard can r
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
-| `events` | Everything else the bridge reports: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deployFailed`, `versionDrift`; and the save backups' `saveBackup`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
+| `events` | Everything else the brain's parts report: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deployFailed`, `versionDrift`; and the save backups' `saveBackup`, `saveBackupRotationFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches the dashboard sets, e.g. pausing supervision (#93, #94) |
 
 - **Every row is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
   - the brain's `git describe` ("unknown" without git, which the startup log shows);
-  - plus the deployment of the Agent connected when the row arrived, or `none` while no Agent is. A deployer event's is the deployment the brain deploys.
+  - plus the deployment of the Agent connected when the row arrived, or `none` while no Agent is. A deployer or save-backup event's is the deployment the brain deploys.
 
   For example, `v0.2.0+3f2a1b…`.
 - **Writes wait up to 5 s** for a reader's lock, so a reader never fails a write.
@@ -70,19 +72,34 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so the dashboard can r
 
 The brain backs up the game's save over the Remote File API (`getSaveFile`; architecture §6). The backups are insurance against a bug or a corrupted save (game issue #2809 is open on 3.0.1), and real starting states for the simulator.
 
-- **When:** once on each RFA connection (the game connects on load and after a drop), and every `saveBackupIntervalMinutes` over the newest connection.
-  - One at a time: a backup asked for while one is under way follows it.
-  - With no connection, the interval's backup fails and is recorded, so a stretch with no backups shows.
-- **What:** Steam's own save, the bytes it writes to `bitburnerSave_*.json.gz`. The brain checks them before keeping them:
-  - the game sent them as bytes (`binary: true`). A page without CompressionStream sends text instead, which isn't Steam's;
+- **When:** once on each RFA connection (the game connects on load and after a drop), and every `saveBackupIntervalMinutes` from the brain's start, over the newest open connection.
+  - One at a time: a backup asked for while one is under way follows it (several such become one).
+  - With no open connection (none yet, or the last one closed), the interval's backup fails and is recorded, so a stretch with no backups shows.
+  - The backups share the RFA connection with the deployer, each on its own client (request ids are unique per connection).
+- **What:** the game's save at that moment, in the format Steam writes to `bitburnerSave_*.json.gz` (gzip bytes). It's a fresh save, not a copy of Steam's file. The brain checks it is what the game's own Import Game accepts before keeping it:
+  - the game sent it as bytes (`binary: true`). A page without CompressionStream sends text instead, which isn't Steam's;
   - every character is a byte;
-  - they gunzip, into JSON, and that JSON is a `BitburnerSaveObject`.
+  - it gunzips into valid UTF-8, then JSON, then a `BitburnerSaveObject` with a player (`data.PlayerSave`).
 - **Where:** `<data dir>/saves/<environment>/<UTC time>.json.gz`, for example `saves/E0/2026-10-27T03-30-00.000Z.json.gz` (`-` for `:`, which Windows doesn't allow).
   - Each environment has its own folder, so a simulator's or source build's backup (`E1`, `E2`) never sits beside Steam's (`E0`).
-  - Each is written under a temporary name, then renamed, so a crash never leaves half a backup.
-- **Rotation:** after each backup the brain keeps the newest `saveBackupsKept` in that environment's folder and deletes the rest. Only files named as backups count; anything else in the folder is left alone.
-- **Recorded:** every backup is a `saveBackup` event in the store, with the file and its size, or with the failure. A failed or damaged backup is never kept. Failures include no connection, no reply in 30 s, a save that isn't valid, and a disk error.
-- **Restoring one:** in the game, Options → Import Game, then pick the `.json.gz`. The game accepts these gzip files as they are (`src/SaveObject.ts:338-355`).
+  - Each is written under a temporary name, then renamed. A half-written backup is only ever a `<name>.partial` file: it's removed when the write fails, and by the next rotation after a crash.
+  - Two backups in the same millisecond: the second replaces the first.
+- **Rotation:** after each backup the brain keeps the newest `saveBackupsKept` in that environment's folder and deletes the rest.
+  - Only files named as backups count; anything else in the folder is left alone.
+  - The backup just written is never deleted, even if the clock went back and its name sorts first.
+  - An old backup that can't be deleted (in use, say) is reported as a `saveBackupRotationFailed` event, and the rest are still rotated.
+- **Recorded:** every backup is a `saveBackup` event in the store, with the file (relative to the data directory) and its size, or with the failure. A failed or damaged backup is never kept. Failures include:
+  - no open connection;
+  - no reply in 30 s;
+  - a save that isn't valid;
+  - a disk error.
+
+  Anything else is a bug, and stops the brain (fail fast).
+- **Size:** the RFA server takes frames up to 128 MiB. A save reply is about twice the gzip save's size, so saves up to about 60 MB gzipped come through. A larger one would close the connection.
+- **Restoring one:**
+  1. **First, stop the brain, or copy the backup you want out of `saves/`.** A running brain keeps backing up whatever the game holds, on every reconnect and every interval, and rotation deletes the oldest. After a bad bug, or a corruption that still loads, that would push the good backups out.
+  2. In the game: Options → Import Game, pick the `.json.gz`, then confirm. The game replaces the current save and reloads. It accepts these gzip files as they are (`src/SaveObject.ts:338-355`).
+  3. When the brain runs again, the reload's RFA connection backs up the restored save.
   - **Only `E0` backups may ever go into Steam.** Saves flow one way: nothing from the simulator or a source build goes back (architecture §9.4).
   - Backups are personal data. They live in the data directory, outside the repository; never commit one.
 - **In the simulator:** a backup loads as a save fixture as it is (`{ kind: "save", path }`), to the same state as the game's own save at that moment (`test/save-backup-round-trip.test.ts`).
@@ -150,13 +167,13 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 
 `test/skeleton.test.ts` is M2's exit criterion in the simulator (environment E1): "connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start" ([architecture §13](../../docs/architecture.md#13-milestones)). It runs on every PR, in about 25 s in CI, against a budget of 60 s.
 
-- **What runs:** the brain is wired like `main.ts` (`test/helpers/brain-in-simulation.ts`): its control channel, deployer and store, in `main.ts`'s order. The game deploys through its own Remote File API client, and the built Agent and workers play their part. Everything is on the lockstep driver at a fixed 100 ms step. `main.ts`'s own wiring, on real sockets, is tested by `brain-process.test.ts`.
+- **What runs:** the brain is wired like `main.ts` (`test/helpers/brain-in-simulation.ts`): its control channel, deployer, store and save backups, in `main.ts`'s order, with the deployer and the backups sharing the game's RFA connection. The game deploys through its own Remote File API client, and the built Agent and workers play their part. Everything is on the lockstep driver at a fixed 100 ms step. `main.ts`'s own wiring, on real sockets, is tested by `brain-process.test.ts`.
 - **The start:** a new game with 8 GB of home RAM, the tutorial skipped, and settings naming the brain's Remote File API and running `agent/boot.js` on autoexec. The brain deploys; the one-time `run agent/boot.js` brings the Agent up.
 
 | Scenario | What it shows |
 |---|---|
-| 8 GB fresh start | For 10 virtual minutes every tier arrives in the right number, each its period apart. Home never holds more than the Agent and one worker. The store holds every snapshot exactly once, numbered with none missed, and the gap report finds no gap |
-| Reload | The game's save, loaded into a new simulation, brings the Agent back through autoexec alone: the Agent is a temporary script, so the save doesn't hold it. It's a new session, from the same deployment, and it sends a full snapshot. The reloaded game's RFA client reconnects, and nothing is deployed again |
+| 8 GB fresh start | For 10 virtual minutes every tier arrives in the right number, each its period apart. Home never holds more than the Agent and one worker. The store holds every snapshot exactly once, numbered with none missed, and the gap report finds no gap. A save backup is taken beside the deploy, on the same connection |
+| Reload | The game's save, loaded into a new simulation, brings the Agent back through autoexec alone: the Agent is a temporary script, so the save doesn't hold it. It's a new session, from the same deployment, and it sends a full snapshot. The reloaded game's RFA client reconnects, nothing is deployed again, and a new backup is taken |
 | Reconnect | The brain drops the connection. The same Agent session comes back after its first backoff (1 s) with a full snapshot, its numbering carrying on, and there's no gap |
 | The Agent stopped for 30 s | The gap report finds exactly that one gap |
 | Faults on the wire | For 5 virtual minutes, snapshot frames are dropped (30%) and duplicated (15%) at random, seeded, and three heartbeats in a row are always dropped. Every snapshot that got through is stored once, and each records how many of its tier were dropped since the one stored before it. The gap report finds the gaps the drops made and no others |

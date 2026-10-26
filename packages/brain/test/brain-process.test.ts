@@ -65,8 +65,10 @@ test.each([
   ["the simulator's environment", { environment: "E1" }, /environment must be E0 or E2/],
   ["two ports the same", { dashboardPort: 12526 }, /the ports must be different/],
   ["no allowed origins", { allowedOrigins: [] }, /allowedOrigins must list at least one origin/],
-  ["no backup interval", { saveBackupIntervalMinutes: undefined }, /saveBackupIntervalMinutes must be a positive/],
-  ["a zero backup interval", { saveBackupIntervalMinutes: 0 }, /saveBackupIntervalMinutes must be a positive/],
+  ["no backup interval", { saveBackupIntervalMinutes: undefined }, /saveBackupIntervalMinutes must be a number/],
+  ["a zero backup interval", { saveBackupIntervalMinutes: 0 }, /above 0 and at most 35791 \(the default is 30\)/],
+  ["an interval a timer can't wait", { saveBackupIntervalMinutes: 35792 }, /above 0 and at most 35791/],
+  ["no backups-kept count", { saveBackupsKept: undefined }, /saveBackupsKept must be a whole number/],
   ["no backups kept", { saveBackupsKept: 0 }, /saveBackupsKept must be a whole number, at least 1/],
   ["a fraction of a backup kept", { saveBackupsKept: 2.5 }, /saveBackupsKept must be a whole number, at least 1/],
 ])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
@@ -138,7 +140,7 @@ test("the brain serves the Remote File API: a game whose definitions differ puts
 
 test("on a Remote File API connection the brain backs up the game's save under its environment, recorded", async () => {
   const { remoteFileApiPort } = await startBrain();
-  const save = gzipSync('{"ctor":"BitburnerSaveObject","data":{}}');
+  const save = gzipSync('{"ctor":"BitburnerSaveObject","data":{"PlayerSave":"{}"}}');
   const game = new WebSocket(`ws://127.0.0.1:${remoteFileApiPort}`, { origin: "file://" });
   // Answers as the Steam game: the save as gzip bytes, one character per byte; nothing else is answered.
   game.on("message", (frame) => {
@@ -156,8 +158,8 @@ test("on a Remote File API connection the brain backs up the game's save under i
   if (!event) throw new Error("no saveBackup event was recorded");
   expect(event).toMatchObject({ kind: "saveBackup", detail: { sizeBytes: save.length } });
   const file = (event.detail as { file: string }).file;
-  expect(path.dirname(file)).toBe(path.join(dataDirectory, "saves", "E2"));
-  expect(readFileSync(file).equals(save)).toBe(true);
+  expect(file).toMatch(/^saves\/E2\/[^/]+\.json\.gz$/);
+  expect(readFileSync(path.join(dataDirectory, file)).equals(save)).toBe(true);
   store.close();
   game.close();
 });

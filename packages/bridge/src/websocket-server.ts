@@ -8,10 +8,16 @@ import type { Connection } from "./connection.ts";
 
 const LOOPBACK_ADDRESS = "127.0.0.1";
 /**
- * The largest frame accepted, before or after hello: a static-tier snapshot (every server's fixed fields) is well under
- * a megabyte, so 16 MiB is headroom, not a limit the protocol meets. A larger frame closes the connection (1009).
+ * The largest frame accepted by default (the control channel), before or after hello: a static-tier snapshot (every
+ * server's fixed fields) is well under a megabyte, so 16 MiB is headroom, not a limit the protocol meets. A larger frame
+ * closes the connection (1009).
  */
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+/**
+ * The Remote File API server's limit. Its largest frame is a `getSaveFile` reply: the gzip save as one JSON-escaped
+ * character per byte, about 2.1 times its size. 128 MiB takes a save of about 60 MB gzipped.
+ */
+export const REMOTE_FILE_API_MAX_FRAME_BYTES = 128 * 1024 * 1024;
 /** "Unsupported data": the standard close code for a binary frame, which the protocol doesn't use. */
 const UNSUPPORTED_DATA_CODE = 1003;
 
@@ -23,6 +29,8 @@ export interface WebSocketServerOptions {
   onConnection(connection: Connection): void;
   /** An upgrade refused for its origin (HTTP 403): `(none)` when there was no `Origin` header. */
   onRejectedOrigin(origin: string): void;
+  /** The largest frame accepted; a larger one closes the connection (1009). Default `MAX_FRAME_BYTES`. */
+  maxFrameBytes?: number;
 }
 
 export interface RunningWebSocketServer {
@@ -39,7 +47,7 @@ export async function startWebSocketServer(options: WebSocketServerOptions): Pro
   });
   const socketServer = new WebSocketServer({
     server: httpServer,
-    maxPayload: MAX_FRAME_BYTES,
+    maxPayload: options.maxFrameBytes ?? MAX_FRAME_BYTES,
     verifyClient: ({ req }: { req: IncomingMessage }, callback: (allowed: boolean, code?: number) => void) => {
       const origin = req.headers.origin ?? "(none)";
       if (allowedOrigins.has(origin)) return callback(true);

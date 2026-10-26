@@ -2,6 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { MAX_BACKUP_INTERVAL_MS } from "./save-backups.ts";
 import type { Environment } from "./telemetry-store.ts";
 
 export const DATA_DIRECTORY_VARIABLE = "BITBURNER_AGENT_DATA_DIR";
@@ -9,6 +10,8 @@ export const CONFIG_FILE_NAME = "config.json";
 export const STORE_FILE_NAME = "telemetry.sqlite";
 /** The environments a brain's config can name: Steam, or a source build under test. The simulator's brain has none. */
 export const CONFIG_ENVIRONMENTS: readonly Environment[] = ["E0", "E2"];
+/** The longest backup interval a timer can wait, in whole minutes. */
+export const MAX_SAVE_BACKUP_INTERVAL_MINUTES = Math.floor(MAX_BACKUP_INTERVAL_MS / 60_000);
 
 export interface BrainConfig {
   /** E0 on Steam (the default); E2 for a source build under test. */
@@ -111,8 +114,12 @@ function configProblem(config: unknown): string | null {
   }
   if (typeof fields.token !== "string" || !/^[0-9a-f]{64}$/.test(fields.token)) return "token must be 64 hex digits";
   const { saveBackupIntervalMinutes, saveBackupsKept } = fields;
-  if (typeof saveBackupIntervalMinutes !== "number" || !(saveBackupIntervalMinutes > 0)) {
-    return "saveBackupIntervalMinutes must be a positive number of minutes (the default is 30)";
+  // A timer can't wait longer than 2^31 - 1 ms (about 24.8 days): Node would run it after 1 ms.
+  if (
+    typeof saveBackupIntervalMinutes !== "number" ||
+    !(saveBackupIntervalMinutes > 0 && saveBackupIntervalMinutes <= MAX_SAVE_BACKUP_INTERVAL_MINUTES)
+  ) {
+    return `saveBackupIntervalMinutes must be a number of minutes above 0 and at most ${MAX_SAVE_BACKUP_INTERVAL_MINUTES} (the default is 30)`;
   }
   if (!Number.isInteger(saveBackupsKept) || (saveBackupsKept as number) < 1) {
     return "saveBackupsKept must be a whole number, at least 1 (the default is 96)";

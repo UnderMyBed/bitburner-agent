@@ -369,7 +369,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - **Release gate:** only tagged releases are deployed to Steam. That's a rule of the setup (#95): the owner runs a release checkout; the brain doesn't enforce it.
 - **Save backups** ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92); details in [`packages/brain`](../packages/brain/README.md#save-backups)):
   - **When:** `getSaveFile` on every RFA connection and every `saveBackupIntervalMinutes` (30 by default). From M3 there's also one **immediately before every irreversible intent** (install, BitNode change; R8, #11). Save corruption is a known open issue on 3.0.1 (#2809).
-  - **What's kept:** Steam's own gzip bytes, checked to gunzip into a Bitburner save, in `<data dir>/saves/<environment>/`. Rotation keeps the newest `saveBackupsKept` (96, two days) per environment. A failed or damaged backup is recorded (`saveBackup` events), never kept.
+  - **What's kept:** the game's save at that moment, in the gzip format Steam writes, checked to be what the game's own Import Game accepts, in `<data dir>/saves/<environment>/`. Rotation keeps the newest `saveBackupsKept` (96: two days at the default interval) per environment. A failed or damaged backup is recorded (`saveBackup` events), never kept.
   - **Sharing the connection:** the backups share the RFA connection with the deployer, each on its own client. Request ids are unique per connection.
   - **Why:** backups are our insurance against catastrophic bugs, and the simulator's source of real starting states: a backup loads as a save fixture. Only `E0` backups may ever go back into Steam (§9.4).
 
@@ -571,7 +571,7 @@ The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit
    - it records a `versionDrift` event for the dashboard's alert (#93).
 
    An Agent already running keeps reporting. In M3, hold also stops intents; reflexes keep running. The RFA can't tell the game's version, so a game with unchanged definitions but another version can be deployed to before its first `hello` ([the protocol](bridge/protocol.md#deploying)).
-3. **Save backups:** the bridge pulls rotating saves via RFA (§6), so a bad patch or bug can always be rolled back.
+3. **Save backups:** the brain takes rotating save backups over the RFA (§6), so a bad patch or bug can always be rolled back.
 4. **Look further ahead:** a cheap, advisory check against upstream `dev`, run on demand and at every release (ADR 0009), covers API diff, contract typecheck (once there's in-game code, #42), RAM cost diff and a commit log for a [watchlist](../tools/upstream-watch/watchlist.txt) of game source. It reports into one tracking issue and never blocks merges (ADR 0005, [`tools/upstream-watch`](../tools/upstream-watch/README.md)).
 
 Steam itself is not pinned: game updates are taken as Steam ships them.
