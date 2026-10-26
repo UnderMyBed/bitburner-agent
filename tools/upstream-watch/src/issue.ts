@@ -38,7 +38,14 @@ export function fillTitle(template: string, upstream: { version: string; sha: st
   return template.replaceAll("{version}", () => upstream.version).replaceAll("{sha}", () => upstream.sha.slice(0, 10));
 }
 
-/** Whether a report has something to publish: listed changes (`on: "changes"`), or any move of the ref (`"moved"`). */
-export function hasNews(report: { changes: number; moved: boolean }, on: "changes" | "moved"): boolean {
-  return on === "moved" ? report.moved : report.changes > 0;
+/**
+ * Whether a report has something to publish: listed changes, or a contract typecheck that couldn't run
+ * (`on: "changes"`); or any move of the ref (`"moved"`: the stable watcher's issue means a Steam update is coming, so a
+ * broken typecheck alone never opens it). Type errors aren't news on their own: they come with API changes.
+ */
+export function hasNews(
+  report: { changes: number; moved: boolean; contractTypecheckRan: boolean },
+  on: "changes" | "moved",
+): boolean {
+  return on === "moved" ? report.moved : report.changes > 0 || !report.contractTypecheckRan;
 }

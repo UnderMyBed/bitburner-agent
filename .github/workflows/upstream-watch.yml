@@ -54,6 +54,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
+      # TypeScript, for the contract typecheck of packages/ingame against the ref's definitions (#42).
+      - run: npm ci --ignore-scripts
       - name: Clone the game's history (blobless)
         run: git clone --quiet --filter=blob:none --no-checkout https://github.com/bitburner-official/bitburner-src.git "$RUNNER_TEMP/game"
       - name: Build the report

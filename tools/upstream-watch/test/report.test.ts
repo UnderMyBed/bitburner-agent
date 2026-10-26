@@ -14,6 +14,7 @@ const empty: WatchReport = {
   rawApiDiff: "",
   ram: [],
   commits: [],
+  contractTypecheck: { ran: true, errors: [] },
 };
 
 const full: WatchReport = {
@@ -110,6 +111,97 @@ describe("renderReport", () => {
   });
 });
 
+describe("renderReport's contract typecheck", () => {
+  const section = (text: string) => text.slice(text.indexOf("## Contract typecheck"));
+  const typeError = (index: number, message: string) => ({
+    file: `packages/ingame/src/file${index}.ts`,
+    line: index + 1,
+    column: 5,
+    message,
+  });
+
+  test("no errors: says none, and adds nothing to the summary", () => {
+    const text = renderReport(empty);
+    expect(section(text)).toContain(
+      "`packages/ingame` typechecked against `dev`'s `src/ScriptEditor/NetscriptDefinitions.d.ts` instead of the pinned one.",
+    );
+    expect(section(text)).toContain("**None:** no type errors.");
+    expect(text).not.toContain("**Contract typecheck:**");
+  });
+
+  test("errors: listed with file, line, column and message, and counted in the summary", () => {
+    const text = renderReport({
+      ...empty,
+      contractTypecheck: {
+        ran: true,
+        errors: [
+          {
+            file: "packages/ingame/src/agent.ts",
+            line: 4,
+            column: 10,
+            message: "TS2345: 'number' | 'bigint' isn't 'string'.",
+          },
+          {
+            file: "packages/ingame/src/boot.ts",
+            line: 12,
+            column: 3,
+            message: "TS2339: Property 'foo' does not exist.",
+          },
+        ],
+      },
+    });
+    expect(text).toContain("**Contract typecheck:** 2 type errors against `dev`'s definitions (below).");
+    expect(section(text)).toContain("**2 type errors:**");
+    expect(section(text)).toContain("| File | Line:column | Message |");
+    expect(section(text)).toContain(
+      "| `packages/ingame/src/agent.ts` | 4:10 | `TS2345: 'number' \\| 'bigint' isn't 'string'.` |",
+    );
+    expect(section(text)).toContain(
+      "| `packages/ingame/src/boot.ts` | 12:3 | `TS2339: Property 'foo' does not exist.` |",
+    );
+  });
+
+  test("couldn't run: says so, with its output and where to read what to do, never 'none'", () => {
+    const text = renderReport({
+      ...empty,
+      contractTypecheck: { ran: false, reason: "error TS5083: Cannot read file ```x```." },
+    });
+    expect(text).toContain("**Contract typecheck:** couldn't run (below).");
+    expect(section(text)).toContain(
+      "**It couldn't run**, so this report says nothing about whether the in-game code still compiles ([what to do](https://github.com/UnderMyBed/bitburner-agent/blob/main/tools/upstream-watch/README.md#maintaining-it)). Its output:",
+    );
+    // Fenced with more backticks than the output holds, so the output can't close the block.
+    expect(section(text)).toContain("````text\nerror TS5083: Cannot read file ```x```.\n````");
+    expect(section(text)).not.toContain("**None:**");
+  });
+
+  test("a long output is cut, on a line break when there is one", () => {
+    const lines = Array.from({ length: 400 }, (_, i) => `line ${i} of the compiler's output`).join("\n");
+    const withLines = section(renderReport({ ...empty, contractTypecheck: { ran: false, reason: lines } }));
+    expect(withLines).toContain("line 0 of the compiler's output");
+    expect(withLines).not.toContain("line 399");
+    expect(withLines).toMatch(/output\n…\n```/);
+    const oneLine = section(renderReport({ ...empty, contractTypecheck: { ran: false, reason: "x".repeat(10_000) } }));
+    expect(oneLine).toContain(`\`\`\`text\n${"x".repeat(3_000)}…\n\`\`\``);
+  });
+
+  test("many long errors: 50 listed, each message cut, and the section survives a full report", () => {
+    const longMessage = `TS2345: ${"An elaborated message about types. ".repeat(13)}`;
+    const errors = Array.from({ length: 200 }, (_, i) => typeError(i, longMessage));
+    const names = Array.from({ length: 150 }, (_, i) => `interface Declaration${i}`);
+    const text = renderReport({
+      ...full,
+      api: { added: names, removed: [], changed: [] },
+      rawApiDiff: "+ line\n".repeat(20_000),
+      contractTypecheck: { ran: true, errors },
+    });
+    expect(text.length).toBeLessThanOrEqual(BODY_LIMIT);
+    expect(section(text)).toContain("| `packages/ingame/src/file49.ts` | 50:5 |");
+    expect(section(text)).not.toContain("file50.ts");
+    expect(section(text)).toContain("…and 150 more type errors.");
+    expect(section(text)).toContain(`\`${longMessage.slice(0, 300)}…\``);
+  });
+});
 describe("renderReport for the stable watcher", () => {
   const stable = { ...full, upstream: { ...full.upstream, ref: "stable" } };
 
@@ -169,11 +261,15 @@ describe("reportFile", () => {
       changes: 9,
       moved: true,
       ahead: true,
+      contractTypecheckRan: true,
       pinned: full.pinned,
+
       upstream: { ref: "dev", sha: full.upstream.sha, version: "3.0.2" },
       markdown: renderReport(full, "stable"),
     });
     const same = { ...empty, upstream: { ...empty.upstream, sha: empty.pinned.sha, ahead: false } };
     expect(reportFile(same)).toMatchObject({ changes: 0, moved: false, ahead: false });
+    const broken = { ...same, contractTypecheck: { ran: false, reason: "error TS5058: …" } } as const;
+    expect(reportFile(broken)).toMatchObject({ changes: 0, contractTypecheckRan: false });
   });
 });

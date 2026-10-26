@@ -15,7 +15,7 @@ It compares the pinned game (`vendor/bitburner-src`'s gitlink) with an upstream 
 | API surface | `src/ScriptEditor/NetscriptDefinitions.d.ts` | Declarations added, removed and changed. For interfaces, classes, enums and object types, the members added, removed and changed. If one side isn't an object type (say it became an intersection), the declaration is listed as changed with no member breakdown. Comments and formatting don't count. The raw diff follows, collapsed. |
 | RAM costs | `src/Netscript/RamCostGenerator.ts` | Each function's cost under `ns` (`hack`, `singularity.cat`, `formulas.hacking.hackChance`), with the cost constants and arithmetic resolved, so a changed constant shows up in every function that uses it. `(SF4)` marks a Singularity cost, which is multiplied without Source-File 4. |
 | Watched source | [`watchlist.txt`](watchlist.txt) | Commits touching the watched paths: whole subsystems (BitNode, constants, corporation, darknet, the Netscript runtime and every `ns` function), plus every game file our [mechanics docs](../../docs/mechanics/) cite. |
-| Contract typecheck | — | Not built yet: it comes with the first in-game code ([#42](https://github.com/UnderMyBed/bitburner-agent/issues/42)). |
+| Contract typecheck | `src/ScriptEditor/NetscriptDefinitions.d.ts` | `packages/ingame` typechecked against the ref's definitions instead of the pinned ones ([#42](https://github.com/UnderMyBed/bitburner-agent/issues/42)): each error's file, line, column and message (50 at most, each message cut at 300 characters), or "None". If the typecheck couldn't run, it says so, with its output and a link to [what to do](#maintaining-it): never "None". Errors and a failure to run also get a line at the top. Errors aren't changes: on their own they never open, reopen or keep open an issue. A failure to run is news for the forward check (below). |
 
 The stable watcher's report leads with **bump steps**, when `stable` is ahead of the pinned commit:
 1. the shallow fetch and checkout of the new commit;
@@ -34,7 +34,7 @@ If `stable` differs without being ahead (a rewound branch, or a test ref), it sa
 
 ## Running it
 
-It needs a clone of the game's repository. A blobless one is enough and quick to make; fetch it again before a later run:
+It needs `npm ci` in this repository (the contract typecheck runs its TypeScript), and a clone of the game's repository. A blobless one is enough and quick to make; fetch it again before a later run:
 
 ```
 git clone --filter=blob:none --no-checkout https://github.com/bitburner-official/bitburner-src.git ../game
@@ -46,9 +46,10 @@ node tools/upstream-watch/cli.ts report --game ../game --ref origin/dev [--out r
 - `--ref` is a branch (`origin/<name>`), a tag or a commit.
 - `--watcher stable` gives the stable watcher's form. It says whether `stable` has moved and, if it has moved ahead, leads with the bump steps. The default, `dev`, is the forward check's.
 - `--pinned <sha>` compares from another commit than the pinned one.
-- `--out` also writes the report as JSON for `publish`: `{ changes, moved, ahead, pinned, upstream, markdown }`.
+- `--out` also writes the report as JSON for `publish`: `{ changes, moved, ahead, contractTypecheckRan, pinned, upstream, markdown }`.
   - `moved` says whether the ref is another commit than the pinned one, whether or not anything listed changed.
   - `ahead` says whether it also has the pinned commit in its history.
+  - `contractTypecheckRan` says whether the contract typecheck ran, errors or not.
 
 `publish` updates the tracking issue from that file, through the `gh` CLI:
 
@@ -62,13 +63,13 @@ node tools/upstream-watch/cli.ts publish --report stable.json --title "Upstream 
 
 - It finds the watcher's issue by title prefix (`--prefix`, default the title) among issues labelled `upstream-watch`. The label must exist; it's in [CONTRIBUTING](../../CONTRIBUTING.md)'s label list.
 - The title may use `{version}` and `{sha}`, filled from the upstream commit. Such a title needs `--prefix`, since the filled title changes between runs.
-- **Something to report** is listed changes (`--on changes`, the default) or, for the stable watcher, any move of the ref (`--on moved`).
+- **Something to report** is listed changes or a contract typecheck that couldn't run (`--on changes`, the default), or, for the stable watcher, any move of the ref (`--on moved`). The stable watcher's issue says a Steam update is coming, so a broken typecheck alone never opens it. Type errors aren't news on their own.
 - **With something to report:** it updates the open issue. If none is open, it reopens the latest closed one, so the history stays in one thread. If there's never been one, it creates one.
 - **With nothing:** `--when-empty close` (the default) closes the open issue with a comment. `leave` leaves it: the stable watcher's issue is closed by the bump PR.
 - `--repo owner/name` picks the repository: by default `$GITHUB_REPOSITORY`, then this one.
 - `--dry-run` prints the plan and the body and changes nothing.
 
-Both commands exit 0 on success and 2 on bad usage or any failure: a git or gh error, or a file the extractors can't take apart.
+Both commands exit 0 on success and 2 on bad usage or any failure: a git or gh error, or a file the extractors can't take apart. A contract typecheck that couldn't run isn't a failure of the command: it exits 0, and the report says the typecheck couldn't run.
 
 ## The workflows
 
@@ -80,7 +81,7 @@ Each watcher has a workflow. Run it from Actions → Run workflow, or with `gh w
 | [`forward-check.yml`](../../.github/workflows/forward-check.yml), "Forward check (upstream dev)" | `origin/dev` | `--on changes --when-empty close` |
 
 Both workflows also take a `dry_run` input, which prints what `publish` would do and touches no issue. The `ref` input is for testing: point it at another commit to see what a move would look like. On the stable watcher, any `ref` but `origin/stable` is always a dry run, since a test ref would otherwise open an issue saying a Steam update is coming. The jobs:
-- **`report`** reads upstream content, with read-only access to this repository.
+- **`report`** reads upstream content, with read-only access to this repository. It runs `npm ci --ignore-scripts` for the contract typecheck's TypeScript.
 - **`publish`**, the only job that can write issues, runs `publish` on the finished report.
 
 Neither runs on pull requests, and neither is a required check.
@@ -93,6 +94,16 @@ Neither runs on pull requests, and neither is a required check.
 - **The extractors** (`src/declarations.ts`, `src/ram-costs.ts`) aren't general TypeScript parsers. They lex just enough (comments, strings, brackets, generics) to take apart the game's own Prettier-formatted files. Tests run them on the real pinned files, so a reshaped upstream file shows up only when the tool reads it:
   - An unbalanced bracket or a missing `RamCosts` object makes the run fail.
   - A cost expression that doesn't work out to a number is shown as written.
+- **The contract typecheck** (`src/contract-typecheck.ts`) writes the ref's definitions and a `tsconfig.json` to a temporary folder, runs this repository's `tsc --pretty false` on that config, and removes the folder. Nothing in the repository changes. The config extends `packages/ingame/src/tsconfig.json` (`INGAME_CONFIG`) and replaces its `paths` with one entry, `@nsdefs`, pointing at the ref's definitions. Two tests keep that true: one runs it on this repository's in-game code against the pinned definitions and expects no errors, and one checks that config's `paths` holds only `@nsdefs`. Moving the config, or giving it another alias, fails CI until this module follows.
+  - **"It couldn't run"** means the report says nothing about the in-game code. One of these happened:
+    - `tsc` printed an error with no place in the code: a config or option error (TS5xxx, TS6xxx, or one in a `.json` file), or one in the temporary config;
+    - it was stopped by a signal;
+    - it failed and printed no error;
+    - the temporary folder couldn't be written;
+    - the ref's definitions import or reference another file. Only the one file is copied, and with `skipLibCheck` a missing import would quietly turn its types into `any`.
+
+    The run still succeeds, and the forward check's issue shows the output. Usual causes: no `npm ci` (Node's "Cannot find module …typescript/bin/tsc"), or a changed `INGAME_CONFIG`. Reproduce it with `report` locally, fix the tool, and run the forward check again.
+  - **An error in `src/ScriptEditor/NetscriptDefinitions.d.ts (upstream)`** is in the ref's definitions themselves. With `skipLibCheck`, that's a syntax error, for example syntax newer than our TypeScript reads.
 - **Layout:**
 
   | Path | What |
@@ -101,9 +112,10 @@ Neither runs on pull requests, and neither is a required check.
   | `src/scan.ts` | Comments, strings, matching brackets, top-level search and splitting, normalising whitespace |
   | `src/declarations.ts` | Declarations and members of a `.d.ts`, and their diff |
   | `src/ram-costs.ts` | The RAM cost tree, flattened and resolved, and its diff |
+  | `src/contract-typecheck.ts` | The in-game code typechecked against other definitions, in a temporary folder; the compiler's errors parsed |
   | `src/report.ts` | The report's shape (`WatchReport`), its Markdown for each watcher (with the stable watcher's bump steps), kept under GitHub's issue size limit, and the JSON `publish` reads (`reportFile`) |
-  | `src/git.ts` | `buildReport`: both versions read from the game clone and compared; the pinned commit |
+  | `src/git.ts` | `buildReport`: both versions read from the game clone and compared, and the contract typecheck run on the ref's definitions; the pinned commit |
   | `src/issue.ts` | Whether there's news (`hasNews`), which issue to create, update, reopen or close (`planIssue`), and title placeholders (`fillTitle`) |
   | `src/watchlist.ts` | Reading the watchlist, and the game files a doc cites |
   | `watchlist.txt` | Watched game source paths |
-  | `test/` | Unit tests, plus integration tests on a scratch git repository, the real pinned files and the docs |
+  | `test/` | Unit tests, plus integration tests on a scratch git repository, a fixture in-game package run through the real compiler, the real pinned files and the docs |

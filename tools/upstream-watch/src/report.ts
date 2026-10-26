@@ -1,4 +1,5 @@
 // The watchers' report: what changed between the pinned game and an upstream ref, as Markdown for an issue body.
+import type { ContractTypecheckResult } from "./contract-typecheck.ts";
 import type { DeclarationDiff } from "./declarations.ts";
 import type { RamCostChange } from "./ram-costs.ts";
 
@@ -16,6 +17,8 @@ export interface WatchReport {
   ram: RamCostChange[];
   /** Commits touching the watchlist, newest first. */
   commits: { sha: string; title: string }[];
+  /** The in-game code typechecked against the ref's definitions (#42). */
+  contractTypecheck: ContractTypecheckResult;
 }
 
 /**
@@ -49,8 +52,7 @@ export function changeCount(report: WatchReport): number {
  * in one, so its `#123` references, `@mentions`, links and HTML render as plain text in our issue.
  */
 export function codeSpan(text: string): string {
-  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map(([run]) => run.length));
-  const fence = "`".repeat(longest + 1);
+  const fence = "`".repeat(longestBacktickRun(text) + 1);
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
   return `${fence}${pad}${text}${pad}${fence}`;
 }
@@ -60,10 +62,13 @@ const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 const code = (names: string[]) => names.map(codeSpan).join(", ");
 const cell = (text: string | null) => (text === null ? "–" : codeSpan(text).replaceAll("|", "\\|"));
 
-/** The first LIST_LIMIT items rendered, and a line saying how many more there are. */
-function capped<T>(items: T[], render: (item: T) => string, noun: string): string[] {
-  const lines = items.slice(0, LIST_LIMIT).map(render);
-  const more = items.length - LIST_LIMIT;
+/** The longest run of backticks in `text`, so a fence around it can be longer. */
+const longestBacktickRun = (text: string) => Math.max(0, ...[...text.matchAll(/`+/g)].map(([run]) => run.length));
+
+/** The first `limit` items rendered, and a line saying how many more there are. */
+function capped<T>(items: T[], render: (item: T) => string, noun: string, limit = LIST_LIMIT): string[] {
+  const lines = items.slice(0, limit).map(render);
+  const more = items.length - limit;
   return more > 0 ? [...lines, "", `…and ${count(more, `more ${noun}`)}.`] : lines;
 }
 
@@ -101,6 +106,64 @@ function ramSection(report: WatchReport): string[] {
   ];
 }
 
+/** The compiler's output when the typecheck couldn't run is cut to this, on a line break. */
+const TYPECHECK_REASON_LIMIT = 3_000;
+/** Type errors listed, and each message's length: the issue points at them; `report` locally has them all. */
+const TYPE_ERROR_LIST_LIMIT = 50;
+const TYPE_ERROR_MESSAGE_LIMIT = 300;
+const CONTRACT_TYPECHECK_DOCS = `${REPO}/tools/upstream-watch/README.md#maintaining-it`;
+
+/** `text` in a fenced block, fenced with more backticks than any run inside it. */
+function fencedBlock(text: string): string[] {
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(text) + 1));
+  return [`${fence}text`, text, fence];
+}
+
+/** `text` cut to `limit` characters, at a line break if there's one, marked with "…". */
+function cutText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const lineBreak = text.lastIndexOf("\n", limit);
+  return `${text.slice(0, lineBreak > 0 ? lineBreak : limit)}${lineBreak > 0 ? "\n" : ""}…`;
+}
+
+/** One line for the summary when the typecheck found errors or couldn't run; nothing when it's clean. */
+function typecheckSummary(report: WatchReport): string[] {
+  const { contractTypecheck } = report;
+  if (!contractTypecheck.ran) return ["**Contract typecheck:** couldn't run (below).", ""];
+  if (contractTypecheck.errors.length === 0) return [];
+  const errors = count(contractTypecheck.errors.length, "type error");
+  return [`**Contract typecheck:** ${errors} against ${codeSpan(report.upstream.ref)}'s definitions (below).`, ""];
+}
+
+function typecheckSection(report: WatchReport): string[] {
+  const { contractTypecheck } = report;
+  const intro = `\`packages/ingame\` typechecked against ${codeSpan(report.upstream.ref)}'s \`${DEFINITIONS}\` instead of the pinned one.`;
+  if (!contractTypecheck.ran) {
+    return [
+      intro,
+      "",
+      `**It couldn't run**, so this report says nothing about whether the in-game code still compiles ([what to do](${CONTRACT_TYPECHECK_DOCS})). Its output:`,
+      "",
+      ...fencedBlock(cutText(contractTypecheck.reason, TYPECHECK_REASON_LIMIT)),
+    ];
+  }
+  if (contractTypecheck.errors.length === 0) return [intro, "", "**None:** no type errors."];
+  return [
+    intro,
+    "",
+    `**${count(contractTypecheck.errors.length, "type error")}:**`,
+    "",
+    "| File | Line:column | Message |",
+    "|---|---|---|",
+    ...capped(
+      contractTypecheck.errors,
+      (error) =>
+        `| ${cell(error.file)} | ${error.line}:${error.column} | ${cell(cutText(error.message, TYPE_ERROR_MESSAGE_LIMIT))} |`,
+      "type error",
+      TYPE_ERROR_LIST_LIMIT,
+    ),
+  ];
+}
 /** What to do to move the pinned game to the upstream commit: the stable watcher's issue tracks these. */
 function bumpSteps(report: WatchReport): string[] {
   const { sha } = report.upstream;
@@ -170,6 +233,7 @@ export function renderReport(report: WatchReport, watcher: Watcher = "dev"): str
     "",
     summary,
     "",
+    ...typecheckSummary(report),
     ...(watcher === "stable" && report.upstream.ahead ? bumpSteps(report) : []),
     "## API surface",
     "",
@@ -178,7 +242,12 @@ export function renderReport(report: WatchReport, watcher: Watcher = "dev"): str
     ...apiSection(report),
     "",
   ];
+  // The typecheck first after the raw diff: cutting a body that's still too long takes the sections after it first.
   const tail = [
+    "",
+    "## Contract typecheck",
+    "",
+    ...typecheckSection(report),
     "",
     "## RAM costs",
     "",
@@ -193,10 +262,6 @@ export function renderReport(report: WatchReport, watcher: Watcher = "dev"): str
       : `${count(report.commits.length, "commit")} touching the [watchlist](${WATCHLIST}), newest first:`,
     "",
     ...capped(report.commits, (c) => `- \`${short(c.sha)}\` ${codeSpan(c.title)}`, "commit"),
-    "",
-    "## Contract typecheck",
-    "",
-    "Not applicable yet: there's no in-game package to typecheck against the upstream definitions (#42).",
     "",
   ];
   const fixed = head.join("\n").length + tail.join("\n").length + 2;
@@ -215,6 +280,8 @@ export interface ReportFile {
   moved: boolean;
   /** Whether it's ahead of the pinned one: see `WatchReport.upstream.ahead`. */
   ahead: boolean;
+  /** Whether the contract typecheck ran. One that couldn't is news for the forward check: the tool needs fixing. */
+  contractTypecheckRan: boolean;
   pinned: { sha: string; version: string };
   upstream: { ref: string; sha: string; version: string };
   markdown: string;
@@ -226,6 +293,7 @@ export function reportFile(report: WatchReport, watcher: Watcher = "dev"): Repor
     changes: changeCount(report),
     moved: moved(report),
     ahead,
+    contractTypecheckRan: report.contractTypecheck.ran,
     pinned: report.pinned,
     upstream: { ref, sha, version },
     markdown: renderReport(report, watcher),
