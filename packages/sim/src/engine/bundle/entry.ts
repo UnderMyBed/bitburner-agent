@@ -27,6 +27,7 @@ import { newRemoteFileApiConnection } from "../../../../../vendor/bitburner-src/
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import type { ScriptModule, ScriptURL } from "../../../../../vendor/bitburner-src/src/Script/LoadedModule";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
+import { BaseServer } from "../../../../../vendor/bitburner-src/src/Server/BaseServer";
 import { SpecialServers } from "../../../../../vendor/bitburner-src/src/Server/data/SpecialServers";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
 import { isPositiveInteger, type SaveData } from "../../../../../vendor/bitburner-src/src/types";
@@ -224,20 +225,36 @@ export async function saveBytes() {
 }
 
 /**
- * The most home has held at once since the engine loaded: RAM in use, and scripts running. Taken as each script starts,
- * the only time either grows (NetscriptWorker.ts:134-141), so a script that starts and exits within one timer counts.
- * The game's map is only observed: it behaves as before.
+ * The highest RAM home has had in use, and the most scripts it has run at once, since the game booted: each its own
+ * high. Taken as each changes, so a script that starts and exits within one timer counts:
+ * - RAM in use changes only through `updateRamUsed` (script starts and kills, `ns.ramOverride`, sharing);
+ * - scripts are added and removed only through `workerScripts`' `set` and `delete` (NetscriptWorker.ts:141,
+ *   killWorkerScript.ts:126).
+ * Both are only observed: the game behaves as before.
  */
 const homePeakSoFar = { ramUsed: 0, scripts: 0 };
+let scriptsOnHome = 0;
+const updateRamUsed = BaseServer.prototype.updateRamUsed;
+BaseServer.prototype.updateRamUsed = function (this: BaseServer, ram: number) {
+  updateRamUsed.call(this, ram);
+  if (this.hostname === SpecialServers.Home) homePeakSoFar.ramUsed = Math.max(homePeakSoFar.ramUsed, this.ramUsed);
+};
 const addWorkerScript = workerScripts.set.bind(workerScripts);
 workerScripts.set = (pid, workerScript) => {
+  const isNew = !workerScripts.has(pid);
   addWorkerScript(pid, workerScript);
-  if (workerScript.hostname === SpecialServers.Home) {
-    const scriptsOnHome = [...workerScripts.values()].filter((each) => each.hostname === SpecialServers.Home).length;
-    homePeakSoFar.ramUsed = Math.max(homePeakSoFar.ramUsed, server(SpecialServers.Home).ramUsed);
+  if (isNew && workerScript.hostname === SpecialServers.Home) {
+    scriptsOnHome += 1;
     homePeakSoFar.scripts = Math.max(homePeakSoFar.scripts, scriptsOnHome);
   }
   return workerScripts;
+};
+const removeWorkerScript = workerScripts.delete.bind(workerScripts);
+workerScripts.delete = (pid) => {
+  const workerScript = workerScripts.get(pid);
+  const removed = removeWorkerScript(pid);
+  if (removed && workerScript?.hostname === SpecialServers.Home) scriptsOnHome -= 1;
+  return removed;
 };
 
 export function homePeak() {

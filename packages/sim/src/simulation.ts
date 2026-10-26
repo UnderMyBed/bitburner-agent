@@ -215,8 +215,9 @@ export class Simulation {
     clock: () => this.rpc.call("diagnostics.clock", {}),
     game: () => this.rpc.call("diagnostics.game", {}),
     /**
-     * The most home has held at once since the game booted (GB of RAM in use, scripts running), taken as each script
-     * starts: one that starts and exits between two timers, which no check after a timer sees, still counts.
+     * The highest RAM home has had in use (GB), and the most scripts it has run at once, since the game booted: each
+     * its own high. Taken as each changes, so a script that starts and exits within one timer, which no check after a
+     * timer sees, still counts.
      */
     homePeak: () => this.rpc.call("diagnostics.homePeak", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),

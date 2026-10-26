@@ -61,7 +61,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB) | 4.3 GB (4.3) |
 | `snapshot-fast.js` | `ps` (0.2 GB), `getServerMoneyAvailable` (0.1 GB; on home it gives the player's money, where `getPlayer` costs 0.5), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.0 GB (2.0) |
 
-The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 7.0 GB, within a fresh save's 8 GB home; a test checks the budgets (7.3 GB) keep it so.
+The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 7.0 GB, within a fresh save's 8 GB home; a test checks the budgets (7.3 GB) keep it so. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) checks home's RAM while the Agent actually runs, in a simulated 8 GB fresh start.
 
 ## Deploy layout
 

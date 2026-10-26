@@ -101,6 +101,11 @@ class SimulatedConnection implements Connection {
     this.#closeListeners.push(listener);
   }
 
+  /** No more frames cross it: closed by the page, or by the brain. */
+  get isClosed(): boolean {
+    return this.#closed;
+  }
+
   receive(text: string): void {
     if (this.#closed) return;
     for (const listener of this.#messageListeners) listener(text);
@@ -123,10 +128,11 @@ export interface SimulatedGameOptions {
    */
   stepMs: number;
   /**
-   * For fault tests: how many copies of each frame from the page reach the brain (0 drops it, 2 duplicates it). Called
-   * once per frame, in order, so a seeded function gives a reproducible run. Default: every frame once.
+   * For fault tests: how many copies of each frame from the page reach the brain (0 drops it, 2 duplicates it, both
+   * copies back to back). Called once per frame, in order, so a seeded function gives a reproducible run; not for frames
+   * on a connection the brain has closed, which it would discard anyway. Default: every frame once.
    */
-  deliveredCopies?: (frame: { connectionId: number; atMs: number; data: string }) => number;
+  deliveredCopies?: (frame: { atMs: number; data: string }) => number;
 }
 
 export class SimulatedGame {
@@ -240,6 +246,8 @@ export class SimulatedGame {
       connection.reportClosed();
       return;
     }
+    // Not for a frame the brain would discard: the fault function sees only what could reach it.
+    if (connection.isClosed) return;
     const copies = this.#deliveredCopies(entry);
     if (!Number.isSafeInteger(copies) || copies < 0) {
       throw new RangeError(`deliveredCopies must return a whole number of copies, got ${copies}`);

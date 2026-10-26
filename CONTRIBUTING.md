@@ -13,6 +13,7 @@ Every change to logic starts with a failing test. The bar is "a test would catch
 | Formula parity | Our estimators match the game's own formula functions exactly | Every PR (CI) |
 | Property | Planner, reconciler and protocol invariants under randomised inputs | Every PR (CI) |
 | Contract | In-game bundles type-check against the pinned game's API definitions; static RAM within budget | Every PR (CI) |
+| Integration | The brain, bridge and in-game code together in the headless simulator, including the skeleton suite (`packages/brain`) | Every PR (CI) |
 | Scenario / chaos | Seeded full runs in the headless simulator; injected failures | On demand, and before every release |
 | End-to-end | Real game UI in a source build, driven by Playwright | On demand, and before every release |
 

@@ -308,9 +308,11 @@ export interface GameSummary {
   augsQueued: number;
 }
 
-/** The most home has held at once: GB of RAM in use, and scripts running. */
+/** Home's highs: each is its own, and they may come from different moments. */
 export interface HomePeak {
+  /** The highest RAM in use, in GB. */
   ramUsed: number;
+  /** The most scripts running at once. */
   scripts: number;
 }
 
@@ -400,8 +402,8 @@ export interface HostMethods {
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   /**
-   * The most home has held at once since the game booted, taken as each script starts (the only time either grows), so
-   * a script that starts and exits between two timers counts.
+   * The highest RAM home has had in use, and the most scripts it has run at once, since the game booted (each its own
+   * high), taken as each changes: a script that starts and exits within one timer counts.
    */
   "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
   "diagnostics.random"(params: { count: number }): RandomSample;

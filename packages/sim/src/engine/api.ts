@@ -69,8 +69,8 @@ export interface EngineApi {
   /** The game's own save, as JSON text. */
   saveJson(): Promise<string>;
   /**
-   * The most home has held at once since the engine loaded (RAM in use, scripts running), taken as each script starts:
-   * a script that starts and exits within one timer counts.
+   * The highest RAM home has had in use, and the most scripts it has run at once, since the game booted (each its own
+   * high), taken as each changes: a script that starts and exits within one timer counts.
    */
   homePeak(): HomePeak;
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */

@@ -1,5 +1,6 @@
-// A brain wired as main.ts wires it, on the lockstep driver: the control channel and the deployer on the game's
-// connections, and, given a store, both recorded into it. Used by the deploy tests (#91) and the skeleton suite (#98).
+// A brain wired like main.ts, on the lockstep driver: the control channel and the deployer on the game's connections,
+// and, given a store, both recorded into it, in main.ts's order. Used by the deploy tests (#91) and the skeleton suite
+// (#98). main.ts's own wiring, on real sockets, is tested by brain-process.test.ts.
 import {
   type Connection,
   ControlChannel,
@@ -29,11 +30,14 @@ export const BRAIN_RFA_SETTINGS = {
 export interface BrainInSimulation {
   channel: ControlChannel;
   deployer: Deployer;
-  /** Every event either reported, in order. */
+  /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
+  /** Every event the deployer reported, in order. */
   deployerEvents: DeployerEvent[];
   /** The page's control channel connections, in order: tests can close one from the brain's side. */
   controlConnections: Connection[];
+  /** The game's Remote File API connections, in order. */
+  remoteFileApiConnections: Connection[];
   /** Closes every connection the game opened to this brain, as a brain stopping does, so the game reconnects. */
   closeConnections(): void;
 }
@@ -53,11 +57,16 @@ export function startBrainInSimulation(
     build: InGameBuild;
     token?: string;
     pinnedDefinitions?: string;
-    /** The store, and the release its rows are tagged with: environment E1, the simulator. */
+    /**
+     * The store, and the brain's release, which starts each row's release tag (`<brainRelease>+<deploymentId>`). The
+     * environment is E1, the simulator.
+     */
     recordInto?: { store: TelemetryStore; brainRelease: string };
   },
 ): BrainInSimulation {
+  const context = { environment: "E1", brainRelease: recordInto?.brainRelease ?? "" } as const;
   const channel = new ControlChannel({ token, clock: game.clock });
+  if (recordInto) recordChannelEvents(channel, recordInto.store, context);
   const deployer = new Deployer({
     build,
     controlPort: CONTROL_PORT,
@@ -66,11 +75,7 @@ export function startBrainInSimulation(
     channel,
     clock: game.clock,
   });
-  if (recordInto) {
-    const context = { environment: "E1", brainRelease: recordInto.brainRelease } as const;
-    recordChannelEvents(channel, recordInto.store, context);
-    recordDeployerEvents(deployer, recordInto.store, context);
-  }
+  if (recordInto) recordDeployerEvents(deployer, recordInto.store, context);
   const openConnections: Connection[] = [];
   const brain: BrainInSimulation = {
     channel,
@@ -78,6 +83,7 @@ export function startBrainInSimulation(
     channelEvents: [],
     deployerEvents: [],
     controlConnections: [],
+    remoteFileApiConnections: [],
     closeConnections: () => {
       for (const connection of openConnections.splice(0)) connection.close(1001, "brain restarting");
     },
@@ -91,6 +97,7 @@ export function startBrainInSimulation(
   });
   game.listen(RFA_URL, (connection) => {
     openConnections.push(connection);
+    brain.remoteFileApiConnections.push(connection);
     void deployer.accept(connection);
   });
   return brain;

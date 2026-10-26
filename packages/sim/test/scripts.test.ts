@@ -453,7 +453,31 @@ describe("script API", () => {
     expect((await sim.ps("home")).map((p) => p.pid)).toEqual([first.pid, third.pid]);
   });
 
-  test("homePeak counts a script that starts and exits between two timers, which no check after a timer sees", async () => {
+  test("homePeak sees RAM raised by ramOverride, counts home's scripts only, and counts down as they end", async () => {
+    const sim = await newGame(1);
+    await sim.writeFile("home", "idle.js", IDLE);
+    // Two scripts on n00dles, and the one on home raising its own RAM to 6 GB without any script starting.
+    await sim.writeFile(
+      "home",
+      "remote.js",
+      `export async function main(ns) {
+         ns.nuke("n00dles"); ns.scp("idle.js", "n00dles");
+         ns.exec("idle.js", "n00dles"); ns.exec("idle.js", "n00dles", 1, "second");
+         ns.ramOverride(6);
+         await ns.sleep(1e9);
+       }`,
+    );
+    expect((await sim.run("home", "remote.js")).error).toBeUndefined();
+    await sim.advance(1_000);
+    expect(await sim.diagnostics.homePeak()).toEqual({ ramUsed: 6, scripts: 1 });
+    // One more on home, killed, then another: never more than two at once.
+    const { pid } = await sim.run("home", "idle.js");
+    expect(await sim.kill(pid)).toBe(true);
+    expect((await sim.run("home", "idle.js", { args: ["again"] })).error).toBeUndefined();
+    expect(await sim.diagnostics.homePeak()).toEqual({ ramUsed: 7.6, scripts: 2 });
+  });
+
+  test("homePeak counts a script that starts and exits within one timer, which no check after a timer sees", async () => {
     const sim = await newGame(1);
     expect(await sim.diagnostics.homePeak()).toEqual({ ramUsed: 0, scripts: 0 });
     // The parent (2.6 GB) runs a 1.6 GB child that exits at once, within the parent's own timer, every 100 ms.
