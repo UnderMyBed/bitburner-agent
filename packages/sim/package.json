@@ -4,7 +4,10 @@
   "description": "Headless simulator: the real Bitburner engine in Node, on a virtual clock, deterministic from a seed (ADR 0007).",
   "license": "MIT",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./test-helpers": "./test/helpers/sim.ts"
+  },
   "scripts": {
     "setup:engine": "node scripts/setup-engine.ts",
     "build:engine": "node scripts/build-engine.ts",

@@ -3,5 +3,15 @@
   "private": true,
   "description": "The in-game code: the Agent, its workers and boot.js, bundled per script and held to RAM budgets.",
   "license": "MIT",
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.ts"
+  },
+  "dependencies": {
+    "@bitburner-agent/core": "*"
+  },
+  "devDependencies": {
+    "@bitburner-agent/sim": "*",
+    "esbuild": "0.28.2"
+  }
 }

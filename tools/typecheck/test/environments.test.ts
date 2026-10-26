@@ -51,10 +51,11 @@ const nodeEnvironment: EnvironmentExpectation = { allowed: [nodeGlobal, nodeModu
 const expectations: Record<string, EnvironmentExpectation> = {
   "packages/core/tsconfig.json": { allowed: [], rejected: [nodeGlobal, nodeModule, domGlobal] },
   "packages/core/test/tsconfig.json": nodeEnvironment,
-  "packages/ingame/tsconfig.json": {
+  "packages/ingame/src/tsconfig.json": {
     allowed: [domGlobal, nsCalledRight],
     rejected: [nodeGlobal, nodeModule, nsCalledWrong],
   },
+  "packages/ingame/tsconfig.json": nodeEnvironment,
   "packages/legacy/tsconfig.json": nodeEnvironment,
   "tools/tsconfig.json": nodeEnvironment,
   // These two configs' options are Node's, but their programs also see the DOM through what their files import:
