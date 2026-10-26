@@ -64,7 +64,8 @@ Reached counts every seed that got to the checkpoint, including one that failed 
 Every seed that didn't pass is explained here, per run: what stopped it, and whether the fork, the simulator or the scenario was at fault, with an issue where it's ours to fix.
 
 - **4799701 (the first run):** none; all 8 seeds reached 12 hours.
-- **Before it**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before that run ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
+- **3cf08f9 (the M1 release):** none; all 8 seeds reached 12 hours.
+- **Before the first run**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before it ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
   - [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73): results depended on when garbage collection ran, through the game's module cache.
   - [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74): the virtual clock's cost grew with the timers pending, so tens of thousands of scripts slowed it to a crawl.
   - [#75](https://github.com/UnderMyBed/bitburner-agent/issues/75): the CLI had no real-time limit or heap cap, so a slow seed held the machine for hours.
@@ -85,8 +86,13 @@ Reading the first run (4799701, the reference rig):
   Money swings with each reset and purchase, so it's the least telling column.
 - **The heap grows about 9 MB over 12 hours** (106 MB at the start, from the CLI's heap table, to 115 MB, median), which the modules the fork compiles account for. Seed 3 was the exception: it got furthest (hacking 723, $1.89t at 12 h), was already running heavy batches, and reached 159 MB. It was also the slowest seed, at 10 minutes.
 
+Reading the second run (3cf08f9, the M1 release, [#44](https://github.com/UnderMyBed/bitburner-agent/issues/44)): every seed's final state hash equals the first run's, so the game columns are identical. Only the speed moved (117× to 116×), which is noise.
+
 | Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Speed | Real time per seed |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 117x | 6 min |
 | 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 113 MB | 117x | 6 min |
 | 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 115 MB | 117x | 6 min |
+| 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 116x | 6 min |
+| 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 113 MB | 116x | 6 min |
+| 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 115 MB | 116x | 6 min |

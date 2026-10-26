@@ -2,7 +2,7 @@
 
 An autonomous agent that plays [Bitburner](https://github.com/bitburner-official/bitburner-src) from a fresh save to **every Source-File maxed**, unattended and repeatably.
 
-> **Status: pre-alpha.** The architecture and a full mechanics analysis of the game are done, and a spike has proven the headless simulator. No agent code yet. See [Roadmap](#roadmap).
+> **Status: pre-alpha.** M1 is done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)): the real game runs headless and deterministically in a simulator, and the legacy fork's BN1 baseline, the bar the agent must beat, is recorded. The agent itself starts in M2. See [Roadmap](#roadmap).
 
 ---
 
@@ -55,8 +55,8 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 |---|---|---|
 | Design | Mechanics analysis, architecture, decision records | ✅ |
 | S1 | Simulator spike: prove the real engine runs headless in Node, deterministically, fast | ✅ [report](docs/spikes/s1-headless-engine.md) |
-| M1 | Toolchain and CI, then the simulator core: headless engine, virtual clock, seeded RNG, worker pool | ⏳ active |
-| M2 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only), automatic recovery | |
+| M1 | Toolchain and CI, then the simulator core: headless engine, virtual clock, seeded RNG, worker pool; the legacy fork's BN1 baseline | ✅ [v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0) |
+| M2 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only), automatic recovery | ⏳ next |
 | M3 | Effectors (UI and Singularity backends), restart-after-reset | |
 | M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then **the live campaign starts at BN1.1 from a fresh save** | |
 | M5+ | More activities and actions: gangs, Bladeburner, stocks, hacknet, corporations, Dark Net, sleeves, Stanek, IPvGO … | |
@@ -75,7 +75,7 @@ Working plan: [`docs/plan.md`](docs/plan.md). Detailed work is tracked in [GitHu
 | [`docs/research/`](docs/research/) | Community tooling, benchmarks and strategies |
 | [`docs/releasing.md`](docs/releasing.md) | How a release is made: versions, the pre-release checklist, notes, commands |
 | [`docs/spikes/`](docs/spikes/) | Spike reports; the throwaway code is in [`spikes/`](spikes/) |
-| [`docs/sim/`](docs/sim/) | The simulator: its browser [parity audit](docs/sim/parity.md) (what the browser and UI provide, and what the simulator does about each), [scenarios](docs/sim/scenarios.md) (running workloads across seeds) and [benchmarks](docs/sim/benchmarks.md) (speed and memory per release) |
+| [`docs/sim/`](docs/sim/) | The simulator: its browser [parity audit](docs/sim/parity.md) (what the browser and UI provide, and what the simulator does about each), [scenarios](docs/sim/scenarios.md) (running workloads across seeds), [benchmarks](docs/sim/benchmarks.md) (speed and memory per release) and [baselines](docs/sim/baselines.md) (the legacy fork's progress, which the agent must beat) |
 
 ## Supported game version
 
@@ -83,13 +83,27 @@ Bitburner **v3.0.1** (VersionNumber 51), the current Steam release. The game sou
 
 ## Getting started
 
-Not usable yet. Once M1 lands this section will cover installing, connecting to the game, and running the simulator.
-
-To browse the source with the pinned game engine:
+There's nothing to connect to the game yet: the bridge and the in-game agent come in M2. What runs today is the simulator, and the legacy fork's baseline in it. You need Node 24 (`.node-version`).
 
 ```sh
 git clone --recurse-submodules https://github.com/UnderMyBed/bitburner-agent.git
+cd bitburner-agent
+npm ci
+npm run setup:engine   # the game's own dependencies, for the simulator; again after a game bump
 ```
+
+Then:
+
+```sh
+# Four seeds of a 6-virtual-hour hack loop, one at a time: each seed takes about a second.
+# The first run builds the engine bundle before it starts, which takes longer.
+npm run sim -- packages/sim/scenarios/lean.json --workers 1
+
+# One seed of the legacy fork's BN1 baseline, to 12 virtual hours: about 6 real minutes.
+npm run baseline -w @bitburner-agent/legacy -- --seeds 1
+```
+
+The simulator is deterministic: a seed gives the same state hash every time, on any machine. More in [scenarios](docs/sim/scenarios.md), [baselines](docs/sim/baselines.md) and the [simulator's README](packages/sim/README.md). [CONTRIBUTING](CONTRIBUTING.md) covers the checks (`npm run check`).
 
 ## Contributing
 
