@@ -73,7 +73,7 @@ The package's other tests (`test/*.test.ts`: the static server, the build's chec
 
 ## Game time
 
-Playwright's clock is installed in each browser context before the page loads, and paused at the start time. It fakes the page's `Date`, `performance`, timers and `requestAnimationFrame`, so game time moves only when a test moves it. Loading doesn't move it either, so a save loads with no offline progress. (Installed but not paused, the clock flows with real time. `gameFromSave`'s `clockDuringLoad: "running"` does that until the game has loaded, as on Steam, for checking a race between a timer and the load.)
+Playwright's clock is installed in each browser context before the page loads, and paused at the start time. It fakes the page's `Date`, `performance`, timers and `requestAnimationFrame`, so game time moves only when a test moves it. Loading doesn't move it either, so a save loads with no offline progress. (Installed but not paused, the clock flows with real time. `gameFromSave`'s `clockDuringLoad: "running"` does that until the game has loaded, as on Steam, for checking a race between a timer and the load. It then pauses a game cycle ahead of the page's time, since real time passes before the pause lands and the clock can't be set back.)
 
 Script imports and WebSockets still run in real time. So:
 - **`advanceGameTime(page, ms)`** moves game time on one game cycle at a time (`GAME_CYCLE_MS`, 200 ms), and **never more than `MAX_GAME_SPEEDUP` (×20) times as fast as real time**. Between steps the page runs its real-time work (imports, socket messages) in real time. At ×20, the Agent's 5 s worker timeout gives an import or a reply 250 ms of real time.
@@ -104,6 +104,7 @@ Script imports and WebSockets still run in real time. So:
   - When a test fails, each brain it started prints its log (the `brain:` lines: deploys, connections, refusals) under "Brain N's log (<data directory>)".
   - The data directory, with `config.json` and `telemetry.sqlite`, is a temporary `e2-skeleton-*` folder, deleted when the file finishes. To keep it, comment out the `afterAll` in `skeleton.e2.test.ts`.
   - The Agent's own log is in the game: to see it, run headed (see `e2:install`) and `tail` it.
+  - A fixture that fails to load the game says what the page showed and its last page and console errors.
 
 ## What the tests show
 

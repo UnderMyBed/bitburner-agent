@@ -80,8 +80,18 @@ async function setUpGamePage(
         );
     }
   });
-  return await context.newPage();
+  const page = await context.newPage();
+  const problems: string[] = [];
+  page.on("pageerror", (error) => problems.push(`page error: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") problems.push(`console error: ${message.text()}`);
+  });
+  problemsOnPage.set(page, problems);
+  return page;
 }
+
+/** Each game page's errors and console errors, for a fixture that fails to report what the page went through. */
+const problemsOnPage = new WeakMap<Page, string[]>();
 
 /**
  * Moves game time on by `ms`, one game cycle at a time, never more than MAX_GAME_SPEEDUP times as fast as real time.
@@ -162,18 +172,44 @@ export async function gameFromSave(
     await page.goto(server.origin);
     await waitForTerminal(page);
     // From here on, game time moves only when the test moves it.
-    if (clockDuringLoad === "running") await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+    if (clockDuringLoad === "running") await pauseFlowingClock(page);
   });
 }
 
-/** `page` once `load` has run on it; if `load` fails, the page's context is closed and the error rethrown. */
+/**
+ * Pauses a clock that's flowing in real time. It pauses a game cycle ahead of the page's time as just read, since real
+ * time passes before the pause lands and the clock can't be set back; if more passed than that, it tries again.
+ */
+async function pauseFlowingClock(page: Page): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const pageNowMs = await page.evaluate(() => Date.now());
+    try {
+      await page.clock.pauseAt(pageNowMs + GAME_CYCLE_MS);
+      return;
+    } catch (error) {
+      if (attempt >= 3 || !String(error).includes("Cannot fast-forward to the past")) throw error;
+    }
+  }
+}
+
+/**
+ * `page` once `load` has run on it. If `load` fails, the page's context is closed and the error rethrown, with what the
+ * page showed and its errors.
+ */
 async function closedIfItFails(page: Page, load: () => Promise<void>): Promise<Page> {
   try {
     await load();
     return page;
   } catch (error) {
+    // What the page showed and what went wrong in it: a load that never finishes says nothing else.
+    const shown = await page
+      .locator("body")
+      .innerText({ timeout: 1_000 })
+      .catch(() => "(unreadable)");
+    const problems = (problemsOnPage.get(page) ?? []).slice(-20);
     await page.context().close();
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\nThe page showed: ${shown.slice(0, 1_500)}\n${problems.join("\n")}`, { cause: error });
   }
 }
 
