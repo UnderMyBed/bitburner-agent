@@ -50,6 +50,18 @@ class DiskError extends Error {}
 const isOperatingSystemError = (error: unknown): error is NodeJS.ErrnoException =>
   error instanceof Error && typeof (error as NodeJS.ErrnoException).syscall === "string";
 
+/**
+ * Best effort, after a failed write: the failure is what gets recorded. `force` covers a file that was never made, but
+ * not, on Linux, a path through a file (ENOTDIR); the next rotation clears anything left.
+ */
+function removePartialFile(partialFile: string): void {
+  try {
+    rmSync(partialFile, { force: true });
+  } catch (error) {
+    if (!isOperatingSystemError(error)) throw error;
+  }
+}
+
 export class SaveBackups {
   readonly #options: SaveBackupsOptions;
   readonly #directory: string;
@@ -143,7 +155,7 @@ export class SaveBackups {
       writeFileSync(`${file}${PARTIAL_SUFFIX}`, bytes);
       renameSync(`${file}${PARTIAL_SUFFIX}`, file);
     } catch (error) {
-      rmSync(`${file}${PARTIAL_SUFFIX}`, { force: true });
+      removePartialFile(`${file}${PARTIAL_SUFFIX}`);
       if (!isOperatingSystemError(error)) throw error;
       throw new DiskError(`couldn't write ${fileName}: ${error.message}`);
     }
