@@ -1,6 +1,6 @@
 # @bitburner-agent/brain
 
-The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). The dashboard ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)) and supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) join it next.
+The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). The dashboard ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)) and supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) join it next.
 
 ## Running it
 
@@ -10,8 +10,8 @@ npm run brain -- --data-dir D:\bitburner-agent
 
 Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 
-- **There's no default data directory.** It holds bulk data (the store, later save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
-- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, and the two ports.
+- **There's no default data directory.** It holds bulk data (the store, the save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
+- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the two ports, and where the save backups go.
 - **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`git clone --recurse-submodules`), or the brain stops at start, saying which file is missing.
 - **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
@@ -22,6 +22,7 @@ Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 | `config.json` | Created with defaults on first run, then read |
 | `telemetry.sqlite` | The store (below), with its WAL files |
 | `ingame-build/` | The in-game code built at start, which the brain deploys |
+| `saves/<environment>/` | The game's save backups ([below](#save-backups)) |
 
 `config.json`:
 
@@ -33,13 +34,16 @@ Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 | `dashboardPort` | 12527 | The dashboard (#93) |
 | `allowedOrigins` | `["file://"]` | `Origin` headers allowed to connect; `file://` is Steam's page |
 | `token` | 32 random bytes, hex | The control channel's shared secret, generated once |
+| `saveBackupIntervalMinutes` | 30 | How often the game's save is backed up, besides once on each RFA connection |
+| `saveBackupsKept` | 96 | How many save backups to keep per environment, the newest: two days at 30 minutes |
 
 A config that isn't valid stops the brain, naming the file and the problem:
 - invalid JSON, or not an object;
 - another environment;
 - ports out of range, or two the same;
 - no allowed origins;
-- a token that isn't 64 hex digits.
+- a token that isn't 64 hex digits;
+- a backup interval that isn't a positive number of minutes, or a count kept that isn't a whole number of at least 1. A config from before these fields existed is refused too, naming the field and its default, so add them.
 
 A port of 0 picks any free port, which is for tests only: the game's RFA settings can't name it, and a control port of 0 changes at every start, so every start would be a new deployment.
 
@@ -50,7 +54,7 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so the dashboard can r
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
-| `events` | Everything else the bridge reports: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`, and the deployer's `deployed`, `deployFailed`, `versionDrift`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
+| `events` | Everything else the bridge reports: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deployFailed`, `versionDrift`; and the save backups' `saveBackup`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches the dashboard sets, e.g. pausing supervision (#93, #94) |
 
 - **Every row is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
@@ -61,6 +65,28 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so the dashboard can r
 - **Writes wait up to 5 s** for a reader's lock, so a reader never fails a write.
 - **Timestamps** (`received_at_ms`, `at_ms`) come from the brain's clock: the system clock live, virtual time under the simulator.
 - **No thinning yet:** a day of snapshots is about 50,000 rows. Thinning comes with the campaign's months of data (M4, [#15](https://github.com/UnderMyBed/bitburner-agent/issues/15)).
+
+## Save backups
+
+The brain backs up the game's save over the Remote File API (`getSaveFile`; architecture §6). The backups are insurance against a bug or a corrupted save (game issue #2809 is open on 3.0.1), and real starting states for the simulator.
+
+- **When:** once on each RFA connection (the game connects on load and after a drop), and every `saveBackupIntervalMinutes` over the newest connection.
+  - One at a time: a backup asked for while one is under way follows it.
+  - With no connection, the interval's backup fails and is recorded, so a stretch with no backups shows.
+- **What:** Steam's own save, the bytes it writes to `bitburnerSave_*.json.gz`. The brain checks them before keeping them:
+  - the game sent them as bytes (`binary: true`). A page without CompressionStream sends text instead, which isn't Steam's;
+  - every character is a byte;
+  - they gunzip, into JSON, and that JSON is a `BitburnerSaveObject`.
+- **Where:** `<data dir>/saves/<environment>/<UTC time>.json.gz`, for example `saves/E0/2026-10-27T03-30-00.000Z.json.gz` (`-` for `:`, which Windows doesn't allow).
+  - Each environment has its own folder, so a simulator's or source build's backup (`E1`, `E2`) never sits beside Steam's (`E0`).
+  - Each is written under a temporary name, then renamed, so a crash never leaves half a backup.
+- **Rotation:** after each backup the brain keeps the newest `saveBackupsKept` in that environment's folder and deletes the rest. Only files named as backups count; anything else in the folder is left alone.
+- **Recorded:** every backup is a `saveBackup` event in the store, with the file and its size, or with the failure. A failed or damaged backup is never kept. Failures include no connection, no reply in 30 s, a save that isn't valid, and a disk error.
+- **Restoring one:** in the game, Options → Import Game, then pick the `.json.gz`. The game accepts these gzip files as they are (`src/SaveObject.ts:338-355`).
+  - **Only `E0` backups may ever go into Steam.** Saves flow one way: nothing from the simulator or a source build goes back (architecture §9.4).
+  - Backups are personal data. They live in the data directory, outside the repository; never commit one.
+- **In the simulator:** a backup loads as a save fixture as it is (`{ kind: "save", path }`), to the same state as the game's own save at that moment (`test/save-backup-round-trip.test.ts`).
+- **Backups before irreversible intents** (R8) come with intents, in M3 (#11).
 
 ## The gap report
 
@@ -147,10 +173,11 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/main.ts` | The process (`npm run brain`) |
 | `src/config.ts` | The data directory and `config.json` |
 | `src/telemetry-store.ts` | The store |
-| `src/record-channel-events.ts` | The control channel's and the deployer's events into the store |
+| `src/record-channel-events.ts` | The control channel's, the deployer's and the save backups' events into the store |
 | `src/in-game-build.ts` | Reads the in-game build (checked against its manifest) and the pinned definitions |
 | `src/gap-report.ts`, `src/gaps-cli.ts` | The gap report and its command (`npm run gaps`) |
 | `src/simulated-game.ts` | The lockstep driver |
+| `src/save-backups.ts` | The save backups |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver |

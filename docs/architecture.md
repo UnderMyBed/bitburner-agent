@@ -367,9 +367,11 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - **Switch-over:** only then does the deployer update `agent/boot.js` (if it differs), and `agent/current.txt` last. It then has the old Agent restart: it runs `agent/boot.js` with its pid and exits, and `boot.js` waits for it to go, then starts the new deployment's Agent. `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
   - **Saved at the next autosave:** `pushFile` doesn't save the game. A deployment is in the save only after the next autosave (every 60 s by default). If the game reloads before then, the next RFA connection deploys again.
   - **Release gate:** only tagged releases are deployed to Steam. That's a rule of the setup (#95): the owner runs a release checkout; the brain doesn't enforce it.
-- **Save backups:**
-  - `getSaveFile` every N minutes, with rotation, **plus immediately before every irreversible intent** (install, BitNode change). Save corruption is a known open issue on 3.0.1 (#2809).
-  - Backups are our insurance against catastrophic bugs, and the simulator's source of real starting states.
+- **Save backups** ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92); details in [`packages/brain`](../packages/brain/README.md#save-backups)):
+  - **When:** `getSaveFile` on every RFA connection and every `saveBackupIntervalMinutes` (30 by default). From M3 there's also one **immediately before every irreversible intent** (install, BitNode change; R8, #11). Save corruption is a known open issue on 3.0.1 (#2809).
+  - **What's kept:** Steam's own gzip bytes, checked to gunzip into a Bitburner save, in `<data dir>/saves/<environment>/`. Rotation keeps the newest `saveBackupsKept` (96, two days) per environment. A failed or damaged backup is recorded (`saveBackup` events), never kept.
+  - **Sharing the connection:** the backups share the RFA connection with the deployer, each on its own client. Request ids are unique per connection.
+  - **Why:** backups are our insurance against catastrophic bugs, and the simulator's source of real starting states: a backup loads as a save fixture. Only `E0` backups may ever go back into Steam (§9.4).
 
 ---
 

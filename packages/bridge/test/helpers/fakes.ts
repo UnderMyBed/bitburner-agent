@@ -1,5 +1,12 @@
+import { gzipSync } from "node:zlib";
 import type { Clock, TimerHandle } from "../../src/clock.ts";
 import type { Connection } from "../../src/connection.ts";
+import type { GameSaveFile } from "../../src/rfa-client.ts";
+
+/** A save as the Steam game sends it over the RFA: gzip bytes of the save's JSON, one character per byte. */
+export function steamSaveFile(json = '{"ctor":"BitburnerSaveObject","data":{}}'): GameSaveFile {
+  return { identifier: "fake-identifier", binary: true, save: gzipSync(json).toString("latin1") };
+}
 
 /** A clock tests move by hand. */
 export class ManualClock implements Clock {
@@ -104,6 +111,8 @@ export class FakeRfaGame extends MemoryConnection {
   /** Each request, as `method filename` (or just the method). */
   readonly requests: string[] = [];
   definitionFile = "interface NS {}\n";
+  /** What `getSaveFile` answers. */
+  saveFile: GameSaveFile = steamSaveFile();
   ramOf: (filename: string, content: string) => number = () => 2.6;
   /** Drops the connection instead of answering this request (1-based), as a game that quits mid-deploy. */
   dropAtRequest = 0;
@@ -174,6 +183,8 @@ export class FakeRfaGame extends MemoryConnection {
       }
       case "getDefinitionFile":
         return { result: this.definitionFile };
+      case "getSaveFile":
+        return { result: this.saveFile };
       default:
         return { error: "Unknown message received" };
     }

@@ -13,6 +13,7 @@ import {
 } from "@bitburner-agent/core";
 import type { Clock, TimerHandle } from "./clock.ts";
 import type { Connection } from "./connection.ts";
+import { raiseAsUncaught } from "./event-listeners.ts";
 
 /** How long a new connection has to send a valid hello. */
 export const HELLO_TIMEOUT_MS = 5_000;
@@ -55,11 +56,6 @@ export interface ControlChannelOptions {
    */
   onListenerError?: (error: unknown) => void;
 }
-
-const raiseAsUncaught = (error: unknown) =>
-  queueMicrotask(() => {
-    throw error;
-  });
 
 /** The Agent connected now. The deployer keeps its deployment when it tidies old ones (#91). */
 export interface ConnectedAgent {

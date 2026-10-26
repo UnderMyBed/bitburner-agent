@@ -2,9 +2,10 @@
 // serving, what the Agent says stored, and the gap report's exit codes.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocket } from "ws";
@@ -53,6 +54,8 @@ test("the config and its token are created once, and kept", () => {
     controlPort: 12526,
     remoteFileApiPort: 12525,
     dashboardPort: 12527,
+    saveBackupIntervalMinutes: 30,
+    saveBackupsKept: 96,
   });
   expect(loadOrCreateConfig(dataDirectory)).toEqual(first);
 });
@@ -62,6 +65,10 @@ test.each([
   ["the simulator's environment", { environment: "E1" }, /environment must be E0 or E2/],
   ["two ports the same", { dashboardPort: 12526 }, /the ports must be different/],
   ["no allowed origins", { allowedOrigins: [] }, /allowedOrigins must list at least one origin/],
+  ["no backup interval", { saveBackupIntervalMinutes: undefined }, /saveBackupIntervalMinutes must be a positive/],
+  ["a zero backup interval", { saveBackupIntervalMinutes: 0 }, /saveBackupIntervalMinutes must be a positive/],
+  ["no backups kept", { saveBackupsKept: 0 }, /saveBackupsKept must be a whole number, at least 1/],
+  ["a fraction of a backup kept", { saveBackupsKept: 2.5 }, /saveBackupsKept must be a whole number, at least 1/],
 ])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
   const config = loadOrCreateConfig(dataDirectory);
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...config, ...changes }));
@@ -125,6 +132,32 @@ test("the brain serves the Remote File API: a game whose definitions differ puts
   expect(store.events({ environment: "E2" })).toMatchObject([
     { kind: "versionDrift", detail: { detail: expect.stringContaining("NetscriptDefinitions.d.ts differs") } },
   ]);
+  store.close();
+  game.close();
+});
+
+test("on a Remote File API connection the brain backs up the game's save under its environment, recorded", async () => {
+  const { remoteFileApiPort } = await startBrain();
+  const save = gzipSync('{"ctor":"BitburnerSaveObject","data":{}}');
+  const game = new WebSocket(`ws://127.0.0.1:${remoteFileApiPort}`, { origin: "file://" });
+  // Answers as the Steam game: the save as gzip bytes, one character per byte; nothing else is answered.
+  game.on("message", (frame) => {
+    const { id, method } = JSON.parse(String(frame)) as { id: number; method: string };
+    if (method !== "getSaveFile") return;
+    game.send(
+      JSON.stringify({ jsonrpc: "2.0", id, result: { identifier: "x", binary: true, save: save.toString("latin1") } }),
+    );
+  });
+  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  for (let attempt = 0; attempt < 50 && store.events({ environment: "E2" }).length === 0; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const [event] = store.events({ environment: "E2" });
+  if (!event) throw new Error("no saveBackup event was recorded");
+  expect(event).toMatchObject({ kind: "saveBackup", detail: { sizeBytes: save.length } });
+  const file = (event.detail as { file: string }).file;
+  expect(path.dirname(file)).toBe(path.join(dataDirectory, "saves", "E2"));
+  expect(readFileSync(file).equals(save)).toBe(true);
   store.close();
   game.close();
 });

@@ -21,6 +21,10 @@ export interface BrainConfig {
   allowedOrigins: string[];
   /** The control channel's shared secret: 32 random bytes, hex. */
   token: string;
+  /** How often the game's save is backed up, besides once on each Remote File API connection. */
+  saveBackupIntervalMinutes: number;
+  /** How many save backups to keep, the newest, per environment. */
+  saveBackupsKept: number;
 }
 
 /**
@@ -59,6 +63,9 @@ export function defaultConfig(): BrainConfig {
     dashboardPort: 12527,
     allowedOrigins: ["file://"],
     token: randomBytes(32).toString("hex"),
+    saveBackupIntervalMinutes: 30,
+    // Two days at 30 minutes.
+    saveBackupsKept: 96,
   };
 }
 
@@ -103,5 +110,12 @@ function configProblem(config: unknown): string | null {
     return "allowedOrigins must list at least one origin (Steam's page is file://)";
   }
   if (typeof fields.token !== "string" || !/^[0-9a-f]{64}$/.test(fields.token)) return "token must be 64 hex digits";
+  const { saveBackupIntervalMinutes, saveBackupsKept } = fields;
+  if (typeof saveBackupIntervalMinutes !== "number" || !(saveBackupIntervalMinutes > 0)) {
+    return "saveBackupIntervalMinutes must be a positive number of minutes (the default is 30)";
+  }
+  if (!Number.isInteger(saveBackupsKept) || (saveBackupsKept as number) < 1) {
+    return "saveBackupsKept must be a whole number, at least 1 (the default is 96)";
+  }
   return null;
 }

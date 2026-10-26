@@ -90,6 +90,31 @@ test("closing fails every request still waiting, and any made after", async () =
   await expect(client.getDefinitionFile()).rejects.toThrow("getDefinitionFile: the connection closed");
 });
 
+test("two clients can share a connection: ids are unique on it, and each takes only its own replies", async () => {
+  const other = new RfaClient(connection, clock);
+  const names = client.getFileNames();
+  const definitions = other.getDefinitionFile();
+  expect(requests().map((request) => request.id)).toEqual([1, 2]);
+  reply(2, { result: "interface NS {}" });
+  reply(1, { result: ["a.js"] });
+  expect(await definitions).toBe("interface NS {}");
+  expect(await names).toEqual(["a.js"]);
+  // A fresh connection numbers from 1 again.
+  const fresh = new MemoryConnection();
+  void new RfaClient(fresh, clock).getDefinitionFile();
+  expect(JSON.parse(fresh.sent[0] as string)).toMatchObject({ id: 1 });
+});
+
+test("getSaveFile gives the game's save: its identifier, whether it's binary, and the save", async () => {
+  const save = client.getSaveFile();
+  expect(requests()).toEqual([{ jsonrpc: "2.0", id: 1, method: "getSaveFile" }]);
+  reply(1, { result: { identifier: "abc", binary: true, save: "\x1f\x8b\x08" } });
+  expect(await save).toEqual({ identifier: "abc", binary: true, save: "\x1f\x8b\x08" });
+  const malformed = client.getSaveFile();
+  reply(2, { result: { binary: true, save: 7 } });
+  await expect(malformed).rejects.toThrow(/getSaveFile: unexpected reply/);
+});
+
 test("a reply of the wrong type for the method is an error, not a value", async () => {
   const ram = client.calculateRam("a.js");
   reply(1, { result: "lots" });

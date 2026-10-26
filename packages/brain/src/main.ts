@@ -1,20 +1,23 @@
 // npm run brain -- --data-dir <dir>: the long-running brain process (architecture D1). In M2 it runs the control
-// channel and stores what the Agent reports, and serves the Remote File API, over which it deploys the in-game code;
-// the dashboard and supervisor join it in later tasks.
+// channel and stores what the Agent reports, and serves the Remote File API, over which it deploys the in-game code and
+// backs up the game's save; the dashboard and supervisor join it in later tasks.
 import path from "node:path";
 import process from "node:process";
 import { ControlChannel, Deployer, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
-import { recordChannelEvents, recordDeployerEvents } from "./record-channel-events.ts";
+import { recordChannelEvents, recordDeployerEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
+import { SaveBackups } from "./save-backups.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
 const MAX_LOG_LINE_LENGTH = 500;
 /** Where the brain builds the in-game code it deploys, inside its data directory. */
 const INGAME_BUILD_DIRECTORY_NAME = "ingame-build";
+/** Where the save backups go, inside its data directory: one folder per environment. */
+const SAVE_BACKUPS_DIRECTORY_NAME = "saves";
 
 function log(message: string): void {
   const line = `${new Date(systemClock.now()).toISOString()} brain: ${message}`;
@@ -57,24 +60,48 @@ try {
   const stopLoggingDeploys = deployer.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
+  // Each environment's backups apart, so only Steam's (E0) are ever beside each other (architecture §9.4).
+  const saveBackupsDirectory = path.join(dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME, config.environment);
+  const saveBackups = new SaveBackups({
+    directory: saveBackupsDirectory,
+    intervalMs: config.saveBackupIntervalMinutes * 60_000,
+    kept: config.saveBackupsKept,
+    clock: systemClock,
+  });
+  const stopRecordingBackups = recordEvents(saveBackups, store, {
+    environment: config.environment,
+    release: `${release}+${deployer.deploymentId}`,
+  });
+  const stopLoggingBackups = saveBackups.subscribe((event) =>
+    log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
+  );
   const remoteFileApiServer = await startWebSocketServer({
     port: config.remoteFileApiPort,
     allowedOrigins: config.allowedOrigins,
-    onConnection: (connection) => void deployer.accept(connection),
+    onConnection: (connection) => {
+      void deployer.accept(connection);
+      saveBackups.accept(connection);
+    },
     onRejectedOrigin: (origin) => channel.reportRejectedOrigin(`${origin} (Remote File API)`),
   });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
   log(`deploys ${deployer.deploymentId}`);
   log(`control channel on 127.0.0.1:${controlServer.port}`);
   log(`Remote File API on 127.0.0.1:${remoteFileApiServer.port}`);
+  log(
+    `save backups in ${saveBackupsDirectory}, every ${config.saveBackupIntervalMinutes} min, ` +
+      `the newest ${config.saveBackupsKept} kept`,
+  );
 
   let stopping = false;
   const shutDown = async () => {
     if (stopping) return;
     stopping = true;
-    // A deploy the shutdown cuts short isn't a failed one: the next start deploys again.
+    // A deploy or backup the shutdown cuts short isn't a failed one: the next start deploys and backs up again.
     stopRecordingDeploys();
     stopLoggingDeploys();
+    stopRecordingBackups();
+    stopLoggingBackups();
     await remoteFileApiServer.close();
     await controlServer.close();
     store.close();

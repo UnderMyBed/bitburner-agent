@@ -1,10 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type Clock, type Connection, ControlChannel } from "@bitburner-agent/bridge";
+import { type Clock, type Connection, ControlChannel, EventListeners } from "@bitburner-agent/bridge";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, expect, test } from "vitest";
-import { recordChannelEvents } from "../src/record-channel-events.ts";
+import { recordChannelEvents, recordEvents } from "../src/record-channel-events.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const TOKEN = "a".repeat(64);
@@ -62,6 +62,21 @@ test("each row's release is the brain's plus the connected Agent's deployment, o
     ["agentConnected", "v0.2.0+deployment-a"],
     ["agentDisconnected", "v0.2.0+deployment-a"],
     ["connectionRejected", "v0.2.0+none"],
+  ]);
+  store.close();
+});
+
+test("a part's events are stored with their time, kind and the rest as detail, until stopped", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const source = new EventListeners<{ type: "saveBackup"; atMs: number; file: string }>();
+  const stop = recordEvents(source, store, { environment: "E0", release: "v0.2.0+abc" });
+  source.emit({ type: "saveBackup", atMs: 5, file: "saves/E0/x.json.gz" });
+  stop();
+  source.emit({ type: "saveBackup", atMs: 6, file: "after stopping" });
+  expect(store.events({ environment: "E0" })).toEqual([
+    { environment: "E0", release: "v0.2.0+abc", atMs: 5, kind: "saveBackup", detail: { file: "saves/E0/x.json.gz" } },
   ]);
   store.close();
 });
