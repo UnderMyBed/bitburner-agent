@@ -88,3 +88,59 @@ export class MemoryConnection implements Connection {
     return this.sent.map((text) => JSON.parse(text) as { type: string });
   }
 }
+
+/**
+ * The game's side of a Remote File API connection, answering as `src/RemoteFileAPI/MessageHandlers.ts` does, for
+ * home only: files in memory, a RAM figure per script, and scripts that are running (whose files it won't delete).
+ */
+export class FakeRfaGame extends MemoryConnection {
+  readonly files = new Map<string, string>();
+  readonly runningScripts = new Set<string>();
+  /** Each request, as `method filename` (or just the method). */
+  readonly requests: string[] = [];
+  definitionFile = "interface NS {}\n";
+  ramOf: (filename: string, content: string) => number = () => 2.6;
+  /** Drops the connection instead of answering this request (1-based), as a game that quits mid-deploy. */
+  dropAtRequest = 0;
+
+  override send(text: string): void {
+    super.send(text);
+    if (this.closedWith) return;
+    const { id, method, params } = JSON.parse(text) as {
+      id: number;
+      method: string;
+      params?: { filename?: string; content?: string };
+    };
+    this.requests.push(params?.filename === undefined ? method : `${method} ${params.filename}`);
+    if (this.requests.length === this.dropAtRequest) {
+      queueMicrotask(() => this.dropFromGameSide());
+      return;
+    }
+    const answer = this.#answer(method, params?.filename ?? "", params?.content ?? "");
+    queueMicrotask(() => this.receive(JSON.stringify({ jsonrpc: "2.0", id, ...answer })));
+  }
+
+  #answer(method: string, filename: string, content: string): { result?: unknown; error?: string } {
+    const missing = { error: `File does not exist. Filename: ${filename}` };
+    switch (method) {
+      case "pushFile":
+        this.files.set(filename, content);
+        return { result: "OK" };
+      case "getFile":
+        return this.files.has(filename) ? { result: this.files.get(filename) } : missing;
+      case "deleteFile":
+        if (this.runningScripts.has(filename)) return { error: "Cannot delete a script that is currently running!" };
+        return this.files.delete(filename) ? { result: "OK" } : { error: "No such file exists" };
+      case "getFileNames":
+        return { result: [...this.files.keys()] };
+      case "calculateRam": {
+        const script = this.files.get(filename);
+        return script === undefined ? missing : { result: this.ramOf(filename, script) };
+      }
+      case "getDefinitionFile":
+        return { result: this.definitionFile };
+      default:
+        return { error: "Unknown message received" };
+    }
+  }
+}

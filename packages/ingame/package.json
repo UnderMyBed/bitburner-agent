@@ -11,10 +11,10 @@
     "build": "node scripts/build.ts"
   },
   "dependencies": {
-    "@bitburner-agent/core": "*"
+    "@bitburner-agent/core": "*",
+    "esbuild": "0.28.2"
   },
   "devDependencies": {
-    "@bitburner-agent/sim": "*",
-    "esbuild": "0.28.2"
+    "@bitburner-agent/sim": "*"
   }
 }

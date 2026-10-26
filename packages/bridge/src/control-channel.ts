@@ -6,6 +6,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   encodeControlMessage,
   type GameInfo,
+  gameDrift,
   type HelloMessage,
   parseAgentMessage,
   type SnapshotMessage,
@@ -29,7 +30,9 @@ export type ControlChannelEvent =
   | { type: "agentDisconnected"; atMs: number; agentSessionId: string }
   /** `missedBefore`: sequence numbers skipped since the last snapshot passed on for this session and tier. */
   | { type: "snapshotReceived"; atMs: number; snapshot: SnapshotMessage; missedBefore: number }
-  | { type: "connectionRejected"; atMs: number; reason: ConnectionRejectedReason; detail: string };
+  | { type: "connectionRejected"; atMs: number; reason: ConnectionRejectedReason; detail: string }
+  /** An Agent reported a game other than the pinned one: the channel holds, and never sends `restart` again. */
+  | { type: "versionDrift"; atMs: number; detail: string };
 
 /**
  * What the deployer knows (#91): the deployment `agent/current.txt` names, as last read or written over the Remote File
@@ -76,6 +79,11 @@ export class ControlChannel {
   readonly #listeners = new Set<(event: ControlChannelEvent) => void>();
   #currentSession: AgentSession | null = null;
   #deploymentState: DeploymentState = { deployedId: null, hold: false, deployFailed: false };
+  /**
+   * An Agent reported a game the brain wasn't built for (architecture §12.4). Kept for the brain's life: only a brain
+   * built for the new version may deploy to it.
+   */
+  #gameDrifted = false;
   /**
    * Deployments a restart was already sent from, for the deployed id now. Cleared when that id changes, so each
    * outdated deployment is told to restart once per thing the deployer learns. If its Agent comes back anyway (the
@@ -176,11 +184,15 @@ export class ControlChannel {
     this.#currentSession = session;
     this.#rememberSession(session.agentSessionId);
     previous?.connection.close(CONTROL_CLOSE_CODES.replaced, "replaced");
+    // Before the restart decision, so a drifted game is never sent one.
+    const drift = gameDrift(hello.game);
+    if (drift !== null) this.#gameDrifted = true;
     if (!this.#restartIfOutdated(session)) {
       this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" });
     }
     const atMs = this.#clock.now();
     this.#emit([
+      ...(drift !== null ? [{ type: "versionDrift" as const, atMs, detail: `the Agent's game: ${drift}` }] : []),
       ...(previous ? [{ type: "agentDisconnected" as const, atMs, agentSessionId: previous.agentSessionId }] : []),
       {
         type: "agentConnected",
@@ -200,7 +212,9 @@ export class ControlChannel {
    */
   #restartIfOutdated(session: AgentSession): boolean {
     const { deployedId, hold, deployFailed } = this.#deploymentState;
-    if (deployedId === null || hold || deployFailed || session.deploymentId === deployedId) return false;
+    if (deployedId === null || hold || this.#gameDrifted || deployFailed || session.deploymentId === deployedId) {
+      return false;
+    }
     if (this.#restartsSentFrom.has(session.deploymentId)) return false;
     this.#restartsSentFrom.add(session.deploymentId);
     this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: deployedId });

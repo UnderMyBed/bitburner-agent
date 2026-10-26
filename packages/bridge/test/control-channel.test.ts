@@ -269,6 +269,34 @@ describe("restart, without loops", () => {
   });
 });
 
+describe("an Agent on another game version", () => {
+  const otherGame = { version: "3.1.0", versionNumber: 52, commit: "abcdef123", platform: "Steam" };
+
+  test("is welcomed and reported, with a versionDrift event before it", () => {
+    const connection = connectAgent(hello({ game: otherGame }));
+    expect(connection.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
+    expect(events).toEqual([
+      { type: "versionDrift", atMs: clock.now(), detail: "the Agent's game: versionNumber 52, pinned 51" },
+      expect.objectContaining({ type: "agentConnected", game: otherGame }),
+    ]);
+  });
+
+  test("puts the channel on hold for good: no restart, for it or any Agent after it", () => {
+    channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
+    const drifted = connectAgent(hello({ game: otherGame }));
+    channel.setDeploymentState({ deployedId: "deployment-c", hold: false, deployFailed: false });
+    const pinned = connectAgent(hello({ agentSessionId: "session-2" }));
+    expect(drifted.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
+    expect(pinned.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
+  });
+
+  test("a commit abbreviated to another length is the same game", () => {
+    const connection = connectAgent(hello({ game: { ...otherGame, versionNumber: 51, commit: "1da7316" } }));
+    expect(types()).toEqual(["agentConnected"]);
+    expect(connection.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
+  });
+});
+
 describe("a listener that throws", () => {
   test("can't leave the channel half-changed, and its error is handed on", () => {
     const listenerErrors: unknown[] = [];

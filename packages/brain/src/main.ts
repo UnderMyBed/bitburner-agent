@@ -1,15 +1,20 @@
 // npm run brain -- --data-dir <dir>: the long-running brain process (architecture D1). In M2 it runs the control
-// channel and stores what the Agent reports; the Remote File API, dashboard and supervisor join it in later tasks.
+// channel and stores what the Agent reports, and serves the Remote File API, over which it deploys the in-game code;
+// the dashboard and supervisor join it in later tasks.
 import path from "node:path";
 import process from "node:process";
-import { ControlChannel, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
+import { ControlChannel, Deployer, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
+import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
-import { recordChannelEvents } from "./record-channel-events.ts";
+import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
+import { recordChannelEvents, recordDeployerEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
 const MAX_LOG_LINE_LENGTH = 500;
+/** Where the brain builds the in-game code it deploys, inside its data directory. */
+const INGAME_BUILD_DIRECTORY_NAME = "ingame-build";
 
 function log(message: string): void {
   const line = `${new Date(systemClock.now()).toISOString()} brain: ${message}`;
@@ -20,6 +25,10 @@ try {
   const dataDirectory = resolveDataDirectory(process.argv.slice(2), process.env);
   const config = loadOrCreateConfig(dataDirectory);
   const release = brainRelease();
+  // Built from this checkout's sources on every start, so the brain always deploys the code it was started from.
+  const buildDirectory = path.join(dataDirectory, INGAME_BUILD_DIRECTORY_NAME);
+  await buildInGameBundles({ outputDirectory: buildDirectory });
+  const build = readInGameBuild(buildDirectory);
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
   const channel = new ControlChannel({ token: config.token, clock: systemClock });
   recordChannelEvents(channel, store, { environment: config.environment, brainRelease: release });
@@ -32,13 +41,33 @@ try {
     onConnection: (connection) => channel.accept(connection),
     onRejectedOrigin: (origin) => channel.reportRejectedOrigin(origin),
   });
+  const deployer = new Deployer({
+    build,
+    // The port the Agent must connect to: the one listened on, which config.json's 0 (tests) leaves to the system.
+    controlPort: controlServer.port,
+    token: config.token,
+    pinnedDefinitions: readPinnedDefinitions(),
+    channel,
+    clock: systemClock,
+  });
+  recordDeployerEvents(deployer, store, { environment: config.environment, brainRelease: release });
+  deployer.subscribe((event) => log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`));
+  const remoteFileApiServer = await startWebSocketServer({
+    port: config.remoteFileApiPort,
+    allowedOrigins: config.allowedOrigins,
+    onConnection: (connection) => void deployer.accept(connection),
+    onRejectedOrigin: (origin) => channel.reportRejectedOrigin(`${origin} (Remote File API)`),
+  });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
+  log(`deploys ${deployer.deploymentId}`);
   log(`control channel on 127.0.0.1:${controlServer.port}`);
+  log(`Remote File API on 127.0.0.1:${remoteFileApiServer.port}`);
 
   let stopping = false;
   const shutDown = async () => {
     if (stopping) return;
     stopping = true;
+    await remoteFileApiServer.close();
     await controlServer.close();
     store.close();
     log("stopped");
