@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { buildDashboardStatus } from "../src/dashboard/status.ts";
-import { recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
+import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
+import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const STARTED_AT_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
@@ -15,9 +15,15 @@ const context = { environment: "E0" as const, release: "v0.2.0+abc123def456" };
 const game = { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" };
 let directory: string;
 let store: TelemetryStore;
+let brainStartedEventId: number;
+/** The brain starting, as main.ts records it: everything stored after this is this run. */
+const brainStarts = () => {
+  brainStartedEventId = store.recordEvent(context, { atMs: STARTED_AT_MS, kind: BRAIN_STARTED_EVENT_KIND, detail: {} });
+};
 beforeEach(() => {
   directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-status-"));
   store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  brainStarts();
 });
 afterEach(() => {
   store.close();
@@ -30,6 +36,7 @@ const status = (nowMs: number) =>
     environment: "E0",
     brainRelease: "v0.2.0",
     brainStartedAtMs: STARTED_AT_MS,
+    brainStartedEventId,
     nowMs,
   });
 
@@ -113,7 +120,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
   });
   // Newest first.
-  expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed"]);
+  expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
 });
 
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
@@ -126,11 +133,41 @@ test("gaps over the last 24 h come from the gap report, from 24 h before now", (
     recordSnapshot("fast", tenMinutesAgoMs + second * 1000, fastData(1));
   }
   const { gaps } = status(nowMs);
-  expect(gaps).toMatchObject({ sinceMs: nowMs - DAY_MS, untilMs: nowMs, thresholdMs: 6_000, count: 252 });
-  expect(gaps.gaps).toEqual([
-    { fromMs: nowMs - DAY_MS, toMs: tenMinutesAgoMs, lengthMs: DAY_MS - 600_000 },
+  expect(gaps).toMatchObject({
+    sinceMs: nowMs - DAY_MS,
+    untilMs: nowMs,
+    thresholdMs: 6_000,
+    count: 252,
+    gapCount: 2,
+    totalGapMs: DAY_MS - 600_000 + 100_000,
+  });
+  // Newest first.
+  expect(gaps.newestGaps).toEqual([
     { fromMs: tenMinutesAgoMs + 300_000, toMs: tenMinutesAgoMs + 400_000, lengthMs: 100_000 },
+    { fromMs: nowMs - DAY_MS, toMs: tenMinutesAgoMs, lengthMs: DAY_MS - 600_000 },
   ]);
+});
+
+test("the gaps are all counted, but only the newest 20 are listed", () => {
+  const nowMs = STARTED_AT_MS + DAY_MS;
+  // A heartbeat every 10 s for 5 minutes: each interval is a gap.
+  for (let second = 300; second >= 0; second -= 10) recordSnapshot("fast", nowMs - second * 1000, fastData(1));
+  const { gaps } = status(nowMs);
+  // 30 intervals of 10 s, and the window's start to the first heartbeat.
+  expect(gaps.gapCount).toBe(31);
+  expect(gaps.newestGaps).toHaveLength(20);
+  expect(gaps.newestGaps[0]).toEqual({ fromMs: nowMs - 10_000, toMs: nowMs, lengthMs: 10_000 });
+});
+
+test("a deploy that failed is resolved by a later connection finding the deployment already in place", () => {
+  store.recordEvent(context, {
+    atMs: STARTED_AT_MS + 1_000,
+    kind: "deployFailed",
+    detail: { deploymentId: "d", reason: "pushFile agent/current.txt: no reply within 30 s" },
+  });
+  expect(status(STARTED_AT_MS + 2_000).alerts.map((alert) => alert.name)).toEqual(["deployFailed"]);
+  store.recordEvent(context, { atMs: STARTED_AT_MS + 3_000, kind: "deploymentCurrent", detail: { deploymentId: "d" } });
+  expect(status(STARTED_AT_MS + 4_000).alerts).toEqual([]);
 });
 
 test("nothing yet: the Agent not connected, no snapshots, the silent alert after 60 s", () => {
@@ -177,7 +214,11 @@ test("a disconnected Agent, another game version, a failed deploy and a give-up 
     kind: "deployFailed",
     detail: { deploymentId: "d", reason: "agent.js needs 4.7 GB, over its budget of 3 GB" },
   });
-  store.recordEvent(context, { atMs: STARTED_AT_MS + 5_000, kind: "relaunch", detail: { cause: "game process gone" } });
+  store.recordEvent(context, {
+    atMs: STARTED_AT_MS + 5_000,
+    kind: RELAUNCH_EVENT_KIND,
+    detail: { cause: "notRunning" },
+  });
   recordSupervisionGaveUp(store, STARTED_AT_MS + 6_000);
   const built = status(STARTED_AT_MS + 7_000);
   expect(built.agent).toMatchObject({ connected: false, sinceMs: STARTED_AT_MS + 3_000, agentSessionId: "s" });
@@ -190,25 +231,27 @@ test("a disconnected Agent, another game version, a failed deploy and a give-up 
     state: "gaveUp",
     paused: false,
     gaveUpAtMs: STARTED_AT_MS + 6_000,
-    relaunches: [{ atMs: STARTED_AT_MS + 5_000, detail: { cause: "game process gone" } }],
+    relaunches: [{ atMs: STARTED_AT_MS + 5_000, detail: { cause: "notRunning" } }],
   });
   setSupervisionPaused(store, true);
   expect(status(STARTED_AT_MS + 8_000).supervision).toMatchObject({ state: "paused", paused: true });
 });
 
-test("only this run of the brain counts for the Agent and the alerts: events from before it started don't", () => {
+test("only this run of the brain counts for the Agent and the alerts, by order, whatever the clock says", () => {
+  // An earlier run, its events stamped later than this run's start (a clock since set back).
   store.recordEvent(context, {
-    atMs: STARTED_AT_MS - 10_000,
+    atMs: STARTED_AT_MS + 10_000,
     kind: "agentConnected",
     detail: { agentSessionId: "old", deploymentId: "d", game },
   });
-  store.recordEvent(context, { atMs: STARTED_AT_MS - 9_000, kind: "deployFailed", detail: { reason: "old" } });
-  store.recordEvent(context, { atMs: STARTED_AT_MS - 8_000, kind: "versionDrift", detail: { detail: "old" } });
+  store.recordEvent(context, { atMs: STARTED_AT_MS + 11_000, kind: "deployFailed", detail: { reason: "old" } });
+  store.recordEvent(context, { atMs: STARTED_AT_MS + 12_000, kind: "versionDrift", detail: { detail: "old" } });
+  brainStarts();
   const built = status(STARTED_AT_MS + 1_000);
   expect(built.agent.connected).toBe(false);
   expect(built.alerts).toEqual([]);
-  // They're still in the recent events.
-  expect(built.events).toHaveLength(3);
+  // They're still in the recent events: both starts and the three between.
+  expect(built.events).toHaveLength(5);
 });
 
 test("the recent events are the last 50", () => {

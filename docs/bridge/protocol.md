@@ -116,7 +116,7 @@ The other channel is the game's own Remote File API (RFA), which the deployer us
 
 **On every RFA connection,** unless on hold:
 1. **Version check:** `getDefinitionFile` against the pinned `NetscriptDefinitions.d.ts`, line endings aside. On any difference: hold (for the brain's run), a `versionDrift` event saying from which line, and the channel is told. Nothing else happens.
-2. Read `agent/current.txt`, and tell the channel the deployment it names. If that's this deployment, stop: nothing to do.
+2. Read `agent/current.txt`, and tell the channel the deployment it names. If that's this deployment, stop: nothing to do. A `deploymentCurrent` event records it, which also shows an earlier failed deploy as resolved (the dashboard's `deployFailed` alert, #93).
 3. Push every file into the deployment's folder.
 4. `calculateRam` on each script there. One over its budget (`ram-budget.json`) stops the deploy: a `deployFailed` event, the channel is told, and nothing shared has changed.
 5. If the brain went on hold meanwhile (an Agent's `hello` reported another game), stop here. Otherwise push `agent/boot.js`, if its content differs.

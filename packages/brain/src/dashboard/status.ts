@@ -9,14 +9,18 @@ import {
   type SnapshotTier,
 } from "@bitburner-agent/core";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
-import { readSupervisionSwitch } from "../supervision.ts";
+import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import { type Alert, activeAlerts } from "./alerts.ts";
 
 /** The gap report's window: the evidence for M2's 24 h criterion. */
 export const GAP_WINDOW_MS = 24 * 60 * 60_000;
 export const RECENT_EVENT_COUNT = 50;
+/** The newest gaps listed; the count and total cover them all. */
+export const LISTED_GAP_COUNT = 20;
 const RECENT_RELAUNCH_COUNT = 10;
+/** The event the brain records as it starts: everything stored after it is this run of the brain. */
+export const BRAIN_STARTED_EVENT_KIND = "brainStarted";
 
 export interface DashboardStatus {
   nowMs: number;
@@ -46,14 +50,17 @@ export interface DashboardStatus {
     pageHeapUsedBytes: number | null;
     degradedTiers: SnapshotTier[];
   };
-  /** The gap report over the last 24 h. */
+  /** The gap report over the last 24 h: every gap counted, the newest 20 listed (newest first). */
   gaps: {
     sinceMs: number;
     untilMs: number;
     thresholdMs: number;
+    /** Fast snapshots in the window. */
     count: number;
     longestIntervalMs: number;
-    gaps: Gap[];
+    gapCount: number;
+    totalGapMs: number;
+    newestGaps: Gap[];
   };
   alerts: Alert[];
   /** The newest 50, newest first. */
@@ -73,17 +80,26 @@ export interface DashboardStatusOptions {
   environment: Environment;
   brainRelease: string;
   brainStartedAtMs: number;
+  /** The id of this run's `brainStarted` event: "since the brain started" is every event stored after it. */
+  brainStartedEventId: number;
   nowMs: number;
 }
+
+/** A field of an event's detail as text, or "" if it isn't there. */
+const detailText = (detail: unknown, field: string) => {
+  const value = (detail as Record<string, unknown> | null)?.[field];
+  return value === undefined || value === null ? "" : String(value);
+};
 
 export function buildDashboardStatus({
   store,
   environment,
   brainRelease,
   brainStartedAtMs,
+  brainStartedEventId,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
-  const sinceStart = { environment, sinceMs: brainStartedAtMs };
+  const sinceStart = { environment, afterEventId: brainStartedEventId };
   const latestOfTier = Object.fromEntries(
     SNAPSHOT_TIERS.map((tier) => [tier, store.latestSnapshot({ environment, tier })]),
   ) as Record<SnapshotTier, ReturnType<TelemetryStore["latestSnapshot"]>>;
@@ -98,7 +114,8 @@ export function buildDashboardStatus({
     | undefined;
 
   const versionDriftEvent = store.latestEvent({ ...sinceStart, kinds: ["versionDrift"] });
-  const deployEvent = store.latestEvent({ ...sinceStart, kinds: ["deployed", "deployFailed"] });
+  // A connection that finds the deployment already in place resolves an earlier failure as much as a new deploy does.
+  const deployEvent = store.latestEvent({ ...sinceStart, kinds: ["deployed", "deploymentCurrent", "deployFailed"] });
   const supervision = readSupervisionSwitch(store);
 
   const gapWindow = { sinceMs: nowMs - GAP_WINDOW_MS, untilMs: nowMs, thresholdMs: DEFAULT_GAP_THRESHOLD_MS };
@@ -132,19 +149,26 @@ export function buildDashboardStatus({
       pageHeapUsedBytes: fast?.pageHeapUsedBytes ?? null,
       degradedTiers: fast?.degradedTiers ?? [],
     },
-    gaps: { ...gapWindow, ...gapReport },
+    gaps: {
+      ...gapWindow,
+      count: gapReport.count,
+      longestIntervalMs: gapReport.longestIntervalMs,
+      gapCount: gapReport.gaps.length,
+      totalGapMs: gapReport.gaps.reduce((total, gap) => total + gap.lengthMs, 0),
+      newestGaps: gapReport.gaps.slice(-LISTED_GAP_COUNT).reverse(),
+    },
     alerts: activeAlerts({
       nowMs,
       brainStartedAtMs,
       lastFastSnapshotAtMs: latestOfTier.fast?.receivedAtMs ?? null,
       versionDrift: versionDriftEvent
-        ? { atMs: versionDriftEvent.atMs, detail: String((versionDriftEvent.detail as { detail?: unknown }).detail) }
+        ? { atMs: versionDriftEvent.atMs, detail: detailText(versionDriftEvent.detail, "detail") }
         : null,
       lastDeploy: deployEvent
         ? {
             atMs: deployEvent.atMs,
             failed: deployEvent.kind === "deployFailed",
-            detail: String((deployEvent.detail as { reason?: unknown }).reason ?? ""),
+            detail: detailText(deployEvent.detail, "reason"),
           }
         : null,
       supervisionGaveUpAtMs: supervision.gaveUpAtMs,
@@ -157,7 +181,7 @@ export function buildDashboardStatus({
       paused: supervision.paused,
       gaveUpAtMs: supervision.gaveUpAtMs,
       relaunches: store
-        .recentEvents({ environment, limit: RECENT_RELAUNCH_COUNT, kinds: ["relaunch"] })
+        .recentEvents({ environment, limit: RECENT_RELAUNCH_COUNT, kinds: [RELAUNCH_EVENT_KIND] })
         .map(({ atMs, detail }) => ({ atMs, detail })),
     },
   };

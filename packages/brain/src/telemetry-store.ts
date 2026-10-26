@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 export const ENVIRONMENTS = ["E0", "E1", "E2"] as const;
 export type Environment = (typeof ENVIRONMENTS)[number];
 
-/** How long a write waits for a reader's lock before failing, so the dashboard reading never fails the brain's writes. */
+/** How long a write waits for a reader's lock before failing, so a reader (the gap report's command) never fails a write. */
 const BUSY_TIMEOUT_MS = 5_000;
 
 /** Who produced a record: every row carries it, so releases and environments can be compared (§7, §11). */
@@ -57,6 +57,7 @@ const SCHEMA = `
     kind TEXT NOT NULL,
     detail TEXT NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS events_by_kind ON events (environment, kind, id);
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -98,7 +99,10 @@ export class TelemetryStore {
     this.#database = database;
   }
 
-  /** Opens (creating if needed) the store at `filePath`, in WAL mode so a reader (the dashboard) never blocks a write. */
+  /**
+   * Opens (creating if needed) the store at `filePath`, in WAL mode so a reader (the gap report's command) never blocks a
+   * write.
+   */
   static open(filePath: string): TelemetryStore {
     const database = new DatabaseSync(filePath, { timeout: BUSY_TIMEOUT_MS });
     database.exec("PRAGMA journal_mode = WAL;");
@@ -135,10 +139,12 @@ export class TelemetryStore {
       );
   }
 
-  recordEvent(context: RecordContext, event: StoredEvent): void {
-    this.#database
+  /** Returns the event's id: events are numbered in the order stored. */
+  recordEvent(context: RecordContext, event: StoredEvent): number {
+    const { lastInsertRowid } = this.#database
       .prepare("INSERT INTO events (environment, release, at_ms, kind, detail) VALUES (?, ?, ?, ?, ?)")
       .run(context.environment, context.release, event.atMs, event.kind, JSON.stringify(event.detail) ?? "null");
+    return Number(lastInsertRowid);
   }
 
   /** Every snapshot from an environment, in the order stored. */
@@ -149,7 +155,10 @@ export class TelemetryStore {
     return rows.map(snapshotOfRow);
   }
 
-  /** The newest snapshot of a tier, by when it arrived (the dashboard), or null if there's none. */
+  /**
+   * The newest snapshot of a tier, in the order stored (the dashboard), or null if there's none. By order, not time, so
+   * a clock set back can't make an older one look newer.
+   */
   latestSnapshot({
     environment,
     tier,
@@ -158,10 +167,7 @@ export class TelemetryStore {
     tier: string;
   }): (RecordContext & StoredSnapshot) | null {
     const row = this.#database
-      .prepare(
-        `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
-          ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
-      )
+      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT 1`)
       .get(environment, tier) as Record<string, string | number> | undefined;
     return row ? snapshotOfRow(row) : null;
   }
@@ -210,22 +216,25 @@ export class TelemetryStore {
     return rows.map(eventOfRow);
   }
 
-  /** The newest event of one of `kinds` stored at or after `sinceMs`, or null (the dashboard's alerts). */
+  /**
+   * The newest event of one of `kinds` stored after the event `afterEventId`, or null (the dashboard's alerts: this run
+   * of the brain is everything after its `brainStarted` event, whatever the clock did).
+   */
   latestEvent({
     environment,
     kinds,
-    sinceMs,
+    afterEventId,
   }: {
     environment: Environment;
     kinds: string[];
-    sinceMs: number;
+    afterEventId: number;
   }): (RecordContext & StoredEvent) | null {
     const row = this.#database
       .prepare(
-        `SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND at_ms >= ?
-          AND kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY id DESC LIMIT 1`,
+        `SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+          AND id > ? ORDER BY id DESC LIMIT 1`,
       )
-      .get(environment, sinceMs, ...kinds) as Record<string, string | number> | undefined;
+      .get(environment, ...kinds, afterEventId) as Record<string, string | number> | undefined;
     return row ? eventOfRow(row) : null;
   }
 
@@ -240,6 +249,10 @@ export class TelemetryStore {
     this.#database
       .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(key, value);
+  }
+
+  deleteSetting(key: string): void {
+    this.#database.prepare("DELETE FROM settings WHERE key = ?").run(key);
   }
 
   close(): void {

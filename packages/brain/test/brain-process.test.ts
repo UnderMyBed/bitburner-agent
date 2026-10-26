@@ -94,6 +94,10 @@ test("a flag without a value is an error, never taken from elsewhere", () => {
   );
 });
 
+/** The events after the brain's own `brainStarted` (E2: the test brain's environment). */
+const eventsSinceStart = (store: TelemetryStore) =>
+  store.events({ environment: "E2" }).filter((event) => event.kind !== "brainStarted");
+
 interface StartedBrain {
   config: BrainConfig;
   controlPort: number;
@@ -175,6 +179,10 @@ test("the brain serves the dashboard; the pause switch is stored and survives a 
     supervision: { paused: boolean };
   };
   expect(status).toMatchObject({ environment: "E2", supervision: { paused: false } });
+  // The brain recorded its start, which the dashboard counts "this run" from.
+  const startedStore = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
+  expect(startedStore.events({ environment: "E2" }).map((event) => event.kind)).toContain("brainStarted");
+  startedStore.close();
   expect((await askDashboard(first.dashboardPort, "POST", "/api/supervision", '{"paused":true}')).status).toBe(200);
   await stopBrain();
   const second = await startBrain();
@@ -196,10 +204,10 @@ test("the brain serves the Remote File API: a game whose definitions differ puts
   expect(method).toBe("getDefinitionFile");
   game.send(JSON.stringify({ jsonrpc: "2.0", id, result: "interface NS { changed(): void; }\n" }));
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
-  for (let attempt = 0; attempt < 50 && store.events({ environment: "E2" }).length === 0; attempt++) {
+  for (let attempt = 0; attempt < 50 && eventsSinceStart(store).length === 0; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  expect(store.events({ environment: "E2" })).toMatchObject([
+  expect(eventsSinceStart(store)).toMatchObject([
     { kind: "versionDrift", detail: { detail: expect.stringContaining("NetscriptDefinitions.d.ts differs") } },
   ]);
   store.close();
@@ -219,10 +227,10 @@ test("on a Remote File API connection the brain backs up the game's save under i
     );
   });
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
-  for (let attempt = 0; attempt < 50 && store.events({ environment: "E2" }).length === 0; attempt++) {
+  for (let attempt = 0; attempt < 50 && eventsSinceStart(store).length === 0; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  const [event] = store.events({ environment: "E2" });
+  const [event] = eventsSinceStart(store);
   if (!event) throw new Error("no saveBackup event was recorded");
   expect(event).toMatchObject({ kind: "saveBackup", detail: { sizeBytes: save.length } });
   const file = (event.detail as { file: string }).file;
@@ -266,7 +274,7 @@ test("the brain serves the control channel and stores what the Agent reports", a
   expect(store.snapshots({ environment: "E2" })).toMatchObject([
     { tier: "fast", sequenceNumber: 1, data: { money: 7 }, release: expect.stringMatching(/\+deployment-a$/) },
   ]);
-  expect(store.events({ environment: "E2" }).map((event) => event.kind)).toEqual(["agentConnected"]);
+  expect(eventsSinceStart(store).map((event) => event.kind)).toEqual(["agentConnected"]);
   store.close();
   agent.close();
 });

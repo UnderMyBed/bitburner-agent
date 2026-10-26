@@ -56,7 +56,7 @@ The deploy steps are in [docs/bridge/protocol.md, "Deploying"](../../docs/bridge
   - **`build`** is the in-game build (`InGameBuild`: each script by file name, and each one's RAM budget). It must have `boot.js` and `agent.js`, and a budget for every script, or the deployer refuses to start.
   - **`deploymentId`** (`deploymentIdOf`): a hash of every script, the control port and the token.
   - **Hold:** a definition file other than the pinned one, or the channel's `versionDrift`, holds the deployer for the brain's run. It checks again just before it changes anything shared, so a drift reported mid-deploy stops that deploy too.
-  - **Events:** `deployed` (with the deployment it replaced), `deployFailed` (with the reason) and `versionDrift`. A listener that throws can't stop the others or the deploy: its error goes to `onListenerError` (by default raised afterwards as an uncaught exception).
+  - **Events:** `deployed` (with the deployment it replaced), `deploymentCurrent` (a connection found it already in place: nothing to deploy), `deployFailed` (with the reason) and `versionDrift`. A listener that throws can't stop the others or the deploy: its error goes to `onListenerError` (by default raised afterwards as an uncaught exception).
   - It tells the control channel (`setDeploymentState`) what `current.txt` names, any hold, and whether the last deploy failed, so the channel restarts an outdated Agent only when that's safe.
 - **`EventListeners`** (`src/event-listeners.ts`) holds a part's subscribers: the deployer's, and the brain's save backups'. A listener that throws can't stop the others: its error goes to `onListenerError`, by default raised afterwards as an uncaught exception (`raiseAsUncaught`, which the control channel uses too).
 

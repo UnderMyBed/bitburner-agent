@@ -383,8 +383,8 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - **Built in M2** ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); [`packages/brain`](../packages/brain/README.md#the-dashboard)): skeleton health (the Agent, the last snapshot per tier, key game values, gaps over 24 h), alerts, recent events, and the supervision switch (§10.2).
   - **Later (M4 on):** the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, and a timeline of BitNodes and installs.
 - **Alerts** appear **on the dashboard only**: no push notifications. They're rules over the store, evaluated whenever the dashboard reads status.
-  - **Built in M2:** the Agent silent (no heartbeat for 60 s with the brain up), a version hold, a failed deploy, and the supervisor giving up. A brain that's down shows as "brain unreachable".
-  - **Later:** a stall (no progress on the route's critical path for X minutes) needs a route, so it comes with the planner (M4). So do a reflex crash loop (with reflexes, M3) and estimate error above a threshold (with the fast model, M4).
+  - **Built in M2:** the Agent silent (no heartbeat for 60 s with the brain up), a version hold, a failed deploy, and the supervisor giving up (raised once the supervisor lands, #94). A brain that's down shows as "brain unreachable".
+  - **Later:** a stall (no progress on the route's critical path for X minutes) needs a route, so it comes with the planner (M4). A reflex crash loop comes with reflexes (M3), and estimate error above a threshold with the fast model (M4).
 - **Campaign report:** generated from telemetry: clear time, cycles and installs per BitNode, per release. It's our benchmark in place of community numbers.
 
 ---

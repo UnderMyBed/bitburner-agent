@@ -46,6 +46,8 @@ export type DeployerEvent =
   /** The game's definition file isn't the pinned one: the deployer holds for good. */
   | { type: "versionDrift"; atMs: number; detail: string }
   | { type: "deployed"; atMs: number; deploymentId: string; replacedDeploymentId: string | null }
+  /** A connection found this deployment already in place (`current.txt` names it): nothing to deploy. */
+  | { type: "deploymentCurrent"; atMs: number; deploymentId: string }
   | { type: "deployFailed"; atMs: number; deploymentId: string; reason: string };
 
 export interface DeployerOptions {
@@ -129,7 +131,10 @@ export class Deployer {
       if (!isNewest()) return;
       const currentId = isValidDeploymentId(current) ? current : null;
       this.#tell({ deployedId: currentId, deployFailed: false });
-      if (currentId === this.deploymentId) return;
+      if (currentId === this.deploymentId) {
+        this.#emit({ type: "deploymentCurrent", atMs: this.#options.clock.now(), deploymentId: this.deploymentId });
+        return;
+      }
       await this.#deploy(client, currentId, isNewest);
     } catch (error) {
       if (!(error instanceof RfaError || error instanceof OverBudgetError)) throw error;

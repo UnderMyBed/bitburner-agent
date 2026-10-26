@@ -11,7 +11,7 @@ npm run brain -- --data-dir D:\bitburner-agent
 Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 
 - **There's no default data directory.** It holds bulk data (the store, the save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
-- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the two ports, where the save backups go, and the dashboard's address.
+- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, and the dashboard's address.
 - **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`git clone --recurse-submodules`), or the brain stops at start, saying which file is missing.
 - **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
@@ -56,10 +56,10 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap r
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
-| `events` | Everything else the brain's parts report: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deployFailed`, `versionDrift`; and the save backups' `saveBackup`, `saveBackupRotationFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
+| `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and, from #94, the supervisor's `relaunch`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch) and `supervision.gaveUpAtMs` (the supervisor's give-up, #94) |
 
-- **Every row is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
+- **Every snapshot and event is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
   - the brain's `git describe` ("unknown" without git, which the startup log shows);
   - plus the deployment of the Agent connected when the row arrived, or `none` while no Agent is. A deployer or save-backup event's is the deployment the brain deploys.
 
@@ -114,29 +114,42 @@ A local page showing whether the skeleton is healthy, its alerts, and the superv
   - **Agent:** connected or not, and since when, as of this run of the brain; its deployment and session; the game's version, and whether it's the pinned one.
   - **Last snapshot per tier:** when each tier last arrived, and how long ago.
   - **Game:** from the latest fast and medium snapshots: money, hacking level, home RAM used of its total, scripts on home, the page's heap, and the tiers the Agent is skipping (`degradedTiers`).
-  - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now. After a fresh start, the time before the first snapshot shows as a gap.
-  - **Supervision:** running, paused, or gave up; the supervisor's recent relaunches (#94); and the switch.
+  - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now: how many gaps and their total time, with the newest 20 listed. Any time without snapshots in the window counts: from the window's start to the first snapshot with a new store, or while the brain or the Agent was down.
+  - **Supervision:** running, paused, or gave up; the supervisor's recent relaunches; and the switch.
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
-- **Brain unreachable:** when the page can't reach the brain (it stopped, or crashed), it says so in place of the data, rather than showing stale numbers.
-- **The supervision switch:** "Pause supervision" stops the supervisor relaunching the game (#94), so the game can be closed on purpose. "Resume supervision" unpauses, which also clears a give-up. It's kept in the store's `settings` (`supervision.paused`), so it survives restarts of the brain, and it's what the supervisor reads (`src/supervision.ts`).
-- **Alerts** are rules over the store, evaluated each time the page asks, so there's no alert state to get out of step. "Since the brain started" means this run of the brain:
+- **When it can't show the status,** it says why in place of the data, rather than showing stale numbers:
+  - "Brain unreachable": the brain stopped, or crashed;
+  - "The brain couldn't answer": the brain failed to build the status (it logs why);
+  - "The dashboard couldn't show the brain's status": the page itself failed.
+- **The supervision switch:** while supervision runs, the button pauses it; otherwise (paused, or given up) it resumes it, and resuming also clears a give-up. Paused, the supervisor won't relaunch the game, so it can be closed on purpose. The switch is kept in the store's `settings`, so it survives restarts of the brain. A switch the brain refuses says so under the button.
+  - **Until the supervisor lands (#94), nothing reads the switch:** "running" only means it isn't paused.
+  - **The contract with the supervisor** (`src/supervision.ts`): it reads the switch with `readSupervisionSwitch` before every launch; it records a give-up with `recordSupervisionGaveUp` (the `supervision.gaveUpAtMs` setting); and it records each launch as a `relaunch` event (`RELAUNCH_EVENT_KIND`), with its cause as `{ cause }`. The dashboard lists the newest 10.
+- **Alerts** are rules over the store, evaluated each time the page asks, so there's no alert state to get out of step.
+  - **"Since the brain started"** means after the brain's own `brainStarted` event, which it records once its in-game build is ready. That's this run of the brain, whatever the clock does.
 
   | Alert | When | Clears |
   |---|---|---|
   | `agentSilent` | No fast snapshot for over 60 s, counted from the brain's start if none came since | When the next one arrives |
   | `versionDrift` | The brain went on hold since it started: the game isn't the pinned version (#91) | When the brain restarts (a hold lasts the brain's run) |
-  | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or the brain restarts |
-  | `supervisionGaveUp` | The supervisor stopped after too many relaunches (#94) | When supervision is unpaused |
+  | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or a connection finds the deployment already in place (`deploymentCurrent`), or the brain restarts |
+  | `supervisionGaveUp` | The supervisor stopped after too many relaunches (#94) | When supervision is resumed |
 
   The stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
-- **Security** (owner decision 20, localhost only):
+- **Security** (owner decision 14, localhost only):
   - it listens on `127.0.0.1` only;
   - it refuses (403) a request whose `Host` isn't `127.0.0.1:<port>` or `localhost:<port>`, so a web page can't reach it by DNS rebinding;
-  - it refuses a `POST` whose `Origin` isn't the dashboard's own, so another page can't flip the switch;
+  - it refuses (403) any request another site's page makes (`Sec-Fetch-Site`, or an `Origin` that isn't its own), so no page can even make the brain build its status;
+  - it refuses (403) a `POST` without the dashboard's own `Origin`, so another page can't flip the switch;
   - the page can't be framed by another page, and everything from the brain is shown as text, never as HTML.
-- **The API** (the page's; for scripts, the same rules apply):
-  - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`);
-  - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch.
+- **The API** (the page's; a script must follow the same rules):
+  - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`).
+  - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
+  - Refusals:
+    - 403: not the dashboard's Host or Origin;
+    - 400: a body that isn't exactly one of those two, or a path that isn't valid;
+    - 413: a body over 1 KiB;
+    - 404 or 405: another path or method;
+    - 500: the brain failed, and logs why. The server carries on.
 
 ## The gap report
 

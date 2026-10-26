@@ -13,7 +13,7 @@ import {
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
-import { buildDashboardStatus } from "./dashboard/status.ts";
+import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
 import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
@@ -35,13 +35,18 @@ try {
   const dataDirectory = resolveDataDirectory(process.argv.slice(2), process.env);
   const config = loadOrCreateConfig(dataDirectory);
   const release = brainRelease();
-  // The dashboard's alerts count from here: an Agent gets its 60 s to reconnect after a restart of the brain.
-  const startedAtMs = systemClock.now();
   // Built from this checkout's sources on every start, so the brain always deploys the code it was started from.
   const buildDirectory = path.join(dataDirectory, INGAME_BUILD_DIRECTORY_NAME);
   await buildInGameBundles({ outputDirectory: buildDirectory });
   const build = readInGameBuild(buildDirectory);
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  // This run of the brain starts here, after the build: everything stored after this event is this run's, for the
+  // dashboard, and the Agent gets its 60 s to reconnect from now.
+  const startedAtMs = systemClock.now();
+  const startedEventId = store.recordEvent(
+    { environment: config.environment, release },
+    { atMs: startedAtMs, kind: BRAIN_STARTED_EVENT_KIND, detail: { release } },
+  );
   const channel = new ControlChannel({ token: config.token, clock: systemClock });
   recordChannelEvents(channel, store, { environment: config.environment, brainRelease: release });
   channel.subscribe((event) => {
@@ -99,6 +104,7 @@ try {
         environment: config.environment,
         brainRelease: release,
         brainStartedAtMs: startedAtMs,
+        brainStartedEventId: startedEventId,
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {

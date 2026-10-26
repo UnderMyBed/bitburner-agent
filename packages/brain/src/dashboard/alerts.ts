@@ -9,7 +9,10 @@ export type AlertName = "agentSilent" | "versionDrift" | "deployFailed" | "super
 
 export interface Alert {
   name: AlertName;
-  /** Since when the condition has held. */
+  /**
+   * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for the others, the
+   * event or give-up that raised it.
+   */
   sinceMs: number;
   detail: string;
 }
@@ -41,7 +44,7 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       name: "agentSilent",
       sinceMs: heardFromAtMs,
       detail: heardSinceStart
-        ? `no fast snapshot for ${Math.round(AGENT_SILENT_AFTER_MS / 1000)} s`
+        ? `no fast snapshot for ${silentForSeconds} s`
         : `no fast snapshot since the brain started, ${silentForSeconds} s ago`,
     });
   }

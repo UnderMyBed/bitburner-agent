@@ -24,6 +24,10 @@ test("agentSilent: no fast snapshot for over 60 s, counted from the brain's star
   expect(activeAlerts({ ...quiet, nowMs: lastFastSnapshotAtMs + AGENT_SILENT_AFTER_MS + 1 })).toEqual([
     { name: "agentSilent", sinceMs: lastFastSnapshotAtMs, detail: "no fast snapshot for 60 s" },
   ]);
+  // The detail says how long, however long.
+  expect(activeAlerts({ ...quiet, nowMs: lastFastSnapshotAtMs + 3_600_000 })[0]?.detail).toBe(
+    "no fast snapshot for 3600 s",
+  );
   // A snapshot from before this brain started doesn't count: the 60 s run from the start.
   const beforeStart = { ...quiet, lastFastSnapshotAtMs: STARTED_AT_MS - 5_000 };
   expect(names({ ...beforeStart, nowMs: STARTED_AT_MS + AGENT_SILENT_AFTER_MS })).toEqual([]);

@@ -30,7 +30,10 @@ interface Reply {
   body: string;
 }
 
-/** A raw request, so the test controls the Host and Origin headers exactly. */
+/**
+ * A raw request, so the test controls the Host and Origin headers exactly. `streamed` sends the body in two writes,
+ * chunked, with no length declared; otherwise Node declares its length.
+ */
 function send(
   port: number,
   {
@@ -38,7 +41,8 @@ function send(
     path = "/",
     headers = {},
     body,
-  }: { method?: string; path?: string; headers?: Record<string, string>; body?: string },
+    streamed = false,
+  }: { method?: string; path?: string; headers?: Record<string, string>; body?: string; streamed?: boolean },
 ): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const outgoing = request(
@@ -53,7 +57,12 @@ function send(
       },
     );
     outgoing.on("error", reject);
-    outgoing.end(body);
+    if (streamed && body !== undefined) {
+      outgoing.write(body.slice(0, body.length / 2));
+      outgoing.end(body.slice(body.length / 2));
+    } else {
+      outgoing.end(body);
+    }
   });
 }
 
@@ -127,13 +136,96 @@ test.each([
   ["no paused field", "{}"],
   ["paused not a boolean", '{"paused":"yes"}'],
   ["another field too", '{"paused":true,"other":1}'],
-  // A valid switch, but padded past 1 KiB: refused for its length alone.
-  ["too long", `{"paused":true${" ".repeat(2_000)}}`],
 ])("a switch body that's %s is refused, 400", async (_description, body) => {
   const { port, pausedCalls } = await start();
   const reply = await send(port, { method: "POST", path: "/api/supervision", headers: sameOrigin(port), body });
   expect(reply.status).toBe(400);
   expect(pausedCalls).toEqual([]);
+});
+
+test("a switch body streamed past 1 KiB, with no length declared, is refused, 413", async () => {
+  const { port, pausedCalls, errors } = await start();
+  // A valid switch, but padded past 1 KiB: refused for its length alone.
+  const reply = await send(port, {
+    method: "POST",
+    path: "/api/supervision",
+    headers: sameOrigin(port),
+    body: `{"paused":true${" ".repeat(2_000)}}`,
+    streamed: true,
+  });
+  expect(reply.status).toBe(413);
+  expect(pausedCalls).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("a body declared over 1 KiB is refused at once, 413, without waiting for it", async () => {
+  const { port } = await start();
+  const status = await new Promise<number | "no reply">((resolve) => {
+    const outgoing = request({
+      host: "127.0.0.1",
+      port,
+      method: "POST",
+      path: "/api/supervision",
+      headers: { ...sameOrigin(port), host: `127.0.0.1:${port}`, "content-length": "5000" },
+      setHost: false,
+    });
+    outgoing.on("response", (response) => resolve(response.statusCode ?? 0));
+    outgoing.on("error", () => {});
+    // Only the start of the body: a server that waited for the rest would never answer.
+    outgoing.write('{"paused":');
+    setTimeout(() => {
+      resolve("no reply");
+      outgoing.destroy();
+    }, 1_000);
+  });
+  expect(status).toBe(413);
+});
+
+test.each([
+  ["another site's page (Sec-Fetch-Site)", { "sec-fetch-site": "cross-site" }],
+  ["another origin", { origin: "https://attacker.example" }],
+])("a status request from %s is refused, so no page can make the brain build status", async (_description, header) => {
+  const { port } = await start({
+    status: () => {
+      throw new Error("built for another site");
+    },
+  });
+  expect((await send(port, { path: "/api/status", headers: header })).status).toBe(403);
+});
+
+test("the dashboard's own page, and an address typed in, may read the status", async () => {
+  const { port } = await start();
+  expect((await send(port, { path: "/api/status", headers: { "sec-fetch-site": "same-origin" } })).status).toBe(200);
+  expect((await send(port, { path: "/", headers: { "sec-fetch-site": "none" } })).status).toBe(200);
+  expect((await send(port, { path: "/api/status", headers: { origin: `http://127.0.0.1:${port}` } })).status).toBe(200);
+});
+
+test("a path that isn't valid is a 400, not the brain's failure", async () => {
+  const { port, errors } = await start();
+  expect((await send(port, { path: "//[" })).status).toBe(400);
+  expect(errors).toEqual([]);
+});
+
+test("a client that goes away mid-request isn't logged as the brain's failure", async () => {
+  const { port, errors } = await start();
+  await new Promise<void>((resolve) => {
+    const outgoing = request({
+      host: "127.0.0.1",
+      port,
+      method: "POST",
+      path: "/api/supervision",
+      headers: { ...sameOrigin(port), "content-length": "100" },
+    });
+    outgoing.on("error", () => {});
+    outgoing.write('{"paused":');
+    setTimeout(() => {
+      outgoing.destroy();
+      resolve();
+    }, 100);
+  });
+  // Long enough for the server to see the connection go.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(errors).toEqual([]);
 });
 
 test("other paths are 404, other methods 405", async () => {

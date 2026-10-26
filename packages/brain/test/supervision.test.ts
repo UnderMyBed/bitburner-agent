@@ -31,6 +31,14 @@ test("pausing is stored and survives a restart of the brain", () => {
   expect(readSupervisionSwitch(store)).toEqual({ paused: false, gaveUpAtMs: null });
 });
 
+test("a value it didn't write is an error, never read as running", () => {
+  store.setSetting("supervision.paused", "1");
+  expect(() => readSupervisionSwitch(store)).toThrow('the supervision.paused setting is "1", not true or false');
+  store.setSetting("supervision.paused", "false");
+  store.setSetting("supervision.gaveUpAtMs", "soon");
+  expect(() => readSupervisionSwitch(store)).toThrow('the supervision.gaveUpAtMs setting is "soon", not a time');
+});
+
 test("a give-up stays until supervision is unpaused; pausing alone keeps it", () => {
   recordSupervisionGaveUp(store, 1_000);
   expect(readSupervisionSwitch(store)).toEqual({ paused: false, gaveUpAtMs: 1_000 });
