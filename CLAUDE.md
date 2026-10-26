@@ -2,6 +2,15 @@
 
 Operating instructions for Claude Code sessions in this repo.
 
+# Global Coding Standards
+
+1. **YAGNI**: Don't build it till we need it
+2. **DRY**: Extract patterns after second duplication, not before
+3. **Fail Fast**: Explicit errors beat silent failures
+4. **Simple First**: Write the obvious solution, optimize only if needed
+5. **Delete Aggressively**: Less code = Fewer bugs
+6. **Semantic Naming**: Always name variables, parameters, and API endpoints with verbose, self-documenting names that optimize for comprehension by both humans and LLMs, not brevity  
+
 ## Mission
 Build an autonomous agent that takes Bitburner from a fresh save to every Source-File maxed: unattended, repeatable, as fast as wall-clock allows. Start with `README.md`, then `docs/plan.md`, `docs/architecture.md`, `docs/decisions/`.
 
