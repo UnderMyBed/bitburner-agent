@@ -124,7 +124,8 @@ describe("engine bundle", () => {
   test("loads in plain Node under the DOM environment and reports the pinned game version and commit", () => {
     expect(loadEngineInChild()).toEqual({
       versionNumber: PINNED_GAME.versionNumber,
-      gameCommit: git("rev-parse", "--short", "HEAD"),
+      // Fixed at PINNED_GAME's length, whatever the clone (a shallow one would give 7 characters).
+      gameCommit: PINNED_GAME.commit,
     });
   });
 
