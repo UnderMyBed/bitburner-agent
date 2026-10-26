@@ -1,6 +1,7 @@
 import type {
   GameDiagnostics,
   GameEvent,
+  GameSettingsOverride,
   GameSummary,
   ProcessInfo,
   PromptRequest,
@@ -92,6 +93,13 @@ export interface EngineApi {
   routerBack(): void;
   /** Sets the game's hook for importing player-script modules. */
   setScriptImport(doImport: (url: string) => Promise<unknown>): void;
+  /**
+   * What the page script does when it loads (index.tsx:37): in 2 s, the game's Remote File API client connects with
+   * the settings then (port 0, the default, means it doesn't). Call once, right after loading the engine.
+   */
+  startRemoteFileApi(): void;
+  /** Sets game settings, as a player would in the options pages. A harness edit. */
+  applyGameSettings(settings: GameSettingsOverride): void;
   writeFile(host: string, path: string, content: string): void;
   /** As the terminal's `run`: the game's own RAM check, pid and failure message. */
   runScript(host: string, path: string, threads: number, args: ScriptArg[]): RunResult;
@@ -127,6 +135,8 @@ const API_FUNCTIONS = {
   toPage: true,
   routerBack: true,
   setScriptImport: true,
+  startRemoteFileApi: true,
+  applyGameSettings: true,
   writeFile: true,
   runScript: true,
   ps: true,

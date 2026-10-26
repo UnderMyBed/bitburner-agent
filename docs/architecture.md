@@ -394,7 +394,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 - **Browser parity layer:** the harness reproduces what the browser and UI provide implicitly, and each item gets a test. The [parity audit](sim/parity.md) is the full inventory, with each item's disposition and test:
   - the page's globals (`sprintf`, lodash `_`, `React`), shared between `window` and the global object
   - the UI's popups, toasts, error popup and prompts, as sim events; prompts answered by scenario rules, or left open as with nobody at the screen
-  - uncaught errors handled as a browser does; no network
+  - uncaught errors handled as a browser does; no network, apart from WebSockets to the parent, which cross in lockstep with the virtual clock (ADR 0012)
   - browser timer semantics (callbacks run with `this` = `window`), a pinned default locale and time zone
   - `MainUILoaded`, which starts saved scripts and autoexec
   - a headless router with the real router's side effects
@@ -407,7 +407,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
   - An import barrier holds virtual time while a player-script module is still loading (between timers, and before each request), so script start times never depend on real import speed.
   - The fake `Date` also pins the game's clock-seeded randomness (roulette seed, Circadian Modulator).
   - Execution is single-threaded and every timer is virtual, so script interleaving is a function of the seed. A replay test proves it: same seed, same state hash, on any machine. The state hash is the sha256 of the game's own save plus the seeded streams' positions.
-- **Same code under test:** the brain connects through an in-process transport, and the in-game bundles run as real NS scripts inside the engine.
+- **Same code under test:** the in-game bundles run as real NS scripts inside the engine, and their sockets (the Agent's, and the game's own RFA client's) reach the brain in the parent process, in lockstep with the virtual clock ([ADR 0012](decisions/0012-simulator-network-in-lockstep.md)).
 - **`sim` effectors** call engine internals directly (e.g. the function a UI button calls). They never grant Source-Files to unlock Singularity, because that would change the state under test.
 - **Scenario fixtures:** starting states (each BitNode entry with a given Source-File set, plus odd mid-run states) are built through the engine's own prestige functions. The simulator's own tests may also edit saves the simulator made (e.g. to mark a BitNode finished); edited saves never leave the simulator. Real Steam saves join as fixtures under the one-way save rule (§9.4).
 - **Speed (measured in S1):** it depends on the workload, because the engine does whatever work the in-game scripts cause.
@@ -420,7 +420,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 ### 9.2 Fidelity gaps (known and accepted)
 - The headless simulator doesn't render the UI, so code that reads the game's DOM fails there (our `ui` effectors, parts of the legacy fork). UI-driver paths are covered by **E2 end-to-end tests on a source build** (§9.4), and only a final smoke check runs on Steam.
 - The browser parity layer (§9.1) is hand-written. A missed side effect of the UI is a silent fidelity gap, so the layer is re-audited ([parity audit](sim/parity.md)) whenever the pinned version moves.
-- The simulator differs from a browser on purpose in a few places, all listed in the [parity audit's summary](sim/parity.md#summary): for example a simulated player at the UI (prompt rules, error popups closed at once), no network and no windows.
+- The simulator differs from a browser on purpose in a few places, all listed in the [parity audit's summary](sim/parity.md#summary): for example a simulated player at the UI (prompt rules, error popups closed at once), no windows, and sockets only to the parent (ADR 0012).
 - Timing contention under load (batch landing jitter) is modelled with injected jitter that we calibrate from real telemetry.
 - Offline progress and save/reload are exercised through the engine's real load path using serialised saves.
 

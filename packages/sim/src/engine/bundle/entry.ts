@@ -23,6 +23,7 @@ import { isLegacyScript, resolveScriptFilePath } from "../../../../../vendor/bit
 import { resolveTextFilePath } from "../../../../../vendor/bitburner-src/src/Paths/TextFilePath";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { enterBitNode } from "../../../../../vendor/bitburner-src/src/RedPill";
+import { newRemoteFileApiConnection } from "../../../../../vendor/bitburner-src/src/RemoteFileAPI/RemoteFileAPI";
 import { saveObject } from "../../../../../vendor/bitburner-src/src/SaveObject";
 import type { ScriptModule, ScriptURL } from "../../../../../vendor/bitburner-src/src/Script/LoadedModule";
 import { GetAllServers, GetServer } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
@@ -35,7 +36,7 @@ import { isSimplePage, Page } from "../../../../../vendor/bitburner-src/src/ui/R
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
-import type { GameEvent, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import type { GameEvent, GameSettingsOverride, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
 import type { EngineApi } from "../api.ts";
 import { answerPrompts, captureUi, installPageGlobals } from "./page.ts";
 import { bitVerseFlume, mountRouter, routerPages } from "./router.ts";
@@ -278,6 +279,16 @@ export function routerBack() {
 export function setScriptImport(doImport: (url: string) => Promise<unknown>) {
   // The host imports the module the game made, so what it resolves with is that module's namespace: a ScriptModule.
   config.doImport = (url: ScriptURL) => doImport(url) as Promise<ScriptModule>;
+}
+
+/** As the page script does when it loads (index.tsx:37): the RFA client connects in 2 s, with the settings then. */
+export function startRemoteFileApi() {
+  setTimeout(newRemoteFileApiConnection, 2000);
+}
+
+/** Sets game settings as a player would in the options pages (RemoteAPIPage.tsx, AutoexecInput.tsx). */
+export function applyGameSettings(settings: GameSettingsOverride) {
+  Object.assign(Settings, settings);
 }
 
 function server(host: string) {

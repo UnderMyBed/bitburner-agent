@@ -26,7 +26,10 @@ export type {
   EventPage,
   Fixture,
   GameEvent,
+  GameSettingsOverride,
   GameSummary,
+  NetworkOptions,
+  NetworkOutboxEntry,
   OnBitVerse,
   ProcessInfo,
   PromptRule,
@@ -182,6 +185,21 @@ export class Simulation {
   kill(pid: number): Promise<boolean> {
     return this.rpc.call("kill", { pid });
   }
+
+  /**
+   * The other end of the page's sockets (ADR 0012), for URLs listed in `network.listenUrls`. Nothing crosses in real
+   * time: the parent takes what the page did, and what it sends or closes reaches the page at the start of the next
+   * `advance` or `runUntil`.
+   */
+  readonly network = {
+    /** Everything the page's sockets did since the last call (connects, frames, closes), in order. */
+    take: () => this.rpc.call("network.take", {}),
+    /** Sends a text frame on a connection; false if it's closing or closed. */
+    send: (connectionId: number, data: string) => this.rpc.call("network.send", { connectionId, data }),
+    /** Closes a connection from this side; false if it's already closing or closed. */
+    close: (connectionId: number, code = 1000, reason = "") =>
+      this.rpc.call("network.close", { connectionId, code, reason }),
+  };
 
   /** For tests and troubleshooting. */
   readonly diagnostics = {

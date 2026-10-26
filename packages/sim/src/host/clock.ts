@@ -84,6 +84,12 @@ export interface VirtualClock {
    * moment, when `stop` returns true; `stop` is also called once at `endMs`. Returns whether it stopped.
    */
   advanceUntil(endMs: number, stop: () => boolean): Promise<boolean>;
+  /**
+   * Runs `task` as a task of its own (nesting level 0), `delayMs` virtual ms from now: for events from outside the
+   * page's own timers, such as a socket's (ADR 0012). Not a page timer, so it's neither clamped nor nested. An exception
+   * it throws is reported as uncaught, as for any task.
+   */
+  queueTask(task: () => void, delayMs: number): void;
 }
 
 /** A string timer handler is code, which a browser evaluates in the global scope: an indirect eval. */
@@ -268,6 +274,16 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
         if (stop()) return true;
         if (to === endMs) return false;
       }
+    },
+    queueTask: (task, delayMs) => {
+      clock.setTimeout(() => {
+        beginTask();
+        try {
+          task();
+        } catch (error) {
+          reportUncaughtException(error);
+        }
+      }, delayMs);
     },
   };
 }
