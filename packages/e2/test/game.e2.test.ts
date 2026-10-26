@@ -9,6 +9,8 @@ import {
   freshGame,
   gameFromSave,
   TERMINAL_INPUT,
+  terminalText,
+  typeCommand,
   waitForTerminal,
 } from "../src/game.ts";
 import { useE2 } from "./helpers/environment.ts";
@@ -28,15 +30,6 @@ async function shownMoney(page: Page): Promise<{ value: number; rounding: number
   const unit = MONEY_SUFFIXES[suffix] as number;
   return { value: Number(`${whole}.${decimals || "0"}`) * unit, rounding: (unit * 10 ** -decimals.length) / 2, text };
 }
-
-/** Types `command` into the game's terminal and presses Enter. */
-async function typeCommand(page: Page, command: string): Promise<void> {
-  await page.locator(TERMINAL_INPUT).click();
-  await page.keyboard.type(command);
-  await page.keyboard.press("Enter");
-}
-
-const terminalText = (page: Page) => page.locator("#terminal").innerText();
 
 describe("the game in Playwright", () => {
   test("a simulator-made save loads to the Terminal, and the overview shows the save's money", async () => {

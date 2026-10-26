@@ -631,7 +631,9 @@ Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-a
 ## 15. Open questions
 Each open question is tracked as a `type:question` issue; the answer is written back here when it closes.
 
-- **Q1** ([#34](https://github.com/UnderMyBed/bitburner-agent/issues/34)) In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? Measured in M2. The simulator uses the engine's own RAM calculator, so the numbers are exact before E2.
+- **Q1** ([#34](https://github.com/UnderMyBed/bitburner-agent/issues/34)) In-game Agent budget: is 3 GB realistic with WebSocket, workers and port I/O? **Answered in M2: yes.** The Agent is 2.7 GB, and its snapshot workers 2.0–4.3 GB, one at a time. Measured with the game's own calculator in the simulator (#89) and on E2 in a real 8 GB fresh start (#97), with the same figures.
+  - The Agent's steady footprint is 2.7 GB of 8. Its peak is the Agent plus its largest worker, the medium tier's, 7.0 GB, for the moment that worker runs.
+  - So on an 8 GB home, anything else (a batcher in early BN1) competes with the workers for the remaining 5.3 GB. A worker that can't start is reported as a degraded tier, not an error. M3/M4 planning has to leave room for the workers, or schedule around them.
 - **Q2** ([#35](https://github.com/UnderMyBed/bitburner-agent/issues/35)) Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
 - **Q9** ([#39](https://github.com/UnderMyBed/bitburner-agent/issues/39)) Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.

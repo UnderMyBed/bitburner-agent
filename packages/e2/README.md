@@ -2,7 +2,7 @@
 
 Environment E2 (architecture §9.4): the game built from `vendor/bitburner-src` at the pinned commit, served on 127.0.0.1 and driven by Playwright. It covers what the simulator can't show: the rendered UI, and the page's real network, storage and reload ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)).
 
-> **Status:** M2. Built: the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)). The skeleton's E2 tests come in [#97](https://github.com/UnderMyBed/bitburner-agent/issues/97).
+> **Status:** M2. Built: the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)), and the walking skeleton's tests on it ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97)).
 
 E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and before every release ([releasing](../../docs/releasing.md) step 2; architecture §9.3, ADR 0004). It isn't part of `npm test` or CI.
 
@@ -86,6 +86,19 @@ Script imports and WebSockets still run in real time. So:
 - **Each step adds an entry to the clock's history.** Playwright replays that history into each new page, which is how a reload keeps game time. A reload after 10 game minutes (3,000 entries) took 650 ms; after a game hour (18,000 entries, measured before the pacing), 420–630 ms. Long runs slow down a little as it grows: for multi-hour tests, a fresh context per hour or so.
 **One shim.** Playwright's fake timers call back with `this` null, where a browser's call back with `this` the window. The game relies on the browser's behaviour: `Engine.start` reschedules itself unbound and sets `this.isRunning`. A context init script, registered after the clock's, wraps the faked `setTimeout`, `setInterval` and `requestAnimationFrame` to call back with the window. It's harness instrumentation (architecture §9.4); the game's code is unchanged.
 
+## The skeleton on E2
+
+`test/skeleton.e2.test.ts` is M2's exit criterion on the real page ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97); architecture §13): "connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start". It uses the game's own Remote File API client and network, a real brain and the built Agent.
+
+- **A real brain** (`test/helpers/brain.ts`): `packages/brain/src/main.ts` in its own process, with a data directory and free ports of the test's own.
+  - Its `config.json` is environment E2, so it never supervises Steam's game, and allows the test page's origin.
+  - The config is written once and kept, so a brain started again on the same ports keeps its token.
+  - Tests read its store read-only while it runs (`readStore`), and its log is printed when a test fails.
+- **Autosave on.** The simulator turns autosave off, and its saves carry that. `simulatorSave` turns the game's default (every 60 s) back on, because a deploy is in the save only after an autosave (#91).
+- **Typing focuses the terminal** (`typeCommand`) rather than clicking it: a toast can lie over it, and toasts close on a game timer, so one stays while game time stands still.
+- **Cadence is checked on `gameTimeMs`**, since the brain's receive times are real time, at ×20.
+- **The page heap isn't measured on E2.** Playwright's fake `performance` has no `memory.usedJSHeapSize`, so the fast snapshot's `pageHeapUsedBytes` is missing. The Steam soak (#99) measures it.
+
 ## What the tests show
 
 Results on the reference rig:
@@ -95,6 +108,7 @@ Results on the reference rig:
 | `test/game.e2.test.ts` | Four checks: <ul><li>a simulator-made save, with money earned by hacking, loads to the Terminal, and the overview shows the save's money;</li><li>with the unload prompt armed, a reload gets through and loads the game again;</li><li>a brand-new game starts in the tutorial, `exitTutorial` closes it, and `free` shows 8.00GB;</li><li>a script autoexec starts on load imports another, sleeps 1 s and prints, all within 5 s of game time: it finished after 1,200 ms.</li></ul> |
 | `test/pacing.e2.test.ts` | A WebSocket reply 100 ms late in real time arrives within 5 s of game time: after 1,400 ms. Unpaced, it would have taken over 12 s |
 | `test/remote-api.e2.test.ts` | The game's Remote File API client connects to a local WebSocket server named in the save's settings, in 10 loads of 10. Game time runs in real time during each load, so the game's 2 s connection timer (`vendor/bitburner-src/src/index.tsx:37`) races the load. Every load connected 2,000 ms of game time after the Terminal appeared (200 ms steps): the timer starts when the main bundle runs, late in a load of about 0.7 s, so the settings were always in first. A load in this mode leaves game time still afterwards |
+| `test/skeleton.e2.test.ts` | Five tests: <ul><li>**deploy and start:** a save naming the brain's RFA and autoexec `agent/boot.js`; the game connects, the brain deploys and backs up the save; past an autosave and a reload, autoexec starts the Agent, it's welcomed, and the next RFA connection finds the deploy current;</li><li>**snapshots:** over 2 game minutes every tier in the right number, numbered 1, 2, 3… with none missed, at its cadence in game time. The most an interval was off its period, over two runs: fast 40 ms, medium 60–80 ms, slow 100–120 ms;</li><li>**reload:** a reload brings the Agent back through autoexec, in a new session, with a full snapshot;</li><li>**reconnect:** the brain stopped and started again on the same ports; the game's RFA client and the Agent reconnected 3 s of game time after, the Agent's session and numbering carrying on;</li><li>**8 GB fresh start:** a new game, the tutorial exited, the Remote API and autoexec set through the Options UI and the first `run agent/boot.js` typed, as the owner does. Over 2 game minutes, home stays 8 GB, every tier arrives, each fast snapshot sees the Agent and at most one worker, and the game's `mem` gives the Agent 2.7 GB and the workers 2.0–4.3 GB: 7.0 GB at the peak (Q1, #34).</li></ul> |
 | `test/clock.e2.test.ts` | 10 minutes of game time, exactly, within the ×20 limit; the engine still running on it (`analyze` finishes after its 1 s of game time; a moving `Date.now()` proves only the clock); and a reload after it, which keeps game time, with the engine running again |
 
 ## Layout
@@ -111,5 +125,6 @@ Results on the reference rig:
 | `tsconfig.json` | Node plus the DOM: code passed to `page.evaluate` runs in the page |
 | `test/*.e2.test.ts` | E2 tests (browser) |
 | `test/helpers/environment.ts` | `useE2()`: the server and browser for a test file |
-| `test/helpers/saves.ts` | Simulator-made saves |
+| `test/helpers/saves.ts` | Simulator-made saves, with the game's default autosave |
+| `test/helpers/brain.ts` | A real brain for a test, and its store read |
 | `test/*.test.ts` | Unit tests (no browser, in CI) |
