@@ -249,8 +249,8 @@ await sim.kill(pid);    // false if no such script is running
 await sim.staticRamUsage("home", "hack.js");   // its RAM in GB, by the game's own calculator
 ```
 
-- **`staticRamUsage(host, path)`** is a script's static RAM in GB from the game's own calculator (`Script.getRamUsage`, the call `run` makes). It rejects with the reason if the file is missing, isn't a script, or doesn't parse. The in-game bundles' RAM budgets are checked with it.
 - **These wrap the game's own functions.**
+  - `staticRamUsage` is a script's static RAM in GB from the game's own calculator (`Script.getRamUsage`, the call `run` makes). It rejects with the game's own `calculateRam` errors (`File does not exist…`, `File is not a script…`), and for a script that doesn't parse, with the calculator's reason. The in-game bundles' RAM budgets are checked with it.
   - `run` does what the terminal's `run` does: the same checks (legacy `.script` files, thread count, RAM), pid allocation and failure messages. When the game refuses, `pid` is 0 and `error` holds its message. Unlike the terminal it takes `threads` and `args` directly, with no flag parsing (`--ram-override`, `--temporary` and `--tail` aren't offered).
   - `writeFile` accepts script and text files.
   - `logs` covers running scripts and the game's list of recently finished ones (`Settings.MaxRecentScriptsCapacity`, 50 by default). For any other pid it throws, whereas `kill` returns false.

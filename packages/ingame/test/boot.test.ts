@@ -1,6 +1,7 @@
 // boot.js (architecture §5.7): starts the deployed Agent if it isn't running, never a second copy, and after a load
-// only autoexec brings the Agent back, because it runs as a temporary script.
-import { BOOT_SCRIPT, CURRENT_DEPLOYMENT_FILE, deployedFilePath } from "@bitburner-agent/core";
+// only autoexec brings the Agent back, because it runs as a temporary script. What boot.js reports is checked in its
+// log; the simulator has no terminal to read, so the tprint copy isn't checked.
+import { AGENT_SCRIPT_NAME, BOOT_SCRIPT, CURRENT_DEPLOYMENT_FILE, deployedFilePath } from "@bitburner-agent/core";
 import type { Simulation } from "@bitburner-agent/sim";
 import { expect, test } from "vitest";
 import { NEW_GAME, useInGameBuild, useSimulations } from "./helpers/simulation.ts";
@@ -9,7 +10,7 @@ const start = useSimulations();
 const build = useInGameBuild();
 
 const DEPLOYMENT_ID = "deployment1";
-const AGENT_FILE = deployedFilePath(DEPLOYMENT_ID, "agent.js");
+const AGENT_FILE = deployedFilePath(DEPLOYMENT_ID, AGENT_SCRIPT_NAME);
 /** A stand-in Agent: runs until killed. */
 const STUB_AGENT = "export async function main(ns) { for (;;) await ns.asleep(60_000); }";
 
@@ -64,6 +65,24 @@ test("an Agent that can't start is reported, not silently skipped", async () => 
   await simulation.run("home", "filler.js", { threads: 3 });
   const log = await runBoot(simulation);
   expect(log.join("\n")).toContain(`couldn't start ${AGENT_FILE}`);
+  expect(log.join("\n")).toMatch(/RAM/);
+});
+
+test("an Agent the game can't parse: the game's own reason is in the log", async () => {
+  const simulation = await deployedGame();
+  await simulation.writeFile("home", AGENT_FILE, "export async function main(ns) {");
+  const log = (await runBoot(simulation)).join("\n");
+  expect(log).toContain(`couldn't start ${AGENT_FILE}`);
+  // The game's message from run, which disableLog("ALL") would hide.
+  expect(log).toMatch(/run: .*agent\.js/i);
+});
+
+test("a current.txt that isn't a deployment id is reported, not run", async () => {
+  const simulation = await deployedGame();
+  await simulation.writeFile("home", CURRENT_DEPLOYMENT_FILE, "../elsewhere");
+  const log = (await runBoot(simulation)).join("\n");
+  expect(log).toContain("doesn't hold a deployment id");
+  expect(await runningFiles(simulation)).toEqual([]);
 });
 
 test("after a load the Agent is back only through autoexec: it runs as a temporary script", async () => {

@@ -5,5 +5,6 @@ export {
   DEPLOYMENT_ROOT,
   deployedFilePath,
   deploymentFolder,
+  isValidDeploymentId,
 } from "./deploy-layout.ts";
 export { PINNED_GAME } from "./game-version.ts";

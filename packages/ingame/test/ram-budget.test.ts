@@ -1,14 +1,20 @@
 // Every in-game script's static RAM, measured with the game's own calculator, is within its budget (architecture R4).
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test } from "vitest";
-import { readRamBudgets } from "../scripts/bundles.ts";
 import { NEW_GAME, useInGameBuild, useSimulations } from "./helpers/simulation.ts";
 
 const start = useSimulations();
 const build = useInGameBuild();
 
+/** Each in-game script's RAM budget, in GB. */
+const budgets = JSON.parse(readFileSync(path.join(import.meta.dirname, "../ram-budget.json"), "utf8")) as Record<
+  string,
+  number
+>;
+
 test("every bundle has a budget, every budget a bundle, and each bundle's RAM is within it", async () => {
   const { manifest, source } = await build();
-  const budgets = readRamBudgets();
   const bundleNames = Object.keys(manifest.files).sort();
   expect(Object.keys(budgets).sort(), "ram-budget.json lists exactly the bundles").toEqual(bundleNames);
 

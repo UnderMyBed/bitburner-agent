@@ -325,12 +325,12 @@ interface Effectors {
 ### 5.7 Bootstrap and restart (C5)
 | Transition | Restart path |
 |---|---|
-| Game load | Autoexec setting → `boot.js` (set once by hand, §10.1) |
-| Aug install (SF4) | `installAugmentations("boot.js")` |
-| BitNode change (SF4) | `destroyW0r1dD43m0n(n, "boot.js", opts)` |
-| Aug install / BitNode change through the UI (before SF4) | The `ui` backend types `run boot.js` into `#terminal-input` from a page-level timer that outlives the dying script. Fallback is save and reload, so autoexec fires. **On the critical path for BN1.1** (Q5). |
+| Game load | Autoexec setting → `agent/boot.js` (set once by hand, §10.1) |
+| Aug install (SF4) | `installAugmentations("agent/boot.js")` |
+| BitNode change (SF4) | `destroyW0r1dD43m0n(n, "agent/boot.js", opts)` |
+| Aug install / BitNode change through the UI (before SF4) | The `ui` backend types `run agent/boot.js` into `#terminal-input` from a page-level timer that outlives the dying script. Fallback is save and reload, so autoexec fires. **On the critical path for BN1.1** (Q5). |
 
-`boot.js` is re-entrant: it is safe to run at any time and in any number of copies. It (re)starts the Agent; everything else follows from reconciliation.
+`agent/boot.js` (its fixed path in the [deploy layout](../packages/ingame/README.md#deploy-layout)) is re-entrant: it is safe to run at any time and in any number of copies. It starts the current deployment's Agent if that isn't running; everything else follows from reconciliation.
 
 **Fresh save:** a new game starts the interactive tutorial. On v3.0.1, while it runs, finished scripts are never cleaned up and never free their RAM (fixed on `dev`; S1 finding). The first thing the Agent does on a fresh save is end the tutorial, through the `ui` backend's equivalent of the Skip button.
 
@@ -353,7 +353,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 - **Version handshake:** brain and agent are built from the same release. On connect they compare build IDs, and on a mismatch the brain redeploys the agent before anything else.
 - **Atomic deploys.** Each deployment (a build plus its configuration) goes into its own folder (`agent/<deploymentId>/…`; the layout is in [`packages/ingame`](../packages/ingame/README.md#deploy-layout)):
   - **RAM:** every pushed script's RAM is verified with `calculateRam`. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise.
-  - **Switch-over:** only after that does `boot.js` switch to the new build, and the reconciler restarts reflexes onto it. Old and new code never mix.
+  - **Switch-over:** the deployer writes `agent/current.txt` last, then has the old Agent restart: it runs `agent/boot.js`, which starts the new deployment's Agent, and exits ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
   - **Release gate:** only tagged releases are deployed to Steam.
 - **Save backups:**
   - `getSaveFile` every N minutes, with rotation, **plus immediately before every irreversible intent** (install, BitNode change). Save corruption is a known open issue on 3.0.1 (#2809).
@@ -473,7 +473,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps
-1. Install Steam, set the RFA port, set autoexec to `boot.js` in game options, and install the Task Scheduler tasks (one setup script). One time.
+1. Install Steam, set the RFA port, set autoexec to `agent/boot.js` in game options, and install the Task Scheduler tasks (one setup script). One time.
 2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
 4. Interruptions outside the game (Windows reboots, Steam client updates, power loss) are recovered automatically (§10.2). A human is needed only if recovery gives up and raises an alert.
@@ -482,7 +482,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 The goal is unattended play (C9), so recovery doesn't wait for a human.
 - **Who:**
   - The same Windows Task Scheduler setup that supervises the brain (D1) also starts Bitburner at logon, through Steam (`steam://rungameid/<appid>`).
-  - Autoexec then runs `boot.js` (§5.7), so a reboot is a short interruption, not a stop.
+  - Autoexec then runs `agent/boot.js` (§5.7), so a reboot is a short interruption, not a stop.
 - **Dead game** (process gone): the brain's supervisor relaunches it the same way.
 - **Frozen game** (process alive, no snapshot for N minutes, and the Agent unreachable):
   - The supervisor ends the game process and relaunches it.
@@ -513,7 +513,7 @@ real game ──telemetry──► store ◄──runs── simulator
 
 ### 12.1 Language and build
 - **TypeScript on Node** at the core: brain, bridge, simulator, dashboard, in-game code (ADR 0006).
-- In-game bundles are built per entry point with esbuild, self-contained and tree-shaken but **not minified**: the game charges RAM by identifier name, so names stay as written. Each bundle's RAM is checked against its budget with the game's own calculator in CI ([`packages/ingame`](../packages/ingame/README.md#ram)).
+- In-game bundles are built per entry point with esbuild, self-contained and tree-shaken but **not minified**: the game charges RAM by identifier name, so names stay as written, apart from a top-level name esbuild renames where two modules collide. Each bundle's RAM is checked against its budget with the game's own calculator in CI ([`packages/ingame`](../packages/ingame/README.md#ram)).
 - **Rust (napi-rs)** only for profiled hot spots. **Python services** (GPU, ML, local LLM) only in Phase 4. Neither is present until needed.
 - Fast CI tiers run on GitHub-hosted runners. Heavy suites run locally on the reference rig through one command. There is no self-hosted runner, because the repo is public.
 

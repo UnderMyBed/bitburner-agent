@@ -303,15 +303,22 @@ export function writeFile(host: string, path: string, content: string) {
   server(host).writeToContentFile(file, content);
 }
 
-/** The game's own RAM calculator, as `run` and the Remote File API's `calculateRam` call it (MessageHandlers.ts:208). */
+/**
+ * The game's own RAM calculator, as `run` and the Remote File API's `calculateRam` call it, with that handler's own
+ * errors (MessageHandlers.ts:191-217), plus the calculator's reason for an invalid script (`ramCalculationError`).
+ */
 export function staticRamUsage(host: string, path: string): number {
   const target = server(host);
   const scriptPath = resolveScriptFilePath(path);
-  if (!scriptPath) throw new Error(`${path} is not a script path`);
+  if (!scriptPath) throw new Error(`File is not a script. Filename: ${path}`);
   const script = target.scripts.get(scriptPath);
-  if (!script) throw new Error(`There is no script ${path} on ${host}`);
+  if (!script) throw new Error(`File does not exist. Filename: ${path}`);
   const ramUsage = script.getRamUsage(target.scripts);
-  if (!ramUsage) throw new Error(`The game can't calculate ${path}'s RAM: the script is invalid`);
+  if (!ramUsage) {
+    throw new Error(
+      `Cannot calculate RAM usage of an invalid script. Filename: ${path}. Reason: ${script.ramCalculationError}`,
+    );
+  }
   return ramUsage;
 }
 

@@ -3,7 +3,7 @@ import { Simulation, type SimulationOptions } from "../../src/simulation.ts";
 
 /**
  * A `start` function for a test file: it starts simulations, and closes each test's when that test ends.
- * Call it at the top level of the file.
+ * Call it at the top level of the file. Other packages' tests use it too (`@bitburner-agent/sim/test-helpers`).
  */
 export function useSimulations(): (options: SimulationOptions) => Promise<Simulation> {
   const open: Simulation[] = [];
