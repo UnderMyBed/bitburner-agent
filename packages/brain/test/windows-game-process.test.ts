@@ -1,7 +1,10 @@
 // The Windows game process (#94): the commands the supervisor runs, and reading tasklist's answer. With a fake command
 // runner: no test ever starts or stops a real process.
 import { expect, test } from "vitest";
-import { tasklistShowsImage, WindowsGameProcess } from "../src/windows-game-process.ts";
+import { runWindowsCommand, tasklistShowsImage, WindowsGameProcess } from "../src/windows-game-process.ts";
+
+/** The programs run by their full path in System32 (never one found first in the working directory). */
+const SYSTEM32 = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\`;
 
 function processWith(output = "") {
   const commands: string[][] = [];
@@ -33,15 +36,26 @@ test.each([
 test("isRunning asks tasklist for the game's image, as CSV without a header", async () => {
   const { gameProcess, commands } = processWith('"bitburner.exe","12345","Console","1","250,000 K"');
   expect(await gameProcess.isRunning()).toBe(true);
-  expect(commands).toEqual([["tasklist", "/FI", "IMAGENAME eq bitburner.exe", "/FO", "CSV", "/NH"]]);
+  expect(commands).toEqual([[SYSTEM32 + "tasklist.exe", "/FI", "IMAGENAME eq bitburner.exe", "/FO", "CSV", "/NH"]]);
 });
+
+// The real runner, with harmless commands only: an empty argument reaches cmd as "", and a failure is an error.
+test.runIf(process.platform === "win32")(
+  "the Windows runner passes arguments as given, and fails on an exit code",
+  async () => {
+    expect((await runWindowsCommand(`${SYSTEM32}cmd.exe`, ["/c", "echo", "", "steam://rungameid/1"])).trim()).toBe(
+      '"" steam://rungameid/1',
+    );
+    await expect(runWindowsCommand(`${SYSTEM32}cmd.exe`, ["/c", "exit", "3"])).rejects.toThrow(/cmd\.exe failed/);
+  },
+);
 
 test("launch starts the game through Steam, as a player does; kill ends it and its children", async () => {
   const { gameProcess, commands } = processWith();
   await gameProcess.launch();
   await gameProcess.kill();
   expect(commands).toEqual([
-    ["cmd", "/c", "start", "", "steam://rungameid/1812820"],
-    ["taskkill", "/IM", "bitburner.exe", "/T", "/F"],
+    [SYSTEM32 + "cmd.exe", "/c", "start", "", "steam://rungameid/1812820"],
+    [SYSTEM32 + "taskkill.exe", "/IM", "bitburner.exe", "/T", "/F"],
   ]);
 });

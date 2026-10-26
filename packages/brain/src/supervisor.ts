@@ -1,18 +1,26 @@
 // The supervisor (#94, architecture §10.2, R9): keeps the game itself running for unattended play. It launches the game
 // when it isn't running, and kills and relaunches it when the Agent has gone silent (a frozen page, or a dead Agent: a
-// reload brings the Agent back through autoexec). At most 3 times an hour, then it gives up until the owner resumes it,
-// and never while paused (the dashboard's switch, src/supervision.ts).
-import type { Clock } from "@bitburner-agent/bridge";
+// reload brings the Agent back through autoexec). At most 3 launches an hour, then it gives up until the owner resumes
+// it, and never while paused (the dashboard's switch, src/supervision.ts).
+//
+// It judges by what it sees at each check, never by timestamps: a heartbeat counts as new only if it's a new snapshot,
+// and every wait is a number of checks. So the clock stepping (time sync, waking from sleep) can't make a healthy game
+// look silent, or hide a frozen one.
+import type { Clock, TimerHandle } from "@bitburner-agent/bridge";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, recordSupervisionGaveUp } from "./supervision.ts";
-import type { RecordContext, TelemetryStore } from "./telemetry-store.ts";
+import type { Environment, RecordContext, TelemetryStore } from "./telemetry-store.ts";
 
 /** How often the supervisor looks. */
 export const SUPERVISION_CHECK_INTERVAL_MS = 30_000;
-/** A running game with no fast snapshot (the heartbeat, every 2 s) for longer than this is silent. */
-export const SUPERVISION_SILENT_AFTER_MS = 5 * 60_000;
-/** After the brain starts or a launch, the game has this long to load and the Agent to boot before silence counts. */
-export const SUPERVISION_GRACE_MS = 5 * 60_000;
-export const MAX_RELAUNCHES_PER_HOUR = 3;
+/** Checks with no new heartbeat (the fast snapshot, every 2 s) before a running game counts as silent: 5 minutes. */
+export const SILENT_AFTER_CHECKS = 10;
+/** Checks after the brain starts, a launch, or a resume, before silence counts: 5 minutes to boot. */
+export const GRACE_CHECKS = 10;
+/** Checks after a launch with nothing done at all, so Steam can start, log in or update: 5 minutes. */
+export const LAUNCH_WAIT_CHECKS = 10;
+/** Checks that fail in a row (a command that keeps failing) before the supervisor gives up: 5 minutes. */
+export const MAX_FAILED_CHECKS = 10;
+export const MAX_LAUNCHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const GAVE_UP_EVENT_KIND = "supervisionGaveUp";
 const FAILED_EVENT_KIND = "supervisionFailed";
@@ -25,6 +33,14 @@ export interface GameProcess {
   kill(): Promise<void>;
 }
 
+/**
+ * Whether a brain supervises: only Steam's game (E0), only on Windows. A brain for a source build (E2) must never
+ * launch or kill it; tests run the brain as E2 for that reason.
+ */
+export function shouldSupervise(environment: Environment, platform: NodeJS.Platform): boolean {
+  return environment === "E0" && platform === "win32";
+}
+
 export interface SupervisorOptions {
   gameProcess: GameProcess;
   /** Holds the switch, the heartbeats it watches, and its events. */
@@ -32,91 +48,171 @@ export interface SupervisorOptions {
   /** Its events' environment and release (the brain's, plus the deployment it deploys). */
   context: RecordContext;
   clock: Clock;
+  /** An error the supervisor couldn't even record (the store closed, say): the brain logs it. It carries on. */
+  onError(error: unknown): void;
 }
 
 type Cause = "notRunning" | "silent";
 
+/** A check stopped because the switch changed while it ran: not a failure. */
+class SwitchedOffError extends Error {}
+
 export class Supervisor {
   readonly #options: SupervisorOptions;
-  /** The grace runs from here: the brain's start, then each launch. */
-  #graceFromMs: number;
+  #timer: TimerHandle | null = null;
   #checking = false;
+  /** Checks left in which nothing is done: after a launch. */
+  #launchWaitChecks = 0;
+  /** Checks left in which silence doesn't count: after the start, a launch, or a resume. */
+  #graceChecks = GRACE_CHECKS;
+  /** The newest heartbeat seen, and how many checks in a row it has stayed the newest. */
+  #lastHeartbeat: string | null = null;
+  #checksWithoutNewHeartbeat = 0;
+  /** Whether the last check found supervision on, to notice a resume. */
+  #wasActive = true;
+  #failedChecksInARow = 0;
 
-  /** Starts checking at once: the first check is one interval from now. */
+  /** Starts the checks; the first is one interval (30 s) from now. */
   constructor(options: SupervisorOptions) {
     this.#options = options;
-    this.#graceFromMs = options.clock.now();
     const everyInterval = () => {
-      void this.#check();
-      options.clock.setTimeout(everyInterval, SUPERVISION_CHECK_INTERVAL_MS);
+      this.#check().catch(options.onError);
+      this.#timer = options.clock.setTimeout(everyInterval, SUPERVISION_CHECK_INTERVAL_MS);
     };
-    options.clock.setTimeout(everyInterval, SUPERVISION_CHECK_INTERVAL_MS);
+    this.#timer = options.clock.setTimeout(everyInterval, SUPERVISION_CHECK_INTERVAL_MS);
   }
 
-  /** One check; a check still running when the next is due (a slow tasklist) makes that one skip. */
+  /** No more checks (the brain is stopping): nothing is launched while the game closes with the session. */
+  stop(): void {
+    if (this.#timer !== null) this.#options.clock.clearTimeout(this.#timer);
+    this.#timer = null;
+  }
+
+  /** One check; one still running when the next is due (a slow tasklist) makes that one skip. */
   async #check(): Promise<void> {
     if (this.#checking) return;
-    const { store } = this.#options;
-    const supervision = readSupervisionSwitch(store);
-    if (supervision.paused || supervision.gaveUpAtMs !== null) return;
     this.#checking = true;
     let cause: Cause | null = null;
     try {
-      if (!(await this.#options.gameProcess.isRunning())) cause = "notRunning";
-      else if (this.#isSilent()) cause = "silent";
+      if (!this.#isActive()) {
+        this.#wasActive = false;
+        return;
+      }
+      if (!this.#wasActive) {
+        // Resumed: the game may be booting again, so silence waits for a fresh grace.
+        this.#wasActive = true;
+        this.#graceChecks = GRACE_CHECKS;
+        this.#launchWaitChecks = 0;
+      }
+      const running = await this.#options.gameProcess.isRunning();
+      this.#watchHeartbeat();
+      if (this.#launchWaitChecks > 0) {
+        this.#launchWaitChecks--;
+      } else if (!running) {
+        cause = "notRunning";
+      } else if (this.#graceChecks > 0) {
+        this.#graceChecks--;
+      } else if (this.#checksWithoutNewHeartbeat >= SILENT_AFTER_CHECKS) {
+        cause = "silent";
+      }
       if (cause) await this.#relaunch(cause);
+      this.#failedChecksInARow = 0;
     } catch (error) {
-      // A command that failed (Steam missing, say): recorded, and the next check tries again.
-      this.#record(FAILED_EVENT_KIND, { cause, failure: error instanceof Error ? error.message : String(error) });
+      if (!(error instanceof SwitchedOffError)) this.#recordFailedCheck(cause, error);
     } finally {
       this.#checking = false;
     }
   }
 
-  /** Past the grace, with no heartbeat for too long. */
-  #isSilent(): boolean {
-    const nowMs = this.#options.clock.now();
-    if (nowMs - this.#graceFromMs < SUPERVISION_GRACE_MS) return false;
-    const lastHeartbeat = this.#options.store.latestSnapshot({
-      environment: this.#options.context.environment,
-      tier: "fast",
-    });
-    return lastHeartbeat === null || nowMs - lastHeartbeat.receivedAtMs > SUPERVISION_SILENT_AFTER_MS;
+  /** Not paused, not given up. Read afresh before anything is killed or launched, so a pause is never late. */
+  #isActive(): boolean {
+    const supervision = readSupervisionSwitch(this.#options.store);
+    return !supervision.paused && supervision.gaveUpAtMs === null;
   }
 
-  /** Kills first if the game is running; gives up instead if this would be one too many in the hour. */
+  /** Counts the checks since the newest heartbeat changed: by which snapshot it is, not by its time. */
+  #watchHeartbeat(): void {
+    const { store, context } = this.#options;
+    const latest = store.latestSnapshot({ environment: context.environment, tier: "fast" });
+    const heartbeat = latest ? `${latest.agentSessionId}/${latest.sequenceNumber}` : null;
+    if (heartbeat !== this.#lastHeartbeat) {
+      this.#lastHeartbeat = heartbeat;
+      this.#checksWithoutNewHeartbeat = 0;
+    } else {
+      this.#checksWithoutNewHeartbeat++;
+    }
+  }
+
+  /** Kills first if silent; gives up instead if this would be one launch too many in the hour. */
   async #relaunch(cause: Cause): Promise<void> {
-    const { gameProcess, clock } = this.#options;
-    const relaunchesInLastHour = this.#relaunchesInLastHour();
-    if (relaunchesInLastHour >= MAX_RELAUNCHES_PER_HOUR) {
-      recordSupervisionGaveUp(this.#options.store, clock.now());
-      this.#record(GAVE_UP_EVENT_KIND, { relaunchesInLastHour });
+    const { gameProcess, store, clock } = this.#options;
+    const launchesInLastHour = this.#launchesInLastHour();
+    if (launchesInLastHour >= MAX_LAUNCHES_PER_HOUR) {
+      this.#giveUp({ cause, launchesInLastHour });
       return;
     }
-    if (cause === "silent") await gameProcess.kill();
+    if (cause === "silent") {
+      this.#throwIfSwitchedOff();
+      try {
+        await gameProcess.kill();
+      } catch (error) {
+        // taskkill can report failure though the game is gone (it exited meanwhile): only a game still running stops
+        // the launch.
+        if (await gameProcess.isRunning()) throw error;
+      }
+    }
+    this.#throwIfSwitchedOff();
     await gameProcess.launch();
-    this.#graceFromMs = clock.now();
-    this.#record(RELAUNCH_EVENT_KIND, { cause });
+    this.#launchWaitChecks = LAUNCH_WAIT_CHECKS;
+    this.#graceChecks = GRACE_CHECKS;
+    this.#checksWithoutNewHeartbeat = 0;
+    store.recordEvent(this.#options.context, { atMs: clock.now(), kind: RELAUNCH_EVENT_KIND, detail: { cause } });
+  }
+
+  #throwIfSwitchedOff(): void {
+    if (!this.#isActive()) throw new SwitchedOffError();
   }
 
   /**
-   * Relaunches in the last hour, from the store, so a brain that restarts can't relaunch without limit. Those before
-   * the last give-up don't count: resuming starts afresh.
+   * Launches in the last hour, from the store, so a brain that restarts can't launch without limit. Only those after
+   * the last give-up count, by order (whatever the clock did): resuming after a give-up starts afresh.
    */
-  #relaunchesInLastHour(): number {
+  #launchesInLastHour(): number {
     const { store, context, clock } = this.#options;
-    const lastGaveUp = store.recentEvents({
-      environment: context.environment,
-      limit: 1,
-      kinds: [GAVE_UP_EVENT_KIND],
-    })[0];
-    const countFromMs = Math.max(clock.now() - HOUR_MS, lastGaveUp ? lastGaveUp.atMs + 1 : -Infinity);
-    return store
-      .recentEvents({ environment: context.environment, limit: MAX_RELAUNCHES_PER_HOUR, kinds: [RELAUNCH_EVENT_KIND] })
-      .filter((event) => event.atMs >= countFromMs).length;
+    const environment = context.environment;
+    const lastGaveUpId = store.latestEventId({ environment, kinds: [GAVE_UP_EVENT_KIND] });
+    return store.countEvents({
+      environment,
+      kinds: [RELAUNCH_EVENT_KIND],
+      afterEventId: lastGaveUpId,
+      sinceMs: clock.now() - HOUR_MS,
+    });
   }
 
-  #record(kind: string, detail: unknown): void {
-    this.#options.store.recordEvent(this.#options.context, { atMs: this.#options.clock.now(), kind, detail });
+  #giveUp(detail: Record<string, unknown>): void {
+    const { store, context, clock } = this.#options;
+    recordSupervisionGaveUp(store, clock.now());
+    store.recordEvent(context, { atMs: clock.now(), kind: GAVE_UP_EVENT_KIND, detail });
+  }
+
+  /**
+   * A check that failed (a command, or the store): recorded once per run of failures, so a command that keeps failing
+   * doesn't fill the events. Too many in a row gives up, with the dashboard's alert.
+   */
+  #recordFailedCheck(cause: Cause | null, error: unknown): void {
+    const failure = error instanceof Error ? error.message : String(error);
+    this.#failedChecksInARow++;
+    const { store, context, clock } = this.#options;
+    try {
+      if (this.#failedChecksInARow === 1) {
+        store.recordEvent(context, { atMs: clock.now(), kind: FAILED_EVENT_KIND, detail: { cause, failure } });
+      }
+      if (this.#failedChecksInARow >= MAX_FAILED_CHECKS) {
+        this.#giveUp({ failedChecksInARow: this.#failedChecksInARow, failure });
+        this.#failedChecksInARow = 0;
+      }
+    } catch (recordingError) {
+      this.#options.onError(recordingError);
+    }
   }
 }

@@ -487,12 +487,12 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R6 | **Version pinning and drift detection** (§12.4). |
 | R7 | **Explainability.** Every desired-state version links to its decision record. |
 | R8 | **Rate-limited and confirmed irreversibles.** Installs and flumes require the guard to pass on two consecutive snapshots, and a save backup is taken first (§6). |
-| R9 | **Liveness.** The brain detects a dead or frozen game (no snapshot for N minutes while the brain is up) and a stalled route (no critical-path progress), and alerts on the dashboard. See §10.2 for automatic recovery. |
+| R9 | **Liveness.** The brain detects a dead or frozen game (no new heartbeat for 5 minutes while the brain is up; §10.2) and a stalled route (no critical-path progress), and alerts on the dashboard. See §10.2 for automatic recovery. |
 | R10 | **Long-run hygiene (24/7).** The game compiles each distinct script source into a module that is never garbage-collected (S1). So in-game code never generates scripts with unique source text: variation goes in arguments and ports, not code. On v3.0.1 the game's cache holds those modules weakly, so a source that returns after a garbage collection compiles, and leaks, a new module, with its module-level variables reset. In-game code therefore keeps no state at module level that it relies on either lasting or resetting. (The simulator holds every module, as upstream dev does: [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73).) Reflex state is bounded. The Agent reports the page's heap use (`performance.memory`, a global scripts can read for free) in every fast snapshot (`pageHeapUsedBytes`), so growth is visible before it hurts. |
 | R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps
-1. Install Steam, set the RFA port, set autoexec to `agent/boot.js` in game options, and install the Task Scheduler tasks (one setup script). Once the brain has deployed, run `agent/boot.js` once in the game's terminal: autoexec fires at load, before the first deploy exists. One time (#95).
+1. Install Steam, set the RFA port, set autoexec to `agent/boot.js` in game options, and install the brain's scheduled task (one setup script; the brain launches the game itself, so pause supervision while setting up). Once the brain has deployed, run `agent/boot.js` once in the game's terminal: autoexec fires at load, before the first deploy exists. One time (#95).
 2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
 4. Interruptions outside the game (Windows reboots, Steam client updates, power loss) are recovered automatically (§10.2). A human is needed only if recovery gives up and raises an alert.
@@ -501,19 +501,20 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 The goal is unattended play (C9), so recovery doesn't wait for a human.
 Built in M2 ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); [`packages/brain`](../packages/brain/README.md#supervision)).
 - **Who:**
-  - **One scheduled task.** Windows Task Scheduler starts the brain at logon and restarts it on failure (D1, #95). The brain's supervisor then launches Bitburner through Steam (`steam://rungameid/1812820`), because it isn't running, so the same task starts both.
+  - **One scheduled task.** Windows Task Scheduler starts the brain at logon, and a restart loop keeps it up (D1, #95). The brain's supervisor finds Bitburner isn't running and launches it through Steam (`steam://rungameid/1812820`), so the one task starts both.
   - Autoexec then runs `agent/boot.js` (§5.7), so a reboot is a short interruption, not a stop.
-  - Only the brain serving Steam's game (E0) on Windows supervises; a source build's brain (E2) never launches or kills anything.
-- **Dead game** (process gone): the supervisor relaunches it the same way, within its 30 s check.
-- **Silent game** (process alive, but no heartbeat for 5 minutes, after a 5-minute grace from the brain's start or the last launch):
+  - Only an E0 brain on Windows supervises (Steam's game); a source build's brain (E2) never launches or kills anything.
+- **Judged by checks, not clocks:** the supervisor looks every 30 s. Its waits are counted in checks, and a heartbeat counts as new by being a new snapshot, so a clock that steps can't fake silence or hide it.
+- **Dead game** (process gone): the supervisor relaunches it the same way. After a launch it waits 5 minutes before anything else, so a slow Steam (starting, logging in, updating) isn't launched over and over.
+- **Silent game** (process alive, but no new heartbeat for 5 minutes, after a 5-minute grace from the brain's start, a launch, or a resume):
   - The supervisor ends the game process and relaunches it.
   - This covers a frozen page, and an Agent that died while the game runs: the brain has no other way to restart it, and a reload brings it back through autoexec.
   - At most the progress since the last autosave is lost, plus the time offline.
   - This is process management only. Nothing touches game code or the save.
 - **Guards:**
-  - At most 3 relaunches in any hour, counted from the store, so a restarting brain can't get round it. A 4th means the supervisor gives up and raises a dashboard alert, so we don't get a crash loop. It stays given up until the owner resumes it.
+  - At most 3 launches in any hour, counted from the store, so a restarting brain can't get round it. A 4th means the supervisor gives up and raises a dashboard alert, so we don't get a crash loop. So do 10 failed checks in a row (a command that keeps failing). It stays given up until the owner resumes it.
   - Every launch is recorded with its cause (`relaunch` events).
-- **Pause switch:** the dashboard has a "pause supervision" toggle. While it's on, nothing is relaunched, so the owner can close the game deliberately without the supervisor fighting them. Resuming also clears a give-up.
+- **Pause switch:** the dashboard has a "pause supervision" toggle. While it's on, nothing is launched or killed, so the owner can close the game deliberately, or set it up, without the supervisor fighting them. Resuming also clears a give-up.
 
 ---
 
@@ -545,7 +546,7 @@ An npm-workspaces monorepo. Packages are created when the first code that needs 
 packages/
   core/         model types, Activity/Action interfaces, route definitions, formula shims → vendor/bitburner-src
   brain/        the brain process: bridge composition, telemetry store and gap report, save backups, the local
-                dashboard (served by the brain; #93), lockstep driver (tests);
+                dashboard (served by the brain; #93), the game's supervisor (#94), lockstep driver (tests);
                 from M4 the fast model, planner (campaign/BitNode/cycle), activities, actions, rules file
   ingame/       agent, reconciler, workers, reflexes, effectors (singularity|ui|sim), boot.js
   bridge/       RFA server + control channel

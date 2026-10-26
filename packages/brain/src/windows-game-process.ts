@@ -6,7 +6,18 @@ import type { GameProcess } from "./supervisor.ts";
 /** A command can't hang the supervisor's checks. */
 const COMMAND_TIMEOUT_MS = 30_000;
 
-/** Runs a program with arguments (never through a shell's parsing), resolving with its output. */
+/**
+ * A Windows program by its full path in System32, so a program of the same name in the working directory, which
+ * Windows would otherwise find first, is never run.
+ */
+function systemProgram(fileName: string): string {
+  return `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\${fileName}`;
+}
+
+/**
+ * Runs a program with arguments, with no shell in between, resolving with its output. (`launch` runs `cmd` itself, with
+ * only a whole-number app ID in its command line.)
+ */
 export type RunCommand = (command: string, args: string[]) => Promise<string>;
 
 export interface WindowsGameProcessOptions {
@@ -17,7 +28,7 @@ export interface WindowsGameProcessOptions {
   runCommand?: RunCommand;
 }
 
-const runWindowsCommand: RunCommand = (command, args) =>
+export const runWindowsCommand: RunCommand = (command, args) =>
   new Promise((resolve, reject) => {
     execFile(command, args, { windowsHide: true, timeout: COMMAND_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (error) reject(new Error(`${command} failed: ${stderr.trim() || error.message}`));
@@ -34,18 +45,29 @@ export class WindowsGameProcess implements GameProcess {
 
   async isRunning(): Promise<boolean> {
     const { gameExecutable, runCommand } = this.#options;
-    const output = await runCommand("tasklist", ["/FI", `IMAGENAME eq ${gameExecutable}`, "/FO", "CSV", "/NH"]);
+    const output = await runCommand(systemProgram("tasklist.exe"), [
+      "/FI",
+      `IMAGENAME eq ${gameExecutable}`,
+      "/FO",
+      "CSV",
+      "/NH",
+    ]);
     return tasklistShowsImage(output, gameExecutable);
   }
 
   /** `start ""` (an empty window title) opens the `steam://` link with Steam, which starts the game. */
   async launch(): Promise<void> {
-    await this.#options.runCommand("cmd", ["/c", "start", "", `steam://rungameid/${this.#options.steamAppId}`]);
+    await this.#options.runCommand(systemProgram("cmd.exe"), [
+      "/c",
+      "start",
+      "",
+      `steam://rungameid/${this.#options.steamAppId}`,
+    ]);
   }
 
   /** The game and its child processes (Electron's renderers). */
   async kill(): Promise<void> {
-    await this.#options.runCommand("taskkill", ["/IM", this.#options.gameExecutable, "/T", "/F"]);
+    await this.#options.runCommand(systemProgram("taskkill.exe"), ["/IM", this.#options.gameExecutable, "/T", "/F"]);
   }
 }
 

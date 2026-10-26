@@ -229,7 +229,8 @@ test("supervision off says so", async () => {
   const off: DashboardStatus = { ...BUSY_STATUS, supervision: { ...BUSY_STATUS.supervision, state: "off" } };
   const { document } = await openPage(() => ({ status: 200, body: off }));
   expectDataShown(document);
-  expect(textOf(document, "#supervision")).toContain("Supervision: off: this brain doesn't supervise the game");
+  expect(textOf(document, "#supervision")).toContain("Supervision: off: only a brain for Steam's game");
+  expect(isShown(document, "#supervision button")).toBe(false);
 });
 
 test("the brain's data goes in as text, never as HTML", async () => {

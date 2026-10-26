@@ -70,6 +70,7 @@ test.each([
   ["an interval a timer can't wait", { saveBackupIntervalMinutes: 35792 }, /above 0 and at most 35791/],
   ["no backups-kept count", { saveBackupsKept: undefined }, /saveBackupsKept must be a whole number/],
   ["no Steam app ID", { steamAppId: undefined }, /steamAppId must be a Steam app ID/],
+  ["a Steam app ID of 0", { steamAppId: 0 }, /steamAppId must be a Steam app ID, a whole number of at least 1/],
   ["a game executable with a folder", { gameExecutable: "C:\\Games\\bitburner.exe" }, /gameExecutable must be/],
   ["a game executable that isn't an .exe", { gameExecutable: "bitburner" }, /gameExecutable must be/],
   ["no backups kept", { saveBackupsKept: 0 }, /saveBackupsKept must be a whole number, at least 1/],
@@ -183,7 +184,8 @@ test("the brain serves the dashboard; the pause switch is stored and survives a 
     environment: string;
     supervision: { paused: boolean };
   };
-  expect(status).toMatchObject({ environment: "E2", supervision: { paused: false } });
+  // An E2 brain (as every test runs) never supervises: it must never touch the owner's Steam game.
+  expect(status).toMatchObject({ environment: "E2", supervision: { state: "off", paused: false } });
   // The brain recorded its start, which the dashboard counts "this run" from.
   const startedStore = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
   expect(startedStore.events({ environment: "E2" }).map((event) => event.kind)).toContain("brainStarted");

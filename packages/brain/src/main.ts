@@ -19,7 +19,7 @@ import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
 import { setSupervisionPaused } from "./supervision.ts";
-import { Supervisor } from "./supervisor.ts";
+import { Supervisor, shouldSupervise } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 import { WindowsGameProcess } from "./windows-game-process.ts";
 
@@ -98,17 +98,19 @@ try {
     },
     onRejectedOrigin: (origin) => channel.reportRejectedOrigin(`${origin} (Remote File API)`),
   });
-  // Only Steam's game is supervised, and only on Windows: a brain for a source build (E2), or a test's, must never
-  // launch or kill it.
-  const supervising = config.environment === "E0" && process.platform === "win32";
-  if (supervising) {
-    new Supervisor({
-      gameProcess: new WindowsGameProcess({ steamAppId: config.steamAppId, gameExecutable: config.gameExecutable }),
-      store,
-      context: deployerReleaseContext,
-      clock: systemClock,
-    });
-  }
+  // Only an E0 brain on Windows supervises: one for a source build (E2) must never launch or kill Steam's game, and
+  // tests run the brain as E2 for that reason.
+  const supervising = shouldSupervise(config.environment, process.platform);
+  const supervisor = supervising
+    ? new Supervisor({
+        gameProcess: new WindowsGameProcess({ steamAppId: config.steamAppId, gameExecutable: config.gameExecutable }),
+        store,
+        context: deployerReleaseContext,
+        clock: systemClock,
+        onError: (error) =>
+          log(`supervisor: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
+      })
+    : null;
   const dashboardServer = await startDashboardServer({
     port: config.dashboardPort,
     status: () =>
@@ -139,13 +141,15 @@ try {
   log(
     supervising
       ? `supervising the game: Steam app ${config.steamAppId}, ${config.gameExecutable}, checked every 30 s`
-      : `not supervising the game: only Steam's (E0) is, on Windows (this is ${config.environment} on ${process.platform})`,
+      : `not supervising the game: only an E0 brain on Windows does (this is ${config.environment} on ${process.platform})`,
   );
 
   let stopping = false;
   const shutDown = async () => {
     if (stopping) return;
     stopping = true;
+    // First: at logoff the game closes too, and must not be relaunched.
+    supervisor?.stop();
     // A deploy or backup the shutdown cuts short isn't a failed one: the next start deploys and backs up again.
     stopRecordingDeploys();
     stopLoggingDeploys();

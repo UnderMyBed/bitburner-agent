@@ -144,6 +144,20 @@ test("recent events newest first, up to a limit; and the latest of some kinds af
   expect(store.latestEvent({ environment: "E1", kinds: ["deployed"], afterEventId: 1 })).toBeNull();
 });
 
+test("the latest event id of some kinds, and counting events after an event since a time", () => {
+  expect(store.latestEventId({ environment: "E1", kinds: ["relaunch"] })).toBe(0);
+  const first = store.recordEvent(context, { atMs: 100, kind: "relaunch", detail: {} });
+  const gaveUp = store.recordEvent(context, { atMs: 200, kind: "gaveUp", detail: {} });
+  store.recordEvent(context, { atMs: 50, kind: "relaunch", detail: {} });
+  store.recordEvent(context, { atMs: 300, kind: "relaunch", detail: {} });
+  store.recordEvent({ environment: "E0", release: "r" }, { atMs: 400, kind: "relaunch", detail: {} });
+  expect(store.latestEventId({ environment: "E1", kinds: ["gaveUp"] })).toBe(gaveUp);
+  expect(store.countEvents({ environment: "E1", kinds: ["relaunch"], afterEventId: 0, sinceMs: 0 })).toBe(3);
+  // After the give-up by order, whatever the times say; and within the window by time.
+  expect(store.countEvents({ environment: "E1", kinds: ["relaunch"], afterEventId: gaveUp, sinceMs: 0 })).toBe(2);
+  expect(store.countEvents({ environment: "E1", kinds: ["relaunch"], afterEventId: first, sinceMs: 100 })).toBe(1);
+});
+
 test("settings are kept across reopening the store, and can be deleted", () => {
   store.setSetting("supervision.paused", "true");
   store.close();

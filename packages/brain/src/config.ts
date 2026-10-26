@@ -132,7 +132,7 @@ function configProblem(config: unknown): string | null {
     return "saveBackupsKept must be a whole number, at least 1 (the default is 96)";
   }
   if (!Number.isInteger(fields.steamAppId) || (fields.steamAppId as number) < 1) {
-    return "steamAppId must be a Steam app ID, a whole number (Bitburner's is 1812820)";
+    return "steamAppId must be a Steam app ID, a whole number of at least 1 (the default is 1812820, Bitburner's)";
   }
   // A bare file name: it goes into tasklist's filter and taskkill's arguments.
   if (typeof fields.gameExecutable !== "string" || !/^[\w .-]+\.exe$/i.test(fields.gameExecutable)) {
