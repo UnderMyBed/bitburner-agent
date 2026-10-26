@@ -1,7 +1,6 @@
 {
-  "extends": "./tsconfig.base.json",
-  "include": ["packages/**/*.ts", "tools/**/*.ts", "*.ts"],
-  // Bundled together with the game, so typechecked the game's way instead: packages/sim/tsconfig.bundle.json
-  // (packages/sim/README.md#typecheck-boundary).
-  "exclude": ["packages/sim/src/engine/bundle/**"]
+  // The repository root's own files (e.g. vitest.config.ts). Each package and tools/ have their own config;
+  // `npm run typecheck` runs them all (tools/typecheck.ts).
+  "extends": "./tsconfig.node.json",
+  "include": ["*.ts"]
 }

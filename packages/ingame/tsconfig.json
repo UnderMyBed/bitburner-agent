@@ -1,0 +1,12 @@
+{
+  // In-game code runs in the game's page: browser globals, no Node. The NS API's types are the pinned game's own
+  // definitions, under the game's own alias `@nsdefs`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["es2024", "dom"],
+    "paths": {
+      "@nsdefs": ["../../vendor/bitburner-src/src/ScriptEditor/NetscriptDefinitions.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

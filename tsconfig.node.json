@@ -1,0 +1,7 @@
+{
+  // For code that runs in Node (CONTRIBUTING, "TypeScript configs").
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}

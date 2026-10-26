@@ -94,7 +94,7 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 
 | Command | What it does |
 |---|---|
-| `npm run typecheck` | Two steps. First TypeScript, strict (unused locals/parameters are errors), every `.ts` file under `packages/` and `tools/` except the simulator's bundled sources. Then those bundled sources, against the game's types with the game's own TypeScript and options; this needs `npm run setup:engine` (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)). No emit: Node runs `.ts` directly |
+| `npm run typecheck` | Two steps. First TypeScript, strict (unused locals/parameters are errors): every `tsconfig.json` in the repository, each in its own environment ([TypeScript configs](#typescript-configs)), failing if any `.ts` file isn't covered by one. Then the simulator's bundled sources, against the game's types with the game's own TypeScript and options; this needs `npm run setup:engine` (see [`packages/sim`](packages/sim/README.md#typecheck-boundary)). No emit: Node runs `.ts` directly |
 | `npm run lint` / `npm run lint:fix` | Biome lint and format check, warnings are errors / apply fixes |
 | `npm test` / `npm run test:watch` | Vitest: every `*.test.ts` under `packages/` and `tools/`. Builds the engine bundle first if it's stale, so it needs `npm run setup:engine` once |
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
@@ -103,6 +103,21 @@ npm run check        # typecheck + lint/format + tests: the same gates CI runs
 | `npm run baseline -w @bitburner-agent/legacy` | Run the legacy fork's BN1 baseline to 4, 8 and 12 virtual hours over seeds 1–8 and print its rows ([docs/sim/baselines.md](docs/sim/baselines.md)); about an hour on one core, before releases, not in CI |
 
 Code lives in npm workspaces under `packages/` (see architecture §12.2). `tools/` holds repository tooling run by Node, under the same gates, such as [`tools/upstream-watch`](tools/upstream-watch/README.md), the upstream `stable` and `dev` watchers. `spikes/` is throwaway and excluded from the gates. `packages/legacy/fork/` is vendored third-party JS: Biome skips it, it's never edited, `packages/legacy/test/fork.test.ts` checks its bytes, and `.claude/settings.json` keeps Claude Code from loading its `CLAUDE.md` as memory.
+
+### TypeScript configs
+
+Code runs in three environments, and each file is typechecked in its own (architecture §12.2):
+
+| Files | Config | Environment |
+|---|---|---|
+| `packages/core/src` | `packages/core/tsconfig.json` | Neither: imported by in-game and Node code alike, so no DOM and no Node types |
+| `packages/ingame/src` | `packages/ingame/tsconfig.json` | The game's page: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` |
+| Everything else: other packages, the tests, `tools/`, the root's own files | the package's `tsconfig.json`; `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node |
+
+- Every config extends `tsconfig.base.json` (the shared strict options, environment-neutral) or `tsconfig.node.json` (the same, plus Node types).
+- **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.
+- **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. A Node config for `ingame`'s tests must map `@nsdefs` too, if the tests import in-game sources.
+- `npm run typecheck` (`tools/typecheck`) finds every `tsconfig.json` and fails on any TypeScript file none of them covers. Its tests check each config's environment with probe files, so a change that lets Node or the DOM back in fails CI.
 
 ## Rules of engagement
 
