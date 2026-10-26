@@ -7,11 +7,17 @@ import type { Connection } from "./connection.ts";
 export const RFA_REQUEST_TIMEOUT_MS = 30_000;
 const HOME = "home";
 
-/** A request that failed: the game's own error, no reply in time, or the connection closing. */
+/**
+ * A request that failed: `game`, the game's own error (or a reply of the wrong type); `timeout`, no reply in time (the
+ * game sends none when a handler throws, Remote.ts:127-134); `closed`, the connection closed.
+ */
 export class RfaError extends Error {
-  constructor(request: string, problem: string) {
+  readonly kind: "game" | "timeout" | "closed";
+
+  constructor(request: string, problem: string, kind: RfaError["kind"] = "game") {
     super(`${request}: ${problem}`);
     this.name = "RfaError";
+    this.kind = kind;
   }
 }
 
@@ -35,7 +41,7 @@ export class RfaClient {
     connection.onMessage((text) => this.#receive(text));
     connection.onClose(() => {
       this.#closed = true;
-      for (const [id, request] of this.#pending) this.#settle(id, request, "the connection closed");
+      for (const [id, request] of this.#pending) this.#settle(id, request, "the connection closed", "closed");
     });
   }
 
@@ -82,12 +88,12 @@ export class RfaClient {
 
   #request(method: string, subject: string | null, params?: object): Promise<unknown> {
     const description = subject === null ? method : `${method} ${subject}`;
-    if (this.#closed) return Promise.reject(new RfaError(description, "the connection closed"));
+    if (this.#closed) return Promise.reject(new RfaError(description, "the connection closed", "closed"));
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       const timer = this.#clock.setTimeout(() => {
         const request = this.#pending.get(id);
-        if (request) this.#settle(id, request, `no reply within ${RFA_REQUEST_TIMEOUT_MS / 1000} s`);
+        if (request) this.#settle(id, request, `no reply within ${RFA_REQUEST_TIMEOUT_MS / 1000} s`, "timeout");
       }, RFA_REQUEST_TIMEOUT_MS);
       this.#pending.set(id, { description, resolve, reject, timer });
       this.#connection.send(JSON.stringify({ jsonrpc: "2.0", id, method, ...(params ? { params } : {}) }));
@@ -95,24 +101,27 @@ export class RfaClient {
   }
 
   #receive(text: string): void {
-    let reply: { id?: unknown; result?: unknown; error?: unknown };
+    let reply: unknown;
     try {
       reply = JSON.parse(text);
     } catch {
       return;
     }
+    // Nothing a client sends may crash the brain: a frame that isn't a reply object is ignored.
+    if (typeof reply !== "object" || reply === null) return;
+    const { id, result, error } = reply as { id?: unknown; result?: unknown; error?: unknown };
     // A reply to a request that timed out, or to none: nothing waits for it.
-    const request = typeof reply.id === "number" ? this.#pending.get(reply.id) : undefined;
+    const request = typeof id === "number" ? this.#pending.get(id) : undefined;
     if (!request) return;
-    if (typeof reply.error === "string") this.#settle(reply.id as number, request, reply.error);
-    else this.#settle(reply.id as number, request, null, reply.result);
+    if (typeof error === "string") this.#settle(id as number, request, error, "game");
+    else this.#settle(id as number, request, null, "game", result);
   }
 
-  #settle(id: number, request: PendingRequest, problem: string | null, result?: unknown): void {
+  #settle(id: number, request: PendingRequest, problem: string | null, kind: RfaError["kind"], result?: unknown): void {
     this.#pending.delete(id);
     this.#clock.clearTimeout(request.timer);
     if (problem === null) request.resolve(result);
-    else request.reject(new RfaError(request.description, problem));
+    else request.reject(new RfaError(request.description, problem, kind));
   }
 }
 

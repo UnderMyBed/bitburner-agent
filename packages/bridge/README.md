@@ -17,7 +17,7 @@ const server = await startWebSocketServer({
   onConnection: (connection) => channel.accept(connection),
   onRejectedOrigin: (origin) => channel.reportRejectedOrigin(origin),
 });
-channel.setDeploymentState({ deployedId, hold: false, deployFailed: false });   // from the deployer
+// The Deployer (below) tells the channel the deployment state: channel.setDeploymentState({ deployedId, hold, deployFailed })
 ```
 
 The protocol, close codes and rules are in [docs/bridge/protocol.md](../../docs/bridge/protocol.md).
@@ -47,12 +47,12 @@ const server = await startWebSocketServer({
 
 The deploy steps are in [docs/bridge/protocol.md, "Deploying"](../../docs/bridge/protocol.md#deploying).
 
-- **`RfaClient`** sends the game's RFA requests over a `Connection`, all for home: `pushFile`, `getFile` (null for a missing file), `deleteFile`, `getFileNames`, `calculateRam`, `getDefinitionFile`. Replies are matched by `id`, whatever their order. A request fails with an `RfaError` on the game's own error (a plain string), on no reply within 30 s, or when the connection closes.
-- **`Deployer`** takes each RFA connection (`accept`, which closes an older one) and deploys over it: the version check, then the deployment, atomically. `accept`'s promise settles when that's done and never rejects.
+- **`RfaClient`** sends the game's RFA requests over a `Connection`, all for home: `pushFile`, `getFile` (null for a missing file), `deleteFile`, `getFileNames`, `calculateRam`, `getDefinitionFile`. Replies are matched by `id`, whatever their order; a frame that isn't a reply is ignored. A request fails with an `RfaError` whose `kind` says why: `game` (the game's own error, a plain string, or a reply of the wrong type), `timeout` (no reply within 30 s) or `closed` (the connection closed).
+- **`Deployer`** takes each RFA connection (`accept`, which closes an older one) and deploys over it: the version check, then the deployment, atomically. Nothing a replaced connection learns afterwards counts. `accept`'s promise settles when that's done. A failed deploy is a `deployFailed` event; the promise rejects only on a bug, which then crashes the brain (fail fast).
   - **`build`** is the in-game build (`InGameBuild`: each script by file name, and each one's RAM budget). It must have `boot.js` and `agent.js`, and a budget for every script, or the deployer refuses to start.
   - **`deploymentId`** (`deploymentIdOf`): a hash of every script, the control port and the token.
-  - **Hold:** a definition file other than the pinned one, or the channel's `versionDrift`, holds the deployer for the brain's run: it deploys nothing more.
-  - **Events:** `deployed` (with the deployment it replaced), `deployFailed` (with the reason) and `versionDrift`.
+  - **Hold:** a definition file other than the pinned one, or the channel's `versionDrift`, holds the deployer for the brain's run. It checks again just before it changes anything shared, so a drift reported mid-deploy stops that deploy too.
+  - **Events:** `deployed` (with the deployment it replaced), `deployFailed` (with the reason) and `versionDrift`. A listener that throws can't stop the others or the deploy: its error goes to `onListenerError` (by default raised afterwards as an uncaught exception).
   - It tells the control channel (`setDeploymentState`) what `current.txt` names, any hold, and whether the last deploy failed, so the channel restarts an outdated Agent only when that's safe.
 
 ## Tests
@@ -60,5 +60,5 @@ The deploy steps are in [docs/bridge/protocol.md, "Deploying"](../../docs/bridge
 - `test/control-channel.test.ts`: the rules, against an in-memory connection and a hand-moved clock.
 - `test/control-channel.property.test.ts`: fast-check; snapshots with duplicates, drops, reordering and reconnects.
 - `test/websocket-server.test.ts`: the real server on a random port.
-- `test/rfa-client.test.ts` and `test/deployer.test.ts`: against `FakeRfaGame` (`test/helpers/fakes.ts`), which answers as the game's `MessageHandlers.ts` does.
+- `test/rfa-client.test.ts` and `test/deployer.test.ts`: against `FakeRfaGame` (`test/helpers/fakes.ts`), which answers as the game's `MessageHandlers.ts` and `removeFile` do, with their messages (it checks only file extensions, not whole paths). It can drop the connection, stay silent, or report a close late as `ws` does.
 - The game's real RFA code is covered in the simulator: `packages/brain/test/deploy.test.ts`.

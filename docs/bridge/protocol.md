@@ -1,6 +1,6 @@
 # The control channel's protocol
 
-The in-game Agent connects to the brain over a WebSocket and reports snapshots. The brain welcomes it, or tells it to restart onto the deployed code (architecture §6, D2). This page is the reference for the messages, close codes and rules. The code is `packages/core/src/control-protocol.ts` (shared by both sides) and `packages/bridge/src/control-channel.ts` (the brain's side).
+The in-game Agent connects to the brain over a WebSocket and reports snapshots. The brain welcomes it, or tells it to restart onto the deployed code (architecture §6, D2). This page is the reference for the messages, close codes and rules, and, under [Deploying](#deploying), for how the deployer uses the game's Remote File API. The code is `packages/core/src/control-protocol.ts` (shared by both sides) and `packages/bridge/src/control-channel.ts` (the brain's side).
 
 M2 only observes, so nothing else comes down yet. Desired state and intents arrive with the reconciler in M3, as protocol version 2.
 
@@ -84,7 +84,11 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
   - whether the brain is on hold (the game's definition file isn't the pinned one);
   - whether the last deploy failed.
 
-  The channel also holds by itself, for the rest of the brain's run, once an Agent's `hello` reports a game other than `PINNED_GAME` (its `versionNumber`, or a `commit` that isn't a prefix of the pinned one or the other way round). It welcomes that Agent and reports a `versionDrift` event first.
+  The channel also holds by itself, for the rest of the brain's run, once an Agent's `hello` reports a game other than `PINNED_GAME`:
+  - another `versionNumber`;
+  - or a `commit` under 7 characters, or one that isn't a prefix of the pinned one, nor the pinned one a prefix of it. The game reports `git rev-parse --short` of its build, whose length depends on the clone.
+
+  It welcomes that Agent, and reports a `versionDrift` event after its `agentConnected`, once.
 
   `restart` is sent when the deployment is known, there's no hold or failed deploy, and the Agent runs another deployment: on `hello` (in place of `welcome`), or to the connected Agent when a deploy completes. So a version hold or a failed deploy never makes the Agent restart.
   - **Once per outdated deployment.** An Agent from a deployment already told to restart is welcomed instead, until the deployed id changes. That stops a loop. Suppose the game reloads a save from before the deploy was autosaved:
@@ -99,9 +103,13 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
 
 ## Deploying
 
-The other channel is the game's own Remote File API (RFA), which the deployer uses ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91), `packages/bridge/src/deployer.ts`). The game connects to the brain (`ws://<RemoteFileApiAddress>:<RemoteFileApiPort>`, game settings kept in the save), and the brain sends it requests: JSON-RPC 2.0-like, replies matched by `id`, errors as plain strings (game source: `src/RemoteFileAPI/`). The server binds `127.0.0.1` and allows the same origins as the control channel; the newest connection replaces an older one (closed with 1000).
+The other channel is the game's own Remote File API (RFA), which the deployer uses ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91), `packages/bridge/src/deployer.ts`).
+- The game connects to the brain: `ws://<RemoteFileApiAddress>:<RemoteFileApiPort>`, from game settings kept in the save.
+- The brain sends it requests, JSON-RPC 2.0-like: replies are matched by `id`, and errors are plain strings (game source: `src/RemoteFileAPI/`).
+- The server binds `127.0.0.1` and allows the same origins as the control channel. The newest connection replaces an older one (closed with 1000), and nothing an older one learns afterwards counts.
+- **One game per brain.** On a close it didn't make, the game reconnects after its reconnection delay. Two games on one RFA port would replace each other for ever, deploying in turn.
 
-**What's deployed:** a deployment is the build plus its configuration. Its id is a 12-digit hash of every script, the control port and the token, so a new token (after a lost data directory) is a new deployment, and the Agent is never locked out. Into `agent/<deploymentId>/` go:
+**What's deployed:** a deployment is the build plus its configuration. Its id is 12 hex digits of a hash of every script, the control port and the token. So a new token (after a lost data directory) is a new deployment, and the Agent is never locked out: the old Agent's `hello` is refused (4003), and before it reconnects it finds `current.txt` names the new deployment and hands over (above). Into `agent/<deploymentId>/` go:
 - every script: `agent.js`, the `snapshot-<tier>.js` workers, and a copy of `boot.js` (measured there before `agent/boot.js` changes);
 - `config.json` (`{ deploymentId, controlPort }`) and `token.txt`.
 
@@ -110,8 +118,14 @@ The other channel is the game's own Remote File API (RFA), which the deployer us
 2. Read `agent/current.txt`, and tell the channel the deployment it names. If that's this deployment, stop: nothing to do.
 3. Push every file into the deployment's folder.
 4. `calculateRam` on each script there. One over its budget (`ram-budget.json`) stops the deploy: a `deployFailed` event, the channel is told, and nothing shared has changed.
-5. Push `agent/boot.js`, if its content differs.
+5. If the brain went on hold meanwhile (an Agent's `hello` reported another game), stop here. Otherwise push `agent/boot.js`, if its content differs.
 6. **Push `agent/current.txt`, last: the switch-over.** Tell the channel the new deployment, which sends `restart` to a connected Agent from another one. A `deployed` event names the deployment it replaced.
-7. Delete the files of every other deployment folder but the one just replaced. The game refuses to delete a running script's file; those are skipped.
+7. Tidy up: delete the files of the deployer's other folders (12 hex digits; never a player's own `agent/<name>/`). It keeps the one just replaced and the connected Agent's. Scripts go first. The game refuses to delete a running one, and then the rest of that folder (its config and token, which that Agent reads) is kept too. Tidying can't fail the deploy: it's done, and the next one tidies again.
 
-A request has 30 s to be answered. A failed request, or the connection closing mid-deploy, is a `deployFailed` event; `current.txt` is unchanged, and the next connection tries again. A deploy is in the save only after the game's next autosave (every 60 s by default): if the game reloads before then, its next RFA connection deploys again.
+**Failures:**
+- A request has 30 s to be answered. The game sends no reply when one of its handlers throws. Then the deploy fails and the brain closes the connection, so the game reconnects after its reconnection delay and the deploy is tried again.
+- A game error, or the connection closing mid-deploy, is a `deployFailed` event too. `current.txt` is unchanged, and the next connection tries again. An over-budget build isn't retried on the same connection: it would fail the same way.
+
+**Saved at the next autosave.** A deploy is in the save only after the game's next autosave (every 60 s by default). If the game reloads before then, its next RFA connection deploys again.
+
+**What the version check can't catch.** The RFA can't tell the game's version, only its definition file. So a game whose definitions are unchanged but whose version differs is deployed to when its RFA connection comes before any Agent's `hello`: a fresh save, or a load where the RFA connects first. The Agent's `hello` then holds the brain, and no restart follows; but the deployed code still runs on that game at the next load, since `boot.js` starts what `current.txt` names. The definitions being identical, the API the code uses is the pinned one.

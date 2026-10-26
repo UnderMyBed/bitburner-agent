@@ -36,7 +36,7 @@ export type ControlChannelEvent =
 
 /**
  * What the deployer knows (#91): the deployment `agent/current.txt` names, as last read or written over the Remote File
- * API (null until known), whether the brain is on hold (a game version it wasn't built for), and whether the last
+ * API (null until known), whether the brain is on hold (the game's definition file isn't the pinned one), and whether the last
  * deploy failed.
  */
 export interface DeploymentState {
@@ -61,7 +61,7 @@ const raiseAsUncaught = (error: unknown) =>
     throw error;
   });
 
-/** The Agent connected now: the deployer's version check reads its game info (#91). */
+/** The Agent connected now. The deployer keeps its deployment when it tidies old ones (#91). */
 export interface ConnectedAgent {
   agentSessionId: string;
   deploymentId: string;
@@ -184,15 +184,16 @@ export class ControlChannel {
     this.#currentSession = session;
     this.#rememberSession(session.agentSessionId);
     previous?.connection.close(CONTROL_CLOSE_CODES.replaced, "replaced");
-    // Before the restart decision, so a drifted game is never sent one.
+    // Before the restart decision, so a drifted game is never sent one. Reported once: it holds for the brain's run.
     const drift = gameDrift(hello.game);
+    const newlyDrifted = drift !== null && !this.#gameDrifted;
     if (drift !== null) this.#gameDrifted = true;
     if (!this.#restartIfOutdated(session)) {
       this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" });
     }
     const atMs = this.#clock.now();
+    // versionDrift after agentConnected, so it's recorded against the Agent that reported it.
     this.#emit([
-      ...(drift !== null ? [{ type: "versionDrift" as const, atMs, detail: `the Agent's game: ${drift}` }] : []),
       ...(previous ? [{ type: "agentDisconnected" as const, atMs, agentSessionId: previous.agentSessionId }] : []),
       {
         type: "agentConnected",
@@ -201,6 +202,7 @@ export class ControlChannel {
         deploymentId: session.deploymentId,
         game: session.game,
       },
+      ...(newlyDrifted ? [{ type: "versionDrift" as const, atMs, detail: `the Agent's game: ${drift}` }] : []),
     ]);
     return session;
   }

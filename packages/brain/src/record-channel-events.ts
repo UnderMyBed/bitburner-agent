@@ -34,12 +34,15 @@ export function recordChannelEvents(
   });
 }
 
-/** Stores what the deployer reports, as events. Their release is the brain's own plus the deployment it deploys. */
+/**
+ * Stores what the deployer reports, as events. Their release is the brain's own plus the deployment it deploys.
+ * Returns a function that stops it.
+ */
 export function recordDeployerEvents(
   deployer: Deployer,
   store: TelemetryStore,
   { environment, brainRelease }: { environment: Environment; brainRelease: string },
-): void {
+): () => void {
   const context = { environment, release: `${brainRelease}+${deployer.deploymentId}` };
-  deployer.subscribe(({ type, atMs, ...detail }) => store.recordEvent(context, { atMs, kind: type, detail }));
+  return deployer.subscribe(({ type, atMs, ...detail }) => store.recordEvent(context, { atMs, kind: type, detail }));
 }

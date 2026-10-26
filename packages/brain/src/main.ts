@@ -50,8 +50,13 @@ try {
     channel,
     clock: systemClock,
   });
-  recordDeployerEvents(deployer, store, { environment: config.environment, brainRelease: release });
-  deployer.subscribe((event) => log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`));
+  const stopRecordingDeploys = recordDeployerEvents(deployer, store, {
+    environment: config.environment,
+    brainRelease: release,
+  });
+  const stopLoggingDeploys = deployer.subscribe((event) =>
+    log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
+  );
   const remoteFileApiServer = await startWebSocketServer({
     port: config.remoteFileApiPort,
     allowedOrigins: config.allowedOrigins,
@@ -67,6 +72,9 @@ try {
   const shutDown = async () => {
     if (stopping) return;
     stopping = true;
+    // A deploy the shutdown cuts short isn't a failed one: the next start deploys again.
+    stopRecordingDeploys();
+    stopLoggingDeploys();
     await remoteFileApiServer.close();
     await controlServer.close();
     store.close();

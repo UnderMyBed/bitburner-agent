@@ -2,11 +2,12 @@
 // atomically (current.txt last, only after every file is pushed and within its RAM budget), and cleans up.
 import { BOOT_SCRIPT, CURRENT_DEPLOYMENT_FILE, deployedFilePath, isValidDeploymentId } from "@bitburner-agent/core";
 import { beforeEach, describe, expect, test } from "vitest";
-import type { ControlChannelEvent, DeploymentState } from "../src/control-channel.ts";
+import type { ConnectedAgent, ControlChannelEvent, DeploymentState } from "../src/control-channel.ts";
 import { Deployer, type DeployerEvent, deploymentIdOf, type InGameBuild } from "../src/deployer.ts";
 import { FakeRfaGame, ManualClock } from "./helpers/fakes.ts";
 
 const PINNED_DEFINITIONS = "interface NS {\n  run(): number;\n}\n";
+const PINNED_GAME_INFO = { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" };
 const TOKEN = "a".repeat(64);
 const CONTROL_PORT = 12526;
 const BUILD: InGameBuild = {
@@ -23,6 +24,10 @@ const BUILD: InGameBuild = {
 class RecordingChannel {
   readonly states: DeploymentState[] = [];
   readonly #listeners: ((event: ControlChannelEvent) => void)[] = [];
+  connected: ConnectedAgent | null = null;
+  connectedAgent(): ConnectedAgent | null {
+    return this.connected;
+  }
   setDeploymentState(state: DeploymentState): void {
     this.states.push({ ...state });
   }
@@ -45,7 +50,9 @@ beforeEach(() => {
   events = [];
 });
 
-function createDeployer(changes: { build?: InGameBuild; token?: string } = {}): Deployer {
+function createDeployer(
+  changes: { build?: InGameBuild; token?: string; onListenerError?: (error: unknown) => void } = {},
+): Deployer {
   const deployer = new Deployer({
     build: changes.build ?? BUILD,
     controlPort: CONTROL_PORT,
@@ -53,6 +60,7 @@ function createDeployer(changes: { build?: InGameBuild; token?: string } = {}): 
     pinnedDefinitions: PINNED_DEFINITIONS,
     channel,
     clock,
+    ...(changes.onListenerError ? { onListenerError: changes.onListenerError } : {}),
   });
   deployer.subscribe((event) => events.push(event));
   return deployer;
@@ -204,33 +212,71 @@ describe("the version check", () => {
     await deployer.accept(game);
     expect(game.requests).toEqual([]);
   });
+
+  test("a drift reported mid-deploy stops it before anything shared changes", async () => {
+    const deployer = createDeployer();
+    const game = newGame();
+    game.files.set(CURRENT_DEPLOYMENT_FILE, "aaaaaaaaaaaa");
+    // The Agent's hello arrives while the deployer measures the scripts.
+    game.ramOf = () => {
+      channel.emit({
+        type: "versionDrift",
+        atMs: clock.now(),
+        detail: "the Agent's game: versionNumber 52, pinned 51",
+      });
+      return 2.6;
+    };
+    await deployer.accept(game);
+    expect(game.files.get(CURRENT_DEPLOYMENT_FILE)).toBe("aaaaaaaaaaaa");
+    expect(game.files.has(BOOT_SCRIPT)).toBe(false);
+    expect(events).toEqual([]);
+  });
 });
 
 describe("cleaning up", () => {
-  test("deletes every other deployment folder but the one it replaced, and skips a running script's file", async () => {
+  const PREVIOUS = "aaaaaaaaaaaa";
+  const OLDER = "bbbbbbbbbbbb";
+  const RUNNING_ELSEWHERE = "cccccccccccc";
+  const CONNECTED = "dddddddddddd";
+  const deploymentFiles = (id: string) =>
+    ["agent.js", "config.json", "token.txt"].map((name) => deployedFilePath(id, name));
+
+  test("deletes the deployer's other folders, keeping the replaced one, the connected Agent's, and a player's", async () => {
     const game = newGame();
-    game.files.set(CURRENT_DEPLOYMENT_FILE, "previous");
-    for (const id of ["previous", "older", "oldest"]) {
-      game.files.set(deployedFilePath(id, "agent.js"), "// old agent");
-      game.files.set(deployedFilePath(id, "token.txt"), TOKEN);
+    game.files.set(CURRENT_DEPLOYMENT_FILE, PREVIOUS);
+    for (const id of [PREVIOUS, OLDER, RUNNING_ELSEWHERE, CONNECTED]) {
+      for (const file of deploymentFiles(id)) game.files.set(file, "// old");
     }
-    game.files.set("hack.js", "// the player's own");
-    game.runningScripts.add(deployedFilePath("oldest", "agent.js"));
+    game.files.set("agent/utils/helper.js", "// the player's own, in a folder that isn't a deployment");
+    game.runningScripts.add(deployedFilePath(RUNNING_ELSEWHERE, "agent.js"));
+    channel.connected = { agentSessionId: "s", deploymentId: CONNECTED, game: PINNED_GAME_INFO };
     await createDeployer().accept(game);
-    const remaining = [...game.files.keys()].filter((name) => name.startsWith("agent/") || name === "hack.js");
+    const remaining = [...game.files.keys()].filter((name) => name.startsWith("agent/"));
     expect(remaining.sort()).toEqual(
       [
         BOOT_SCRIPT,
         CURRENT_DEPLOYMENT_FILE,
-        "hack.js",
-        deployedFilePath("oldest", "agent.js"),
-        deployedFilePath("previous", "agent.js"),
-        deployedFilePath("previous", "token.txt"),
+        "agent/utils/helper.js",
+        ...deploymentFiles(PREVIOUS),
+        ...deploymentFiles(CONNECTED),
+        // A running script's folder keeps its config and token, which that Agent reads.
+        ...deploymentFiles(RUNNING_ELSEWHERE),
         ...["agent.js", "boot.js", "config.json", "snapshot-fast.js", "token.txt"].map((name) =>
           deployedFilePath(idOf(), name),
         ),
       ].sort(),
     );
+    expect(game.files.has(deployedFilePath(OLDER, "agent.js"))).toBe(false);
+  });
+
+  test("a connection that drops while tidying up doesn't make the deploy a failure", async () => {
+    const game = newGame();
+    // Request 14 is getFileNames, after current.txt (request 13).
+    game.dropAtRequest = 14;
+    await createDeployer().accept(game);
+    expect(game.requests.at(-1)).toBe("getFileNames");
+    expect(events.map((event) => event.type)).toEqual(["deployed"]);
+    expect(channel.states.at(-1)).toEqual({ deployedId: idOf(), hold: false, deployFailed: false });
   });
 });
 
@@ -245,15 +291,60 @@ describe("connections", () => {
     ]);
   });
 
-  test("a newer one replaces the older, which is closed", async () => {
+  test("a newer one replaces the older, which is closed, and nothing the older learns afterwards counts", async () => {
     const deployer = createDeployer();
     const first = newGame();
+    // As ws reports it: after the closing handshake, so the older deploy fails late.
+    first.closeReportedLate = true;
     const second = newGame();
-    void deployer.accept(first);
+    const firstDeploy = deployer.accept(first);
     await deployer.accept(second);
+    await firstDeploy;
     expect(first.closedWith).toEqual({ code: 1000, reason: "replaced by a newer connection" });
     expect(second.files.get(CURRENT_DEPLOYMENT_FILE)).toBe(idOf());
+    expect(events.map((event) => event.type)).toEqual(["deployed"]);
+    expect(channel.states.at(-1)).toEqual({ deployedId: idOf(), hold: false, deployFailed: false });
   });
+
+  test("a request the game never answers fails the deploy after 30 s, and the connection is closed to retry", async () => {
+    const game = newGame();
+    game.silentAtRequest = 2;
+    const deploy = createDeployer().accept(game);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    clock.advance(30_000);
+    await deploy;
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "deployFailed",
+        reason: `getFile ${CURRENT_DEPLOYMENT_FILE}: no reply within 30 s`,
+      }),
+    ]);
+    expect(game.closedWith).toEqual({ code: 1000, reason: "no reply in time" });
+  });
+
+  test("an over-budget deploy leaves the connection open: retrying the same build would fail the same way", async () => {
+    const game = newGame();
+    game.ramOf = () => 9;
+    await createDeployer().accept(game);
+    expect(events.map((event) => event.type)).toEqual(["deployFailed"]);
+    expect(game.closedWith).toBeNull();
+  });
+});
+
+test("a listener that throws can't stop the others, or the deploy's tidying up", async () => {
+  const errors: unknown[] = [];
+  const deployer = createDeployer({ onListenerError: (error) => errors.push(error) });
+  deployer.subscribe(() => {
+    throw new Error("the store is full");
+  });
+  const after: string[] = [];
+  deployer.subscribe((event) => after.push(event.type));
+  const game = newGame();
+  game.files.set(deployedFilePath("bbbbbbbbbbbb", "agent.js"), "// old");
+  await deployer.accept(game);
+  expect(errors).toEqual([new Error("the store is full")]);
+  expect(after).toEqual(["deployed"]);
+  expect(game.files.has(deployedFilePath("bbbbbbbbbbbb", "agent.js"))).toBe(false);
 });
 
 test("a build without boot.js or agent.js, or a script without a budget, is refused at once", () => {

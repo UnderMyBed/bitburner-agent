@@ -48,6 +48,7 @@ test("the game's error, a plain string, is raised as an RfaError naming the meth
   const deleted = client.deleteFile("agent/x/agent.js");
   reply(1, { error: "Cannot delete a script that is currently running!" });
   await expect(deleted).rejects.toThrow(RfaError);
+  await expect(deleted).rejects.toMatchObject({ kind: "game" });
   await expect(deleted).rejects.toThrow(
     "deleteFile agent/x/agent.js: Cannot delete a script that is currently running!",
   );
@@ -67,14 +68,25 @@ test("a request with no reply in 30 s fails, and a late reply is ignored", async
   clock.advance(RFA_REQUEST_TIMEOUT_MS - 1);
   reply(99, { result: 1 });
   clock.advance(1);
-  await expect(ram).rejects.toThrow("calculateRam a.js: no reply within 30 s");
+  await expect(ram).rejects.toMatchObject({ message: "calculateRam a.js: no reply within 30 s", kind: "timeout" });
+  // Nothing waits for it, and the client carries on.
   reply(1, { result: 2.6 });
+  const names = client.getFileNames();
+  reply(2, { result: [] });
+  expect(await names).toEqual([]);
+});
+
+test("a frame that isn't a reply object is ignored, never thrown out of the socket's handler", async () => {
+  const names = client.getFileNames();
+  for (const frame of ["null", "7", '"text"', "[]", "{"]) expect(() => connection.receive(frame)).not.toThrow();
+  reply(1, { result: ["a.js"] });
+  expect(await names).toEqual(["a.js"]);
 });
 
 test("closing fails every request still waiting, and any made after", async () => {
   const names = client.getFileNames();
   connection.dropFromGameSide();
-  await expect(names).rejects.toThrow("getFileNames: the connection closed");
+  await expect(names).rejects.toMatchObject({ message: "getFileNames: the connection closed", kind: "closed" });
   await expect(client.getDefinitionFile()).rejects.toThrow("getDefinitionFile: the connection closed");
 });
 

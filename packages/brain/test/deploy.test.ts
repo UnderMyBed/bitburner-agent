@@ -53,25 +53,41 @@ async function brainAndGame() {
     },
   });
   const game = await SimulatedGame.create({ simulation, stepMs: 100 });
-  const channel = new ControlChannel({ token: TOKEN, clock: game.clock });
   const channelEvents: ControlChannelEvent[] = [];
-  channel.subscribe((event) => channelEvents.push(event));
-  game.listen(CONTROL_URL, (connection) => channel.accept(connection));
   const deployerEvents: DeployerEvent[] = [];
-  const rfaConnections: Connection[] = [];
-  /** Deploys `deployedBuild` over the game's next RFA connection, as a brain built from it would. */
-  const deployOnNextConnection = (deployedBuild: InGameBuild) => {
+  let openConnections: Connection[] = [];
+  /**
+   * Starts a brain built from `deployedBuild`, with its token, as `main.ts` does: a control channel and a deployer on
+   * the game's connections. A brain already running stops first, closing its connections, so the game reconnects.
+   */
+  const startBrain = ({
+    build: deployedBuild = build,
+    token = TOKEN,
+    pinnedDefinitions = readPinnedDefinitions(),
+  }: {
+    build?: InGameBuild;
+    token?: string;
+    pinnedDefinitions?: string;
+  } = {}) => {
+    for (const connection of openConnections) connection.close(1001, "brain restarting");
+    openConnections = [];
+    const channel = new ControlChannel({ token, clock: game.clock });
+    channel.subscribe((event) => channelEvents.push(event));
     const deployer = new Deployer({
       build: deployedBuild,
       controlPort: CONTROL_PORT,
-      token: TOKEN,
-      pinnedDefinitions: readPinnedDefinitions(),
+      token,
+      pinnedDefinitions,
       channel,
       clock: game.clock,
     });
     deployer.subscribe((event) => deployerEvents.push(event));
+    game.listen(CONTROL_URL, (connection) => {
+      openConnections.push(connection);
+      channel.accept(connection);
+    });
     game.listen(RFA_URL, (connection) => {
-      rfaConnections.push(connection);
+      openConnections.push(connection);
       void deployer.accept(connection);
     });
     return deployer;
@@ -82,7 +98,8 @@ async function brainAndGame() {
       await game.step();
     }
   };
-  return { simulation, game, channelEvents, deployerEvents, rfaConnections, deployOnNextConnection, runUntil };
+  const agentsConnected = () => channelEvents.filter((event) => event.type === "agentConnected");
+  return { simulation, game, channelEvents, deployerEvents, agentsConnected, startBrain, runUntil };
 }
 
 /** A file's content on home, read by a script in the game (the simulation has no file reader), or null if absent. */
@@ -98,73 +115,74 @@ async function readOnHome(simulation: Simulation, game: SimulatedGame, fileName:
   return JSON.parse(printed as string) as string | null;
 }
 
+const runningFiles = async (simulation: Simulation) =>
+  (await simulation.ps("home")).map((process) => process.filename).filter((name) => name !== "read-probe.js");
+/** Long enough for the game to reconnect its RFA, the deploy to finish, and the Agent to hand over. */
+const AFTER_A_BRAIN_RESTART_MS = RFA_RECONNECT_SECONDS * 1_000 + 30_000;
+
+/** A game with the brain's first deployment, and its Agent started by the one-time `run agent/boot.js`. */
+async function gameWithAgent() {
+  const brainOnGame = await brainAndGame();
+  const deployer = brainOnGame.startBrain();
+  await brainOnGame.runUntil(() => brainOnGame.deployerEvents.length === 1, 10_000);
+  expect((await brainOnGame.simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
+  await brainOnGame.runUntil(() => brainOnGame.agentsConnected().length === 1, 10_000);
+  return { ...brainOnGame, deployer };
+}
+
 test("the game connects, the brain deploys, and a one-time run of boot.js brings the Agent up, welcomed", async () => {
-  const { simulation, game, channelEvents, deployerEvents, deployOnNextConnection, runUntil } = await brainAndGame();
-  const deployer = deployOnNextConnection(build);
-  await runUntil(() => deployerEvents.length > 0, 10_000);
+  const { simulation, game, deployerEvents, agentsConnected, deployer } = await gameWithAgent();
   expect(deployerEvents).toEqual([expect.objectContaining({ type: "deployed", deploymentId: deployer.deploymentId })]);
   expect(await readOnHome(simulation, game, CURRENT_DEPLOYMENT_FILE)).toBe(deployer.deploymentId);
   expect(await readOnHome(simulation, game, deployedFilePath(deployer.deploymentId, "snapshot-medium.js"))).toBe(
     build.scripts["snapshot-medium.js"],
   );
-
-  expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
-  await runUntil(() => channelEvents.some((event) => event.type === "agentConnected"), 10_000);
-  expect(channelEvents.find((event) => event.type === "agentConnected")).toMatchObject({
-    deploymentId: deployer.deploymentId,
-  });
+  expect(agentsConnected().at(-1)).toMatchObject({ deploymentId: deployer.deploymentId });
+  // Welcomed, not told to restart: it's still running, and still the only Agent, a while later.
+  await game.run(5_000);
+  expect(agentsConnected()).toHaveLength(1);
+  expect(await runningFiles(simulation)).toEqual([deployedFilePath(deployer.deploymentId, "agent.js")]);
 });
 
-test("a new build replaces the running Agent through restart and boot.js, with the game measuring its RAM", async () => {
-  const { simulation, channelEvents, deployerEvents, rfaConnections, deployOnNextConnection, runUntil } =
-    await brainAndGame();
-  deployOnNextConnection(build);
-  await runUntil(() => deployerEvents.length === 1, 10_000);
-  await simulation.run("home", BOOT_SCRIPT);
-  await runUntil(() => channelEvents.some((event) => event.type === "agentConnected"), 10_000);
-
-  // The brain restarts with a new build, whose agent.js references getServerMaxRam (0.05 GB): the game measures the
-  // new file, not a cached figure for the old one (game issue #2907 can't reach new paths).
-  const newBuild = withAgentLine("function measured(ns) { return ns.getServerMaxRam; }");
-  const newDeployer = deployOnNextConnection(newBuild);
-  rfaConnections.at(-1)?.close(1001, "brain restarting");
-  await runUntil(
-    () => channelEvents.filter((event) => event.type === "agentConnected").length === 2,
-    RFA_RECONNECT_SECONDS * 1_000 + 20_000,
-  );
+test("a brain with a new build replaces the running Agent through restart and boot.js, with no human step", async () => {
+  const { simulation, deployerEvents, agentsConnected, startBrain, runUntil } = await gameWithAgent();
+  // Its agent.js also references getServerMaxRam (0.05 GB), which the game measures at the new path: 2.75 GB.
+  const newDeployer = startBrain({ build: withAgentLine("function measured(ns) { return ns.getServerMaxRam; }") });
+  await runUntil(() => agentsConnected().at(-1)?.deploymentId === newDeployer.deploymentId, AFTER_A_BRAIN_RESTART_MS);
   expect(deployerEvents.at(-1)).toMatchObject({ type: "deployed", deploymentId: newDeployer.deploymentId });
-  expect(channelEvents.filter((event) => event.type === "agentConnected").at(-1)).toMatchObject({
-    deploymentId: newDeployer.deploymentId,
-  });
   expect(await simulation.staticRamUsage("home", deployedFilePath(newDeployer.deploymentId, "agent.js"))).toBe(2.75);
-  expect((await simulation.ps("home")).map((process) => process.filename)).toEqual([
-    deployedFilePath(newDeployer.deploymentId, "agent.js"),
-  ]);
+  expect(await runningFiles(simulation)).toEqual([deployedFilePath(newDeployer.deploymentId, "agent.js")]);
 });
 
-test("a build over its RAM budget by the game's own measure isn't switched to, and the Agent isn't restarted", async () => {
-  const { simulation, game, channelEvents, deployerEvents, rfaConnections, deployOnNextConnection, runUntil } =
-    await brainAndGame();
-  const deployer = deployOnNextConnection(build);
-  await runUntil(() => deployerEvents.length === 1, 10_000);
-  await simulation.run("home", BOOT_SCRIPT);
-  await runUntil(() => channelEvents.some((event) => event.type === "agentConnected"), 10_000);
+test("a brain with a new token: the old Agent is refused (4003), finds the new deployment, and hands over", async () => {
+  const { simulation, channelEvents, agentsConnected, startBrain, runUntil } = await gameWithAgent();
+  const newDeployer = startBrain({ token: "c".repeat(64) });
+  await runUntil(() => agentsConnected().at(-1)?.deploymentId === newDeployer.deploymentId, AFTER_A_BRAIN_RESTART_MS);
+  expect(channelEvents.some((event) => event.type === "connectionRejected" && event.reason === "wrongToken")).toBe(
+    true,
+  );
+  expect(await runningFiles(simulation)).toEqual([deployedFilePath(newDeployer.deploymentId, "agent.js")]);
+});
 
+test("a build the game measures over its RAM budget isn't switched to, and the running Agent stays", async () => {
+  const { simulation, game, deployerEvents, agentsConnected, deployer, startBrain, runUntil } = await gameWithAgent();
   // getServer costs 2.0 GB: agent.js would need 4.7 GB, over its 3.0 GB budget.
-  deployOnNextConnection(withAgentLine("function tooCostly(ns) { return ns.getServer; }"));
-  rfaConnections.at(-1)?.close(1001, "brain restarting");
-  await runUntil(() => deployerEvents.length === 2, RFA_RECONNECT_SECONDS * 1_000 + 10_000);
+  startBrain({ build: withAgentLine("function tooCostly(ns) { return ns.getServer; }") });
+  await runUntil(() => deployerEvents.length === 2, AFTER_A_BRAIN_RESTART_MS);
   expect(deployerEvents[1]).toMatchObject({
     type: "deployFailed",
     reason: "agent.js needs 4.7 GB, over its budget of 3 GB",
   });
+  await game.run(5_000);
   expect(await readOnHome(simulation, game, CURRENT_DEPLOYMENT_FILE)).toBe(deployer.deploymentId);
-  expect(channelEvents.filter((event) => event.type === "agentConnected")).toHaveLength(1);
+  expect(agentsConnected().every((event) => event.deploymentId === deployer.deploymentId)).toBe(true);
+  expect(await runningFiles(simulation)).toEqual([deployedFilePath(deployer.deploymentId, "agent.js")]);
 });
 
-test("the game's definitions are the pinned ones: an RFA connection to the simulated game never holds", async () => {
-  const { deployerEvents, deployOnNextConnection, runUntil } = await brainAndGame();
-  deployOnNextConnection(build);
+test("a game whose definition file isn't the brain's pinned one holds it: nothing is deployed", async () => {
+  const { simulation, game, deployerEvents, startBrain, runUntil } = await brainAndGame();
+  startBrain({ pinnedDefinitions: `${readPinnedDefinitions()}\n// a line the game doesn't have\n` });
   await runUntil(() => deployerEvents.length > 0, 10_000);
-  expect(deployerEvents.map((event) => event.type)).toEqual(["deployed"]);
+  expect(deployerEvents).toEqual([expect.objectContaining({ type: "versionDrift" })]);
+  expect(await readOnHome(simulation, game, CURRENT_DEPLOYMENT_FILE)).toBeNull();
 });

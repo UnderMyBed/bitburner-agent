@@ -272,13 +272,15 @@ describe("restart, without loops", () => {
 describe("an Agent on another game version", () => {
   const otherGame = { version: "3.1.0", versionNumber: 52, commit: "abcdef123", platform: "Steam" };
 
-  test("is welcomed and reported, with a versionDrift event before it", () => {
+  test("is welcomed and reported, with a versionDrift event after it, once for the brain's run", () => {
     const connection = connectAgent(hello({ game: otherGame }));
     expect(connection.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
     expect(events).toEqual([
-      { type: "versionDrift", atMs: clock.now(), detail: "the Agent's game: versionNumber 52, pinned 51" },
       expect.objectContaining({ type: "agentConnected", game: otherGame }),
+      { type: "versionDrift", atMs: clock.now(), detail: "the Agent's game: versionNumber 52, pinned 51" },
     ]);
+    connectAgent(hello({ game: otherGame, agentSessionId: "session-2" }));
+    expect(types().filter((type) => type === "versionDrift")).toHaveLength(1);
   });
 
   test("puts the channel on hold for good: no restart, for it or any Agent after it", () => {
