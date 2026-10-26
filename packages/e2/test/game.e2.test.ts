@@ -13,6 +13,7 @@ import {
   typeCommand,
   waitForTerminal,
 } from "../src/game.ts";
+import { BLANK_PAGE_PATH } from "../src/server.ts";
 import { useE2 } from "./helpers/environment.ts";
 import { moneyInSave, simulatorSave } from "./helpers/saves.ts";
 
@@ -70,6 +71,30 @@ describe("the game in Playwright", () => {
       await page.reload();
       await waitForTerminal(page);
       await expect(page.evaluate(() => "beforeReload" in window)).resolves.toBe(false);
+    } finally {
+      await closeGame(page);
+    }
+  });
+
+  test("a load that never shows the terminal says what the page showed and its errors", async () => {
+    const page = await freshGame(e2.browser, e2.server);
+    try {
+      // A page that isn't the game, with an error of its own.
+      await page.goto(`${e2.server.origin}${BLANK_PAGE_PATH}`);
+      await page.evaluate(() => {
+        document.body.textContent = "not the game";
+        queueMicrotask(() => {
+          throw new Error("an E2 probe error");
+        });
+      });
+      const failure = await waitForTerminal(page, { timeoutMs: 1_000 }).then(
+        () => null,
+        (error: Error) => error.message,
+      );
+      expect(failure).toContain("The page showed: not the game");
+      expect(failure).toContain("page error: an E2 probe error");
+      expect(failure).toContain(`navigated to ${e2.server.origin}${BLANK_PAGE_PATH}`);
+      expect(failure).toContain("Requests still pending: none");
     } finally {
       await closeGame(page);
     }

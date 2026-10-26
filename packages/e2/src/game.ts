@@ -22,6 +22,23 @@ export const MAX_GAME_SPEEDUP = 20;
 export const TERMINAL_INPUT = "#terminal-input";
 /** How long a fixture waits, in real time, for the game to load. */
 const LOAD_TIMEOUT_MS = 60_000;
+/**
+ * What a load that fails adds to its error: the page's visible text, cut to this; its first and last events (the first
+ * is often the cause); and the requests still pending.
+ */
+const LOAD_FAILURE_TEXT_CHARACTERS = 1_500;
+const LOAD_FAILURE_FIRST_EVENTS_SHOWN = 5;
+const LOAD_FAILURE_LAST_EVENTS_SHOWN = 20;
+const LOAD_FAILURE_PENDING_REQUESTS_SHOWN = 10;
+
+/** What a game page went through, recorded from its start, so a load that fails can say. */
+interface PageHistory {
+  /** Navigations, page errors, console errors, failed requests and a crash, in order. */
+  events: string[];
+  /** Requests sent and not yet finished or failed: a load stuck on a fetch logs nothing else. */
+  pendingRequests: Set<string>;
+}
+const historyByPage = new WeakMap<Page, PageHistory>();
 
 /**
  * Whether game time stands still while the page loads ("paused", the default: a save loads at exactly its own time,
@@ -80,7 +97,24 @@ async function setUpGamePage(
         );
     }
   });
-  return await context.newPage();
+  const page = await context.newPage();
+  const history: PageHistory = { events: [], pendingRequests: new Set() };
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) history.events.push(`navigated to ${frame.url()}`);
+  });
+  page.on("pageerror", (error) => history.events.push(`page error: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") history.events.push(`console error: ${message.text()}`);
+  });
+  page.on("crash", () => history.events.push("the page crashed"));
+  page.on("request", (request) => history.pendingRequests.add(request.url()));
+  page.on("requestfinished", (request) => history.pendingRequests.delete(request.url()));
+  page.on("requestfailed", (request) => {
+    history.pendingRequests.delete(request.url());
+    history.events.push(`request failed: ${request.url()} (${request.failure()?.errorText})`);
+  });
+  historyByPage.set(page, history);
+  return page;
 }
 
 /**
@@ -117,9 +151,41 @@ export async function advanceUntil(
   }
 }
 
-/** Waits, in real time, for the game to finish loading: its terminal's input is on the page. */
-export async function waitForTerminal(page: Page): Promise<void> {
-  await page.locator(TERMINAL_INPUT).waitFor({ timeout: LOAD_TIMEOUT_MS });
+/**
+ * Waits, in real time, for the game to finish loading (its terminal's input is on the page), after a fixture's load or
+ * a reload. If it doesn't, the error says what the page showed, what it went through (navigations, errors, failed
+ * requests, a crash) and the requests still pending: a load that never finishes says nothing else.
+ */
+export async function waitForTerminal(page: Page, { timeoutMs = LOAD_TIMEOUT_MS } = {}): Promise<void> {
+  try {
+    await page.locator(TERMINAL_INPUT).waitFor({ timeout: timeoutMs });
+  } catch (error) {
+    // Why the text can't be read tells a hung page (a timeout) from a crashed or closed one.
+    const visibleText = await page
+      .locator("body")
+      .innerText({ timeout: 1_000 })
+      .catch((readError: Error) => `(unreadable: ${readError.message.split("\n")[0]})`);
+    const { events, pendingRequests } = historyByPage.get(page) ?? { events: [], pendingRequests: new Set() };
+    const eventsShown =
+      events.length <= LOAD_FAILURE_FIRST_EVENTS_SHOWN + LOAD_FAILURE_LAST_EVENTS_SHOWN
+        ? events
+        : [
+            ...events.slice(0, LOAD_FAILURE_FIRST_EVENTS_SHOWN),
+            `…${events.length - LOAD_FAILURE_FIRST_EVENTS_SHOWN - LOAD_FAILURE_LAST_EVENTS_SHOWN} more…`,
+            ...events.slice(-LOAD_FAILURE_LAST_EVENTS_SHOWN),
+          ];
+    const pending = [...pendingRequests].slice(0, LOAD_FAILURE_PENDING_REQUESTS_SHOWN);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      [
+        message,
+        `The page showed: ${visibleText.slice(0, LOAD_FAILURE_TEXT_CHARACTERS)}`,
+        `What it went through:\n${eventsShown.join("\n") || "nothing recorded"}`,
+        `Requests still pending: ${pending.join(", ") || "none"}`,
+      ].join("\n"),
+      { cause: error },
+    );
+  }
 }
 
 /** `Player.lastUpdate` in a save (gzip bytes, as Steam writes them): when it was taken. */
@@ -162,8 +228,24 @@ export async function gameFromSave(
     await page.goto(server.origin);
     await waitForTerminal(page);
     // From here on, game time moves only when the test moves it.
-    if (clockDuringLoad === "running") await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+    if (clockDuringLoad === "running") await pauseFlowingClock(page);
   });
+}
+
+/**
+ * Pauses a clock that's flowing in real time, a game cycle ahead of the page's time as just read: real time passes
+ * before the pause lands, and the clock can't be set back. Game time so jumps on by up to a cycle, and timers due in the
+ * jump run once. If even a cycle had passed, Playwright refuses, but has paused the clock first (Playwright 1.59), so
+ * pausing a cycle ahead of the page's time then lands.
+ */
+async function pauseFlowingClock(page: Page): Promise<void> {
+  const pauseAhead = async () => page.clock.pauseAt((await page.evaluate(() => Date.now())) + GAME_CYCLE_MS);
+  try {
+    await pauseAhead();
+  } catch (error) {
+    if (!String(error).includes("Cannot fast-forward to the past")) throw error;
+    await pauseAhead();
+  }
 }
 
 /** `page` once `load` has run on it; if `load` fails, the page's context is closed and the error rethrown. */
