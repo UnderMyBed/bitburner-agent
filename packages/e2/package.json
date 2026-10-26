@@ -1,0 +1,12 @@
+{
+  "name": "@bitburner-agent/e2",
+  "private": true,
+  "description": "Environment E2: the pinned game built from source, served locally and driven by Playwright (architecture §9.4).",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "@bitburner-agent/sim": "*",
+    "playwright": "1.59.1",
+    "ws": "8.22.0"
+  }
+}

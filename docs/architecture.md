@@ -463,14 +463,14 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 |---|---|---|
 | **E0 Steam** | Vanilla 3.0.1 binary and the real campaign save | The campaign. Final smoke checks only. Never used as a test bed. |
 | **E1 Simulator** | Engine from `vendor/bitburner-src` in Node; no UI; virtual clock; seeded RNG | The skeleton suite (every PR), scenario and chaos suites, calibration, the speed target |
-| **E2 Source build (browser)** | `vendor/bitburner-src` @ `1da7316ff` built with webpack, served locally, driven by Playwright (headless Chromium). Playwright's clock control lets the real UI run time-accelerated. | End-to-end tests of everything that touches the UI, the bootstrap or the bridge. Debugging game internals with breakpoints and logs. |
+| **E2 Source build (browser)** | `vendor/bitburner-src` @ `1da7316ff` built with the game's own webpack config in production mode (`npm run e2:build`, into `.cache/e2/<commit>/`), served on 127.0.0.1, driven by Playwright 1.59 (its Chromium 147 headless shell; Steam's Electron 41 is Chromium 146, and no Playwright release ships 146). Playwright's clock control lets the real UI run time-accelerated: about ×126 on a fresh game ([`packages/e2`](../packages/e2/README.md)). | End-to-end tests of everything that touches the UI, the bootstrap or the bridge. Debugging game internals with breakpoints and logs. |
 | **E3 Electron from source** *(only if needed)* | `npm run electron` from the same commit | Only if Electron-specific behaviour (file protocol, Steam hooks) diverges from E2 |
 
 **Guardrails**
 - **Parity:** E1 and E2 build from the exact commit Steam ships. The brain checks the live game against them: its `getDefinitionFile` on every RFA connection, and the version each Agent's `hello` reports (§12.4).
 - **Vanilla-only dependency:** the agent (in-game bundles and brain) must never rely on behaviour that doesn't exist in unmodified 3.0.1.
   - Instrumentation (clock, RNG seeding, observation hooks) lives in the **harness** and is injected from outside, either by the simulator harness or by Playwright.
-  - The game build itself is never patched for E2 runs.
+  - The game build itself is never patched for E2 runs. Its build config changes only how it's built (where to, on one core, without the separate typecheck process), and the harness's one page-side shim restores browser behaviour Playwright's clock lacks (timer callbacks' `this`).
 - **One-way saves:** Steam saves may be copied *into* E1/E2 as test fixtures. Nothing generated in E1/E2 is ever loaded into Steam, since that would be save editing by another name.
 - **Rules scope:** the rules of engagement (§1.3) govern the agent playing on E0. Test harnesses on E1/E2 may use any tooling (CDP, debuggers, dev menu) because they're testing the agent, not playing the campaign.
 

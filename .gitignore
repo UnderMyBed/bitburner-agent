@@ -9,6 +9,9 @@ coverage/
 # local runtime data (telemetry store, save backups)
 .data/
 
+# E2's game builds and Playwright browsers (packages/e2)
+.cache/
+
 # editor / OS
 .vscode/*
 !.vscode/extensions.json
