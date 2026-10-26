@@ -9,6 +9,8 @@ import {
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 
+const HANDOVER_POLL_MS = 50;
+
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
   // The game logs why a start failed (missing file, no RAM, a script it can't parse) only with run's log on.
@@ -26,6 +28,12 @@ export async function main(ns: NS): Promise<void> {
   if (!isValidDeploymentId(deploymentId)) {
     report(`boot: ${CURRENT_DEPLOYMENT_FILE} doesn't hold a deployment id: ${JSON.stringify(deploymentId)}`);
     return;
+  }
+  // An Agent handing over (#88) passes its pid and exits. Wait until it has gone: until then its RAM isn't free, and
+  // if it's the deployed one, it would look like it was still running.
+  const handingOverAgentPid = ns.args[0];
+  if (typeof handingOverAgentPid === "number") {
+    while (ns.isRunning(handingOverAgentPid)) await ns.sleep(HANDOVER_POLL_MS);
   }
   const agentFile = deployedFilePath(deploymentId, AGENT_SCRIPT_NAME);
   if (ns.isRunning(agentFile, "home")) return;

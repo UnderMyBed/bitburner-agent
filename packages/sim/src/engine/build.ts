@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { PINNED_GAME } from "@bitburner-agent/core";
 import * as esbuild from "esbuild";
 import { enginePaths } from "./paths.ts";
 import { checkVendorInstall, lockfileHash } from "./vendor.ts";
@@ -158,8 +159,9 @@ export async function buildEngine({ force = false } = {}): Promise<BuildResult> 
     nodePaths: [path.join(enginePaths.gameRoot, "node_modules")],
     define: {
       "process.env.NODE_ENV": '"production"',
-      // webpack.config.js injects `git rev-parse --short HEAD` of the game's repo.
-      __COMMIT_HASH__: JSON.stringify(gameGit("rev-parse", "--short", "HEAD")),
+      // webpack.config.js injects `git rev-parse --short HEAD` of the game's repo. A short hash's length depends on the
+      // clone (CI's shallow one gives 7 characters), so it's fixed at PINNED_GAME's: every clone builds the same engine.
+      __COMMIT_HASH__: JSON.stringify(gameGit("rev-parse", `--short=${PINNED_GAME.commit.length}`, "HEAD")),
     },
     loader: Object.fromEntries(assetExtensions.split(" ").map((ext) => [`.${ext}`, "empty" as const])),
     jsx: "transform",

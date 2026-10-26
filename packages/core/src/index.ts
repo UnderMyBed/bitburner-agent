@@ -14,12 +14,17 @@ export {
   type SnapshotTier,
 } from "./control-protocol.ts";
 export {
+  AGENT_CONFIG_FILE_NAME,
   AGENT_SCRIPT_NAME,
+  type AgentConfig,
   BOOT_SCRIPT,
   CURRENT_DEPLOYMENT_FILE,
   DEPLOYMENT_ROOT,
   deployedFilePath,
   deploymentFolder,
+  deploymentIdOfPath,
   isValidDeploymentId,
+  parseAgentConfig,
+  TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
 export { PINNED_GAME } from "./game-version.ts";

@@ -16,6 +16,44 @@ export const CURRENT_DEPLOYMENT_FILE = "agent/current.txt";
 export const BOOT_SCRIPT = "agent/boot.js";
 /** The Agent's file name inside a deployment folder. */
 export const AGENT_SCRIPT_NAME = "agent.js";
+/** The deployment's configuration for the Agent, inside its folder (`AgentConfig`, as JSON). */
+export const AGENT_CONFIG_FILE_NAME = "config.json";
+/** The control channel's shared secret, inside the deployment's folder. */
+export const TOKEN_FILE_NAME = "token.txt";
+
+/** What the deployer tells the Agent in `config.json` (#91). */
+export interface AgentConfig {
+  /** The deployment this folder holds: the Agent reports it in `hello`. */
+  deploymentId: string;
+  /** The brain's control channel: the Agent connects to `ws://127.0.0.1:<controlPort>`. */
+  controlPort: number;
+}
+
+/** Reads `config.json`: the config, or `ok: false` and the reason it isn't a valid one. */
+export function parseAgentConfig(text: string): { ok: true; config: AgentConfig } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: "not JSON" };
+  }
+  const { deploymentId, controlPort } = (parsed ?? {}) as Partial<AgentConfig>;
+  if (typeof deploymentId !== "string" || !isValidDeploymentId(deploymentId)) {
+    return { ok: false, reason: "no valid deploymentId" };
+  }
+  if (!Number.isInteger(controlPort) || (controlPort as number) < 1 || (controlPort as number) > 65535) {
+    return { ok: false, reason: "no valid controlPort" };
+  }
+  return { ok: true, config: { deploymentId, controlPort: controlPort as number } };
+}
+
+/** The deployment a deployed file belongs to: `agent/<deploymentId>/<file>` gives `<deploymentId>`, else null. */
+export function deploymentIdOfPath(filePath: string): string | null {
+  const parts = filePath.replace(/^\//, "").split("/");
+  if (parts.length !== 3 || parts[0] !== DEPLOYMENT_ROOT) return null;
+  const deploymentId = parts[1] as string;
+  return isValidDeploymentId(deploymentId) ? deploymentId : null;
+}
 
 /** A deployment id names a folder: letters, digits, `-` and `_` only, so it can't reach outside `agent/`. */
 export function isValidDeploymentId(deploymentId: string): boolean {

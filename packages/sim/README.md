@@ -43,7 +43,7 @@ npm run build:engine   # bundles the engine (also done automatically before test
 | `@swc/wasm-web` (transpiles `.ts`/`.jsx` player scripts) | Native `@swc/core` in Jest | **Stub that throws.** See "Differences from a browser" |
 | `crypto` (Node built-in) | `fallback: { crypto: false }` in webpack | Empty module (`stubs/node-builtin.js`), the same |
 | `/utils/Protections` | Null mock in Jest | Not needed: the entry never imports `index.tsx`, the only importer |
-| `__COMMIT_HASH__` | webpack injects `git rev-parse --short HEAD` | Same value, so `ns.ui.getGameInfo().commit` matches the game |
+| `__COMMIT_HASH__` | webpack injects `git rev-parse --short HEAD` | The same commit, at `PINNED_GAME.commit`'s length (9). A short hash's length depends on the clone (a shallow one gives 7), so fixing it makes every clone build the same engine. Whether the Steam build reports 9 characters is a check on the live game |
 | `WeakRef`, `FinalizationRegistry` in `NetscriptJSEvaluator.ts` (the script module cache) | Built-ins (the browser's; Node's under Jest) | **Strong stand-ins** (`stubs/strong-refs.ts`), imported into that file alone (`holdModules`), so compiled modules are never dropped, as on upstream dev. See "Differences from a browser" |
 
 The entry imports the game's `engine` module, so the bundle contains the whole game and its UI dependencies (React, MUI and so on), about 16 MB. That's harmless at runtime and makes loading the bundle exercise the real module graph.
