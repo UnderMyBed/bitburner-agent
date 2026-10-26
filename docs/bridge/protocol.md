@@ -78,4 +78,4 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
   - duplicated, dropped and reordered frames;
   - reconnects and replacements;
   - frames still in flight to a replaced connection.
-- **Time** comes from the brain's injected clock (architecture R11). Every event's `atMs` is from it, so under the simulator they're virtual time (#90).
+- **Time** comes from the brain's injected clock (architecture R11). Every event's `atMs` is from it, so under the simulator they're virtual time (the [lockstep driver](../../packages/brain/README.md#the-lockstep-driver)).

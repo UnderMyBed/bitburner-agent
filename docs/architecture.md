@@ -362,7 +362,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ---
 
 ## 7. Telemetry and observability
-- **Store:** an append-only time series of snapshots (thinned for old data), decision records, estimate-vs-actual errors, reflex health, and transitions. SQLite to start, in the configurable data directory (ADR 0006).
+- **Store:** an append-only time series of snapshots, decision records, estimate-vs-actual errors, reflex health, and transitions. It's SQLite through Node's built-in `node:sqlite`, in the data directory the owner chooses (ADR 0006; [`packages/brain`](../packages/brain/README.md#the-telemetry-store)). Old data is thinned once the campaign's months of data need it (M4). The gap report over its fast snapshots is the evidence for M2's 24 h criterion.
 - **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup.
 - **Release tagging:** every record carries the agent release that produced it, so releases can be compared directly ("did v0.4 beat v0.3 on BN1?").
 - **Dashboard:** a web page served on **`127.0.0.1` only**. It shows the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, a timeline of BitNodes and installs, brain/agent health, and alerts.
@@ -503,7 +503,7 @@ real game ──telemetry──► store ◄──runs── simulator
                            │
                      versioned model params ──► brain
 ```
-- **One store for both worlds:** live telemetry and simulator runs go into the same SQLite store (§7). Every record is tagged with environment (E0/E1/E2), release, scenario and seed.
+- **One store for both worlds:** live telemetry and simulator runs go into the same SQLite store (§7). Every record is tagged with environment (E0/E1/E2) and release, and simulator runs with scenario and seed once scenarios store their runs (M4). Under the simulator the brain's clock is virtual time (the lockstep driver, [`packages/brain`](../packages/brain/README.md#the-lockstep-driver)), so its records are reproducible from the seed.
 - **Calibration jobs** fit fast-model corrections, the per-BitNode duration table and the timing-jitter model. They run on demand like the other heavy suites.
 - **Model params are code.** Calibration output is a versioned data file that ships through the normal merge gate: PR, CI including the scenario suite, independent review, tagged release. A behaviour change never reaches the live game without the same checks as a code change. This is the same rule as LLM supervisor proposals (§8).
 
@@ -522,7 +522,8 @@ An npm-workspaces monorepo. Packages are created when the first code that needs 
 ```
 packages/
   core/         model types, Activity/Action interfaces, route definitions, formula shims → vendor/bitburner-src
-  brain/        fast model, planner (campaign/BitNode/cycle), activities, actions, rules file
+  brain/        the brain process: bridge composition, telemetry store and gap report, lockstep driver (tests);
+                from M4 the fast model, planner (campaign/BitNode/cycle), activities, actions, rules file
   ingame/       agent, reconciler, workers, reflexes, effectors (singularity|ui|sim), boot.js
   bridge/       RFA server + control channel
   sim/          engine bundle, browser parity layer, virtual clock, scenarios, chaos, worker pool (ADR 0007)
@@ -532,7 +533,7 @@ spikes/         throwaway experiments; findings in docs/spikes/
 tools/          repository tooling run by Node, under the same gates (upstream-watch: the upstream stable and dev watchers; typecheck: every config, each in its environment)
 vendor/         bitburner-src submodule (pinned, read-only)
 ```
-- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `dashboard` reads the store only. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
+- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `bridge` ← `brain`; `sim` ← `brain` for the lockstep driver only (type imports and tests: the live brain never loads the simulator); `dashboard` reads the store only. `bridge` never depends on `sim`, so the live transport stays free of the simulator. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
 - **Type environments differ per package:** Node-side packages get Node types. `ingame` gets the browser `lib` plus the pinned NS definitions, read straight from the submodule as `@nsdefs` (no generated types package; the live drift check is the bridge's, §12.4), and no Node types. `core` gets neither, since both sides import it. Each package has its own config, and tests (which run in Node) have their own where the package's environment differs ([CONTRIBUTING](../CONTRIBUTING.md#typescript-configs)).
 - **Real saves stay local:** Steam save copies used as fixtures live in a gitignored folder. The public repo only carries fixtures generated by the simulator.
 

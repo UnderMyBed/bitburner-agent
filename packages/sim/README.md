@@ -185,7 +185,7 @@ const sim = await Simulation.start({ seed: 1, epochMs, fixture, prompts: [{ matc
 
 ### Network
 
-The simulation is offline, except for WebSockets to URLs the parent listens on ([ADR 0012](../../docs/decisions/0012-simulator-network-in-lockstep.md)). That's how the brain's bridge is tested against the game's own Remote File API client and the Agent:
+The simulation is offline, except for WebSockets to URLs the parent listens on ([ADR 0012](../../docs/decisions/0012-simulator-network-in-lockstep.md)). That's how the brain's bridge is tested against the game's own Remote File API client and the Agent. To run a brain against a simulation, use the brain's lockstep driver, `SimulatedGame` ([`packages/brain`](../brain/README.md#the-lockstep-driver)); by hand, the parent side looks like this:
 
 ```ts
 const sim = await Simulation.start({

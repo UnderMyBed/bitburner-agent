@@ -72,6 +72,15 @@ export function encodeControlMessage(message: AgentMessage | BrainMessage): stri
 export const MAX_FIELD_LENGTH = 256;
 
 type JsonObject = Record<string, unknown>;
+
+/** How much of a bad value a rejection reason quotes: reasons are stored and logged, and frames can be 16 MiB. */
+const MAX_QUOTED_VALUE_LENGTH = 64;
+
+/** A value for a rejection reason: as JSON, cut short. */
+function describeValue(value: unknown): string {
+  const json = JSON.stringify(value) ?? String(value);
+  return json.length <= MAX_QUOTED_VALUE_LENGTH ? json : `${json.slice(0, MAX_QUOTED_VALUE_LENGTH)}…`;
+}
 const isShortNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value !== "" && value.length <= MAX_FIELD_LENGTH;
 const isSafeIntegerAtLeast = (value: unknown, minimum: number): value is number =>
@@ -93,7 +102,7 @@ function parseEnvelope(text: string): ParsedMessage<JsonObject> {
   if (protocolVersion !== CONTROL_PROTOCOL_VERSION) {
     return {
       ok: false,
-      reason: `protocol version ${JSON.stringify(protocolVersion)}, not ${CONTROL_PROTOCOL_VERSION}`,
+      reason: `protocol version ${describeValue(protocolVersion)}, not ${CONTROL_PROTOCOL_VERSION}`,
     };
   }
   return { ok: true, message: parsed as JsonObject };
@@ -140,7 +149,7 @@ export function parseAgentMessage(text: string): ParsedMessage<AgentMessage> {
       const { agentSessionId, tier, sequenceNumber, gameTimeMs } = fields;
       if (!isShortNonEmptyString(agentSessionId)) return { ok: false, reason: "snapshot without an agentSessionId" };
       if (!SNAPSHOT_TIERS.includes(tier as SnapshotTier)) {
-        return { ok: false, reason: `snapshot of tier ${JSON.stringify(tier)}` };
+        return { ok: false, reason: `snapshot of tier ${describeValue(tier)}` };
       }
       if (!isSafeIntegerAtLeast(sequenceNumber, 1)) {
         return { ok: false, reason: "snapshot sequenceNumber must be 1 or more" };
@@ -161,7 +170,7 @@ export function parseAgentMessage(text: string): ParsedMessage<AgentMessage> {
       };
     }
     default:
-      return { ok: false, reason: `unknown message type ${JSON.stringify(fields.type)}` };
+      return { ok: false, reason: `unknown message type ${describeValue(fields.type)}` };
   }
 }
 
@@ -180,6 +189,6 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
         message: { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: fields.deploymentId },
       };
     default:
-      return { ok: false, reason: `unknown message type ${JSON.stringify(fields.type)}` };
+      return { ok: false, reason: `unknown message type ${describeValue(fields.type)}` };
   }
 }

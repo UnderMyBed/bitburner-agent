@@ -10,7 +10,7 @@ The brain's connections to the game (architecture §6): the control channel to t
 import { ControlChannel, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 
 const channel = new ControlChannel({ token, clock: systemClock });
-channel.subscribe((event) => store.record(event));   // agentConnected, snapshotReceived, …
+recordChannelEvents(channel, store, { environment, brainRelease });   // the brain's: every event into the store
 const server = await startWebSocketServer({
   port: 12526,
   allowedOrigins: ["file://"],
@@ -24,7 +24,7 @@ The protocol, close codes and rules are in [docs/bridge/protocol.md](../../docs/
 
 - **`ControlChannel`** is the session logic. It sees only a `Connection` (`send`, `close`, message and close listeners), so it runs the same over any transport:
   - live and on E2, over `startWebSocketServer`;
-  - under the simulator, over the brain's lockstep driver ([#90](https://github.com/UnderMyBed/bitburner-agent/issues/90)). That driver lives in the brain, so `bridge` never depends on `sim` (architecture §12.2).
+  - under the simulator, over the brain's [lockstep driver](../brain/README.md#the-lockstep-driver). That driver lives in the brain, so `bridge` never depends on `sim` (architecture §12.2).
 - **Events** go to subscribers: `agentConnected`, `agentDisconnected`, `snapshotReceived` (with `missedBefore`, the sequence numbers skipped since the last one) and `connectionRejected` (with the reason).
 - **`Clock`:** the channel reads time and sets its hello timeout only through the clock it's given: `systemClock` live, virtual time under the simulator (architecture R11).
 - **A listener that throws** can't stop the other listeners or leave the channel half-changed: events go out once its state is settled. Its error goes to `onListenerError`, by default raised afterwards as an uncaught exception, so the brain fails fast and is restarted rather than carry on without its store.
