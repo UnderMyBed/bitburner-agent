@@ -1,6 +1,6 @@
 # @bitburner-agent/brain
 
-The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports. The Remote File API ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)), dashboard ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)) and supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) join it next.
+The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). The dashboard ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)) and supervisor ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) join it next.
 
 ## Running it
 
@@ -11,7 +11,9 @@ npm run brain -- --data-dir D:\bitburner-agent
 Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 
 - **There's no default data directory.** It holds bulk data (the store, later save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
-- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)).
+- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, and the two ports.
+- **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`git clone --recurse-submodules`), or the brain stops at start, saying which file is missing.
+- **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
 ## The data directory
 
@@ -19,6 +21,7 @@ Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 |---|---|
 | `config.json` | Created with defaults on first run, then read |
 | `telemetry.sqlite` | The store (below), with its WAL files |
+| `ingame-build/` | The in-game code built at start, which the brain deploys |
 
 `config.json`:
 
@@ -26,7 +29,7 @@ Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 |---|---|---|
 | `environment` | `E0` | Which environment this brain serves: `E0` Steam, `E2` a source build under test ([architecture §9.4](../../docs/architecture.md#94-environments)). A simulator's brain (`E1`) runs from code, with no config |
 | `controlPort` | 12526 | The control channel ([docs/bridge/protocol.md](../../docs/bridge/protocol.md)) |
-| `remoteFileApiPort` | 12525 | The Remote File API server (#91) |
+| `remoteFileApiPort` | 12525 | The Remote File API server: the game's RFA settings must name it (#91, #95) |
 | `dashboardPort` | 12527 | The dashboard (#93) |
 | `allowedOrigins` | `["file://"]` | `Origin` headers allowed to connect; `file://` is Steam's page |
 | `token` | 32 random bytes, hex | The control channel's shared secret, generated once |
@@ -38,7 +41,7 @@ A config that isn't valid stops the brain, naming the file and the problem:
 - no allowed origins;
 - a token that isn't 64 hex digits.
 
-A port of 0 picks any free port, which is for tests only: the Agent couldn't find it.
+A port of 0 picks any free port, which is for tests only: the game's RFA settings can't name it, and a control port of 0 changes at every start, so every start would be a new deployment.
 
 ## The telemetry store
 
@@ -47,12 +50,12 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so the dashboard can r
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
-| `events` | Everything else the bridge reports, e.g. `agentConnected`, `agentDisconnected`, `connectionRejected`: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
+| `events` | Everything else the bridge reports: the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`, and the deployer's `deployed`, `deployFailed`, `versionDrift`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches the dashboard sets, e.g. pausing supervision (#93, #94) |
 
 - **Every row is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
   - the brain's `git describe` ("unknown" without git, which the startup log shows);
-  - plus the deployment of the Agent connected when the row arrived, or `none` while no Agent is.
+  - plus the deployment of the Agent connected when the row arrived, or `none` while no Agent is. A deployer event's is the deployment the brain deploys.
 
   For example, `v0.2.0+3f2a1b…`.
 - **Writes wait up to 5 s** for a reader's lock, so a reader never fails a write.
@@ -96,7 +99,7 @@ await game.run(60_000);   // virtual ms
   3. what the page's sockets did comes back in order, each handed to the brain at its own virtual time, with the brain's timers fired in between;
   4. the brain's clock moves to the simulation's time.
 - **Determinism:** the same seed and step size give the same run, however long the brain's work takes in real time. Tests check it with a deliberately slow brain.
-  - **The brain's handlers must be synchronous.** A batch of frames is handed over without yielding, so the continuation of an `await` on real I/O would land in whichever step real time put it in.
+  - **The brain's handlers must be synchronous.** A batch of frames is handed over without yielding, so the continuation of an `await` on real I/O would land in whichever step real time put it in. Awaiting only replies that come through the driver is fine, as the deployer does.
 - **Closes:**
   - A connection the brain closes stops carrying frames at once, but is reported closed only once the close reaches the page (the next step), as a live socket reports it after the closing handshake.
   - A close by the page is reported at the virtual time it happened.
@@ -113,7 +116,8 @@ await game.run(60_000);   // virtual ms
 | `src/main.ts` | The process (`npm run brain`) |
 | `src/config.ts` | The data directory and `config.json` |
 | `src/telemetry-store.ts` | The store |
-| `src/record-channel-events.ts` | The control channel's events into the store |
+| `src/record-channel-events.ts` | The control channel's and the deployer's events into the store |
+| `src/in-game-build.ts` | Reads the in-game build (checked against its manifest) and the pinned definitions |
 | `src/gap-report.ts`, `src/gaps-cli.ts` | The gap report and its command (`npm run gaps`) |
 | `src/simulated-game.ts` | The lockstep driver |
 | `src/release.ts` | The brain's release, from `git describe` |

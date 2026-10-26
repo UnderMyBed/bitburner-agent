@@ -1,4 +1,4 @@
-import type { ControlChannel } from "@bitburner-agent/bridge";
+import type { ControlChannel, Deployer } from "@bitburner-agent/bridge";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
 /**
@@ -32,4 +32,17 @@ export function recordChannelEvents(
     store.recordEvent(context, { atMs, kind: type, detail });
     if (event.type === "agentDisconnected") connectedDeploymentId = "none";
   });
+}
+
+/**
+ * Stores what the deployer reports, as events. Their release is the brain's own plus the deployment it deploys.
+ * Returns a function that stops it.
+ */
+export function recordDeployerEvents(
+  deployer: Deployer,
+  store: TelemetryStore,
+  { environment, brainRelease }: { environment: Environment; brainRelease: string },
+): () => void {
+  const context = { environment, release: `${brainRelease}+${deployer.deploymentId}` };
+  return deployer.subscribe(({ type, atMs, ...detail }) => store.recordEvent(context, { atMs, kind: type, detail }));
 }

@@ -27,7 +27,7 @@ export {
   parseAgentConfig,
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
-export { PINNED_GAME } from "./game-version.ts";
+export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

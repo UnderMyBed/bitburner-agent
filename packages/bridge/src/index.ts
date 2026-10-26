@@ -11,6 +11,14 @@ export {
   REMEMBERED_SESSIONS,
 } from "./control-channel.ts";
 export {
+  Deployer,
+  type DeployerEvent,
+  type DeployerOptions,
+  deploymentIdOf,
+  type InGameBuild,
+} from "./deployer.ts";
+export { RFA_REQUEST_TIMEOUT_MS, RfaClient, RfaError } from "./rfa-client.ts";
+export {
   MAX_FRAME_BYTES,
   type RunningWebSocketServer,
   startWebSocketServer,

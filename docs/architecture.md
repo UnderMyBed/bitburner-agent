@@ -361,11 +361,12 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - both servers bind to `127.0.0.1` only and accept only the game's origin
   - each allows one client: the newest accepted connection replaces the old one
   - the control channel requires a **shared token**, which the deployer writes to a file only the agent reads
-- **Version handshake:** the Agent's `hello` names its deployment and the game's version. If the deployer knows a different deployment is deployed, isn't on hold and its last deploy didn't fail, the brain tells the Agent to restart onto it, once per outdated deployment, so neither a hold, a failed deploy nor a reloaded save can cause a restart loop.
-- **Atomic deploys.** Each deployment (a build plus its configuration) goes into its own folder (`agent/<deploymentId>/…`; the layout is in [`packages/ingame`](../packages/ingame/README.md#deploy-layout)):
-  - **RAM:** every pushed script's RAM is verified with `calculateRam`. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise.
-  - **Switch-over:** the deployer writes `agent/current.txt` last, then has the old Agent restart: it runs `agent/boot.js` with its pid and exits, and `boot.js` waits for it to go, then starts the new deployment's Agent ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
-  - **Release gate:** only tagged releases are deployed to Steam.
+- **Version handshake:** the Agent's `hello` names its deployment and the game's version. The channel checks the version against `PINNED_GAME`: on a mismatch it holds for the brain's run (§12.4). Otherwise, if the deployer knows a different deployment is deployed, isn't on hold and its last deploy didn't fail, the brain tells the Agent to restart onto it, once per outdated deployment, so neither a hold, a failed deploy nor a reloaded save can cause a restart loop.
+- **Atomic deploys** ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91); the steps are in [the protocol](bridge/protocol.md#deploying)). On every RFA connection, unless on hold, the deployer deploys the brain's build. Each deployment (a build plus its configuration) goes into its own folder (`agent/<deploymentId>/…`; the layout is in [`packages/ingame`](../packages/ingame/README.md#deploy-layout)):
+  - **RAM:** every script, `boot.js` included, is pushed into the folder and measured there with `calculateRam`, the game's own calculator. Any script over its budget aborts the deploy before a shared path changes. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise; a simulator test shows the game measuring a new build's own RAM.
+  - **Switch-over:** only then does the deployer update `agent/boot.js` (if it differs), and `agent/current.txt` last. It then has the old Agent restart: it runs `agent/boot.js` with its pid and exits, and `boot.js` waits for it to go, then starts the new deployment's Agent. `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.
+  - **Saved at the next autosave:** `pushFile` doesn't save the game. A deployment is in the save only after the next autosave (every 60 s by default). If the game reloads before then, the next RFA connection deploys again.
+  - **Release gate:** only tagged releases are deployed to Steam. That's a rule of the setup (#95): the owner runs a release checkout; the brain doesn't enforce it.
 - **Save backups:**
   - `getSaveFile` every N minutes, with rotation, **plus immediately before every irreversible intent** (install, BitNode change). Save corruption is a known open issue on 3.0.1 (#2809).
   - Backups are our insurance against catastrophic bugs, and the simulator's source of real starting states.
@@ -459,7 +460,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | **E3 Electron from source** *(only if needed)* | `npm run electron` from the same commit | Only if Electron-specific behaviour (file protocol, Steam hooks) diverges from E2 |
 
 **Guardrails**
-- **Parity:** E1 and E2 build from the exact commit Steam ships. On connect, the bridge compares `VersionNumber` and the live `getDefinitionFile` against the source tree's `NetscriptDefinitions.d.ts`.
+- **Parity:** E1 and E2 build from the exact commit Steam ships. The brain checks the live game against them: its `getDefinitionFile` on every RFA connection, and the version each Agent's `hello` reports (§12.4).
 - **Vanilla-only dependency:** the agent (in-game bundles and brain) must never rely on behaviour that doesn't exist in unmodified 3.0.1.
   - Instrumentation (clock, RNG seeding, observation hooks) lives in the **harness** and is injected from outside, either by the simulator harness or by Playwright.
   - The game build itself is never patched for E2 runs.
@@ -484,7 +485,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | R11 | **Injectable time and randomness.** Brain and in-game code read time and randomness only through injected sources. Under the simulator's virtual clock they then behave exactly as live, and runs are reproducible from a seed (ADR 0007). |
 
 ### 10.1 Irreducible human steps
-1. Install Steam, set the RFA port, set autoexec to `agent/boot.js` in game options, and install the Task Scheduler tasks (one setup script). One time.
+1. Install Steam, set the RFA port, set autoexec to `agent/boot.js` in game options, and install the Task Scheduler tasks (one setup script). Once the brain has deployed, run `agent/boot.js` once in the game's terminal: autoexec fires at load, before the first deploy exists. One time (#95).
 2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
 4. Interruptions outside the game (Windows reboots, Steam client updates, power loss) are recovered automatically (§10.2). A human is needed only if recovery gives up and raises an alert.
@@ -557,7 +558,16 @@ The fork is retired and does **not** play the campaign; the agent plays from BN1
 ### 12.4 Version management
 The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit Steam ships (3.0.1 = `1da7316ff`). We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
 1. **See it coming:** a CI workflow, run on demand and at every release (ADR 0009), watches upstream `stable`. When it has moved ahead of the pinned commit, the workflow keeps one issue with a compatibility report (API, RAM cost and watched-source diffs) and the bump steps. The bump itself is a normal PR (ADR 0010, [`tools/upstream-watch`](../tools/upstream-watch/README.md)). Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
-2. **Hold at runtime:** on every connect the brain checks `VersionNumber` and `getDefinitionFile` against the pinned build. On a mismatch it goes to **hold**: reflexes keep running, no intents, alert raised.
+2. **Hold at runtime** (#91). Two checks:
+   - on every RFA connection, the deployer compares `getDefinitionFile` with the pinned `NetscriptDefinitions.d.ts`, line endings aside;
+   - on every `hello`, the control channel compares the Agent's `versionNumber` and `commit` with `PINNED_GAME`. Commits are compared on their common prefix (at least 7 characters), since the abbreviation's length depends on the clone the game was built in.
+
+   On a mismatch the brain goes to **hold** for the rest of its run:
+   - it deploys nothing more (a deploy under way stops before it changes anything shared);
+   - it never tells an Agent to restart;
+   - it records a `versionDrift` event for the dashboard's alert (#93).
+
+   An Agent already running keeps reporting. In M3, hold also stops intents; reflexes keep running. The RFA can't tell the game's version, so a game with unchanged definitions but another version can be deployed to before its first `hello` ([the protocol](bridge/protocol.md#deploying)).
 3. **Save backups:** the bridge pulls rotating saves via RFA (§6), so a bad patch or bug can always be rolled back.
 4. **Look further ahead:** a cheap, advisory check against upstream `dev`, run on demand and at every release (ADR 0009), covers API diff, contract typecheck (once there's in-game code, #42), RAM cost diff and a commit log for a [watchlist](../tools/upstream-watch/watchlist.txt) of game source. It reports into one tracking issue and never blocks merges (ADR 0005, [`tools/upstream-watch`](../tools/upstream-watch/README.md)).
 

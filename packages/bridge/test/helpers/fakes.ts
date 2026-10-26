@@ -88,3 +88,94 @@ export class MemoryConnection implements Connection {
     return this.sent.map((text) => JSON.parse(text) as { type: string });
   }
 }
+
+const isScriptPath = (path: string) => /\.(js|jsx|ts|tsx)$/.test(path);
+const isTextPath = (path: string) => /\.(txt|json|css)$/.test(path);
+
+/**
+ * The game's side of a Remote File API connection, answering as `src/RemoteFileAPI/MessageHandlers.ts` and
+ * `BaseServer.removeFile` do, for home only, with their messages: files in memory (text files listed before scripts),
+ * a RAM figure per script, and scripts that are running (whose files it won't delete; text files it always will).
+ * It doesn't check paths beyond their extension.
+ */
+export class FakeRfaGame extends MemoryConnection {
+  readonly files = new Map<string, string>();
+  readonly runningScripts = new Set<string>();
+  /** Each request, as `method filename` (or just the method). */
+  readonly requests: string[] = [];
+  definitionFile = "interface NS {}\n";
+  ramOf: (filename: string, content: string) => number = () => 2.6;
+  /** Drops the connection instead of answering this request (1-based), as a game that quits mid-deploy. */
+  dropAtRequest = 0;
+  /** Never answers this request (1-based), as the game when a handler throws (Remote.ts:127-134). */
+  silentAtRequest = 0;
+  /** Reports a close a macrotask late, as `ws` does after the closing handshake, rather than at once. */
+  closeReportedLate = false;
+
+  override send(text: string): void {
+    super.send(text);
+    if (this.closedWith) return;
+    const { id, method, params } = JSON.parse(text) as {
+      id: number;
+      method: string;
+      params?: { filename?: string; content?: string };
+    };
+    this.requests.push(params?.filename === undefined ? method : `${method} ${params.filename}`);
+    if (this.requests.length === this.dropAtRequest) {
+      queueMicrotask(() => this.dropFromGameSide());
+      return;
+    }
+    if (this.requests.length === this.silentAtRequest) return;
+    const answer = this.#answer(method, params?.filename ?? "", params?.content ?? "");
+    queueMicrotask(() => this.receive(JSON.stringify({ jsonrpc: "2.0", id, ...answer })));
+  }
+
+  override close(code: number, reason: string): void {
+    if (!this.closeReportedLate) {
+      super.close(code, reason);
+      return;
+    }
+    if (this.closedWith) return;
+    this.closedWith = { code, reason };
+    setTimeout(() => {
+      this.closedWith = null;
+      super.close(code, reason);
+    }, 0);
+  }
+
+  #answer(method: string, filename: string, content: string): { result?: unknown; error?: string } {
+    const missing = { error: `File does not exist. Filename: ${filename}` };
+    switch (method) {
+      case "pushFile":
+        if (!isScriptPath(filename) && !isTextPath(filename)) {
+          return { error: `Invalid file extension. Filename: ${filename}` };
+        }
+        this.files.set(filename, content);
+        return { result: "OK" };
+      case "getFile":
+        return this.files.has(filename) ? { result: this.files.get(filename) } : missing;
+      case "deleteFile":
+        if (!this.files.has(filename)) {
+          return {
+            error: isScriptPath(filename) ? `Script ${filename} not found.` : `Text file ${filename} not found.`,
+          };
+        }
+        if (this.runningScripts.has(filename)) return { error: "Cannot delete a script that is currently running!" };
+        this.files.delete(filename);
+        return { result: "OK" };
+      case "getFileNames": {
+        const names = [...this.files.keys()];
+        return { result: [...names.filter(isTextPath), ...names.filter(isScriptPath)] };
+      }
+      case "calculateRam": {
+        if (!isScriptPath(filename)) return { error: `File is not a script. Filename: ${filename}` };
+        const script = this.files.get(filename);
+        return script === undefined ? missing : { result: this.ramOf(filename, script) };
+      }
+      case "getDefinitionFile":
+        return { result: this.definitionFile };
+      default:
+        return { error: "Unknown message received" };
+    }
+  }
+}

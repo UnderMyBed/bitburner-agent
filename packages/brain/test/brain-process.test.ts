@@ -87,21 +87,47 @@ test("a flag without a value is an error, never taken from elsewhere", () => {
   );
 });
 
-async function startBrain(): Promise<{ config: BrainConfig; controlPort: number }> {
-  const config: BrainConfig = { ...loadOrCreateConfig(dataDirectory), environment: "E2", controlPort: 0 };
+async function startBrain(): Promise<{ config: BrainConfig; controlPort: number; remoteFileApiPort: number }> {
+  const config: BrainConfig = {
+    ...loadOrCreateConfig(dataDirectory),
+    environment: "E2",
+    controlPort: 0,
+    remoteFileApiPort: 0,
+  };
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify(config));
   brain = spawn(process.execPath, [BRAIN_MAIN, "--data-dir", dataDirectory], { stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
-  const controlPort = await new Promise<number>((resolve, reject) => {
+  const ports = await new Promise<{ controlPort: number; remoteFileApiPort: number }>((resolve, reject) => {
     brain?.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString();
-      const match = /control channel on 127\.0\.0\.1:(\d+)/.exec(output);
-      if (match) resolve(Number(match[1]));
+      const control = /control channel on 127\.0\.0\.1:(\d+)/.exec(output);
+      const remoteFileApi = /Remote File API on 127\.0\.0\.1:(\d+)/.exec(output);
+      if (control && remoteFileApi) {
+        resolve({ controlPort: Number(control[1]), remoteFileApiPort: Number(remoteFileApi[1]) });
+      }
     });
     brain?.once("exit", (code) => reject(new Error(`brain exited ${code}: ${output}`)));
   });
-  return { config, controlPort };
+  return { config, ...ports };
 }
+
+test("the brain serves the Remote File API: a game whose definitions differ puts it on hold, recorded", async () => {
+  const { remoteFileApiPort } = await startBrain();
+  const game = new WebSocket(`ws://127.0.0.1:${remoteFileApiPort}`, { origin: "file://" });
+  const [request] = await once(game, "message");
+  const { id, method } = JSON.parse(String(request)) as { id: number; method: string };
+  expect(method).toBe("getDefinitionFile");
+  game.send(JSON.stringify({ jsonrpc: "2.0", id, result: "interface NS { changed(): void; }\n" }));
+  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  for (let attempt = 0; attempt < 50 && store.events({ environment: "E2" }).length === 0; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(store.events({ environment: "E2" })).toMatchObject([
+    { kind: "versionDrift", detail: { detail: expect.stringContaining("NetscriptDefinitions.d.ts differs") } },
+  ]);
+  store.close();
+  game.close();
+});
 
 test("the brain serves the control channel and stores what the Agent reports", async () => {
   const { config, controlPort } = await startBrain();
