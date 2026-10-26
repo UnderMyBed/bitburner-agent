@@ -75,6 +75,7 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
 - Releases are tagged from `main` and include notes on what changed, what to try, and known issues ([docs/releasing.md](docs/releasing.md)).
 
 ### Code standards
+- **The coding standards in [CLAUDE.md](CLAUDE.md#global-coding-standards) apply to all code:** YAGNI, DRY after the second duplication, fail fast, simple first, delete aggressively, and verbose, self-documenting names.
 - **Clear and simple beats clever.** If a reviewer needs the PR description to understand the code, the code isn't clear yet.
 - **Performance matters in game:** every in-game bundle has a RAM budget enforced in CI.
 - **Docs are part of done:** behaviour changes update the relevant doc in the same PR. Design changes get an ADR in [`docs/decisions/`](docs/decisions/).
