@@ -280,22 +280,28 @@ describe("uncaught errors are handled as a browser does", () => {
 describe("isolation", () => {
   test("scripts can't reach the network, through the global object or window", async () => {
     const sim = await newGame();
+    // Sockets reach only URLs the parent listens on (network.test.ts); this simulation listens on none.
     const { out } = await runScript(
       sim,
       `const win = ${WINDOW};
        out(await ns.wget("https://example.com/x.txt", "x.txt"));
+       out(globalThis.WebSocket === win.WebSocket);
        for (const scope of [globalThis, win]) {
          try { await scope.fetch("https://example.com"); } catch (e) { out(e.message); }
          try { new scope.XMLHttpRequest(); } catch (e) { out(e.message); }
-         try { new scope.WebSocket("wss://example.com"); } catch (e) { out(e.message); }
+         try { new scope.EventSource("https://example.com"); } catch (e) { out(e.message); }
+         const socket = new scope.WebSocket("wss://example.com");
+         const closed = new Promise((resolve) => { socket.onclose = (event) => resolve(event.code); });
+         out(await closed);
        }`,
     );
     const refusals = [
       "Failed to fetch",
       "XMLHttpRequest: the simulator has no network",
-      "WebSocket: the simulator has no network",
+      "EventSource: the simulator has no network",
+      1006,
     ];
-    expect(out).toEqual([false, ...refusals, ...refusals]);
+    expect(out).toEqual([false, true, ...refusals, ...refusals]);
   });
 
   test("scripts import other scripts and data: URLs, as from a browser's blob: modules, and nothing else", async () => {

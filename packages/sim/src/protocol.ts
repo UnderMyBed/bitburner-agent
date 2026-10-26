@@ -94,8 +94,42 @@ export interface SimulationOptions {
    * collect sooner. A run that needs more than the cap crashes, as out of memory. Default: Node's.
    */
   maxHeapMb?: number;
+  /** The page's network (ADR 0012): which WebSocket URLs the parent listens on. Without it, every socket is refused. */
+  network?: NetworkOptions;
+  /** Game settings set right after the fixture boots, before the RFA client's timer fires. A harness edit. */
+  gameSettings?: GameSettingsOverride;
   testHooks?: TestHooks;
 }
+
+export interface NetworkOptions {
+  /**
+   * `ws:` or `wss:` URLs a page socket may connect to, the parent being the other end. A URL matches exactly as the
+   * browser normalises it: `ws://localhost:1` isn't `ws://127.0.0.1:1`. A socket to any other URL fails, as a refused
+   * connection does.
+   */
+  listenUrls: string[];
+}
+
+/** Game settings a harness may set (Settings.ts): the Remote File API's address, port and retry delay, and autoexec. */
+export interface GameSettingsOverride {
+  RemoteFileApiAddress?: string;
+  /** 0 turns the RFA client off (the game's default). */
+  RemoteFileApiPort?: number;
+  /** Seconds before the RFA client reconnects after a drop; 0 (the default) never reconnects. */
+  RemoteFileApiReconnectionDelay?: number;
+  /** A script (and its arguments) on home that runs on every load of a saved game. */
+  AutoexecScript?: string;
+}
+
+/**
+ * What the page's sockets did, for the parent to take (`network.take`), in order. `atMs` is the virtual time it
+ * happened. `close` is the page closing its own socket (`code` null when it gave none).
+ */
+export type NetworkOutboxEntry = { connectionId: number; atMs: number } & (
+  | { type: "connect"; url: string }
+  | { type: "message"; data: string }
+  | { type: "close"; code: number | null; reason: string }
+);
 
 /** The least `maxHeapMb`: a booted game's heap is about 110 MB. */
 export const MIN_HEAP_MB = 256;
@@ -122,6 +156,8 @@ export interface HostOptions {
   epochMs: number;
   fixture?: HostFixture;
   prompts?: PromptRule[];
+  network?: NetworkOptions;
+  gameSettings?: GameSettingsOverride;
   testHooks?: TestHooks;
 }
 
@@ -388,6 +424,18 @@ export interface HostMethods {
   "diagnostics.profile"(params: { action: "start" | "stop" }): CpuProfile | null;
   /** Writes `message` to stderr and exits with `code`. */
   "diagnostics.crash"(params: { code: number; message: string }): never;
+  /** Everything the page's sockets did since the last call, in order. */
+  "network.take"(params: Record<string, never>): NetworkOutboxEntry[];
+  /**
+   * Sends a text frame to the page on a connection, delivered at the start of the next advance. False if the connection
+   * is closing or closed (the frame is dropped); throws for a connection that never existed.
+   */
+  "network.send"(params: { connectionId: number; data: string }): boolean;
+  /**
+   * Closes a connection from the parent's side, delivered at the start of the next advance: a clean close if it's open,
+   * a failed connection (as a refused handshake) if it hasn't opened yet. False if it's already closing or closed.
+   */
+  "network.close"(params: { connectionId: number; code: number; reason: string }): boolean;
 }
 
 export type Method = keyof HostMethods;
@@ -414,11 +462,51 @@ export function validateHostOptions(options: HostOptions): void {
   }
   if (options.fixture !== undefined) validateFixture(options.fixture);
   if (options.prompts !== undefined) validatePrompts(options.prompts);
+  if (options.network !== undefined) validateNetwork(options.network);
+  if (options.gameSettings !== undefined) validateGameSettings(options.gameSettings);
   const delay = options.testHooks?.importDelayMs;
   if (delay && !(Number.isInteger(delay[0]) && Number.isInteger(delay[1]) && 0 <= delay[0] && delay[0] <= delay[1])) {
     throw new RangeError(
       `testHooks.importDelayMs must be [min, max] integers with 0 <= min <= max, got ${JSON.stringify(delay)}`,
     );
+  }
+}
+
+export function validateNetwork(network: NetworkOptions): void {
+  const isSocketUrl = (url: unknown) => {
+    if (typeof url !== "string" || !URL.canParse(url)) return false;
+    return ["ws:", "wss:"].includes(new URL(url).protocol);
+  };
+  if (typeof network !== "object" || network === null || !Array.isArray(network.listenUrls)) {
+    throw new RangeError("network needs listenUrls: a list of ws: or wss: URLs");
+  }
+  const bad = network.listenUrls.filter((url) => !isSocketUrl(url));
+  if (bad.length > 0) throw new RangeError(`network.listenUrls must be ws: or wss: URLs, got ${JSON.stringify(bad)}`);
+}
+
+const isText = { expected: "text", isValid: (value: unknown) => typeof value === "string" };
+const GAME_SETTING_CHECKS: Record<keyof GameSettingsOverride, { expected: string; isValid(value: unknown): boolean }> =
+  {
+    RemoteFileApiAddress: isText,
+    RemoteFileApiPort: {
+      expected: "a port number from 0 to 65535",
+      isValid: (value) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 65535,
+    },
+    RemoteFileApiReconnectionDelay: {
+      expected: "a non-negative number of seconds",
+      isValid: (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+    },
+    AutoexecScript: isText,
+  };
+
+export function validateGameSettings(settings: GameSettingsOverride): void {
+  if (typeof settings !== "object" || settings === null) throw new RangeError("gameSettings must be an object");
+  for (const [name, value] of Object.entries(settings)) {
+    if (!Object.hasOwn(GAME_SETTING_CHECKS, name)) {
+      throw new RangeError(`gameSettings has no ${name}: one of ${Object.keys(GAME_SETTING_CHECKS).join(", ")}`);
+    }
+    const { expected, isValid } = GAME_SETTING_CHECKS[name as keyof GameSettingsOverride];
+    if (!isValid(value)) throw new RangeError(`gameSettings.${name} must be ${expected}, got ${JSON.stringify(value)}`);
   }
 }
 

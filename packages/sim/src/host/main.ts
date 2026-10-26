@@ -69,8 +69,10 @@ interface Host {
 async function start(options: HostOptions): Promise<Host> {
   validateHostOptions(options);
   const bootStarted = process.hrtime.bigint(); // real time: the virtual clock doesn't measure the host itself
-  const { clock, engine, scripts, afterEveryTimer } = installHost(options);
+  const { clock, engine, scripts, network, afterEveryTimer } = installHost(options);
   if (options.fixture) await bootFixture(engine, options.fixture);
+  // Before the RFA client's timer fires (2 s after load), so it connects with these.
+  if (options.gameSettings) engine.applyGameSettings(options.gameSettings);
   // From the booted game on, every BitNode entry is an event, whether a timer or a request caused it.
   const watch = options.fixture ? watchBitNodeEntries(engine) : () => {};
   watch();
@@ -131,6 +133,9 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       return engine.killScript(pid);
     },
+    "network.take": () => network.take(),
+    "network.send": ({ connectionId, data }) => network.send(connectionId, data),
+    "network.close": ({ connectionId, code, reason }) => network.close(connectionId, code, reason),
     "diagnostics.clock": () => ({
       engineLastUpdate: engine.engineLastUpdate(),
       engineDateNow: engine.dateNow(),
