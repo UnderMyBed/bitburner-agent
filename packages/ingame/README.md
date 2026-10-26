@@ -2,7 +2,7 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** M2. `boot.js` is built ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)); the Agent ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)) and its snapshot workers ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)) follow.
+> **Status:** M2. `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)) and the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)) are built; its snapshot workers ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)) follow.
 
 ## Layout
 
@@ -53,6 +53,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | Script | Calls |
 |---|---|
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing |
+| `agent.js` | `run` (1.0 GB); `read`, `sleep`, `atExit`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and `disableLog` cost nothing: 2.6 GB of its 3.0 GB |
 
 ## Deploy layout
 
@@ -63,7 +64,8 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
 | `agent/<deploymentId>/<name>.js` | A deployment's scripts, e.g. `agent.js` |
-| `agent/<deploymentId>/config.json`, `token.txt` | Its configuration and the control channel's token (their names go in `core` with the deployer, #91) |
+| `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
+| `agent/<deploymentId>/token.txt` | The control channel's token |
 
 A deployment is a build plus its configuration, so a new token or port is a new deployment too. Its id is a folder name: letters, digits, `-` and `_` (`isValidDeploymentId`). Each one gets its own folder, so a deploy never overwrites a file a running script uses. The deployer ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) writes `current.txt` last.
 
@@ -78,3 +80,24 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 **It never stops an Agent.** An Agent from an earlier deployment keeps running until it restarts itself: the deployer tells it to, and it runs `boot.js` and exits ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88), [#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)).
 
 **Why temporary:** the game saves every running non-temporary script and restarts it on load (game source: `src/NetscriptWorker.ts:241-261`). A temporary Agent isn't saved. So after a load, autoexec (`boot.js`) is the one way back, and a load never starts an old Agent and its workers at once, which wouldn't fit in 8 GB.
+
+## The Agent
+
+`agent/<deploymentId>/agent.js` runs all the time and holds the control channel to the brain ([protocol](../../docs/bridge/protocol.md), architecture §5.1). Snapshots come with [#89](https://github.com/UnderMyBed/bitburner-agent/issues/89).
+
+**Lifecycle:**
+1. **Start:** it takes its deployment from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` from that folder. If either is missing or invalid, it says so in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
+2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
+3. **`welcome`:** it stays connected, and its backoff goes back to 1 s.
+4. **`restart`:** it closes the socket, runs `agent/boot.js` (which starts the deployed Agent) and exits.
+5. **Disconnected:**
+   - closed with 4000 (a newer Agent replaced it): it exits for good;
+   - otherwise, if `agent/current.txt` names another deployment, it runs `boot.js` and exits;
+   - otherwise it waits and reconnects: 1 s, doubling to 30 s.
+6. **Killed:** an `atExit` callback closes the socket, since a socket outlives its script. The brain sees `agentDisconnected` at once.
+
+**The event-queue rule: socket handlers never call `ns`.** While a script awaits `ns.sleep` (or any `ns` promise), the game kills it for any `ns` call made from another callback, such as a socket handler (game source: `src/Netscript/NetscriptHelpers.tsx:405-431`). So the handlers only put events on an in-memory queue, and the main loop takes them off and acts. The main loop waits on that queue with a plain promise, not an `ns` call. The tests include a script that breaks the rule, to show the trap is real: it's killed.
+
+**Hygiene:** no state at module level, since the game may reuse a module (architecture R10); time from `Date.now()` and randomness from `Math.random()` only, both virtual in the simulator (R11).
+
+**Tests:** `packages/brain/test/agent.test.ts` runs the built Agent in the simulator against the brain's real `ControlChannel`, on the lockstep driver, in virtual time. They live in `brain` because they need both sides, and `ingame` doesn't depend on the brain. `ingame` exports its build (`@bitburner-agent/ingame/build`) for them.

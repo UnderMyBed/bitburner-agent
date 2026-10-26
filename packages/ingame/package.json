@@ -4,6 +4,9 @@
   "description": "The in-game code: the Agent, its workers and boot.js, bundled per script and held to RAM budgets.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./build": "./scripts/bundles.ts"
+  },
   "scripts": {
     "build": "node scripts/build.ts"
   },

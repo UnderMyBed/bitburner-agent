@@ -261,6 +261,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 ### 5.1 Agent
 - One persistent script, held to a **≤ 3 GB** budget that we enforce.
 - It holds the WebSocket to the brain and runs the Snapshotter and Reconciler. It never calls expensive NS functions directly.
+- **Socket handlers never call `ns`.** While a script awaits an `ns` promise such as `ns.sleep`, the game kills it for an `ns` call from any other callback. So the handlers only queue events, and the main loop acts on them ([lifecycle and details](../packages/ingame/README.md#the-agent)).
 - **Observe-only (M2):** before the reconciler exists (M3), the Agent launches and kills nothing except its own workers.
 - Expensive calls go to **worker scripts**: tiny, single-purpose, short-lived. They write their results to a port or file. This is the fork's `getNsDataThroughFile` pattern, formalised.
 - **RAM reservation:** the agent and its workers get a fixed reserved slice of home RAM, sized from measured worker peaks. Reflexes, the batcher in particular, receive their RAM budget from the reconciler and never use the reservation. On an 8 GB start the reservation is the first claim on RAM. When RAM is starved, the agent drops to slower snapshot tiers instead of growing.
