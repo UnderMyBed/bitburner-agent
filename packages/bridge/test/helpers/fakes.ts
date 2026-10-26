@@ -131,7 +131,10 @@ export class FakeRfaGame extends MemoryConnection {
   }
 
   override close(code: number, reason: string): void {
-    if (!this.closeReportedLate) return super.close(code, reason);
+    if (!this.closeReportedLate) {
+      super.close(code, reason);
+      return;
+    }
     if (this.closedWith) return;
     this.closedWith = { code, reason };
     setTimeout(() => {
