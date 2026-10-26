@@ -17,7 +17,7 @@
     "sim": "node packages/sim/scripts/run-scenario.ts",
     "brain": "node packages/brain/src/main.ts",
     "gaps": "node packages/brain/src/gaps-cli.ts",
-    "setup:windows": "pwsh -NoProfile -File tools/setup/install-brain-task.ps1",
+    "setup:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File tools/setup/install-brain-task.ps1",
     "typecheck": "node tools/typecheck/cli.ts && node packages/sim/scripts/typecheck-bundle.ts",
     "lint": "biome ci --error-on-warnings .",
     "lint:fix": "biome check --write .",

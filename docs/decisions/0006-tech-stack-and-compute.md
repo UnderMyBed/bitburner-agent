@@ -33,6 +33,7 @@ Where the compute goes:
 - **Heavy test suites run locally** on the reference rig through one command. CI uses GitHub-hosted runners for the fast tiers only.
   - **No self-hosted runner:** the repo is public, and fork PRs must never execute on the owner's machine.
 - Bulk local data (simulator artifacts, telemetry, save backups) goes in a configurable data directory, by default on a non-system drive.
+  - *Note, 2026-10-26:* as built, there's no default directory. The owner picks one on a non-system drive, and the brain refuses to start without it ([`packages/brain`](../../packages/brain/README.md#running-it), [docs/setup.md](../setup.md)).
 
 ## Consequences
 - No formula re-implementation, so no drift between the game and our model.

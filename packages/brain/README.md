@@ -10,6 +10,8 @@ npm run brain -- --data-dir D:\bitburner-agent
 
 Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 
+Unattended on Windows, a scheduled task runs it through `tools/setup/run-brain.ps1` instead, which appends its output to `<data dir>\brain.log` and restarts it after any exit ([docs/setup.md](../../docs/setup.md)). Don't also run `npm run brain` while that task runs: one brain per game.
+
 - **On Windows, an E0 brain (the default) runs the game itself.** Within 30 s it launches Bitburner through Steam. If no Agent reports for about 5 minutes, it kills and relaunches the game ([Supervision](#supervision)). Pause supervision on the dashboard while you set the game up.
 - **There's no default data directory.** It holds bulk data (the store, the save backups), so it belongs on a non-system drive the owner picks ([ADR 0006](../../docs/decisions/0006-tech-stack-and-compute.md)). Without one, the brain refuses to start and says how to give it. A relative path is taken from the directory the command was run in.
 - **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr. A fatal error exits non-zero, so whatever runs the brain restarts it ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95)). The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, the dashboard's address, and whether it supervises the game.
@@ -24,6 +26,7 @@ Or set `BITBURNER_AGENT_DATA_DIR` instead of passing `--data-dir`.
 | `telemetry.sqlite` | The store (below), with its WAL files |
 | `ingame-build/` | The in-game code built at start, which the brain deploys |
 | `saves/<environment>/` | The game's save backups ([below](#save-backups)) |
+| `brain.log` | The brain's output and each restart, when the scheduled task runs it ([docs/setup.md](../../docs/setup.md)) |
 
 `config.json`:
 
