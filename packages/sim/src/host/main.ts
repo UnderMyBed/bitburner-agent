@@ -154,6 +154,10 @@ async function start(options: HostOptions): Promise<Host> {
         pinnedLocale: pinnedLocale() ?? null,
       };
     },
+    "diagnostics.homePeak": () => {
+      booted();
+      return engine.homePeak();
+    },
     "diagnostics.random": ({ count }) => ({
       math: Array.from({ length: count }, () => Math.random()),
       windowMath: Array.from({ length: count }, () => window.Math.random()),

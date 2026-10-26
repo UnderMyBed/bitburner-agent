@@ -223,6 +223,27 @@ export async function saveBytes() {
   return data;
 }
 
+/**
+ * The most home has held at once since the engine loaded: RAM in use, and scripts running. Taken as each script starts,
+ * the only time either grows (NetscriptWorker.ts:134-141), so a script that starts and exits within one timer counts.
+ * The game's map is only observed: it behaves as before.
+ */
+const homePeakSoFar = { ramUsed: 0, scripts: 0 };
+const addWorkerScript = workerScripts.set.bind(workerScripts);
+workerScripts.set = (pid, workerScript) => {
+  addWorkerScript(pid, workerScript);
+  if (workerScript.hostname === SpecialServers.Home) {
+    const scriptsOnHome = [...workerScripts.values()].filter((each) => each.hostname === SpecialServers.Home).length;
+    homePeakSoFar.ramUsed = Math.max(homePeakSoFar.ramUsed, server(SpecialServers.Home).ramUsed);
+    homePeakSoFar.scripts = Math.max(homePeakSoFar.scripts, scriptsOnHome);
+  }
+  return workerScripts;
+};
+
+export function homePeak() {
+  return { ...homePeakSoFar };
+}
+
 export function gameSummary() {
   const home = Player.getHomeComputer();
   return {

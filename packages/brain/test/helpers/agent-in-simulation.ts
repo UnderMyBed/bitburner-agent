@@ -87,12 +87,7 @@ export async function attachBrain(
     channel,
     events,
     connections,
-    runUntil: async (condition, maxVirtualMs) => {
-      for (let elapsedMs = 0; !condition(); elapsedMs += stepMs) {
-        if (elapsedMs > maxVirtualMs) throw new Error(`condition not met within ${maxVirtualMs} virtual ms`);
-        await game.step();
-      }
-    },
+    runUntil: (condition, maxVirtualMs) => game.runUntil(condition, maxVirtualMs),
   };
 }
 

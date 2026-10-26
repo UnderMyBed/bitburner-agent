@@ -3,6 +3,7 @@ import type {
   GameEvent,
   GameSettingsOverride,
   GameSummary,
+  HomePeak,
   ProcessInfo,
   PromptRequest,
   RunResult,
@@ -67,6 +68,11 @@ export interface EngineApi {
   gameSummary(): Omit<GameSummary, "virtualMs">;
   /** The game's own save, as JSON text. */
   saveJson(): Promise<string>;
+  /**
+   * The most home has held at once since the engine loaded (RAM in use, scripts running), taken as each script starts:
+   * a script that starts and exits within one timer counts.
+   */
+  homePeak(): HomePeak;
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
   gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
   /**
@@ -132,6 +138,7 @@ const API_FUNCTIONS = {
   saveBytes: true,
   gameSummary: true,
   saveJson: true,
+  homePeak: true,
   gameDiagnostics: true,
   installPageGlobals: true,
   setGameEventListener: true,

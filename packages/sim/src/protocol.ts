@@ -308,6 +308,12 @@ export interface GameSummary {
   augsQueued: number;
 }
 
+/** The most home has held at once: GB of RAM in use, and scripts running. */
+export interface HomePeak {
+  ramUsed: number;
+  scripts: number;
+}
+
 export interface GameDiagnostics {
   tutorialRunning: boolean;
   /** The game's own setting (0: the harness turned autosave off). */
@@ -393,6 +399,11 @@ export interface HostMethods {
   runUntil(params: RunUntilParams): RunUntilResult;
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
+  /**
+   * The most home has held at once since the game booted, taken as each script starts (the only time either grows), so
+   * a script that starts and exits between two timers counts.
+   */
+  "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
   "diagnostics.random"(params: { count: number }): RandomSample;
   /**
    * Navigates as game code does (`Router.toPage`): a simple page by its `Page` value, or "BitVerse" (only then is

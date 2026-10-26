@@ -36,6 +36,7 @@ export {
   type GameEvent,
   type GameSettingsOverride,
   type GameSummary,
+  type HomePeak,
   type NetworkOptions,
   type NetworkOutboxEntry,
   type OnBitVerse,

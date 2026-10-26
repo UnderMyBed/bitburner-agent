@@ -95,6 +95,7 @@ await sim.close();
 - **`diagnostics`** exist for tests and troubleshooting:
   - `clock()`: the engine's view of time
   - `game()`: tutorial state, autosave setting, the current page and `Player.focus`, the current BitNode's multipliers, exploits earned (always none), whether the game thinks it's under a test runner (always false), coding contracts, host boot time, default and pinned locale
+  - `homePeak()`: the most home has held at once since the game booted: GB of RAM in use, and scripts running. It's taken as each script starts, the only time either grows, so a script that starts and exits within one timer still counts, though no check after a timer (`runUntil`) can see it. The harness only observes the game's map of running scripts to take it: the game behaves the same.
   - `random(n)`: samples of the seeded streams
   - `toPage(page, flume?)` and `back()`: navigate as game code does (see [Pages](#pages-and-the-bitverse)). **Test-only:** they change game state (going to the BitVerse kills every script), and scenarios must not use them.
   - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios use `runUntil`'s `onBitVerse`.

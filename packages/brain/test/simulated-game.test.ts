@@ -3,7 +3,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ControlChannel } from "@bitburner-agent/bridge";
+import { type Connection, ControlChannel } from "@bitburner-agent/bridge";
+import type { Simulation } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { afterAll, expect, test } from "vitest";
 import { recordChannelEvents } from "../src/record-channel-events.ts";
@@ -221,6 +222,135 @@ test("once the brain has closed a connection, nothing more crosses it either way
   await game.run(500);
   expect(framesFromPage).toEqual(["one"]);
   expect(framesToPage).toEqual(["before closing"]);
+});
+
+/**
+ * Starts a script that connects and sends `frames` once open. It exits at once: its socket outlives it, and a save
+ * doesn't bring it back.
+ */
+async function runSender(simulation: Simulation, scriptName: string, frames: string[]): Promise<void> {
+  await simulation.writeFile(
+    "home",
+    scriptName,
+    `export function main(ns) {
+       const socket = new WebSocket("${CONTROL_URL}");
+       socket.onopen = () => { for (const frame of ${JSON.stringify(frames)}) socket.send(frame); };
+     }`,
+  );
+  expect((await simulation.run("home", scriptName)).error).toBeUndefined();
+}
+
+test("a test's fault function decides how many copies of each frame from the page reach the brain", async () => {
+  const simulation = await start({
+    seed: 1,
+    epochMs: EPOCH_MS,
+    fixture: { kind: "new", tutorial: "skipped" },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const offered: { data: string; atMs: number }[] = [];
+  const copiesByFrame: Record<string, number> = { dropped: 0, duplicated: 2, once: 1 };
+  const game = await SimulatedGame.create({
+    simulation,
+    stepMs: 100,
+    deliveredCopies: ({ data, atMs }) => {
+      offered.push({ data, atMs });
+      return copiesByFrame[data] as number;
+    },
+  });
+  const received: string[] = [];
+  game.listen(CONTROL_URL, (connection) => connection.onMessage((text) => received.push(text)));
+  await runSender(simulation, "sender.js", ["dropped", "duplicated", "once"]);
+  await game.run(500);
+  expect(offered.map((frame) => frame.data)).toEqual(["dropped", "duplicated", "once"]);
+  expect(offered[0]?.atMs).toBeGreaterThan(EPOCH_MS);
+  expect(received).toEqual(["duplicated", "duplicated", "once"]);
+});
+
+test("a fault function's answer must be a whole number of copies, or the step fails", async () => {
+  const simulation = await start({
+    seed: 1,
+    epochMs: EPOCH_MS,
+    fixture: { kind: "new", tutorial: "skipped" },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const game = await SimulatedGame.create({ simulation, stepMs: 100, deliveredCopies: () => 0.5 });
+  game.listen(CONTROL_URL, () => {});
+  await runSender(simulation, "sender.js", ["anything"]);
+  await expect(game.run(500)).rejects.toThrow(/whole number of copies, got 0.5/);
+});
+
+test("on a reload the old page's sockets close at once, and the steps drive the reloaded simulation", async () => {
+  const before = await start({
+    seed: 1,
+    epochMs: EPOCH_MS,
+    fixture: { kind: "new", tutorial: "skipped" },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const game = await SimulatedGame.create({ simulation: before, stepMs: 100 });
+  const received: string[] = [];
+  const closedAtMs: number[] = [];
+  const connections: Connection[] = [];
+  game.listen(CONTROL_URL, (connection) => {
+    connections.push(connection);
+    connection.onMessage((text) => received.push(text));
+    connection.onClose(() => closedAtMs.push(game.clock.now()));
+  });
+  await runSender(before, "sender.js", ["before the reload"]);
+  await game.run(500);
+  const after = await start({
+    seed: 1,
+    fixture: { kind: "save", bytes: await before.save() },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const framesToReloadedPage: string[] = [];
+  const sendToReloadedPage = after.network.send.bind(after.network);
+  after.network.send = (connectionId, data) => {
+    framesToReloadedPage.push(data);
+    return sendToReloadedPage(connectionId, data);
+  };
+  // The brain's reply is still queued for the old page when the reload happens: it goes nowhere.
+  connections[0]?.send("to the old page");
+  const reloadedAtMs = game.clock.now();
+  game.replaceSimulation(after);
+  expect(closedAtMs).toEqual([reloadedAtMs]);
+  await runSender(after, "sender-after.js", ["after the reload"]);
+  await game.run(500);
+  expect(received).toEqual(["before the reload", "after the reload"]);
+  expect(framesToReloadedPage).toEqual([]);
+  expect(connections).toHaveLength(2);
+  // The brain's clock follows the reloaded game's, but never goes back: the save was taken a moment before the reload.
+  const reloadedGameNowMs = await after.now();
+  expect(reloadedGameNowMs).toBeLessThan(reloadedAtMs + 500);
+  expect(game.clock.now()).toBe(Math.max(reloadedAtMs, reloadedGameNowMs));
+});
+
+test("runUntil steps until its condition holds, or fails once over its virtual time", async () => {
+  const simulation = await start({
+    seed: 1,
+    epochMs: EPOCH_MS,
+    fixture: { kind: "new", tutorial: "skipped" },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const game = await SimulatedGame.create({ simulation, stepMs: 100 });
+  const startMs = game.clock.now();
+  await game.runUntil(() => game.clock.now() >= startMs + 300, 1_000);
+  expect(game.clock.now()).toBe(startMs + 300);
+  await expect(game.runUntil(() => false, 250)).rejects.toThrow("condition not met within 250 virtual ms");
+  // Checked before each step: 300 ms of steps, the first over 250.
+  expect(game.clock.now()).toBe(startMs + 600);
+});
+
+test("a reload can't happen mid-step", async () => {
+  const simulation = await start({
+    seed: 1,
+    epochMs: EPOCH_MS,
+    fixture: { kind: "new", tutorial: "skipped" },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const game = await SimulatedGame.create({ simulation, stepMs: 100 });
+  const stepping = game.step();
+  expect(() => game.replaceSimulation(simulation)).toThrow(/mid-step/);
+  await stepping;
 });
 
 test("a close by the page is reported at the virtual time it happened", async () => {

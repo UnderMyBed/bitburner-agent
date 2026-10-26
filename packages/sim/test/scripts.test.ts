@@ -453,6 +453,24 @@ describe("script API", () => {
     expect((await sim.ps("home")).map((p) => p.pid)).toEqual([first.pid, third.pid]);
   });
 
+  test("homePeak counts a script that starts and exits between two timers, which no check after a timer sees", async () => {
+    const sim = await newGame(1);
+    expect(await sim.diagnostics.homePeak()).toEqual({ ramUsed: 0, scripts: 0 });
+    // The parent (2.6 GB) runs a 1.6 GB child that exits at once, within the parent's own timer, every 100 ms.
+    await sim.writeFile("home", "quick.js", "export function main(ns) {}");
+    await sim.writeFile(
+      "home",
+      "parent.js",
+      `export async function main(ns) { for (let i = 0; i < 5; i++) { ns.run("quick.js"); await ns.sleep(100); } }`,
+    );
+    expect((await sim.run("home", "parent.js")).error).toBeUndefined();
+    const { stoppedBy } = await sim.runUntil(1_000, {
+      stopWhen: [{ summary: { field: "homeRamUsed", op: ">", value: 2.6 } }],
+    });
+    expect(stoppedBy).toBeNull();
+    expect(await sim.diagnostics.homePeak()).toEqual({ ramUsed: 4.2, scripts: 2 });
+  });
+
   test("player scripts see a browser's globals, not Node's: no process, Buffer or global, and the game's setImmediate", async () => {
     const sim = await newGame(1);
     const names = NODE_GLOBALS;
