@@ -1,0 +1,5 @@
+{
+  // Imported by both the in-game code and the Node packages, so it may use neither environment: no DOM, no Node.
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"]
+}

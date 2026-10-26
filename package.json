@@ -15,7 +15,7 @@
     "setup:engine": "node packages/sim/scripts/setup-engine.ts",
     "build:engine": "node packages/sim/scripts/build-engine.ts",
     "sim": "node packages/sim/scripts/run-scenario.ts",
-    "typecheck": "tsc -p tsconfig.json && node packages/sim/scripts/typecheck-bundle.ts",
+    "typecheck": "node tools/typecheck.ts && node packages/sim/scripts/typecheck-bundle.ts",
     "lint": "biome ci --error-on-warnings .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",

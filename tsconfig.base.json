@@ -1,10 +1,12 @@
 {
+  // Shared by every package's tsconfig. Environment-neutral: no DOM and no Node types. Each config adds the
+  // environment its files run in (CONTRIBUTING, "TypeScript configs").
   "compilerOptions": {
     "target": "es2024",
     "lib": ["es2024"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "types": ["node"],
+    "types": [],
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
