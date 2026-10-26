@@ -156,9 +156,11 @@ describe("a socket to a listening URL", () => {
   test("the parent closing a socket that hasn't opened yet fails it, as a refused handshake does", async () => {
     const sim = await newGame();
     const recorder = await startRecorder(sim, `const socket = new WebSocket("${CONTROL_URL}");\n${LISTENERS}`);
-    // The script starts on the next advance; stop before the open is delivered.
-    await sim.advance(0);
+    // The script has connected (it ran before this request); its open is still 1 ms away.
     expect(await sim.network.close(1, 4003, "refused")).toBe(true);
+    // Closed from this side: a second close, or a frame, would be dropped.
+    expect(await sim.network.close(1, 4003, "again")).toBe(false);
+    expect(await sim.network.send(1, "dropped")).toBe(false);
     await sim.advance(10);
     expect(await recorder.records()).toEqual([
       { event: "error", readyState: 3, target: true },
@@ -170,13 +172,40 @@ describe("a socket to a listening URL", () => {
 describe("a socket to a URL nobody listens on", () => {
   test("fails as a refused connection: error, then close 1006, and nothing reaches the parent", async () => {
     const sim = await newGame();
-    const recorder = await startRecorder(sim, `const socket = new WebSocket("ws://127.0.0.1:9");\n${LISTENERS}`);
+    const recorder = await startRecorder(
+      sim,
+      `const socket = new WebSocket("ws://127.0.0.1:9");\n${LISTENERS}
+       const closedEarly = new WebSocket("ws://127.0.0.1:9");
+       closedEarly.close(1000, "never mind");`,
+    );
     await sim.advance(10);
     expect(await recorder.records()).toEqual([
       { event: "error", readyState: 3, target: true },
       { event: "close", code: 1006, reason: "", wasClean: false, readyState: 3, isWebSocket: true },
     ]);
     expect(await sim.network.take()).toEqual([]);
+  });
+
+  test("a page reconnecting for ever doesn't grow the simulation's memory", async () => {
+    const sim = await newGame();
+    // 20,000 refused sockets with listeners, as an RFA client with a short retry delay would make over hours.
+    await startRecorder(
+      sim,
+      `for (let index = 0; index < 20_000; index++) {
+         const socket = new WebSocket("ws://127.0.0.1:9");
+         socket.onclose = () => {};
+         socket.addEventListener("error", () => {});
+       }`,
+    );
+    await sim.advance(10);
+    const heapAfterFirst = await sim.diagnostics.heap();
+    await startRecorder(
+      sim,
+      `for (let index = 0; index < 20_000; index++) new WebSocket("ws://127.0.0.1:9").onclose = () => {};`,
+    );
+    await sim.advance(10);
+    // Kept sockets would hold over 20 MB here.
+    expect((await sim.diagnostics.heap()) - heapAfterFirst).toBeLessThan(5_000_000);
   });
 
   test("a listening URL matches exactly: localhost isn't 127.0.0.1", async () => {
@@ -199,18 +228,93 @@ describe("errors, as a browser raises them", () => {
        const socket = new WebSocket("${CONTROL_URL}");
        recordOutcome("sendWhileConnecting", () => socket.send("x"));
        recordOutcome("closeCode999", () => socket.close(999));
+       recordOutcome("closeCode2999.6", () => socket.close(2999.6));
        recordOutcome("closeReasonTooLong", () => socket.close(1000, "x".repeat(124)));
-       recordOutcome("httpUrl", () => new WebSocket("http://127.0.0.1:12526"));
-       recordOutcome("notAUrl", () => new WebSocket("not a url"));`,
+       recordOutcome("ftpUrl", () => new WebSocket("ftp://127.0.0.1:12526"));
+       recordOutcome("fragment", () => new WebSocket("${CONTROL_URL}/#part"));
+       recordOutcome("unparsable", () => new WebSocket("http://["));`,
     );
     await sim.advance(10);
     expect(await recorder.records()).toEqual([
       { sendWhileConnecting: "InvalidStateError" },
       { closeCode999: "InvalidAccessError" },
+      // [Clamp] rounds 2999.6 to 3000, which is allowed.
+      { "closeCode2999.6": "no error" },
       { closeReasonTooLong: "SyntaxError" },
-      { httpUrl: "SyntaxError" },
-      { notAUrl: "SyntaxError" },
+      { ftpUrl: "SyntaxError" },
+      { fragment: "SyntaxError" },
+      { unparsable: "SyntaxError" },
     ]);
+  });
+
+  test("URLs are taken as Chromium takes them: http(s) as ws(s), relative to the page", async () => {
+    const sim = await newGame();
+    const recorder = await startRecorder(
+      sim,
+      `record(new WebSocket("http://127.0.0.1:12526").url);
+       record(new WebSocket("https://example.com/socket").url);
+       record(new WebSocket("/relative").url);`,
+    );
+    await sim.advance(10);
+    expect(await recorder.records()).toEqual([
+      `${CONTROL_URL}/`,
+      "wss://example.com/socket",
+      "wss://bitburner.local/relative",
+    ]);
+    // The http: URL is the listening one once taken as ws:.
+    expect((await sim.network.take()).map((entry) => entry.type)).toEqual(["connect"]);
+  });
+
+  test("text is whatever send is given, as WebIDL converts it; a reason without a code closes with 1000", async () => {
+    const sim = await newGame();
+    const recorder = await startRecorder(
+      sim,
+      `const socket = new WebSocket("${CONTROL_URL}");
+       socket.onopen = () => { socket.send(42); socket.send({ toString: () => "object" }); socket.close(undefined, "bye"); };
+       socket.onclose = (event) => record({ code: event.code, reason: event.reason });`,
+    );
+    await sim.advance(10);
+    expect((await sim.network.take()).map(({ atMs, connectionId, ...entry }) => entry)).toEqual([
+      { type: "connect", url: `${CONTROL_URL}/` },
+      { type: "message", data: "42" },
+      { type: "message", data: "object" },
+      { type: "close", code: 1000, reason: "bye" },
+    ]);
+    expect(await recorder.records()).toEqual([{ code: 1000, reason: "bye" }]);
+  });
+
+  test("a listener's exception is reported as uncaught, and the other listeners still run", async () => {
+    const sim = await newGame();
+    const recorder = await startRecorder(
+      sim,
+      `const socket = new WebSocket("${CONTROL_URL}");
+       socket.addEventListener("open", () => { throw new Error("listener failed"); });
+       socket.addEventListener("open", () => record("second listener ran"));`,
+    );
+    await sim.advance(10);
+    expect(await recorder.records()).toEqual(["second listener ran"]);
+    const { events } = await sim.events();
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "console", message: expect.stringContaining("listener failed") }),
+    );
+  });
+
+  test("an async listener's rejection is an unhandled rejection, which the game reports as a browser would", async () => {
+    const sim = await newGame();
+    await startRecorder(
+      sim,
+      `const socket = new WebSocket("${CONTROL_URL}");
+       socket.onopen = async () => { throw new Error("async listener failed"); };`,
+    );
+    await sim.advance(10);
+    const { events } = await sim.events();
+    // The game's own unhandledrejection handler shows its error popup (UncaughtPromiseHandler.ts).
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "error", message: expect.stringContaining("async listener failed") }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "console", message: expect.stringContaining("Uncaught Error: async") }),
+    );
   });
 
   test("the parts neither the RFA client nor the Agent use fail fast", async () => {
@@ -219,15 +323,52 @@ describe("errors, as a browser raises them", () => {
       sim,
       `const recordOutcome = (label, action) => { try { action(); record({ [label]: "no error" }); } catch (error) { record({ [label]: error.message }); } };
        recordOutcome("subProtocol", () => new WebSocket("${CONTROL_URL}", "chat"));
-       const socket = new WebSocket("${CONTROL_URL}");
+       const socket = new WebSocket("${CONTROL_URL}", []);
+       record({ protocol: socket.protocol, extensions: socket.extensions, bufferedAmount: socket.bufferedAmount });
        recordOutcome("binaryType", () => { socket.binaryType = "arraybuffer"; });
        socket.onopen = () => recordOutcome("binaryFrame", () => socket.send(new Uint8Array(1)));`,
     );
     await sim.advance(10);
     const notSupported = "not supported in the simulator";
-    const records = (await recorder.records()) as Record<string, string>[];
+    const [first, values, ...failures] = (await recorder.records()) as Record<string, string>[];
+    // No sub-protocols is the same as none: an empty list is fine.
+    expect(values).toEqual({ protocol: "", extensions: "", bufferedAmount: 0 });
+    const records = [first, ...failures] as Record<string, string>[];
     expect(records.map((record) => Object.keys(record)[0])).toEqual(["subProtocol", "binaryType", "binaryFrame"]);
     for (const record of records) expect(Object.values(record)[0]).toContain(notSupported);
+  });
+
+  test("the harness's state isn't visible to the page: a script can't forge a frame", async () => {
+    const sim = await newGame();
+    const recorder = await startRecorder(
+      sim,
+      `const socket = new WebSocket("${CONTROL_URL}");
+       record(Object.getOwnPropertyNames(socket).concat(Object.getOwnPropertyNames(Object.getPrototypeOf(socket))).sort());`,
+    );
+    await sim.advance(10);
+    expect(await recorder.records()).toEqual([
+      [
+        "CLOSED",
+        "CLOSING",
+        "CONNECTING",
+        "OPEN",
+        "binaryType",
+        "bufferedAmount",
+        "close",
+        "constructor",
+        "extensions",
+        "onclose",
+        "onerror",
+        "onmessage",
+        "onopen",
+        "protocol",
+        "readyState",
+        "send",
+        "url",
+        "addEventListener",
+        "removeEventListener",
+      ].sort(),
+    ]);
   });
 
   test("the parent can't address a connection that never existed", async () => {
@@ -254,10 +395,24 @@ test("a socket outlives the script that opened it, as in a browser", async () =>
 });
 
 describe("determinism", () => {
-  const CHATTY_SCRIPT = `const socket = new WebSocket("${CONTROL_URL}");
-     let count = 0;
-     socket.onopen = () => setInterval(() => socket.send("tick " + ++count), 100);
-     socket.onmessage = (event) => record(event.data);`;
+  // Every kind of event the page causes itself: opens, frames, its own close (also of a socket not yet open), and a
+  // refused connection.
+  const CHATTY_SCRIPT = `let count = 0;
+     const openSocket = () => {
+       const socket = new WebSocket("${CONTROL_URL}");
+       socket.onopen = () => {
+         const interval = setInterval(() => {
+           socket.send("tick " + ++count);
+           if (count % 10 === 0) { clearInterval(interval); socket.close(1000, "rest"); }
+         }, 100);
+       };
+       socket.onmessage = (event) => record(event.data);
+       socket.onclose = (event) => { record("closed " + event.code); setTimeout(openSocket, 150); };
+       const refused = new WebSocket("ws://127.0.0.1:9");
+       refused.onclose = (event) => record("refused " + event.code);
+       new WebSocket("${CONTROL_URL}").close();
+     };
+     openSocket();`;
 
   async function runWithSteps(stepsMs: number[]): Promise<{ outbox: unknown[]; hash: string }> {
     const sim = await newGame();
@@ -279,6 +434,13 @@ describe("determinism", () => {
     expect(oneStep.outbox.length).toBeGreaterThan(25);
     expect(secondSteps).toEqual(oneStep);
     expect(shortSteps).toEqual(oneStep);
+  });
+
+  test("1 ms steps, so every page event falls on a step boundary, change nothing either", async () => {
+    const totalMs = 1_300;
+    const oneStep = await runWithSteps([totalMs]);
+    const millisecondSteps = await runWithSteps(Array.from({ length: totalMs }, () => 1));
+    expect(millisecondSteps).toEqual(oneStep);
   });
 
   async function runEcho(realReplyDelayMs: number): Promise<{ outbox: unknown[]; hash: string }> {

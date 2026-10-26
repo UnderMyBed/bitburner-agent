@@ -203,22 +203,27 @@ const replies = await sim.network.take();   // [{ type: "message", data: '{"json
 ```
 
 - **Nothing crosses in real time**, so determinism holds:
-  - What the page's sockets do (connect, send, close) goes into an outbox, which `network.take()` empties.
-  - What the parent sends or closes (`network.send`, `network.close`) is due at that virtual moment, so it's delivered at the start of the next `advance` or `runUntil`.
+  - What the page's sockets do (connect, send, close) goes into an outbox, which `network.take()` empties. It isn't paged like the event log, and it grows until it's taken, so a parent driving sockets takes it every step.
+  - What the parent sends or closes (`network.send`, `network.close`) is due at that virtual moment, so it's delivered at the start of the next `advance` or `runUntil`, in request order on each connection. A page timer already due at that moment may run first.
   - Events the page causes itself arrive 1 virtual ms after the call that caused them: a socket opening, a connection refused, its own close completing.
-  - Every event is a task of its own. A frame the parent sends before a socket's open arrives after it.
+  - Every event is a task of its own. A frame the parent sends before a socket's open waits for it, so it can arrive after a later frame to another, already open socket.
   - So the same seed and calls give the same outbox and state hash, whatever real time the parent takes. While the parent sends nothing, step sizes don't matter either. Once it replies, replies take a step, so drive it with a fixed step.
-- **Listening URLs match exactly, as the browser normalises them:** `ws://localhost:1` isn't `ws://127.0.0.1:1`. A socket to any other URL fails as a refused connection does: `error`, then `close` with 1006.
+- **URLs are taken as Chromium takes them** (the WHATWG spec): relative to the page, `http:`/`https:` as `ws:`/`wss:`, and a fragment or any other scheme is a `SyntaxError`. Listening URLs then match exactly, as normalised: `ws://localhost:1` isn't `ws://127.0.0.1:1`. A socket to any other URL fails as a refused connection does (`error`, then `close` with 1006), and nothing it does reaches the parent.
 - **Browser semantics** cover what the game's RFA client and our Agent use:
   - the `readyState`s;
-  - `send` while connecting throws `InvalidStateError`, and frames are dropped once closing has begun;
-  - `close` codes and reasons are checked as Chromium checks them;
+  - `send` while connecting throws `InvalidStateError`; anything but binary data is sent as its text, as WebIDL converts it; frames are dropped once closing has begun;
+  - `close` codes are converted ([Clamp]) and checked, and reasons checked, as Chromium does; a reason without a code closes with 1000;
   - `on*` handlers and listeners, called with `this` as the socket, and events with `target`/`currentTarget`, `data`, and `code`/`reason`/`wasClean`;
+  - a listener's exception is reported as uncaught at once, and a promise it returns is left alone, so a rejection is an unhandled rejection the game handles as in a browser;
+  - `protocol` and `extensions` are `""` and `bufferedAmount` is 0: none was asked for, and frames leave at once;
   - **a socket outlives the script that opened it.**
+  - The harness's own state isn't on the socket, so a script sees only what a browser shows.
   - Binary frames, a non-default `binaryType` and sub-protocols throw "not supported in the simulator".
 - **The game's own RFA client** starts as the page script does: a timer 2 s after the page loads (`index.tsx:37`) connects with the settings then. Port 0, the default, means it doesn't. Its requests are answered by the game's own handlers.
-- **`gameSettings`** sets the RFA client's address, port and reconnection delay, and `AutoexecScript`, right after the fixture boots, as a player would in the options pages. A harness edit. Settings are saved, so they're part of the state hash.
-- **`network.close(id, code, reason)`** takes a code a server can send: 1000-4999, apart from the reserved 1005, 1006 and 1015. On a socket that hasn't opened yet, it fails the connection, as a refused handshake does (`error`, `close` 1006). Both `send` and `close` return false on a connection that's already closing or closed, and throw for one the page never opened.
+- **`gameSettings`** sets the RFA client's address, port and reconnection delay, and `AutoexecScript`, right after the fixture boots, as a player would in the options pages. A harness edit.
+  - Settings are saved, so they're part of the state hash, and `sim.save()` carries them.
+  - With a save fixture they're set after the save has loaded, so an `AutoexecScript` set this way runs on the next load, not this one: the load has already run the save's own autoexec.
+- **`network.send(id, data)`** takes text. **`network.close(id, code, reason)`** takes a code a server can send (1000-4999, apart from the reserved 1005, 1006 and 1015) and a reason of at most 123 UTF-8 bytes. On a socket that hasn't opened yet, `close` fails the connection, as a refused handshake does (`error`, `close` 1006). Both return false on a connection that's closing or closed, from either side, and throw for an id the page never had.
 
 ### Pages and the BitVerse
 
@@ -317,7 +322,7 @@ npm run bench -w @bitburner-agent/sim -- --profile <workload> [--out file.cpupro
 
 ## Determinism
 
-**The guarantee:** the same seed, epoch, fixture, prompt rules and sequence of calls give the same `stateHash()`, whatever the `advance` or `runUntil` step sizes, on any machine. Garbage collection doesn't change it either, including the full collections `diagnostics.heap()` takes, because the build holds every compiled script module ([Differences from a browser](#differences-from-a-browser)). `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
+**The guarantee:** the same seed, epoch, fixture, prompt rules, network, game settings and sequence of calls give the same `stateHash()`, on any machine. Step sizes don't matter while the parent sends nothing to the page's sockets. Once it replies, its replies are delivered at the next `advance`, so the step sizes become part of the call sequence ([Network](#network)). Garbage collection doesn't change it either, including the full collections `diagnostics.heap()` takes, because the build holds every compiled script module ([Differences from a browser](#differences-from-a-browser)). `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
 
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
@@ -346,13 +351,13 @@ Other packages only use `Simulation`; the rest of this section describes the hos
    - Between timers, the clock yields to the real event loop through the import barrier, so virtual time never moves while a script is loading. This relies on a fake-timers internal; see the comment in `clock.ts`.
    - fake-timers is loaded from its own source with one patch (`skipEmptyTimerScans`; `node_modules` stays as installed). When no timer is due in the range being run, it no longer scans every pending timer to find that out, so the clock's cost per step no longer grows in proportion to the timers pending ([#74](https://github.com/UnderMyBed/bitburner-agent/issues/74), [benchmarks](../../docs/sim/benchmarks.md#scaling-with-running-scripts)). The results are identical while the timer heap's order follows due times, which the host ensures: no delay reaches fake-timers as NaN ([#80](https://github.com/UnderMyBed/bitburner-agent/issues/80)). Loading fails if fake-timers isn't the version, or the lines, the patch was made for.
    - Timer callbacks run with `this` set to `window`, as in a browser (fake-timers would pass `null`). The game relies on it: `Engine.start` is passed bare to `setTimeout`. An exception a callback throws is logged as uncaught, and the clock carries on; fake-timers would rethrow it.
-   - Then the network (`src/host/parity/network.ts`): offline, except for sockets to the parent, whose events run on this clock ([Network](#network)).
    - Timer delays are taken, and nested timers clamped, as Chromium 146 does (`browserDelay`, `nestedDelay`). A timer's nesting level resets to 0 between timers and wherever another task begins (`beginTask`): when a script module's import settles, and for a message, an IndexedDB step or an animation frame ([Differences from a browser](#differences-from-a-browser)).
+   - Then the network (`src/host/parity/network.ts`): offline, except for sockets to the parent, whose events run on this clock ([Network](#network)).
 6. **The engine bundle** (`loadEngine`), after two things:
    - `JEST_WORKER_ID` is removed from the environment (the game reads it while loading).
    - **Node's globals are hidden** (`src/host/parity/node-globals.ts`): `process`, `Buffer`, `global`, `setImmediate` and `clearImmediate`, as a browser has none of them. The game's libraries then take their browser paths while loading, and the game installs jszip's `setImmediate` polyfill on the window, which the bare names then follow, as in a browser. Host code imports `process` and `Buffer` from `node:` modules. Node's own internals still find them, by who's asking, and fake-indexeddb schedules on the real `setImmediate`.
 
-   Then the page's globals (`installPageGlobals`), the barrier-aware import function (`setScriptImport`), the event listener (`setGameEventListener`) and the prompt rules (`setPromptAnswerer`).
+   Then the page's globals (`installPageGlobals`), the barrier-aware import function (`setScriptImport`), the event listener (`setGameEventListener`) and the prompt rules (`setPromptAnswerer`), and the RFA client's 2 s timer starts (`startRemoteFileApi`), as when the page script loads. `gameSettings` are applied once the fixture has booted, before that timer fires.
 
 ## Browser globals, errors and network
 
