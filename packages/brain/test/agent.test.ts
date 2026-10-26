@@ -98,17 +98,23 @@ test("a wrong token is refused (4003), and the Agent keeps trying, backing off t
 test("when the brain drops the connection, the Agent comes back after 1 s, every time, in the same session", async () => {
   const { game, events, connections, runUntil } = await gameWithAgent();
   const comebackDelaysMs: number[] = [];
+  const fastSnapshotCount = () =>
+    events.filter((event) => event.type === "snapshotReceived" && event.snapshot.tier === "fast").length;
   // Twice: being welcomed resets the backoff, so the second comeback isn't slower.
   for (const connectionIndex of [0, 1]) {
     await runUntil(() => eventsOfType(events, "agentConnected").length === connectionIndex + 1, 10_000);
+    // Dropped just after a fast snapshot, while the Agent sleeps until its next round (2 s): it notices then.
+    const fastSnapshotsBefore = fastSnapshotCount();
+    await runUntil(() => fastSnapshotCount() > fastSnapshotsBefore, 5_000);
     const droppedAtMs = game.clock.now();
     connections[connectionIndex]?.close(4999, "brain restarting");
     await runUntil(() => eventsOfType(events, "agentConnected").length === connectionIndex + 2, 10_000);
     comebackDelaysMs.push((events.at(-1)?.atMs as number) - droppedAtMs);
   }
+  // Up to the 2 s round, then the 1 s backoff: never the 2 s a backoff without the reset would give.
   for (const delayMs of comebackDelaysMs) {
-    expect(delayMs).toBeGreaterThanOrEqual(1_000);
-    expect(delayMs).toBeLessThan(1_500);
+    expect(delayMs).toBeGreaterThanOrEqual(2_500);
+    expect(delayMs).toBeLessThan(3_500);
   }
   const sessionIds = eventsOfType(events, "agentConnected").map((event) => event.agentSessionId);
   expect(new Set(sessionIds).size).toBe(1);
@@ -205,7 +211,8 @@ test("replaced by a newer Agent (4000), the older one exits and doesn't come bac
   // A second copy (its argument tells them apart) connects and replaces the first.
   expect((await simulation.run("home", agentFile("deployment-a"), { args: ["second"] })).error).toBeUndefined();
   await runUntil(() => eventsOfType(events, "agentConnected").length === 2, 5_000);
-  await game.run(1_000);
+  // The old one notices at the end of its 2 s sleep between snapshot rounds.
+  await game.run(2_500);
   expect((await simulation.ps("home")).map((process) => process.args)).toEqual([["second"]]);
   // Long after the first one's backoff would have run out, nothing else has connected.
   await game.run(60_000);

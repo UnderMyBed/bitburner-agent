@@ -1,10 +1,11 @@
 // agent/<deploymentId>/agent.js: the always-running in-game Agent (architecture §5.1). It holds the control channel to
-// the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff.
-// Snapshots come with #89.
+// the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff. While
+// welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts) and sleeps in between.
 //
 // Two rules make it safe:
-// - Socket handlers never call `ns`. While the script awaits `ns.sleep`, the game kills it for any `ns` call made from
-//   another callback (NetscriptHelpers.tsx:405-431). The handlers only queue events; the main loop acts on them.
+// - Socket handlers never call `ns`. While the script awaits `ns.sleep` (between rounds), the game kills it for any
+//   `ns` call made from another callback (NetscriptHelpers.tsx:405-431). The handlers only queue events; the main loop
+//   acts on them.
 // - It keeps no state at module level (architecture R10): the game may or may not reuse a module.
 //
 // RAM: `run` (1.0 GB) is the one function referenced that costs anything; the rest are free (ram-budget.json).
@@ -23,6 +24,7 @@ import {
   parseBrainMessage,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
+import { createSnapshotter, SNAPSHOT_ROUND_MS } from "../agent/snapshotter.ts";
 import type { NS } from "../ns.ts";
 
 const FIRST_RECONNECT_DELAY_MS = 1_000;
@@ -44,6 +46,10 @@ function createEventQueue() {
     async next(): Promise<SocketEvent> {
       while (pending.length === 0) await new Promise<void>((resolve) => (wakeMainLoop = resolve));
       return pending.shift() as SocketEvent;
+    },
+    /** The next event if there is one, without waiting. */
+    takeIfAny(): SocketEvent | undefined {
+      return pending.shift();
     },
   };
 }
@@ -71,16 +77,19 @@ export async function main(ns: NS): Promise<void> {
   if (token === "") return reportCantStart("token.txt is missing or empty");
   const agentSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const game = ns.ui.getGameInfo();
+  const snapshotter = createSnapshotter(ns, { deploymentId, agentSessionId });
 
-  // The game logs why a start failed (no RAM, a missing file) only with run's log on.
-  ns.enableLog("run");
   /**
    * Starts `agent/boot.js`, which starts the deployed Agent; the caller then exits. Returns false if it couldn't (home
    * is full): this Agent carries on, so there is always one, and tries again at its next disconnect.
    */
   const startedBoot = (why: string): boolean => {
+    // The game logs why a start failed (no RAM, a missing file) only with run's log on. Off again after, or every
+    // worker start would be logged.
+    ns.enableLog("run");
     // With this Agent's pid, boot.js waits for it to exit before starting the deployed one.
     const started = ns.run(BOOT_SCRIPT, 1, ns.pid) !== 0;
+    ns.disableLog("run");
     ns.print(`agent: ${why}; ${started ? "handed over to" : "carrying on: couldn't start"} ${BOOT_SCRIPT}`);
     return started;
   };
@@ -102,9 +111,16 @@ export async function main(ns: NS): Promise<void> {
     connection.onclose = (event) => events.push({ kind: "closed", code: event.code });
 
     let closeCode = 0;
+    let welcomed = false;
     while (closeCode === 0) {
-      const event = await events.next();
-      if (event.kind === "opened") {
+      const event = welcomed ? events.takeIfAny() : await events.next();
+      if (event === undefined) {
+        // Welcomed, with nothing to act on: a round of snapshots, then sleep until the next. Socket events queue
+        // meanwhile.
+        const roundStartedAtMs = Date.now();
+        await snapshotter.takeRound((message) => connection.send(encodeControlMessage(message)));
+        await ns.sleep(Math.max(0, roundStartedAtMs + SNAPSHOT_ROUND_MS - Date.now()));
+      } else if (event.kind === "opened") {
         connection.send(
           encodeControlMessage({
             protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -123,6 +139,8 @@ export async function main(ns: NS): Promise<void> {
       } else if (event.kind === "message") {
         if (event.message.type === "welcome") {
           reconnectDelayMs = FIRST_RECONNECT_DELAY_MS;
+          welcomed = true;
+          snapshotter.welcomed();
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;

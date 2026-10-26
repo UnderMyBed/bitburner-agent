@@ -34,16 +34,31 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 | `tier` | `static`, `slow`, `medium` or `fast` (architecture §5.2) |
 | `sequenceNumber` | 1, 2, 3… per session and tier |
 | `gameTimeMs` | The game's `Date.now()` when it was taken |
-| `data` | The tier's contents (#89) |
+| `data` | The tier's contents: see below |
 
-**The fast snapshot is the heartbeat.** The Agent sends it every 2 s whatever happens, with what it knows itself and the fast worker's data, or `null` when no worker could run (#89). So liveness never depends on a worker getting RAM, and there's no separate heartbeat message.
+**The fast snapshot is the heartbeat.** The Agent sends it every 2 s whatever happens, with what it knows itself and the fast worker's data, or `null` when no worker could run. So liveness never depends on a worker getting RAM, and there's no separate heartbeat message.
+
+### Each tier's `data`
+
+The types are in `packages/core/src/snapshots.ts`. Server and player fields keep the game's own names (`ns.getServer`, `ns.getPlayer`). Fields the game leaves undefined are absent.
+
+| Tier | When | `data` |
+|---|---|---|
+| `static` | Once per Agent start; resent, unchanged, after each `welcome` | `servers`: every server `scan` reaches from home, each with `hostname`, `maxRam`, `cpuCores`, `purchasedByPlayer`, and, for hackable ones, `moneyMax`, `minDifficulty`, `requiredHackingSkill`, `numOpenPortsRequired` |
+| `slow` | Every 60 s | `resetInfo`: `ns.getResetInfo()` with its Maps as objects (`ownedAugs`: augmentation → level, `ownedSF`: Source-File → level, `bitNodeOptions.sourceFileOverrides`), plus `lastAugReset`, `lastNodeReset`, `currentNode`. `purchasedServers`: their hostnames |
+| `medium` | Every 10 s | `player`: `ns.getPlayer()` whole (skills, exp, money, city, location, factions, jobs, karma, multipliers…). `servers`: each reachable server's `hostname`, `hasAdminRights`, `backdoorInstalled`, `moneyAvailable`, `hackDifficulty` |
+| `fast` | Every 2 s | `degradedTiers`: the tiers whose worker couldn't start or didn't report on its last attempt. `pageHeapUsedBytes`: the page's JS heap, `null` where the browser doesn't report it. `game`: the fast worker's `money`, `homeRamUsed` (the Agent and the worker included), `homeMaxRam` and `homeProcesses` (each with `pid`, `filename`, `threads`, `args`, `temporary`), or `null` when the worker couldn't run |
+
+`gameTimeMs` is when the worker read the game (for the fast tier without a worker, when the round started).
 
 ## Brain → Agent
 
 | Message | Meaning |
 |---|---|
-| `welcome` | Accepted: the Agent sends all four tiers at once (a full snapshot), then each at its cadence (#89) |
+| `welcome` | Accepted: the Agent sends all four tiers in its next round (a full snapshot), then each at its cadence |
 | `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits, and `boot.js` starts the deployment `agent/current.txt` names (#88). If `boot.js` can't start, the Agent stays |
+
+Once welcomed, the Agent sleeps between snapshot rounds, so it acts on a message or a close at its next round: within 2 s.
 
 ## Close codes, and what the Agent does
 

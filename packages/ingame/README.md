@@ -2,20 +2,22 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** M2. `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)) and the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)) are built; its snapshot workers ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)) follow.
+> **Status:** M2. Built: `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js` |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js` |
+| `src/agent/` | The Agent's modules: `snapshotter.ts` |
+| `src/workers/` | What the snapshot workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
 | `src/` | In-game code, typechecked as the game's page sees it: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` (`src/tsconfig.json`) |
 | `scripts/` | The build (Node): `bundles.ts`, and `build.ts`, its command |
 | `test/` | Tests (Node), which test the built bundles in the simulator |
 | `ram-budget.json` | Each bundle's RAM budget, in GB |
 
-In-game code imports `@bitburner-agent/core` (for the deploy layout and the control protocol) and its own modules. The bundle includes them; nothing is imported at runtime.
+In-game code imports `@bitburner-agent/core` (for the deploy layout, the control protocol and the snapshot types) and its own modules. The bundle includes them; nothing is imported at runtime.
 
 ## Build
 
@@ -53,7 +55,13 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | Script | Calls | RAM (budget) |
 |---|---|---|
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (2.7) |
-| `agent.js` | `run` (1.0 GB); `read`, `sleep`, `atExit`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and `disableLog` cost nothing | 2.6 GB (3.0) |
+| `agent.js` | `run` (1.0 GB); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.6 GB (3.0) |
+| `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
+| `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
+| `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB) | 4.3 GB (4.3) |
+| `snapshot-fast.js` | `getPlayer` (0.5 GB), `ps` (0.2 GB), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.4 GB (2.4) |
+
+The workers write to a port (`writePort`, free). The Agent plus its largest worker (4.3 GB) is 6.9 GB, within a fresh save's 8 GB home; a test checks the budgets keep it so.
 
 ## Deploy layout
 
@@ -86,12 +94,12 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 
 ## The Agent
 
-`agent/<deploymentId>/agent.js` runs all the time and holds the control channel to the brain ([protocol](../../docs/bridge/protocol.md), architecture §5.1). Snapshots come with [#89](https://github.com/UnderMyBed/bitburner-agent/issues/89).
+`agent/<deploymentId>/agent.js` runs all the time, holds the control channel to the brain ([protocol](../../docs/bridge/protocol.md), architecture §5.1), and sends [snapshots](#snapshots).
 
 **Lifecycle:**
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
-3. **`welcome`:** it stays connected, and its backoff goes back to 1 s.
+3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a close) after each round, so within 2 s.
 4. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 5. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
@@ -103,10 +111,28 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 
 Frames it can't parse, or of a type it doesn't know, are ignored.
 
-**The event-queue rule: socket handlers never call `ns`.** While a script awaits a call the game delays (`ns.sleep`, `hack`, `grow`, `weaken`, `share`), the game kills it for any `ns` call made from another callback, such as a socket handler (game source: `src/Netscript/NetscriptHelpers.tsx:405-431`). `ns.asleep` doesn't set that guard (`src/NetscriptFunctions.ts:259-265`). So the handlers only put events on an in-memory queue, and the main loop takes them off and acts. The main loop waits on that queue with a plain promise, not an `ns` call.
+**The event-queue rule: socket handlers never call `ns`.** While a script awaits a call the game delays (`ns.sleep`, `hack`, `grow`, `weaken`, `share`), the game kills it for any `ns` call made from another callback, such as a socket handler (game source: `src/Netscript/NetscriptHelpers.tsx:405-431`). `ns.asleep` doesn't set that guard (`src/NetscriptFunctions.ts:259-265`). So the handlers only put events on an in-memory queue, and the main loop takes them off and acts. Before a welcome, the main loop waits on that queue with a plain promise; after it, it sleeps between snapshot rounds, while frames keep arriving.
 
-Today the main loop sleeps (`ns.sleep`) only while disconnected, when no socket is open, so no frame can arrive during a sleep yet. The tests include a script that breaks the rule, to show the trap is real: it's killed. The test that frames arriving during a sleep don't kill the Agent comes with #89, whose loop sleeps while connected.
+The tests show both sides: frames arriving while the Agent sleeps don't kill it (and a handler that calls `ns` makes that test fail), and a script that breaks the rule is killed.
+
+## Snapshots
+
+Each round (every 2 s while welcomed) the Agent runs the tiers that are due, one worker at a time (architecture §5.2; each tier's data: [protocol](../../docs/bridge/protocol.md#each-tiers-data)):
+1. **fast**, every round, then sends it whatever happened: it's the heartbeat;
+2. **static**, until it has it once; it keeps it for its life and resends it after each welcome;
+3. **slow** every 60 s and **medium** every 10 s, both at once after each welcome.
+
+**Workers** (`agent/<deploymentId>/snapshot-<tier>.js`) are short-lived and hold the costly NS calls, so the Agent stays at 2.6 GB:
+- The Agent runs each as a **temporary** script (`ns.run(file, { temporary: true })`), with no arguments, so a save never holds one.
+- The worker reads the game and writes `{ workerPid, gameTimeMs, data }` to port 89001 (`SNAPSHOT_WORKER_PORT`), then exits.
+- The Agent waits for a report carrying that worker's pid, for up to 5 s. A report from an earlier worker that came too late is skipped. While it waits it uses `ns.asleep`, not `ns.sleep`: a `sleep` that lost the race would leave the script marked busy, and its next `ns` call would get it killed.
+
+**Degraded:** a worker that can't start (home is full) or doesn't report within 5 s leaves its tier skipped this time, and the tier is named in the fast snapshot's `degradedTiers` until it next succeeds. A skipped slow or medium tier is tried again at its next slot; static, every round until it succeeds. The fast snapshot is still sent, with `game: null`. So on a full home the brain sees a live but blind Agent, never a dead one. The Agent logs a tier being skipped or coming back, not every round.
+
+A timed-out worker delays its round by 5 s. The fast tier goes first in each round, so with one broken worker the heartbeat stays within the gap threshold (6 s); two timing out in the same round would show as a gap.
+
+## Hygiene and tests
 
 **Hygiene:** no state at module level, since the game may or may not reuse a module (architecture R10); time from `Date.now()` and randomness from `Math.random()` only, both virtual in the simulator (R11).
 
-**Tests:** `packages/brain/test/agent.test.ts` runs the built Agent in the simulator against the brain's real `ControlChannel`, on the lockstep driver, in virtual time. They live in `brain` because they need both sides, and `ingame` doesn't depend on the brain. `ingame` exports its build (`@bitburner-agent/ingame/build`) for them.
+**Tests:** `packages/brain/test/agent.test.ts` (the connection and lifecycle) and `snapshots.test.ts` (the tiers, a full home, a broken worker, a reload) run the built Agent and its workers in the simulator against the brain's real `ControlChannel`, on the lockstep driver, in virtual time. They live in `brain` because they need both sides, and `ingame` doesn't depend on the brain. `ingame` exports its build (`@bitburner-agent/ingame/build`) for them.

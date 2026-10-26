@@ -31,3 +31,12 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
     expect(measured[fileName], `${fileName}'s static RAM`).toBeLessThanOrEqual(budgets[fileName] as number);
   }
 });
+
+test("the Agent and its largest worker's budgets fit in a fresh save's 8 GB home", () => {
+  const largestWorkerBudget = Math.max(
+    ...Object.entries(budgets)
+      .filter(([fileName]) => fileName.startsWith("snapshot-"))
+      .map(([, budget]) => budget),
+  );
+  expect((budgets["agent.js"] as number) + largestWorkerBudget).toBeLessThanOrEqual(8);
+});

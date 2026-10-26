@@ -271,12 +271,22 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 
   | Tier | Cadence | Contents |
   |---|---|---|
-  | static | once per reset, plus on demand | server max money, min security, required hack level, ports; faction/aug catalogue; BitNode multipliers |
+  | static | once per Agent start (so once per reset), resent after each welcome | server max money, min security, required hack level, ports; faction/aug catalogue; BitNode multipliers |
   | slow | 60 s | factions and rep, owned/queued augs, the big subsystems (gang, corp, Bladeburner, sleeves, Dark Net) |
   | medium | 10 s | player stats and exp, server money and security, purchased servers |
   | fast | 2 s | money, player focus, running scripts, reflex health metrics |
 
 - Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps. Tiers are merged into one model on the brain side.
+- **M2 contents (#89):** what can be read cheaply without Singularity ([each tier's data](bridge/protocol.md#each-tiers-data)):
+  - static: the servers' fixed fields;
+  - slow: the reset info (installed augmentations, Source-Files, the BitNode) and the purchased servers;
+  - medium: the player, and every server's money, security and access;
+  - fast: money, home's RAM and the scripts on home.
+
+  Reputation, queued augmentations and current work need Singularity, so they come later (M3/M4).
+- **Static once per Agent start:** installing augmentations or changing BitNode kills every script, so a reset always means a new Agent. The Agent keeps the static data and resends it after each welcome. Fields that change, such as admin rights and backdoors, are in medium.
+- **The fast snapshot is the heartbeat:** it's sent every 2 s even when no worker can run, with `game: null` and the skipped tiers in `degradedTiers`. A full home never looks like a dead game.
+- **Workers** run one at a time, as temporary scripts, and report through a port. One that can't start or doesn't report within 5 s leaves its tier skipped until it next succeeds ([details](../packages/ingame/README.md#snapshots)).
 
 ### 5.3 Reconciler
 - **Namespace ownership:** the reconciler manages only the scripts it owns: everything under `/agent/`, plus legacy reflexes it launched itself. It never kills or modifies anything else. Foreign scripts' RAM is counted as unavailable.
