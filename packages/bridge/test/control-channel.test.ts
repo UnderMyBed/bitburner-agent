@@ -7,7 +7,12 @@ import {
   type SnapshotTier,
 } from "@bitburner-agent/core";
 import { beforeEach, describe, expect, test } from "vitest";
-import { ControlChannel, type ControlChannelEvent, HELLO_TIMEOUT_MS } from "../src/control-channel.ts";
+import {
+  ControlChannel,
+  type ControlChannelEvent,
+  HELLO_TIMEOUT_MS,
+  REMEMBERED_SESSIONS,
+} from "../src/control-channel.ts";
 import { ManualClock, MemoryConnection } from "./helpers/fakes.ts";
 
 const TOKEN = "the-token";
@@ -119,6 +124,21 @@ describe("accepting an Agent", () => {
     expect(otherSession.closedWith?.code).toBe(CONTROL_CLOSE_CODES.badMessage);
   });
 
+  test("a welcomed Agent isn't timed out later", () => {
+    const connection = connectAgent();
+    clock.advance(HELLO_TIMEOUT_MS * 3);
+    expect(connection.closedWith).toBeNull();
+    expect(types()).toEqual(["agentConnected"]);
+  });
+
+  test("a connection that closes before saying hello isn't reported as timed out later", () => {
+    const connection = new MemoryConnection();
+    channel.accept(connection);
+    connection.dropFromGameSide();
+    clock.advance(HELLO_TIMEOUT_MS * 3);
+    expect(events).toEqual([]);
+  });
+
   test("an origin the transport refused is reported through the channel", () => {
     channel.reportRejectedOrigin("https://example.com");
     expect(events).toEqual([
@@ -184,6 +204,19 @@ describe("snapshots", () => {
     ]);
   });
 
+  test(`only the last ${REMEMBERED_SESSIONS} sessions keep their numbering, so a long run doesn't grow`, () => {
+    connectAgent().receive(snapshot(5));
+    for (let session = 2; session <= REMEMBERED_SESSIONS + 1; session++) {
+      connectAgent(hello({ agentSessionId: `session-${session}` }));
+    }
+    // session-1 is forgotten: if it ever came back, it would count from scratch.
+    connectAgent().receive(snapshot(1));
+    expect(received()).toEqual([
+      ["fast", 5, 4],
+      ["fast", 1, 0],
+    ]);
+  });
+
   test("every snapshot is stamped with the channel's clock", () => {
     const connection = connectAgent();
     clock.advance(2_000);
@@ -220,5 +253,51 @@ describe("restart, without loops", () => {
     channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
     channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
     expect(sentTypes(connection)).toEqual(["welcome", "restart"]);
+  });
+
+  test("an outdated deployment that keeps coming back is told once, then welcomed, until the deployer learns more", () => {
+    channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
+    // The game reloaded a save from before the deploy was autosaved: boot.js starts deployment-a again, and again.
+    expect(sentTypes(connectAgent(hello({ agentSessionId: "session-1" })))).toEqual(["restart"]);
+    expect(sentTypes(connectAgent(hello({ agentSessionId: "session-2" })))).toEqual(["welcome"]);
+    const third = connectAgent(hello({ agentSessionId: "session-3" }));
+    expect(sentTypes(third)).toEqual(["welcome"]);
+    // The deployer reads current.txt (it names deployment-a), deploys again, and the connected Agent is told again.
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
+    expect(sentTypes(third)).toEqual(["welcome", "restart"]);
+  });
+});
+
+describe("a listener that throws", () => {
+  test("can't leave the channel half-changed, and its error is handed on", () => {
+    const listenerErrors: unknown[] = [];
+    channel = new ControlChannel({ token: TOKEN, clock, onListenerError: (error) => listenerErrors.push(error) });
+    events = [];
+    channel.subscribe(() => {
+      throw new Error("the store is full");
+    });
+    channel.subscribe((event) => events.push(event));
+    const first = connectAgent();
+    const second = connectAgent(hello({ agentSessionId: "session-2" }));
+    expect(first.closedWith?.code).toBe(CONTROL_CLOSE_CODES.replaced);
+    expect(second.sentMessages()).toEqual([{ protocolVersion: 1, type: "welcome" }]);
+    expect(channel.connectedAgent()?.agentSessionId).toBe("session-2");
+    second.dropFromGameSide();
+    expect(channel.connectedAgent()).toBeNull();
+    // Every event still reached the other listener, and every error was handed on.
+    expect(types()).toEqual(["agentConnected", "agentDisconnected", "agentConnected", "agentDisconnected"]);
+    expect(listenerErrors).toHaveLength(4);
+  });
+
+  test("on a rejection, the connection is closed all the same", () => {
+    channel = new ControlChannel({ token: TOKEN, clock, onListenerError: () => {} });
+    channel.subscribe(() => {
+      throw new Error("the store is full");
+    });
+    const connection = new MemoryConnection();
+    channel.accept(connection);
+    connection.receive("{");
+    expect(connection.closedWith?.code).toBe(CONTROL_CLOSE_CODES.badMessage);
   });
 });

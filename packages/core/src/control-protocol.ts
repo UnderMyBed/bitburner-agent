@@ -11,7 +11,7 @@ export const CONTROL_PROTOCOL_VERSION = 1;
 export const SNAPSHOT_TIERS = ["static", "slow", "medium", "fast"] as const;
 export type SnapshotTier = (typeof SNAPSHOT_TIERS)[number];
 
-/** `ns.ui.getGameInfo()`'s fields the brain checks against the pinned version. */
+/** `ns.ui.getGameInfo()`'s fields, reported for the version check against the pinned game (the deployer, #91). */
 export interface GameInfo {
   version: string;
   versionNumber: number;
@@ -68,66 +68,97 @@ export function encodeControlMessage(message: AgentMessage | BrainMessage): stri
   return JSON.stringify(message);
 }
 
-type Fields = Record<string, unknown>;
-const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
-const isWholeNumber = (value: unknown, least: number): value is number =>
-  Number.isSafeInteger(value) && (value as number) >= least;
+/** The longest identifier or version string accepted: tokens, ids and versions are far shorter. */
+export const MAX_FIELD_LENGTH = 256;
+
+type JsonObject = Record<string, unknown>;
+const isShortNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value !== "" && value.length <= MAX_FIELD_LENGTH;
+const isSafeIntegerAtLeast = (value: unknown, minimum: number): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= minimum;
+const isDeploymentId = (value: unknown): value is string => isShortNonEmptyString(value) && isValidDeploymentId(value);
 
 /** The envelope every message shares: an object of this protocol version, with a type. */
-function parseEnvelope(text: string): ParsedMessage<Fields & { type: unknown }> {
-  let fields: unknown;
+function parseEnvelope(text: string): ParsedMessage<JsonObject> {
+  let parsed: unknown;
   try {
-    fields = JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
     return { ok: false, reason: "not JSON" };
   }
-  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return { ok: false, reason: "not a JSON object" };
   }
-  const { protocolVersion } = fields as Fields;
+  const { protocolVersion } = parsed as JsonObject;
   if (protocolVersion !== CONTROL_PROTOCOL_VERSION) {
     return {
       ok: false,
       reason: `protocol version ${JSON.stringify(protocolVersion)}, not ${CONTROL_PROTOCOL_VERSION}`,
     };
   }
-  return { ok: true, message: fields as Fields & { type: unknown } };
+  return { ok: true, message: parsed as JsonObject };
 }
 
-function gameInfoProblem(game: unknown): string | null {
-  if (typeof game !== "object" || game === null) return "game info missing";
-  const { version, versionNumber, commit, platform } = game as Fields;
-  if (!isText(version) || !isText(commit) || !isText(platform)) return "game info needs version, commit and platform";
-  if (!isWholeNumber(versionNumber, 0)) return "game info's versionNumber must be a whole number";
-  return null;
+function parseGameInfo(game: unknown): GameInfo | null {
+  if (typeof game !== "object" || game === null) return null;
+  const { version, versionNumber, commit, platform } = game as JsonObject;
+  if (!isShortNonEmptyString(version) || !isShortNonEmptyString(commit) || !isShortNonEmptyString(platform))
+    return null;
+  if (!isSafeIntegerAtLeast(versionNumber, 0)) return null;
+  return { version, versionNumber, commit, platform };
 }
 
-/** What the brain accepts from the Agent; anything else is a reason to close (4002). */
+/**
+ * What the brain accepts from the Agent; anything else is a reason to close (4002). The message is rebuilt from the
+ * known fields, so nothing else the Agent sent comes along. `data` stays as sent: it's untrusted (#89, #90).
+ */
 export function parseAgentMessage(text: string): ParsedMessage<AgentMessage> {
   const envelope = parseEnvelope(text);
   if (!envelope.ok) return envelope;
   const fields = envelope.message;
   switch (fields.type) {
     case "hello": {
-      if (!isText(fields.token)) return { ok: false, reason: "hello without a token" };
-      if (!isText(fields.deploymentId) || !isValidDeploymentId(fields.deploymentId)) {
-        return { ok: false, reason: "hello without a valid deploymentId" };
-      }
-      if (!isText(fields.agentSessionId)) return { ok: false, reason: "hello without an agentSessionId" };
-      const problem = gameInfoProblem(fields.game);
-      if (problem) return { ok: false, reason: `hello: ${problem}` };
-      return { ok: true, message: fields as unknown as HelloMessage };
+      const { token, deploymentId, agentSessionId } = fields;
+      if (!isShortNonEmptyString(token)) return { ok: false, reason: "hello without a token" };
+      if (!isDeploymentId(deploymentId)) return { ok: false, reason: "hello without a valid deploymentId" };
+      if (!isShortNonEmptyString(agentSessionId)) return { ok: false, reason: "hello without an agentSessionId" };
+      const game = parseGameInfo(fields.game);
+      if (!game) return { ok: false, reason: "hello without game info (version, versionNumber, commit, platform)" };
+      return {
+        ok: true,
+        message: {
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "hello",
+          token,
+          deploymentId,
+          agentSessionId,
+          game,
+        },
+      };
     }
     case "snapshot": {
-      if (!isText(fields.agentSessionId)) return { ok: false, reason: "snapshot without an agentSessionId" };
-      if (!SNAPSHOT_TIERS.includes(fields.tier as SnapshotTier)) {
-        return { ok: false, reason: `snapshot of tier ${JSON.stringify(fields.tier)}` };
+      const { agentSessionId, tier, sequenceNumber, gameTimeMs } = fields;
+      if (!isShortNonEmptyString(agentSessionId)) return { ok: false, reason: "snapshot without an agentSessionId" };
+      if (!SNAPSHOT_TIERS.includes(tier as SnapshotTier)) {
+        return { ok: false, reason: `snapshot of tier ${JSON.stringify(tier)}` };
       }
-      if (!isWholeNumber(fields.sequenceNumber, 1))
+      if (!isSafeIntegerAtLeast(sequenceNumber, 1)) {
         return { ok: false, reason: "snapshot sequenceNumber must be 1 or more" };
-      if (!isWholeNumber(fields.gameTimeMs, 0)) return { ok: false, reason: "snapshot without gameTimeMs" };
+      }
+      if (!isSafeIntegerAtLeast(gameTimeMs, 0)) return { ok: false, reason: "snapshot without gameTimeMs" };
       if (!("data" in fields)) return { ok: false, reason: "snapshot without data" };
-      return { ok: true, message: fields as unknown as SnapshotMessage };
+      return {
+        ok: true,
+        message: {
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "snapshot",
+          agentSessionId,
+          tier: tier as SnapshotTier,
+          sequenceNumber,
+          gameTimeMs,
+          data: fields.data,
+        },
+      };
     }
     default:
       return { ok: false, reason: `unknown message type ${JSON.stringify(fields.type)}` };
@@ -143,9 +174,7 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
     case "welcome":
       return { ok: true, message: { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" } };
     case "restart":
-      if (!isText(fields.deploymentId) || !isValidDeploymentId(fields.deploymentId)) {
-        return { ok: false, reason: "restart without a valid deploymentId" };
-      }
+      if (!isDeploymentId(fields.deploymentId)) return { ok: false, reason: "restart without a valid deploymentId" };
       return {
         ok: true,
         message: { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: fields.deploymentId },

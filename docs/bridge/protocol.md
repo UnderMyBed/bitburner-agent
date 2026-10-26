@@ -6,7 +6,12 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 
 ## Frames
 
-- Text frames of JSON, one message each. Binary frames aren't part of the protocol.
+- Text frames of JSON, one message each, of at most 16 MiB (a static-tier snapshot is well under 1 MB). Each of these closes only its own connection:
+  - a binary frame: 1003;
+  - invalid UTF-8: 1007;
+  - a larger frame: 1009.
+- The Agent connects to `ws://127.0.0.1:<port>`, not `localhost`: the brain listens on the IPv4 loopback only.
+- Identifiers and version strings are at most 256 characters. The brain keeps only the fields it knows. `data` is passed on as sent, and is untrusted.
 - Every message has `protocolVersion: 1` and a `type`.
 - A message that doesn't parse, has another protocol version, or arrives out of order (anything before `hello`, a second `hello`, a snapshot from another session) closes the connection with **4002**.
 
@@ -17,7 +22,7 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 | Field | What |
 |---|---|
 | `token` | The shared secret the deployer wrote to `agent/<deploymentId>/token.txt` |
-| `deploymentId` | The deployment the Agent runs from (packages/ingame/README.md, "Deploy layout") |
+| `deploymentId` | The deployment the Agent runs from ([deploy layout](../../packages/ingame/README.md#deploy-layout)) |
 | `agentSessionId` | New each time the Agent starts; reconnects of the same Agent keep it |
 | `game` | `ns.ui.getGameInfo()`: `version`, `versionNumber`, `commit`, `platform` |
 
@@ -37,18 +42,21 @@ M2 only observes, so nothing else comes down yet. Desired state and intents arri
 
 | Message | Meaning |
 |---|---|
-| `welcome` | Accepted; the Agent starts its snapshots |
+| `welcome` | Accepted: the Agent sends all four tiers at once (a full snapshot), then each at its cadence (#89) |
 | `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits (#88) |
 
-## Close codes
+## Close codes, and what the Agent does
 
-| Code | When |
-|---|---|
-| HTTP 403 (no connection) | The upgrade's `Origin` isn't an allowed one |
-| 4000 | A newer Agent connection replaced this one |
-| 4001 | No valid `hello` within 5 s |
-| 4002 | A message that doesn't parse, has another protocol version, or comes out of order |
-| 4003 | The `hello`'s token is wrong |
+| Code | When | The Agent ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)) |
+|---|---|---|
+| HTTP 403 (no connection) | The upgrade's `Origin` isn't an allowed one | Reconnects with backoff |
+| 4000 | A newer Agent connection replaced this one | **Exits, without reconnecting.** The newest Agent wins, and a replaced one is stale: if both reconnected, they would replace each other for ever |
+| 4001 | No valid `hello` within 5 s | Reconnects with backoff |
+| 4002 | A message that doesn't parse, has another protocol version, or comes out of order | Reconnects with backoff |
+| 4003 | The `hello`'s token is wrong | Reconnects with backoff (a new token means a new deployment, which the check below catches) |
+| 1003, 1007, 1009 | A binary frame, invalid UTF-8, a frame over 16 MiB | Reconnects with backoff |
+
+Before each reconnect, the Agent reads `agent/current.txt` (which costs no RAM). If it no longer names the Agent's deployment, the Agent runs `agent/boot.js` and exits.
 
 Every refusal is reported (`connectionRejected`, with the reason, and the origin for a 403), so a wrong setting shows on the dashboard instead of failing silently.
 
@@ -61,6 +69,13 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
   - whether the brain is on hold (a game version it wasn't built for);
   - whether the last deploy failed.
 
-  `restart` is sent when the deployment is known, there's no hold or failed deploy, and the Agent runs another deployment. It's sent once per deployment: on `hello` (in place of `welcome`), or to the connected Agent when a deploy completes. So a version hold or a failed deploy can never make the Agent restart over and over.
-- **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The count stays with the session across reconnects. Property tests check this under duplicated, dropped and reordered frames.
+  `restart` is sent when the deployment is known, there's no hold or failed deploy, and the Agent runs another deployment: on `hello` (in place of `welcome`), or to the connected Agent when a deploy completes. So a version hold or a failed deploy never makes the Agent restart.
+  - **Once per outdated deployment.** An Agent from a deployment already told to restart is welcomed instead, until the deployed id changes. That stops a loop. Suppose the game reloads a save from before the deploy was autosaved:
+    1. `boot.js` starts the old deployment again, which is welcomed and reports.
+    2. The deployer reconnects over RFA and reads `current.txt`, which names the old id.
+    3. It deploys again, and that change lets the next restart through.
+- **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The numbering stays with the session across reconnects, for the 4 most recent sessions, so a 24/7 run doesn't grow. Property tests check this against a reference model under:
+  - duplicated, dropped and reordered frames;
+  - reconnects and replacements;
+  - frames still in flight to a replaced connection.
 - **Time** comes from the brain's injected clock (architecture R11). Every event's `atMs` is from it, so under the simulator they're virtual time (#90).

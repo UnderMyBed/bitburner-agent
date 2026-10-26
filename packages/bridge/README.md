@@ -27,7 +27,9 @@ The protocol, close codes and rules are in [docs/bridge/protocol.md](../../docs/
   - under the simulator, over the brain's lockstep driver ([#90](https://github.com/UnderMyBed/bitburner-agent/issues/90)). That driver lives in the brain, so `bridge` never depends on `sim` (architecture §12.2).
 - **Events** go to subscribers: `agentConnected`, `agentDisconnected`, `snapshotReceived` (with `missedBefore`, the sequence numbers skipped since the last one) and `connectionRejected` (with the reason).
 - **`Clock`:** the channel reads time and sets its hello timeout only through the clock it's given: `systemClock` live, virtual time under the simulator (architecture R11).
-- **`startWebSocketServer`** binds `127.0.0.1` and refuses an upgrade whose `Origin` isn't allowed (HTTP 403), reporting it.
+- **A listener that throws** can't stop the other listeners or leave the channel half-changed: events go out once its state is settled. Its error goes to `onListenerError`, by default raised afterwards as an uncaught exception, so the brain fails fast and is restarted rather than carry on without its store.
+- **Bounded for 24/7 runs:** the channel keeps the sequence numbering of the last `REMEMBERED_SESSIONS` (4) Agent sessions only.
+- **`startWebSocketServer`** binds `127.0.0.1` and refuses an upgrade whose `Origin` isn't allowed (HTTP 403), reporting it. Nothing a client sends can crash the brain: invalid UTF-8, a binary frame or one over `MAX_FRAME_BYTES` (16 MiB) closes that connection only. A port already in use rejects the start.
 
 ## Tests
 

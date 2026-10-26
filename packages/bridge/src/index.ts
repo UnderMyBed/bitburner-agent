@@ -8,9 +8,10 @@ export {
   type ControlChannelOptions,
   type DeploymentState,
   HELLO_TIMEOUT_MS,
+  REMEMBERED_SESSIONS,
 } from "./control-channel.ts";
 export {
-  LOOPBACK_ADDRESS,
+  MAX_FRAME_BYTES,
   type RunningWebSocketServer,
   startWebSocketServer,
   type WebSocketServerOptions,

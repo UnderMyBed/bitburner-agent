@@ -57,14 +57,34 @@ describe("rejected, each with a reason", () => {
     ["a snapshot numbered 1.5", withChanges(snapshot, { sequenceNumber: 1.5 })],
     ["a snapshot without game time", withChanges(snapshot, { gameTimeMs: undefined })],
     ["a snapshot without data", JSON.stringify({ ...snapshot, data: undefined })],
+    ["a numeric deployment id", withChanges(hello, { deploymentId: 123 })],
+    ["an over-long token", withChanges(hello, { token: "x".repeat(257) })],
+    ["an over-long version", withChanges(hello, { game: { ...hello.game, version: "3".repeat(257) } })],
   ])("%s", (_description, text) => {
     const result = parseAgentMessage(text);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).not.toBe("");
   });
 
+  test("an array isn't a message", () => {
+    expect(parseAgentMessage(JSON.stringify([hello]))).toEqual({ ok: false, reason: "not a JSON object" });
+  });
+
+  test("only the known fields come through: anything else the Agent sent is left behind", () => {
+    const extras = JSON.stringify({
+      ...hello,
+      extra: 1,
+      game: { ...hello.game, extra: 2 },
+      ["__proto__"]: { polluted: true },
+    });
+    expect(parseAgentMessage(extras)).toEqual({ ok: true, message: hello });
+  });
+
   test("a brain message the Agent doesn't know", () => {
     expect(parseBrainMessage(JSON.stringify({ protocolVersion: 1, type: "intent" })).ok).toBe(false);
     expect(parseBrainMessage(JSON.stringify({ protocolVersion: 1, type: "restart" })).ok).toBe(false);
+    expect(parseBrainMessage(JSON.stringify({ protocolVersion: 1, type: "restart", deploymentId: 123 })).ok).toBe(
+      false,
+    );
   });
 });

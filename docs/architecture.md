@@ -345,12 +345,12 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 | **RFA** (WebSocket server; the game connects to us) | Brain → game requests | Deploy bundles (`pushFile`), `calculateRam` checks, `getDefinitionFile` (live API types for drift detection), `getSaveFile` (backups and simulator seeding) |
 | **Control** (WebSocket server; the Agent connects to us) | Both ways | Snapshots up (the fast one, every 2 s, is the heartbeat); desired state and intent acknowledgements down (M3) |
 
-- The protocol is versioned JSON messages with sequence numbers ([docs/bridge/protocol.md](bridge/protocol.md)). On reconnect, the Agent sends a full snapshot and the brain resends the current desired state.
+- The protocol is versioned JSON messages with sequence numbers ([docs/bridge/protocol.md](bridge/protocol.md)). On reconnect, the Agent sends a full snapshot and the brain resends the current desired state (M3).
 - **Security.** Any web page can open a WebSocket to `localhost`, so:
   - both servers bind to `127.0.0.1` only and accept only the game's origin
   - each allows one client: the newest accepted connection replaces the old one
   - the control channel requires a **shared token**, which the deployer writes to a file only the agent reads
-- **Version handshake:** the Agent's `hello` names its deployment and the game's version. If the deployer knows a newer deployment, isn't on hold and its last deploy didn't fail, the brain tells the Agent to restart onto it, once per deployment, so a hold or a failed deploy can't cause a restart loop.
+- **Version handshake:** the Agent's `hello` names its deployment and the game's version. If the deployer knows a different deployment is deployed, isn't on hold and its last deploy didn't fail, the brain tells the Agent to restart onto it, once per outdated deployment, so neither a hold, a failed deploy nor a reloaded save can cause a restart loop.
 - **Atomic deploys.** Each deployment (a build plus its configuration) goes into its own folder (`agent/<deploymentId>/…`; the layout is in [`packages/ingame`](../packages/ingame/README.md#deploy-layout)):
   - **RAM:** every pushed script's RAM is verified with `calculateRam`. Bundles are self-contained and every deployment has new paths, so game issue #2907 (stale RAM cache for importers) can't arise.
   - **Switch-over:** the deployer writes `agent/current.txt` last, then has the old Agent restart: it runs `agent/boot.js`, which starts the new deployment's Agent, and exits ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)). `boot.js` itself never stops an Agent. The reconciler (M3) then restarts reflexes onto the new deployment.

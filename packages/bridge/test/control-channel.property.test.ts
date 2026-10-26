@@ -1,6 +1,7 @@
-// Property tests (fast-check): whatever the wire does to the Agent's snapshots (duplicates, drops, reordering) and
-// however often it reconnects, what the channel passes on per session and tier is strictly increasing, never repeated,
-// and its missed count covers exactly the sequence numbers it never passed on.
+// Property tests (fast-check): whatever the wire does to the Agent's snapshots (duplicates, drops, reordering), however
+// often the Agent reconnects or replaces its own connection, and whatever frames still arrive on a replaced one, the
+// channel passes on exactly what a reference model says, in order, and counts as missed exactly what it never passed
+// on.
 import {
   CONTROL_PROTOCOL_VERSION,
   encodeControlMessage,
@@ -9,27 +10,36 @@ import {
 } from "@bitburner-agent/core";
 import fc from "fast-check";
 import { expect, test } from "vitest";
-import { ControlChannel, type ControlChannelEvent } from "../src/control-channel.ts";
+import { ControlChannel } from "../src/control-channel.ts";
 import { ManualClock, MemoryConnection } from "./helpers/fakes.ts";
 
 const TOKEN = "the-token";
 
-/** What the wire delivers: snapshot frames (by session, tier and number), and reconnects in between. */
+type Frame = { session: number; tier: SnapshotTier; sequenceNumber: number };
+/**
+ * What happens on the wire:
+ * - `snapshot`: a frame on the session's current connection;
+ * - `reconnect`: the connection drops, and the session connects again;
+ * - `replace`: the session opens a new connection while the old one is still open (the old one is replaced, 4000);
+ * - `inFlight`: a frame that arrives on the session's previous, replaced connection.
+ */
 type WireStep =
-  | { kind: "snapshot"; session: number; tier: SnapshotTier; sequenceNumber: number }
-  | { kind: "reconnect"; session: number };
+  | ({ kind: "snapshot" } & Frame)
+  | { kind: "reconnect"; session: number }
+  | { kind: "replace"; session: number }
+  | ({ kind: "inFlight" } & Frame);
 
 /**
- * The Agent sends 1..count per tier, in order, from one session or two (a restart). The wire then duplicates some
- * frames, drops some, swaps neighbours, and reconnects anywhere.
+ * The Agent sends 1..count per tier, in order, from one session or two (a restart). The wire then duplicates frames,
+ * drops some, swaps neighbours, reconnects, replaces, and delivers frames on replaced connections, anywhere.
  */
 const wireSteps = fc
   .record({
     sessions: fc.integer({ min: 1, max: 2 }),
-    countPerTier: fc.integer({ min: 1, max: 12 }),
+    countPerTier: fc.integer({ min: 1, max: 10 }),
     perturbations: fc.array(
       fc.record({
-        kind: fc.constantFrom("duplicate", "drop", "swap", "reconnect"),
+        kind: fc.constantFrom("duplicate", "drop", "swap", "reconnect", "replace", "inFlight"),
         position: fc.nat(),
       }),
       { maxLength: 40 },
@@ -51,71 +61,102 @@ const wireSteps = fc
       else if (kind === "swap" && index + 1 < steps.length) {
         steps[index] = steps[index + 1] as WireStep;
         steps[index + 1] = step;
-      } else if (kind === "reconnect") steps.splice(index, 0, { kind: "reconnect", session: step.session });
+      } else if (kind === "reconnect" || kind === "replace") steps.splice(index, 0, { kind, session: step.session });
+      else if (kind === "inFlight" && step.kind === "snapshot") steps.splice(index, 0, { ...step, kind: "inFlight" });
     }
     return steps;
   });
 
-function replay(steps: WireStep[]): ControlChannelEvent[] {
-  const channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
-  const events: ControlChannelEvent[] = [];
-  channel.subscribe((event) => events.push(event));
-  let connection: MemoryConnection | null = null;
-  let connectedSession: number | null = null;
-  for (const step of steps) {
-    if (step.kind === "reconnect" || step.session !== connectedSession) {
-      connection?.dropFromGameSide();
-      connection = new MemoryConnection();
-      channel.accept(connection);
-      connection.receive(
-        encodeControlMessage({
-          protocolVersion: CONTROL_PROTOCOL_VERSION,
-          type: "hello",
-          token: TOKEN,
-          deploymentId: "deployment-a",
-          agentSessionId: `session-${step.session}`,
-          game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
-        }),
-      );
-      connectedSession = step.session;
-      if (step.kind === "reconnect") continue;
-    }
-    connection?.receive(
-      encodeControlMessage({
-        protocolVersion: CONTROL_PROTOCOL_VERSION,
-        type: "snapshot",
-        agentSessionId: `session-${step.session}`,
-        tier: step.tier,
-        sequenceNumber: step.sequenceNumber,
-        gameTimeMs: step.sequenceNumber,
-        data: null,
-      }),
-    );
-  }
-  return events;
+function helloFrom(session: number): string {
+  return encodeControlMessage({
+    protocolVersion: CONTROL_PROTOCOL_VERSION,
+    type: "hello",
+    token: TOKEN,
+    deploymentId: "deployment-a",
+    agentSessionId: `session-${session}`,
+    game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+  });
 }
 
-test("passed on strictly increasing, never repeated, and missed counts exactly what was never passed on", () => {
+function frameText({ session, tier, sequenceNumber }: Frame): string {
+  return encodeControlMessage({
+    protocolVersion: CONTROL_PROTOCOL_VERSION,
+    type: "snapshot",
+    agentSessionId: `session-${session}`,
+    tier,
+    sequenceNumber,
+    gameTimeMs: sequenceNumber,
+    data: null,
+  });
+}
+
+interface PassedOn {
+  key: string;
+  sequenceNumber: number;
+  missedBefore: number;
+}
+
+/** Runs the steps through a real channel. */
+function replayThroughChannel(steps: WireStep[]): PassedOn[] {
+  const channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+  const passedOn: PassedOn[] = [];
+  channel.subscribe((event) => {
+    if (event.type !== "snapshotReceived") return;
+    const { agentSessionId, tier, sequenceNumber } = event.snapshot;
+    passedOn.push({ key: `${agentSessionId}/${tier}`, sequenceNumber, missedBefore: event.missedBefore });
+  });
+  let current: { session: number; connection: MemoryConnection } | null = null;
+  let replaced: { session: number; connection: MemoryConnection } | null = null;
+  const open = (session: number) => {
+    const connection = new MemoryConnection();
+    channel.accept(connection);
+    connection.receive(helloFrom(session));
+    return { session, connection };
+  };
+  for (const step of steps) {
+    if (step.kind === "reconnect") {
+      current?.connection.dropFromGameSide();
+      current = open(step.session);
+    } else if (step.kind === "replace") {
+      replaced = current;
+      current = open(step.session);
+    } else if (step.kind === "inFlight") {
+      replaced?.connection.receiveInFlight(frameText(step));
+    } else {
+      if (current?.session !== step.session) {
+        current?.connection.dropFromGameSide();
+        current = open(step.session);
+      }
+      current.connection.receive(frameText(step));
+    }
+  }
+  return passedOn;
+}
+
+/**
+ * The reference model: a frame on the current connection passes exactly when its number is above the highest passed on
+ * for its session and tier; frames on a replaced connection never pass.
+ */
+function replayThroughModel(steps: WireStep[]): PassedOn[] {
+  const highest = new Map<string, number>();
+  const passedOn: PassedOn[] = [];
+  for (const step of steps) {
+    if (step.kind !== "snapshot") continue;
+    const key = `session-${step.session}/${step.tier}`;
+    const last = highest.get(key) ?? 0;
+    if (step.sequenceNumber <= last) continue;
+    highest.set(key, step.sequenceNumber);
+    passedOn.push({ key, sequenceNumber: step.sequenceNumber, missedBefore: step.sequenceNumber - last - 1 });
+  }
+  return passedOn;
+}
+
+test("the channel passes on exactly what the reference model does, with the same missed counts", () => {
   fc.assert(
     fc.property(wireSteps, (steps) => {
-      const passedOn = new Map<string, { sequenceNumbers: number[]; missed: number }>();
-      for (const event of replay(steps)) {
-        if (event.type !== "snapshotReceived") continue;
-        const key = `${event.snapshot.agentSessionId}/${event.snapshot.tier}`;
-        const stream = passedOn.get(key) ?? { sequenceNumbers: [], missed: 0 };
-        stream.sequenceNumbers.push(event.snapshot.sequenceNumber);
-        stream.missed += event.missedBefore;
-        passedOn.set(key, stream);
-      }
-      for (const [key, { sequenceNumbers, missed }] of passedOn) {
-        for (let index = 1; index < sequenceNumbers.length; index++) {
-          expect(sequenceNumbers[index], key).toBeGreaterThan(sequenceNumbers[index - 1] as number);
-        }
-        const highest = sequenceNumbers.at(-1) as number;
-        expect(missed, key).toBe(highest - sequenceNumbers.length);
-      }
+      expect(replayThroughChannel(steps)).toEqual(replayThroughModel(steps));
     }),
-    { numRuns: 500 },
+    { numRuns: 1_000 },
   );
 });
 
@@ -124,14 +165,12 @@ test("with nothing lost on the wire, every snapshot is passed on once and nothin
     fc.property(fc.integer({ min: 1, max: 20 }), fc.integer({ min: 0, max: 5 }), (count, reconnects) => {
       const steps: WireStep[] = [{ kind: "reconnect", session: 1 }];
       for (let sequenceNumber = 1; sequenceNumber <= count; sequenceNumber++) {
-        steps.push({ kind: "snapshot", session: 1, tier: "fast", sequenceNumber });
+        for (const tier of SNAPSHOT_TIERS) steps.push({ kind: "snapshot", session: 1, tier, sequenceNumber });
         if (sequenceNumber <= reconnects) steps.push({ kind: "reconnect", session: 1 });
       }
-      const received = replay(steps).filter((event) => event.type === "snapshotReceived");
-      expect(received.map((event) => event.snapshot.sequenceNumber)).toEqual(
-        Array.from({ length: count }, (_, index) => index + 1),
-      );
-      expect(received.every((event) => event.missedBefore === 0)).toBe(true);
+      const passedOn = replayThroughChannel(steps);
+      expect(passedOn).toHaveLength(count * SNAPSHOT_TIERS.length);
+      expect(passedOn.every((snapshot) => snapshot.missedBefore === 0)).toBe(true);
     }),
   );
 });
