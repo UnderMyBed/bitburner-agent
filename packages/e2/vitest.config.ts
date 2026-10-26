@@ -1,10 +1,12 @@
 // npm run e2: the E2 tests, which drive the built game in Playwright's Chromium (packages/e2/README.md). Not part of
 // `npm test` or CI: E2 is a heavy tier, run on demand (architecture §9.3, ADR 0004). One file at a time, one browser.
 import { defineConfig } from "vitest/config";
-import { BROWSERS_DIRECTORY } from "./src/paths.ts";
+import { BROWSERS_DIRECTORY, REPOSITORY_ROOT } from "./src/paths.ts";
 
 export default defineConfig({
   test: {
+    // Paths below are the repository root's, wherever this is run from.
+    root: REPOSITORY_ROOT,
     include: ["packages/e2/test/**/*.e2.test.ts"],
     // The simulator makes the saves the tests load.
     globalSetup: ["packages/sim/test/global-setup.ts"],

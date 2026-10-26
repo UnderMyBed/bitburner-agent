@@ -4,7 +4,7 @@ import { get } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { BLANK_PAGE, fileForUrlPath, type GameServer, serveGame } from "../src/server.ts";
+import { BLANK_PAGE_PATH, fileForUrlPath, type GameServer, serveGame } from "../src/server.ts";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "e2-server-"));
 let server: GameServer;
@@ -57,9 +57,10 @@ describe("serveGame", () => {
   });
 
   test("a blank page on the same origin, for writing a save before the game loads", async () => {
-    const blank = await fetch(`${server.origin}${BLANK_PAGE}`);
+    const blank = await fetch(`${server.origin}${BLANK_PAGE_PATH}`);
     expect(blank.status).toBe(200);
     expect(await blank.text()).not.toContain("game");
+    expect((await fetch(`${server.origin}${BLANK_PAGE_PATH}?x=1`)).status).toBe(200);
   });
 
   test("404 for a missing file, 400 for a path outside the root or a bad escape, 405 for a POST", async () => {

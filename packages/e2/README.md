@@ -1,8 +1,10 @@
 # @bitburner-agent/e2
 
-Environment E2 (architecture §9.4): the game built from `vendor/bitburner-src` at the pinned commit, served on 127.0.0.1 and driven by Playwright. It covers what the simulator can't show: the rendered UI, and the page's real network, storage and reload ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)). The skeleton's E2 tests build on it ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97)).
+Environment E2 (architecture §9.4): the game built from `vendor/bitburner-src` at the pinned commit, served on 127.0.0.1 and driven by Playwright. It covers what the simulator can't show: the rendered UI, and the page's real network, storage and reload ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)).
 
-E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and before every release (architecture §9.3, ADR 0004). It isn't part of `npm test` or CI.
+> **Status:** M2. Built: the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)). The skeleton's E2 tests come in [#97](https://github.com/UnderMyBed/bitburner-agent/issues/97).
+
+E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and before every release ([releasing](../../docs/releasing.md) step 2; architecture §9.3, ADR 0004). It isn't part of `npm test` or CI.
 
 ## Running it
 
@@ -10,86 +12,104 @@ E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and bef
 npm run setup:engine   # once: the game's own dependencies (packages/sim uses them too)
 npm run e2:build       # once per pinned commit
 npm run e2:install     # once: Playwright's Chromium headless shell
-npm run e2
+npm run e2             # all E2 tests; npm run e2 -- clock runs the files whose names match
 ```
 
-Everything E2 builds and downloads goes under the repository's gitignored `.cache/e2/`. Deleting that folder undoes it all.
+- The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
+- On Linux, Chromium may need system libraries: `npx playwright install-deps chromium`.
+- E2 builds and downloads go under the repository's gitignored `.cache/e2/`, so deleting that folder undoes `e2:build` and `e2:install`. The exception is babel's cache, which the game's webpack config keeps in the submodule's gitignored `node_modules/.cache/`. Builds of earlier commits stay there, about 117 MB each, until you delete them.
 
 ### `npm run e2:build`
 
-It builds the game with its own webpack config in production mode into `.cache/e2/<commit>/`: `index.html`, and the bundles in `dist/` (about 117 MB with source maps).
-- **Cached by commit.** It's skipped when that commit is built already. A `built.json` written last marks a finished build, so a build that stopped part way is redone.
-- **The submodule stays clean.** It refuses a submodule with changes, since they'd be built in. It checks `git status --porcelain` again afterwards, and fails if the build left anything. Every other path the build writes is gitignored in the submodule: its `node_modules` and babel's cache.
-- **It runs from the submodule**, through `scripts/webpack-in-game.ts`, because the game's config reads the commit with `git rev-parse` and takes its entry and template relative to the working directory. The build shows the pinned commit, `1da7316ff`, as Steam's does. It doesn't use the game's `npm run build`, which runs `bash ./tools/build.sh` and isn't portable to Windows.
-- **Three changes to the config** (`src/webpack-config.ts`), none to the game's code:
+It builds the game with its own webpack config in production mode into `.cache/e2/<commit>/`: `index.html`, and the bundles in `dist/`.
+- **The pinned game only.** It builds the commit this repository pins (its gitlink), and refuses a submodule with another commit checked out.
+- **Its dependencies must be current.** It refuses them if `npm run setup:engine` hasn't installed the game's current lockfile (the simulator's own check).
+- **Cached by commit and inputs.** It's skipped when that commit is built already from the same inputs: the game's lockfile and this package's build code (`src/build.ts`, `src/webpack-config.ts`, `scripts/run-game-webpack.ts`). A change to any of them builds again. A `built.json` written last marks a finished build and its inputs, so a build that stopped part way is redone.
+- **The submodule stays clean.** It refuses a submodule with changes, since they'd be built in. Afterwards it compares `git status --porcelain --ignored` (without `node_modules`, where babel's cache goes) and fails if the build added anything. Ignored files count: the game's .gitignore ignores exactly what a build would write there.
+- **The game's committed `dist/` files** (achievement icons, favicons, the web manifest) are copied in after webpack, as Steam's build copies the whole folder.
+- **It runs from the submodule**, through `scripts/run-game-webpack.ts`. The game's config reads the commit with `git rev-parse` and takes its entry and template relative to the working directory. The build shows the pinned commit, `1da7316ff`, as Steam's does. It doesn't use the game's `npm run build`, which runs `bash ./tools/build.sh` and isn't portable to Windows.
+- **Three changes to the config** (`src/webpack-config.ts`), none to what it builds:
   - the output goes outside the submodule;
-  - the minifier runs on one core;
+  - the minifier runs on one core. By default it uses every core but one, and this machine's test runs keep to one core. Its options otherwise stay webpack's defaults (two compress passes);
   - the separate typecheck process is dropped. The pinned game's types are upstream's business; ours are checked by `npm run typecheck`.
-- **Time on the reference rig:** 89 s, of which webpack took 80 s.
+
+  The webpack CLI can set the output path, but not the other two, hence a config.
+- **Time on the reference rig:** 88–89 s from start to exit, of which webpack took 80–87 s.
 
 ### `npm run e2:install`
 
 It downloads Playwright's Chromium headless shell into `.cache/e2/browsers/`, not the user's profile. The E2 Vitest config points Playwright there (`PLAYWRIGHT_BROWSERS_PATH`).
 
 - **Why Playwright 1.59.1 and its Chromium 147:** Steam's Bitburner runs Electron 41, which is Chromium 146. No Playwright release ships 146, and 1.59's 147.0.7727.15 is the closest.
-- **Why the headless shell:** the tests never need a visible window.
+- **Why the headless shell:** the tests never need a visible window. To watch one while debugging, install full Chromium (`npx playwright install chromium`, with the same `PLAYWRIGHT_BROWSERS_PATH`) and launch with `headless: false`.
 
 ### `npm run e2`
 
-It runs `test/**/*.e2.test.ts` under `vitest.config.ts`: one file at a time, one browser, with the simulator's global setup, since the simulator makes the saves the tests load. The root Vitest config excludes `*.e2.test.ts`.
+It runs `test/**/*.e2.test.ts` under `vitest.config.ts`, from the repository root: one file at a time, one browser, with the simulator's global setup, since the simulator makes the saves the tests load. The root Vitest config excludes `*.e2.test.ts`.
 
 The package's other tests (`test/*.test.ts`: the static server, the build's checks, the webpack config) need no browser and run with `npm test` in CI.
 
 ## Fixtures
 
-`src/game.ts`, with `test/helpers/environment.ts`'s `useE2()` for the browser and server of a test file:
+`src/game.ts`, with `test/helpers/environment.ts`'s `useE2()` for the browser and server of a test file, and `test/helpers/saves.ts` for saves:
 
 | Fixture | What |
 |---|---|
-| `launchBrowser()` | Playwright's Chromium headless shell. It says to run `e2:install` if that's missing |
-| `serveGame(directory)` (`src/server.ts`) | The built game on `http://127.0.0.1:<random port>`. It also serves a blank page on the same origin, for writing a save before the game loads |
-| `gameFromSave(browser, server, bytes, { startTimeMs })` | A page in a new browser context with the save in its IndexedDB, loaded to the Terminal. The save goes into `bitburnerSave` v2, store `savestring`, key `save`, as gzip bytes, exactly what Steam writes to disk (`src/db.ts`). Start the clock at the save's `lastUpdate` for no offline progress |
-| `freshGame(browser, server)` | A brand-new game: an empty context, 8 GB of home RAM, and the tutorial running |
+| `launchBrowser()` | Playwright's Chromium headless shell. On any launch failure, its error suggests `npm run e2:install` |
+| `serveGame(root)` (`src/server.ts`) | The built game on `http://127.0.0.1:<random port>`, GET only. It also serves a blank page on the same origin (`BLANK_PAGE_PATH`), for writing a save before the game loads |
+| `gameFromSave(browser, server, save, { offlineMs, clockDuringLoad })` | A page in a new browser context with the save in its IndexedDB, loaded to the Terminal. `save` is the gzip bytes, exactly what Steam writes to disk; it goes into `bitburnerSave` v2, store `savestring`, key `save` (`vendor/bitburner-src/src/db.ts`). Game time starts at the save's own `lastUpdate` plus `offlineMs` (default 0: no offline progress), as the simulator's save fixture does |
+| `freshGame(browser, server, { startTimeMs })` | A brand-new game: an empty context, 8 GB of home RAM, and the tutorial running |
 | `exitTutorial(page)` | Clicks "Exit Tutorial" and waits for the tutorial to close |
+| `waitForTerminal(page)`, `TERMINAL_INPUT` | The game loaded: its terminal input is on the page |
 | `advanceGameTime(page, ms)`, `advanceUntil(page, condition, { realTimeoutMs, gameTimeoutMs })` | Game time, below |
 | `closeGame(page)` | Closes the page's browser context |
+| `simulatorSave({ gameSettings, prepare })`, `moneyInSave(save)` (`test/helpers/saves.ts`) | A save from the simulator: a new game, with `prepare` writing files, running scripts or moving time first, and `gameSettings` (the Remote API's address and port, autoexec) saved in it |
 
-- **Saves come from the simulator** (`Simulation.save()`, with `gameSettings` for the Remote API's address and port, and for autoexec). That's allowed: saves only flow from Steam into test environments, never back.
+- **Saves come from the simulator.** That's allowed: saves only flow from Steam into test environments, never back.
 - **The game's settings live in the save**, so a test sets the RFA port or autoexec by making the save with them.
-- **Reloads aren't blocked.** A production build over `http` asks before unloading (`src/index.tsx`), and the browser shows that prompt once the page has been used (typed in, clicked). With no dialog listener, Playwright's own navigations go through it; `test/game.e2.test.ts` reloads after typing to check. A test that adds a `dialog` listener must accept that prompt itself.
+- **Reloads aren't blocked.** A production build over `http` asks before unloading (`vendor/bitburner-src/src/index.tsx:53-58`), and the browser shows that prompt once the page has been used (typed in, clicked). With no dialog listener, Playwright's own navigations go through it. `test/game.e2.test.ts` checks the prompt is armed, then reloads. A test that adds a `dialog` listener must accept that prompt itself.
 - **The page's origin is `http://127.0.0.1:<port>`**, not Steam's `file://`. A brain under test allows it in its config (#87).
 
 ## Game time
 
-Playwright's clock is installed in each browser context before the page loads, and paused at the start time. It fakes the page's `Date`, `performance`, timers and `requestAnimationFrame`, so game time moves only when a test moves it. Loading a save doesn't move it either, so a save loads with no offline progress.
+Playwright's clock is installed in each browser context before the page loads, and paused at the start time. It fakes the page's `Date`, `performance`, timers and `requestAnimationFrame`, so game time moves only when a test moves it. Loading doesn't move it either, so a save loads with no offline progress. (Installed but not paused, the clock flows with real time. `gameFromSave`'s `clockDuringLoad: "running"` does that until the game has loaded, as on Steam, for checking a race between a timer and the load.)
 
 Script imports and WebSockets still run in real time. So:
-- **`advanceGameTime(page, ms)`** moves game time on one game cycle at a time (`GAME_CYCLE_MS`, 200 ms). After each cycle it lets the page run whatever real-time work is ready: one real task, through a `MessageChannel`, which the clock doesn't fake. A long jump of game time therefore can't overtake a worker's import or a socket reply. For example, the Agent's 5 s worker timeout won't fire falsely.
-- **Tests wait for conditions with `advanceUntil`**, with a real-time timeout and optionally a game-time one. They never use fixed sleeps.
+- **`advanceGameTime(page, ms)`** moves game time on one game cycle at a time (`GAME_CYCLE_MS`, 200 ms), and **never more than `MAX_GAME_SPEEDUP` (×20) times as fast as real time**. Between steps the page runs its real-time work (imports, socket messages) in real time. At ×20, the Agent's 5 s worker timeout gives an import or a reply 250 ms of real time.
+  - Unpaced, the clock ran at ×126 and more. A reply only 50 ms late then took over 5 s of game time, and the stepped clock would have tripped the Agent's timeout: the review of #96 measured it. `test/pacing.e2.test.ts` keeps that from coming back.
+  - Raise the limit only with a test showing real-time work still fits.
+- **Wait for real-time work with `advanceUntil`**, on its effect, with a real-time timeout and, where a bound matters, a game-time one. Never advance a fixed amount and hope, and never use fixed sleeps.
+- **Move time only through these two.** Calling `page.clock` directly skips the pacing.
 - **Check cadences on the snapshots' `gameTimeMs`**, not on when the brain received them.
 
-**Speed:** an hour of game time takes 29 s of real time on the reference rig, ×126 (`test/clock.e2.test.ts`). That's on a fresh game with no scripts running; scripts and a busy page make it slower.
-
+**Speed on the reference rig** (`test/clock.e2.test.ts`, a fresh game with no scripts): 10 game minutes take 30 s of real time, the ×20 limit. A game hour takes 3 minutes; scripts and a busy page can make it slower.
+- **Each step adds an entry to the clock's history.** Playwright replays that history into each new page, which is how a reload keeps game time. A reload after 10 game minutes (3,000 entries) took 650 ms; after a game hour (18,000 entries, measured before the pacing), 420–630 ms. Long runs slow down a little as it grows: for multi-hour tests, a fresh context per hour or so.
 **One shim.** Playwright's fake timers call back with `this` null, where a browser's call back with `this` the window. The game relies on the browser's behaviour: `Engine.start` reschedules itself unbound and sets `this.isRunning`. A context init script, registered after the clock's, wraps the faked `setTimeout`, `setInterval` and `requestAnimationFrame` to call back with the window. It's harness instrumentation (architecture §9.4); the game's code is unchanged.
 
 ## What the tests show
 
+Results on the reference rig:
+
 | Test | What |
 |---|---|
-| `test/game.e2.test.ts` | A simulator-made save, with money earned by hacking, loads to the Terminal, and the overview shows the save's money. A reload after typing gets through the unload prompt and loads the game again. A brand-new game starts in the tutorial, and `exitTutorial` closes it |
-| `test/remote-api.e2.test.ts` | The game's Remote File API client connects to a local WebSocket server named in the save's settings, in 10 loads of 10. Every load connected at 2,000 ms of game time: the game's own timer (`src/index.tsx`), so the settings are always loaded first |
-| `test/clock.e2.test.ts` | An hour of game time, exactly, and the speed-up above |
+| `test/game.e2.test.ts` | Four checks: <ul><li>a simulator-made save, with money earned by hacking, loads to the Terminal, and the overview shows the save's money;</li><li>with the unload prompt armed, a reload gets through and loads the game again;</li><li>a brand-new game starts in the tutorial, `exitTutorial` closes it, and `free` shows 8.00GB;</li><li>a script autoexec starts on load imports another, sleeps 1 s and prints, all within 5 s of game time: it finished after 1,200 ms.</li></ul> |
+| `test/pacing.e2.test.ts` | A WebSocket reply 100 ms late in real time arrives within 5 s of game time: after 1,400 ms. Unpaced, it would have taken over 12 s |
+| `test/remote-api.e2.test.ts` | The game's Remote File API client connects to a local WebSocket server named in the save's settings, in 10 loads of 10. Game time runs in real time during each load, so the game's 2 s connection timer (`vendor/bitburner-src/src/index.tsx:37`) races the load. Every load connected 2,000 ms of game time after the Terminal appeared (200 ms steps): the timer starts when the main bundle runs, late in a load of about 0.7 s, so the settings were always in first. A load in this mode leaves game time still afterwards |
+| `test/clock.e2.test.ts` | 10 minutes of game time, exactly, within the ×20 limit; the engine still running on it (`analyze` finishes after its 1 s of game time; a moving `Date.now()` proves only the clock); and a reload after it, which keeps game time, with the engine running again |
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `src/paths.ts` | `.cache/e2/` and the pinned commit |
-| `src/build.ts`, `scripts/build-game.ts` | `e2:build`: the cache, the clean-submodule checks |
-| `src/webpack-config.ts`, `scripts/webpack-in-game.ts` | The game's webpack config with E2's changes, and the runner started in the submodule |
+| `src/build.ts`, `scripts/build-game.ts` | `e2:build`: the dependency check, the cache by commit and inputs, the clean-submodule checks, the committed `dist/` files |
+| `src/webpack-config.ts`, `scripts/run-game-webpack.ts` | The game's webpack config with E2's changes, and the runner started in the submodule |
 | `scripts/install-browser.ts` | `e2:install` |
 | `src/server.ts` | The static server |
 | `src/game.ts` | The fixtures and game time |
 | `vitest.config.ts` | `npm run e2` |
+| `tsconfig.json` | Node plus the DOM: code passed to `page.evaluate` runs in the page |
 | `test/*.e2.test.ts` | E2 tests (browser) |
+| `test/helpers/environment.ts` | `useE2()`: the server and browser for a test file |
+| `test/helpers/saves.ts` | Simulator-made saves |
 | `test/*.test.ts` | Unit tests (no browser, in CI) |

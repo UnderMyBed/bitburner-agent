@@ -463,14 +463,14 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 |---|---|---|
 | **E0 Steam** | Vanilla 3.0.1 binary and the real campaign save | The campaign. Final smoke checks only. Never used as a test bed. |
 | **E1 Simulator** | Engine from `vendor/bitburner-src` in Node; no UI; virtual clock; seeded RNG | The skeleton suite (every PR), scenario and chaos suites, calibration, the speed target |
-| **E2 Source build (browser)** | `vendor/bitburner-src` @ `1da7316ff` built with the game's own webpack config in production mode (`npm run e2:build`, into `.cache/e2/<commit>/`), served on 127.0.0.1, driven by Playwright 1.59 (its Chromium 147 headless shell; Steam's Electron 41 is Chromium 146, and no Playwright release ships 146). Playwright's clock control lets the real UI run time-accelerated: about ×126 on a fresh game ([`packages/e2`](../packages/e2/README.md)). | End-to-end tests of everything that touches the UI, the bootstrap or the bridge. Debugging game internals with breakpoints and logs. |
+| **E2 Source build (browser)** | `vendor/bitburner-src` @ `1da7316ff` built with the game's own webpack config in production mode (`npm run e2:build`, into `.cache/e2/<commit>/`), served on 127.0.0.1, driven by Playwright 1.59 (its Chromium 147 headless shell; Steam's Electron 41 is Chromium 146, and no Playwright release ships 146). Playwright's clock control lets the real UI run time-accelerated, paced at up to ×20 so real-time work (imports, socket replies) keeps up ([`packages/e2`](../packages/e2/README.md)). | End-to-end tests of everything that touches the UI, the bootstrap or the bridge. Debugging game internals with breakpoints and logs. |
 | **E3 Electron from source** *(only if needed)* | `npm run electron` from the same commit | Only if Electron-specific behaviour (file protocol, Steam hooks) diverges from E2 |
 
 **Guardrails**
 - **Parity:** E1 and E2 build from the exact commit Steam ships. The brain checks the live game against them: its `getDefinitionFile` on every RFA connection, and the version each Agent's `hello` reports (§12.4).
 - **Vanilla-only dependency:** the agent (in-game bundles and brain) must never rely on behaviour that doesn't exist in unmodified 3.0.1.
   - Instrumentation (clock, RNG seeding, observation hooks) lives in the **harness** and is injected from outside, either by the simulator harness or by Playwright.
-  - The game build itself is never patched for E2 runs. Its build config changes only how it's built (where to, on one core, without the separate typecheck process), and the harness's one page-side shim restores browser behaviour Playwright's clock lacks (timer callbacks' `this`).
+  - The game build itself is never patched for E2 runs. Its build config changes only how it's built (where to, the minifier on one core, without the separate typecheck process), and the harness's one page-side shim restores browser behaviour Playwright's clock lacks (timer callbacks' `this`).
 - **One-way saves:** Steam saves may be copied *into* E1/E2 as test fixtures. Nothing generated in E1/E2 is ever loaded into Steam, since that would be save editing by another name.
 - **Rules scope:** the rules of engagement (§1.3) govern the agent playing on E0. Test harnesses on E1/E2 may use any tooling (CDP, debuggers, dev menu) because they're testing the agent, not playing the campaign.
 
@@ -558,13 +558,15 @@ packages/
   ingame/       agent, reconciler, workers, reflexes, effectors (singularity|ui|sim), boot.js
   bridge/       RFA server + control channel
   sim/          engine bundle, browser parity layer, virtual clock, scenarios, chaos, worker pool (ADR 0007)
+  e2/           environment E2 (tests only): the pinned game built from source, its static server, Playwright
+                fixtures and game clock (§9.4)
   legacy/       retired-fork scripts (MIT, with notice; fork/ is byte-for-byte, see PROVENANCE.md) + adapters that run them as reflexes; also the simulator baseline
 spikes/         throwaway experiments; findings in docs/spikes/
 tools/          repository tooling run by Node, under the same gates (upstream-watch: the upstream stable and dev watchers; typecheck: every config, each in its environment)
 vendor/         bitburner-src submodule (pinned, read-only)
 ```
-- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `bridge` ← `brain`; `sim` ← `brain` for the lockstep driver only (type imports and tests: the live brain never loads the simulator); `ingame` ← `brain` for tests only (its build, to run the Agent against the control channel). The dashboard, inside `brain`, reads the store and writes only the supervision switch. `bridge` never depends on `sim`, so the live transport stays free of the simulator. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
-- **Type environments differ per package:** Node-side packages get Node types. `ingame` gets the browser `lib` plus the pinned NS definitions, read straight from the submodule as `@nsdefs` (no generated types package; the live drift check is the bridge's, §12.4), and no Node types. `core` gets neither, since both sides import it. Each package has its own config, and tests (which run in Node) have their own where the package's environment differs ([CONTRIBUTING](../CONTRIBUTING.md#typescript-configs)).
+- **Dependency direction:** `core` ← `brain`, `ingame`, `sim`, `bridge`; `bridge` ← `brain`; `sim` ← `brain` for the lockstep driver only (type imports and tests: the live brain never loads the simulator); `ingame` ← `brain` for tests only (its build, to run the Agent against the control channel); `sim` ← `e2` for tests only (the saves E2 loads come from the simulator). The dashboard, inside `brain`, reads the store and writes only the supervision switch. `bridge` never depends on `sim`, so the live transport stays free of the simulator. `ingame` never imports from `brain`, because in-game bundles have to stay tiny (C2/C3).
+- **Type environments differ per package:** Node-side packages get Node types. `ingame` gets the browser `lib` plus the pinned NS definitions, read straight from the submodule as `@nsdefs` (no generated types package; the live drift check is the bridge's, §12.4), and no Node types. `core` gets neither, since both sides import it. `e2` gets Node and the DOM: the functions it passes to Playwright's `page.evaluate` run in the page. Each package has its own config, and tests (which run in Node) have their own where the package's environment differs ([CONTRIBUTING](../CONTRIBUTING.md#typescript-configs)).
 - **Real saves stay local:** Steam save copies used as fixtures live in a gitignored folder. The public repo only carries fixtures generated by the simulator.
 
 ### 12.3 Migration from the fork (strangler pattern)

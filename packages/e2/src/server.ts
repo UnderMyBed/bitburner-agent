@@ -5,24 +5,22 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 
-export const BLANK_PAGE = "/__e2/blank.html";
+export const BLANK_PAGE_PATH = "/__e2/blank.html";
 
+/** The kinds of file the built game has (index.html, and dist/: webpack's output and the game's committed files). */
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json",
   ".map": "application/json",
   ".ico": "image/x-icon",
   ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
   ".svg": "image/svg+xml",
   ".ttf": "font/ttf",
   ".woff2": "font/woff2",
   ".wasm": "application/wasm",
   ".txt": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
+  ".xml": "application/xml",
 };
 
 export interface GameServer {
@@ -41,11 +39,11 @@ export function fileForUrlPath(root: string, urlPath: string): string | null {
 
 export async function serveGame(root: string): Promise<GameServer> {
   const server = createServer(async (request, response) => {
-    if (request.method !== "GET" && request.method !== "HEAD") {
+    if (request.method !== "GET") {
       response.writeHead(405).end();
       return;
     }
-    if (request.url === BLANK_PAGE) {
+    if (request.url?.split("?")[0] === BLANK_PAGE_PATH) {
       response.writeHead(200, { "content-type": CONTENT_TYPES[".html"] }).end("<!doctype html><title>e2</title>");
       return;
     }
@@ -63,7 +61,7 @@ export async function serveGame(root: string): Promise<GameServer> {
       const body = await readFile(file);
       const contentType = CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream";
       response.writeHead(200, { "content-type": contentType, "cache-control": "no-store" });
-      response.end(request.method === "HEAD" ? undefined : body);
+      response.end(body);
     } catch {
       response.writeHead(404).end();
     }

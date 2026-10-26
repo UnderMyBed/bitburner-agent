@@ -3,110 +3,151 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { writeSetupStamp } from "@bitburner-agent/sim";
 import { afterAll, describe, expect, test } from "vitest";
-import { BUILT_STAMP, buildGame, isBuilt, submoduleChanges } from "../src/build.ts";
-import { GAME_ROOT } from "../src/paths.ts";
+import { BUILT_STAMP, buildGame, buildInputsHash, isBuilt, submoduleState } from "../src/build.ts";
+import { GAME_ROOT, gameCommit } from "../src/paths.ts";
 import { e2WebpackConfig } from "../src/webpack-config.ts";
 
 const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "e2-build-"));
 afterAll(() => rmSync(temporaryDirectory, { recursive: true, force: true }));
 
-/** A git repository with one commit, standing in for the submodule; `withDependencies` fakes an installed webpack. */
-function fakeGame(name: string, { withDependencies }: { withDependencies: boolean }): string {
+/** A harness file for the inputs hash: tests change it to change the inputs. */
+const harnessFile = path.join(temporaryDirectory, "harness.ts");
+writeFileSync(harnessFile, "// version 1\n");
+const harnessFiles = [harnessFile];
+
+/**
+ * A git repository with one commit, standing in for the submodule: a lockfile, a committed `dist/` icon, and a
+ * .gitignore like the game's (build outputs ignored). Its dependencies are "installed" (setup's stamp written).
+ */
+function fakeGame(name: string): string {
   const root = path.join(temporaryDirectory, name);
-  mkdirSync(root);
+  mkdirSync(path.join(root, "dist/icons"), { recursive: true });
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
   git("init", "-q");
-  writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
-  writeFileSync(path.join(root, "webpack.config.js"), "module.exports = () => ({});\n");
+  writeFileSync(path.join(root, ".gitignore"), "node_modules/\nindex.html\n*.bundle.*\n");
+  writeFileSync(path.join(root, "package-lock.json"), '{ "lockfileVersion": 3 }\n');
+  writeFileSync(path.join(root, "dist/icons/achievement.svg"), "<svg/>");
   git("add", ".");
   git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "game");
-  if (withDependencies) {
-    mkdirSync(path.join(root, "node_modules/webpack"), { recursive: true });
-    writeFileSync(path.join(root, "node_modules/webpack/package.json"), "{}");
-  }
+  mkdirSync(path.join(root, "node_modules"));
+  writeSetupStamp(root);
   return root;
 }
 
+/** A stand-in for run-game-webpack.ts: `body` runs in the game's folder, with the output directory as argv[2]. */
+function runner(name: string, body: string): string {
+  const file = path.join(temporaryDirectory, `${name}.mjs`);
+  writeFileSync(file, `import fs from "node:fs";\nconst out = process.argv[2];\n${body}\n`);
+  return file;
+}
+
+const succeeds = runner(
+  "succeeds",
+  'fs.mkdirSync(out + "/dist", { recursive: true }); fs.writeFileSync(out + "/index.html", process.cwd());',
+);
+
 describe("buildGame", () => {
-  test("a commit already built (its stamp written) is skipped, and nothing else is checked", () => {
-    const outputDirectory = path.join(temporaryDirectory, "built");
-    mkdirSync(outputDirectory);
-    writeFileSync(path.join(outputDirectory, BUILT_STAMP), "{}");
-    expect(isBuilt(outputDirectory)).toBe(true);
-    expect(buildGame({ gameRoot: path.join(temporaryDirectory, "nowhere"), commit: "x", outputDirectory })).toEqual({
-      skipped: true,
-      seconds: 0,
-    });
+  test("builds in the game's folder, copies the game's committed dist/ files, and writes its stamp last", () => {
+    const gameRoot = fakeGame("builds");
+    const outputDirectory = path.join(temporaryDirectory, "out-builds");
+    const result = buildGame({ gameRoot, commit: "abc", outputDirectory, webpackRunner: succeeds, harnessFiles });
+    expect(result.skipped).toBe(false);
+    expect(readFileSync(path.join(outputDirectory, "index.html"), "utf8")).toBe(gameRoot);
+    expect(readFileSync(path.join(outputDirectory, "dist/icons/achievement.svg"), "utf8")).toBe("<svg/>");
+    const stamp = JSON.parse(readFileSync(path.join(outputDirectory, BUILT_STAMP), "utf8"));
+    expect(stamp).toMatchObject({ commit: "abc", inputs: buildInputsHash(gameRoot, harnessFiles) });
+    expect(isBuilt(outputDirectory, buildInputsHash(gameRoot, harnessFiles))).toBe(true);
   });
 
-  test("without the game's dependencies it says to run setup:engine", () => {
-    const gameRoot = fakeGame("no-dependencies", { withDependencies: false });
-    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory: path.join(temporaryDirectory, "out1") })).toThrow(
-      "run npm run setup:engine first",
+  test("built from the same inputs, it's skipped; from other inputs (harness code, dependencies), built again", () => {
+    const gameRoot = fakeGame("inputs");
+    const outputDirectory = path.join(temporaryDirectory, "out-inputs");
+    const build = () => buildGame({ gameRoot, commit: "abc", outputDirectory, webpackRunner: succeeds, harnessFiles });
+    expect(build().skipped).toBe(false);
+    expect(build().skipped).toBe(true);
+    writeFileSync(harnessFile, "// version 2\n");
+    try {
+      expect(build().skipped).toBe(false);
+    } finally {
+      writeFileSync(harnessFile, "// version 1\n");
+    }
+    // New dependencies, committed (as a game bump brings them) and installed: the lockfile and setup's stamp change.
+    writeFileSync(path.join(gameRoot, "package-lock.json"), '{ "lockfileVersion": 3, "packages": {} }\n');
+    const git = (...args: string[]) => execFileSync("git", ["-C", gameRoot, ...args], { encoding: "utf8" });
+    git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-am", "bump");
+    writeSetupStamp(gameRoot);
+    expect(build().skipped).toBe(false);
+  });
+
+  test("refuses dependencies that aren't installed, or are stale, before anything else", () => {
+    const gameRoot = fakeGame("stale");
+    const outputDirectory = path.join(temporaryDirectory, "out-stale");
+    writeFileSync(path.join(gameRoot, "package-lock.json"), '{ "lockfileVersion": 3, "changed": true }\n');
+    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory, webpackRunner: succeeds, harnessFiles })).toThrow(
+      "out of date",
+    );
+    rmSync(path.join(gameRoot, "node_modules"), { recursive: true });
+    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory, webpackRunner: succeeds, harnessFiles })).toThrow(
+      "not installed",
     );
   });
 
   test("a submodule with changes is refused before building, naming them", () => {
-    const gameRoot = fakeGame("dirty", { withDependencies: true });
-    writeFileSync(path.join(gameRoot, "webpack.config.js"), "changed\n");
-    expect(submoduleChanges(gameRoot)).toBe("M webpack.config.js");
-    const outputDirectory = path.join(temporaryDirectory, "out2");
-    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory })).toThrow(
-      "The submodule has changes, which the build would include:\nM webpack.config.js",
+    const gameRoot = fakeGame("dirty");
+    writeFileSync(path.join(gameRoot, "package.json"), "{}");
+    const outputDirectory = path.join(temporaryDirectory, "out-dirty");
+    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory, webpackRunner: succeeds, harnessFiles })).toThrow(
+      "The submodule has changes, which the build would include:\n?? package.json",
     );
     expect(existsSync(outputDirectory)).toBe(false);
   });
 
-  test("a clean submodule lists no changes", () => {
-    expect(submoduleChanges(fakeGame("clean", { withDependencies: true }))).toBe("");
-  });
-
-  /** A stand-in for webpack-in-game.ts: `body` runs in the game's folder, with the output directory as argv[2]. */
-  function runner(name: string, body: string): string {
-    const file = path.join(temporaryDirectory, `${name}.mjs`);
-    writeFileSync(file, `import fs from "node:fs";\nconst out = process.argv[2];\n${body}\n`);
-    return file;
-  }
-
-  test("a successful build runs in the game's folder, writes its stamp last, and is skipped next time", () => {
-    const gameRoot = fakeGame("builds", { withDependencies: true });
-    const outputDirectory = path.join(temporaryDirectory, "out3");
-    const webpackRunner = runner(
-      "succeeds",
-      'fs.mkdirSync(out, { recursive: true }); fs.writeFileSync(out + "/index.html", process.cwd());',
-    );
-    expect(buildGame({ gameRoot, commit: "abc", outputDirectory, webpackRunner }).skipped).toBe(false);
-    expect(readFileSync(path.join(outputDirectory, "index.html"), "utf8")).toBe(gameRoot);
-    expect(JSON.parse(readFileSync(path.join(outputDirectory, BUILT_STAMP), "utf8"))).toMatchObject({ commit: "abc" });
-    expect(buildGame({ gameRoot, commit: "abc", outputDirectory, webpackRunner }).skipped).toBe(true);
+  test("its state lists ignored files, but not node_modules", () => {
+    const gameRoot = fakeGame("state");
+    expect(submoduleState(gameRoot)).toEqual([]);
+    writeFileSync(path.join(gameRoot, "index.html"), "");
+    mkdirSync(path.join(gameRoot, "node_modules/.cache"), { recursive: true });
+    writeFileSync(path.join(gameRoot, "node_modules/.cache/x"), "");
+    expect(submoduleState(gameRoot)).toEqual(["!! index.html"]);
   });
 
   test("a failed build says so and writes no stamp; a stopped build's leftovers are cleared first", () => {
-    const gameRoot = fakeGame("fails", { withDependencies: true });
-    const outputDirectory = path.join(temporaryDirectory, "out4");
+    const gameRoot = fakeGame("fails");
+    const outputDirectory = path.join(temporaryDirectory, "out-fails");
     mkdirSync(outputDirectory);
     writeFileSync(path.join(outputDirectory, "leftover.js"), "");
     const webpackRunner = runner("fails", "process.exit(3);");
-    expect(() => buildGame({ gameRoot, commit: "abc", outputDirectory, webpackRunner })).toThrow(
+    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory, webpackRunner, harnessFiles })).toThrow(
       "webpack failed (exit 3)",
     );
     expect(existsSync(path.join(outputDirectory, "leftover.js"))).toBe(false);
-    expect(isBuilt(outputDirectory)).toBe(false);
+    expect(isBuilt(outputDirectory, buildInputsHash(gameRoot, harnessFiles))).toBe(false);
   });
 
-  test("a build that changes the submodule fails, naming the change, and writes no stamp", () => {
-    const gameRoot = fakeGame("dirtied", { withDependencies: true });
-    const outputDirectory = path.join(temporaryDirectory, "out5");
+  test("a build that writes into the submodule fails, naming what it wrote, even a file the game ignores", () => {
+    const gameRoot = fakeGame("dirtied");
+    const outputDirectory = path.join(temporaryDirectory, "out-dirtied");
+    // Absolute paths, so they land in the fake game wherever the runner is started.
     const webpackRunner = runner(
       "dirties",
-      // An absolute path, so it lands in the fake game wherever the runner is started.
-      `fs.mkdirSync(out, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(gameRoot, "stray.txt"))}, "");`,
+      `fs.mkdirSync(out, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(gameRoot, "main.bundle.js"))}, "");`,
     );
-    expect(() => buildGame({ gameRoot, commit: "abc", outputDirectory, webpackRunner })).toThrow(
-      "The build changed the submodule:\n?? stray.txt",
+    expect(() => buildGame({ gameRoot, commit: "x", outputDirectory, webpackRunner, harnessFiles })).toThrow(
+      "The build changed the submodule:\n!! main.bundle.js",
     );
-    expect(isBuilt(outputDirectory)).toBe(false);
+    expect(isBuilt(outputDirectory, buildInputsHash(gameRoot, harnessFiles))).toBe(false);
+  });
+});
+
+describe("gameCommit", () => {
+  test("is the pinned commit: this repository's gitlink, which the submodule has checked out", () => {
+    const gitlink = execFileSync("git", ["ls-tree", "HEAD", "vendor/bitburner-src"], {
+      cwd: path.join(GAME_ROOT, "../.."),
+      encoding: "utf8",
+    });
+    expect(gitlink).toContain(gameCommit());
   });
 });
 
@@ -114,15 +155,21 @@ describe.runIf(existsSync(path.join(GAME_ROOT, "node_modules/webpack/package.jso
   test("the game's production config, writing outside the submodule, minifying on one core, no typecheck process", () => {
     const outputDirectory = path.join(temporaryDirectory, "webpack-out");
     const config = e2WebpackConfig(GAME_ROOT, outputDirectory);
+    expect(config.mode).toBe("production");
     expect(config.output.path).toBe(path.join(outputDirectory, "dist"));
     expect(config.optimization.minimize).toBe(true);
     const minimizers = config.optimization.minimizer as {
       constructor: { name: string };
-      options: { parallel: unknown };
+      options: { parallel: unknown; minimizer: { options: unknown } };
     }[];
-    expect(minimizers.map((minimizer) => [minimizer.constructor.name, minimizer.options.parallel])).toEqual([
-      ["TerserPlugin", false],
-    ]);
+    // webpack's default minimizer (two compress passes), only on one core.
+    expect(
+      minimizers.map((minimizer) => [
+        minimizer.constructor.name,
+        minimizer.options.parallel,
+        minimizer.options.minimizer.options,
+      ]),
+    ).toEqual([["TerserPlugin", false, { compress: { passes: 2 } }]]);
     const pluginNames = config.plugins.map((plugin) => plugin.constructor.name);
     expect(pluginNames).not.toContain("ForkTsCheckerWebpackPlugin");
     // The game's own plugins otherwise stay: the editor's, the HTML page's and the commit hash's.

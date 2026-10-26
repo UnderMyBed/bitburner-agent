@@ -1,11 +1,11 @@
-// node packages/e2/scripts/webpack-in-game.ts <output directory>, run with the submodule as the working directory
+// node packages/e2/scripts/run-game-webpack.ts <output directory>, run with the submodule as the working directory
 // (src/build.ts does this): builds the game with e2WebpackConfig. Exits 1 if webpack reports errors.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { e2WebpackConfig } from "../src/webpack-config.ts";
 
 const [outputDirectory] = process.argv.slice(2);
-if (outputDirectory === undefined) throw new RangeError("usage: webpack-in-game.ts <output directory>");
+if (outputDirectory === undefined) throw new RangeError("usage: run-game-webpack.ts <output directory>");
 const gameRoot = process.cwd();
 
 interface Stats {
