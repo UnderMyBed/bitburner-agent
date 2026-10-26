@@ -3,7 +3,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ControlChannel } from "@bitburner-agent/bridge";
+import { type Connection, ControlChannel } from "@bitburner-agent/bridge";
+import type { Simulation } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { afterAll, expect, test } from "vitest";
 import { recordChannelEvents } from "../src/record-channel-events.ts";
@@ -14,6 +15,14 @@ const start = useSimulations();
 const CONTROL_URL = "ws://127.0.0.1:12526";
 const TOKEN = "a".repeat(64);
 const EPOCH_MS = Date.UTC(2026, 0, 1);
+/** A new game (tutorial skipped) whose page can connect to the brain. */
+const startNewGame = (seed = 1) =>
+  start({
+    seed,
+    epochMs: EPOCH_MS,
+    fixture: { kind: "new", tutorial: "skipped" },
+    network: { listenUrls: [CONTROL_URL] },
+  });
 
 /**
  * A stand-in Agent: says hello, then sends a fast snapshot every 2 s once welcomed. Its names avoid NS function names
@@ -90,12 +99,7 @@ async function runBrainAgainstSimulation({
   durationMs: number;
   realDelayPerEventMs?: number;
 }) {
-  const simulation = await start({
-    seed,
-    epochMs: EPOCH_MS,
-    fixture: { kind: "new", tutorial: "skipped" },
-    network: { listenUrls: [CONTROL_URL] },
-  });
+  const simulation = await startNewGame(seed);
   const game = await SimulatedGame.create({ simulation, stepMs });
   const directory = mkdtempSync(path.join(os.tmpdir(), "simulated-brain-"));
   directories.push(directory);
@@ -146,12 +150,7 @@ test("the same seed and step size give identical stored rows, however slow the b
 
 /** A simulation with a brain's ControlChannel on the driver, and every channel event recorded with its time. */
 async function gameWithChannel(stepMs: number) {
-  const simulation = await start({
-    seed: 1,
-    epochMs: EPOCH_MS,
-    fixture: { kind: "new", tutorial: "skipped" },
-    network: { listenUrls: [CONTROL_URL] },
-  });
+  const simulation = await startNewGame();
   const game = await SimulatedGame.create({ simulation, stepMs });
   const channel = new ControlChannel({ token: TOKEN, clock: game.clock });
   const events: { type: string; atMs: number }[] = [];
@@ -186,12 +185,7 @@ test("a close by the brain is reported once it reaches the page, as a live socke
 });
 
 test("once the brain has closed a connection, nothing more crosses it either way", async () => {
-  const simulation = await start({
-    seed: 1,
-    epochMs: EPOCH_MS,
-    fixture: { kind: "new", tutorial: "skipped" },
-    network: { listenUrls: [CONTROL_URL] },
-  });
+  const simulation = await startNewGame();
   const game = await SimulatedGame.create({ simulation, stepMs: 100 });
   const framesToPage: string[] = [];
   const sendToPage = simulation.network.send.bind(simulation.network);
@@ -223,6 +217,138 @@ test("once the brain has closed a connection, nothing more crosses it either way
   expect(framesToPage).toEqual(["before closing"]);
 });
 
+/**
+ * Starts a script that connects and sends `frames` once open. It exits at once: its socket outlives it, and a save
+ * doesn't bring it back.
+ */
+async function runSender(simulation: Simulation, scriptName: string, frames: string[]): Promise<void> {
+  await simulation.writeFile(
+    "home",
+    scriptName,
+    `export function main(ns) {
+       const socket = new WebSocket("${CONTROL_URL}");
+       socket.onopen = () => { for (const frame of ${JSON.stringify(frames)}) socket.send(frame); };
+     }`,
+  );
+  expect((await simulation.run("home", scriptName)).error).toBeUndefined();
+}
+
+test("a test's fault function decides how many copies of each frame from the page reach the brain", async () => {
+  const simulation = await startNewGame();
+  const offered: { data: string; atMs: number }[] = [];
+  const copiesByFrame: Record<string, number> = { dropped: 0, duplicated: 2, once: 1 };
+  const game = await SimulatedGame.create({
+    simulation,
+    stepMs: 100,
+    deliveredCopies: ({ data, atMs }) => {
+      offered.push({ data, atMs });
+      return copiesByFrame[data] as number;
+    },
+  });
+  const received: string[] = [];
+  game.listen(CONTROL_URL, (connection) => connection.onMessage((text) => received.push(text)));
+  await runSender(simulation, "sender.js", ["dropped", "duplicated", "once"]);
+  await game.run(500);
+  expect(offered.map((frame) => frame.data)).toEqual(["dropped", "duplicated", "once"]);
+  expect(offered[0]?.atMs).toBeGreaterThan(EPOCH_MS);
+  expect(received).toEqual(["duplicated", "duplicated", "once"]);
+});
+
+test("a fault function isn't asked about frames on a connection the brain has closed: they'd be discarded", async () => {
+  const simulation = await startNewGame();
+  const offered: string[] = [];
+  const game = await SimulatedGame.create({
+    simulation,
+    stepMs: 100,
+    deliveredCopies: ({ data }) => {
+      offered.push(data);
+      return 1;
+    },
+  });
+  // The brain closes at the first frame; the other two arrive in the same batch, before the close reaches the page.
+  game.listen(CONTROL_URL, (connection) => connection.onMessage(() => connection.close(4000, "enough")));
+  await runSender(simulation, "sender.js", ["first", "second", "third"]);
+  await game.run(500);
+  expect(offered).toEqual(["first"]);
+});
+
+test("a fault function's answer must be a whole number of copies, or the step fails", async () => {
+  const simulation = await startNewGame();
+  const game = await SimulatedGame.create({ simulation, stepMs: 100, deliveredCopies: () => 0.5 });
+  game.listen(CONTROL_URL, () => {});
+  await runSender(simulation, "sender.js", ["anything"]);
+  await expect(game.run(500)).rejects.toThrow(/whole number of copies, got 0.5/);
+});
+
+test("on a reload the old page's sockets close at once, and the steps drive the reloaded simulation", async () => {
+  const before = await startNewGame();
+  // Small steps, so the reloaded game is still behind the brain's clock for the first few.
+  const game = await SimulatedGame.create({ simulation: before, stepMs: 20 });
+  const received: string[] = [];
+  const closedAtMs: number[] = [];
+  const connections: Connection[] = [];
+  game.listen(CONTROL_URL, (connection) => {
+    connections.push(connection);
+    connection.onMessage((text) => received.push(text));
+    connection.onClose(() => closedAtMs.push(game.clock.now()));
+  });
+  await runSender(before, "sender.js", ["before the reload"]);
+  await game.run(500);
+  const after = await start({
+    seed: 1,
+    fixture: { kind: "save", bytes: await before.save() },
+    network: { listenUrls: [CONTROL_URL] },
+  });
+  const framesToReloadedPage: string[] = [];
+  const sendToReloadedPage = after.network.send.bind(after.network);
+  after.network.send = (connectionId, data) => {
+    framesToReloadedPage.push(data);
+    return sendToReloadedPage(connectionId, data);
+  };
+  // The brain's reply is still queued for the old page when the reload happens: it goes nowhere.
+  connections[0]?.send("to the old page");
+  const reloadedAtMs = game.clock.now();
+  game.replaceSimulation(after);
+  expect(closedAtMs).toEqual([reloadedAtMs]);
+  await runSender(after, "sender-after.js", ["after the reload"]);
+  // The brain's clock follows the reloaded game's, but never goes back: the save was taken a moment before the reload,
+  // so for the first steps the game is behind it.
+  expect(await after.now()).toBeLessThan(reloadedAtMs);
+  const clockAfterEachStep: number[] = [];
+  let stepsWithTheGameBehind = 0;
+  for (let step = 0; step < 25; step++) {
+    await game.step();
+    const gameNowMs = await after.now();
+    if (gameNowMs < reloadedAtMs) stepsWithTheGameBehind++;
+    clockAfterEachStep.push(game.clock.now());
+    expect(clockAfterEachStep.at(-1)).toBe(Math.max(reloadedAtMs, gameNowMs));
+  }
+  expect(stepsWithTheGameBehind).toBeGreaterThan(0);
+  expect(clockAfterEachStep).toEqual([...clockAfterEachStep].sort((a, b) => a - b));
+  expect(received).toEqual(["before the reload", "after the reload"]);
+  expect(framesToReloadedPage).toEqual([]);
+  expect(connections).toHaveLength(2);
+});
+
+test("runUntil steps until its condition holds, or fails once over its virtual time", async () => {
+  const simulation = await startNewGame();
+  const game = await SimulatedGame.create({ simulation, stepMs: 100 });
+  const startMs = game.clock.now();
+  await game.runUntil(() => game.clock.now() >= startMs + 300, 1_000);
+  expect(game.clock.now()).toBe(startMs + 300);
+  await expect(game.runUntil(() => false, 250)).rejects.toThrow("condition not met within 250 virtual ms");
+  // Checked before each step: 300 ms of steps, the first over 250.
+  expect(game.clock.now()).toBe(startMs + 600);
+});
+
+test("a reload can't happen mid-step", async () => {
+  const simulation = await startNewGame();
+  const game = await SimulatedGame.create({ simulation, stepMs: 100 });
+  const stepping = game.step();
+  expect(() => game.replaceSimulation(simulation)).toThrow(/mid-step/);
+  await stepping;
+});
+
 test("a close by the page is reported at the virtual time it happened", async () => {
   const { simulation, game, events } = await gameWithChannel(1_000);
   await simulation.writeFile(
@@ -246,12 +372,7 @@ test("a close by the page is reported at the virtual time it happened", async ()
 });
 
 test("steps can't overlap, and a socket to a URL nobody listens on fails the step after the whole batch", async () => {
-  const simulation = await start({
-    seed: 1,
-    epochMs: EPOCH_MS,
-    fixture: { kind: "new", tutorial: "skipped" },
-    network: { listenUrls: [CONTROL_URL] },
-  });
+  const simulation = await startNewGame();
   const game = await SimulatedGame.create({ simulation, stepMs: 100 });
   const first = game.step();
   await expect(game.step()).rejects.toThrow(/already running/);
@@ -268,12 +389,7 @@ test("steps can't overlap, and a socket to a URL nobody listens on fails the ste
 });
 
 test("the brain's timers run on virtual time: a page that never says hello is timed out after 5 virtual seconds", async () => {
-  const simulation = await start({
-    seed: 1,
-    epochMs: EPOCH_MS,
-    fixture: { kind: "new", tutorial: "skipped" },
-    network: { listenUrls: [CONTROL_URL] },
-  });
+  const simulation = await startNewGame();
   const game = await SimulatedGame.create({ simulation, stepMs: 500 });
   const channel = new ControlChannel({ token: TOKEN, clock: game.clock });
   const rejections: { atMs: number; reason: string }[] = [];

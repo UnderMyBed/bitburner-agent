@@ -91,6 +91,7 @@ const game = await SimulatedGame.create({ simulation, stepMs: 100 });
 const channel = new ControlChannel({ token, clock: game.clock });
 game.listen("ws://127.0.0.1:12526", (connection) => channel.accept(connection));
 await game.run(60_000);   // virtual ms
+await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fail after 10 virtual s
 ```
 
 - **Each step:**
@@ -105,9 +106,39 @@ await game.run(60_000);   // virtual ms
   - A close by the page is reported at the virtual time it happened.
 - **Fail fast:**
   - Steps can't overlap: await each one.
+  - A reload can't happen mid-step.
   - A page socket to a URL nothing listens on fails the step, once the whole batch has been handled.
 - **The brain's clock** takes delays as Node does: under 1 ms, or not a number, waits 1 ms, so a timer that re-arms itself can't spin.
 - **Fix the step size per test:** the brain's replies reach the page at the start of the next step, so the step size is part of what makes a run.
+- **Waiting (`runUntil`):** steps until a condition holds, checked before each step, and fails once more than the given virtual time has passed.
+- **Faults (`deliveredCopies`):** a test can say how many copies of each frame from the page reach the brain: 0 drops it, 2 duplicates it, both copies back to back.
+  - The function is called once per frame, in order, so a seeded one gives a reproducible run.
+  - It isn't asked about frames on a connection the brain has already closed: the brain would discard them anyway.
+  - An answer that isn't a whole number of copies fails the step.
+- **Reloads (`replaceSimulation`):** for a save loaded into a new simulation; start it with the same `network.listenUrls`.
+  - Every socket of the old page closes at once, as a reload closes them, and frames still queued for it are dropped.
+  - The steps then drive the new simulation, and the brain stays as it was.
+  - The brain's clock never goes back: if the save's time is a moment behind it, the clock waits for the reloaded game to catch up.
+
+## The skeleton suite
+
+`test/skeleton.test.ts` is M2's exit criterion in the simulator (environment E1): "connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start" ([architecture §13](../../docs/architecture.md#13-milestones)). It runs on every PR, in about 25 s in CI, against a budget of 60 s.
+
+- **What runs:** the brain is wired like `main.ts` (`test/helpers/brain-in-simulation.ts`): its control channel, deployer and store, in `main.ts`'s order. The game deploys through its own Remote File API client, and the built Agent and workers play their part. Everything is on the lockstep driver at a fixed 100 ms step. `main.ts`'s own wiring, on real sockets, is tested by `brain-process.test.ts`.
+- **The start:** a new game with 8 GB of home RAM, the tutorial skipped, and settings naming the brain's Remote File API and running `agent/boot.js` on autoexec. The brain deploys; the one-time `run agent/boot.js` brings the Agent up.
+
+| Scenario | What it shows |
+|---|---|
+| 8 GB fresh start | For 10 virtual minutes every tier arrives in the right number, each its period apart. Home never holds more than the Agent and one worker. The store holds every snapshot exactly once, numbered with none missed, and the gap report finds no gap |
+| Reload | The game's save, loaded into a new simulation, brings the Agent back through autoexec alone: the Agent is a temporary script, so the save doesn't hold it. It's a new session, from the same deployment, and it sends a full snapshot. The reloaded game's RFA client reconnects, and nothing is deployed again |
+| Reconnect | The brain drops the connection. The same Agent session comes back after its first backoff (1 s) with a full snapshot, its numbering carrying on, and there's no gap |
+| The Agent stopped for 30 s | The gap report finds exactly that one gap |
+| Faults on the wire | For 5 virtual minutes, snapshot frames are dropped (30%) and duplicated (15%) at random, seeded, and three heartbeats in a row are always dropped. Every snapshot that got through is stored once, and each records how many of its tier were dropped since the one stored before it. The gap report finds the gaps the drops made and no others |
+| Determinism | The faulty run, a minute long, run twice with the same seed and step, stores identical rows and events, timestamps included |
+
+- **Home's RAM:** a snapshot worker starts and exits within one timer, so checking between steps would never see it. The suite reads the simulator's `homePeak` instead, which is taken as RAM in use and the script count change. Home must have run exactly two scripts at most (the Agent and a worker, which also shows a worker ran), and used at most the RAM of the Agent plus the largest worker, by the game's own figures.
+- **Faults are on snapshot frames from the page only.** Over a WebSocket a frame can't be lost or repeated while the connection stays up, so the faults are there to try the store and the gap report, which only snapshots reach. A lost hello is the hello timeout's case, which the control channel's own tests cover, as they cover a duplicate that arrives late.
+- **What it doesn't model:** a reload here loads a save taken that moment; a real one loads the last save, which may be older. The old page's sockets also close before the new Agent says hello.
 
 ## Layout
 
@@ -121,3 +152,5 @@ await game.run(60_000);   // virtual ms
 | `src/gap-report.ts`, `src/gaps-cli.ts` | The gap report and its command (`npm run gaps`) |
 | `src/simulated-game.ts` | The lockstep driver |
 | `src/release.ts` | The brain's release, from `git describe` |
+| `test/skeleton.test.ts` | The skeleton suite |
+| `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver |

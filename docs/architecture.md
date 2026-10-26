@@ -442,6 +442,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 | Unit | Activity rates and action effects against game formulas (formula parity); fast-model step invariants; planner levels on fixed models; reconciler diffing | Every PR (CI) |
 | Property | Reconciler convergence and idempotency, protocol handling of dropped/duplicated/reordered messages, planner invariants, under randomised inputs | Every PR (CI) |
 | Contract | In-game bundles type-check against the pinned `NetscriptDefinitions.d.ts`; static RAM ≤ budget | Every PR (CI) |
+| Integration (simulator) | The brain, bridge and built in-game code together on the lockstep driver, including the skeleton suite: connect, snapshot, reload, reconnect, Agent RAM in an 8 GB start, and dropped or duplicated snapshot frames ([`packages/brain`](../packages/brain/README.md#the-skeleton-suite)) | Every PR (CI) |
 | Scenario (simulator) | Seeded runs: fresh BN1.1→destroy; entry into each BitNode with representative Source-File sets; odd mid-run states | On demand when touching brain/activities/actions; before every release. Includes **fast-model fidelity** (divergence from the engine over a horizon). |
 | Chaos (simulator) | Kill random scripts, drop the brain, reload mid-batch, offline gaps, duplicated messages | Before every release |
 | End-to-end (E2 source build) | UI driver actions, bootstrap/restart paths (Q5), Agent RAM in a real 8 GB start (Q1), bridge connect/reconnect, RFA deploy, real save/reload | On demand when touching `ingame/` or `bridge/`; before every release |
@@ -455,7 +456,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | Env | What | Used for |
 |---|---|---|
 | **E0 Steam** | Vanilla 3.0.1 binary and the real campaign save | The campaign. Final smoke checks only. Never used as a test bed. |
-| **E1 Simulator** | Engine from `vendor/bitburner-src` in Node; no UI; virtual clock; seeded RNG | Scenario and chaos suites, calibration, the speed target |
+| **E1 Simulator** | Engine from `vendor/bitburner-src` in Node; no UI; virtual clock; seeded RNG | The skeleton suite (every PR), scenario and chaos suites, calibration, the speed target |
 | **E2 Source build (browser)** | `vendor/bitburner-src` @ `1da7316ff` built with webpack, served locally, driven by Playwright (headless Chromium). Playwright's clock control lets the real UI run time-accelerated. | End-to-end tests of everything that touches the UI, the bootstrap or the bridge. Debugging game internals with breakpoints and logs. |
 | **E3 Electron from source** *(only if needed)* | `npm run electron` from the same commit | Only if Electron-specific behaviour (file protocol, Steam hooks) diverges from E2 |
 

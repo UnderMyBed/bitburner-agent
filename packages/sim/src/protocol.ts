@@ -308,6 +308,14 @@ export interface GameSummary {
   augsQueued: number;
 }
 
+/** Home's highs: each is its own, and they may come from different moments. */
+export interface HomePeak {
+  /** The highest RAM in use, in GB. */
+  ramUsed: number;
+  /** The most scripts running at once. */
+  scripts: number;
+}
+
 export interface GameDiagnostics {
   tutorialRunning: boolean;
   /** The game's own setting (0: the harness turned autosave off). */
@@ -393,6 +401,11 @@ export interface HostMethods {
   runUntil(params: RunUntilParams): RunUntilResult;
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
+  /**
+   * The highest RAM home has had in use, and the most scripts it has run at once, since the game booted (each its own
+   * high), taken as each changes: a script that starts and exits within one timer counts.
+   */
+  "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
   "diagnostics.random"(params: { count: number }): RandomSample;
   /**
    * Navigates as game code does (`Router.toPage`): a simple page by its `Page` value, or "BitVerse" (only then is

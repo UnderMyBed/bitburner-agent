@@ -28,6 +28,7 @@ export type {
   GameEvent,
   GameSettingsOverride,
   GameSummary,
+  HomePeak,
   NetworkOptions,
   NetworkOutboxEntry,
   OnBitVerse,
@@ -213,6 +214,12 @@ export class Simulation {
   readonly diagnostics = {
     clock: () => this.rpc.call("diagnostics.clock", {}),
     game: () => this.rpc.call("diagnostics.game", {}),
+    /**
+     * The highest RAM home has had in use (GB), and the most scripts it has run at once, since the game booted: each
+     * its own high. Taken as each changes, so a script that starts and exits within one timer, which no check after a
+     * timer sees, still counts.
+     */
+    homePeak: () => this.rpc.call("diagnostics.homePeak", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
     /** Test-only: changes game state (going to the BitVerse kills every script). Scenarios must not use it. */
     toPage: (page: string, flume = false) => this.rpc.call("diagnostics.toPage", { page, flume }),

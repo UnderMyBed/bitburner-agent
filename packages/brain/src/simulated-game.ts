@@ -101,6 +101,11 @@ class SimulatedConnection implements Connection {
     this.#closeListeners.push(listener);
   }
 
+  /** No more frames cross it: closed by the page, or by the brain. */
+  get isClosed(): boolean {
+    return this.#closed;
+  }
+
   receive(text: string): void {
     if (this.#closed) return;
     for (const listener of this.#messageListeners) listener(text);
@@ -122,29 +127,50 @@ export interface SimulatedGameOptions {
    * what makes a run: fix it per test.
    */
   stepMs: number;
+  /**
+   * For fault tests: how many copies of each frame from the page reach the brain (0 drops it, 2 duplicates it, both
+   * copies back to back). Called once per frame, in order, so a seeded function gives a reproducible run; not for frames
+   * on a connection the brain has closed, which it would discard anyway. Default: every frame once.
+   */
+  deliveredCopies?: (frame: { atMs: number; data: string }) => number;
 }
 
 export class SimulatedGame {
   /** The brain's clock: give it to the brain's parts (`ControlChannel`, the store's timestamps). */
   readonly clock: VirtualBrainClock;
-  readonly #simulation: Simulation;
+  #simulation: Simulation;
   readonly #stepMs: number;
+  readonly #deliveredCopies: NonNullable<SimulatedGameOptions["deliveredCopies"]>;
   readonly #listeners = new Map<string, (connection: Connection) => void>();
   readonly #connections = new Map<number, SimulatedConnection>();
   readonly #outgoing: OutgoingFrame[] = [];
   #stepping = false;
 
-  private constructor(simulation: Simulation, stepMs: number, startMs: number) {
+  private constructor({ simulation, stepMs, deliveredCopies = () => 1 }: SimulatedGameOptions, startMs: number) {
     this.#simulation = simulation;
     this.#stepMs = stepMs;
+    this.#deliveredCopies = deliveredCopies;
     this.clock = new VirtualBrainClock(startMs);
   }
 
-  static async create({ simulation, stepMs }: SimulatedGameOptions): Promise<SimulatedGame> {
-    if (!Number.isSafeInteger(stepMs) || stepMs < 1) {
-      throw new RangeError(`stepMs must be a positive integer, got ${stepMs}`);
+  static async create(options: SimulatedGameOptions): Promise<SimulatedGame> {
+    if (!Number.isSafeInteger(options.stepMs) || options.stepMs < 1) {
+      throw new RangeError(`stepMs must be a positive integer, got ${options.stepMs}`);
     }
-    return new SimulatedGame(simulation, stepMs, await simulation.now());
+    return new SimulatedGame(options, await options.simulation.now());
+  }
+
+  /**
+   * The game reloaded: `simulation` is a new one started from its save. Every socket of the old page closes now, as a
+   * reload closes them, frames still queued for it go nowhere, and steps drive `simulation` from here on. Its
+   * `network.listenUrls` must cover what's listened on. The brain's clock never goes back: the save's time may be a
+   * moment behind it, and it waits for the reloaded game to catch up.
+   */
+  replaceSimulation(simulation: Simulation): void {
+    if (this.#stepping) throw new Error("SimulatedGame.replaceSimulation() can't run mid-step: await the step first");
+    this.#outgoing.length = 0;
+    for (const connection of [...this.#connections.values()]) connection.reportClosed();
+    this.#simulation = simulation;
   }
 
   /**
@@ -192,6 +218,14 @@ export class SimulatedGame {
     for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += this.#stepMs) await this.step();
   }
 
+  /** Steps until `condition` holds (checked before each step), failing once over `maxVirtualMs` has passed. */
+  async runUntil(condition: () => boolean, maxVirtualMs: number): Promise<void> {
+    for (let elapsedMs = 0; !condition(); elapsedMs += this.#stepMs) {
+      if (elapsedMs > maxVirtualMs) throw new Error(`condition not met within ${maxVirtualMs} virtual ms`);
+      await this.step();
+    }
+  }
+
   #handle(entry: NetworkOutboxEntry, unlistenedUrls: string[]): void {
     if (entry.type === "connect") {
       const onConnection = this.#listeners.get(entry.url);
@@ -208,7 +242,16 @@ export class SimulatedGame {
     }
     const connection = this.#connections.get(entry.connectionId);
     if (!connection) return;
-    if (entry.type === "message") connection.receive(entry.data);
-    else connection.reportClosed();
+    if (entry.type === "close") {
+      connection.reportClosed();
+      return;
+    }
+    // Not for a frame the brain would discard: the fault function sees only what could reach it.
+    if (connection.isClosed) return;
+    const copies = this.#deliveredCopies(entry);
+    if (!Number.isSafeInteger(copies) || copies < 0) {
+      throw new RangeError(`deliveredCopies must return a whole number of copies, got ${copies}`);
+    }
+    for (let copy = 0; copy < copies; copy++) connection.receive(entry.data);
   }
 }
