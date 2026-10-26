@@ -1,0 +1,16 @@
+{
+  "name": "@bitburner-agent/brain",
+  "private": true,
+  "description": "The long-running brain process: the bridge to the game, the telemetry store, and (from M4) the planner.",
+  "license": "MIT",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@bitburner-agent/bridge": "*",
+    "@bitburner-agent/core": "*",
+    "@bitburner-agent/sim": "*"
+  },
+  "devDependencies": {
+    "ws": "8.22.0"
+  }
+}

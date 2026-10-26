@@ -362,7 +362,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ---
 
 ## 7. Telemetry and observability
-- **Store:** an append-only time series of snapshots (thinned for old data), decision records, estimate-vs-actual errors, reflex health, and transitions. SQLite to start, in the configurable data directory (ADR 0006).
+- **Store:** an append-only time series of snapshots, decision records, estimate-vs-actual errors, reflex health, and transitions. It's SQLite through Node's built-in `node:sqlite`, in the data directory the owner chooses (ADR 0006; [`packages/brain`](../packages/brain/README.md#the-telemetry-store)). Old data is thinned once the campaign's months of data need it (M4). The gap report over its fast snapshots is the evidence for M2's 24 h criterion.
 - **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup.
 - **Release tagging:** every record carries the agent release that produced it, so releases can be compared directly ("did v0.4 beat v0.3 on BN1?").
 - **Dashboard:** a web page served on **`127.0.0.1` only**. It shows the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, a timeline of BitNodes and installs, brain/agent health, and alerts.
@@ -503,7 +503,7 @@ real game ──telemetry──► store ◄──runs── simulator
                            │
                      versioned model params ──► brain
 ```
-- **One store for both worlds:** live telemetry and simulator runs go into the same SQLite store (§7). Every record is tagged with environment (E0/E1/E2), release, scenario and seed.
+- **One store for both worlds:** live telemetry and simulator runs go into the same SQLite store (§7). Every record is tagged with environment (E0/E1/E2) and release, and simulator runs with scenario and seed once scenarios store their runs (M4). Under the simulator the brain's clock is virtual time (the lockstep driver, [`packages/brain`](../packages/brain/README.md#the-lockstep-driver)), so its records are reproducible from the seed.
 - **Calibration jobs** fit fast-model corrections, the per-BitNode duration table and the timing-jitter model. They run on demand like the other heavy suites.
 - **Model params are code.** Calibration output is a versioned data file that ships through the normal merge gate: PR, CI including the scenario suite, independent review, tagged release. A behaviour change never reaches the live game without the same checks as a code change. This is the same rule as LLM supervisor proposals (§8).
 
