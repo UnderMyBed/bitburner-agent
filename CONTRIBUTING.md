@@ -112,11 +112,12 @@ Code runs in three environments, and each file is typechecked in its own (archit
 |---|---|---|
 | `packages/core/src` | `packages/core/tsconfig.json` | Neither: imported by in-game and Node code alike, so no DOM and no Node types |
 | `packages/ingame/src` | `packages/ingame/tsconfig.json` | The game's page: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` |
-| Everything else: other packages, every package's tests, `tools/`, root files | that folder's `tsconfig.json` | Node |
+| Everything else: other packages, the tests, `tools/`, the root's own files | the package's `tsconfig.json`; `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node |
 
 - Every config extends `tsconfig.base.json` (the shared strict options, environment-neutral) or `tsconfig.node.json` (the same, plus Node types).
-- `packages/sim` also sees the DOM: its host emulates the game's page with jsdom, whose types bring the DOM in.
-- **A new package or folder of TypeScript needs a config** (and, for a non-Node package, a separate one for its tests, which run in Node). `npm run typecheck` finds every `tsconfig.json` and fails on any `.ts` file none of them covers.
+- **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.
+- **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. A Node config for `ingame`'s tests must map `@nsdefs` too, if the tests import in-game sources.
+- `npm run typecheck` (`tools/typecheck`) finds every `tsconfig.json` and fails on any TypeScript file none of them covers. Its tests check each config's environment with probe files, so a change that lets Node or the DOM back in fails CI.
 
 ## Rules of engagement
 

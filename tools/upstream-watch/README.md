@@ -15,7 +15,7 @@ It compares the pinned game (`vendor/bitburner-src`'s gitlink) with an upstream 
 | API surface | `src/ScriptEditor/NetscriptDefinitions.d.ts` | Declarations added, removed and changed. For interfaces, classes, enums and object types, the members added, removed and changed. If one side isn't an object type (say it became an intersection), the declaration is listed as changed with no member breakdown. Comments and formatting don't count. The raw diff follows, collapsed. |
 | RAM costs | `src/Netscript/RamCostGenerator.ts` | Each function's cost under `ns` (`hack`, `singularity.cat`, `formulas.hacking.hackChance`), with the cost constants and arithmetic resolved, so a changed constant shows up in every function that uses it. `(SF4)` marks a Singularity cost, which is multiplied without Source-File 4. |
 | Watched source | [`watchlist.txt`](watchlist.txt) | Commits touching the watched paths: whole subsystems (BitNode, constants, corporation, darknet, the Netscript runtime and every `ns` function), plus every game file our [mechanics docs](../../docs/mechanics/) cite. |
-| Contract typecheck | — | Not applicable until an in-game package exists ([#42](https://github.com/UnderMyBed/bitburner-agent/issues/42)). |
+| Contract typecheck | — | Not built yet: it comes with the first in-game code ([#42](https://github.com/UnderMyBed/bitburner-agent/issues/42)). |
 
 The stable watcher's report leads with **bump steps**, when `stable` is ahead of the pinned commit:
 1. the shallow fetch and checkout of the new commit;

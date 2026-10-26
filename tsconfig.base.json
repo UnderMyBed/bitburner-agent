@@ -1,6 +1,7 @@
 {
-  // Shared by every package's tsconfig. Environment-neutral: no DOM and no Node types. Each config adds the
-  // environment its files run in (CONTRIBUTING, "TypeScript configs").
+  // Shared by every tsconfig.json in the repository. Environment-neutral: no DOM and no Node types; each config adds
+  // the environment its files run in (CONTRIBUTING, "TypeScript configs"). `types: []` matters: left out, TypeScript
+  // would load every installed @types package.
   "compilerOptions": {
     "target": "es2024",
     "lib": ["es2024"],

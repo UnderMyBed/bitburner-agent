@@ -1,6 +1,5 @@
 {
-  // For code that runs in Node: every package except the environment-neutral `core/src` and the in-game
-  // `ingame/src`, plus all tests.
+  // For code that runs in Node (CONTRIBUTING, "TypeScript configs").
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"]
