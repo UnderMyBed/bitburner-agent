@@ -28,7 +28,10 @@ export interface GapReport {
 /** The default threshold: three fast-tier cadences. */
 export const DEFAULT_GAP_THRESHOLD_MS = 6_000;
 
+/** Throws for a window that ends before it starts: it would check nothing, and must never pass as "no gaps". */
 export function findGaps(receivedAtMs: number[], { sinceMs, untilMs, thresholdMs }: GapWindow): GapReport {
+  if (!(sinceMs < untilMs)) throw new RangeError("the window must end after it starts");
+  if (!(thresholdMs > 0)) throw new RangeError("the threshold must be positive");
   const inWindow = receivedAtMs.filter((time) => time >= sinceMs && time <= untilMs).sort((a, b) => a - b);
   const edges = [sinceMs, ...inWindow, untilMs];
   const gaps: Gap[] = [];

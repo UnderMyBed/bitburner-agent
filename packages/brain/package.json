@@ -6,11 +6,11 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@bitburner-agent/bridge": "*",
-    "@bitburner-agent/core": "*",
-    "@bitburner-agent/sim": "*"
+    "@bitburner-agent/bridge": "*"
   },
   "devDependencies": {
+    "@bitburner-agent/core": "*",
+    "@bitburner-agent/sim": "*",
     "ws": "8.22.0"
   }
 }

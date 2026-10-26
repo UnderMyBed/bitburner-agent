@@ -1,14 +1,26 @@
 // The lockstep driver (ADR 0012): runs a brain against a simulation. The page's sockets become `Connection`s on the
 // brain's side, and the brain's clock follows the simulation's virtual time, so a run is reproducible from its seed and
-// step size, whatever real time anything takes. Used by every brain-plus-simulator test; the live brain never loads it.
+// step size, whatever real time the brain's synchronous work takes. Used by every brain-plus-simulator test; the live
+// brain never loads it.
+//
+// The brain's handlers must be synchronous: a batch of frames is handed over without yielding, so the continuation of
+// an `await` on real I/O would land in whichever step real time put it in.
 import type { Clock, Connection, TimerHandle } from "@bitburner-agent/bridge";
 import type { NetworkOutboxEntry, Simulation } from "@bitburner-agent/sim";
+
+/** The least a timer waits, as Node takes a delay below 1 ms (or not a number). */
+const MIN_TIMER_DELAY_MS = 1;
+
+interface PendingTimer {
+  dueMs: number;
+  callback: () => void;
+}
 
 /** The brain's clock under the simulator: virtual time, moved only by the driver. */
 export class VirtualBrainClock implements Clock {
   #nowMs: number;
   #nextHandle = 1;
-  readonly #timers = new Map<number, { dueMs: number; callback: () => void }>();
+  readonly #timers = new Map<number, PendingTimer>();
 
   constructor(startMs: number) {
     this.#nowMs = startMs;
@@ -18,9 +30,11 @@ export class VirtualBrainClock implements Clock {
     return this.#nowMs;
   }
 
+  /** As Node's: a delay below 1 ms, or not a finite number, waits 1 ms, so a timer that re-arms itself can't spin. */
   setTimeout(callback: () => void, delayMs: number): TimerHandle {
     const handle = this.#nextHandle++;
-    this.#timers.set(handle, { dueMs: this.#nowMs + Math.max(0, delayMs), callback });
+    const waitMs = Number.isFinite(delayMs) && delayMs >= MIN_TIMER_DELAY_MS ? delayMs : MIN_TIMER_DELAY_MS;
+    this.#timers.set(handle, { dueMs: this.#nowMs + waitMs, callback });
     return handle;
   }
 
@@ -31,46 +45,52 @@ export class VirtualBrainClock implements Clock {
   /** Moves to `targetMs`, firing each timer due by then at its own due time, in order (ties by creation). */
   advanceTo(targetMs: number): void {
     for (;;) {
-      let next: [number, { dueMs: number; callback: () => void }] | undefined;
-      for (const entry of this.#timers) {
-        if (entry[1].dueMs > targetMs) continue;
-        if (!next || entry[1].dueMs < next[1].dueMs) next = entry;
+      let earliest: { handle: number; timer: PendingTimer } | undefined;
+      for (const [handle, timer] of this.#timers) {
+        if (timer.dueMs > targetMs) continue;
+        if (!earliest || timer.dueMs < earliest.timer.dueMs) earliest = { handle, timer };
       }
-      if (!next) break;
-      this.#timers.delete(next[0]);
-      this.#nowMs = Math.max(this.#nowMs, next[1].dueMs);
-      next[1].callback();
+      if (!earliest) break;
+      this.#timers.delete(earliest.handle);
+      this.#nowMs = Math.max(this.#nowMs, earliest.timer.dueMs);
+      earliest.timer.callback();
     }
     this.#nowMs = Math.max(this.#nowMs, targetMs);
   }
 }
 
 type OutgoingFrame =
-  | { kind: "send"; connectionId: number; data: string }
-  | { kind: "close"; connectionId: number; code: number; reason: string };
+  | { kind: "send"; connection: SimulatedConnection; data: string }
+  | { kind: "close"; connection: SimulatedConnection; code: number; reason: string };
 
 /** One page socket, as the brain sees it. */
 class SimulatedConnection implements Connection {
-  readonly #connectionId: number;
+  readonly connectionId: number;
   /** The driver's queue of frames for the page, sent at the start of the next step. */
   readonly #outgoing: OutgoingFrame[];
+  /** No more frames either way: closed by the page, or by the brain (whose close is still on its way). */
   #closed = false;
+  #closeReported = false;
   readonly #messageListeners: ((text: string) => void)[] = [];
   readonly #closeListeners: (() => void)[] = [];
 
   constructor(connectionId: number, outgoing: OutgoingFrame[]) {
-    this.#connectionId = connectionId;
+    this.connectionId = connectionId;
     this.#outgoing = outgoing;
   }
 
   send(text: string): void {
-    if (!this.#closed) this.#outgoing.push({ kind: "send", connectionId: this.#connectionId, data: text });
+    if (!this.#closed) this.#outgoing.push({ kind: "send", connection: this, data: text });
   }
 
+  /**
+   * Stops frames at once, as a real socket does once closing, but reports the close only once it has reached the page
+   * (the next step), as a live socket reports it after the closing handshake.
+   */
   close(code: number, reason: string): void {
     if (this.#closed) return;
-    this.#outgoing.push({ kind: "close", connectionId: this.#connectionId, code, reason });
-    this.closedOnEitherSide();
+    this.#closed = true;
+    this.#outgoing.push({ kind: "close", connection: this, code, reason });
   }
 
   onMessage(listener: (text: string) => void): void {
@@ -86,9 +106,11 @@ class SimulatedConnection implements Connection {
     for (const listener of this.#messageListeners) listener(text);
   }
 
-  closedOnEitherSide(): void {
-    if (this.#closed) return;
+  /** The close has completed: the page closed it, or the brain's close reached the page. */
+  reportClosed(): void {
     this.#closed = true;
+    if (this.#closeReported) return;
+    this.#closeReported = true;
     for (const listener of this.#closeListeners) listener();
   }
 }
@@ -110,6 +132,7 @@ export class SimulatedGame {
   readonly #listeners = new Map<string, (connection: Connection) => void>();
   readonly #connections = new Map<number, SimulatedConnection>();
   readonly #outgoing: OutgoingFrame[] = [];
+  #stepping = false;
 
   private constructor(simulation: Simulation, stepMs: number, startMs: number) {
     this.#simulation = simulation;
@@ -118,8 +141,9 @@ export class SimulatedGame {
   }
 
   static async create({ simulation, stepMs }: SimulatedGameOptions): Promise<SimulatedGame> {
-    if (!Number.isSafeInteger(stepMs) || stepMs < 1)
+    if (!Number.isSafeInteger(stepMs) || stepMs < 1) {
       throw new RangeError(`stepMs must be a positive integer, got ${stepMs}`);
+    }
     return new SimulatedGame(simulation, stepMs, await simulation.now());
   }
 
@@ -133,19 +157,34 @@ export class SimulatedGame {
 
   /**
    * One step: the brain's queued frames and closes go to the page; the simulation advances; what the page's sockets did
-   * comes back in order, each at its own virtual time, with the brain's timers fired in between.
+   * comes back in order, each at its own virtual time, with the brain's timers fired in between. Steps never overlap.
    */
   async step(): Promise<void> {
-    for (const frame of this.#outgoing.splice(0)) {
-      if (frame.kind === "send") await this.#simulation.network.send(frame.connectionId, frame.data);
-      else await this.#simulation.network.close(frame.connectionId, frame.code, frame.reason);
+    if (this.#stepping) throw new Error("SimulatedGame.step() is already running: await each step");
+    this.#stepping = true;
+    try {
+      for (const frame of this.#outgoing.splice(0)) {
+        if (frame.kind === "send") {
+          await this.#simulation.network.send(frame.connection.connectionId, frame.data);
+        } else {
+          await this.#simulation.network.close(frame.connection.connectionId, frame.code, frame.reason);
+          frame.connection.reportClosed();
+        }
+      }
+      const nowMs = await this.#simulation.advance(this.#stepMs);
+      const unlistenedUrls: string[] = [];
+      for (const entry of await this.#simulation.network.take()) {
+        this.clock.advanceTo(entry.atMs);
+        this.#handle(entry, unlistenedUrls);
+      }
+      this.clock.advanceTo(nowMs);
+      // Reported once the whole batch is handled, so nothing after it is lost.
+      if (unlistenedUrls.length > 0) {
+        throw new Error(`page sockets connected to ${unlistenedUrls.join(", ")}, which nothing listens on`);
+      }
+    } finally {
+      this.#stepping = false;
     }
-    const nowMs = await this.#simulation.advance(this.#stepMs);
-    for (const entry of await this.#simulation.network.take()) {
-      this.clock.advanceTo(entry.atMs);
-      this.#handle(entry);
-    }
-    this.clock.advanceTo(nowMs);
   }
 
   /** Steps until at least `durationMs` of virtual time has passed. */
@@ -153,10 +192,13 @@ export class SimulatedGame {
     for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += this.#stepMs) await this.step();
   }
 
-  #handle(entry: NetworkOutboxEntry): void {
+  #handle(entry: NetworkOutboxEntry, unlistenedUrls: string[]): void {
     if (entry.type === "connect") {
       const onConnection = this.#listeners.get(entry.url);
-      if (!onConnection) throw new Error(`a page socket connected to ${entry.url}, which nothing listens on`);
+      if (!onConnection) {
+        unlistenedUrls.push(entry.url);
+        return;
+      }
       const connection = new SimulatedConnection(entry.connectionId, this.#outgoing);
       this.#connections.set(entry.connectionId, connection);
       // Closed from either side: the driver forgets it.
@@ -167,6 +209,6 @@ export class SimulatedGame {
     const connection = this.#connections.get(entry.connectionId);
     if (!connection) return;
     if (entry.type === "message") connection.receive(entry.data);
-    else connection.closedOnEitherSide();
+    else connection.reportClosed();
   }
 }

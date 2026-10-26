@@ -64,6 +64,15 @@ test("fast snapshots' receipt times, by environment and window, for the gap repo
     );
   }
   expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 0, untilMs: 5_000 })).toEqual([1_000, 3_000]);
+  // Both edges of the window count.
+  expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 1_000, untilMs: 3_000 })).toEqual([1_000, 3_000]);
+});
+
+test("the store is in WAL mode, so a reader never blocks the brain's writes; a read-only open can't write", () => {
+  expect(store.journalMode()).toBe("wal");
+  const reader = TelemetryStore.openReadOnly(path.join(directory, "telemetry.sqlite"));
+  expect(() => reader.setSetting("x", "y")).toThrow();
+  reader.close();
 });
 
 test("events round-trip in order, tagged", () => {

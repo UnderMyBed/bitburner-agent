@@ -66,6 +66,12 @@ describe("rejected, each with a reason", () => {
     if (!result.ok) expect(result.reason).not.toBe("");
   });
 
+  test("a reason quotes at most a short piece of a bad value, so a huge frame can't flood the store or the log", () => {
+    const result = parseAgentMessage(JSON.stringify({ protocolVersion: "x".repeat(1_000_000) }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.length).toBeLessThan(150);
+  });
+
   test("an array isn't a message", () => {
     expect(parseAgentMessage(JSON.stringify([hello]))).toEqual({ ok: false, reason: "not a JSON object" });
   });

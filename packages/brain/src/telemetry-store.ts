@@ -3,7 +3,11 @@
 import { DatabaseSync } from "node:sqlite";
 
 /** E0 Steam, E1 the simulator, E2 the source build (architecture §9.4). */
-export type Environment = "E0" | "E1" | "E2";
+export const ENVIRONMENTS = ["E0", "E1", "E2"] as const;
+export type Environment = (typeof ENVIRONMENTS)[number];
+
+/** How long a write waits for a reader's lock before failing, so the dashboard reading never fails the brain's writes. */
+const BUSY_TIMEOUT_MS = 5_000;
 
 /** Who produced a record: every row carries it, so releases and environments can be compared (§7, §11). */
 export interface RecordContext {
@@ -68,10 +72,20 @@ export class TelemetryStore {
 
   /** Opens (creating if needed) the store at `filePath`, in WAL mode so a reader (the dashboard) never blocks a write. */
   static open(filePath: string): TelemetryStore {
-    const database = new DatabaseSync(filePath);
+    const database = new DatabaseSync(filePath, { timeout: BUSY_TIMEOUT_MS });
     database.exec("PRAGMA journal_mode = WAL;");
     database.exec(SCHEMA);
     return new TelemetryStore(database);
+  }
+
+  /** Opens an existing store for reading only (the gap report): it takes no write lock and changes nothing. */
+  static openReadOnly(filePath: string): TelemetryStore {
+    return new TelemetryStore(new DatabaseSync(filePath, { readOnly: true, timeout: BUSY_TIMEOUT_MS }));
+  }
+
+  /** The journal mode in force: `wal` for a store opened with `open`. */
+  journalMode(): string {
+    return (this.#database.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
   }
 
   recordSnapshot(context: RecordContext, snapshot: StoredSnapshot): void {
@@ -89,14 +103,14 @@ export class TelemetryStore {
         snapshot.gameTimeMs,
         snapshot.receivedAtMs,
         snapshot.missedBefore,
-        JSON.stringify(snapshot.data),
+        JSON.stringify(snapshot.data) ?? "null",
       );
   }
 
   recordEvent(context: RecordContext, event: StoredEvent): void {
     this.#database
       .prepare("INSERT INTO events (environment, release, at_ms, kind, detail) VALUES (?, ?, ?, ?, ?)")
-      .run(context.environment, context.release, event.atMs, event.kind, JSON.stringify(event.detail));
+      .run(context.environment, context.release, event.atMs, event.kind, JSON.stringify(event.detail) ?? "null");
   }
 
   /** Every snapshot from an environment, in the order stored. */

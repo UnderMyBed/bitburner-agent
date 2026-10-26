@@ -45,6 +45,11 @@ describe("findGaps", () => {
     });
   });
 
+  test("a window that ends before it starts is an error, not 'no gaps'", () => {
+    expect(() => findGaps([], { sinceMs: 10, untilMs: 10, thresholdMs: 6_000 })).toThrow(RangeError);
+    expect(() => findGaps([], { sinceMs: 10, untilMs: 0, thresholdMs: 6_000 })).toThrow(RangeError);
+  });
+
   test("times outside the window are ignored, and times needn't arrive sorted", () => {
     expect(findGaps([70_000, 4_000, -5_000, 2_000, 0], { sinceMs: 0, untilMs: 6_000, thresholdMs: 6_000 })).toEqual({
       gaps: [],

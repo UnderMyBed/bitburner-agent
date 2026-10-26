@@ -8,7 +8,13 @@ import path from "node:path";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { type BrainConfig, CONFIG_FILE_NAME, loadOrCreateConfig, STORE_FILE_NAME } from "../src/config.ts";
+import {
+  type BrainConfig,
+  CONFIG_FILE_NAME,
+  loadOrCreateConfig,
+  resolveDataDirectory,
+  STORE_FILE_NAME,
+} from "../src/config.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const BRAIN_MAIN = path.resolve(import.meta.dirname, "../src/main.ts");
@@ -51,10 +57,34 @@ test("the config and its token are created once, and kept", () => {
   expect(loadOrCreateConfig(dataDirectory)).toEqual(first);
 });
 
-test("a config that isn't valid is refused, saying what's wrong", () => {
+test.each([
+  ["a short token", { token: "short" }, /token must be 64 hex digits/],
+  ["the simulator's environment", { environment: "E1" }, /environment must be E0 or E2/],
+  ["two ports the same", { dashboardPort: 12526 }, /the ports must be different/],
+  ["no allowed origins", { allowedOrigins: [] }, /allowedOrigins must list at least one origin/],
+])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
   const config = loadOrCreateConfig(dataDirectory);
-  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...config, token: "short" }));
-  expect(() => loadOrCreateConfig(dataDirectory)).toThrow(/token must be 64 hex digits/);
+  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...config, ...changes }));
+  expect(() => loadOrCreateConfig(dataDirectory)).toThrow(expected);
+});
+
+test("a config that isn't JSON, or isn't an object, is refused with its path", () => {
+  loadOrCreateConfig(dataDirectory);
+  const configPath = path.join(dataDirectory, CONFIG_FILE_NAME);
+  writeFileSync(configPath, "{ trailing comma, }");
+  expect(() => loadOrCreateConfig(dataDirectory)).toThrow(`${configPath}: not valid JSON`);
+  writeFileSync(configPath, "null");
+  expect(() => loadOrCreateConfig(dataDirectory)).toThrow(`${configPath}: must be a JSON object`);
+});
+
+test("a flag without a value is an error, never taken from elsewhere", () => {
+  expect(() => resolveDataDirectory(["--data-dir"], { BITBURNER_AGENT_DATA_DIR: "elsewhere" })).toThrow(
+    /--data-dir needs a value/,
+  );
+  expect(() => resolveDataDirectory(["--data-dir", "--since", "x"], {})).toThrow(/--data-dir needs a value/);
+  expect(resolveDataDirectory(["--data-dir", "data"], { INIT_CWD: dataDirectory })).toBe(
+    path.join(dataDirectory, "data"),
+  );
 });
 
 async function startBrain(): Promise<{ config: BrainConfig; controlPort: number }> {
@@ -153,4 +183,9 @@ test("the gap report's command: 0 with no gaps, 1 with gaps, 2 when it can't run
   expect(clean.exitCode).toBe(0);
   expect(clean.output).toContain("No gaps.");
   expect(runGaps([...window, "--threshold-seconds", "0"]).exitCode).toBe(2);
+  // A window that checks nothing must never pass as "no gaps".
+  expect(runGaps(["--since", "2026-10-26T00:01:00Z", "--until", "2026-10-26T00:00:00Z"]).exitCode).toBe(2);
+  expect(runGaps(["--since", "2999-01-01T00:00:00Z"]).exitCode).toBe(2);
+  // A time without Z or an offset would be read as local time: refused.
+  expect(runGaps(["--since", "2026-10-26T00:00:00", "--until", "2026-10-26T00:00:20Z"]).exitCode).toBe(2);
 });
