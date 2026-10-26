@@ -53,6 +53,8 @@ const expectations: Record<string, EnvironmentExpectation> = {
   "packages/bridge/tsconfig.json": nodeEnvironment,
   "packages/core/tsconfig.json": { allowed: [], rejected: [nodeGlobal, nodeModule, domGlobal] },
   "packages/core/test/tsconfig.json": nodeEnvironment,
+  // Node, and the DOM too: the functions its harness passes to Playwright's page.evaluate run in the page.
+  "packages/e2/tsconfig.json": { allowed: [nodeGlobal, nodeModule, domGlobal], rejected: [] },
   "packages/ingame/src/tsconfig.json": {
     allowed: [domGlobal, nsCalledRight],
     rejected: [nodeGlobal, nodeModule, nsCalledWrong],

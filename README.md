@@ -106,6 +106,8 @@ npm run baseline -w @bitburner-agent/legacy -- --seeds 1
 
 The simulator is deterministic: a seed gives the same state hash every time, on any machine. More in [scenarios](docs/sim/scenarios.md), [baselines](docs/sim/baselines.md) and the [simulator's README](packages/sim/README.md). [CONTRIBUTING](CONTRIBUTING.md) covers the checks (`npm run check`).
 
+The end-to-end tests run the real game, built from the same pinned source, in a browser: [`packages/e2`](packages/e2/README.md).
+
 ## Contributing
 
 This is a personal project made public. Issues and PRs are welcome, but there is no support commitment. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development process, which is strict test-first with automated merge gates.

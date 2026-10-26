@@ -1,0 +1,8 @@
+{
+  // The harness runs in Node; code passed to page.evaluate() runs in the page, so the DOM's types are included too.
+  "extends": "../../tsconfig.node.json",
+  "compilerOptions": {
+    "lib": ["es2024", "dom"]
+  },
+  "include": ["*.ts", "src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
+}

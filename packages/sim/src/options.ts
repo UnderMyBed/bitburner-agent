@@ -63,8 +63,8 @@ function parseSaveFile(bytes: Uint8Array): { hostFixture: HostFixture; json: str
   };
 }
 
-/** `Player.lastUpdate` from a save: the moment it was taken, which becomes the simulation's epoch. */
-function playerLastUpdate(json: string): number {
+/** `Player.lastUpdate` from a save's JSON: the moment it was taken, which becomes the simulation's epoch. */
+export function playerLastUpdate(json: string): number {
   try {
     const save = JSON.parse(json) as { ctor?: string; data?: { PlayerSave?: string } };
     const player = JSON.parse(save.data?.PlayerSave ?? "") as { data?: { lastUpdate?: number } };

@@ -1,6 +1,8 @@
 export { commitId, growthPerDay, rigId } from "./bench/report.ts";
 export type { EngineApi } from "./engine/api.ts";
 export { buildEngine } from "./engine/build.ts";
+export { checkVendorInstall, lockfileHash, writeSetupStamp } from "./engine/vendor.ts";
+export { playerLastUpdate } from "./options.ts";
 export { formatProgress, formatRun } from "./scenario/report.ts";
 export {
   type Aggregate,
