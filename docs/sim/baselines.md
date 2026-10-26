@@ -65,7 +65,7 @@ Every seed that didn't pass is explained here, per run: what stopped it, and whe
 
 - **4799701 (the first run):** none; all 8 seeds reached 12 hours.
 - **3cf08f9 (the M1 release):** none; all 8 seeds reached 12 hours.
-- **Before it**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before that run ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
+- **Before the first run**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before it ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
   - [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73): results depended on when garbage collection ran, through the game's module cache.
   - [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74): the virtual clock's cost grew with the timers pending, so tens of thousands of scripts slowed it to a crawl.
   - [#75](https://github.com/UnderMyBed/bitburner-agent/issues/75): the CLI had no real-time limit or heap cap, so a slow seed held the machine for hours.

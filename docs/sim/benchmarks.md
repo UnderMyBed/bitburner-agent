@@ -92,7 +92,7 @@ Reading the second row (5457a1c, the reference rig):
 - **The heap still doesn't grow.**
 
 Reading the third row (3cf08f9, the M1 release, the reference rig):
-- Every workload is within 2% of the second row (lean −2%, batch −0.4%, churn +1.7%, copies +0.3%), which is run-to-run noise: nothing merged since #79 changed the hot paths.
+- Every workload is within 2% of the second row (lean −2%, batch −0.4%, churn +1.7%, copies +0.3%), which is run-to-run noise. So the changes since that row (#79's review fixes, #81's Chromium timer model on every timer, #82) cost nothing measurable ([#44](https://github.com/UnderMyBed/bitburner-agent/issues/44)).
 - **The heap still doesn't grow.**
 
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.

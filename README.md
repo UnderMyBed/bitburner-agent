@@ -95,7 +95,8 @@ npm run setup:engine   # the game's own dependencies, for the simulator; again a
 Then:
 
 ```sh
-# Four seeds of a 6-virtual-hour hack loop, one at a time: each takes about a second.
+# Four seeds of a 6-virtual-hour hack loop, one at a time: each seed takes about a second.
+# The first run builds the engine bundle before it starts, which takes longer.
 npm run sim -- packages/sim/scenarios/lean.json --workers 1
 
 # One seed of the legacy fork's BN1 baseline, to 12 virtual hours: about 6 real minutes.

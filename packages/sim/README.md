@@ -2,7 +2,7 @@
 
 The headless simulator (environment E1): the real Bitburner engine from `vendor/bitburner-src`, bundled for plain Node, running on a virtual clock and deterministic from a seed. Design: [ADR 0007](../../docs/decisions/0007-headless-engine-simulator.md), architecture §9, and the [S1 spike report](../../docs/spikes/s1-headless-engine.md).
 
-> **Status:** being built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4)). It boots a new game, a save or a BitNode with chosen Source-Files in a child process on a virtual clock. It runs player scripts with a headless UI router, and is deterministic from a seed. Scenario files run across seeds in parallel from the CLI.
+> **Status:** built in milestone M1 ([epic #4](https://github.com/UnderMyBed/bitburner-agent/issues/4), [v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); later milestones extend it as they need. It boots a new game, a save or a BitNode with chosen Source-Files in a child process on a virtual clock. It runs player scripts with a headless UI router, and is deterministic from a seed. Scenario files run across seeds in parallel from the CLI.
 
 ## Setup
 
