@@ -68,14 +68,17 @@ test("fast snapshots' receipt times, by environment and window, for the gap repo
   expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 1_000, untilMs: 3_000 })).toEqual([1_000, 3_000]);
 });
 
-test("fast snapshots' page heaps, by environment and window, in order of arrival, without the nulls", () => {
-  for (const [receivedAtMs, tier, environment, pageHeapUsedBytes] of [
-    [3_000, "fast", "E0", 30],
-    [1_000, "fast", "E0", 10],
-    [2_000, "fast", "E0", null],
-    [2_500, "medium", "E0", 99],
-    [2_600, "fast", "E2", 98],
-    [9_000, "fast", "E0", 90],
+test("fast snapshots' page heaps, by environment and window, in order of arrival, numbers only", () => {
+  for (const [receivedAtMs, tier, environment, data] of [
+    [3_000, "fast", "E0", { pageHeapUsedBytes: 30 }],
+    [1_000, "fast", "E0", { pageHeapUsedBytes: 10 }],
+    [2_000, "fast", "E0", { pageHeapUsedBytes: null }],
+    // E2's shape: Playwright's page has no performance.memory, so the key is missing.
+    [2_100, "fast", "E0", {}],
+    [2_200, "fast", "E0", { pageHeapUsedBytes: "12" }],
+    [2_500, "medium", "E0", { pageHeapUsedBytes: 99 }],
+    [2_600, "fast", "E2", { pageHeapUsedBytes: 98 }],
+    [9_000, "fast", "E0", { pageHeapUsedBytes: 90 }],
   ] as const) {
     store.recordSnapshot(
       { environment, release: "r" },
@@ -86,7 +89,7 @@ test("fast snapshots' page heaps, by environment and window, in order of arrival
         gameTimeMs: 0,
         receivedAtMs,
         missedBefore: 0,
-        data: { pageHeapUsedBytes },
+        data,
       },
     );
   }

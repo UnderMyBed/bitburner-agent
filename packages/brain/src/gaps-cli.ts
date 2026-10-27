@@ -32,7 +32,8 @@ function describePageHeap(pageHeapsBytes: number[]): string {
   const highest = pageHeapsBytes.reduce((high, bytes) => Math.max(high, bytes));
   return (
     `page heap: first ${formatMegabytes(first)}, last ${formatMegabytes(last)}, lowest ${formatMegabytes(lowest)}, ` +
-    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshots reported it)`
+    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshot${pageHeapsBytes.length === 1 ? "" : "s"} ` +
+    "reported it)"
   );
 }
 

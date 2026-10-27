@@ -149,7 +149,7 @@ try {
   const shutDown = async () => {
     if (stopping) return;
     stopping = true;
-    // First: at logoff the game closes too, and must not be relaunched.
+    // First: so the game isn't relaunched while the brain shuts down.
     supervisor?.stop();
     // A deploy or backup the shutdown cuts short isn't a failed one: the next start deploys and backs up again.
     stopRecordingDeploys();

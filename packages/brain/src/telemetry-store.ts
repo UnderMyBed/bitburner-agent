@@ -191,7 +191,10 @@ export class TelemetryStore {
     return rows.map((row) => row.received_at_ms);
   }
 
-  /** The page's JS heap from each fast snapshot in a window that has one, in order of arrival (the gap report's). */
+  /**
+   * The `pageHeapUsedBytes` of each fast snapshot in the window (both edges included) that reported a number, in order
+   * of arrival: for the gap report. Null, a missing key (E2) and anything not a number are skipped.
+   */
   fastSnapshotPageHeaps({
     environment,
     sinceMs,
@@ -203,10 +206,10 @@ export class TelemetryStore {
   }): number[] {
     const rows = this.#database
       .prepare(
-        `SELECT page_heap_used_bytes FROM (
-          SELECT json_extract(data, '$.pageHeapUsedBytes') AS page_heap_used_bytes, received_at_ms FROM snapshots
-            WHERE environment = ? AND tier = 'fast' AND received_at_ms BETWEEN ? AND ?)
-          WHERE page_heap_used_bytes IS NOT NULL ORDER BY received_at_ms`,
+        `SELECT json_extract(data, '$.pageHeapUsedBytes') AS page_heap_used_bytes FROM snapshots
+          WHERE environment = ? AND tier = 'fast' AND received_at_ms BETWEEN ? AND ?
+            AND json_type(data, '$.pageHeapUsedBytes') IN ('integer', 'real')
+          ORDER BY received_at_ms`,
       )
       .all(environment, sinceMs, untilMs) as { page_heap_used_bytes: number }[];
     return rows.map((row) => row.page_heap_used_bytes);

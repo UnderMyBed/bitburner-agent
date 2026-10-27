@@ -120,5 +120,5 @@ Before relying on it, check on your machine, and record what you saw on [#95](ht
   - kill the Agent in the game's terminal (`kill agent/<id>/agent.js`, the deployment's folder): after about 5 minutes with no heartbeat, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec;
   - pause supervision and close the game: it stays closed until you resume.
 - **Stopping and starting the brain:** Ctrl+C, then `npm run brain` again; the game's Remote API reconnects and the Agent carries on.
-- **A brain crash:** end the brain's own `node` process (the one whose command line has `packages\brain\src\main.ts`, not `start.ts`) in Task Manager (the Details tab; right-click a column header → Select columns → Command line to see it); within about 5 s a `brain runner:` line shows the restart, and the game reconnects.
+- **A brain crash:** end the brain's own `node` process (the one whose command line has `packages\brain\src\main.ts`, not `start.ts`) in Task Manager (the Details page, in the left-hand menu; right-click a column header → Select columns → Command line to see it); within about 5 s a `brain runner:` line shows the restart, and the game reconnects.
 - **The game's commit:** note what the dashboard's Agent table shows on its "Game" line.
