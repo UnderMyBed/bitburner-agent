@@ -47,16 +47,31 @@ export function flagValue(argv: string[], name: string): string | undefined {
 }
 
 /**
- * The data directory from `--data-dir <dir>` or the environment variable, resolved against the directory the command
- * was run from (npm runs scripts from the repository root, and records the caller's directory in INIT_CWD). There's
- * no default: the owner picks it.
+ * The data directory when none is given: the repository's own `.data/` (gitignored). The agent runs from the repo and
+ * keeps everything in it (owner decision 30, #122).
+ */
+export const DEFAULT_DATA_DIRECTORY = path.resolve(import.meta.dirname, "../../../.data");
+
+/**
+ * The data directory from `--data-dir <dir>` or the environment variable (the flag first), resolved against the
+ * directory the command was run from (npm runs scripts from the repository root, and records the caller's directory
+ * in INIT_CWD); otherwise the repository's `.data/`.
+ *
+ * Only an absent one means the default. A brain there with a new config is E0, which on Windows launches Steam's game,
+ * so a given but empty one (`--data-dir "$UNSET"`) is refused, and so is the default under a test runner: a test's
+ * brain must have its own directory (Vitest sets VITEST, which a brain it starts inherits).
  */
 export function resolveDataDirectory(argv: string[], environmentVariables: NodeJS.ProcessEnv): string {
   const dataDirectory = flagValue(argv, "--data-dir") ?? environmentVariables[DATA_DIRECTORY_VARIABLE];
-  if (!dataDirectory) {
+  if (dataDirectory === undefined) {
+    if (environmentVariables.VITEST) {
+      throw new Error("A brain started by a test must be given its own data directory (--data-dir), never .data/");
+    }
+    return DEFAULT_DATA_DIRECTORY;
+  }
+  if (dataDirectory.trim() === "") {
     throw new Error(
-      `The brain needs a data directory: pass --data-dir <dir> or set ${DATA_DIRECTORY_VARIABLE}. ` +
-        'Put it on a non-system drive (ADR 0006; packages/brain/README.md, "Running it").',
+      `The data directory given (--data-dir or ${DATA_DIRECTORY_VARIABLE}) is empty: give one, or neither for .data/`,
     );
   }
   return path.resolve(environmentVariables.INIT_CWD ?? process.cwd(), dataDirectory);

@@ -1,4 +1,4 @@
-// npm run gaps -- --data-dir <dir> --since <ISO time> [--until <ISO time>] [--environment E0] [--threshold-seconds 6]
+// npm run gaps -- [--data-dir <dir>] --since <ISO time> [--until <ISO time>] [--environment E0] [--threshold-seconds 6]
 // Lists every gap in the fast snapshots (the heartbeat) in a window: the evidence for M2's 24 h Steam criterion.
 // Exits 0 when there are none, 1 when there are gaps, 2 when it couldn't run, including for a window that checks
 // nothing (one that ends before it starts).

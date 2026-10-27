@@ -6,7 +6,7 @@ coverage/
 .env
 .env.*
 
-# local runtime data (telemetry store, save backups)
+# the brain's default data directory (config with its token, telemetry store, in-game build, save backups): personal, never committed
 .data/
 
 # E2's game builds and Playwright browsers (packages/e2)

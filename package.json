@@ -11,16 +11,16 @@
     "node": ">=24"
   },
   "scripts": {
+    "bootstrap": "node tools/bootstrap/cli.ts",
     "check": "npm run typecheck && npm run lint && npm test",
     "setup:engine": "node packages/sim/scripts/setup-engine.ts",
     "build:engine": "node packages/sim/scripts/build-engine.ts",
     "sim": "node packages/sim/scripts/run-scenario.ts",
-    "brain": "node packages/brain/src/main.ts",
+    "brain": "node packages/brain/src/start.ts",
     "gaps": "node packages/brain/src/gaps-cli.ts",
     "e2:build": "node packages/e2/scripts/build-game.ts",
     "e2:install": "node packages/e2/scripts/install-browser.ts",
     "e2": "vitest run --config packages/e2/vitest.config.ts",
-    "setup:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File tools/setup/install-brain-task.ps1",
     "typecheck": "node tools/typecheck/cli.ts && node packages/sim/scripts/typecheck-bundle.ts",
     "lint": "biome ci --error-on-warnings .",
     "lint:fix": "biome check --write .",
