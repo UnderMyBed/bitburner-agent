@@ -12,7 +12,8 @@ import { TelemetryStore } from "../src/telemetry-store.ts";
 const STARTED_AT_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60_000;
 const context = { environment: "E0" as const, release: "v0.2.0+abc123def456" };
-const game = { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" };
+// What Steam's v3.0.1 reports: upstream's tag commit, not the pinned stable one (the same source, #128).
+const game = { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" };
 let directory: string;
 let store: TelemetryStore;
 let brainStartedEventId: number;
@@ -198,12 +199,12 @@ test("a disconnected Agent, another game version, a failed deploy and a give-up 
   store.recordEvent(context, {
     atMs: STARTED_AT_MS + 1_000,
     kind: "agentConnected",
-    detail: { agentSessionId: "s", deploymentId: "d", game: { ...game, commit: "DEV" } },
+    detail: { agentSessionId: "s", deploymentId: "d", game: { ...game, versionNumber: 52 } },
   });
   store.recordEvent(context, {
     atMs: STARTED_AT_MS + 1_000,
     kind: "versionDrift",
-    detail: { detail: "the Agent's game: commit DEV" },
+    detail: { detail: "the Agent's game: versionNumber 52, pinned 51" },
   });
   store.recordEvent(context, {
     atMs: STARTED_AT_MS + 3_000,
@@ -224,7 +225,7 @@ test("a disconnected Agent, another game version, a failed deploy and a give-up 
   const built = status(STARTED_AT_MS + 7_000);
   expect(built.agent).toMatchObject({ connected: false, sinceMs: STARTED_AT_MS + 3_000, agentSessionId: "s" });
   expect(built.alerts).toEqual([
-    { name: "versionDrift", sinceMs: STARTED_AT_MS + 1_000, detail: "the Agent's game: commit DEV" },
+    { name: "versionDrift", sinceMs: STARTED_AT_MS + 1_000, detail: "the Agent's game: versionNumber 52, pinned 51" },
     { name: "deployFailed", sinceMs: STARTED_AT_MS + 4_000, detail: "agent.js needs 4.7 GB, over its budget of 3 GB" },
     expect.objectContaining({ name: "supervisionGaveUp", sinceMs: STARTED_AT_MS + 6_000 }),
   ]);

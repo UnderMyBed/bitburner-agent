@@ -277,7 +277,11 @@ describe("an Agent on another game version", () => {
     expect(connection.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
     expect(events).toEqual([
       expect.objectContaining({ type: "agentConnected", game: otherGame }),
-      { type: "versionDrift", atMs: clock.now(), detail: "the Agent's game: versionNumber 52, pinned 51" },
+      {
+        type: "versionDrift",
+        atMs: clock.now(),
+        detail: "the Agent's game: versionNumber 52, pinned 51; version 3.1.0, pinned 3.0.1",
+      },
     ]);
     connectAgent(hello({ game: otherGame, agentSessionId: "session-2" }));
     expect(types().filter((type) => type === "versionDrift")).toHaveLength(1);
@@ -292,8 +296,10 @@ describe("an Agent on another game version", () => {
     expect(pinned.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
   });
 
-  test("a commit abbreviated to another length is the same game", () => {
-    const connection = connectAgent(hello({ game: { ...otherGame, versionNumber: 51, commit: "1da7316" } }));
+  test("the pinned release from another commit is the same game: Steam's build is v3.0.1's tag (#128)", () => {
+    const connection = connectAgent(
+      hello({ game: { ...otherGame, version: "3.0.1", versionNumber: 51, commit: "3162fd2" } }),
+    );
     expect(types()).toEqual(["agentConnected"]);
     expect(connection.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
   });

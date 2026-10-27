@@ -110,7 +110,6 @@ The brain builds the new in-game code at start and deploys it when the game conn
 - **The dashboard says "Brain unreachable", or doesn't load:** the brain isn't running. If its terminal shows `brain runner:` restart lines, it's crashing at start: the lines before them say why. If the terminal was closed, start it again.
 - **A `deployFailed` alert:** the brain couldn't deploy to the game. The alert and the brain's output say why. It retries each time the game connects; Options → Remote API → Connect makes it reconnect now.
 - **A `versionDrift` alert:** the game isn't the version this release was built for, usually because Steam updated it. The brain holds: it deploys nothing and restarts no Agent. Wait for a release built for the new version.
-  - If the alert names the commit, for example `commit DEV`, tell the developer. It means Steam's build reports its version differently from what the release expects.
 - **A `supervisionGaveUp` alert:** the game was relaunched 3 times in an hour, or the supervisor's checks or launch commands kept failing. Check the game and Steam, then click "Resume supervision".
 - **An `agentSilent` alert:** no heartbeat for over a minute. If it lasts, the supervisor relaunches the game after 5 minutes. If the game is running and the Agent isn't, `run agent/boot.js` in the terminal starts it.
 
