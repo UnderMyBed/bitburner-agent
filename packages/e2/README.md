@@ -102,7 +102,7 @@ Script imports and WebSockets still run in real time. So:
 - **Autosave on.** The simulator turns autosave off, and its saves carry that. `simulatorSave` turns the game's default (every 60 s) back on, because a deploy is in the save only after an autosave (#91).
 - **Typing focuses the terminal** (`typeCommand`) rather than clicking it: a toast can lie over it, and toasts close on a game timer, so one stays while game time stands still.
 - **Cadence is checked on `gameTimeMs`** ([game time](#game-time)).
-- **The page heap isn't measured on E2.** Playwright's fake `performance` has a `memory` without `usedJSHeapSize`, so the Agent reads `undefined`, and the fast snapshot's `pageHeapUsedBytes` arrives missing (not `null`, which the Agent sends where there's no `memory` at all). Measuring it on Steam is left to the soak (#99).
+- **The page heap isn't measured on E2.** Playwright's fake `performance` has a `memory` without `usedJSHeapSize`, so the Agent reads `undefined`, and the fast snapshot's `pageHeapUsedBytes` arrives missing (not `null`, which the Agent sends where there's no `memory` at all). It's measured on Steam, in a release's live run ([releasing](../../docs/releasing.md) step 2).
 - **Debugging a failing test.**
   - Run one test with `npm run e2 -- skeleton -t "reconnect"`.
   - When a test fails, each brain it started prints its log (the `brain:` lines: deploys, connections, refusals) under "Brain N's log (<data directory>)".
