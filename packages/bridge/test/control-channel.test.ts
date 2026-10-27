@@ -297,11 +297,13 @@ describe("an Agent on another game version", () => {
   });
 
   test("the pinned release from another commit is the same game: Steam's build is v3.0.1's tag (#128)", () => {
+    // No hold: an Agent on an older deployment is still told to restart onto the new one.
+    channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
     const connection = connectAgent(
       hello({ game: { ...otherGame, version: "3.0.1", versionNumber: 51, commit: "3162fd2" } }),
     );
     expect(types()).toEqual(["agentConnected"]);
-    expect(connection.sentMessages().map((message) => message.type)).toEqual(["welcome"]);
+    expect(connection.sentMessages().map((message) => message.type)).toEqual(["restart"]);
   });
 });
 

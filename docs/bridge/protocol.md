@@ -86,7 +86,9 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
 
   The channel also holds by itself, for the rest of the brain's run, once an Agent's `hello` reports a game other than `PINNED_GAME`:
   - another `versionNumber`;
-  - or a `commit` under 7 characters, or one that isn't a prefix of the pinned one, nor the pinned one a prefix of it. The game reports `git rev-parse --short` of its build, whose length depends on the clone.
+  - or another `version` (the version string).
+
+  The commit isn't compared (owner decision 31, #128). Upstream's v3.0.1 tag is a different commit from `stable`'s, with the same source, and Steam's build reports the tag's.
 
   It welcomes that Agent, and reports a `versionDrift` event after its `agentConnected`, once.
 

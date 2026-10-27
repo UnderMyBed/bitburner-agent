@@ -2,8 +2,9 @@ import type { GameInfo } from "./control-protocol.ts";
 
 /**
  * The game release the agent is built and tested against, pinned as the `vendor/bitburner-src` submodule (ADR 0003). A
- * contract test keeps this in sync with the submodule. `commit` is the submodule's: upstream `stable`'s, which has the
- * same source as the release tag's commit Steam's build reports.
+ * contract test keeps this in sync with the submodule. `commit` is the submodule's, upstream `stable`'s. Steam's build
+ * reports the release tag's commit instead, which has the same source. The simulator's build and the contract test use
+ * it; drift checks don't.
  */
 export const PINNED_GAME = {
   versionString: "3.0.1",
@@ -13,9 +14,9 @@ export const PINNED_GAME = {
 
 /**
  * How the game an Agent reports (`ns.ui.getGameInfo()`) differs from the pinned release, or null if it doesn't. The
- * release is its version number and version string. The commit isn't compared (owner decision 31, #128): upstream
- * commits a release twice, on `stable` and as its tag, and Steam's v3.0.1 reports the tag's commit (`3162fd2`), not the
- * pinned `stable` one, though both are the same source. The deployer's definitions-file check covers the API.
+ * release is its version number and version string. The commit isn't compared (owner decision 31, #128): upstream's
+ * v3.0.1 tag is a different commit from `stable`'s, and Steam's v3.0.1 reports the tag's (`3162fd2`), not the pinned
+ * `stable` one, though both are the same source. The deployer's definitions-file check covers the API.
  */
 export function gameDrift(game: GameInfo): string | null {
   const differences: string[] = [];

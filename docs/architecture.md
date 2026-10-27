@@ -576,11 +576,11 @@ The fork is retired and does **not** play the campaign; the agent plays from BN1
 3. **Replacement:** legacy reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
 
 ### 12.4 Version management
-The game source is a git submodule (`vendor/bitburner-src`) pinned to upstream `stable`'s commit for the release Steam ships (3.0.1 = `1da7316ff`; Steam's build reports the release tag's commit, `3162fd2`, which has the same source). We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
+The game source is a git submodule (`vendor/bitburner-src`) pinned to upstream `stable`'s commit for the release Steam ships (3.0.1 = `1da7316ff`). Steam's build reports the release tag's commit, `3162fd2`, which has the same source. We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
 1. **See it coming:** a CI workflow, run on demand and at every release (ADR 0009), watches upstream `stable`. When it has moved ahead of the pinned commit, the workflow keeps one issue with a compatibility report (API, RAM cost and watched-source diffs, and the in-game code typechecked against `stable`'s definitions) and the bump steps. The bump itself is a normal PR (ADR 0010, [`tools/upstream-watch`](../tools/upstream-watch/README.md)). Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
 2. **Hold at runtime** (#91). Two checks:
    - on every RFA connection, the deployer compares `getDefinitionFile` with the pinned `NetscriptDefinitions.d.ts`, line endings aside;
-   - on every `hello`, the control channel compares the Agent's `versionNumber` and `version` with `PINNED_GAME`. The commit isn't compared (owner decision 31, #128): upstream commits each release twice, on `stable` and as its tag, and Steam's build reports the tag's. The dashboard still shows it.
+   - on every `hello`, the control channel compares the Agent's `versionNumber` and `version` with `PINNED_GAME`. The commit isn't compared (owner decision 31, #128): upstream's v3.0.1 tag is a different commit from `stable`'s, with the same source, and Steam's build reports the tag's. The dashboard still shows it.
 
    On a mismatch the brain goes to **hold** for the rest of its run:
    - it deploys nothing more (a deploy under way stops before it changes anything shared);
