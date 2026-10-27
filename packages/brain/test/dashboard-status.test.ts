@@ -6,7 +6,7 @@ import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
-import type { HackLoopView } from "../src/hack-loop.ts";
+import type { HackLoopView, ProgramsView } from "../src/desired-state.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -20,6 +20,13 @@ let store: TelemetryStore;
 let brainStartedEventId: number;
 /** What the hack loop's controller shows (#134): the status passes it on as it is. */
 const hackLoop: HackLoopView = { enabled: true, waiting: false, target: "n00dles", hosts: ["foodnstuff", "n00dles"] };
+const programs: ProgramsView = {
+  enabled: true,
+  waiting: false,
+  owned: ["TOR router"],
+  buying: "BruteSSH.exe",
+  waitingFor: null,
+};
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
   brainStartedEventId = store.recordEvent(context, { atMs: STARTED_AT_MS, kind: BRAIN_STARTED_EVENT_KIND, detail: {} });
@@ -43,6 +50,7 @@ const status = (nowMs: number) =>
     brainStartedEventId,
     supervising: true,
     hackLoop,
+    programs,
     nowMs,
   });
 
@@ -87,6 +95,8 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     recordSnapshot("fast", STARTED_AT_MS + second * 1000, fastData(second));
   recordSnapshot("medium", STARTED_AT_MS + 10_000, {
     player: { skills: { hacking: 42 } },
+    hasTorRouter: false,
+    programs: [],
     servers: [],
   } as MediumSnapshotData);
   recordSnapshot("slow", STARTED_AT_MS + 2_000, {});
@@ -125,6 +135,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     alerts: [],
     supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
     hackLoop,
+    programs,
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
@@ -271,6 +282,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     brainStartedEventId,
     supervising: false,
     hackLoop,
+    programs,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

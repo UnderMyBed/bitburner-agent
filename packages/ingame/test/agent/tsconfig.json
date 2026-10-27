@@ -1,0 +1,5 @@
+{
+  // Unit tests of the in-game code: they import it, so they're checked as it is (browser globals, the game's NS types).
+  "extends": "../../src/tsconfig.json",
+  "include": ["**/*.ts"]
+}

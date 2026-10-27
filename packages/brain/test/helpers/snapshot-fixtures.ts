@@ -1,0 +1,44 @@
+// Snapshot data for the brain's rule and controller tests (#134, #136), in the shape the Agent's workers send.
+import type { MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+
+type StaticServer = StaticSnapshotData["servers"][number];
+
+/** A server as the static snapshot has it: the game's own, hackable at level 1, no ports, growth 10. */
+export const staticServer = (hostname: string, changes: Partial<StaticServer> = {}): StaticServer => ({
+  hostname,
+  purchasedByPlayer: false,
+  moneyMax: 1_000_000,
+  minDifficulty: 1,
+  requiredHackingSkill: 1,
+  numOpenPortsRequired: 0,
+  serverGrowth: 10,
+  ...changes,
+});
+
+/**
+ * A medium snapshot: the player's hacking level, each server rooted or not (16 GB each), and the player's money, city
+ * and hacking programs (none, by default).
+ */
+export const mediumData = (
+  hacking: number,
+  rooted: Record<string, boolean>,
+  {
+    money = 0,
+    city = "Sector-12",
+    hasTorRouter = false,
+    programs = [],
+  }: { money?: number; city?: string; hasTorRouter?: boolean; programs?: string[] } = {},
+): MediumSnapshotData => ({
+  player: { skills: { hacking }, money, city },
+  hasTorRouter,
+  programs,
+  servers: Object.entries(rooted).map(([hostname, hasAdminRights]) => ({
+    hostname,
+    maxRam: 16,
+    cpuCores: 1,
+    hasAdminRights,
+    backdoorInstalled: false,
+    moneyAvailable: 0,
+    hackDifficulty: 1,
+  })),
+});

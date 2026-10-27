@@ -42,8 +42,26 @@ export async function simulatorSave({
   }
 }
 
+type SaveObject = { data: { PlayerSave: string } };
+
+/** A save's outer object and its player, parsed. */
+function readPlayerSave(save: Uint8Array): { saveObject: SaveObject; player: { data: { money: number } } } {
+  const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as SaveObject;
+  return { saveObject, player: JSON.parse(saveObject.data.PlayerSave) };
+}
+
+/**
+ * `save` with the player's money set: a test environment's save, edited by the test harness (allowed there; never a
+ * Steam save, which only ever flows one way, from Steam).
+ */
+export function withMoney(save: Uint8Array, money: number): Uint8Array {
+  const { saveObject, player } = readPlayerSave(save);
+  player.data.money = money;
+  saveObject.data.PlayerSave = JSON.stringify(player);
+  return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
+}
+
 /** The player's money, as the save holds it. */
 export function moneyInSave(save: Uint8Array): number {
-  const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { PlayerSave: string } };
-  return (JSON.parse(saveObject.data.PlayerSave) as { data: { money: number } }).data.money;
+  return readPlayerSave(save).player.data.money;
 }

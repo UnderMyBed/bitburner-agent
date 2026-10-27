@@ -3,6 +3,7 @@ import {
   type AgentMessage,
   type BrainMessage,
   CONTROL_PROTOCOL_VERSION,
+  desiredStateWhileHolding,
   encodeControlMessage,
   parseAgentMessage,
   parseBrainMessage,
@@ -38,16 +39,19 @@ describe("round trips", () => {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",
       hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] },
+      programs: { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } },
     },
     {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",
       hackLoop: { enabled: true, target: null, hosts: [] },
+      programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: null } },
     },
     {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",
       hackLoop: { enabled: false, target: null, hosts: [] },
+      programs: { enabled: false, next: null },
     },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
@@ -110,7 +114,8 @@ describe("rejected, each with a reason", () => {
   });
 
   const hackLoop = { enabled: true, target: "n00dles", hosts: ["foodnstuff"] };
-  const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop };
+  const programs = { enabled: true, next: { item: "FTPCrack.exe", vendor: null } };
+  const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop, programs };
   test.each([
     ["no hack loop", { ...desiredState, hackLoop: undefined }],
     ["a hack loop that isn't an object", { ...desiredState, hackLoop: true }],
@@ -122,6 +127,25 @@ describe("rejected, each with a reason", () => {
     ["no hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: undefined } }],
     ["a host that isn't a hostname", { ...desiredState, hackLoop: { ...hackLoop, hosts: ["n00dles", 7] } }],
     ["too many hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: Array(1_001).fill("n00dles") } }],
+    ["no programs", { ...desiredState, programs: undefined }],
+    ["programs.enabled that isn't a boolean", { ...desiredState, programs: { ...programs, enabled: 1 } }],
+    ["no next", { ...desiredState, programs: { enabled: true } }],
+    [
+      "a next item that isn't one",
+      { ...desiredState, programs: { enabled: true, next: { item: "Formulas.exe", vendor: null } } },
+    ],
+    [
+      "TOR without a vendor",
+      { ...desiredState, programs: { enabled: true, next: { item: "TOR router", vendor: null } } },
+    ],
+    [
+      "the TOR router at a vendor that doesn't sell it",
+      { ...desiredState, programs: { enabled: true, next: { item: "TOR router", vendor: "Noodle Bar" } } },
+    ],
+    [
+      "a program with a vendor",
+      { ...desiredState, programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: "Alpha Enterprises" } } },
+    ],
   ])("a desired state with %s", (_description, message) => {
     const result = parseBrainMessage(JSON.stringify(message));
     expect(result.ok).toBe(false);
@@ -129,7 +153,45 @@ describe("rejected, each with a reason", () => {
   });
 
   test("a desired state keeps only its known fields", () => {
-    const extras = JSON.stringify({ ...desiredState, extra: 1, hackLoop: { ...desiredState.hackLoop, extra: 2 } });
+    const extras = JSON.stringify({
+      ...desiredState,
+      extra: 1,
+      hackLoop: { ...desiredState.hackLoop, extra: 2 },
+      programs: { ...programs, extra: 3, next: { ...programs.next, extra: 4 } },
+    });
     expect(parseBrainMessage(extras)).toEqual({ ok: true, message: desiredState });
+  });
+});
+
+describe("while the brain holds (#136)", () => {
+  const hackLoopOff = { enabled: false, target: null, hosts: [] };
+  const buying = { enabled: true, next: { item: "BruteSSH.exe", vendor: null } };
+
+  const hackLoopOn = { enabled: true, target: "n00dles", hosts: ["foodnstuff"] };
+
+  test("with the hack loop on and nothing sent yet, nothing goes: it would start the loop", () => {
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: buying }, null)).toBeNull();
+  });
+
+  test("with the hack loop on, it goes as last sent, buying nothing", () => {
+    const lastSent = { hackLoop: { ...hackLoopOn, target: "joesguns" }, programs: buying };
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: buying }, lastSent)).toEqual({
+      hackLoop: lastSent.hackLoop,
+      programs: { enabled: true, next: null },
+    });
+  });
+
+  test("with the hack loop off, it goes, buying nothing", () => {
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOff, programs: buying }, null)).toEqual({
+      hackLoop: hackLoopOff,
+      programs: { enabled: true, next: null },
+    });
+  });
+
+  test("buying turned off goes too, so the Agent stops at once", () => {
+    const lastSent = { hackLoop: hackLoopOn, programs: buying };
+    expect(
+      desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: { enabled: false, next: null } }, lastSent),
+    ).toEqual({ hackLoop: hackLoopOn, programs: { enabled: false, next: null } });
   });
 });

@@ -2,6 +2,7 @@
 // brain. The dashboard sets it; the supervisor (#94) reads it with `readSupervisionSwitch` before every launch, records
 // a give-up with `recordSupervisionGaveUp` after too many, and records each launch as a `relaunch` event. While paused,
 // nothing is launched; unpausing also clears a give-up.
+import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 const PAUSED_SETTING = "supervision.paused";
@@ -21,20 +22,17 @@ export interface SupervisionSwitch {
 
 /** Fails on a value it didn't write, rather than guess whether supervision is paused. */
 export function readSupervisionSwitch(store: TelemetryStore): SupervisionSwitch {
-  const paused = store.getSetting(PAUSED_SETTING);
-  if (paused !== null && paused !== "true" && paused !== "false") {
-    throw new Error(`the ${PAUSED_SETTING} setting is ${JSON.stringify(paused)}, not true or false`);
-  }
+  const paused = readSwitch(store, PAUSED_SETTING, false);
   const gaveUpAt = store.getSetting(GAVE_UP_AT_SETTING);
   if (gaveUpAt !== null && !/^\d+$/.test(gaveUpAt)) {
     throw new Error(`the ${GAVE_UP_AT_SETTING} setting is ${JSON.stringify(gaveUpAt)}, not a time`);
   }
-  return { paused: paused === "true", gaveUpAtMs: gaveUpAt === null ? null : Number(gaveUpAt) };
+  return { paused, gaveUpAtMs: gaveUpAt === null ? null : Number(gaveUpAt) };
 }
 
 /** The dashboard's switch. Unpausing also clears a give-up, so the supervisor starts afresh. */
 export function setSupervisionPaused(store: TelemetryStore, paused: boolean): void {
-  store.setSetting(PAUSED_SETTING, String(paused));
+  writeSwitch(store, PAUSED_SETTING, paused);
   if (!paused) store.deleteSetting(GAVE_UP_AT_SETTING);
 }
 

@@ -1,7 +1,8 @@
 // npm run brain [-- --data-dir <dir>]: the long-running brain process (architecture D1), run from the repo, with its
 // data in the repo's .data/ unless told otherwise. It runs the control channel and stores what the Agent reports,
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
-// to run (the hack loop, #134), serves the dashboard, and (for Steam, on Windows) supervises the game itself.
+// to run (the hack loop, #134, and the hacking programs, #136), serves the dashboard, and (for Steam, on Windows)
+// supervises the game itself.
 import path from "node:path";
 import process from "node:process";
 import {
@@ -15,8 +16,10 @@ import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
-import { HackLoopController, readHackLoopEnabled } from "./hack-loop.ts";
+import { DesiredStateController } from "./desired-state.ts";
+import { readHackLoopEnabled } from "./hack-loop.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
+import { readProgramsEnabled } from "./programs.ts";
 import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
@@ -57,7 +60,7 @@ try {
     if (event.type !== "snapshotReceived") log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`);
   });
   // What the brain wants running in the game (#134): set before the channel listens, so the first Agent is given it.
-  const hackLoop = new HackLoopController({ channel, store });
+  const desiredState = new DesiredStateController({ channel, store });
   const controlServer = await startWebSocketServer({
     port: config.controlPort,
     allowedOrigins: config.allowedOrigins,
@@ -125,7 +128,8 @@ try {
         brainStartedAtMs: startedAtMs,
         brainStartedEventId: startedEventId,
         supervising,
-        hackLoop: hackLoop.view(),
+        hackLoop: desiredState.hackLoopView(),
+        programs: desiredState.programsView(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -133,8 +137,12 @@ try {
       log(`supervision ${paused ? "paused" : "resumed"} from the dashboard`);
     },
     setHackLoopEnabled: (enabled) => {
-      hackLoop.setEnabled(enabled);
+      desiredState.setHackLoopEnabled(enabled);
       log(`hack loop turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setProgramsEnabled: (enabled) => {
+      desiredState.setProgramsEnabled(enabled);
+      log(`buying hacking programs turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });
@@ -147,7 +155,9 @@ try {
       `every ${config.saveBackupIntervalMinutes} min, the newest ${config.saveBackupsKept} kept`,
   );
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
-  log(`hack loop ${readHackLoopEnabled(store) ? "on" : "off"} (the dashboard's switch)`);
+  log(
+    `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+  );
   log(
     supervising
       ? `supervising the game: Steam app ${config.steamAppId}, ${config.gameExecutable}, checked every 30 s`

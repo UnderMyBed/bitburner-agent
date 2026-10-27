@@ -272,8 +272,12 @@ describe("restart, without loops", () => {
 describe("desired state (#134)", () => {
   const sentTypes = (connection: MemoryConnection) => connection.sentMessages().map((message) => message.type);
   const deployedA = { deployedId: "deployment-a", hold: false, deployFailed: false };
-  const loopOn = { hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] } };
-  const loopOff = { hackLoop: { enabled: false, target: null, hosts: [] } };
+  const noPurchase = { enabled: true, next: null };
+  const loopOn = {
+    hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] },
+    programs: noPurchase,
+  };
+  const loopOff = { hackLoop: { enabled: false, target: null, hosts: [] }, programs: noPurchase };
 
   test("sent when set, to a welcomed Agent running the deployed deployment", () => {
     channel.setDeploymentState(deployedA);
@@ -386,6 +390,28 @@ describe("desired state (#134)", () => {
     expect(connection.sentMessages().slice(1)).toEqual([
       { protocolVersion: 1, type: "desiredState", ...loopOff },
       { protocolVersion: 1, type: "desiredState", ...loopOn },
+    ]);
+  });
+
+  test("while holding, a purchase never goes out: off goes, buying nothing (#136)", () => {
+    channel.setDeploymentState({ ...deployedA, hold: true });
+    const connection = connectAgent();
+    channel.setDesiredState({ ...loopOff, programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: null } } });
+    expect(connection.sentMessages().slice(1)).toEqual([{ protocolVersion: 1, type: "desiredState", ...loopOff }]);
+  });
+
+  test("while holding with the hack loop on, buying off still goes, with the hack loop as last sent (#136)", () => {
+    channel.setDeploymentState(deployedA);
+    const connection = connectAgent();
+    channel.setDesiredState(loopOn);
+    channel.setDeploymentState({ ...deployedA, hold: true });
+    // A new target isn't sent while holding: the loop stays as the Agent has it.
+    const newTarget = { ...loopOn.hackLoop, target: "joesguns" };
+    channel.setDesiredState({ hackLoop: newTarget, programs: noPurchase });
+    channel.setDesiredState({ hackLoop: newTarget, programs: { enabled: false, next: null } });
+    expect(connection.sentMessages().slice(1)).toEqual([
+      { protocolVersion: 1, type: "desiredState", ...loopOn },
+      { protocolVersion: 1, type: "desiredState", hackLoop: loopOn.hackLoop, programs: { enabled: false, next: null } },
     ]);
   });
 

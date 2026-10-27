@@ -10,7 +10,7 @@ import {
   type DeployerEvent,
   type InGameBuild,
 } from "@bitburner-agent/bridge";
-import { HackLoopController } from "../../src/hack-loop.ts";
+import { DesiredStateController } from "../../src/desired-state.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
 import { recordChannelEvents, recordEvents } from "../../src/record-channel-events.ts";
 import { type SaveBackupEvent, SaveBackups } from "../../src/save-backups.ts";
@@ -36,8 +36,8 @@ export const BRAIN_RFA_SETTINGS = {
 export interface BrainInSimulation {
   channel: ControlChannel;
   deployer: Deployer;
-  /** The hack loop's controller, when asked for (#134). */
-  hackLoop: HackLoopController | null;
+  /** The desired state's controller (the hack loop, #134; the hacking programs, #136), when asked for. */
+  desiredState: DesiredStateController | null;
   /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
   /** Every event the deployer reported, in order. */
@@ -63,7 +63,7 @@ export function startBrainInSimulation(
     token = TOKEN,
     pinnedDefinitions = readPinnedDefinitions(),
     data,
-    withHackLoop = false,
+    withDesiredState = false,
   }: {
     build: InGameBuild;
     token?: string;
@@ -74,18 +74,18 @@ export function startBrainInSimulation(
      */
     data?: { store: TelemetryStore; brainRelease: string; dataDirectory: string };
     /**
-     * With the hack loop's controller, as main.ts has it (#134), its switch kept in `data`'s store. Off by default, so
-     * the M2 suites see the observe-only skeleton they test.
+     * With the desired state's controller, as main.ts has it (#134, #136), its switches kept in `data`'s store. Off by
+     * default, so the M2 suites see the observe-only skeleton they test.
      */
-    withHackLoop?: boolean;
+    withDesiredState?: boolean;
   },
 ): BrainInSimulation {
   const channel = new ControlChannel({ token, clock: game.clock });
   if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
-  let hackLoopController: HackLoopController | null = null;
-  if (withHackLoop) {
-    if (!data) throw new Error("the hack loop keeps its switch in the store: give the brain its data");
-    hackLoopController = new HackLoopController({ channel, store: data.store });
+  let desiredStateController: DesiredStateController | null = null;
+  if (withDesiredState) {
+    if (!data) throw new Error("the desired state keeps its switches in the store: give the brain its data");
+    desiredStateController = new DesiredStateController({ channel, store: data.store });
   }
   const deployer = new Deployer({
     build,
@@ -114,7 +114,7 @@ export function startBrainInSimulation(
   const brain: BrainInSimulation = {
     channel,
     deployer,
-    hackLoop: hackLoopController,
+    desiredState: desiredStateController,
     channelEvents: [],
     deployerEvents: [],
     saveBackupEvents: [],

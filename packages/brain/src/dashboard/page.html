@@ -39,6 +39,10 @@
     <h2>Hack loop</h2><div></div><button type="button">Stop the hack loop</button>
     <div class="bad" id="hack-loop-problem" hidden></div>
   </section>
+  <section id="programs">
+    <h2>Hacking programs</h2><div></div><button type="button">Stop buying programs</button>
+    <div class="bad" id="programs-problem" hidden></div>
+  </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -50,6 +54,8 @@ const POLL_MS = 2000;
 let pauseNext = true;
 /** What the hack loop's switch sends next (#134): the other way from the status. */
 let enableHackLoopNext = false;
+/** What the hacking programs' switch sends next (#136), likewise. */
+let enableProgramsNext = false;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -164,6 +170,23 @@ function render(status) {
   );
   document.querySelector("#hack-loop button").textContent = hackLoop.enabled ? "Stop the hack loop" : "Start the hack loop";
 
+  const programs = status.programs;
+  enableProgramsNext = !programs.enabled;
+  const programsText = !programs.enabled
+    ? "not buying"
+    : programs.waiting
+      ? "waiting for the Agent's snapshots"
+      : programs.buying !== null
+        ? `buying ${programs.buying}`
+        : programs.waitingFor !== null
+          ? `waiting for ${programs.waitingFor}`
+          : "all bought";
+  document.querySelector("#programs div").replaceChildren(
+    element("div", `Hacking programs: ${programsText}`, programs.enabled ? "ok" : "muted"),
+    element("div", `Owned: ${programs.owned.length === 0 ? "none" : programs.owned.join(", ")}`),
+  );
+  document.querySelector("#programs button").textContent = programs.enabled ? "Stop buying programs" : "Start buying programs";
+
   const events = document.querySelector("#events table");
   events.replaceChildren(
     ...status.events.map((event) => {
@@ -217,6 +240,9 @@ document.querySelector("#supervision button").addEventListener("click", () =>
 );
 document.querySelector("#hack-loop button").addEventListener("click", () =>
   sendSwitch("/api/hack-loop", { enabled: enableHackLoopNext }, "#hack-loop-problem"),
+);
+document.querySelector("#programs button").addEventListener("click", () =>
+  sendSwitch("/api/programs", { enabled: enableProgramsNext }, "#programs-problem"),
 );
 
 refresh();

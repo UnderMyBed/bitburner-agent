@@ -8,8 +8,8 @@ import {
   SNAPSHOT_TIERS,
   type SnapshotTier,
 } from "@bitburner-agent/core";
+import type { HackLoopView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
-import type { HackLoopView } from "../hack-loop.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import { type Alert, activeAlerts } from "./alerts.ts";
@@ -79,6 +79,8 @@ export interface DashboardStatus {
   };
   /** The hack loop (#134): its switch, and what the brain has set for the Agent (its controller's view). */
   hackLoop: HackLoopView;
+  /** The hacking programs (#136): owned, being bought, or what they wait for. */
+  programs: ProgramsView;
 }
 
 export interface DashboardStatusOptions {
@@ -92,6 +94,8 @@ export interface DashboardStatusOptions {
   supervising: boolean;
   /** The hack loop's controller's view (#134): what it set, not worked out again here. */
   hackLoop: HackLoopView;
+  /** The hacking programs' view (#136), likewise. */
+  programs: ProgramsView;
   nowMs: number;
 }
 
@@ -109,6 +113,7 @@ export function buildDashboardStatus({
   brainStartedEventId,
   supervising,
   hackLoop,
+  programs,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -203,5 +208,6 @@ export function buildDashboardStatus({
         .map(({ atMs, detail }) => ({ atMs, detail })),
     },
     hackLoop,
+    programs,
   };
 }

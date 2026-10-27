@@ -1,6 +1,6 @@
 // The dashboard's server (#93, architecture §7): one page and a JSON API, on 127.0.0.1 only (owner decision 14). Any
-// web page can reach localhost, so it also refuses a Host header that isn't its own (DNS rebinding), any request another
-// site's page makes (so none can make the brain build status over and over), and a write from any page but its own.
+// web page can reach localhost, so it also refuses a Host header that isn't its own (DNS rebinding), any request
+// another site's page makes (so none can make the brain build status over and over), and a write from any other page.
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,6 +21,8 @@ export interface DashboardServerOptions {
   setSupervisionPaused(paused: boolean): void;
   /** The hack loop's switch (#134). */
   setHackLoopEnabled(enabled: boolean): void;
+  /** The hacking programs' switch (#136). */
+  setProgramsEnabled(enabled: boolean): void;
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
 }
@@ -82,8 +84,10 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "paused", options.setSupervisionPaused);
       case "POST /api/hack-loop":
         return handleSwitch(request, response, origin, "enabled", options.setHackLoopEnabled);
+      case "POST /api/programs":
+        return handleSwitch(request, response, origin, "enabled", options.setProgramsEnabled);
       default:
-        if (["/", "/api/status", "/api/supervision", "/api/hack-loop"].includes(path)) {
+        if (["/", "/api/status", "/api/supervision", "/api/hack-loop", "/api/programs"].includes(path)) {
           throw new RequestError(405, "method not allowed");
         }
         throw new RequestError(404, "not found");

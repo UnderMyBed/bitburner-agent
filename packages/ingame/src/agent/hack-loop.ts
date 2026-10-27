@@ -14,6 +14,7 @@ import {
   type HackLoopRootReport,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
+import { createChangeLog, createRoundSchedule } from "./activity.ts";
 import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 
 /** Rounds between one convergence and the next, while on and nothing changes: 30 s. */
@@ -24,11 +25,10 @@ export function createHackLoop(
   { deploymentId, workerRunner }: { deploymentId: string; workerRunner: WorkerRunner },
 ) {
   let desired: DesiredState["hackLoop"] | null = null;
-  /** 0: due now. */
-  let roundsUntilDue = 0;
+  const schedule = createRoundSchedule();
   /** This convergence has rooted already: a retry of the deploy worker doesn't root again. */
   let rootedThisTime = false;
-  let lastOutcome = "";
+  const logOutcome = createChangeLog(ns, "hack loop");
 
   /** The worker's report, or null with the reason logged. */
   async function runHackLoopWorker(
@@ -43,18 +43,12 @@ export function createHackLoop(
     return null;
   }
 
-  /** Logged when it changes, so a steady loop doesn't fill the log. */
-  function logOutcome(outcome: string): void {
-    if (outcome !== lastOutcome) ns.print(`agent: hack loop: ${outcome}`);
-    lastOutcome = outcome;
-  }
-
   return {
     /** The brain's latest desired state: a change makes the loop due at once. */
     desire(hackLoop: DesiredState["hackLoop"]): void {
       if (JSON.stringify(desired) === JSON.stringify(hackLoop)) return;
       desired = { ...hackLoop, hosts: [...hackLoop.hosts] };
-      roundsUntilDue = 0;
+      schedule.dueNow();
       rootedThisTime = false;
     },
 
@@ -65,11 +59,7 @@ export function createHackLoop(
 
     /** After a round's snapshots: converges if it's due, within `deadlineMs`. If it can't, it stays due. */
     async convergeIfDue(deadlineMs: number): Promise<void> {
-      if (desired === null) return;
-      if (roundsUntilDue > 0) {
-        roundsUntilDue -= 1;
-        return;
-      }
+      if (desired === null || !schedule.takeRound()) return;
       if (desired.enabled && !rootedThisTime) {
         const rooted = (await runHackLoopWorker(
           HACK_LOOP_ROOT_WORKER_NAME,
@@ -88,7 +78,8 @@ export function createHackLoop(
       if (deployed === null) return;
       rootedThisTime = false;
       // Off, once is enough: nothing starts our loops again but this Agent.
-      roundsUntilDue = desired.enabled ? HACK_LOOP_ROUNDS_BETWEEN - 1 : Number.POSITIVE_INFINITY;
+      if (desired.enabled) schedule.dueAfter(HACK_LOOP_ROUNDS_BETWEEN);
+      else schedule.never();
       const running = `${deployed.threadsRunning} threads on ${deployed.serversRunning} servers`;
       logOutcome(
         deployed.problem !== null
