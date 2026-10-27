@@ -467,7 +467,7 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 | **E3 Electron from source** *(only if needed)* | `npm run electron` from the same commit | Only if Electron-specific behaviour (file protocol, Steam hooks) diverges from E2 |
 
 **Guardrails**
-- **Parity:** E1 and E2 build from the exact commit Steam ships. The brain checks the live game against them: its `getDefinitionFile` on every RFA connection, and the version each Agent's `hello` reports (§12.4).
+- **Parity:** E1 and E2 build from the pinned commit, the same source Steam ships. The brain checks the live game against them: its `getDefinitionFile` on every RFA connection, and the version each Agent's `hello` reports (§12.4).
 - **Vanilla-only dependency:** the agent (in-game bundles and brain) must never rely on behaviour that doesn't exist in unmodified 3.0.1.
   - Instrumentation (clock, RNG seeding, observation hooks) lives in the **harness** and is injected from outside, either by the simulator harness or by Playwright.
   - The game build itself is never patched for E2 runs. Its build config changes only how it's built (where to, the minifier on one core, without the separate typecheck process), and the harness's one page-side shim restores browser behaviour Playwright's clock lacks (timer callbacks' `this`).
@@ -576,11 +576,11 @@ The fork is retired and does **not** play the campaign; the agent plays from BN1
 3. **Replacement:** legacy reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
 
 ### 12.4 Version management
-The game source is a git submodule (`vendor/bitburner-src`) pinned to the commit Steam ships (3.0.1 = `1da7316ff`). We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
+The game source is a git submodule (`vendor/bitburner-src`) pinned to upstream `stable`'s commit for the release Steam ships (3.0.1 = `1da7316ff`). Steam's build reports the release tag's commit, `3162fd2`, which has the same source. We can't control when Steam updates, so the strategy is **never broken, at worst degraded**:
 1. **See it coming:** a CI workflow, run on demand and at every release (ADR 0009), watches upstream `stable`. When it has moved ahead of the pinned commit, the workflow keeps one issue with a compatibility report (API, RAM cost and watched-source diffs, and the in-game code typechecked against `stable`'s definitions) and the bump steps. The bump itself is a normal PR (ADR 0010, [`tools/upstream-watch`](../tools/upstream-watch/README.md)). Steam ships from `stable`, so we normally know about a break, and have a fix, before Steam updates.
 2. **Hold at runtime** (#91). Two checks:
    - on every RFA connection, the deployer compares `getDefinitionFile` with the pinned `NetscriptDefinitions.d.ts`, line endings aside;
-   - on every `hello`, the control channel compares the Agent's `versionNumber` and `commit` with `PINNED_GAME`. Commits are compared on their common prefix (at least 7 characters), since the abbreviation's length depends on the clone the game was built in.
+   - on every `hello`, the control channel compares the Agent's `versionNumber` and `version` with `PINNED_GAME`. The commit isn't compared (owner decision 31, #128): upstream's v3.0.1 tag is a different commit from `stable`'s, with the same source, and Steam's build reports the tag's. The dashboard still shows it.
 
    On a mismatch the brain goes to **hold** for the rest of its run:
    - it deploys nothing more (a deploy under way stops before it changes anything shared);

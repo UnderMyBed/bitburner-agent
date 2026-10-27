@@ -29,17 +29,19 @@ describe("PINNED_GAME", () => {
 describe("gameDrift: how the game the Agent reports differs from the pinned one", () => {
   const pinned = { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" };
 
-  test("none for the pinned game, its commit abbreviated to any length from 7, on either platform", () => {
+  test("none for the pinned release, whatever its commit, on either platform", () => {
     expect(gameDrift(pinned)).toBeNull();
-    expect(gameDrift({ ...pinned, commit: "1da7316" })).toBeNull();
-    expect(gameDrift({ ...pinned, commit: "1da7316ffd9d281b45a86c4c54ec532276557892" })).toBeNull();
+    // Steam's build of v3.0.1 is upstream's tag, 3162fd2: the same tree as the pinned stable commit (#128).
+    expect(gameDrift({ ...pinned, commit: "3162fd2" })).toBeNull();
+    expect(gameDrift({ ...pinned, commit: "DEV" })).toBeNull();
     expect(gameDrift({ ...pinned, platform: "Browser" })).toBeNull();
   });
 
-  test("another version number or commit, or a commit too short to tell, is drift, and says what differs", () => {
+  test("another version number or version string is drift, and says what differs", () => {
     expect(gameDrift({ ...pinned, versionNumber: 52 })).toBe("versionNumber 52, pinned 51");
-    expect(gameDrift({ ...pinned, commit: "1da7317ff" })).toBe("commit 1da7317ff, pinned 1da7316ff");
-    expect(gameDrift({ ...pinned, commit: "1da731" })).toBe("commit 1da731, pinned 1da7316ff");
-    expect(gameDrift({ ...pinned, commit: "DEV" })).toBe("commit DEV, pinned 1da7316ff");
+    expect(gameDrift({ ...pinned, version: "3.0.2" })).toBe("version 3.0.2, pinned 3.0.1");
+    expect(gameDrift({ ...pinned, version: "3.0.2", versionNumber: 52 })).toBe(
+      "versionNumber 52, pinned 51; version 3.0.2, pinned 3.0.1",
+    );
   });
 });

@@ -93,7 +93,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 The title is the release's heading, so the notes start below it:
 
 ```markdown
-Game version: v<version> (`<vendor/bitburner-src commit>`), as Steam ships it.
+Game version: v<version>, as Steam ships it (pinned source: `<vendor/bitburner-src commit>`).
 
 ### What changed
 - <what the milestone delivered, a line each, linking the PRs or epics>

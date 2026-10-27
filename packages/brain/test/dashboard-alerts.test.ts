@@ -37,9 +37,9 @@ test("agentSilent: no fast snapshot for over 60 s, counted from the brain's star
 });
 
 test("versionDrift: on once the brain has held on another game version since it started", () => {
-  const versionDrift = { atMs: STARTED_AT_MS + 2_000, detail: "commit DEV, pinned 1da7316ff" };
+  const versionDrift = { atMs: STARTED_AT_MS + 2_000, detail: "versionNumber 52, pinned 51" };
   expect(activeAlerts({ ...quiet, versionDrift })).toEqual([
-    { name: "versionDrift", sinceMs: versionDrift.atMs, detail: "commit DEV, pinned 1da7316ff" },
+    { name: "versionDrift", sinceMs: versionDrift.atMs, detail: "versionNumber 52, pinned 51" },
   ]);
 });
 
