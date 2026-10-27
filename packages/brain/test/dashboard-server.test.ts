@@ -16,6 +16,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const pausedCalls: boolean[] = [];
   const hackLoopCalls: boolean[] = [];
   const programsCalls: boolean[] = [];
+  const homeRamCalls: boolean[] = [];
   const errors: unknown[] = [];
   server = await startDashboardServer({
     port: 0,
@@ -23,9 +24,10 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setSupervisionPaused: (paused) => pausedCalls.push(paused),
     setHackLoopEnabled: (enabled) => hackLoopCalls.push(enabled),
     setProgramsEnabled: (enabled) => programsCalls.push(enabled),
+    setHomeRamEnabled: (enabled) => homeRamCalls.push(enabled),
     onError: (error) => errors.push(error),
   });
-  return { port: server.port, pausedCalls, hackLoopCalls, programsCalls, errors };
+  return { port: server.port, pausedCalls, hackLoopCalls, programsCalls, homeRamCalls, errors };
 }
 
 interface Reply {
@@ -149,29 +151,27 @@ test.each([
 
 /** The dashboard's on/off switches: each its own path, and each changes only its own setting. */
 const SWITCHES = [
-  ["the hack loop (#134)", "/api/hack-loop", "hackLoopCalls", "programsCalls"],
-  ["the hacking programs (#136)", "/api/programs", "programsCalls", "hackLoopCalls"],
+  ["the hack loop (#134)", "/api/hack-loop", "hackLoopCalls"],
+  ["the hacking programs (#136)", "/api/programs", "programsCalls"],
+  ["home RAM (#138)", "/api/home-ram", "homeRamCalls"],
 ] as const;
 
-test.each(SWITCHES)(
-  "POST sets the switch for %s, from the dashboard's own page",
-  async (_name, switchPath, own, other) => {
-    const started = await start();
-    const { port } = started;
-    const off = await send(port, {
-      method: "POST",
-      path: switchPath,
-      headers: sameOrigin(port),
-      body: JSON.stringify({ enabled: false }),
-    });
-    expect(off.status).toBe(200);
-    expect(JSON.parse(off.body)).toEqual({ enabled: false });
-    await send(port, { method: "POST", path: switchPath, headers: sameOrigin(port), body: '{"enabled":true}' });
-    expect(started[own]).toEqual([false, true]);
-    expect(started[other]).toEqual([]);
-    expect(started.pausedCalls).toEqual([]);
-  },
-);
+test.each(SWITCHES)("POST sets the switch for %s, from the dashboard's own page", async (_name, switchPath, own) => {
+  const started = await start();
+  const { port } = started;
+  const off = await send(port, {
+    method: "POST",
+    path: switchPath,
+    headers: sameOrigin(port),
+    body: JSON.stringify({ enabled: false }),
+  });
+  expect(off.status).toBe(200);
+  expect(JSON.parse(off.body)).toEqual({ enabled: false });
+  await send(port, { method: "POST", path: switchPath, headers: sameOrigin(port), body: '{"enabled":true}' });
+  expect(started[own]).toEqual([false, true]);
+  for (const [, , other] of SWITCHES) if (other !== own) expect(started[other]).toEqual([]);
+  expect(started.pausedCalls).toEqual([]);
+});
 
 describe.each(SWITCHES)("the switch for %s", (_name, switchPath, own) => {
   test.each([
@@ -282,6 +282,7 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { method: "GET", path: "/api/supervision" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/hack-loop" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/programs" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/home-ram" })).status).toBe(405);
 });
 
 test("a status that fails is a 500, reported, and the server carries on", async () => {

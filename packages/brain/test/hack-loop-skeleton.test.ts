@@ -277,7 +277,11 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   });
   const { game, brain } = loop;
   const desire = (hackLoop: DesiredState["hackLoop"]) =>
-    brain.channel.setDesiredState({ hackLoop, programs: { enabled: false, next: null } });
+    brain.channel.setDesiredState({
+      hackLoop,
+      programs: { enabled: false, next: null },
+      homeRam: { enabled: false, next: null },
+    });
   expect((await loop.loopsRunning()).map((each) => each.filename)).toEqual(["agent/0123456789ab/hack-loop.js"]);
   // Every no-port server but joesguns: one convergence roots them all, then runs the loop on the hosts.
   const hosts = NO_PORT_SERVERS.filter((hostname) => hostname !== "joesguns");
@@ -308,6 +312,7 @@ test("a purchase the page can't make (#136): the Agent logs why and when it trie
   brain.channel.setDesiredState({
     hackLoop: { enabled: false, target: null, hosts: [] },
     programs: { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } },
+    homeRam: { enabled: false, next: null },
   });
   // Long enough for three tries 30 s apart, not for a fourth.
   await game.run(2 * CONVERGE_EVERY_MS + 3 * SNAPSHOT_ROUND_MS);
@@ -324,6 +329,24 @@ test("a purchase the page can't make (#136): the Agent logs why and when it trie
   expect((await simulation.diagnostics.homePeak()).scripts).toBe(2);
 });
 
+test("a home RAM upgrade already made (#138): done from the game alone, without touching the page", async () => {
+  const loop = await freshStart({ withDesiredState: false });
+  const { simulation, game, brain } = loop;
+  // A fresh start's home has 8 GB: an upgrade from 4 GB is made already, as when the brain asks again before its next
+  // medium snapshot shows the last one.
+  brain.channel.setDesiredState({
+    hackLoop: { enabled: false, target: null, hosts: [] },
+    programs: { enabled: false, next: null },
+    homeRam: { enabled: true, next: { fromRam: 4, vendor: "Alpha Enterprises" } },
+  });
+  await game.run(3 * SNAPSHOT_ROUND_MS);
+  const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  if (!agent) throw new Error("no Agent on home");
+  // The simulator's page has no sidebar: had the worker touched it, the line would name the missing City.
+  const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("home RAM"));
+  expect(lines).toEqual([expect.stringMatching(/agent: home RAM: bought 8 GB of home RAM$/)]);
+});
+
 test("home too full for the deploy worker: it never piles up, and runs within two rounds of there being room", async () => {
   const loop = await freshStart({
     // A brain with no controller: with home this full, the Agent's medium snapshots can't run either.
@@ -336,6 +359,7 @@ test("home too full for the deploy worker: it never piles up, and runs within tw
   brain.channel.setDesiredState({
     hackLoop: { enabled: true, target: "n00dles", hosts: NO_PORT_SERVERS },
     programs: { enabled: false, next: null },
+    homeRam: { enabled: false, next: null },
   });
   await game.run(CONVERGE_EVERY_MS);
   expect(await loop.loopsRunning()).toEqual([]);

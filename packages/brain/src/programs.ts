@@ -5,8 +5,8 @@ import {
   type DesiredState,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
+  TECH_VENDORS,
   TOR_ROUTER,
-  TOR_VENDORS,
 } from "@bitburner-agent/core";
 import { readSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -34,6 +34,8 @@ export interface PurchasePlan {
   owned: string[];
   /** The next item to buy now, or null. */
   next: DesiredState["programs"]["next"];
+  /** What the first item not owned costs, or null when everything is owned. */
+  price: number | null;
   /** Why nothing is bought now, for the dashboard, or null when something is (or everything's owned). */
   waitingFor: string | null;
 }
@@ -50,17 +52,16 @@ export function chooseNextPurchase(mediumData: MediumSnapshotData): PurchasePlan
     ...PORT_OPENER_PROGRAMS.filter((program) => ownedPrograms.includes(program)),
   ];
   const item = [TOR_ROUTER, ...PORT_OPENER_PROGRAMS].find((each) => !owned.includes(each));
-  if (item === undefined) return { owned, next: null, waitingFor: null };
+  if (item === undefined) return { owned, next: null, price: null, waitingFor: null };
   const money = typeof mediumData.player?.money === "number" ? mediumData.player.money : 0;
   const price = PURCHASE_PRICES[item];
   // Fail fast: an item with no price would otherwise always look affordable.
   if (price === undefined) throw new Error(`no price for ${item}`);
-  if (money < price) return { owned, next: null, waitingFor: `money for ${item} ($${price.toLocaleString("en-US")})` };
-  if (item !== TOR_ROUTER) return { owned, next: { item, vendor: null }, waitingFor: null };
+  const waiting = (waitingFor: string): PurchasePlan => ({ owned, next: null, price, waitingFor });
+  if (money < price) return waiting(`money for ${item} ($${price.toLocaleString("en-US")})`);
+  if (item !== TOR_ROUTER) return { owned, next: { item, vendor: null }, price, waitingFor: null };
   const city = mediumData.player?.city;
-  const vendor = typeof city === "string" ? TOR_VENDORS[city] : undefined;
-  if (vendor === undefined) {
-    return { owned, next: null, waitingFor: `travel: no tech vendor sells the TOR router in ${String(city)}` };
-  }
-  return { owned, next: { item, vendor }, waitingFor: null };
+  const vendor = typeof city === "string" ? TECH_VENDORS[city] : undefined;
+  if (vendor === undefined) return waiting(`travel: no tech vendor sells the TOR router in ${String(city)}`);
+  return { owned, next: { item, vendor }, price, waitingFor: null };
 }

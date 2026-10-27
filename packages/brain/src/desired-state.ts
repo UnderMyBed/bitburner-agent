@@ -1,9 +1,10 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
-// connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the hacking
-// programs (#136).
+// connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134), the hacking programs
+// (#136) and home's RAM (#138).
 import type { ControlChannel } from "@bitburner-agent/bridge";
-import type { DesiredState, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import type { DesiredState, MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
+import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type PurchasePlan, readProgramsEnabled } from "./programs.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -30,6 +31,19 @@ export interface ProgramsView {
   waitingFor: string | null;
 }
 
+/** What the dashboard shows of home's RAM. */
+export interface HomeRamView {
+  enabled: boolean;
+  /** As for the hack loop: no medium snapshot from the connected Agent yet. */
+  waiting: boolean;
+  /** Home's RAM (GB), or null if it isn't known. */
+  ram: number | null;
+  /** The RAM the upgrade being bought now brings home to, or null. */
+  upgradingTo: number | null;
+  /** Why nothing is bought now, or null. */
+  waitingFor: string | null;
+}
+
 /**
  * Keeps the channel's desired state in step with the switches and the connected Agent's snapshots.
  * - Both activities go in one state, whole each time. With no snapshots from the connected Agent yet (it sends them
@@ -38,6 +52,8 @@ export interface ProgramsView {
  *   restarts sends the running Agent the same state, which changes nothing, and an Agent after a reset is never given
  *   a target its game can't hack.
  * - The channel sends each connection a state once, then again on a change.
+ * - One purchase at a time, cheapest first: of the next program and the next RAM upgrade, both affordable, the cheaper
+ *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -45,9 +61,13 @@ export class DesiredStateController {
   /** The connected Agent's latest snapshots: forgotten when it disconnects, or another connects. */
   #staticData: StaticSnapshotData | null = null;
   #mediumData: MediumSnapshotData | null = null;
+  #slowData: SlowSnapshotData | null = null;
   #desired: DesiredState | null = null;
-  /** From the connected Agent's latest medium snapshot, or null. */
+  /** From the connected Agent's latest medium (and slow) snapshot, or null. */
   #purchasePlan: PurchasePlan | null = null;
+  #homeRamPlan: HomeRamPlan | null = null;
+  /** Why each activity's purchase isn't asked for now, or null: its plan's reason, or the cheaper purchase first. */
+  #waitingFor: { programs: string | null; homeRam: string | null } = { programs: null, homeRam: null };
 
   constructor({ channel, store }: { channel: ControlChannel; store: TelemetryStore }) {
     this.#channel = channel;
@@ -56,10 +76,13 @@ export class DesiredStateController {
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
         this.#staticData = null;
         this.#mediumData = null;
+        this.#slowData = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
+      } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
+        this.#slowData = event.snapshot.data as SlowSnapshotData;
       } else {
         return;
       }
@@ -77,6 +100,12 @@ export class DesiredStateController {
   /** The hacking programs' switch, likewise. */
   setProgramsEnabled(enabled: boolean): void {
     writeSwitch(this.#store, PROGRAMS_ENABLED_SETTING, enabled);
+    this.#update();
+  }
+
+  /** Home RAM's switch, likewise. */
+  setHomeRamEnabled(enabled: boolean): void {
+    writeSwitch(this.#store, HOME_RAM_ENABLED_SETTING, enabled);
     this.#update();
   }
 
@@ -101,18 +130,55 @@ export class DesiredStateController {
       waiting,
       owned: this.#purchasePlan?.owned ?? [],
       buying: sent?.next?.item ?? null,
-      waitingFor: enabled && !waiting ? (this.#purchasePlan?.waitingFor ?? null) : null,
+      waitingFor: enabled && !waiting ? this.#waitingFor.programs : null,
+    };
+  }
+
+  homeRamView(): HomeRamView {
+    const enabled = readHomeRamEnabled(this.#store);
+    const sent = this.#desired?.homeRam ?? null;
+    const waiting = enabled && (sent === null || this.#homeRamPlan === null);
+    return {
+      enabled,
+      waiting,
+      ram: this.#homeRamPlan?.ram ?? null,
+      upgradingTo: sent?.next ? sent.next.fromRam * 2 : null,
+      waitingFor: enabled && !waiting ? this.#waitingFor.homeRam : null,
+    };
+  }
+
+  /** The purchases to ask for now: one at a time, cheapest first, among the activities switched on. */
+  #choosePurchases(): Pick<DesiredState, "programs" | "homeRam"> {
+    const programsEnabled = readProgramsEnabled(this.#store);
+    const homeRamEnabled = readHomeRamEnabled(this.#store);
+    const programsPlan = this.#mediumData === null ? null : chooseNextPurchase(this.#mediumData);
+    const homeRamPlan = this.#mediumData === null ? null : chooseHomeRamUpgrade(this.#mediumData, this.#slowData);
+    this.#purchasePlan = programsPlan;
+    this.#homeRamPlan = homeRamPlan;
+    let programsNext = programsEnabled ? (programsPlan?.next ?? null) : null;
+    let homeRamNext = homeRamEnabled ? (homeRamPlan?.next ?? null) : null;
+    this.#waitingFor = { programs: programsPlan?.waitingFor ?? null, homeRam: homeRamPlan?.waitingFor ?? null };
+    if (programsNext !== null && homeRamNext !== null) {
+      // Both plans have a price when they have a next item.
+      if ((homeRamPlan?.price ?? 0) < (programsPlan?.price ?? 0)) {
+        this.#waitingFor.programs = `home RAM to ${homeRamNext.fromRam * 2} GB first (cheaper)`;
+        programsNext = null;
+      } else {
+        this.#waitingFor.homeRam = `${programsNext.item} first (cheaper)`;
+        homeRamNext = null;
+      }
+    }
+    return {
+      programs: { enabled: programsEnabled, next: programsNext },
+      homeRam: { enabled: homeRamEnabled, next: homeRamNext },
     };
   }
 
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
-    const programsEnabled = readProgramsEnabled(this.#store);
-    const plan = this.#mediumData === null ? null : chooseNextPurchase(this.#mediumData);
-    this.#purchasePlan = plan;
-    const programs = { enabled: programsEnabled, next: programsEnabled ? (plan?.next ?? null) : null };
+    const purchases = this.#choosePurchases();
     if (!hackLoopEnabled) {
-      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, programs };
+      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, ...purchases };
     } else if (this.#staticData === null || this.#mediumData === null) {
       this.#desired = null;
     } else {
@@ -122,7 +188,7 @@ export class DesiredStateController {
           target: chooseHackTarget(this.#staticData, this.#mediumData),
           hosts: chooseHackHosts(this.#staticData, this.#mediumData),
         },
-        programs,
+        ...purchases,
       };
     }
     this.#channel.setDesiredState(this.#desired);

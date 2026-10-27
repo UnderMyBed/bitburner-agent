@@ -8,5 +8,6 @@
   "snapshot-fast.js": 2.0,
   "snapshot-medium.js": 4.45,
   "snapshot-slow.js": 3.65,
-  "snapshot-static.js": 3.8
+  "snapshot-static.js": 3.8,
+  "upgrade-home-ram.js": 1.65
 }

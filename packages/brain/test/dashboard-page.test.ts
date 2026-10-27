@@ -72,6 +72,7 @@ const BUSY_STATUS: DashboardStatus = {
     buying: null,
     waitingFor: "money for FTPCrack.exe ($1,500,000)",
   },
+  homeRam: { enabled: true, waiting: false, ram: 8, upgradingTo: null, waitingFor: "FTPCrack.exe first (cheaper)" },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -98,6 +99,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     supervising: true,
     hackLoop: { enabled: true, waiting: true, target: null, hosts: [] },
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
+    homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
     nowMs: NOW_MS,
   });
   store.close();
@@ -206,6 +208,9 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#programs")).toContain("Hacking programs: waiting for money for FTPCrack.exe ($1,500,000)");
   expect(textOf(document, "#programs")).toContain("Owned: TOR router, BruteSSH.exe");
   expect(textOf(document, "#programs button")).toBe("Stop buying programs");
+  expect(textOf(document, "#home-ram")).toContain("Home RAM: waiting for FTPCrack.exe first (cheaper)");
+  expect(textOf(document, "#home-ram")).toContain("Home: 8 GB");
+  expect(textOf(document, "#home-ram button")).toBe("Stop upgrading home RAM");
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
 });
 
@@ -346,6 +351,7 @@ test.each([
   ["supervision", "#supervision button", "#supervision-problem"],
   ["hack loop", "#hack-loop button", "#hack-loop-problem"],
   ["hacking programs", "#programs button", "#programs-problem"],
+  ["home RAM", "#home-ram button", "#home-ram-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -390,4 +396,39 @@ test.each([
   const programs = { ...BUSY_STATUS.programs, ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, programs } }));
   expect(textOf(document, "#programs")).toContain(`Hacking programs: ${text}`);
+});
+
+test("home RAM's button (#138) sends its switch, and each state reads plainly", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = { ...BUSY_STATUS, homeRam: { ...BUSY_STATUS.homeRam, enabled, waitingFor: null } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  (document.querySelector("#home-ram button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/home-ram", '{"enabled":false}']],
+  );
+  expect(textOf(document, "#home-ram")).toContain("Home RAM: not upgrading");
+  expect(textOf(document, "#home-ram button")).toBe("Start upgrading home RAM");
+  (document.querySelector("#home-ram button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => request.body)).toEqual([
+    '{"enabled":false}',
+    '{"enabled":true}',
+  ]);
+});
+
+test.each([
+  ["upgrading", { upgradingTo: 16, waitingFor: null }, "upgrading to 16 GB"],
+  ["at its limit", { ram: 1_073_741_824, waitingFor: null }, "at its limit"],
+  ["waiting for the Agent", { waiting: true, ram: null }, "waiting for the Agent's snapshots"],
+])("home RAM, %s, says so", async (_description, changes, text) => {
+  const homeRam = { ...BUSY_STATUS.homeRam, ...changes };
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, homeRam } }));
+  expect(textOf(document, "#home-ram")).toContain(`Home RAM: ${text}`);
 });

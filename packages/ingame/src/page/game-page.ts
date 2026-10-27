@@ -90,6 +90,20 @@ export function openGamePage(ns: NS, deadlineMs: number) {
 
     openSidebarPage: (pageName: string) => openSidebarPage(pageName, stepsEndMs),
 
+    /**
+     * Opens one of the city's locations (a tech vendor, say): the City page, then the location, as the ASCII map's
+     * labelled letter or, with ASCII art off, a button (`Locations/ui/City.tsx`).
+     */
+    async openCityLocation(location: string): Promise<string | null> {
+      return (
+        (await openSidebarPage("City", stepsEndMs)) ??
+        (await clickWhenThere(
+          `//span[@aria-label='${location}'] | //button[normalize-space()='${location}']`,
+          `${location} in the city`,
+        ))
+      );
+    },
+
     /** Back to the Terminal, with the time kept for it: the last step of anything that moved the page. */
     returnToTerminal: () => openSidebarPage("Terminal", deadlineMs),
 

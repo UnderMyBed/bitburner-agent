@@ -21,6 +21,7 @@ describe("chooseNextPurchase", () => {
     expect(chooseNextPurchase(medium({ money: 199_999 }))).toEqual({
       owned: [],
       next: null,
+      price: 200_000,
       waitingFor: "money for TOR router ($200,000)",
     });
     expect(chooseNextPurchase(medium({ money: 200_000 })).next).toEqual({
@@ -37,6 +38,7 @@ describe("chooseNextPurchase", () => {
     expect(chooseNextPurchase(medium({ money: 1e9, city: "Chongqing" }))).toEqual({
       owned: [],
       next: null,
+      price: 200_000,
       waitingFor: "travel: no tech vendor sells the TOR router in Chongqing",
     });
   });
@@ -57,6 +59,7 @@ describe("chooseNextPurchase", () => {
     ).toEqual({
       owned: ["TOR router", "BruteSSH.exe", "FTPCrack.exe", "relaySMTP.exe"],
       next: null,
+      price: 30e6,
       waitingFor: "money for HTTPWorm.exe ($30,000,000)",
     });
   });
@@ -72,6 +75,7 @@ describe("chooseNextPurchase", () => {
     expect(chooseNextPurchase(medium({ hasTorRouter: true, money: 1e12, programs: all }))).toEqual({
       owned: ["TOR router", ...all],
       next: null,
+      price: null,
       waitingFor: null,
     });
   });
@@ -81,6 +85,7 @@ describe("chooseNextPurchase", () => {
     expect(chooseNextPurchase(odd)).toEqual({
       owned: [],
       next: null,
+      price: 200_000,
       waitingFor: "money for TOR router ($200,000)",
     });
   });

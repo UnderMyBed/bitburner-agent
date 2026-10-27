@@ -59,6 +59,13 @@ test("a missing sidebar item is named as missing, with the likely reason", async
   expect(await gamePage?.openSidebarPage("City")).toBe('no "City" in the sidebar (is its section collapsed?)');
 });
 
+test("a city location: the City, then the location; one that isn't there is named (#138)", async () => {
+  sidebarWith("Terminal", "City");
+  const gamePage = openGamePage(ns, Date.now() + 700);
+  expect(await gamePage?.openCityLocation("Alpha Enterprises")).toBe("no Alpha Enterprises in the city");
+  expect(clicks).toEqual(["City"]);
+});
+
 test("past the deadline, a step still looks once: what's there is clicked", async () => {
   sidebarWith("Terminal");
   const gamePage = openGamePage(ns, Date.now() - 1);

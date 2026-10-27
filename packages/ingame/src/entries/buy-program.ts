@@ -9,7 +9,7 @@
 // - A program: the Terminal, and `buy <program>` in it (`Terminal/commands/buy.ts`).
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `hasTorRouter` 0.05 + `fileExists` 0.1 (ram-budget.json); the page costs nothing.
-import { type BuyProgramReport, TOR_ROUTER } from "@bitburner-agent/core";
+import { type PurchaseReport, TOR_ROUTER } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { type GamePage, openGamePage } from "../page/game-page.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
@@ -21,12 +21,7 @@ function owns(ns: NS, item: string): boolean {
 
 async function buyTorRouter(gamePage: GamePage, vendor: string): Promise<string | null> {
   const problem =
-    (await gamePage.openSidebarPage("City")) ??
-    // The city's locations: the ASCII map's labelled letters, or buttons with ASCII art off (`Locations/ui/City.tsx`).
-    (await gamePage.clickWhenThere(
-      `//span[@aria-label='${vendor}'] | //button[normalize-space()='${vendor}']`,
-      ` in the city`,
-    )) ??
+    (await gamePage.openCityLocation(vendor)) ??
     // A disabled button means the player can't afford it now: its click handler would still run, and open a dialog.
     (await gamePage.clickWhenThere(
       "//button[not(@disabled) and contains(normalize-space(), 'Purchase TOR router')]",
@@ -51,7 +46,7 @@ export async function main(ns: NS): Promise<void> {
   const item = String(ns.args[0] ?? "");
   const vendor = String(ns.args[1] ?? "");
   const deadlineMs = Number(ns.args[2] ?? 0);
-  const report: BuyProgramReport = { item, done: owns(ns, item), problem: null };
+  const report: PurchaseReport = { item, done: owns(ns, item), problem: null };
   if (!report.done) {
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {

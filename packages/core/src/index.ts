@@ -42,14 +42,10 @@ export {
   type HackLoopRootReport,
   isHackLoopFile,
 } from "./hack-loop.ts";
+export { HOME_RAM, HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { homeWorkerFileNames } from "./home-workers.ts";
-export {
-  BUY_PROGRAM_WORKER_NAME,
-  type BuyProgramReport,
-  PORT_OPENER_PROGRAMS,
-  TOR_ROUTER,
-  TOR_VENDORS,
-} from "./programs.ts";
+export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
+export { type PurchaseReport, TECH_VENDORS } from "./purchases.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

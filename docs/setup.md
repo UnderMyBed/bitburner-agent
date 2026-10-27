@@ -94,6 +94,11 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
   - **Chongqing and New Tokyo have no tech vendor:** in either, the TOR router waits until you travel, and the dashboard says so.
   - **Nothing is bought while the brain holds** (after a Steam update, a failed deploy, or a game version it wasn't built for).
   - **To stop it,** click **"Stop buying programs"** on the dashboard; **"Start buying programs"** turns it back on.
+- **Upgrading home's RAM** (from M3, on `main`) is on by default too. When you can afford it, the Agent doubles home's RAM at your city's tech vendor, the same way: the page switches to the City and back to the Terminal once per upgrade ([home RAM](../packages/ingame/README.md#home-ram)).
+  - **One purchase at a time, the cheaper first:** with buying programs on too, the upgrades and the programs take turns by price (16 GB comes after BruteSSH.exe and before FTPCrack.exe), and the dashboard says which one waits for which.
+  - **BN1 only, for now:** other BitNodes change the price, so there it waits, and the dashboard says so.
+  - The same as for the programs: keep the World section open, close any dialog, travel from Chongqing or New Tokyo, and nothing while the brain holds.
+  - **To stop it,** click **"Stop upgrading home RAM"** on the dashboard; **"Start upgrading home RAM"** turns it back on.
 - **The dashboard** at http://127.0.0.1:12527/ shows the Agent, the snapshots, gaps over the last 24 h, alerts and recent events ([packages/brain](../packages/brain/README.md#the-dashboard)).
 - **Closing the game on purpose?** Pause supervision first, or it's relaunched within 30 s. A pause lasts until you resume it, even across brain restarts, so resume when you're done.
 - **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like. The hack loops keep running too, untended: they're the game's own scripts. Stop the hack loop on the dashboard first if you want them gone.

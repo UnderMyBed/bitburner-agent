@@ -1,5 +1,5 @@
-// Snapshot data for the brain's rule and controller tests (#134, #136), in the shape the Agent's workers send.
-import type { MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+// Snapshot data for the brain's rule and controller tests (#134, #136, #138), in the shape the Agent's workers send.
+import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 
 type StaticServer = StaticSnapshotData["servers"][number];
 
@@ -17,7 +17,7 @@ export const staticServer = (hostname: string, changes: Partial<StaticServer> = 
 
 /**
  * A medium snapshot: the player's hacking level, each server rooted or not (16 GB each), and the player's money, city
- * and hacking programs (none, by default).
+ * and hacking programs (none, by default). `homeRam` sets home's RAM, adding home if `rooted` doesn't name it.
  */
 export const mediumData = (
   hacking: number,
@@ -27,18 +27,27 @@ export const mediumData = (
     city = "Sector-12",
     hasTorRouter = false,
     programs = [],
-  }: { money?: number; city?: string; hasTorRouter?: boolean; programs?: string[] } = {},
+    homeRam,
+  }: { money?: number; city?: string; hasTorRouter?: boolean; programs?: string[]; homeRam?: number } = {},
 ): MediumSnapshotData => ({
   player: { skills: { hacking }, money, city },
   hasTorRouter,
   programs,
-  servers: Object.entries(rooted).map(([hostname, hasAdminRights]) => ({
-    hostname,
-    maxRam: 16,
-    cpuCores: 1,
-    hasAdminRights,
-    backdoorInstalled: false,
-    moneyAvailable: 0,
-    hackDifficulty: 1,
-  })),
+  servers: Object.entries(homeRam === undefined ? rooted : { home: true, ...rooted }).map(
+    ([hostname, hasAdminRights]) => ({
+      hostname,
+      maxRam: hostname === "home" && homeRam !== undefined ? homeRam : 16,
+      cpuCores: 1,
+      hasAdminRights,
+      backdoorInstalled: false,
+      moneyAvailable: 0,
+      hackDifficulty: 1,
+    }),
+  ),
+});
+
+/** A slow snapshot: the BitNode the player is in (BN1 by default) and its options. */
+export const slowData = (currentNode = 1, bitNodeOptions: Record<string, unknown> = {}): SlowSnapshotData => ({
+  resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode, ownedAugs: {}, ownedSF: {}, bitNodeOptions },
+  purchasedServers: [],
 });
