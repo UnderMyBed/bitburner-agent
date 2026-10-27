@@ -316,7 +316,7 @@ test("a purchase the page can't make (#136): the Agent logs why and when it trie
   const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("couldn't buy TOR router"));
   // The simulator's page has no sidebar: each try waits for it until its deadline, logs why, and isn't bought.
   expect(tries).toHaveLength(3);
-  for (const line of tries) expect(line).toContain('out of time before the "City" in the sidebar');
+  for (const line of tries) expect(line).toContain('no "City" in the sidebar (is its section collapsed?)');
   for (const line of tries) expect(line).toContain("trying again in 30 s");
   expect(loop.medium()?.hasTorRouter).toBe(false);
   // Each try ends within its round, so home never held more than the Agent and one worker. (E2 shows the retry:

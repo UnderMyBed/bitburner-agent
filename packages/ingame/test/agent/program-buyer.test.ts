@@ -37,17 +37,29 @@ test("with less than a second of the round left, it waits for the next round rat
 });
 
 test("not bought: each try logs why, and the next is 15 rounds (30 s) later", async () => {
-  const notBought = { item: "TOR router", done: false, problem: "no TOR button that can be bought with on the page" };
+  const notBought = { item: "TOR router", done: false, problem: "no TOR router to buy (is the money there?)" };
   const { buyer, lines, runWorker, round } = buyerWith([notBought, notBought]);
   buyer.desire(TOR);
   for (let each = 0; each < 16; each += 1) await round();
   expect(runWorker).toHaveBeenCalledTimes(2);
   expect(lines).toEqual([
-    "agent: hacking programs: couldn't buy TOR router: no TOR button that can be bought with on the page; trying again in 30 s",
-    "agent: hacking programs: couldn't buy TOR router: no TOR button that can be bought with on the page; trying again in 30 s",
+    "agent: hacking programs: couldn't buy TOR router: no TOR router to buy (is the money there?); trying again in 30 s",
+    "agent: hacking programs: couldn't buy TOR router: no TOR router to buy (is the money there?); trying again in 30 s",
   ]);
 });
 
+test("short rounds count toward the 30 s between tries: only the try itself waits for a round with time", async () => {
+  const notBought = { item: "TOR router", done: false, problem: "no TOR router to buy (is the money there?)" };
+  const { buyer, runWorker, round } = buyerWith([notBought, notBought]);
+  buyer.desire(TOR);
+  await round();
+  for (let each = 0; each < 14; each += 1) await round(500);
+  expect(runWorker).toHaveBeenCalledTimes(1);
+  // Due now, but short: it waits for the next round with time, not 15 more.
+  await round(500);
+  await round();
+  expect(runWorker).toHaveBeenCalledTimes(2);
+});
 test("bought: nothing more until the brain names the next item, and a problem on the way is still logged", async () => {
   const { buyer, lines, runWorker, round } = buyerWith([
     { item: "TOR router", done: true, problem: 'no "Terminal" in the sidebar (is its section collapsed?)' },

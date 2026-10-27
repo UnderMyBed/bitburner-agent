@@ -25,20 +25,20 @@ async function buyTorRouter(gamePage: GamePage, vendor: string): Promise<string 
     // The city's locations: the ASCII map's labelled letters, or buttons with ASCII art off (`Locations/ui/City.tsx`).
     (await gamePage.clickWhenThere(
       `//span[@aria-label='${vendor}'] | //button[normalize-space()='${vendor}']`,
-      vendor,
+      ` in the city`,
     )) ??
     // A disabled button means the player can't afford it now: its click handler would still run, and open a dialog.
     (await gamePage.clickWhenThere(
       "//button[not(@disabled) and contains(normalize-space(), 'Purchase TOR router')]",
-      "TOR button that can be bought with",
+      "TOR router to buy (is the money there?)",
     )) ??
     // The purchase's dialog, the only one open: its close button sits beside its text (`ui/React/Modal.tsx`).
     (await gamePage.clickWhenThere(
       "//div[button and contains(., 'You have purchased a TOR router')]/button",
-      "TOR purchase's dialog",
+      "close button on the TOR purchase's dialog",
     ));
-  // Back to the Terminal, however it went: the page was moved.
-  const backProblem = await gamePage.openSidebarPage("Terminal");
+  // Back to the Terminal, however it went, in the time kept for it: the page was moved.
+  const backProblem = await gamePage.returnToTerminal();
   return problem ?? backProblem;
 }
 

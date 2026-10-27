@@ -47,9 +47,9 @@ export function createProgramBuyer(
     async buyIfDue(deadlineMs: number): Promise<void> {
       const next = desired?.enabled ? desired.next : null;
       if (!next) return;
-      // Checked before the round is taken, so a short round leaves it due next round.
-      if (deadlineMs - Date.now() < MIN_WORKER_TIME_MS) return;
+      // A round that isn't due counts down, short or not. A due one that's short leaves it due next round.
       if (!schedule.takeRound()) return;
+      if (deadlineMs - Date.now() < MIN_WORKER_TIME_MS) return;
       const workerFile = deployedFilePath(deploymentId, BUY_PROGRAM_WORKER_NAME);
       // The worker gives up a little before the round ends, so its report is in before the Agent stops waiting.
       const workerRun = await workerRunner.runWorker(

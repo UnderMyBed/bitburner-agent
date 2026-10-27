@@ -178,11 +178,11 @@ M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/1
   4. **A program:** the sidebar's Terminal, and `buy <program>` typed into it, unless the owner has a line typed there: that's left alone.
   5. **Back to the Terminal,** however it went, once it has moved the page.
 
-  It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a dialog open, a sidebar section collapsed (its items unmount), a button missing, a line typed in the terminal, or the deadline reached. A problem on the way back to the Terminal is reported even when the item was bought.
-- **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. The Enter handler is read after the line is typed: the one from before would run the empty line. Every step checks the worker's deadline first, and every wait ends by it.
+  It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a dialog open, a sidebar section collapsed (its items unmount), a button missing (each named: "no TOR router to buy (is the money there?)"), or a line typed in the terminal. A problem on the way back to the Terminal is reported even when the item was bought.
+- **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. The Enter handler is read after the line is typed: the one from before would run the empty line. Every wait ends by the worker's deadline, and looks at least once. The steps end 300 ms before it, so the way back to the Terminal has its own time however long a step waited (`test/agent/game-page.test.ts`).
 - **What the owner sees:** a few times a session, the page switches to the City and back to the Terminal, or a `buy` is typed into the terminal. The dashboard's "Stop buying programs" switch stops it.
 
-E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/program-buyer.test.ts` checks when the Agent runs the worker and what it logs.
+E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/program-buyer.test.ts` checks when the Agent runs the worker and what it logs; `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
 
 ## Hygiene and tests
 
