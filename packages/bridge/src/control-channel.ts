@@ -6,6 +6,7 @@ import {
   CONTROL_CLOSE_CODES,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
+  desiredStateWhileHolding,
   encodeControlMessage,
   type GameInfo,
   gameDrift,
@@ -138,9 +139,9 @@ export class ControlChannel {
    * What the brain wants running in the game (architecture D2, #134), whole, or null to send nothing new. The brain's
    * controller sets it, and sets it again for each newly connected Agent once it knows that Agent's game, so a stale
    * state never goes out with a welcome. Each connection is sent a state once, then again only when it changes. It's
-   * sent only to a welcomed Agent running the deployed deployment. While the brain holds (on hold, after a failed
-   * deploy, or once the game has drifted), only "off" goes out, and it goes to any connected Agent: stopping our own
-   * loops is always safe. A new connection clears it.
+   * sent whole only to a welcomed Agent running the deployed deployment while the brain doesn't hold. Otherwise (on hold,
+   * after a failed deploy, once the game has drifted, or to an outdated Agent) only what starts nothing new goes out,
+   * to any connected Agent: `desiredStateWhileHolding`. A new connection clears it.
    */
   setDesiredState(state: DesiredState | null): void {
     this.#desiredState = structuredClone(state);
@@ -255,17 +256,13 @@ export class ControlChannel {
   /** Sends the desired state if the brain has one this welcomed Agent may have and hasn't had yet. */
   #sendDesiredStateIfDue(session: AgentSession): void {
     if (this.#desiredState === null) return;
-    // "Off" goes to any connected Agent, whatever the brain knows: it only stops our own loops, and an Agent too old
-    // to know it ignores it. After a Steam update the brain holds before it ever learns the deployed id.
-    const off = !this.#desiredState.hackLoop.enabled;
-    if (!off && (!session.welcomed || session.deploymentId !== this.#deploymentState.deployedId || this.#holding())) {
-      return;
-    }
-    const message: BrainMessage = {
-      protocolVersion: CONTROL_PROTOCOL_VERSION,
-      type: "desiredState",
-      ...this.#desiredState,
-    };
+    const trusted = session.welcomed && session.deploymentId === this.#deploymentState.deployedId && !this.#holding();
+    // Otherwise only what starts nothing new goes (the hack loop off, nothing bought), and to any connected Agent,
+    // whatever the brain knows: it only stops our own loops, and an Agent too old to know it ignores it. After a Steam
+    // update the brain holds before it ever learns the deployed id.
+    const state = trusted ? this.#desiredState : desiredStateWhileHolding(this.#desiredState);
+    if (state === null) return;
+    const message: BrainMessage = { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "desiredState", ...state };
     const encoded = encodeControlMessage(message);
     if (encoded === session.sentDesiredState) return;
     session.sentDesiredState = encoded;

@@ -4,6 +4,7 @@ export {
   CONTROL_CLOSE_CODES,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
+  desiredStateWhileHolding,
   encodeControlMessage,
   type GameInfo,
   type HelloMessage,
@@ -42,6 +43,12 @@ export {
   isHackLoopFile,
 } from "./hack-loop.ts";
 export { homeWorkerFileNames } from "./home-workers.ts";
+export {
+  BUY_PROGRAM_WORKER_NAME,
+  type BuyProgramReport,
+  PORT_OPENER_PROGRAMS,
+  TOR_ROUTER,
+} from "./programs.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

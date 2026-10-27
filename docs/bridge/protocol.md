@@ -46,7 +46,7 @@ The types are in `packages/core/src/snapshots.ts`. Server and player fields keep
 |---|---|---|
 | `static` | Once per Agent start; resent, unchanged, after each `welcome` | `servers`: every server `scan` reaches from home at the Agent's start, each with `hostname`, `purchasedByPlayer`, `moneyMax`, `minDifficulty`, `requiredHackingSkill`, `numOpenPortsRequired`, `serverGrowth` |
 | `slow` | Every 60 s | `resetInfo`: `ns.getResetInfo()` (`lastAugReset`, `lastNodeReset`, `currentNode`, `ownedAugs`, `ownedSF`, `bitNodeOptions`) with its Maps as objects: `ownedAugs` (augmentation → level), `ownedSF` (Source-File → level), `bitNodeOptions.sourceFileOverrides`. `purchasedServers`: their hostnames |
-| `medium` | Every 10 s | `player`: `ns.getPlayer()` whole (skills, exp, money, city, location, factions, jobs, karma, multipliers…). `servers`: every server `scan` reaches now, each with `hostname`, `maxRam`, `cpuCores`, `hasAdminRights`, `backdoorInstalled`, `moneyAvailable`, `hackDifficulty` |
+| `medium` | Every 10 s | `player`: `ns.getPlayer()` whole (skills, exp, money, city, location, factions, jobs, karma, multipliers…). `hasTorRouter` and `programs` (the port openers on home, #136). `servers`: every server `scan` reaches now, each with `hostname`, `maxRam`, `cpuCores`, `hasAdminRights`, `backdoorInstalled`, `moneyAvailable`, `hackDifficulty` |
 | `fast` | Every 2 s | `degradedTiers`: the tiers skipped on their last attempt (the worker couldn't start, didn't report in its round, or was still running from before). `pageHeapUsedBytes`: the page's JS heap, `null` where the browser doesn't report it. `game`: the fast worker's `money`, `homeRamUsed` (the Agent and the worker included), `homeMaxRam` and `homeProcesses` (each with `pid`, `filename`, `threads`, `args`, `temporary`), or `null` when the fast worker was skipped |
 
 `gameTimeMs` is when the worker read the game: for a resent static, when it was first read; for a fast snapshot without the worker's data, when the round started.
@@ -57,7 +57,7 @@ The types are in `packages/core/src/snapshots.ts`. Server and player fields keep
 |---|---|
 | `welcome` | Accepted: the Agent sends all four tiers in its next round (a full snapshot), then each at its cadence |
 | `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits, and `boot.js` starts the deployment `agent/current.txt` names (#88). If `boot.js` can't start, the Agent stays |
-| `desiredState { hackLoop: { enabled, target, hosts } }` | What the brain wants running in the game, whole each time (#134). `enabled` is the dashboard's switch; `target` is the server to hack, or `null` while none is worth it (servers are rooted, but no loop runs); `hosts` are the servers the loop runs on (at most 1,000). The Agent converges on the last one it got, and forgets it when it disconnects ([the hack loop](../../packages/ingame/README.md#the-hack-loop)) |
+| `desiredState { hackLoop: { enabled, target, hosts } }` | What the brain wants running in the game, whole each time (#134). `enabled` is the dashboard's switch; `target` is the server to hack, or `null` while none is worth it (servers are rooted, but no loop runs); `hosts` are the servers the loop runs on (at most 1,000). `programs { enabled, next }` (#136): `next` is the hacking program to buy now, `{ item, vendor }` (the TOR router at a named tech vendor, or a port opener with `vendor` null), or null. The Agent converges on the last one it got, and forgets it when it disconnects ([the hack loop](../../packages/ingame/README.md#the-hack-loop), [the hacking programs](../../packages/ingame/README.md#the-hacking-programs)) |
 
 Once welcomed, the Agent sleeps between snapshot rounds, so it acts on a message or a close at its next round: within 2 s.
 
@@ -98,7 +98,7 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
     1. `boot.js` starts the old deployment again, which is welcomed and reports.
     2. The deployer reconnects over RFA and reads `current.txt`, which names the old id.
     3. It deploys again, and that change lets the next restart through.
-- **The desired state, only to the deployed code, and only "off" while holding** (#134). The brain's controller sets it afresh for each connection. "Off" goes to any connected Agent, whatever the brain knows: it only stops our own loops (after a Steam update, the brain holds before it ever learns the deployed id). "On" goes to the connected Agent only if:
+- **The desired state, only to the deployed code, and only what starts nothing while holding** (#134, #136). The brain's controller sets it afresh for each connection. A state that starts nothing new (`desiredStateWhileHolding`: the hack loop off, nothing bought) goes to any connected Agent, whatever the brain knows: it only stops our own loops (after a Steam update, the brain holds before it ever learns the deployed id). Anything else goes to the connected Agent only if:
   - that Agent was welcomed (not told to restart);
   - it runs the deployment the deployer knows is deployed;
   - there's no hold, no failed deploy, and no version drift.

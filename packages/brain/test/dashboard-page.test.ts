@@ -65,6 +65,13 @@ const BUSY_STATUS: DashboardStatus = {
   ],
   supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
   hackLoop: { enabled: true, waiting: false, target: "n00dles", hosts: ["foodnstuff", "joesguns", "n00dles"] },
+  programs: {
+    enabled: true,
+    waiting: false,
+    owned: ["TOR router", "BruteSSH.exe"],
+    buying: null,
+    waitingFor: "money for FTPCrack.exe ($1,500,000)",
+  },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -90,6 +97,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     brainStartedEventId,
     supervising: true,
     hackLoop: { enabled: true, waiting: true, target: null, hosts: [] },
+    programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     nowMs: NOW_MS,
   });
   store.close();
@@ -195,6 +203,9 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#supervision button")).toBe("Pause supervision");
   expect(textOf(document, "#hack-loop")).toContain("Hack loop: on, against n00dles, on 3 servers");
   expect(textOf(document, "#hack-loop button")).toBe("Stop the hack loop");
+  expect(textOf(document, "#programs")).toContain("Hacking programs: waiting for money for FTPCrack.exe ($1,500,000)");
+  expect(textOf(document, "#programs")).toContain("Owned: TOR router, BruteSSH.exe");
+  expect(textOf(document, "#programs button")).toBe("Stop buying programs");
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
 });
 
@@ -334,6 +345,7 @@ test.each([
 test.each([
   ["supervision", "#supervision button", "#supervision-problem"],
   ["hack loop", "#hack-loop button", "#hack-loop-problem"],
+  ["hacking programs", "#programs button", "#programs-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -343,4 +355,33 @@ test.each([
   expect(textOf(document, problem)).toBe("The switch didn't change: HTTP 403");
   expect(isShown(document, problem)).toBe(true);
   expectDataShown(document);
+});
+
+test("the hacking programs' button (#136) sends its switch, and each state reads plainly", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = { ...BUSY_STATUS, programs: { ...BUSY_STATUS.programs, enabled, waitingFor: null } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  (document.querySelector("#programs button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/programs", '{"enabled":false}']],
+  );
+  expect(textOf(document, "#programs")).toContain("Hacking programs: not buying");
+  expect(textOf(document, "#programs button")).toBe("Start buying programs");
+});
+
+test.each([
+  ["buying one", { buying: "TOR router" }, "buying TOR router"],
+  ["all bought", { waitingFor: null }, "all bought"],
+  ["waiting for the Agent", { waiting: true }, "waiting for the Agent's snapshots"],
+])("the hacking programs, %s, say so", async (_description, changes, text) => {
+  const programs = { ...BUSY_STATUS.programs, ...changes };
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, programs } }));
+  expect(textOf(document, "#programs")).toContain(`Hacking programs: ${text}`);
 });

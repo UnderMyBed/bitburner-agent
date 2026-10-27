@@ -21,6 +21,8 @@ export interface DashboardServerOptions {
   setSupervisionPaused(paused: boolean): void;
   /** The hack loop's switch (#134). */
   setHackLoopEnabled(enabled: boolean): void;
+  /** The hacking programs' switch (#136). */
+  setProgramsEnabled(enabled: boolean): void;
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
 }
@@ -82,8 +84,10 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "paused", options.setSupervisionPaused);
       case "POST /api/hack-loop":
         return handleSwitch(request, response, origin, "enabled", options.setHackLoopEnabled);
+      case "POST /api/programs":
+        return handleSwitch(request, response, origin, "enabled", options.setProgramsEnabled);
       default:
-        if (["/", "/api/status", "/api/supervision", "/api/hack-loop"].includes(path)) {
+        if (["/", "/api/status", "/api/supervision", "/api/hack-loop", "/api/programs"].includes(path)) {
           throw new RequestError(405, "method not allowed");
         }
         throw new RequestError(404, "not found");

@@ -65,6 +65,10 @@ export interface SlowSnapshotData {
 export interface MediumSnapshotData {
   /** Skills, exp, money, city, location, factions, jobs, karma, multipliers and the rest of `ns.getPlayer()`. */
   player: Record<string, unknown>;
+  /** Whether the player owns the TOR router (#136). */
+  hasTorRouter: boolean;
+  /** The port openers on home, of `PORT_OPENER_PROGRAMS` (#136). */
+  programs: string[];
   servers: {
     hostname: string;
     /** These change: home's RAM and cores with upgrades, purchased servers' RAM with theirs. */

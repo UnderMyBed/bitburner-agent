@@ -15,15 +15,17 @@ const STATUS = { nowMs: 1, alerts: [] };
 async function start({ status = () => STATUS as never }: { status?: () => never } = {}) {
   const pausedCalls: boolean[] = [];
   const hackLoopCalls: boolean[] = [];
+  const programsCalls: boolean[] = [];
   const errors: unknown[] = [];
   server = await startDashboardServer({
     port: 0,
     status,
     setSupervisionPaused: (paused) => pausedCalls.push(paused),
     setHackLoopEnabled: (enabled) => hackLoopCalls.push(enabled),
+    setProgramsEnabled: (enabled) => programsCalls.push(enabled),
     onError: (error) => errors.push(error),
   });
-  return { port: server.port, pausedCalls, hackLoopCalls, errors };
+  return { port: server.port, pausedCalls, hackLoopCalls, programsCalls, errors };
 }
 
 interface Reply {
@@ -266,6 +268,7 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { method: "DELETE", path: "/api/status", headers: sameOrigin(port) })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/supervision" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/hack-loop" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/programs" })).status).toBe(405);
 });
 
 test("a status that fails is a 500, reported, and the server carries on", async () => {
@@ -280,4 +283,25 @@ test("a status that fails is a 500, reported, and the server carries on", async 
   expect((await send(port, { path: "/api/status" })).status).toBe(500);
   expect(errors).toEqual([new Error("the store is locked")]);
   expect((await send(port, { path: "/api/status" })).status).toBe(200);
+});
+
+test("POST /api/programs sets the hacking programs' switch, from the dashboard's own page (#136)", async () => {
+  const { port, programsCalls, hackLoopCalls } = await start();
+  const off = await send(port, {
+    method: "POST",
+    path: "/api/programs",
+    headers: sameOrigin(port),
+    body: '{"enabled":false}',
+  });
+  expect(off.status).toBe(200);
+  expect(JSON.parse(off.body)).toEqual({ enabled: false });
+  const foreign = await send(port, {
+    method: "POST",
+    path: "/api/programs",
+    headers: { ...sameOrigin(port), origin: "https://attacker.example" },
+    body: '{"enabled":true}',
+  });
+  expect(foreign.status).toBe(403);
+  expect(programsCalls).toEqual([false]);
+  expect(hackLoopCalls).toEqual([]);
 });

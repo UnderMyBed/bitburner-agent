@@ -21,7 +21,8 @@ import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import type { Simulation } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
-import { chooseHackTarget, type HackLoopController } from "../src/hack-loop.ts";
+import type { DesiredStateController } from "../src/desired-state.ts";
+import { chooseHackTarget } from "../src/hack-loop.ts";
 import { readInGameBuild } from "../src/in-game-build.ts";
 import { SimulatedGame } from "../src/simulated-game.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -81,13 +82,13 @@ async function ownerRunsOnHome(fresh: FreshGame, source: string) {
 
 /**
  * An 8 GB fresh start with the brain, deployed, and `beforeAgent` run (the owner's own setup), then the Agent. With
- * `withHackLoop`, the brain has its hack loop controller, as `main.ts` does.
+ * `withDesiredState`, the brain has its desired state controller, as `main.ts` does.
  */
 async function freshStart({
-  withHackLoop,
+  withDesiredState,
   beforeAgent = async () => {},
 }: {
-  withHackLoop: boolean;
+  withDesiredState: boolean;
   beforeAgent?: (fresh: FreshGame) => Promise<void>;
 }) {
   const simulation = await start({
@@ -103,7 +104,7 @@ async function freshStart({
   const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
   openStores.push(store);
   const data = { store, brainRelease: "hack-loop-test", dataDirectory };
-  const brain = startBrainInSimulation(game, { build, data, withHackLoop });
+  const brain = startBrainInSimulation(game, { build, data, withDesiredState });
   // A request and its reply cross one step each way, so the deploy's requests take longer at this step size.
   await game.runUntil(() => brain.deployerEvents.length > 0, 30_000);
   expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
@@ -144,11 +145,12 @@ async function freshStart({
     loopsRunning,
     hostsOf: async () => (await loopsRunning()).map((each) => each.hostname).sort(),
     money: () => latest<FastSnapshotData>("fast")?.game?.money ?? null,
+    medium: () => latest<MediumSnapshotData>("medium"),
     brainsTarget: () => chooseHackTarget(latest<StaticSnapshotData>("static"), latest<MediumSnapshotData>("medium")),
     /** The brain's hack loop controller; fails at once if the brain has none. */
-    controller: (): HackLoopController => {
-      if (!brain.hackLoop) throw new Error("this brain has no hack loop controller");
-      return brain.hackLoop;
+    controller: (): DesiredStateController => {
+      if (!brain.desiredState) throw new Error("this brain has no desired state controller");
+      return brain.desiredState;
     },
   };
 }
@@ -165,7 +167,7 @@ const ownerScriptOnFoodnstuff = (fresh: FreshGame) =>
   );
 
 test("on by default: the Agent roots the no-port servers, runs the loop on them against the brain's target, and money grows", async () => {
-  const loop = await freshStart({ withHackLoop: true, beforeAgent: ownerScriptOnFoodnstuff });
+  const loop = await freshStart({ withDesiredState: true, beforeAgent: ownerScriptOnFoodnstuff });
   const { simulation, game } = loop;
   await game.runUntil(() => loop.money() !== null, 10_000);
   const startingMoney = loop.money() as number;
@@ -190,7 +192,7 @@ test("on by default: the Agent roots the no-port servers, runs the loop on them 
 });
 
 test("a loop that stops, with nothing changed, is started again within one convergence and a round", async () => {
-  const loop = await freshStart({ withHackLoop: true });
+  const loop = await freshStart({ withDesiredState: true });
   const { simulation, game } = loop;
   await game.runUntil(() => loop.brainsTarget() !== null, 60_000);
   await game.run(CONVERGE_EVERY_MS);
@@ -202,14 +204,14 @@ test("a loop that stops, with nothing changed, is started again within one conve
 });
 
 test("switched off: every loop is gone within two rounds, and stays gone; on again, they're back", async () => {
-  const loop = await freshStart({ withHackLoop: true, beforeAgent: ownerScriptOnFoodnstuff });
+  const loop = await freshStart({ withDesiredState: true, beforeAgent: ownerScriptOnFoodnstuff });
   const { game } = loop;
   await game.runUntil(() => loop.brainsTarget() !== null, 60_000);
   await game.run(CONVERGE_EVERY_MS);
   expect(await loop.hostsOf()).toEqual(NO_PORT_SERVERS);
 
   // Sent at once; the Agent acts on it at its next round, and converges in it.
-  loop.controller().setEnabled(false);
+  loop.controller().setHackLoopEnabled(false);
   await game.run(2 * SNAPSHOT_ROUND_MS);
   expect(await loop.loopsRunning()).toEqual([]);
   await game.run(2 * CONVERGE_EVERY_MS);
@@ -217,13 +219,13 @@ test("switched off: every loop is gone within two rounds, and stays gone; on aga
   // The owner's script was never one of ours.
   expect((await loop.simulation.ps("foodnstuff")).map((process) => process.filename)).toEqual([OWNER_SCRIPT]);
 
-  loop.controller().setEnabled(true);
+  loop.controller().setHackLoopEnabled(true);
   await game.run(2 * SNAPSHOT_ROUND_MS);
   expect(await loop.hostsOf()).toEqual(NO_PORT_SERVERS);
 });
 
 test("a brain restart leaves the loops alone: the new brain sends the same state, which changes nothing", async () => {
-  const loop = await freshStart({ withHackLoop: true });
+  const loop = await freshStart({ withDesiredState: true });
   const { game, brain } = loop;
   await game.runUntil(() => loop.brainsTarget() !== null, 60_000);
   await game.run(CONVERGE_EVERY_MS);
@@ -231,17 +233,17 @@ test("a brain restart leaves the loops alone: the new brain sends the same state
   expect(before.length).toBe(NO_PORT_SERVERS.length);
 
   brain.closeConnections();
-  const restarted = startBrainInSimulation(game, { build, data: loop.data, withHackLoop: true });
+  const restarted = startBrainInSimulation(game, { build, data: loop.data, withDesiredState: true });
   await game.runUntil(() => restarted.channelEvents.some((event) => event.type === "agentConnected"), 30_000);
   // Its first round's snapshots, the desired state, and a convergence after it, and then some.
   await game.run(CONVERGE_EVERY_MS + 2 * SNAPSHOT_ROUND_MS);
-  expect(restarted.hackLoop?.view()).toMatchObject({ enabled: true, waiting: false, target: "n00dles" });
+  expect(restarted.desiredState?.hackLoopView()).toMatchObject({ enabled: true, waiting: false, target: "n00dles" });
   // The very same processes: none killed and started again.
   expect(await loop.loopsRunning()).toEqual(before);
 });
 
 test("after a disconnect the Agent acts only on the next brain's instructions: from a brain that sends none, nothing", async () => {
-  const loop = await freshStart({ withHackLoop: true });
+  const loop = await freshStart({ withDesiredState: true });
   const { simulation, game, brain } = loop;
   await game.runUntil(() => loop.brainsTarget() !== null, 60_000);
   await game.run(CONVERGE_EVERY_MS);
@@ -260,7 +262,7 @@ test("after a disconnect the Agent acts only on the next brain's instructions: f
 test("the Agent converges on what the brain says: only the named hosts, a new target, and no other deployment's loops", async () => {
   // A brain with no controller: the test sets the desired state itself.
   const loop = await freshStart({
-    withHackLoop: false,
+    withDesiredState: false,
     // A loop left from another deployment (a generated id), on sigma-cosmetics.
     beforeAgent: (fresh) =>
       ownerRunsOnHome(
@@ -274,7 +276,8 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
       ),
   });
   const { game, brain } = loop;
-  const desire = (hackLoop: DesiredState["hackLoop"]) => brain.channel.setDesiredState({ hackLoop });
+  const desire = (hackLoop: DesiredState["hackLoop"]) =>
+    brain.channel.setDesiredState({ hackLoop, programs: { enabled: false, next: null } });
   expect((await loop.loopsRunning()).map((each) => each.filename)).toEqual(["agent/0123456789ab/hack-loop.js"]);
   // Every no-port server but joesguns: one convergence roots them all, then runs the loop on the hosts.
   const hosts = NO_PORT_SERVERS.filter((hostname) => hostname !== "joesguns");
@@ -299,16 +302,39 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
+test("a purchase the page can't make (#136): the Agent logs why and when it tries again, and never runs two workers at once", async () => {
+  const loop = await freshStart({ withDesiredState: false });
+  const { simulation, game, brain } = loop;
+  brain.channel.setDesiredState({
+    hackLoop: { enabled: false, target: null, hosts: [] },
+    programs: { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } },
+  });
+  await game.run(CONVERGE_EVERY_MS + 2 * SNAPSHOT_ROUND_MS);
+  const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  if (!agent) throw new Error("no Agent on home");
+  const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("couldn't buy TOR router"));
+  // The simulator's page has nothing to click: a problem, logged once (the log notes changes), and not bought.
+  expect(tries).toHaveLength(1);
+  expect(tries[0]).toContain("trying again in 30 s");
+  expect(loop.medium()?.hasTorRouter).toBe(false);
+  // Each try ends within its round, so home never held more than the Agent and one worker. (E2 shows the retry:
+  // bought once the page allows it.)
+  expect((await simulation.diagnostics.homePeak()).scripts).toBe(2);
+});
+
 test("home too full for the deploy worker: it never piles up, and runs within two rounds of there being room", async () => {
   const loop = await freshStart({
     // A brain with no controller: with home this full, the Agent's medium snapshots can't run either.
-    withHackLoop: false,
+    withDesiredState: false,
     // The owner's own script on home: 2.7 + 1.6 leaves room for the root worker (2.35) but not the deploy one (4.65).
     beforeAgent: (fresh) =>
       ownerRunsOnHome(fresh, `export async function main(ns) { ns.exec("${OWNER_SCRIPT}", "home", 1); }`),
   });
   const { simulation, game, brain } = loop;
-  brain.channel.setDesiredState({ hackLoop: { enabled: true, target: "n00dles", hosts: NO_PORT_SERVERS } });
+  brain.channel.setDesiredState({
+    hackLoop: { enabled: true, target: "n00dles", hosts: NO_PORT_SERVERS },
+    programs: { enabled: false, next: null },
+  });
   await game.run(CONVERGE_EVERY_MS);
   expect(await loop.loopsRunning()).toEqual([]);
   // The Agent, the owner's script and one worker at most, all along: never a pile-up of tries.

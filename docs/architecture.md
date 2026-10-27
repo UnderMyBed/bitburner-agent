@@ -280,7 +280,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - **M2 contents (#89):** what can be read cheaply without Singularity ([each tier's data](bridge/protocol.md#each-tiers-data)):
   - static: the servers' fixed fields (max money, min security, required hacking level, ports needed, and, from M3, growth);
   - slow: the reset info (installed augmentations, Source-Files, the BitNode) and the purchased servers;
-  - medium: the player, and every server's RAM, cores, money, security and access;
+  - medium: the player, the hacking programs they own (from M3), and every server's RAM, cores, money, security and access;
   - fast: money, home's RAM and the scripts on home.
 
   Reputation, queued augmentations and current work need Singularity, so they come later (M3/M4).
@@ -289,7 +289,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - **Workers** run one at a time, as temporary scripts, and report through a port. Every wait ends with its 2 s round, so the heartbeat is never more than 4 s apart, whatever the workers do. A worker that can't start, doesn't report in its round or is still running leaves its tier skipped that time, and named in `degradedTiers` until it next succeeds ([details](../packages/ingame/README.md#snapshots)).
 
 ### 5.3 Reconciler
-- **First slice (M3, #134):** the hack loop. The brain's desired state has one activity, `hackLoop { enabled, target, hosts }`: the brain picks the target and the servers it runs on (the game's, never home or the player's own). The Agent converges on it with two home workers (root what it can, then start and stop the loops), when it changes and every 30 s ([`packages/ingame`](../packages/ingame/README.md#the-hack-loop)). Activities with reflex health, intents, guards and the ledger follow in M3.
+- **First slice (M3, #134):** the hack loop. The brain's desired state has one activity, `hackLoop { enabled, target, hosts }`: the brain picks the target and the servers it runs on (the game's, never home or the player's own). The Agent converges on it with two home workers (root what it can, then start and stop the loops), when it changes and every 30 s ([`packages/ingame`](../packages/ingame/README.md#the-hack-loop)). The second (#136) adds `programs { enabled, next }`: the next hacking program to buy, through the `ui` effector (§5.6). Activities with reflex health, intents, guards and the ledger follow in M3.
 - **Namespace ownership:** the reconciler manages only the scripts it owns: everything under `/agent/`, plus legacy reflexes it launched itself. It never kills or modifies anything else. Foreign scripts' RAM is counted as unavailable.
 - **Activities:** for each activity config, it diffs desired against actual: is the reflex running, with which config, and is it healthy. It starts, stops or reconfigures reflexes to close the diff.
 - **Intents:** executed at most once.
@@ -331,6 +331,7 @@ interface Effectors {
   - `singularity`: SF4, or inside BN4
   - `ui`: page/React automation through `eval("document")`. This is **on the critical path**: a fresh save has no Singularity, so BN1.1 is played entirely through this backend.
   - `sim`: direct engine calls, simulator only
+- **First `ui` effector (M3, #136):** buying the TOR router at a tech vendor and the port openers through the terminal ([`packages/ingame`](../packages/ingame/README.md#the-hacking-programs)). The page is driven through React's own handlers, from a home worker that ends within the Agent's round; E2 tests it on the real page.
 - Backend selection is automatic, by availability and RAM cost (C4). The `ui` backend also covers the things that never get an API (casino, infiltration).
 - Brain-side code never knows which backend is in use.
 
@@ -625,7 +626,7 @@ Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-a
 | Game process dead, frozen or bloated (24/7 run) | Lost wall-clock time | Liveness detection and recovery (R9, §10.2); heap monitoring and no code generation (R10); save backups |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher issues, runtime hold, save backups (§12.4) |
 | UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
-| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2). Measured (Q1): 2.7 GB steady, 7.0 GB at a snapshot worker's peak (7.35 GB with the hack loop's deploy worker, #134), so a full reservation leaves under 1 GB of 8; sized in M3 planning |
+| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2). Measured (Q1): 2.7 GB steady, 7.15 GB at a snapshot worker's peak (the medium tier's, 4.45 GB since #136), and 7.35 GB with the hack loop's deploy worker (#134), so a full reservation leaves under 1 GB of 8; sized in M3 planning |
 
 ---
 

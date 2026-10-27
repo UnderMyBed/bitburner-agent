@@ -8,8 +8,9 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, and the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js` |
-| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, and `run-worker.ts`, the runner both share for their home workers |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, and `buy-program.js` |
+| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `programs.ts`, and `run-worker.ts`, the runner they share for their home workers |
+| `src/page/` | The game's page, for the `ui` effector: `game-page.ts` |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
 | `src/` | In-game code, typechecked as the game's page sees it: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` (`src/tsconfig.json`) |
@@ -58,10 +59,11 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `agent.js` | `run` (1.0 GB), `isRunning` (0.1 GB); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (3.0) |
 | `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
 | `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
-| `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB) | 4.3 GB (4.3) |
+| `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB), `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB) | 4.45 GB (4.45) |
 | `snapshot-fast.js` | `ps` (0.2 GB), `getServerMoneyAvailable` (0.1 GB; on home it gives the player's money, where `getPlayer` costs 0.5), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.0 GB (2.0) |
 | `hack-loop-root.js` | `scan` (0.2 GB), `fileExists`, `getServerNumPortsRequired` (0.1 GB each), `hasRootAccess`, `nuke` and the five port openers (0.05 GB each) | 2.35 GB (2.35) |
 | `hack-loop-deploy.js` | `exec` (1.3 GB), `scp` (0.6 GB), `kill` (0.5 GB), `scan`, `ps` (0.2 GB each), `getScriptRam` (0.1 GB), `hasRootAccess`, `getServerMaxRam`, `getServerUsedRam` (0.05 GB each) | 4.65 GB (4.65) |
+| `buy-program.js` | `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB); the page costs nothing | 1.75 GB (1.75) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
 The workers write to a port (`writePort`, free). The Agent plus its largest home worker (`hack-loop-deploy.js`, 4.65 GB) is 7.35 GB, within a fresh save's 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
@@ -163,6 +165,22 @@ The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed
 - **Saved scripts:** the loops aren't temporary, so a reload brings them back by itself, and they keep running while the brain is down.
 
 The Agent logs what it does when that changes: the servers it rooted, and the loop's threads, servers and target. The brain's [hack loop suite](../brain/README.md#the-hack-loop) tests it in an 8 GB fresh start, and E2 checks n00dles runs it in the real game.
+
+## The hacking programs
+
+M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/programs.ts`, `src/page/game-page.ts`, `src/entries/buy-program.js`).
+- **What the brain sends:** `desiredState { programs: { enabled, next } }`, `next` being `{ item, vendor }` or null ([protocol](../../docs/bridge/protocol.md#brain--agent); [packages/brain](../brain/README.md#the-hacking-programs) picks it). The Agent keeps it until it disconnects, like the hack loop.
+- **When:** a new `next` is bought in the next round with at least 1 s left, after the snapshots and the hack loop. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it tries again every 15 rounds (30 s) and logs why.
+- **`buy-program.js`**, with the item, the vendor and a deadline, so it ends within the Agent's round like any other worker:
+  1. **The game first:** the TOR router owned (`hasTorRouter`) or the program on home (`fileExists`) is done, without touching the page.
+  2. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off), "Purchase TOR router", then that purchase's dialog closed with its own close button (Escape would dismiss every dialog), then back to the Terminal.
+  3. **A program:** the sidebar's Terminal, and `buy <program>` typed into it.
+
+  It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a sidebar section collapsed (its items unmount), a button missing.
+- **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. No wait goes past the worker's deadline.
+- **What the owner sees:** a few times a session, the page switches to the City and back to the Terminal, or a `buy` is typed into the terminal. The dashboard's "Stop buying programs" switch stops it.
+
+E2 buys all six on the real page, and checks a collapsed World section stops it until it's open again ([`packages/e2`](../e2/README.md)).
 
 ## Hygiene and tests
 

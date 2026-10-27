@@ -2,7 +2,7 @@
 
 An autonomous agent that plays [Bitburner](https://github.com/bitburner-official/bitburner-src) from a fresh save to **every Source-File maxed**, unattended and repeatably.
 
-> **Status: pre-alpha.** M2 is done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the walking skeleton runs on Steam. M2's brain deploys an observe-only Agent into the game, stores what it reports, backs up the save, serves a local dashboard and, on Windows, keeps Steam's game running. Its first live hour on Steam had no gaps. M1 ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)) built the simulator and recorded the legacy fork's BN1 baseline, the bar the agent must beat. M3 is under way on `main`: the agent's first action is a hack loop on the servers it can root (#134). See [Roadmap](#roadmap).
+> **Status: pre-alpha.** M2 is done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the walking skeleton runs on Steam. M2's brain deploys an observe-only Agent into the game, stores what it reports, backs up the save, serves a local dashboard and, on Windows, keeps Steam's game running. Its first live hour on Steam had no gaps. M1 ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)) built the simulator and recorded the legacy fork's BN1 baseline, the bar the agent must beat. M3 is under way on `main`: the agent runs a hack loop on the servers it can root (#134), and buys the TOR router and the port-opening programs through the game's page (#136). See [Roadmap](#roadmap).
 
 ---
 
@@ -84,7 +84,7 @@ Bitburner **v3.0.1** (VersionNumber 51), the current Steam release. The game sou
 
 ## Getting started
 
-Since M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)), the brain (`npm run brain`, [packages/brain](packages/brain/README.md)) deploys the in-game Agent, stores what it reports, backs up the save, serves a dashboard at http://127.0.0.1:12527/, and on Windows keeps Steam's game running while it runs. On `main` (M3), it also runs a hack loop on the servers it can root, on by default; the dashboard's switch stops it. Everything runs from the repo, and nothing is installed outside it (npm's own download cache aside): to run it against Steam, follow **[docs/setup.md](docs/setup.md)**. The simulator runs too, with the legacy fork's baseline in it. You need Node 24 (`.node-version`) and git.
+Since M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)), the brain (`npm run brain`, [packages/brain](packages/brain/README.md)) deploys the in-game Agent, stores what it reports, backs up the save, serves a dashboard at http://127.0.0.1:12527/, and on Windows keeps Steam's game running while it runs. On `main` (M3), it also runs a hack loop on the servers it can root, and buys the hacking programs, both on by default; the dashboard's switches stop them. Everything runs from the repo, and nothing is installed outside it (npm's own download cache aside): to run it against Steam, follow **[docs/setup.md](docs/setup.md)**. The simulator runs too, with the legacy fork's baseline in it. You need Node 24 (`.node-version`) and git.
 
 ```sh
 git clone https://github.com/UnderMyBed/bitburner-agent.git

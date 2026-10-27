@@ -4,6 +4,7 @@
  * so its names must not collide with NS function names (packages/ingame/README.md, "RAM").
  */
 import { isValidDeploymentId } from "./deploy-layout.ts";
+import { PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
 
 export const CONTROL_PROTOCOL_VERSION = 1;
 
@@ -52,7 +53,7 @@ export type AgentMessage = HelloMessage | SnapshotMessage;
 
 /**
  * What the brain wants running in the game (architecture D2), whole each time: the Agent converges on the last one it
- * got. M3's first slice has one activity in it (#134).
+ * got. M3 adds an activity per slice: the hack loop (#134), the hacking programs (#136).
  */
 export interface DesiredState {
   /**
@@ -60,10 +61,25 @@ export interface DesiredState {
    * hacking yet). Off, every loop stops, wherever it runs.
    */
   hackLoop: { enabled: boolean; target: string | null; hosts: string[] };
+  /**
+   * The hacking programs: the next one to buy, or null for none now. `vendor` names the tech vendor in the player's
+   * city to buy the TOR router at, and is null for a program.
+   */
+  programs: { enabled: boolean; next: { item: string; vendor: string | null } | null };
 }
 
 /** The most hosts a desired state names: a whole network is well under it. */
 export const MAX_HACK_LOOP_HOSTS = 1_000;
+
+/**
+ * What may go to the game while the brain holds (on hold, after a failed deploy, or once the game has drifted): only a
+ * state that starts nothing new. The hack loop must be off (stopping our own loops is always safe), and nothing is
+ * bought. Null when the state would start something.
+ */
+export function desiredStateWhileHolding(state: DesiredState): DesiredState | null {
+  if (state.hackLoop.enabled) return null;
+  return { hackLoop: state.hackLoop, programs: { enabled: state.programs.enabled, next: null } };
+}
 
 export type BrainMessage =
   | { protocolVersion: typeof CONTROL_PROTOCOL_VERSION; type: "welcome" }
@@ -195,6 +211,27 @@ export function parseAgentMessage(text: string): ParsedMessage<AgentMessage> {
   }
 }
 
+/** A desired state's `programs`: the next item is TOR, at a named vendor, or a port opener, at none. */
+function parsePrograms(programs: unknown): ParsedMessage<DesiredState["programs"]> {
+  if (typeof programs !== "object" || programs === null) return { ok: false, reason: "desiredState without programs" };
+  const { enabled, next } = programs as JsonObject;
+  if (typeof enabled !== "boolean") return { ok: false, reason: "desiredState's programs.enabled isn't a boolean" };
+  if (next === null) return { ok: true, message: { enabled, next: null } };
+  if (typeof next !== "object") return { ok: false, reason: `desiredState's programs.next is ${describeValue(next)}` };
+  const { item, vendor } = next as JsonObject;
+  const isTor = item === TOR_ROUTER;
+  if (!isTor && !PORT_OPENER_PROGRAMS.includes(item as string)) {
+    return { ok: false, reason: `desiredState's programs.next.item is ${describeValue(item)}` };
+  }
+  if (isTor ? !isShortNonEmptyString(vendor) : vendor !== null) {
+    return {
+      ok: false,
+      reason: "desiredState's programs.next.vendor must name a vendor for TOR, and be null otherwise",
+    };
+  }
+  return { ok: true, message: { enabled, next: { item: item as string, vendor: vendor as string | null } } };
+}
+
 /** What the Agent accepts from the brain. */
 export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
   const envelope = parseEnvelope(text);
@@ -222,12 +259,15 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       if (!Array.isArray(hosts) || hosts.length > MAX_HACK_LOOP_HOSTS || !hosts.every(isShortNonEmptyString)) {
         return { ok: false, reason: "desiredState's hackLoop.hosts isn't a list of hostnames" };
       }
+      const programs = parsePrograms(fields.programs);
+      if (!programs.ok) return programs;
       return {
         ok: true,
         message: {
           protocolVersion: CONTROL_PROTOCOL_VERSION,
           type: "desiredState",
           hackLoop: { enabled, target, hosts: [...hosts] },
+          programs: programs.message,
         },
       };
     }
