@@ -2,14 +2,14 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)) and [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), and [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, and `buy-program.js` |
-| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `program-buyer.ts`, and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js` and `upgrade-home-ram.js` |
+| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `page-buyer.ts` (the programs' and home RAM's buyers), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effector: `game-page.ts` |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
@@ -64,6 +64,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `hack-loop-root.js` | `scan` (0.2 GB), `fileExists`, `getServerNumPortsRequired` (0.1 GB each), `hasRootAccess`, `nuke` and the five port openers (0.05 GB each) | 2.35 GB (2.35) |
 | `hack-loop-deploy.js` | `exec` (1.3 GB), `scp` (0.6 GB), `kill` (0.5 GB), `scan`, `ps` (0.2 GB each), `getScriptRam` (0.1 GB), `hasRootAccess`, `getServerMaxRam`, `getServerUsedRam` (0.05 GB each) | 4.65 GB (4.65) |
 | `buy-program.js` | `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB); the page costs nothing | 1.75 GB (1.75) |
+| `upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB); the page costs nothing | 1.65 GB (1.65) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
 The workers write to a port (`writePort`, free). The Agent plus its largest home worker (`hack-loop-deploy.js`, 4.65 GB) is 7.35 GB, within a fresh save's 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
@@ -76,7 +77,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -168,13 +169,13 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 
 ## The hacking programs
 
-M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/program-buyer.ts`, `src/page/game-page.ts`, `src/entries/buy-program.ts`).
+M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/page-buyer.ts`, `src/page/game-page.ts`, `src/entries/buy-program.ts`).
 - **What the brain sends:** `desiredState { programs: { enabled, next } }`, `next` being `{ item, vendor }` or null ([protocol](../../docs/bridge/protocol.md#brain--agent); [packages/brain](../brain/README.md#the-hacking-programs) picks it). The Agent keeps it until it disconnects, like the hack loop.
 - **When:** a new `next` is bought in the next round, after the snapshots and the hack loop, in what's left of the round; with under 1 s left, in the round after. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it logs why, every try, and tries again every 15 rounds (30 s).
 - **`buy-program.js`**, with the item, the vendor and a deadline, so it ends within the Agent's round like any other worker:
   1. **The game first:** the TOR router owned (`hasTorRouter`) or the program on home (`fileExists`) is done, without touching the page.
   2. **Never over an open dialog:** that's the owner's to read and close, so it does nothing and tries again later.
-  3. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off), "Purchase TOR router" while it can be bought (not disabled), then the purchase's dialog closed with its own close button (never Escape, which closes every dialog). No dialog is left open (E2 checks).
+  3. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off; the page's `openCityLocation`), "Purchase TOR router" while it can be bought (not disabled), then the purchase's dialog closed with its own close button (never Escape, which closes every dialog). No dialog is left open (E2 checks).
   4. **A program:** the sidebar's Terminal, and `buy <program>` typed into it, unless the owner has a line typed there: that's left alone.
   5. **Back to the Terminal,** however it went, once it has moved the page.
 
@@ -182,7 +183,23 @@ M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/1
 - **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. The Enter handler is read after the line is typed: the one from before would run the empty line. Every wait ends by the worker's deadline, and looks at least once. The steps end 300 ms before it, so the way back to the Terminal has its own time however long a step waited (`test/agent/game-page.test.ts`).
 - **What the owner sees:** a few times a session, the page switches to the City and back to the Terminal, or a `buy` is typed into the terminal. The dashboard's "Stop buying programs" switch stops it.
 
-E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/program-buyer.test.ts` checks when the Agent runs the worker and what it logs; `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
+E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/page-buyer.test.ts` checks when the Agent runs the worker and what it logs; `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
+
+## Home RAM
+
+M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)): the Agent doubles home's RAM at a tech vendor, the second `ui` effector, through the same page code as the TOR router (`src/agent/page-buyer.ts`, `src/entries/upgrade-home-ram.ts`).
+- **What the brain sends:** `desiredState { homeRam: { enabled, next } }`, `next` being `{ fromRam, vendor }` or null ([packages/brain](../brain/README.md#home-ram) picks it, one purchase at a time with the programs, cheapest first). The Agent keeps it until it disconnects.
+- **When:** as for the programs, with its own buyer: a new `next` in the next round with 1 s of it left, after the program buyer; not bought, again every 30 s, logging why each time.
+- **`upgrade-home-ram.js`**, with home's RAM when the brain asked (`fromRam`), the vendor and a deadline:
+  1. **The game first:** home with more RAM than `fromRam` (`getServerMaxRam`) is done, without touching the page. So a repeat never buys a second doubling.
+  2. **Never over an open dialog.**
+  3. The sidebar's City, the vendor, and "Upgrade 'home' RAM" while it can be bought (it's disabled when the player can't afford it, or home is at its limit). A purchase opens no dialog.
+  4. **Back to the Terminal,** however it went.
+
+  It reports `{ item: "home RAM", done, problem }`, as `buy-program.js` does ("no home RAM upgrade to buy (is the money there?)").
+- **What the owner sees:** once per upgrade, the page switches to the City and back to the Terminal. The dashboard's "Stop upgrading home RAM" switch stops it.
+
+E2 upgrades home from 8 GB to 16 GB on the real page and checks it goes no further, with no dialog left open. `test/agent/page-buyer.test.ts` checks the upgrader's worker, its arguments and its log, and that both buyers share a round.
 
 ## Hygiene and tests
 

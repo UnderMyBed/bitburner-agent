@@ -6,7 +6,7 @@ import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
-import type { HackLoopView, ProgramsView } from "../src/desired-state.ts";
+import type { HackLoopView, HomeRamView, ProgramsView } from "../src/desired-state.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -27,6 +27,7 @@ const programs: ProgramsView = {
   buying: "BruteSSH.exe",
   waitingFor: null,
 };
+const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
   brainStartedEventId = store.recordEvent(context, { atMs: STARTED_AT_MS, kind: BRAIN_STARTED_EVENT_KIND, detail: {} });
@@ -51,6 +52,7 @@ const status = (nowMs: number) =>
     supervising: true,
     hackLoop,
     programs,
+    homeRam,
     nowMs,
   });
 
@@ -136,6 +138,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
     hackLoop,
     programs,
+    homeRam,
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
@@ -283,6 +286,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     supervising: false,
     hackLoop,
     programs,
+    homeRam,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

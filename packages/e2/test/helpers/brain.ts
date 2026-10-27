@@ -72,18 +72,28 @@ function testBrainConfig(dataDirectory: string, ports: BrainPorts, allowedOrigin
   }
 }
 
-/** Starts a brain with `dataDirectory` (see testBrainConfig), and waits for it to listen. */
+/**
+ * Starts a brain with `dataDirectory` (see testBrainConfig), and waits for it to listen. `settings` go in its store
+ * first, as the dashboard's switches would have left them ("programs.enabled": "false", say).
+ */
 export async function startBrain({
   dataDirectory,
   ports,
   allowedOrigin,
+  settings = {},
 }: {
   dataDirectory: string;
   ports: BrainPorts;
   allowedOrigin: string;
+  settings?: Record<string, string>;
 }): Promise<RunningBrain> {
   mkdirSync(dataDirectory, { recursive: true });
   testBrainConfig(dataDirectory, ports, allowedOrigin);
+  if (Object.keys(settings).length > 0) {
+    const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
+    for (const [key, value] of Object.entries(settings)) store.setSetting(key, value);
+    store.close();
+  }
   const child = spawn(process.execPath, [BRAIN_MAIN, "--data-dir", dataDirectory], {
     cwd: REPOSITORY_ROOT,
     stdio: ["ignore", "pipe", "pipe"],

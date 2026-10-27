@@ -1,6 +1,6 @@
-// Buying the hacking programs on the real page (#136): the first `ui` effector, end to end. A save with money, a real
-// brain, the built Agent: the Agent buys the TOR router at Alpha Enterprises and every port opener through the
-// terminal, as a player would, and leaves the page on the Terminal with no dialog open.
+// Buying through the real page (#136, #138): the `ui` effectors, end to end. A save with money, a real brain, the built
+// Agent: the Agent buys the TOR router at Alpha Enterprises and every port opener through the terminal, and upgrades
+// home's RAM at Alpha Enterprises, as a player would, and leaves the page on the Terminal with no dialog open.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,22 +69,24 @@ const allOwned = (medium: MediumSnapshotData | null) =>
   medium?.hasTorRouter === true && PORT_OPENER_PROGRAMS.every((program) => medium.programs.includes(program));
 
 /**
- * A save with money and the brain's Remote File API and autoexec in its settings; the brain deploys; past an autosave
- * and a reload, autoexec starts the Agent. The reload's "Offline for…" alert is closed, unless `keepOfflineAlert`;
- * then `beforeAgent` runs on the page, before the Agent's first round.
+ * A save with money and the brain's Remote File API and autoexec in its settings; the brain deploys, with
+ * `brainSettings` in its store; past an autosave and a reload, autoexec starts the Agent. The reload's "Offline for…"
+ * alert is closed, unless `keepOfflineAlert`; then `beforeAgent` runs on the page, before the Agent's first round.
  */
 async function moneyedGameWithAgent({
   money = MONEY,
   keepOfflineAlert = false,
   beforeAgent = async () => {},
+  brainSettings = {},
 }: {
   money?: number;
   keepOfflineAlert?: boolean;
   beforeAgent?: (page: Page) => Promise<void>;
+  brainSettings?: Record<string, string>;
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
-  const brain = await startBrain({ dataDirectory, ports, allowedOrigin: e2.server.origin });
+  const brain = await startBrain({ dataDirectory, ports, allowedOrigin: e2.server.origin, settings: brainSettings });
   started.brains.push(brain);
   onTestFailed(() => console.log(`The brain's log (${dataDirectory}):\n${brain.log.join("\n")}`));
   const save = withMoney(
@@ -116,7 +118,8 @@ async function moneyedGameWithAgent({
 }
 
 test("with money, the Agent buys the TOR router at Alpha Enterprises and every port opener, and leaves the page as it was", async () => {
-  const { dataDirectory, page } = await moneyedGameWithAgent();
+  // Home RAM off: with this much money its upgrades would go in between, cheapest first (#138).
+  const { dataDirectory, page } = await moneyedGameWithAgent({ brainSettings: { "homeRam.enabled": "false" } });
   await advanceUntil(page, async () => allOwned(latestMedium(dataDirectory)), {
     realTimeoutMs: 4 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: ALL_BOUGHT_GAME_TIMEOUT_MS,
@@ -175,4 +178,28 @@ test("with a dialog open, nothing is bought until the owner closes it", async ()
     realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 60_000,
   });
+});
+
+const homeRamOf = (medium: MediumSnapshotData | null) =>
+  medium?.servers.find((server) => server.hostname === "home")?.maxRam;
+
+test("home RAM (#138): with $1.1m and buying programs off, home goes from 8 GB to 16 GB at Alpha Enterprises, no further", async () => {
+  // $1.01m for 16 GB; 32 GB's $3.19m is beyond what the hack loop earns meanwhile. A new save starts in Sector-12, so
+  // the vendor is Alpha Enterprises: the only one the page could buy it at there.
+  const { dataDirectory, page } = await moneyedGameWithAgent({
+    money: 1_100_000,
+    brainSettings: { "programs.enabled": "false" },
+  });
+  await advanceUntil(page, async () => homeRamOf(latestMedium(dataDirectory)) === 16, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  await advanceGameTime(page, 30_000);
+  const medium = latestMedium(dataDirectory);
+  expect(homeRamOf(medium)).toBe(16);
+  // Paid for (the hack loop earns some meanwhile), and nothing else bought.
+  expect(medium?.player.money as number).toBeLessThan(600_000);
+  expect(medium?.hasTorRouter).toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });

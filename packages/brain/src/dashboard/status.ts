@@ -8,7 +8,7 @@ import {
   SNAPSHOT_TIERS,
   type SnapshotTier,
 } from "@bitburner-agent/core";
-import type { HackLoopView, ProgramsView } from "../desired-state.ts";
+import type { HackLoopView, HomeRamView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
@@ -81,6 +81,8 @@ export interface DashboardStatus {
   hackLoop: HackLoopView;
   /** The hacking programs (#136): owned, being bought, or what they wait for. */
   programs: ProgramsView;
+  /** Home's RAM (#138): its size, the upgrade being bought, or what it waits for. */
+  homeRam: HomeRamView;
 }
 
 export interface DashboardStatusOptions {
@@ -96,6 +98,8 @@ export interface DashboardStatusOptions {
   hackLoop: HackLoopView;
   /** The hacking programs' view (#136), likewise. */
   programs: ProgramsView;
+  /** Home RAM's view (#138), likewise. */
+  homeRam: HomeRamView;
   nowMs: number;
 }
 
@@ -114,6 +118,7 @@ export function buildDashboardStatus({
   supervising,
   hackLoop,
   programs,
+  homeRam,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -209,5 +214,6 @@ export function buildDashboardStatus({
     },
     hackLoop,
     programs,
+    homeRam,
   };
 }

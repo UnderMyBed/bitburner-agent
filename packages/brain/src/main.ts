@@ -1,8 +1,8 @@
 // npm run brain [-- --data-dir <dir>]: the long-running brain process (architecture D1), run from the repo, with its
 // data in the repo's .data/ unless told otherwise. It runs the control channel and stores what the Agent reports,
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
-// to run (the hack loop, #134, and the hacking programs, #136), serves the dashboard, and (for Steam, on Windows)
-// supervises the game itself.
+// to run (the hack loop, #134, the hacking programs, #136, and home's RAM, #138), serves the dashboard, and (for
+// Steam, on Windows) supervises the game itself.
 import path from "node:path";
 import process from "node:process";
 import {
@@ -18,6 +18,7 @@ import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { DesiredStateController } from "./desired-state.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
+import { readHomeRamEnabled } from "./home-ram.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
 import { readProgramsEnabled } from "./programs.ts";
 import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
@@ -130,6 +131,7 @@ try {
         supervising,
         hackLoop: desiredState.hackLoopView(),
         programs: desiredState.programsView(),
+        homeRam: desiredState.homeRamView(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -144,6 +146,10 @@ try {
       desiredState.setProgramsEnabled(enabled);
       log(`buying hacking programs turned ${enabled ? "on" : "off"} from the dashboard`);
     },
+    setHomeRamEnabled: (enabled) => {
+      desiredState.setHomeRamEnabled(enabled);
+      log(`upgrading home RAM turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
@@ -156,7 +162,8 @@ try {
   );
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
   log(
-    `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+    `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
+      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
   );
   log(
     supervising

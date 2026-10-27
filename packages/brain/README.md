@@ -12,7 +12,7 @@ From the repo, in a terminal, until stopped (Ctrl+C). Nothing is installed (owne
 
 - **On Windows, an E0 brain (the default) runs the game itself.** Within 30 s it launches Bitburner through Steam. If no Agent reports for about 5 minutes, it kills and relaunches the game ([Supervision](#supervision)). Pause supervision on the dashboard while you set the game up.
 - **The data directory is the repo's `.data/`** (gitignored), so everything stays in the repo ([#122](https://github.com/UnderMyBed/bitburner-agent/issues/122)). `--data-dir <dir>` or `BITBURNER_AGENT_DATA_DIR` picks another; a relative path is taken from the directory the command was run in. Tests always pass their own (with an E2 config): a brain started in `.data/` creates an E0 config, which on Windows launches Steam's game.
-- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr, and the brain exits non-zero. The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, the dashboard's address, whether it supervises the game, and whether the hack loop and the program buying are on. Each switch flipped on the dashboard is logged too.
+- **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr, and the brain exits non-zero. The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, the dashboard's address, whether it supervises the game, and whether the hack loop, the program buying and the home RAM upgrades are on. Each switch flipped on the dashboard is logged too.
 - **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`npm run bootstrap` fetches it), or the brain stops at start, saying which file is missing.
 - **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
@@ -61,7 +61,7 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap r
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
 | `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and the supervisor's `relaunch`, `supervisionGaveUp`, `supervisionFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
-| `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch), `supervision.gaveUpAtMs` (the supervisor's give-up, #94), `hackLoop.enabled` (the hack loop's switch, on when unset, #134), and `programs.enabled` (buying the hacking programs, likewise, #136) |
+| `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch), `supervision.gaveUpAtMs` (the supervisor's give-up, #94), `hackLoop.enabled` (the hack loop's switch, on when unset, #134), `programs.enabled` (buying the hacking programs, likewise, #136), and `homeRam.enabled` (upgrading home's RAM, likewise, #138) |
 
 - **Every snapshot and event is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
   - the brain's `git describe` ("unknown" without git, which the startup log shows);
@@ -111,7 +111,7 @@ The brain backs up the game's save over the Remote File API (`getSaveFile`; arch
 
 ## The dashboard
 
-A local page showing whether the skeleton is healthy, its alerts, and its switches: supervision, the hack loop and buying the hacking programs ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
+A local page showing whether the skeleton is healthy, its alerts, and its switches: supervision, the hack loop, buying the hacking programs and upgrading home's RAM ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
 
 - **What it shows,** refreshed every 2 s from the store:
   - **Alerts:** the ones holding now (below).
@@ -121,7 +121,8 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now: how many gaps and their total time, with the newest 20 listed. Any time without snapshots in the window counts: from the window's start to the first snapshot with a new store, or while the brain or the Agent was down.
   - **Supervision:** off, running, paused, or gave up; the supervisor's recent relaunches; and the switch (hidden when off).
   - **Hack loop:** on or off; on, whether the brain is waiting for the Agent's snapshots, has no target yet (while servers are being rooted), or runs it against a target on so many servers; and its switch ([the hack loop](#the-hack-loop)).
-  - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, or travel); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
+  - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, travel, or a cheaper home RAM upgrade first); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
+  - **Home RAM:** on or off; on, the size the upgrade being bought brings home to, or what it waits for (the Agent's snapshots, money for the next size, travel, a cheaper program first, or the BitNode's price), or that home is at its limit; home's RAM; and its switch ([home RAM](#home-ram)).
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
 - **When it can't show the status,** it says why in place of the data, rather than showing stale numbers:
   - "Brain unreachable": the brain stopped, or crashed;
@@ -150,7 +151,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
 - **The API** (the page's; a script must follow the same rules):
   - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`).
   - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
-  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, and `POST /api/programs` the hacking programs' (#136).
+  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), and `POST /api/home-ram` home RAM's (#138).
   - Refusals:
     - 403: not the dashboard's Host or Origin;
     - 400: a body that isn't exactly one of its switch's two, or a path that isn't valid;
@@ -167,7 +168,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - Among the game's rooted servers with money (not home, not the player's purchased or Hacknet servers) that need at most half the player's hacking level (at least 1), it takes the one with the highest maximum money times growth.
   - Growth counts because the loop hacks only once a server's money is back at 75% of its maximum, and servers start at 4%. Over an 8 GB fresh start's first virtual hour, n00dles (growth 3000) earned $15m. foodnstuff, joesguns and sigma-cosmetics, with more money but growth 5–20, earned nothing.
 - **The hosts** (`chooseHackHosts`): the game's rooted servers with RAM. Never home, which is the Agent's, and never the player's own purchased or Hacknet servers.
-- **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #136 it also sends [the hacking programs](#the-hacking-programs)) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
+- **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #136 it also sends [the hacking programs](#the-hacking-programs), and since #138 [home's RAM](#home-ram)) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
   - **Off** is sent at once, to each Agent as it connects too.
   - **On** waits for that Agent's own static and medium snapshots, which come in its first round, then sends the target (or none yet, while the servers get rooted) and the hosts. It never sends the last brain's or the last game's view:
     - a brain that restarts sends the running Agent the same state, which changes nothing;
@@ -186,6 +187,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - **With the desired state set directly:** only the named hosts run the loop, a new target restarts the loops against it, a dropped host's loop goes, and another deployment's loop is stopped.
   - **Home too full for the deploy worker:** home never holds more than the Agent, the owner's script and one worker, and the deploy worker runs within two rounds of there being room.
   - **A purchase the page can't make** (#136; the simulator's page has no sidebar): each try logs why, the next comes 30 s later, and home never holds more than the Agent and one worker. E2 buys on the real page ([packages/e2](../e2/README.md)).
+  - **A home RAM upgrade already made** (#138; an upgrade from 4 GB on the fresh start's 8 GB): the worker reports it done from the game alone, without touching the page, so a repeat never buys a second doubling.
 
 ## The hacking programs
 
@@ -195,9 +197,22 @@ M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/1
 - **The next item** (`chooseNextPurchase`), from the connected Agent's medium snapshot (`hasTorRouter`, `programs`, the player's money and city):
   - the first not owned, in the order TOR router, BruteSSH.exe, FTPCrack.exe, relaySMTP.exe, HTTPWorm.exe, SQLInject.exe;
   - once the player's money covers its price: $200k, $500k, $1.5m, $5m, $30m, $250m (`Constants.ts:44`, `DarkWeb/DarkWebItems.ts`);
-  - the TOR router needs a tech vendor in the player's city, one per city that has any (`TOR_VENDORS` in core): Sector-12 Alpha Enterprises, Aevum NetLink Technologies, Ishima Omega Software, Volhaven CompuTek. Chongqing and New Tokyo have none, and the dashboard says travel is needed.
+  - the TOR router needs a tech vendor in the player's city, one per city that has any (`TECH_VENDORS` in core): Sector-12 Alpha Enterprises, Aevum NetLink Technologies, Ishima Omega Software, Volhaven CompuTek. Chongqing and New Tokyo have none, and the dashboard says travel is needed.
 - **The dashboard** shows what's owned, what's being bought, or what it waits for (money for an item, or travel).
-- **One desired state:** `DesiredStateController` (`src/desired-state.ts`) sends the hack loop and the hacking programs together, whole each time, with the hack loop's rules: nothing new until the connected Agent's own snapshots; while the brain holds, only a state that starts nothing new (`desiredStateWhileHolding` in core: the hack loop off, or as last sent, and nothing bought).
+- **One desired state:** `DesiredStateController` (`src/desired-state.ts`) sends the hack loop, the hacking programs and home's RAM together, whole each time, with the hack loop's rules: nothing new until the connected Agent's own snapshots; while the brain holds, only a state that starts nothing new (`desiredStateWhileHolding` in core: the hack loop off, or as last sent, and nothing bought).
+
+## Home RAM
+
+M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)): the brain tells the Agent when to double home's RAM, and the Agent buys it at a tech vendor through the game's page ([`packages/ingame`](../ingame/README.md#home-ram)). The code is `src/home-ram.ts`.
+
+- **The switch:** "Stop upgrading home RAM" on the dashboard ("Start upgrading home RAM" when off), on unless the owner turns it off (the store's `homeRam.enabled`), like the others.
+- **The next upgrade** (`chooseHomeRamUpgrade`), from the connected Agent's medium snapshot (home's `maxRam`, the player's money and city) and slow snapshot (the BitNode and its options):
+  - home's RAM doubled, once the player's money covers the price: `ram × 32,000 × 1.58^log2(ram)` in BN1 (`PersonObjects/Player/PlayerObjectServerMethods.ts:30`), $1.01m for 8 GB to 16 GB, about 3.16× more each doubling;
+  - **BN1 only, for now:** other BitNodes multiply the price (`HomeComputerRamCost`), so there nothing is bought, and the dashboard says the price isn't known yet. Nothing either until the Agent's slow snapshot says which BitNode (its first round);
+  - up to the game's limit, 2^30 GB, or 128 GB with the BitNode option `restrictHomePCUpgrade`;
+  - at the tech vendor in the player's city (`TECH_VENDORS`, as for the TOR router). Chongqing and New Tokyo have none, and the dashboard says travel is needed.
+- **One purchase at a time, cheapest first:** of the next program and the next upgrade, both affordable, the controller sends the cheaper, and the other's view says it waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With both switches on, the order is TOR, BruteSSH.exe, 16 GB, FTPCrack.exe, 32 GB, relaySMTP.exe, 64 GB, HTTPWorm.exe, 128 GB, 256 GB, SQLInject.exe, then the rest of the doublings. A switch that's off takes its activity out of the comparison. With home RAM on, no program goes either until the slow snapshot says which BitNode, since until then the upgrade's price isn't known. And the cheaper purchase holds back the other while the page can't make it (a collapsed World section, say), even a program the terminal could buy; the dashboard says what each waits for.
+- **The dashboard** shows home's RAM, the upgrade being bought, or what it waits for (money, travel, the cheaper purchase, the BitNode).
 
 ## Supervision
 

@@ -1,15 +1,18 @@
-// The program buyer's schedule (#136): when it runs `buy-program.js`, and what it logs. The worker itself is the
-// stand-in here; E2 drives the real one on the real page (packages/e2/test/programs.e2.test.ts).
-import type { BuyProgramReport } from "@bitburner-agent/core";
+// The page buyers' schedule (#136, #138): when they run their workers (`buy-program.js`, `upgrade-home-ram.js`), and
+// what they log. The workers themselves are stand-ins here; E2 drives the real ones on the real page
+// (packages/e2/test/programs.e2.test.ts).
+import type { PurchaseReport } from "@bitburner-agent/core";
 import { expect, test, vi } from "vitest";
-import { createProgramBuyer } from "../../src/agent/program-buyer.ts";
+import { createHomeRamUpgrader, createProgramBuyer } from "../../src/agent/page-buyer.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
 import type { NS } from "../../src/ns.ts";
 
 const TOR = { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } };
+const RAM_FROM_8 = { enabled: true, next: { fromRam: 8, vendor: "Alpha Enterprises" } };
 const ROUND_MS = 2_000;
 
-function buyerWith(reports: BuyProgramReport[]) {
+/** A runner whose stand-in workers report `reports` in turn, and a log. */
+function standIns(reports: PurchaseReport[]) {
   const lines: string[] = [];
   const ns = { print: (line: string) => lines.push(line) } as unknown as NS;
   const runWorker = vi.fn(async (): Promise<WorkerRun> => {
@@ -17,7 +20,13 @@ function buyerWith(reports: BuyProgramReport[]) {
     if (!report) throw new Error("no report left for the stand-in worker");
     return { outcome: "reported", report: { workerPid: 1, data: report } as never };
   });
-  const buyer = createProgramBuyer(ns, { deploymentId: "abcdef123456", workerRunner: { runWorker } as WorkerRunner });
+  const options = { deploymentId: "abcdef123456", workerRunner: { runWorker } as WorkerRunner };
+  return { ns, lines, runWorker, options };
+}
+
+function buyerWith(reports: PurchaseReport[]) {
+  const { ns, lines, runWorker, options } = standIns(reports);
+  const buyer = createProgramBuyer(ns, options);
   /** One round, with `leftMs` of it left when the buyer's turn comes. */
   const round = (leftMs = ROUND_MS) => buyer.buyIfDue(Date.now() + leftMs);
   return { buyer, lines, runWorker, round };
@@ -31,7 +40,8 @@ test("with less than a second of the round left, it waits for the next round rat
   await round();
   expect(runWorker).toHaveBeenCalledTimes(1);
   // The worker gives up 200 ms before the Agent stops waiting for it.
-  const [, workerArguments, deadlineMs] = runWorker.mock.calls[0] as unknown as [string, unknown[], number];
+  const [workerFile, workerArguments, deadlineMs] = runWorker.mock.calls[0] as unknown as [string, unknown[], number];
+  expect(workerFile).toBe("agent/abcdef123456/buy-program.js");
   expect(workerArguments.slice(0, 2)).toEqual(["TOR router", "Alpha Enterprises"]);
   expect(deadlineMs - (workerArguments[2] as number)).toBe(200);
 });
@@ -60,6 +70,7 @@ test("short rounds count toward the 30 s between tries: only the try itself wait
   await round();
   expect(runWorker).toHaveBeenCalledTimes(2);
 });
+
 test("bought: nothing more until the brain names the next item, and a problem on the way is still logged", async () => {
   const { buyer, lines, runWorker, round } = buyerWith([
     { item: "TOR router", done: true, problem: 'no "Terminal" in the sidebar (is its section collapsed?)' },
@@ -85,4 +96,43 @@ test("off, or forgotten on a disconnect, it buys nothing", async () => {
   buyer.forget();
   await round();
   expect(runWorker).not.toHaveBeenCalled();
+});
+
+test("home RAM (#138): upgrade-home-ram.js with the RAM it upgrades from and the vendor, logged as what it brings", async () => {
+  const { ns, lines, runWorker, options } = standIns([
+    { item: "home RAM", done: false, problem: "no home RAM upgrade to buy (is the money there?)" },
+    { item: "home RAM", done: true, problem: null },
+  ]);
+  const upgrader = createHomeRamUpgrader(ns, options);
+  upgrader.desire(RAM_FROM_8);
+  for (let each = 0; each < 16; each += 1) await upgrader.buyIfDue(Date.now() + ROUND_MS);
+  expect(runWorker).toHaveBeenCalledTimes(2);
+  const [workerFile, workerArguments] = runWorker.mock.calls[0] as unknown as [string, unknown[]];
+  expect(workerFile).toBe("agent/abcdef123456/upgrade-home-ram.js");
+  expect(workerArguments.slice(0, 2)).toEqual([8, "Alpha Enterprises"]);
+  expect(lines).toEqual([
+    "agent: home RAM: couldn't buy 16 GB of home RAM: no home RAM upgrade to buy (is the money there?); " +
+      "trying again in 30 s",
+    "agent: home RAM: bought 16 GB of home RAM",
+  ]);
+});
+
+test("both due in one round: each runs in turn, the second only with a second of the round still left", async () => {
+  const { ns, runWorker, options } = standIns([{ item: "home RAM", done: true, problem: null }]);
+  const programBuyer = createProgramBuyer(ns, options);
+  const upgrader = createHomeRamUpgrader(ns, options);
+  programBuyer.desire(TOR);
+  upgrader.desire(RAM_FROM_8);
+  // The first worker takes most of the round: the second waits for the next.
+  const torBought = { item: "TOR router", done: true, problem: null };
+  runWorker.mockImplementationOnce(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    return { outcome: "reported", report: { workerPid: 1, data: torBought } as never };
+  });
+  const deadlineMs = Date.now() + ROUND_MS;
+  await programBuyer.buyIfDue(deadlineMs);
+  await upgrader.buyIfDue(deadlineMs);
+  expect(runWorker).toHaveBeenCalledTimes(1);
+  await upgrader.buyIfDue(Date.now() + ROUND_MS);
+  expect(runWorker).toHaveBeenCalledTimes(2);
 });

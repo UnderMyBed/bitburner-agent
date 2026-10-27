@@ -4,7 +4,9 @@
  * so its names must not collide with NS function names (packages/ingame/README.md, "RAM").
  */
 import { isValidDeploymentId } from "./deploy-layout.ts";
-import { PORT_OPENER_PROGRAMS, TOR_ROUTER, TOR_VENDORS } from "./programs.ts";
+import { isUpgradableHomeRam } from "./home-ram.ts";
+import { PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
+import { TECH_VENDORS } from "./purchases.ts";
 
 export const CONTROL_PROTOCOL_VERSION = 1;
 
@@ -53,7 +55,8 @@ export type AgentMessage = HelloMessage | SnapshotMessage;
 
 /**
  * What the brain wants running in the game (architecture D2), whole each time: the Agent converges on the last one it
- * got. M3 adds an activity per slice: the hack loop (#134), the hacking programs (#136).
+ * got. M3 adds an activity per slice: the hack loop (#134), the hacking programs (#136), home's RAM (#138). The brain
+ * asks for one purchase at a time, of the programs and home's RAM.
  */
 export interface DesiredState {
   /**
@@ -66,6 +69,11 @@ export interface DesiredState {
    * city to buy the TOR router at, and is null for a program.
    */
   programs: { enabled: boolean; next: { item: string; vendor: string | null } | null };
+  /**
+   * Home's RAM: the next upgrade to buy, or null for none now. `fromRam` is home's RAM (GB) when the brain asked, so
+   * the upgrade is done once home has more; `vendor` names the tech vendor in the player's city to buy it at.
+   */
+  homeRam: { enabled: boolean; next: { fromRam: number; vendor: string } | null };
 }
 
 /** The most hosts a desired state names: a whole network is well under it. */
@@ -79,9 +87,12 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * the hack loop does.
  */
 export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
-  const programs = { enabled: state.programs.enabled, next: null };
-  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, programs };
-  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, programs };
+  const purchases = {
+    programs: { enabled: state.programs.enabled, next: null },
+    homeRam: { enabled: state.homeRam.enabled, next: null },
+  };
+  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, ...purchases };
+  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, ...purchases };
 }
 
 export type BrainMessage =
@@ -226,13 +237,32 @@ function parsePrograms(programs: unknown): ParsedMessage<DesiredState["programs"
   if (!isTor && !PORT_OPENER_PROGRAMS.includes(item as string)) {
     return { ok: false, reason: `desiredState's programs.next.item is ${describeValue(item)}` };
   }
-  if (isTor ? !Object.values(TOR_VENDORS).includes(vendor as string) : vendor !== null) {
+  if (isTor ? !isTechVendor(vendor) : vendor !== null) {
     return {
       ok: false,
-      reason: "desiredState's programs.next.vendor must be a known TOR vendor for TOR, and null otherwise",
+      reason: "desiredState's programs.next.vendor must be a tech vendor for TOR, and null otherwise",
     };
   }
   return { ok: true, message: { enabled, next: { item: item as string, vendor: vendor as string | null } } };
+}
+
+const isTechVendor = (vendor: unknown): vendor is string => Object.values(TECH_VENDORS).includes(vendor as string);
+
+/** A desired state's `homeRam`: the next upgrade is from a size home can be upgraded from, at a tech vendor. */
+function parseHomeRam(homeRam: unknown): ParsedMessage<DesiredState["homeRam"]> {
+  if (typeof homeRam !== "object" || homeRam === null) return { ok: false, reason: "desiredState without homeRam" };
+  const { enabled, next } = homeRam as JsonObject;
+  if (typeof enabled !== "boolean") return { ok: false, reason: "desiredState's homeRam.enabled isn't a boolean" };
+  if (next === null) return { ok: true, message: { enabled, next: null } };
+  if (typeof next !== "object") return { ok: false, reason: `desiredState's homeRam.next is ${describeValue(next)}` };
+  const { fromRam, vendor } = next as JsonObject;
+  if (!isUpgradableHomeRam(fromRam)) {
+    return { ok: false, reason: `desiredState's homeRam.next.fromRam is ${describeValue(fromRam)}` };
+  }
+  if (!isTechVendor(vendor)) {
+    return { ok: false, reason: `desiredState's homeRam.next.vendor is ${describeValue(vendor)}, not a tech vendor` };
+  }
+  return { ok: true, message: { enabled, next: { fromRam, vendor } } };
 }
 
 /** What the Agent accepts from the brain. */
@@ -264,6 +294,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       }
       const programs = parsePrograms(fields.programs);
       if (!programs.ok) return programs;
+      const homeRam = parseHomeRam(fields.homeRam);
+      if (!homeRam.ok) return homeRam;
       return {
         ok: true,
         message: {
@@ -271,6 +303,7 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
           type: "desiredState",
           hackLoop: { enabled, target, hosts: [...hosts] },
           programs: programs.message,
+          homeRam: homeRam.message,
         },
       };
     }

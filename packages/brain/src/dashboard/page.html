@@ -43,6 +43,10 @@
     <h2>Hacking programs</h2><div></div><button type="button">Stop buying programs</button>
     <div class="bad" id="programs-problem" hidden></div>
   </section>
+  <section id="home-ram">
+    <h2>Home RAM</h2><div></div><button type="button">Stop upgrading home RAM</button>
+    <div class="bad" id="home-ram-problem" hidden></div>
+  </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -56,6 +60,8 @@ let pauseNext = true;
 let enableHackLoopNext = false;
 /** What the hacking programs' switch sends next (#136), likewise. */
 let enableProgramsNext = false;
+/** What home RAM's switch sends next (#138), likewise. */
+let enableHomeRamNext = false;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -187,6 +193,23 @@ function render(status) {
   );
   document.querySelector("#programs button").textContent = programs.enabled ? "Stop buying programs" : "Start buying programs";
 
+  const homeRam = status.homeRam;
+  enableHomeRamNext = !homeRam.enabled;
+  const homeRamText = !homeRam.enabled
+    ? "not upgrading"
+    : homeRam.waiting
+      ? "waiting for the Agent's snapshots"
+      : homeRam.upgradingTo !== null
+        ? `upgrading to ${homeRam.upgradingTo} GB`
+        : homeRam.waitingFor !== null
+          ? `waiting for ${homeRam.waitingFor}`
+          : "at its limit";
+  document.querySelector("#home-ram div").replaceChildren(
+    element("div", `Home RAM: ${homeRamText}`, homeRam.enabled ? "ok" : "muted"),
+    element("div", `Home: ${orNone(homeRam.ram, (ram) => `${ram} GB`)}`),
+  );
+  document.querySelector("#home-ram button").textContent = homeRam.enabled ? "Stop upgrading home RAM" : "Start upgrading home RAM";
+
   const events = document.querySelector("#events table");
   events.replaceChildren(
     ...status.events.map((event) => {
@@ -243,6 +266,9 @@ document.querySelector("#hack-loop button").addEventListener("click", () =>
 );
 document.querySelector("#programs button").addEventListener("click", () =>
   sendSwitch("/api/programs", { enabled: enableProgramsNext }, "#programs-problem"),
+);
+document.querySelector("#home-ram button").addEventListener("click", () =>
+  sendSwitch("/api/home-ram", { enabled: enableHomeRamNext }, "#home-ram-problem"),
 );
 
 refresh();
