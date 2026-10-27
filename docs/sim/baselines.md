@@ -65,6 +65,7 @@ Every seed that didn't pass is explained here, per run: what stopped it, and whe
 
 - **4799701 (the first run):** none; all 8 seeds reached 12 hours.
 - **3cf08f9 (the M1 release):** none; all 8 seeds reached 12 hours.
+- **58f0c4d (the M2 release):** none; all 8 seeds reached 12 hours.
 - **Before the first run**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before it ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
   - [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73): results depended on when garbage collection ran, through the game's module cache.
   - [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74): the virtual clock's cost grew with the timers pending, so tens of thousands of scripts slowed it to a crawl.
@@ -88,6 +89,8 @@ Reading the first run (4799701, the reference rig):
 
 Reading the second run (3cf08f9, the M1 release, [#44](https://github.com/UnderMyBed/bitburner-agent/issues/44)): every seed's final state hash equals the first run's, so the game columns are identical. Only the speed moved (117× to 116×), which is noise.
 
+Reading the third run (58f0c4d, the M2 release, [#100](https://github.com/UnderMyBed/bitburner-agent/issues/100)): every seed's final state hash again equals the first run's, so the game columns are identical. The speed is 118×, and the heap is 1–2 MB higher at each checkpoint. M2's candidate then moved on to 201e133. That change lists only `packages/core/src/game-version.ts`, which the simulator reads only for an unchanged constant, so the baseline didn't run again (releasing step 2, owner decision 32).
+
 | Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Speed | Real time per seed |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 117x | 6 min |
@@ -96,3 +99,6 @@ Reading the second run (3cf08f9, the M1 release, [#44](https://github.com/UnderM
 | 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 116x | 6 min |
 | 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 113 MB | 116x | 6 min |
 | 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 115 MB | 116x | 6 min |
+| 2026-10-27 | 58f0c4d | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 112 MB | 118x | 6 min |
+| 2026-10-27 | 58f0c4d | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 114 MB | 118x | 6 min |
+| 2026-10-27 | 58f0c4d | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 117 MB | 118x | 6 min |

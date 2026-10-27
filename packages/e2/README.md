@@ -2,7 +2,7 @@
 
 Environment E2 (architecture §9.4): the game built from `vendor/bitburner-src` at the pinned commit, served on 127.0.0.1 and driven by Playwright. It covers what the simulator can't show: the rendered UI, and the page's real network, storage and reload ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)).
 
-> **Status:** M2. Built: the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)), and the walking skeleton's tests on it ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)), and the walking skeleton's tests on it ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97)).
 
 E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and before every release ([releasing](../../docs/releasing.md) step 2; architecture §9.3, ADR 0004). It isn't part of `npm test` or CI.
 

@@ -95,6 +95,10 @@ Reading the third row (3cf08f9, the M1 release, the reference rig):
 - Every workload is within 2% of the second row (lean −2%, batch −0.4%, churn +1.7%, copies +0.3%), which is run-to-run noise. So the changes since that row (#79's review fixes, #81's Chromium timer model on every timer, #82) cost nothing measurable ([#44](https://github.com/UnderMyBed/bitburner-agent/issues/44)).
 - **The heap still doesn't grow.**
 
+Reading the fourth row (58f0c4d, the M2 release, the reference rig, [#100](https://github.com/UnderMyBed/bitburner-agent/issues/100)):
+- Every workload is within 1.4% of the third row (lean +1.4%, batch +0.2%, churn +1.0%, copies ±0%), which is noise. So M2's changes to the simulator cost nothing measurable. M2 moved its candidate on to 201e133 after this row. By the owner's decision, only the suites that change touched ran on it, the workloads and E2, and the workloads ended in the same state hashes.
+- **The heap still doesn't grow.** It starts and ends 1.6 MB higher than the third row's.
+
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
 
 | Date | Commit | Rig | Node | lean | batch | churn | copies | Heap start | Heap end | Heap growth per day |
@@ -102,3 +106,4 @@ Rows are appended at the end of this file, so keep the results table last. When 
 | 2026-10-25 | 8149ce0 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26406x | 9038x | 259x | 9137x | 102.9 MB | 93.0 MB | +0.0 MB |
 | 2026-10-25 | 5457a1c | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 27034x | 10028x | 479x | 12040x | 103.6 MB | 93.5 MB | +0.0 MB |
 | 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26503x | 9991x | 487x | 12081x | 103.7 MB | 93.5 MB | +0.0 MB |
+| 2026-10-27 | 58f0c4d | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26866x | 10014x | 492x | 12081x | 105.3 MB | 95.1 MB | +0.0 MB |
