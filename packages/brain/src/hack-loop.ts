@@ -3,7 +3,13 @@
 // target and the servers it runs on come from starter rules over the connected Agent's snapshots, until the planner
 // (M4) decides.
 import type { ControlChannel } from "@bitburner-agent/bridge";
-import type { DesiredState, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import {
+  type DesiredState,
+  MAX_FIELD_LENGTH,
+  MAX_HACK_LOOP_HOSTS,
+  type MediumSnapshotData,
+  type StaticSnapshotData,
+} from "@bitburner-agent/core";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 const ENABLED_SETTING = "hackLoop.enabled";
@@ -27,7 +33,12 @@ export function readHackLoopEnabled(store: TelemetryStore): boolean {
 function gameServers(staticData: StaticSnapshotData): StaticServer[] {
   return staticData.servers.filter(
     (server) =>
-      typeof server?.hostname === "string" && server.hostname !== "home" && server.purchasedByPlayer === false,
+      // Only names the protocol takes: one it refused would leave the Agent on its old state, unaware.
+      typeof server?.hostname === "string" &&
+      server.hostname !== "" &&
+      server.hostname.length <= MAX_FIELD_LENGTH &&
+      server.hostname !== "home" &&
+      server.purchasedByPlayer === false,
   );
 }
 
@@ -92,7 +103,8 @@ export function chooseHackHosts(
   return gameServers(snapshots.staticData)
     .map((server) => server.hostname)
     .filter((hostname) => (rooted.get(hostname) ?? 0) > 0)
-    .sort();
+    .sort()
+    .slice(0, MAX_HACK_LOOP_HOSTS);
 }
 
 /** What the dashboard shows of the hack loop. */
@@ -114,7 +126,7 @@ export interface HackLoopView {
 export class HackLoopController {
   readonly #channel: ControlChannel;
   readonly #store: TelemetryStore;
-  /** The connected Agent's latest snapshots: forgotten when another connects. */
+  /** The connected Agent's latest snapshots: forgotten when it disconnects, or another connects. */
   #staticData: StaticSnapshotData | null = null;
   #mediumData: MediumSnapshotData | null = null;
   #desired: HackLoop | null = null;
@@ -123,7 +135,7 @@ export class HackLoopController {
     this.#channel = channel;
     this.#store = store;
     channel.subscribe((event) => {
-      if (event.type === "agentConnected") {
+      if (event.type === "agentConnected" || event.type === "agentDisconnected") {
         this.#staticData = null;
         this.#mediumData = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {

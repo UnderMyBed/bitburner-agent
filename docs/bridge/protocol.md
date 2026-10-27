@@ -98,10 +98,10 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
     1. `boot.js` starts the old deployment again, which is welcomed and reports.
     2. The deployer reconnects over RFA and reads `current.txt`, which names the old id.
     3. It deploys again, and that change lets the next restart through.
-- **The desired state, only to the deployed code, and only "off" while holding** (#134). The brain's controller sets it, and the channel sends it to the connected Agent only if:
+- **The desired state, only to the deployed code, and only "off" while holding** (#134). The brain's controller sets it afresh for each connection. "Off" goes to any connected Agent, whatever the brain knows: it only stops our own loops (after a Steam update, the brain holds before it ever learns the deployed id). "On" goes to the connected Agent only if:
   - that Agent was welcomed (not told to restart);
   - it runs the deployment the deployer knows is deployed;
-  - there's no hold, no failed deploy, and no version drift, unless it's "off": stopping our own loops is always safe.
+  - there's no hold, no failed deploy, and no version drift.
 
   Never with the `welcome`: "on" waits until the brain has that Agent's own static and medium snapshots, from its first round, so it's never sent a stale target. "Off" goes at once. Each connection is sent a state once, then again only when it changes; after a reconnect or a reload, the Agent gets it again. The Agent acts only on what the brain it's connected to sent: while the brain holds, an Agent sent nothing does nothing, and loops already running keep running.
 - **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The numbering stays with the session across reconnects within one run of the brain ([#119](https://github.com/UnderMyBed/bitburner-agent/issues/119)), for the 4 most recent sessions, so a 24/7 run doesn't grow. Property tests check this against a reference model under:

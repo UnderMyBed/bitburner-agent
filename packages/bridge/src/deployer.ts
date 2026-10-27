@@ -12,6 +12,7 @@ import {
   CURRENT_DEPLOYMENT_FILE,
   deployedFilePath,
   deploymentIdOfPath,
+  isGeneratedDeploymentId,
   isValidDeploymentId,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
@@ -61,9 +62,6 @@ export interface DeployerOptions {
   /** Where a listener's error goes. Default: raised as an uncaught exception, so the brain fails fast. */
   onListenerError?: (error: unknown) => void;
 }
-
-/** The ids `deploymentIdOf` makes. Cleaning up touches only these folders. */
-const GENERATED_DEPLOYMENT_ID = /^[0-9a-f]{12}$/;
 
 export class Deployer {
   readonly deploymentId: string;
@@ -193,7 +191,7 @@ export class Deployer {
     const folders = new Map<string, string[]>();
     for (const name of await client.getFileNames()) {
       const deploymentId = deploymentIdOfPath(name);
-      if (deploymentId === null || !GENERATED_DEPLOYMENT_ID.test(deploymentId) || kept.has(deploymentId)) continue;
+      if (deploymentId === null || !isGeneratedDeploymentId(deploymentId) || kept.has(deploymentId)) continue;
       folders.set(deploymentId, [...(folders.get(deploymentId) ?? []), name]);
     }
     for (const names of folders.values()) {

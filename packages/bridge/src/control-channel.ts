@@ -139,7 +139,8 @@ export class ControlChannel {
    * controller sets it, and sets it again for each newly connected Agent once it knows that Agent's game, so a stale
    * state never goes out with a welcome. Each connection is sent a state once, then again only when it changes. It's
    * sent only to a welcomed Agent running the deployed deployment. While the brain holds (on hold, after a failed
-   * deploy, or once the game has drifted), only "off" goes out: stopping our own loops is always safe.
+   * deploy, or once the game has drifted), only "off" goes out, and it goes to any connected Agent: stopping our own
+   * loops is always safe. A new connection clears it.
    */
   setDesiredState(state: DesiredState | null): void {
     this.#desiredState = structuredClone(state);
@@ -204,6 +205,8 @@ export class ControlChannel {
     };
     this.#currentSession = session;
     this.#rememberSession(session.agentSessionId);
+    // Whatever was wanted for the last Agent isn't for this one: the controller sets it afresh (#134).
+    this.#desiredState = null;
     previous?.connection.close(CONTROL_CLOSE_CODES.replaced, "replaced");
     // Before the restart decision, so a drifted game is never sent one. Reported once: it holds for the brain's run.
     const drift = gameDrift(hello.game);
@@ -251,9 +254,13 @@ export class ControlChannel {
 
   /** Sends the desired state if the brain has one this welcomed Agent may have and hasn't had yet. */
   #sendDesiredStateIfDue(session: AgentSession): void {
-    if (this.#desiredState === null || !session.welcomed) return;
-    if (session.deploymentId !== this.#deploymentState.deployedId) return;
-    if (this.#holding() && this.#desiredState.hackLoop.enabled) return;
+    if (this.#desiredState === null) return;
+    // "Off" goes to any connected Agent, whatever the brain knows: it only stops our own loops, and an Agent too old
+    // to know it ignores it. After a Steam update the brain holds before it ever learns the deployed id.
+    const off = !this.#desiredState.hackLoop.enabled;
+    if (!off && (!session.welcomed || session.deploymentId !== this.#deploymentState.deployedId || this.#holding())) {
+      return;
+    }
     const message: BrainMessage = {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",

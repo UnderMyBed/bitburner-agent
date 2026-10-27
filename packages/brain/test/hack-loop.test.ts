@@ -123,6 +123,19 @@ describe("chooseHackHosts: where the loop runs", () => {
     expect(chooseHackHosts(network, medium)).toEqual(["foodnstuff", "n00dles"]);
   });
 
+  test("only names the protocol takes, and at most its limit", () => {
+    const odd: StaticSnapshotData = {
+      servers: [staticServer(""), staticServer("x".repeat(257)), staticServer("n00dles")],
+    };
+    expect(chooseHackHosts(odd, mediumData(1, { "": true, ["x".repeat(257)]: true, n00dles: true }))).toEqual([
+      "n00dles",
+    ]);
+    const hostnames = Array.from({ length: 1_005 }, (_, index) => `server-${String(index).padStart(4, "0")}`);
+    const many: StaticSnapshotData = { servers: hostnames.map((hostname) => staticServer(hostname)) };
+    const allRooted = Object.fromEntries(hostnames.map((hostname) => [hostname, true]));
+    expect(chooseHackHosts(many, mediumData(1, allRooted))).toHaveLength(1_000);
+  });
+
   test("nothing to go on: none", () => {
     expect(chooseHackHosts(null, mediumData(1, { n00dles: true }))).toEqual([]);
     expect(chooseHackHosts({ servers: [staticServer("n00dles")] }, null)).toEqual([]);
@@ -246,6 +259,15 @@ describe("the controller", () => {
     new HackLoopController({ channel, store });
     const connection = connectAgent();
     expect(desiredStates(connection)).toEqual([off]);
+  });
+
+  test("a disconnect forgets the Agent's snapshots: the view shows on, waiting", () => {
+    const controller = new HackLoopController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "medium", mediumData(1, { n00dles: true }));
+    connection.dropFromGameSide();
+    expect(controller.view()).toEqual({ enabled: true, waiting: true, target: null, hosts: [] });
   });
 
   test("fast snapshots change nothing", () => {

@@ -183,7 +183,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - **A brain restart** leaves the loops alone: the very same processes.
   - **After a disconnect,** the Agent acts only on the next brain's instructions. From a brain that sends none, a loop that stops stays stopped.
   - **With the desired state set directly:** only the named hosts run the loop, a new target restarts the loops against it, a dropped host's loop goes, and another deployment's loop is stopped.
-  - **Home too full for the deploy worker:** it's tried again each round, never two at once, and runs as soon as there's room.
+  - **Home too full for the deploy worker:** home never holds more than the Agent, the owner's script and one worker, and the deploy worker runs within two rounds of there being room.
 
 ## Supervision
 

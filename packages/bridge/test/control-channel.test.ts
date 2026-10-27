@@ -314,10 +314,10 @@ describe("desired state (#134)", () => {
   });
 
   test("a copy is kept: changing the caller's object later changes nothing sent", () => {
+    const connection = connectAgent();
     const state = structuredClone(loopOn);
     channel.setDesiredState(state);
     state.hackLoop.hosts.push("joesguns");
-    const connection = connectAgent();
     channel.setDeploymentState(deployedA);
     expect(connection.sentMessages()[1]).toEqual({ protocolVersion: 1, type: "desiredState", ...loopOn });
   });
@@ -330,14 +330,36 @@ describe("desired state (#134)", () => {
     expect(sentTypes(connection)).toEqual(["welcome", "desiredState"]);
   });
 
-  test("never to an Agent told to restart, nor to an outdated one welcomed after that", () => {
+  test("on never goes to an Agent told to restart, nor to an outdated one; off goes to both", () => {
     channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
     const toldToRestart = connectAgent();
     channel.setDesiredState(loopOn);
     expect(sentTypes(toldToRestart)).toEqual(["restart"]);
-    const outdated = connectAgent(hello({ agentSessionId: "session-2" }));
     channel.setDesiredState(loopOff);
+    expect(sentTypes(toldToRestart)).toEqual(["restart", "desiredState"]);
+    const outdated = connectAgent(hello({ agentSessionId: "session-2" }));
+    channel.setDesiredState(loopOn);
     expect(sentTypes(outdated)).toEqual(["welcome"]);
+    channel.setDesiredState(loopOff);
+    expect(sentTypes(outdated)).toEqual(["welcome", "desiredState"]);
+  });
+
+  test("a new connection starts with nothing: the last Agent's state isn't sent when the deployer learns more", () => {
+    channel.setDeploymentState(deployedA);
+    connectAgent();
+    channel.setDesiredState(loopOn);
+    const next = connectAgent(hello({ agentSessionId: "session-2" }));
+    channel.setDeploymentState(deployedA);
+    expect(sentTypes(next)).toEqual(["welcome"]);
+  });
+
+  test("off gets through a drift found at hello, before the brain ever learns the deployed id", () => {
+    const drifted = connectAgent(
+      hello({ game: { version: "3.1.0", versionNumber: 52, commit: "abcdef123", platform: "Steam" } }),
+    );
+    channel.setDesiredState(loopOn);
+    channel.setDesiredState(loopOff);
+    expect(drifted.sentMessages().slice(1)).toEqual([{ protocolVersion: 1, type: "desiredState", ...loopOff }]);
   });
 
   test("an Agent told to restart after its welcome gets nothing more, even if its deployment is current again", () => {

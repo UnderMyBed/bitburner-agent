@@ -151,7 +151,7 @@ The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed
   - Off, it stops every loop once, then does nothing until the state changes.
 - **How:** after the round's snapshots, within the round's time, it runs two home workers, one after the other. They share the snapshot workers' runner ([`run-worker.ts`](src/agent/run-worker.ts)), so home never holds two at once, nor two copies of one. A worker that can't start, or doesn't report, is tried again next round; a retry doesn't root again. The Agent logs why.
   1. **`hack-loop-root.js`** (only when on): for every server but home that it doesn't have root on, it opens the ports it can with the programs on home, then runs NUKE if that's enough. Rooting is what any player does first.
-  2. **`hack-loop-deploy.js`**, with whether the loop should run, its target and the hosts. On every rooted server but home, it stops **only our loops** (any deployment's `agent/<id>/hack-loop.js`) that shouldn't run there:
+  2. **`hack-loop-deploy.js`**, with whether the loop should run, its target and the hosts. On every rooted server but home, it stops **only our loops**, any deployment's `agent/<id>/hack-loop.js` in a folder the deployer generated (12 hex digits, never a player's own `agent/<name>/`), that shouldn't run there:
      - another deployment's;
      - another target's;
      - on a server that isn't a host;

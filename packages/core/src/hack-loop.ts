@@ -3,7 +3,7 @@
  * report to the Agent. Shared by the in-game code and the brain's tests. The constants are plain literals, as in
  * deploy-layout.ts.
  */
-import { deploymentIdOfPath } from "./deploy-layout.ts";
+import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
 
 /** Runs on the servers other than home, with the target as its one argument. */
 export const HACK_LOOP_SCRIPT_NAME = "hack-loop.js";
@@ -25,7 +25,13 @@ export interface HackLoopDeployReport {
   problem: string | null;
 }
 
-/** Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`. Only these are ever stopped. */
+/**
+ * Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`, in a folder the deployer generated. Only these are
+ * ever stopped, never a script in a player's own `agent/<name>/`.
+ */
 export function isHackLoopFile(filePath: string): boolean {
-  return deploymentIdOfPath(filePath) !== null && filePath.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`);
+  const deploymentId = deploymentIdOfPath(filePath);
+  return (
+    deploymentId !== null && isGeneratedDeploymentId(deploymentId) && filePath.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`)
+  );
 }

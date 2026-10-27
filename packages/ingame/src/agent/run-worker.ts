@@ -19,7 +19,7 @@ export type WorkerRun =
   /** Its last copy hasn't exited: a worker that hangs would otherwise pile up copies, each holding its RAM. */
   | { outcome: "stillRunning" }
   | { outcome: "noTimeLeft" }
-  /** Home has no room for it (the game's reason is in the Agent's log), or the file is missing. */
+  /** Home has no room for it, or the file is missing. */
   | { outcome: "couldNotStart" }
   /** It exited without a report, or didn't send one by the deadline. */
   | { outcome: "noReport" };

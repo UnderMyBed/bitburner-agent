@@ -261,21 +261,21 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   // A brain with no controller: the test sets the desired state itself.
   const loop = await freshStart({
     withHackLoop: false,
-    // A loop left from another deployment, on sigma-cosmetics.
+    // A loop left from another deployment (a generated id), on sigma-cosmetics.
     beforeAgent: (fresh) =>
       ownerRunsOnHome(
         fresh,
         `export async function main(ns) {
           ns.nuke("sigma-cosmetics");
-          ns.write("agent/an-old-deployment/hack-loop.js", ns.read("${OWNER_SCRIPT}"), "w");
-          ns.scp("agent/an-old-deployment/hack-loop.js", "sigma-cosmetics", "home");
-          ns.exec("agent/an-old-deployment/hack-loop.js", "sigma-cosmetics", 1, "n00dles");
+          ns.write("agent/0123456789ab/hack-loop.js", ns.read("${OWNER_SCRIPT}"), "w");
+          ns.scp("agent/0123456789ab/hack-loop.js", "sigma-cosmetics", "home");
+          ns.exec("agent/0123456789ab/hack-loop.js", "sigma-cosmetics", 1, "n00dles");
         }`,
       ),
   });
   const { game, brain } = loop;
   const desire = (hackLoop: DesiredState["hackLoop"]) => brain.channel.setDesiredState({ hackLoop });
-  expect((await loop.loopsRunning()).map((each) => each.filename)).toEqual(["agent/an-old-deployment/hack-loop.js"]);
+  expect((await loop.loopsRunning()).map((each) => each.filename)).toEqual(["agent/0123456789ab/hack-loop.js"]);
   // Every no-port server but joesguns: one convergence roots them all, then runs the loop on the hosts.
   const hosts = NO_PORT_SERVERS.filter((hostname) => hostname !== "joesguns");
   desire({ enabled: true, target: "n00dles", hosts });
@@ -299,7 +299,7 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
-test("home too full for the deploy worker: tried again each round, never two at once, and run once there's room", async () => {
+test("home too full for the deploy worker: it never piles up, and runs within two rounds of there being room", async () => {
   const loop = await freshStart({
     // A brain with no controller: with home this full, the Agent's medium snapshots can't run either.
     withHackLoop: false,
