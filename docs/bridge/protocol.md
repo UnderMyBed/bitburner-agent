@@ -1,8 +1,8 @@
 # The control channel's protocol
 
-The in-game Agent connects to the brain over a WebSocket and reports snapshots. The brain welcomes it, or tells it to restart onto the deployed code (architecture §6, D2). This page is the reference for the messages, close codes and rules, and, under [Deploying](#deploying), for how the deployer uses the game's Remote File API. The code is `packages/core/src/control-protocol.ts` (shared by both sides) and `packages/bridge/src/control-channel.ts` (the brain's side).
+The in-game Agent connects to the brain over a WebSocket and reports snapshots. The brain welcomes it, or tells it to restart onto the deployed code, and tells it what to run: the desired state (architecture §6, D2). This page is the reference for the messages, close codes and rules, and, under [Deploying](#deploying), for how the deployer uses the game's Remote File API. The code is `packages/core/src/control-protocol.ts` (shared by both sides) and `packages/bridge/src/control-channel.ts` (the brain's side).
 
-M2 only observes, so nothing else comes down yet. Desired state and intents arrive with the reconciler in M3, as protocol version 2.
+The desired state started in M3 with one activity, the hack loop ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)). It was added to protocol version 1: an Agent ignores a message type it doesn't know. Intents come later in M3.
 
 ## Frames
 
@@ -44,7 +44,7 @@ The types are in `packages/core/src/snapshots.ts`. Server and player fields keep
 
 | Tier | When | `data` |
 |---|---|---|
-| `static` | Once per Agent start; resent, unchanged, after each `welcome` | `servers`: every server `scan` reaches from home at the Agent's start, each with `hostname`, `purchasedByPlayer`, `moneyMax`, `minDifficulty`, `requiredHackingSkill`, `numOpenPortsRequired` |
+| `static` | Once per Agent start; resent, unchanged, after each `welcome` | `servers`: every server `scan` reaches from home at the Agent's start, each with `hostname`, `purchasedByPlayer`, `moneyMax`, `minDifficulty`, `requiredHackingSkill`, `numOpenPortsRequired`, `serverGrowth` |
 | `slow` | Every 60 s | `resetInfo`: `ns.getResetInfo()` (`lastAugReset`, `lastNodeReset`, `currentNode`, `ownedAugs`, `ownedSF`, `bitNodeOptions`) with its Maps as objects: `ownedAugs` (augmentation → level), `ownedSF` (Source-File → level), `bitNodeOptions.sourceFileOverrides`. `purchasedServers`: their hostnames |
 | `medium` | Every 10 s | `player`: `ns.getPlayer()` whole (skills, exp, money, city, location, factions, jobs, karma, multipliers…). `servers`: every server `scan` reaches now, each with `hostname`, `maxRam`, `cpuCores`, `hasAdminRights`, `backdoorInstalled`, `moneyAvailable`, `hackDifficulty` |
 | `fast` | Every 2 s | `degradedTiers`: the tiers skipped on their last attempt (the worker couldn't start, didn't report in its round, or was still running from before). `pageHeapUsedBytes`: the page's JS heap, `null` where the browser doesn't report it. `game`: the fast worker's `money`, `homeRamUsed` (the Agent and the worker included), `homeMaxRam` and `homeProcesses` (each with `pid`, `filename`, `threads`, `args`, `temporary`), or `null` when the fast worker was skipped |
@@ -57,6 +57,7 @@ The types are in `packages/core/src/snapshots.ts`. Server and player fields keep
 |---|---|
 | `welcome` | Accepted: the Agent sends all four tiers in its next round (a full snapshot), then each at its cadence |
 | `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits, and `boot.js` starts the deployment `agent/current.txt` names (#88). If `boot.js` can't start, the Agent stays |
+| `desiredState { hackLoop: { enabled, target } }` | What the brain wants running in the game, whole each time (#134). `enabled` is the dashboard's switch; `target` is the server to hack, or `null` while none is worth it (servers are rooted, but no loop runs). The Agent converges on the last one it got ([the hack loop](../../packages/ingame/README.md#the-hack-loop)) |
 
 Once welcomed, the Agent sleeps between snapshot rounds, so it acts on a message or a close at its next round: within 2 s.
 
@@ -77,7 +78,7 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
 
 ## Rules
 
-- **Loopback only:** the server binds `127.0.0.1`. Any web page can open a socket to `localhost`, so the `Origin` header must be one of the configured ones (`file://` for Steam's page, which it loads from disk, to be confirmed on Steam by #95; the test page's origin on E2).
+- **Loopback only:** the server binds `127.0.0.1`. Any web page can open a socket to `localhost`, so the `Origin` header must be one of the configured ones (`file://` for Steam's page, which it loads from disk, as the owner's check on Steam confirmed (#95); the test page's origin on E2).
 - **One Agent at a time:** an Agent whose `hello` is accepted replaces the connected one, which is closed with 4000. A restarted Agent is the newest; a stale one is the oldest. A refused connection never displaces the connected Agent.
 - **Restart, without loops:** the deployer (#91) tells the channel what it knows:
   - the deployment `agent/current.txt` names, as last read or written;
@@ -97,6 +98,12 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
     1. `boot.js` starts the old deployment again, which is welcomed and reports.
     2. The deployer reconnects over RFA and reads `current.txt`, which names the old id.
     3. It deploys again, and that change lets the next restart through.
+- **The desired state, only to the deployed code, and never while holding** (#134). The brain sends it after a `welcome` and whenever it changes, to the connected Agent only if:
+  - that Agent was welcomed (not told to restart);
+  - it runs the deployment the deployer knows is deployed;
+  - there's no hold, no failed deploy, and no version drift.
+
+  So a held brain only observes, and old code is never told what to run. Each Agent session gets it once, then again only when it changes. A new session, after a reconnect or a reload, gets it with its welcome.
 - **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The numbering stays with the session across reconnects within one run of the brain ([#119](https://github.com/UnderMyBed/bitburner-agent/issues/119)), for the 4 most recent sessions, so a 24/7 run doesn't grow. Property tests check this against a reference model under:
   - duplicated, dropped and reordered frames;
   - reconnects and replacements;

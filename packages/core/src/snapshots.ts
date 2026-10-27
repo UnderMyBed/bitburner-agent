@@ -38,6 +38,8 @@ export interface StaticSnapshotData {
     minDifficulty?: number;
     requiredHackingSkill?: number;
     numOpenPortsRequired?: number;
+    /** How fast its money grows back (#134): the hack loop's target rule weighs it. */
+    serverGrowth?: number;
   }[];
 }
 

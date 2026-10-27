@@ -3,6 +3,7 @@ export {
   type BrainMessage,
   CONTROL_CLOSE_CODES,
   CONTROL_PROTOCOL_VERSION,
+  type DesiredState,
   encodeControlMessage,
   type GameInfo,
   type HelloMessage,
@@ -29,6 +30,14 @@ export {
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
+export {
+  HACK_LOOP_DEPLOY_WORKER_NAME,
+  HACK_LOOP_ROOT_WORKER_NAME,
+  HACK_LOOP_SCRIPT_NAME,
+  type HackLoopDeployReport,
+  type HackLoopRootReport,
+  isHackLoopFile,
+} from "./hack-loop.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

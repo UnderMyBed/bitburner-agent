@@ -13,17 +13,15 @@ import {
   type FastSnapshotData,
   type FastWorkerData,
   SNAPSHOT_TIER_PERIOD_MS,
-  SNAPSHOT_WORKER_PORT,
   type SnapshotMessage,
   type SnapshotTier,
   type SnapshotWorkerReport,
   snapshotWorkerFileName,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
+import { runWorker } from "./run-worker.ts";
 
 export const SNAPSHOT_ROUND_MS = SNAPSHOT_TIER_PERIOD_MS.fast;
-/** How often a wait checks whether its worker is still running. */
-const WORKER_POLL_MS = 20;
 /** Rounds from one snapshot of the tier to the next. */
 const ROUNDS_BETWEEN = {
   medium: SNAPSHOT_TIER_PERIOD_MS.medium / SNAPSHOT_ROUND_MS,
@@ -34,11 +32,6 @@ const ROUNDS_BETWEEN = {
 function pageHeapUsedBytes(): number | null {
   const memory = (performance as { memory?: { usedJSHeapSize: number } }).memory;
   return memory ? memory.usedJSHeapSize : null;
-}
-
-/** Anything can be written to a port: only a report from this worker counts. */
-function isReportFrom(value: unknown, workerPid: number): value is SnapshotWorkerReport {
-  return typeof value === "object" && value !== null && (value as { workerPid?: unknown }).workerPid === workerPid;
 }
 
 export function createSnapshotter(
@@ -73,32 +66,7 @@ export function createSnapshotter(
     return null;
   };
 
-  /**
-   * The worker's report, once the worker has exited (so its RAM is free for the next one), or null if it exits
-   * without one. Either way, no later than `deadlineMs`.
-   */
-  async function reportFrom(workerPid: number, deadlineMs: number): Promise<SnapshotWorkerReport | null> {
-    const port = ns.getPortHandle(SNAPSHOT_WORKER_PORT);
-    let report: SnapshotWorkerReport | null = null;
-    for (;;) {
-      // An `ns` call before touching the port: if this Agent has been killed, the game ends it here, before it can
-      // read a report meant for the next Agent's worker (port reads don't check).
-      const workerRunning = ns.isRunning(workerPid);
-      while (report === null && !port.empty()) {
-        const value: unknown = port.read();
-        if (isReportFrom(value, workerPid)) report = value;
-      }
-      if (!workerRunning) return report;
-      // Bounded by a round even if the clock steps back.
-      const remainingMs = Math.min(deadlineMs - Date.now(), SNAPSHOT_ROUND_MS);
-      if (remainingMs <= 0) return report;
-      // `asleep`, not `sleep`: a `sleep` that loses the race keeps the script marked busy until it ends, and the
-      // game kills a busy script for its next `ns` call (NetscriptHelpers.tsx:405-431). `asleep` doesn't mark it.
-      await Promise.race([port.nextWrite(), ns.asleep(Math.min(remainingMs, WORKER_POLL_MS))]);
-    }
-  }
-
-  async function runWorker(tier: SnapshotTier, deadlineMs: number): Promise<SnapshotWorkerReport | null> {
+  async function runTierWorker(tier: SnapshotTier, deadlineMs: number): Promise<SnapshotWorkerReport | null> {
     const previousWorkerPid = lastWorkerPids[tier];
     // Never a second copy: a worker that hangs would otherwise pile up copies, each holding its RAM.
     if (previousWorkerPid !== undefined && ns.isRunning(previousWorkerPid)) {
@@ -106,10 +74,10 @@ export function createSnapshotter(
     }
     if (Date.now() >= deadlineMs) return skipped(tier, "no time left in the round");
     const workerFile = deployedFilePath(deploymentId, snapshotWorkerFileName(tier));
-    const workerPid = ns.run(workerFile, { temporary: true });
-    if (workerPid === 0) return skipped(tier, `${workerFile} couldn't start`);
-    lastWorkerPids[tier] = workerPid;
-    const report = await reportFrom(workerPid, deadlineMs);
+    const workerRun = await runWorker(ns, workerFile, [], deadlineMs);
+    if (!workerRun.started) return skipped(tier, `${workerFile} couldn't start`);
+    lastWorkerPids[tier] = workerRun.workerPid;
+    const report = workerRun.report;
     if (report === null) return skipped(tier, `${workerFile} didn't report in time`);
     if (degradedTiers.delete(tier)) ns.print(`agent: the ${tier} tier is back`);
     return report;
@@ -127,7 +95,7 @@ export function createSnapshotter(
     async takeRound(send: (message: SnapshotMessage) => void): Promise<void> {
       const roundStartedAtMs = Date.now();
       const roundEndsAtMs = roundStartedAtMs + SNAPSHOT_ROUND_MS;
-      const fastReport = await runWorker("fast", roundEndsAtMs);
+      const fastReport = await runTierWorker("fast", roundEndsAtMs);
       const fastData: FastSnapshotData = {
         degradedTiers: [...degradedTiers],
         pageHeapUsedBytes: pageHeapUsedBytes(),
@@ -141,13 +109,13 @@ export function createSnapshotter(
           continue;
         }
         // A tier that fails stays due, so it's tried again next round.
-        const report = await runWorker(tier, roundEndsAtMs);
+        const report = await runTierWorker(tier, roundEndsAtMs);
         if (report === null) continue;
         send(snapshot(tier, report.gameTimeMs, report.data));
         roundsUntilDue[tier] = ROUNDS_BETWEEN[tier] - 1;
       }
 
-      staticReport ??= await runWorker("static", roundEndsAtMs);
+      staticReport ??= await runTierWorker("static", roundEndsAtMs);
       if (staticReport !== null && staticToSend) {
         send(snapshot("static", staticReport.gameTimeMs, staticReport.data));
         staticToSend = false;

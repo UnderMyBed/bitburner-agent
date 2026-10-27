@@ -1,6 +1,6 @@
 # @bitburner-agent/brain
 
-The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. Since M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)) it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)), and, for Steam on Windows, [supervises](#supervision) the game itself ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)).
+The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. Since M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)) it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)), and, for Steam on Windows, [supervises](#supervision) the game itself ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)). In M3 it starts telling the Agent what to run: first [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)).
 
 ## Running it
 
@@ -120,6 +120,7 @@ A local page showing whether the skeleton is healthy, its alerts, and the superv
   - **Game:** from the latest fast and medium snapshots: money, hacking level, home RAM used of its total, scripts on home, the page's heap, and the tiers the Agent is skipping (`degradedTiers`).
   - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now: how many gaps and their total time, with the newest 20 listed. Any time without snapshots in the window counts: from the window's start to the first snapshot with a new store, or while the brain or the Agent was down.
   - **Supervision:** off, running, paused, or gave up; the supervisor's recent relaunches; and the switch (hidden when off).
+  - **Hack loop:** on or off, its target (or "no target yet" while servers are being rooted), and its switch ([the hack loop](#the-hack-loop)).
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
 - **When it can't show the status,** it says why in place of the data, rather than showing stale numbers:
   - "Brain unreachable": the brain stopped, or crashed;
@@ -148,12 +149,27 @@ A local page showing whether the skeleton is healthy, its alerts, and the superv
 - **The API** (the page's; a script must follow the same rules):
   - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`).
   - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
+  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way.
   - Refusals:
     - 403: not the dashboard's Host or Origin;
-    - 400: a body that isn't exactly one of those two, or a path that isn't valid;
+    - 400: a body that isn't exactly one of its switch's two, or a path that isn't valid;
     - 413: a body over 1 KiB;
     - 404 or 405: another path or method;
     - 500: the brain failed, and logs why. The server carries on.
+
+## The hack loop
+
+M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134), owner decision 34): the brain tells the Agent to run a hack loop on the servers other than home, and the Agent does it ([`packages/ingame`](../ingame/README.md#the-hack-loop)). It's the first desired state (architecture D2).
+
+- **The switch:** on unless the owner turns it off, on the dashboard. It's the store's setting `hackLoop.enabled`, so it survives restarts of the brain. Off, the Agent stops every one of its loops within a round (2 s).
+- **The target:** a starter rule, until the planner (M4) decides (`chooseHackTarget` in `src/hack-loop.ts`). Among the rooted servers with money, other than home and purchased ones, that need at most half the player's hacking level (at least 1), it takes the one with the highest maximum money times growth. Growth counts because the loop hacks only once a server's money is back at 75% of its maximum, and servers start at 4%: over an 8 GB fresh start's first virtual hour, n00dles (growth 3000) earned $15m, and foodnstuff, joesguns and sigma-cosmetics (more money, growth 5–20) nothing.
+- **The controller** (`HackLoopController`): it follows the latest static and medium snapshots and the switch, and sets the control channel's desired state: on at once with no target (so servers get rooted), then with the target once the snapshots show a rooted one. The channel sends it only to a welcomed Agent running the deployed code, and never while the brain holds ([protocol](../../docs/bridge/protocol.md#rules)).
+- **The suite** (`test/hack-loop-skeleton.test.ts`), in an 8 GB fresh start in the simulator, with an owner's script already on foodnstuff:
+  - the Agent roots the no-port servers, runs the loop on each against the brain's target (n00dles), and the money grows by over $500,000 in 10 virtual minutes;
+  - the owner's script is untouched, and the loop on foodnstuff has only the RAM it left;
+  - home never holds more than the Agent and one worker, the hack loop's included;
+  - a loop killed from outside is back within 30 s;
+  - off, every loop is gone within a round and stays gone; on again, they're back.
 
 ## Supervision
 
@@ -251,7 +267,7 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 
 `test/skeleton.test.ts` is M2's exit criterion in the simulator (environment E1): "connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start" ([architecture §13](../../docs/architecture.md#13-milestones)). It runs on every PR, in about 25 s in CI, against a budget of 60 s.
 
-- **What runs:** the brain is wired like `main.ts` (`test/helpers/brain-in-simulation.ts`): its control channel, deployer, store and save backups, in `main.ts`'s order, with the deployer and the backups sharing the game's RFA connection. The game deploys through its own Remote File API client, and the built Agent and workers play their part. Everything is on the lockstep driver at a fixed 100 ms step. `main.ts`'s own wiring, on real sockets, is tested by `brain-process.test.ts`.
+- **What runs:** the brain is wired like `main.ts` (`test/helpers/brain-in-simulation.ts`): its control channel, deployer, store and save backups, in `main.ts`'s order (the hack loop aside: it has [its own suite](#the-hack-loop)), with the deployer and the backups sharing the game's RFA connection. The game deploys through its own Remote File API client, and the built Agent and workers play their part. Everything is on the lockstep driver at a fixed 100 ms step. `main.ts`'s own wiring, on real sockets, is tested by `brain-process.test.ts`.
 - **The start:** a new game with 8 GB of home RAM, the tutorial skipped, and settings naming the brain's Remote File API and running `agent/boot.js` on autoexec. The brain deploys; the one-time `run agent/boot.js` brings the Agent up.
 
 | Scenario | What it shows |
@@ -282,7 +298,9 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/save-backups.ts` | The save backups |
 | `src/dashboard/` | The dashboard: `server.ts` (HTTP), `status.ts` (what it shows), `alerts.ts` (the rules), `page.html` (the page) |
 | `src/supervision.ts` | The supervision switch, in the store's settings |
+| `src/hack-loop.ts` | The hack loop's switch, target rule and controller |
 | `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
-| `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver |
+| `test/hack-loop-skeleton.test.ts` | The hack loop's suite |
+| `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the hack loop's controller only when a test asks, so the M2 suites see the observe-only skeleton they test |

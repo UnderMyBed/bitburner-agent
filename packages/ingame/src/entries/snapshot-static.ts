@@ -17,6 +17,7 @@ export function main(ns: NS): void {
         minDifficulty: server.minDifficulty,
         requiredHackingSkill: server.requiredHackingSkill,
         numOpenPortsRequired: server.numOpenPortsRequired,
+        serverGrowth: server.serverGrowth,
       };
     }),
   };

@@ -84,6 +84,7 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
 
 ## Day to day
 
+- **The hack loop** is on by default (owner decision 34). Once the Agent connects, it roots the servers it can and runs a loop on them, never on home, against the target the brain picks; the dashboard's "Hack loop" line names it. Your own scripts are never touched, and the loop uses only RAM they leave free. To stop it, click **"Stop the hack loop"** on the dashboard: every loop stops within a couple of seconds, and it stays off, across brain restarts, until you start it again ([the hack loop](../packages/ingame/README.md#the-hack-loop)).
 - **The dashboard** at http://127.0.0.1:12527/ shows the Agent, the snapshots, gaps over the last 24 h, alerts and recent events ([packages/brain](../packages/brain/README.md#the-dashboard)).
 - **Closing the game on purpose?** Pause supervision first, or it's relaunched within 30 s. A pause lasts until you resume it, even across brain restarts, so resume when you're done.
 - **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like.

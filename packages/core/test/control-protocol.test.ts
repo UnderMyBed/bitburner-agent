@@ -34,6 +34,9 @@ describe("round trips", () => {
   test.each<BrainMessage>([
     { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" },
     { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: "0123abcd" },
+    { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "desiredState", hackLoop: { enabled: true, target: "n00dles" } },
+    { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "desiredState", hackLoop: { enabled: true, target: null } },
+    { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "desiredState", hackLoop: { enabled: false, target: null } },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
   });
@@ -92,5 +95,25 @@ describe("rejected, each with a reason", () => {
     expect(parseBrainMessage(JSON.stringify({ protocolVersion: 1, type: "restart", deploymentId: 123 })).ok).toBe(
       false,
     );
+  });
+
+  const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop: { enabled: true, target: "n00dles" } };
+  test.each([
+    ["no hack loop", { ...desiredState, hackLoop: undefined }],
+    ["a hack loop that isn't an object", { ...desiredState, hackLoop: true }],
+    ["enabled that isn't a boolean", { ...desiredState, hackLoop: { enabled: "yes", target: "n00dles" } }],
+    ["no target", { ...desiredState, hackLoop: { enabled: true } }],
+    ["an empty target", { ...desiredState, hackLoop: { enabled: true, target: "" } }],
+    ["a numeric target", { ...desiredState, hackLoop: { enabled: true, target: 7 } }],
+    ["an over-long target", { ...desiredState, hackLoop: { enabled: true, target: "x".repeat(257) } }],
+  ])("a desired state with %s", (_description, message) => {
+    const result = parseBrainMessage(JSON.stringify(message));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).not.toBe("");
+  });
+
+  test("a desired state keeps only its known fields", () => {
+    const extras = JSON.stringify({ ...desiredState, extra: 1, hackLoop: { ...desiredState.hackLoop, extra: 2 } });
+    expect(parseBrainMessage(extras)).toEqual({ ok: true, message: desiredState });
   });
 });

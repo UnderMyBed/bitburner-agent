@@ -10,6 +10,7 @@ import {
   type DeployerEvent,
   type InGameBuild,
 } from "@bitburner-agent/bridge";
+import { HackLoopController } from "../../src/hack-loop.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
 import { recordChannelEvents, recordEvents } from "../../src/record-channel-events.ts";
 import { type SaveBackupEvent, SaveBackups } from "../../src/save-backups.ts";
@@ -35,6 +36,8 @@ export const BRAIN_RFA_SETTINGS = {
 export interface BrainInSimulation {
   channel: ControlChannel;
   deployer: Deployer;
+  /** The hack loop's controller, when asked for (#134). */
+  hackLoop: HackLoopController | null;
   /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
   /** Every event the deployer reported, in order. */
@@ -60,6 +63,7 @@ export function startBrainInSimulation(
     token = TOKEN,
     pinnedDefinitions = readPinnedDefinitions(),
     data,
+    hackLoop = false,
   }: {
     build: InGameBuild;
     token?: string;
@@ -69,10 +73,17 @@ export function startBrainInSimulation(
      * and its data directory, where the save backups go. The environment is E1, the simulator.
      */
     data?: { store: TelemetryStore; brainRelease: string; dataDirectory: string };
+    /**
+     * With the hack loop's controller, as main.ts has it (#134), its switch kept in `data`'s store. Off by default, so
+     * the M2 suites see the observe-only skeleton they test.
+     */
+    hackLoop?: boolean;
   },
 ): BrainInSimulation {
   const channel = new ControlChannel({ token, clock: game.clock });
   if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
+  if (hackLoop && !data) throw new Error("the hack loop keeps its switch in the store: give the brain its data");
+  const hackLoopController = hackLoop && data ? new HackLoopController({ channel, store: data.store }) : null;
   const deployer = new Deployer({
     build,
     controlPort: CONTROL_PORT,
@@ -100,6 +111,7 @@ export function startBrainInSimulation(
   const brain: BrainInSimulation = {
     channel,
     deployer,
+    hackLoop: hackLoopController,
     channelEvents: [],
     deployerEvents: [],
     saveBackupEvents: [],

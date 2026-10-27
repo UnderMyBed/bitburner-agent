@@ -32,11 +32,20 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
   }
 });
 
-test("the Agent's budget plus its largest worker's fits in a fresh save's 8 GB home", () => {
-  const largestWorkerBudget = Math.max(
-    ...Object.entries(budgets)
-      .filter(([fileName]) => fileName.startsWith("snapshot-"))
-      .map(([, budget]) => budget),
-  );
+/** What doesn't run beside the Agent as its worker: the Agent, `boot.js`, and the loop, which runs on other servers. */
+const NOT_HOME_WORKERS = new Set(["agent.js", "boot.js", "hack-loop.js"]);
+
+test("the Agent's budget plus its largest home worker's fits in a fresh save's 8 GB home", () => {
+  const homeWorkerBudgets = Object.entries(budgets).filter(([fileName]) => !NOT_HOME_WORKERS.has(fileName));
+  // The snapshot workers and the hack loop's two (#134).
+  expect(homeWorkerBudgets.map(([fileName]) => fileName).sort()).toEqual([
+    "hack-loop-deploy.js",
+    "hack-loop-root.js",
+    "snapshot-fast.js",
+    "snapshot-medium.js",
+    "snapshot-slow.js",
+    "snapshot-static.js",
+  ]);
+  const largestWorkerBudget = Math.max(...homeWorkerBudgets.map(([, budget]) => budget));
   expect((budgets["agent.js"] as number) + largestWorkerBudget).toBeLessThanOrEqual(8);
 });

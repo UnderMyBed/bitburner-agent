@@ -262,7 +262,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - One persistent script, held to a **≤ 3 GB** budget that we enforce.
 - It holds the WebSocket to the brain and runs the Snapshotter and Reconciler. It never calls expensive NS functions directly.
 - **Socket handlers never call `ns`.** While a script awaits a call the game delays, such as `ns.sleep` or `hack`, the game kills it for an `ns` call from any other callback. So the handlers only queue events, and the main loop acts on them ([lifecycle and details](../packages/ingame/README.md#the-agent)).
-- **Observe-only (M2):** before the reconciler exists (M3), the Agent launches and kills nothing except its own workers and `agent/boot.js`.
+- **What it runs:** in M2 the Agent only observed, launching and killing nothing but its own workers and `agent/boot.js`. From M3 it also carries out the brain's desired state, starting with the hack loop on the servers other than home (#134, §5.3). It still launches and kills only our own scripts, under `agent/`.
 - Expensive calls go to **worker scripts**: tiny, single-purpose, short-lived. They write their results to a port or file. This is the fork's `getNsDataThroughFile` pattern, formalised.
 - **RAM reservation:** the agent and its workers get a fixed reserved slice of home RAM, sized from measured worker peaks. Reflexes, the batcher in particular, receive their RAM budget from the reconciler and never use the reservation. On an 8 GB start the reservation is the first claim on RAM. When RAM is starved, the Agent skips the tiers whose workers can't start, naming them in the heartbeat, instead of growing (§5.2).
 
@@ -278,7 +278,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 
 - Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps. Tiers are merged into one model on the brain side.
 - **M2 contents (#89):** what can be read cheaply without Singularity ([each tier's data](bridge/protocol.md#each-tiers-data)):
-  - static: the servers' fixed fields (max money, min security, required hacking level, ports needed);
+  - static: the servers' fixed fields (max money, min security, required hacking level, ports needed, and, from M3, growth);
   - slow: the reset info (installed augmentations, Source-Files, the BitNode) and the purchased servers;
   - medium: the player, and every server's RAM, cores, money, security and access;
   - fast: money, home's RAM and the scripts on home.
@@ -289,6 +289,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - **Workers** run one at a time, as temporary scripts, and report through a port. Every wait ends with its 2 s round, so the heartbeat is never more than 4 s apart, whatever the workers do. A worker that can't start, doesn't report in its round or is still running leaves its tier skipped that time, and named in `degradedTiers` until it next succeeds ([details](../packages/ingame/README.md#snapshots)).
 
 ### 5.3 Reconciler
+- **First slice (M3, #134):** the hack loop. The brain's desired state has one activity, `hackLoop { enabled, target }`. The Agent converges on it with two home workers (root what it can, then start and stop the loops on the other servers), when it changes and every 30 s ([`packages/ingame`](../packages/ingame/README.md#the-hack-loop)). Activities with reflex health, intents, guards and the ledger follow in M3.
 - **Namespace ownership:** the reconciler manages only the scripts it owns: everything under `/agent/`, plus legacy reflexes it launched itself. It never kills or modifies anything else. Foreign scripts' RAM is counted as unavailable.
 - **Activities:** for each activity config, it diffs desired against actual: is the reflex running, with which config, and is it healthy. It starts, stops or reconfigures reflexes to close the diff.
 - **Intents:** executed at most once.
@@ -624,7 +625,7 @@ Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-a
 | Game process dead, frozen or bloated (24/7 run) | Lost wall-clock time | Liveness detection and recovery (R9, §10.2); heap monitoring and no code generation (R10); save backups |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher issues, runtime hold, save backups (§12.4) |
 | UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
-| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2). Measured (Q1): 2.7 GB steady, 7.0 GB at a worker's peak, so a full reservation leaves about 1 GB of 8; sized in M3 planning |
+| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2). Measured (Q1): 2.7 GB steady, 7.0 GB at a snapshot worker's peak (7.35 GB with the hack loop's deploy worker, #134), so a full reservation leaves about 1 GB of 8; sized in M3 planning |
 
 ---
 
@@ -636,6 +637,7 @@ Each open question is tracked as a `type:question` issue; the answer is written 
   - **Runtime equals static:** at each fast snapshot on E2, home held the Agent and the fast worker, 4.7 GB in use: exactly 2.7 + 2.0.
   - **The peak is derived:** the Agent plus its largest worker (the medium tier's) is 7.0 GB of 8, for the moment that worker runs. At a handover, `boot.js` runs beside the Agent too (5.4 GB, and more if a worker is still running); a worker that can't start then is a degraded tier, not an error.
   - **What it means for §5.1:** the reservation, "sized from measured worker peaks", is then 7.0 GB of a fresh save's 8, leaving reflexes (an early-BN1 batcher) about 1 GB until home grows. Whether to keep that, or reserve less (say, the Agent and the fast worker) and let the slower tiers degrade while RAM is short, is a design call for M3 planning.
+  - **Deferred by M3's first slice** (owner decision 34): the hack loop runs on the servers other than home, which a fresh save's no-port servers give about 100 GB of, so home is left to the Agent for now. Its deploy worker is the largest home worker since (4.65 GB, 7.35 GB with the Agent).
 - **Q2** ([#35](https://github.com/UnderMyBed/bitburner-agent/issues/35)) Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
 - **Q9** ([#39](https://github.com/UnderMyBed/bitburner-agent/issues/39)) Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.

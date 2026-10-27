@@ -1,6 +1,7 @@
 // agent/<deploymentId>/agent.js: the always-running in-game Agent (architecture §5.1). It holds the control channel to
 // the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff. While
-// welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts) and sleeps in between.
+// welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), converges the hack loop on the brain's
+// desired state when that's due (../agent/hack-loop.ts, #134), and sleeps in between.
 //
 // Two rules make it safe:
 // - Socket handlers never call `ns`. While the script awaits `ns.sleep` (between rounds), the game kills it for any
@@ -25,6 +26,7 @@ import {
   parseBrainMessage,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
+import { createHackLoop } from "../agent/hack-loop.ts";
 import { createSnapshotter, SNAPSHOT_ROUND_MS } from "../agent/snapshotter.ts";
 import type { NS } from "../ns.ts";
 
@@ -79,6 +81,7 @@ export async function main(ns: NS): Promise<void> {
   const agentSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const game = ns.ui.getGameInfo();
   const snapshotter = createSnapshotter(ns, { deploymentId, agentSessionId });
+  const hackLoop = createHackLoop(ns, { deploymentId });
 
   /**
    * Starts `agent/boot.js`, which starts the deployed Agent; the caller then exits. Returns false if it couldn't (home
@@ -120,6 +123,8 @@ export async function main(ns: NS): Promise<void> {
         // meanwhile.
         const roundStartedAtMs = Date.now();
         await snapshotter.takeRound((message) => connection.send(encodeControlMessage(message)));
+        // In what's left of the round, after the snapshots, so the heartbeat is never late for it.
+        await hackLoop.convergeIfDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         // Clamped, so a clock that steps back can't stretch the sleep.
         const untilNextRoundMs = roundStartedAtMs + SNAPSHOT_ROUND_MS - Date.now();
         await ns.sleep(Math.min(Math.max(0, untilNextRoundMs), SNAPSHOT_ROUND_MS));
@@ -147,6 +152,8 @@ export async function main(ns: NS): Promise<void> {
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;
+        } else if (event.message.type === "desiredState") {
+          hackLoop.desire(event.message.hackLoop);
         }
       } else {
         closeCode = event.code;

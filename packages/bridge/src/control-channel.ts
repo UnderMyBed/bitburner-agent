@@ -1,9 +1,11 @@
 // The control channel's session logic (docs/bridge/protocol.md): authenticates the in-game Agent, keeps one at a time,
-// passes its snapshots on in order, and tells it to restart onto the deployed deployment, never in a loop.
+// passes its snapshots on in order, tells it to restart onto the deployed deployment, never in a loop, and gives it the
+// brain's desired state (#134).
 import {
   type BrainMessage,
   CONTROL_CLOSE_CODES,
   CONTROL_PROTOCOL_VERSION,
+  type DesiredState,
   encodeControlMessage,
   type GameInfo,
   gameDrift,
@@ -66,6 +68,10 @@ export interface ConnectedAgent {
 
 interface AgentSession extends ConnectedAgent {
   connection: Connection;
+  /** Sent `welcome` (not `restart`): it may be given the desired state. */
+  welcomed: boolean;
+  /** The desired state last sent to it, as encoded, or null. */
+  sentDesiredState: string | null;
 }
 
 export class ControlChannel {
@@ -88,6 +94,8 @@ export class ControlChannel {
   readonly #restartsSentFrom = new Set<string>();
   /** The last sequence number passed on, by session and tier, for the most recent sessions (oldest first). */
   readonly #lastPassedOnBySession = new Map<string, Map<string, number>>();
+  /** What the brain wants running in the game (#134), or null until it says. */
+  #desiredState: DesiredState | null = null;
 
   constructor({ token, clock, onListenerError = raiseAsUncaught }: ControlChannelOptions) {
     if (token === "") throw new Error("the control channel needs a token");
@@ -120,7 +128,20 @@ export class ControlChannel {
   setDeploymentState(state: DeploymentState): void {
     if (state.deployedId !== this.#deploymentState.deployedId) this.#restartsSentFrom.clear();
     this.#deploymentState = { ...state };
-    if (this.#currentSession) this.#restartIfOutdated(this.#currentSession);
+    if (this.#currentSession) {
+      if (this.#restartIfOutdated(this.#currentSession)) this.#currentSession.welcomed = false;
+      this.#sendDesiredStateIfDue(this.#currentSession);
+    }
+  }
+
+  /**
+   * What the brain wants running in the game (architecture D2, #134), whole. Sent to the Agent when it changes and after
+   * every welcome, but only to an Agent running the deployed deployment, and never while the brain holds: on hold, after
+   * a failed deploy, or once the game has drifted, the game is only observed.
+   */
+  setDesiredState(state: DesiredState): void {
+    this.#desiredState = { hackLoop: { ...state.hackLoop } };
+    if (this.#currentSession) this.#sendDesiredStateIfDue(this.#currentSession);
   }
 
   /** Takes a new connection from the game's page: it has `HELLO_TIMEOUT_MS` to say a valid hello. */
@@ -176,6 +197,8 @@ export class ControlChannel {
       agentSessionId: hello.agentSessionId,
       deploymentId: hello.deploymentId,
       game: hello.game,
+      welcomed: false,
+      sentDesiredState: null,
     };
     this.#currentSession = session;
     this.#rememberSession(session.agentSessionId);
@@ -186,6 +209,8 @@ export class ControlChannel {
     if (drift !== null) this.#gameDrifted = true;
     if (!this.#restartIfOutdated(session)) {
       this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" });
+      session.welcomed = true;
+      this.#sendDesiredStateIfDue(session);
     }
     const atMs = this.#clock.now();
     // versionDrift after agentConnected, so it's recorded against the Agent that reported it.
@@ -217,6 +242,22 @@ export class ControlChannel {
     this.#restartsSentFrom.add(session.deploymentId);
     this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: deployedId });
     return true;
+  }
+
+  /** Sends the desired state if the brain has one this welcomed Agent may have and hasn't had yet. */
+  #sendDesiredStateIfDue(session: AgentSession): void {
+    const { deployedId, hold, deployFailed } = this.#deploymentState;
+    if (this.#desiredState === null || !session.welcomed) return;
+    if (hold || deployFailed || this.#gameDrifted || session.deploymentId !== deployedId) return;
+    const message: BrainMessage = {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      ...this.#desiredState,
+    };
+    const encoded = encodeControlMessage(message);
+    if (encoded === session.sentDesiredState) return;
+    session.sentDesiredState = encoded;
+    session.connection.send(encoded);
   }
 
   /** Keeps the numbering of the most recent sessions only. */

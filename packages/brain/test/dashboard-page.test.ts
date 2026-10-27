@@ -64,6 +64,7 @@ const BUSY_STATUS: DashboardStatus = {
     { atMs: NOW_MS - 2_000, kind: "agentConnected", detail: { agentSessionId: "session-1" } },
   ],
   supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
+  hackLoop: { enabled: true, target: "n00dles" },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -191,6 +192,8 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#gaps")).toContain("(100 s)");
   expect(textOf(document, "#supervision")).toContain("Supervision: running");
   expect(textOf(document, "#supervision button")).toBe("Pause supervision");
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: on, against n00dles");
+  expect(textOf(document, "#hack-loop button")).toBe("Stop the hack loop");
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
 });
 
@@ -285,6 +288,47 @@ test("the button sends the switch, the other way from the status, then shows the
     '{"paused":false}',
   ]);
   expect(textOf(document, "#supervision")).toContain("Supervision: running");
+});
+
+test("the hack loop's button (#134) sends its switch, the other way from the status, then shows the new state", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = { ...BUSY_STATUS, hackLoop: { enabled, target: enabled ? "n00dles" : null } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  (document.querySelector("#hack-loop button") as HTMLButtonElement).click();
+  await settle();
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: off");
+  expect(textOf(document, "#hack-loop button")).toBe("Start the hack loop");
+  (document.querySelector("#hack-loop button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [
+      ["/api/hack-loop", '{"enabled":false}'],
+      ["/api/hack-loop", '{"enabled":true}'],
+    ],
+  );
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: on, against n00dles");
+});
+
+test("the hack loop on with no target yet says so", async () => {
+  const waiting: DashboardStatus = { ...BUSY_STATUS, hackLoop: { enabled: true, target: null } };
+  const { document } = await openPage(() => ({ status: 200, body: waiting }));
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: on, rooting servers; no target yet");
+});
+
+test("a hack loop switch the brain refuses says so, and the data stays", async () => {
+  const { document } = await openPage((request) =>
+    request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
+  );
+  (document.querySelector("#hack-loop button") as HTMLButtonElement).click();
+  await settle();
+  expect(textOf(document, "#hack-loop-problem")).toBe("The switch didn't change: HTTP 403");
+  expectDataShown(document);
 });
 
 test("a switch the brain refuses says so, and the data stays", async () => {

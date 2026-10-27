@@ -19,6 +19,8 @@ export interface DashboardServerOptions {
   /** Built afresh for each request. */
   status(): DashboardStatus;
   setSupervisionPaused(paused: boolean): void;
+  /** The hack loop's switch (#134). */
+  setHackLoopEnabled(enabled: boolean): void;
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
 }
@@ -79,12 +81,20 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
       case "POST /api/supervision": {
         // A write must say it's from the dashboard's own page: a missing Origin isn't enough.
         if (origin === undefined) throw new RequestError(403, "not this dashboard's page");
-        const paused = pausedOf(await readBody(request));
+        const paused = switchValueOf(await readBody(request), "paused");
         options.setSupervisionPaused(paused);
         return reply(response, 200, "application/json", JSON.stringify({ paused }));
       }
+      case "POST /api/hack-loop": {
+        if (origin === undefined) throw new RequestError(403, "not this dashboard's page");
+        const enabled = switchValueOf(await readBody(request), "enabled");
+        options.setHackLoopEnabled(enabled);
+        return reply(response, 200, "application/json", JSON.stringify({ enabled }));
+      }
       default:
-        if (["/", "/api/status", "/api/supervision"].includes(path)) throw new RequestError(405, "method not allowed");
+        if (["/", "/api/status", "/api/supervision", "/api/hack-loop"].includes(path)) {
+          throw new RequestError(405, "method not allowed");
+        }
         throw new RequestError(404, "not found");
     }
   }
@@ -147,20 +157,20 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** `{ "paused": true|false }`, exactly. */
-function pausedOf(body: string): boolean {
+/** A switch's body: `{ "<field>": true|false }`, exactly. */
+function switchValueOf(body: string, field: "paused" | "enabled"): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
     throw new RequestError(400, "the body isn't JSON");
   }
-  const fields = parsed as { paused?: unknown } | null;
+  const fields = parsed as Record<string, unknown> | null;
   const isSwitch =
     typeof fields === "object" &&
     fields !== null &&
-    Object.keys(fields).join() === "paused" &&
-    typeof fields.paused === "boolean";
-  if (!isSwitch) throw new RequestError(400, 'the body must be {"paused": true} or {"paused": false}');
-  return fields.paused as boolean;
+    Object.keys(fields).join() === field &&
+    typeof fields[field] === "boolean";
+  if (!isSwitch) throw new RequestError(400, `the body must be {"${field}": true} or {"${field}": false}`);
+  return fields[field] as boolean;
 }

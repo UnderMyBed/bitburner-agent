@@ -1,6 +1,9 @@
 {
   "agent.js": 3.0,
   "boot.js": 2.7,
+  "hack-loop.js": 2.4,
+  "hack-loop-deploy.js": 4.65,
+  "hack-loop-root.js": 2.35,
   "snapshot-fast.js": 2.0,
   "snapshot-medium.js": 4.3,
   "snapshot-slow.js": 3.65,
