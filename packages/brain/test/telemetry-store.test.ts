@@ -68,6 +68,32 @@ test("fast snapshots' receipt times, by environment and window, for the gap repo
   expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 1_000, untilMs: 3_000 })).toEqual([1_000, 3_000]);
 });
 
+test("fast snapshots' page heaps, by environment and window, in order of arrival, without the nulls", () => {
+  for (const [receivedAtMs, tier, environment, pageHeapUsedBytes] of [
+    [3_000, "fast", "E0", 30],
+    [1_000, "fast", "E0", 10],
+    [2_000, "fast", "E0", null],
+    [2_500, "medium", "E0", 99],
+    [2_600, "fast", "E2", 98],
+    [9_000, "fast", "E0", 90],
+  ] as const) {
+    store.recordSnapshot(
+      { environment, release: "r" },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: receivedAtMs,
+        gameTimeMs: 0,
+        receivedAtMs,
+        missedBefore: 0,
+        data: { pageHeapUsedBytes },
+      },
+    );
+  }
+  expect(store.fastSnapshotPageHeaps({ environment: "E0", sinceMs: 1_000, untilMs: 3_000 })).toEqual([10, 30]);
+  expect(store.fastSnapshotPageHeaps({ environment: "E0", sinceMs: 4_000, untilMs: 8_000 })).toEqual([]);
+});
+
 test("the store is in WAL mode, so a reader never blocks the brain's writes; a read-only open can't write", () => {
   expect(store.journalMode()).toBe("wal");
   const reader = TelemetryStore.openReadOnly(path.join(directory, "telemetry.sqlite"));

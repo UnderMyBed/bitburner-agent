@@ -360,3 +360,41 @@ test("the gap report's command: 0 with no gaps, 1 with gaps, 2 when it can't run
   // A time without Z or an offset would be read as local time: refused.
   expect(runGaps(["--since", "2026-10-26T00:00:00", "--until", "2026-10-26T00:00:20Z"]).exitCode).toBe(2);
 });
+
+test("the gap report's command prints the page heap over the window; it doesn't change the exit code", () => {
+  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  const sinceMs = Date.parse("2026-10-26T00:00:00Z");
+  const megabyte = 1024 * 1024;
+  for (const [second, pageHeapUsedBytes] of [
+    [0, 100 * megabyte],
+    [2, null],
+    [4, 80 * megabyte],
+    [6, 150.5 * megabyte],
+    [8, 120 * megabyte],
+    [30, 500 * megabyte],
+  ] as const) {
+    store.recordSnapshot(
+      { environment: "E0", release: "r" },
+      {
+        agentSessionId: "s",
+        tier: "fast",
+        sequenceNumber: second + 1,
+        gameTimeMs: 0,
+        receivedAtMs: sinceMs + second * 1000,
+        missedBefore: 0,
+        data: { degradedTiers: [], pageHeapUsedBytes, game: null },
+      },
+    );
+  }
+  store.close();
+  const reported = runGaps(["--since", "2026-10-26T00:00:00Z", "--until", "2026-10-26T00:00:10Z"]);
+  expect(reported.exitCode).toBe(0);
+  expect(reported.output).toContain(
+    "  page heap: first 100.0 MB, last 120.0 MB, lowest 80.0 MB, highest 150.5 MB (4 snapshots reported it)",
+  );
+  const withGap = runGaps(["--since", "2026-10-26T00:00:00Z", "--until", "2026-10-26T00:00:30Z"]);
+  expect(withGap.exitCode).toBe(1);
+  expect(withGap.output).toContain("highest 500.0 MB (5 snapshots reported it)");
+  const notReported = runGaps(["--since", "2026-10-26T00:00:01Z", "--until", "2026-10-26T00:00:03Z"]);
+  expect(notReported.output).toContain("  page heap: not reported");
+});

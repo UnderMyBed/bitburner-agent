@@ -377,7 +377,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 
 ## 7. Telemetry and observability
 - **Store:** an append-only time series of snapshots, decision records, estimate-vs-actual errors, reflex health, and transitions. It's SQLite through Node's built-in `node:sqlite`, in the brain's data directory, by default the repo's gitignored `.data/` (owner decision 30; [`packages/brain`](../packages/brain/README.md#the-telemetry-store)). Old data is thinned once the campaign's months of data need it (M4). The gap report over its fast snapshots is the evidence for M2's 24 h criterion.
-- **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup.
+- **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup once the campaign starts (M4, [#15](https://github.com/UnderMyBed/bitburner-agent/issues/15)).
 - **Release tagging:** every record carries the agent release that produced it, so releases can be compared directly ("did v0.4 beat v0.3 on BN1?").
 - **Dashboard:** a web page the brain serves on **`127.0.0.1` only**, refusing foreign `Host` headers (DNS rebinding) and writes from other pages.
   - **Built in M2** ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); [`packages/brain`](../packages/brain/README.md#the-dashboard)): skeleton health (the Agent, the last snapshot per tier, key game values, gaps over 24 h), alerts, recent events, and the supervision switch (§10.2).

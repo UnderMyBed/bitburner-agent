@@ -191,6 +191,27 @@ export class TelemetryStore {
     return rows.map((row) => row.received_at_ms);
   }
 
+  /** The page's JS heap from each fast snapshot in a window that has one, in order of arrival (the gap report's). */
+  fastSnapshotPageHeaps({
+    environment,
+    sinceMs,
+    untilMs,
+  }: {
+    environment: Environment;
+    sinceMs: number;
+    untilMs: number;
+  }): number[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT page_heap_used_bytes FROM (
+          SELECT json_extract(data, '$.pageHeapUsedBytes') AS page_heap_used_bytes, received_at_ms FROM snapshots
+            WHERE environment = ? AND tier = 'fast' AND received_at_ms BETWEEN ? AND ?)
+          WHERE page_heap_used_bytes IS NOT NULL ORDER BY received_at_ms`,
+      )
+      .all(environment, sinceMs, untilMs) as { page_heap_used_bytes: number }[];
+    return rows.map((row) => row.page_heap_used_bytes);
+  }
+
   /** Every event from an environment, in the order stored. */
   events({ environment }: { environment: Environment }): (RecordContext & StoredEvent)[] {
     const rows = this.#database
