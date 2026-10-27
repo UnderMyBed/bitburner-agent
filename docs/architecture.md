@@ -513,7 +513,7 @@ Built in M2 ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); [`p
   - Only an E0 brain on Windows supervises (Steam's game); a source build's brain (E2) never launches or kills anything.
 - **Judged by checks, not clocks:** the supervisor looks every 30 s. Its waits are counted in checks, and a heartbeat counts as new by being a new snapshot, so a clock that steps can't fake silence or hide it.
 - **Dead game** (process gone): the supervisor relaunches it the same way. After a launch it waits 5 minutes before anything else, so a slow Steam (starting, logging in, updating) isn't launched over and over.
-- **Silent game** (process alive, but no new heartbeat for 5 minutes, after a 5-minute grace from the brain's start, a launch, or a resume):
+- **Silent game** (process alive, but no new heartbeat for 5 minutes, after a 5-minute grace from the brain's start or a resume; after a launch, the grace starts once the launch's 5-minute wait is over, so the earliest kill is 10 minutes after it):
   - The supervisor ends the game process and relaunches it.
   - This covers a frozen page, and an Agent that died while the game runs: the brain has no other way to restart it, and a reload brings it back through autoexec.
   - At most the progress since the last autosave is lost, plus the time offline.
