@@ -1,5 +1,5 @@
-// The brain's side of the hack loop (#134): the starter target rule, the dashboard's switch, and the controller that
-// turns snapshots and the switch into the desired state the channel sends.
+// The brain's side of the hack loop (#134): the starter rules (target and hosts), the dashboard's switch, and the
+// controller that turns the connected Agent's snapshots and the switch into the desired state the channel sends.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { chooseHackTarget, HackLoopController, readHackLoopEnabled } from "../src/hack-loop.ts";
+import { chooseHackHosts, chooseHackTarget, HackLoopController, readHackLoopEnabled } from "../src/hack-loop.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 type StaticServer = StaticSnapshotData["servers"][number];
@@ -97,6 +97,38 @@ describe("chooseHackTarget: a starter rule until the planner (M4)", () => {
   });
 });
 
+describe("chooseHackHosts: where the loop runs", () => {
+  test("the game's rooted servers with RAM, sorted: never home, nor the player's purchased or Hacknet servers", () => {
+    const network: StaticSnapshotData = {
+      servers: [
+        staticServer("home", { moneyMax: 0 }),
+        staticServer("n00dles"),
+        staticServer("foodnstuff"),
+        staticServer("not-rooted"),
+        staticServer("no-ram"),
+        staticServer("bought-1", { purchasedByPlayer: true, moneyMax: 0 }),
+        staticServer("hacknet-server-0", { purchasedByPlayer: true }),
+      ],
+    };
+    const medium = mediumData(1, {
+      home: true,
+      n00dles: true,
+      foodnstuff: true,
+      "not-rooted": false,
+      "no-ram": true,
+      "bought-1": true,
+      "hacknet-server-0": true,
+    });
+    for (const server of medium.servers) if (server.hostname === "no-ram") server.maxRam = 0;
+    expect(chooseHackHosts(network, medium)).toEqual(["foodnstuff", "n00dles"]);
+  });
+
+  test("nothing to go on: none", () => {
+    expect(chooseHackHosts(null, mediumData(1, { n00dles: true }))).toEqual([]);
+    expect(chooseHackHosts({ servers: [staticServer("n00dles")] }, null)).toEqual([]);
+  });
+});
+
 let directory: string;
 let store: TelemetryStore;
 beforeEach(() => {
@@ -108,48 +140,19 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-describe("the switch", () => {
-  test("on until the owner turns it off, kept in the store", () => {
-    const channel = new ControlChannel({ token: "t", clock: new ManualClock() });
-    expect(readHackLoopEnabled(store)).toBe(true);
-    new HackLoopController({ channel, store }).setEnabled(false);
-    expect(readHackLoopEnabled(store)).toBe(false);
-  });
-
-  test("a value it didn't write fails, rather than guess", () => {
-    store.setSetting("hackLoop.enabled", "maybe");
-    expect(() => readHackLoopEnabled(store)).toThrow(/hackLoop\.enabled/);
-  });
+test("the switch: a value it didn't write fails, rather than guess", () => {
+  store.setSetting("hackLoop.enabled", "maybe");
+  expect(() => readHackLoopEnabled(store)).toThrow(/hackLoop\.enabled/);
 });
 
 describe("the controller", () => {
   const TOKEN = "the-token";
   let channel: ControlChannel;
-  let connection: MemoryConnection;
   let sequenceNumber = 0;
 
-  const send = (tier: SnapshotTier, data: unknown) =>
-    connection.receive(
-      encodeControlMessage({
-        protocolVersion: CONTROL_PROTOCOL_VERSION,
-        type: "snapshot",
-        agentSessionId: "session-1",
-        tier,
-        sequenceNumber: ++sequenceNumber,
-        gameTimeMs: 1_000,
-        data,
-      }),
-    );
-  const desiredStates = () =>
-    connection
-      .sentMessages()
-      .filter((message) => message.type === "desiredState")
-      .map((message) => message.hackLoop);
-
-  beforeEach(() => {
-    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
-    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
-    connection = new MemoryConnection();
+  /** An Agent of the deployed deployment connects, and is welcomed. */
+  function connectAgent(agentSessionId = "session-1"): MemoryConnection {
+    const connection = new MemoryConnection();
     channel.accept(connection);
     connection.receive(
       encodeControlMessage({
@@ -157,50 +160,98 @@ describe("the controller", () => {
         type: "hello",
         token: TOKEN,
         deploymentId: "deployment-a",
-        agentSessionId: "session-1",
+        agentSessionId,
         game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
       }),
     );
+    return connection;
+  }
+  const send = (connection: MemoryConnection, tier: SnapshotTier, data: unknown, agentSessionId = "session-1") =>
+    connection.receive(
+      encodeControlMessage({
+        protocolVersion: CONTROL_PROTOCOL_VERSION,
+        type: "snapshot",
+        agentSessionId,
+        tier,
+        sequenceNumber: ++sequenceNumber,
+        gameTimeMs: 1_000,
+        data,
+      }),
+    );
+  const desiredStates = (connection: MemoryConnection) =>
+    connection
+      .sentMessages()
+      .filter((message) => message.type === "desiredState")
+      .map((message) => message.hackLoop);
+  const network: StaticSnapshotData = { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] };
+  const on = { enabled: true, target: "n00dles", hosts: ["n00dles"] };
+  const off = { enabled: false, target: null, hosts: [] };
+
+  beforeEach(() => {
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
   });
 
-  test("on at once with no target, so servers get rooted; then the target once snapshots show one", () => {
-    new HackLoopController({ channel, store });
-    expect(desiredStates()).toEqual([{ enabled: true, target: null }]);
-    send("static", { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] });
-    send("medium", mediumData(1, { home: true, n00dles: false }));
-    expect(desiredStates()).toEqual([{ enabled: true, target: null }]);
-    send("medium", mediumData(1, { home: true, n00dles: true }));
-    expect(desiredStates()).toEqual([
-      { enabled: true, target: null },
-      { enabled: true, target: "n00dles" },
-    ]);
-  });
-
-  test("the switch: off sends off at once, and on again picks the target back up", () => {
+  test("on: nothing until the connected Agent's own static and medium snapshots, then the target and hosts", () => {
     const controller = new HackLoopController({ channel, store });
-    send("static", { servers: [staticServer("n00dles")] });
-    send("medium", mediumData(1, { n00dles: true }));
-    controller.setEnabled(false);
-    controller.setEnabled(true);
-    expect(desiredStates()).toEqual([
-      { enabled: true, target: null },
-      { enabled: true, target: "n00dles" },
-      { enabled: false, target: null },
-      { enabled: true, target: "n00dles" },
-    ]);
+    const connection = connectAgent();
+    expect(controller.view()).toEqual({ enabled: true, waiting: true, target: null, hosts: [] });
+    send(connection, "static", network);
+    expect(desiredStates(connection)).toEqual([]);
+    // Nothing rooted yet: on, with no target, so the Agent roots what it can.
+    send(connection, "medium", mediumData(1, { home: true, n00dles: false }));
+    send(connection, "medium", mediumData(1, { home: true, n00dles: true }));
+    expect(desiredStates(connection)).toEqual([{ enabled: true, target: null, hosts: [] }, on]);
+    expect(controller.view()).toEqual({ enabled: true, waiting: false, target: "n00dles", hosts: ["n00dles"] });
   });
 
-  test("off in the store when the brain starts: off from the start", () => {
+  test("an Agent that connects again is sent nothing until its own snapshots, then the same state", () => {
+    new HackLoopController({ channel, store });
+    const first = connectAgent();
+    send(first, "static", network);
+    send(first, "medium", mediumData(1, { n00dles: true }));
+    const again = connectAgent();
+    expect(desiredStates(again)).toEqual([]);
+    send(again, "static", network);
+    send(again, "medium", mediumData(1, { n00dles: true }));
+    expect(desiredStates(again)).toEqual([on]);
+  });
+
+  test("an Agent after a reset is never sent the last game's target", () => {
+    new HackLoopController({ channel, store });
+    const before = connectAgent();
+    send(before, "static", network);
+    send(before, "medium", mediumData(1, { n00dles: true }));
+    // Augmentations installed: a new Agent, nothing rooted any more.
+    const afterReset = connectAgent("session-2");
+    send(afterReset, "static", network, "session-2");
+    send(afterReset, "medium", mediumData(1, { n00dles: false }), "session-2");
+    expect(desiredStates(afterReset)).toEqual([{ enabled: true, target: null, hosts: [] }]);
+  });
+
+  test("the switch: off is sent at once, kept in the store; on again sends the target back", () => {
+    const controller = new HackLoopController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "medium", mediumData(1, { n00dles: true }));
+    controller.setEnabled(false);
+    expect(readHackLoopEnabled(store)).toBe(false);
+    expect(controller.view()).toEqual({ enabled: false, waiting: false, target: null, hosts: [] });
+    controller.setEnabled(true);
+    expect(desiredStates(connection)).toEqual([on, off, on]);
+  });
+
+  test("off in the store when the brain starts: off to each Agent as it connects, before any snapshot", () => {
     store.setSetting("hackLoop.enabled", "false");
     new HackLoopController({ channel, store });
-    send("static", { servers: [staticServer("n00dles")] });
-    send("medium", mediumData(1, { n00dles: true }));
-    expect(desiredStates()).toEqual([{ enabled: false, target: null }]);
+    const connection = connectAgent();
+    expect(desiredStates(connection)).toEqual([off]);
   });
 
-  test("fast snapshots don't change anything", () => {
+  test("fast snapshots change nothing", () => {
     new HackLoopController({ channel, store });
-    send("fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null });
-    expect(desiredStates()).toEqual([{ enabled: true, target: null }]);
+    const connection = connectAgent();
+    send(connection, "fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null });
+    expect(desiredStates(connection)).toEqual([]);
   });
 });

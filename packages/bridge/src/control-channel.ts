@@ -135,12 +135,14 @@ export class ControlChannel {
   }
 
   /**
-   * What the brain wants running in the game (architecture D2, #134), whole. Sent to the Agent when it changes and after
-   * every welcome, but only to an Agent running the deployed deployment, and never while the brain holds: on hold, after
-   * a failed deploy, or once the game has drifted, the game is only observed.
+   * What the brain wants running in the game (architecture D2, #134), whole, or null to send nothing new. The brain's
+   * controller sets it, and sets it again for each newly connected Agent once it knows that Agent's game, so a stale
+   * state never goes out with a welcome. Each connection is sent a state once, then again only when it changes. It's
+   * sent only to a welcomed Agent running the deployed deployment. While the brain holds (on hold, after a failed
+   * deploy, or once the game has drifted), only "off" goes out: stopping our own loops is always safe.
    */
-  setDesiredState(state: DesiredState): void {
-    this.#desiredState = { hackLoop: { ...state.hackLoop } };
+  setDesiredState(state: DesiredState | null): void {
+    this.#desiredState = structuredClone(state);
     if (this.#currentSession) this.#sendDesiredStateIfDue(this.#currentSession);
   }
 
@@ -210,7 +212,6 @@ export class ControlChannel {
     if (!this.#restartIfOutdated(session)) {
       this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" });
       session.welcomed = true;
-      this.#sendDesiredStateIfDue(session);
     }
     const atMs = this.#clock.now();
     // versionDrift after agentConnected, so it's recorded against the Agent that reported it.
@@ -234,21 +235,25 @@ export class ControlChannel {
    * Returns whether it did.
    */
   #restartIfOutdated(session: AgentSession): boolean {
-    const { deployedId, hold, deployFailed } = this.#deploymentState;
-    if (deployedId === null || hold || this.#gameDrifted || deployFailed || session.deploymentId === deployedId) {
-      return false;
-    }
+    const { deployedId } = this.#deploymentState;
+    if (deployedId === null || this.#holding() || session.deploymentId === deployedId) return false;
     if (this.#restartsSentFrom.has(session.deploymentId)) return false;
     this.#restartsSentFrom.add(session.deploymentId);
     this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: deployedId });
     return true;
   }
 
+  /** On hold, after a failed deploy, or once the game has drifted: the brain deploys and restarts nothing. */
+  #holding(): boolean {
+    const { hold, deployFailed } = this.#deploymentState;
+    return hold || deployFailed || this.#gameDrifted;
+  }
+
   /** Sends the desired state if the brain has one this welcomed Agent may have and hasn't had yet. */
   #sendDesiredStateIfDue(session: AgentSession): void {
-    const { deployedId, hold, deployFailed } = this.#deploymentState;
     if (this.#desiredState === null || !session.welcomed) return;
-    if (hold || deployFailed || this.#gameDrifted || session.deploymentId !== deployedId) return;
+    if (session.deploymentId !== this.#deploymentState.deployedId) return;
+    if (this.#holding() && this.#desiredState.hackLoop.enabled) return;
     const message: BrainMessage = {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",

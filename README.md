@@ -2,7 +2,7 @@
 
 An autonomous agent that plays [Bitburner](https://github.com/bitburner-official/bitburner-src) from a fresh save to **every Source-File maxed**, unattended and repeatably.
 
-> **Status: pre-alpha.** M2 is done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the walking skeleton runs on Steam. The brain deploys an observe-only Agent into the game, stores what it reports, backs up the save, serves a local dashboard and, on Windows, keeps Steam's game running. Its first live hour on Steam had no gaps. M1 ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)) built the simulator and recorded the legacy fork's BN1 baseline, the bar the agent must beat. M3 is under way on `main`: the agent's first action is a hack loop on the servers it can root (#134). See [Roadmap](#roadmap).
+> **Status: pre-alpha.** M2 is done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the walking skeleton runs on Steam. M2's brain deploys an observe-only Agent into the game, stores what it reports, backs up the save, serves a local dashboard and, on Windows, keeps Steam's game running. Its first live hour on Steam had no gaps. M1 ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)) built the simulator and recorded the legacy fork's BN1 baseline, the bar the agent must beat. M3 is under way on `main`: the agent's first action is a hack loop on the servers it can root (#134). See [Roadmap](#roadmap).
 
 ---
 

@@ -8,11 +8,11 @@ import {
   type FastSnapshotData,
   type MediumSnapshotData,
   type SlowSnapshotData,
-  SNAPSHOT_WORKER_PORT,
   type SnapshotMessage,
   type SnapshotTier,
   type StaticSnapshotData,
   snapshotWorkerFileName,
+  WORKER_REPORT_PORT,
 } from "@bitburner-agent/core";
 import type { Simulation, SimulationOptions } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
@@ -53,7 +53,7 @@ const BROKEN_WORKERS = {
   hangs: "export async function main(ns) { await ns.asleep(1e9); }",
   late: `export async function main(ns) {
            await ns.sleep(6_000);
-           ns.writePort(${SNAPSHOT_WORKER_PORT}, { workerPid: ns.pid, gameTimeMs: Date.now(), data: { late: true } });
+           ns.writePort(${WORKER_REPORT_PORT}, { workerPid: ns.pid, gameTimeMs: Date.now(), data: { late: true } });
          }`,
 };
 type BrokenWorkers = Partial<Record<SnapshotTier, keyof typeof BROKEN_WORKERS>>;

@@ -33,7 +33,7 @@
   <section id="gaps"><h2>Gaps in the last 24 h</h2><div></div></section>
   <section id="supervision">
     <h2>Supervision</h2><div></div><button type="button">Pause supervision</button>
-    <div class="bad" id="switch-problem" hidden></div>
+    <div class="bad" id="supervision-problem" hidden></div>
   </section>
   <section id="hack-loop">
     <h2>Hack loop</h2><div></div><button type="button">Stop the hack loop</button>
@@ -154,9 +154,11 @@ function render(status) {
   enableHackLoopNext = !hackLoop.enabled;
   const hackLoopText = !hackLoop.enabled
     ? "off"
-    : hackLoop.target === null
-      ? "on, rooting servers; no target yet"
-      : `on, against ${hackLoop.target}`;
+    : hackLoop.waiting
+      ? "on, waiting for the Agent's snapshots"
+      : hackLoop.target === null
+        ? "on, rooting servers; no target yet"
+        : `on, against ${hackLoop.target}, on ${hackLoop.hosts.length} servers`;
   document.querySelector("#hack-loop div").replaceChildren(
     element("div", `Hack loop: ${hackLoopText}`, hackLoop.enabled ? "ok" : "muted"),
   );
@@ -211,7 +213,7 @@ async function sendSwitch(path, body, problemSelector) {
 }
 
 document.querySelector("#supervision button").addEventListener("click", () =>
-  sendSwitch("/api/supervision", { paused: pauseNext }, "#switch-problem"),
+  sendSwitch("/api/supervision", { paused: pauseNext }, "#supervision-problem"),
 );
 document.querySelector("#hack-loop button").addEventListener("click", () =>
   sendSwitch("/api/hack-loop", { enabled: enableHackLoopNext }, "#hack-loop-problem"),

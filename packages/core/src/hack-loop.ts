@@ -21,9 +21,8 @@ export interface HackLoopDeployReport {
   /** Servers running the loop afterwards, and their threads in all. */
   serversRunning: number;
   threadsRunning: number;
-  /** Loops it started and stopped this time. */
-  started: number;
-  stopped: number;
+  /** Why it couldn't do its job (no deployment folder, no loop script on home), or null. */
+  problem: string | null;
 }
 
 /** Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`. Only these are ever stopped. */

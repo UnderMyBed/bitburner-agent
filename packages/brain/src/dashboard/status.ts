@@ -7,10 +7,9 @@ import {
   type MediumSnapshotData,
   SNAPSHOT_TIERS,
   type SnapshotTier,
-  type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
-import { chooseHackTarget, readHackLoopEnabled } from "../hack-loop.ts";
+import type { HackLoopView } from "../hack-loop.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import { type Alert, activeAlerts } from "./alerts.ts";
@@ -78,8 +77,8 @@ export interface DashboardStatus {
     /** The supervisor's newest relaunches (#94), newest first. */
     relaunches: { atMs: number; detail: unknown }[];
   };
-  /** The hack loop (#134): its switch, and the target the brain's rule picks from the latest snapshots. */
-  hackLoop: { enabled: boolean; target: string | null };
+  /** The hack loop (#134): its switch, and what the brain has set for the Agent (its controller's view). */
+  hackLoop: HackLoopView;
 }
 
 export interface DashboardStatusOptions {
@@ -91,6 +90,8 @@ export interface DashboardStatusOptions {
   brainStartedEventId: number;
   /** Whether this brain runs the supervisor (#94). */
   supervising: boolean;
+  /** The hack loop's controller's view (#134): what it set, not worked out again here. */
+  hackLoop: HackLoopView;
   nowMs: number;
 }
 
@@ -107,6 +108,7 @@ export function buildDashboardStatus({
   brainStartedAtMs,
   brainStartedEventId,
   supervising,
+  hackLoop,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -115,7 +117,6 @@ export function buildDashboardStatus({
   ) as Record<SnapshotTier, ReturnType<TelemetryStore["latestSnapshot"]>>;
   const fast = latestOfTier.fast?.data as FastSnapshotData | undefined;
   const medium = latestOfTier.medium?.data as MediumSnapshotData | undefined;
-  const hackLoopEnabled = readHackLoopEnabled(store);
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -201,11 +202,6 @@ export function buildDashboardStatus({
         .recentEvents({ environment, limit: RECENT_RELAUNCH_COUNT, kinds: [RELAUNCH_EVENT_KIND] })
         .map(({ atMs, detail }) => ({ atMs, detail })),
     },
-    hackLoop: {
-      enabled: hackLoopEnabled,
-      target: hackLoopEnabled
-        ? chooseHackTarget((latestOfTier.static?.data as StaticSnapshotData | undefined) ?? null, medium ?? null)
-        : null,
-    },
+    hackLoop,
   };
 }

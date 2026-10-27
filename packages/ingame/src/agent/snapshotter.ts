@@ -15,11 +15,11 @@ import {
   SNAPSHOT_TIER_PERIOD_MS,
   type SnapshotMessage,
   type SnapshotTier,
-  type SnapshotWorkerReport,
   snapshotWorkerFileName,
+  type WorkerReport,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
-import { runWorker } from "./run-worker.ts";
+import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 
 export const SNAPSHOT_ROUND_MS = SNAPSHOT_TIER_PERIOD_MS.fast;
 /** Rounds from one snapshot of the tier to the next. */
@@ -36,14 +36,17 @@ function pageHeapUsedBytes(): number | null {
 
 export function createSnapshotter(
   ns: NS,
-  { deploymentId, agentSessionId }: { deploymentId: string; agentSessionId: string },
+  {
+    deploymentId,
+    agentSessionId,
+    workerRunner,
+  }: { deploymentId: string; agentSessionId: string; workerRunner: WorkerRunner },
 ) {
   const lastSequenceNumbers: Record<SnapshotTier, number> = { static: 0, slow: 0, medium: 0, fast: 0 };
   /** 0: due this round. */
   const roundsUntilDue = { medium: 0, slow: 0 };
-  const lastWorkerPids: Partial<Record<SnapshotTier, number>> = {};
   const degradedTiers = new Set<SnapshotTier>();
-  let staticReport: SnapshotWorkerReport | null = null;
+  let staticReport: WorkerReport | null = null;
   let staticToSend = false;
 
   const snapshot = (tier: SnapshotTier, gameTimeMs: number, data: unknown): SnapshotMessage => {
@@ -66,21 +69,12 @@ export function createSnapshotter(
     return null;
   };
 
-  async function runTierWorker(tier: SnapshotTier, deadlineMs: number): Promise<SnapshotWorkerReport | null> {
-    const previousWorkerPid = lastWorkerPids[tier];
-    // Never a second copy: a worker that hangs would otherwise pile up copies, each holding its RAM.
-    if (previousWorkerPid !== undefined && ns.isRunning(previousWorkerPid)) {
-      return skipped(tier, "its last worker is still running");
-    }
-    if (Date.now() >= deadlineMs) return skipped(tier, "no time left in the round");
+  async function runTierWorker(tier: SnapshotTier, deadlineMs: number): Promise<WorkerReport | null> {
     const workerFile = deployedFilePath(deploymentId, snapshotWorkerFileName(tier));
-    const workerRun = await runWorker(ns, workerFile, [], deadlineMs);
-    if (!workerRun.started) return skipped(tier, `${workerFile} couldn't start`);
-    lastWorkerPids[tier] = workerRun.workerPid;
-    const report = workerRun.report;
-    if (report === null) return skipped(tier, `${workerFile} didn't report in time`);
+    const workerRun = await workerRunner.runWorker(workerFile, [], deadlineMs);
+    if (workerRun.outcome !== "reported") return skipped(tier, whyNoReport(workerRun, workerFile));
     if (degradedTiers.delete(tier)) ns.print(`agent: the ${tier} tier is back`);
-    return report;
+    return workerRun.report;
   }
 
   return {

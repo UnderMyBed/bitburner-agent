@@ -78,19 +78,10 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return reply(response, 200, "text/html; charset=utf-8", PAGE);
       case "GET /api/status":
         return reply(response, 200, "application/json", JSON.stringify(options.status()));
-      case "POST /api/supervision": {
-        // A write must say it's from the dashboard's own page: a missing Origin isn't enough.
-        if (origin === undefined) throw new RequestError(403, "not this dashboard's page");
-        const paused = switchValueOf(await readBody(request), "paused");
-        options.setSupervisionPaused(paused);
-        return reply(response, 200, "application/json", JSON.stringify({ paused }));
-      }
-      case "POST /api/hack-loop": {
-        if (origin === undefined) throw new RequestError(403, "not this dashboard's page");
-        const enabled = switchValueOf(await readBody(request), "enabled");
-        options.setHackLoopEnabled(enabled);
-        return reply(response, 200, "application/json", JSON.stringify({ enabled }));
-      }
+      case "POST /api/supervision":
+        return handleSwitch(request, response, origin, "paused", options.setSupervisionPaused);
+      case "POST /api/hack-loop":
+        return handleSwitch(request, response, origin, "enabled", options.setHackLoopEnabled);
       default:
         if (["/", "/api/status", "/api/supervision", "/api/hack-loop"].includes(path)) {
           throw new RequestError(405, "method not allowed");
@@ -155,6 +146,21 @@ async function readBody(request: IncomingMessage): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/** A switch: `{ "<field>": true|false }` from the dashboard's own page, answered with the same. */
+async function handleSwitch(
+  request: IncomingMessage,
+  response: ServerResponse,
+  origin: string | undefined,
+  field: "paused" | "enabled",
+  apply: (value: boolean) => void,
+): Promise<void> {
+  // A write must say it's from the dashboard's own page: a missing Origin isn't enough.
+  if (origin === undefined) throw new RequestError(403, "not this dashboard's page");
+  const value = switchValueOf(await readBody(request), field);
+  apply(value);
+  reply(response, 200, "application/json", JSON.stringify({ [field]: value }));
 }
 
 /** A switch's body: `{ "<field>": true|false }`, exactly. */

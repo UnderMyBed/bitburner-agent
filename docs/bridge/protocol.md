@@ -57,7 +57,7 @@ The types are in `packages/core/src/snapshots.ts`. Server and player fields keep
 |---|---|
 | `welcome` | Accepted: the Agent sends all four tiers in its next round (a full snapshot), then each at its cadence |
 | `restart { deploymentId }` | The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits, and `boot.js` starts the deployment `agent/current.txt` names (#88). If `boot.js` can't start, the Agent stays |
-| `desiredState { hackLoop: { enabled, target } }` | What the brain wants running in the game, whole each time (#134). `enabled` is the dashboard's switch; `target` is the server to hack, or `null` while none is worth it (servers are rooted, but no loop runs). The Agent converges on the last one it got ([the hack loop](../../packages/ingame/README.md#the-hack-loop)) |
+| `desiredState { hackLoop: { enabled, target, hosts } }` | What the brain wants running in the game, whole each time (#134). `enabled` is the dashboard's switch; `target` is the server to hack, or `null` while none is worth it (servers are rooted, but no loop runs); `hosts` are the servers the loop runs on (at most 1,000). The Agent converges on the last one it got, and forgets it when it disconnects ([the hack loop](../../packages/ingame/README.md#the-hack-loop)) |
 
 Once welcomed, the Agent sleeps between snapshot rounds, so it acts on a message or a close at its next round: within 2 s.
 
@@ -98,12 +98,12 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
     1. `boot.js` starts the old deployment again, which is welcomed and reports.
     2. The deployer reconnects over RFA and reads `current.txt`, which names the old id.
     3. It deploys again, and that change lets the next restart through.
-- **The desired state, only to the deployed code, and never while holding** (#134). The brain sends it after a `welcome` and whenever it changes, to the connected Agent only if:
+- **The desired state, only to the deployed code, and only "off" while holding** (#134). The brain's controller sets it, and the channel sends it to the connected Agent only if:
   - that Agent was welcomed (not told to restart);
   - it runs the deployment the deployer knows is deployed;
-  - there's no hold, no failed deploy, and no version drift.
+  - there's no hold, no failed deploy, and no version drift, unless it's "off": stopping our own loops is always safe.
 
-  So a held brain only observes, and old code is never told what to run. Each Agent session gets it once, then again only when it changes. A new session, after a reconnect or a reload, gets it with its welcome.
+  Never with the `welcome`: "on" waits until the brain has that Agent's own static and medium snapshots, from its first round, so it's never sent a stale target. "Off" goes at once. Each connection is sent a state once, then again only when it changes; after a reconnect or a reload, the Agent gets it again. The Agent acts only on what the brain it's connected to sent: while the brain holds, an Agent sent nothing does nothing, and loops already running keep running.
 - **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The numbering stays with the session across reconnects within one run of the brain ([#119](https://github.com/UnderMyBed/bitburner-agent/issues/119)), for the 4 most recent sessions, so a 24/7 run doesn't grow. Property tests check this against a reference model under:
   - duplicated, dropped and reordered frames;
   - reconnects and replacements;

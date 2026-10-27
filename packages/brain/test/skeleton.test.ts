@@ -33,6 +33,7 @@ import {
   RFA_URL,
   startBrainInSimulation,
 } from "./helpers/brain-in-simulation.ts";
+import { expectHomeWithinTheAgentPlusOneWorker } from "./helpers/home-peak.ts";
 
 const start = useSimulations();
 const STEP_MS = 100;
@@ -118,21 +119,11 @@ async function freshStartWithBrain({ deliveredCopies }: Pick<SimulatedGameOption
         return SNAPSHOT_TIERS.every((tier) => storedTiers.has(tier));
       }, maxVirtualMs),
     /**
-     * Home never held more than the Agent and one worker since `inSimulation`'s game booted: exactly two scripts at
-     * most (the Agent and a worker), and at most the RAM of the Agent and the largest worker, by the game's own figures.
-     * Read from `homePeak`, which is taken as each changes: a worker starts and exits within one timer, which no check
-     * from outside sees.
+     * Home never held more than the Agent and one snapshot worker since `inSimulation`'s game booted. Observe-only, so
+     * only the snapshot workers: the hack loop's suite checks its own.
      */
-    expectHomeWithinTheAgentPlusOneWorker: async (inSimulation = simulation) => {
-      const ramOf = (file: string) => inSimulation.staticRamUsage("home", file);
-      const workerRams = await Promise.all(SNAPSHOT_TIERS.map((tier) => ramOf(workerFile(tier))));
-      // Rounded as the game rounds RAM in use, so a sum like 2.8 + 4.35 compares as 7.15.
-      const limitGb = Math.round(((await ramOf(agentFile)) + Math.max(...workerRams)) * 100) / 100;
-      expect(limitGb).toBeLessThanOrEqual(8);
-      const peak = await inSimulation.diagnostics.homePeak();
-      expect(peak.scripts).toBe(2);
-      expect(peak.ramUsed).toBeLessThanOrEqual(limitGb);
-    },
+    expectHomeWithinTheAgentPlusOneWorker: (inSimulation = simulation) =>
+      expectHomeWithinTheAgentPlusOneWorker(inSimulation, deploymentId, SNAPSHOT_TIERS.map(snapshotWorkerFileName)),
   };
 }
 

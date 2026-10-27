@@ -125,6 +125,7 @@ try {
         brainStartedAtMs: startedAtMs,
         brainStartedEventId: startedEventId,
         supervising,
+        hackLoop: hackLoop.view(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {

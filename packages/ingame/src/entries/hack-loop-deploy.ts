@@ -1,7 +1,8 @@
 // agent/<deploymentId>/hack-loop-deploy.js: the hack loop's second home worker (#134). Arguments: whether the loop
-// should run, and its target ("" for none yet). On every rooted server but home, it stops our loops that shouldn't run
-// (another deployment's, another target's, or all of them when off), and starts this deployment's loop where it isn't
-// running, with the threads the free RAM allows. It never touches any other script, and uses only RAM left free.
+// should run, its target ("" for none yet), then the hosts the brain named for it. On every server but home, it stops
+// our loops that shouldn't run there (another deployment's, another target's, on a server that isn't a host, or all
+// of them when off), and starts this deployment's loop on each host where it isn't running, with the threads the free
+// RAM allows. It never touches any other script, and uses only RAM left free.
 // RAM: `scan` 0.2 + `hasRootAccess` 0.05 + `ps` 0.2 + `kill` 0.5 + `scp` 0.6 + `exec` 1.3 + `getScriptRam` 0.1 +
 // `getServerMaxRam` and `getServerUsedRam` 0.05 each (ram-budget.json).
 import {
@@ -19,29 +20,38 @@ export function main(ns: NS): void {
   ns.disableLog("ALL");
   const loopShouldRun = ns.args[0] === true;
   const targetHostname = String(ns.args[1] ?? "");
+  const hosts = new Set(ns.args.slice(2).map(String));
+  const report: HackLoopDeployReport = { serversRunning: 0, threadsRunning: 0, problem: null };
   const ownDeploymentId = deploymentIdOfPath(ns.getScriptName());
-  if (ownDeploymentId === null) return;
+  if (ownDeploymentId === null) {
+    report.problem = `${ns.getScriptName()} isn't in a deployment folder`;
+    reportToAgent(ns, report);
+    return;
+  }
   const loopFile = deployedFilePath(ownDeploymentId, HACK_LOOP_SCRIPT_NAME);
-  const wanted = loopShouldRun && targetHostname !== "";
   const loopRam = ns.getScriptRam(loopFile, "home");
-  const report: HackLoopDeployReport = { serversRunning: 0, threadsRunning: 0, started: 0, stopped: 0 };
+  const wanted = loopShouldRun && targetHostname !== "";
+  if (wanted && loopRam === 0) {
+    // Stopping still goes ahead: only starting needs the script.
+    report.problem = `${loopFile} isn't on home`;
+  }
   for (const hostname of reachableHostnames(ns)) {
     if (hostname === "home" || !ns.hasRootAccess(hostname)) continue;
+    const runsHere = wanted && hosts.has(hostname);
     let runningThreads = 0;
     for (const process of ns.ps(hostname)) {
       if (!isHackLoopFile(process.filename)) continue;
-      if (wanted && process.filename === loopFile && process.args[0] === targetHostname) {
+      if (runsHere && process.filename === loopFile && process.args[0] === targetHostname) {
         runningThreads += process.threads;
-      } else if (ns.kill(process.pid)) {
-        report.stopped += 1;
+      } else {
+        ns.kill(process.pid);
       }
     }
-    if (wanted && runningThreads === 0 && loopRam > 0) {
+    if (runsHere && runningThreads === 0 && loopRam > 0) {
       const freeRam = ns.getServerMaxRam(hostname) - ns.getServerUsedRam(hostname);
       const threads = Math.floor(freeRam / loopRam);
       if (threads > 0 && ns.scp(loopFile, hostname, "home") && ns.exec(loopFile, hostname, threads, targetHostname)) {
         runningThreads = threads;
-        report.started += 1;
       }
     }
     if (runningThreads > 0) {

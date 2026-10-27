@@ -24,8 +24,7 @@ export function main(ns: NS): void {
     if (hostname === "home" || ns.hasRootAccess(hostname)) continue;
     if (ns.getServerNumPortsRequired(hostname) > ownedOpeners.length) continue;
     for (const [, openPort] of ownedOpeners) openPort(ns, hostname);
-    ns.nuke(hostname);
-    rootedNow.push(hostname);
+    if (ns.nuke(hostname)) rootedNow.push(hostname);
   }
   const report: HackLoopRootReport = { rootedNow };
   reportToAgent(ns, report);

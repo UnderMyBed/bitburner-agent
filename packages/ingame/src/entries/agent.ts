@@ -27,6 +27,7 @@ import {
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import { createHackLoop } from "../agent/hack-loop.ts";
+import { createWorkerRunner } from "../agent/run-worker.ts";
 import { createSnapshotter, SNAPSHOT_ROUND_MS } from "../agent/snapshotter.ts";
 import type { NS } from "../ns.ts";
 
@@ -80,8 +81,10 @@ export async function main(ns: NS): Promise<void> {
   if (token === "") return reportCantStart("token.txt is missing or empty");
   const agentSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const game = ns.ui.getGameInfo();
-  const snapshotter = createSnapshotter(ns, { deploymentId, agentSessionId });
-  const hackLoop = createHackLoop(ns, { deploymentId });
+  // One runner for every home worker, so they run one at a time, and never two copies of one.
+  const workerRunner = createWorkerRunner(ns);
+  const snapshotter = createSnapshotter(ns, { deploymentId, agentSessionId, workerRunner });
+  const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });
 
   /**
    * Starts `agent/boot.js`, which starts the deployed Agent; the caller then exits. Returns false if it couldn't (home
@@ -160,6 +163,8 @@ export async function main(ns: NS): Promise<void> {
       }
     }
     socket = null;
+    // Instructions come only from the brain it's connected to: the next one sends its own.
+    hackLoop.forget();
 
     // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one).
     if (closeCode === CONTROL_CLOSE_CODES.replaced) {

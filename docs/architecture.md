@@ -289,7 +289,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - **Workers** run one at a time, as temporary scripts, and report through a port. Every wait ends with its 2 s round, so the heartbeat is never more than 4 s apart, whatever the workers do. A worker that can't start, doesn't report in its round or is still running leaves its tier skipped that time, and named in `degradedTiers` until it next succeeds ([details](../packages/ingame/README.md#snapshots)).
 
 ### 5.3 Reconciler
-- **First slice (M3, #134):** the hack loop. The brain's desired state has one activity, `hackLoop { enabled, target }`. The Agent converges on it with two home workers (root what it can, then start and stop the loops on the other servers), when it changes and every 30 s ([`packages/ingame`](../packages/ingame/README.md#the-hack-loop)). Activities with reflex health, intents, guards and the ledger follow in M3.
+- **First slice (M3, #134):** the hack loop. The brain's desired state has one activity, `hackLoop { enabled, target, hosts }`: the brain picks the target and the servers it runs on (the game's, never home or the player's own). The Agent converges on it with two home workers (root what it can, then start and stop the loops), when it changes and every 30 s ([`packages/ingame`](../packages/ingame/README.md#the-hack-loop)). Activities with reflex health, intents, guards and the ledger follow in M3.
 - **Namespace ownership:** the reconciler manages only the scripts it owns: everything under `/agent/`, plus legacy reflexes it launched itself. It never kills or modifies anything else. Foreign scripts' RAM is counted as unavailable.
 - **Activities:** for each activity config, it diffs desired against actual: is the reflex running, with which config, and is it healthy. It starts, stops or reconfigures reflexes to close the diff.
 - **Intents:** executed at most once.
@@ -625,7 +625,7 @@ Each milestone is a [GitHub milestone](https://github.com/UnderMyBed/bitburner-a
 | Game process dead, frozen or bloated (24/7 run) | Lost wall-clock time | Liveness detection and recovery (R9, §10.2); heap monitoring and no code generation (R10); save backups |
 | Steam auto-update mid-campaign | Breakage | Upstream-`stable` watcher issues, runtime hold, save backups (§12.4) |
 | UI-backend fragility (DOM/React changes) | Stalls in BN1 (and any BitNode before SF4) | Critical-path E2 tests on the source build; Singularity replaces most UI use after SF4; smoke tests |
-| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2). Measured (Q1): 2.7 GB steady, 7.0 GB at a snapshot worker's peak (7.35 GB with the hack loop's deploy worker, #134), so a full reservation leaves about 1 GB of 8; sized in M3 planning |
+| 8 GB early RAM | Agent can't run alongside the batcher | Strict budgets; workers; when RAM-starved, the Agent skips the tiers it can't run and keeps the heartbeat (§5.2). Measured (Q1): 2.7 GB steady, 7.0 GB at a snapshot worker's peak (7.35 GB with the hack loop's deploy worker, #134), so a full reservation leaves under 1 GB of 8; sized in M3 planning |
 
 ---
 
@@ -637,7 +637,7 @@ Each open question is tracked as a `type:question` issue; the answer is written 
   - **Runtime equals static:** at each fast snapshot on E2, home held the Agent and the fast worker, 4.7 GB in use: exactly 2.7 + 2.0.
   - **The peak is derived:** the Agent plus its largest worker (the medium tier's) is 7.0 GB of 8, for the moment that worker runs. At a handover, `boot.js` runs beside the Agent too (5.4 GB, and more if a worker is still running); a worker that can't start then is a degraded tier, not an error.
   - **What it means for §5.1:** the reservation, "sized from measured worker peaks", is then 7.0 GB of a fresh save's 8, leaving reflexes (an early-BN1 batcher) about 1 GB until home grows. Whether to keep that, or reserve less (say, the Agent and the fast worker) and let the slower tiers degrade while RAM is short, is a design call for M3 planning.
-  - **Deferred by M3's first slice** (owner decision 34): the hack loop runs on the servers other than home, which a fresh save's no-port servers give about 100 GB of, so home is left to the Agent for now. Its deploy worker is the largest home worker since (4.65 GB, 7.35 GB with the Agent).
+  - **Deferred by M3's first slice** (owner decision 34): the hack loop runs on the game's servers, never home, and a fresh save's no-port servers have about 100 GB between them, so home is left to the Agent for now. Since then, the hack loop's deploy worker is the largest home worker: 4.65 GB, or 7.35 GB with the Agent.
 - **Q2** ([#35](https://github.com/UnderMyBed/bitburner-agent/issues/35)) Planner v0: is a small structured family of candidate policies (tens) enough to beat the legacy fork on BN1, or is real search (CEM/MCTS) needed sooner?
 - **Q9** ([#39](https://github.com/UnderMyBed/bitburner-agent/issues/39)) Fast-model fidelity: what divergence tolerance (per horizon) is "good enough" for planning? Calibrate on BN1 scenarios in M4.
 - **Q3** ~~Steam update control~~ Resolved: we don't try to block updates; see §12.4.

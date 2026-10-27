@@ -272,29 +272,31 @@ describe("restart, without loops", () => {
 describe("desired state (#134)", () => {
   const sentTypes = (connection: MemoryConnection) => connection.sentMessages().map((message) => message.type);
   const deployedA = { deployedId: "deployment-a", hold: false, deployFailed: false };
-  const loopOn = { hackLoop: { enabled: true, target: "n00dles" } };
-  const loopOff = { hackLoop: { enabled: false, target: null } };
+  const loopOn = { hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] } };
+  const loopOff = { hackLoop: { enabled: false, target: null, hosts: [] } };
 
-  test("sent after the welcome, to an Agent running the deployed deployment", () => {
+  test("sent when set, to a welcomed Agent running the deployed deployment", () => {
     channel.setDeploymentState(deployedA);
-    channel.setDesiredState(loopOn);
     const connection = connectAgent();
+    channel.setDesiredState(loopOn);
     expect(connection.sentMessages()).toEqual([
       { protocolVersion: 1, type: "welcome" },
       { protocolVersion: 1, type: "desiredState", ...loopOn },
     ]);
   });
 
-  test("none before the brain has one", () => {
+  test("never with the welcome: the controller sets it for each new Agent once it knows that Agent's game", () => {
     channel.setDeploymentState(deployedA);
+    channel.setDesiredState(loopOn);
     expect(sentTypes(connectAgent())).toEqual(["welcome"]);
   });
 
-  test("sent on a change, and not again when it's the same", () => {
+  test("sent on a change, not again when it's the same, and null sends nothing", () => {
     channel.setDeploymentState(deployedA);
     const connection = connectAgent();
     channel.setDesiredState(loopOn);
-    channel.setDesiredState({ hackLoop: { ...loopOn.hackLoop } });
+    channel.setDesiredState(structuredClone(loopOn));
+    channel.setDesiredState(null);
     channel.setDesiredState(loopOff);
     expect(connection.sentMessages().slice(1)).toEqual([
       { protocolVersion: 1, type: "desiredState", ...loopOn },
@@ -302,17 +304,27 @@ describe("desired state (#134)", () => {
     ]);
   });
 
-  test("sent again to each new session: after a reconnect, the Agent has it at once", () => {
+  test("each connection is sent it once: a reconnected Agent gets the same state again when it's set", () => {
     channel.setDeploymentState(deployedA);
-    channel.setDesiredState(loopOn);
     connectAgent();
+    channel.setDesiredState(loopOn);
     const reconnected = connectAgent(hello({ agentSessionId: "session-2" }));
+    channel.setDesiredState(loopOn);
     expect(sentTypes(reconnected)).toEqual(["welcome", "desiredState"]);
   });
 
-  test("not until the deployer knows the Agent runs the deployed deployment, then at once", () => {
-    channel.setDesiredState(loopOn);
+  test("a copy is kept: changing the caller's object later changes nothing sent", () => {
+    const state = structuredClone(loopOn);
+    channel.setDesiredState(state);
+    state.hackLoop.hosts.push("joesguns");
     const connection = connectAgent();
+    channel.setDeploymentState(deployedA);
+    expect(connection.sentMessages()[1]).toEqual({ protocolVersion: 1, type: "desiredState", ...loopOn });
+  });
+
+  test("not until the deployer knows the Agent runs the deployed deployment, then at once", () => {
+    const connection = connectAgent();
+    channel.setDesiredState(loopOn);
     expect(sentTypes(connection)).toEqual(["welcome"]);
     channel.setDeploymentState(deployedA);
     expect(sentTypes(connection)).toEqual(["welcome", "desiredState"]);
@@ -320,28 +332,49 @@ describe("desired state (#134)", () => {
 
   test("never to an Agent told to restart, nor to an outdated one welcomed after that", () => {
     channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
+    const toldToRestart = connectAgent();
     channel.setDesiredState(loopOn);
-    expect(sentTypes(connectAgent())).toEqual(["restart"]);
-    expect(sentTypes(connectAgent(hello({ agentSessionId: "session-2" })))).toEqual(["welcome"]);
+    expect(sentTypes(toldToRestart)).toEqual(["restart"]);
+    const outdated = connectAgent(hello({ agentSessionId: "session-2" }));
+    channel.setDesiredState(loopOff);
+    expect(sentTypes(outdated)).toEqual(["welcome"]);
+  });
+
+  test("an Agent told to restart after its welcome gets nothing more, even if its deployment is current again", () => {
+    channel.setDeploymentState(deployedA);
+    const connection = connectAgent();
+    channel.setDeploymentState({ deployedId: "deployment-b", hold: false, deployFailed: false });
+    // The deployer reads current.txt again, naming deployment-a: the Agent is on its way out all the same.
+    channel.setDeploymentState(deployedA);
+    channel.setDesiredState(loopOn);
+    expect(sentTypes(connection)).toEqual(["welcome", "restart"]);
   });
 
   test.each([
     ["on hold", { ...deployedA, hold: true }],
     ["after a failed deploy", { ...deployedA, deployFailed: true }],
-  ])("not while the deployment is %s", (_description, state) => {
-    channel.setDeploymentState(state);
+  ])("%s: on isn't sent, but off is, and on goes out once the hold clears", (_description, held) => {
+    channel.setDeploymentState(held);
+    const connection = connectAgent();
     channel.setDesiredState(loopOn);
-    expect(sentTypes(connectAgent())).toEqual(["welcome"]);
+    expect(sentTypes(connection)).toEqual(["welcome"]);
+    channel.setDesiredState(loopOff);
+    channel.setDesiredState(loopOn);
+    channel.setDeploymentState(deployedA);
+    expect(connection.sentMessages().slice(1)).toEqual([
+      { protocolVersion: 1, type: "desiredState", ...loopOff },
+      { protocolVersion: 1, type: "desiredState", ...loopOn },
+    ]);
   });
 
-  test("never once the game has drifted: a held brain stays observe-only", () => {
+  test("once the game has drifted, only off goes out", () => {
     channel.setDeploymentState(deployedA);
-    channel.setDesiredState(loopOn);
     const drifted = connectAgent(
       hello({ game: { version: "3.1.0", versionNumber: 52, commit: "abcdef123", platform: "Steam" } }),
     );
+    channel.setDesiredState(loopOn);
     channel.setDesiredState(loopOff);
-    expect(sentTypes(drifted)).toEqual(["welcome"]);
+    expect(drifted.sentMessages().slice(1)).toEqual([{ protocolVersion: 1, type: "desiredState", ...loopOff }]);
   });
 });
 

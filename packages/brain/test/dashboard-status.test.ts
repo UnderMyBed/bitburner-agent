@@ -6,7 +6,7 @@ import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
-import { setHackLoopEnabled } from "../src/hack-loop.ts";
+import type { HackLoopView } from "../src/hack-loop.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -18,6 +18,8 @@ const game = { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform:
 let directory: string;
 let store: TelemetryStore;
 let brainStartedEventId: number;
+/** What the hack loop's controller shows (#134): the status passes it on as it is. */
+const hackLoop: HackLoopView = { enabled: true, waiting: false, target: "n00dles", hosts: ["foodnstuff", "n00dles"] };
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
   brainStartedEventId = store.recordEvent(context, { atMs: STARTED_AT_MS, kind: BRAIN_STARTED_EVENT_KIND, detail: {} });
@@ -40,6 +42,7 @@ const status = (nowMs: number) =>
     brainStartedAtMs: STARTED_AT_MS,
     brainStartedEventId,
     supervising: true,
+    hackLoop,
     nowMs,
   });
 
@@ -121,32 +124,10 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     },
     alerts: [],
     supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
-    // On by default, with no target: the snapshots name no servers.
-    hackLoop: { enabled: true, target: null },
+    hackLoop,
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
-});
-
-test("the hack loop (#134): its switch, and the target the brain's rule picks from the latest snapshots", () => {
-  const server = { purchasedByPlayer: false, minDifficulty: 1, requiredHackingSkill: 1, numOpenPortsRequired: 0 };
-  recordSnapshot("static", STARTED_AT_MS + 2_000, {
-    servers: [
-      { ...server, hostname: "n00dles", moneyMax: 1_750_000, serverGrowth: 3_000 },
-      { ...server, hostname: "foodnstuff", moneyMax: 50_000_000, serverGrowth: 5 },
-    ],
-  });
-  const rooted = { maxRam: 16, cpuCores: 1, hasAdminRights: true };
-  recordSnapshot("medium", STARTED_AT_MS + 10_000, {
-    player: { skills: { hacking: 1 } },
-    servers: [
-      { ...rooted, hostname: "n00dles" },
-      { ...rooted, hostname: "foodnstuff" },
-    ],
-  });
-  expect(status(STARTED_AT_MS + 11_000).hackLoop).toEqual({ enabled: true, target: "n00dles" });
-  setHackLoopEnabled(store, false);
-  expect(status(STARTED_AT_MS + 12_000).hackLoop).toEqual({ enabled: false, target: null });
 });
 
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
@@ -289,6 +270,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     brainStartedAtMs: STARTED_AT_MS,
     brainStartedEventId,
     supervising: false,
+    hackLoop,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

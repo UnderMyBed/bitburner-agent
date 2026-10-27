@@ -63,7 +63,7 @@ export function startBrainInSimulation(
     token = TOKEN,
     pinnedDefinitions = readPinnedDefinitions(),
     data,
-    hackLoop = false,
+    withHackLoop = false,
   }: {
     build: InGameBuild;
     token?: string;
@@ -77,13 +77,16 @@ export function startBrainInSimulation(
      * With the hack loop's controller, as main.ts has it (#134), its switch kept in `data`'s store. Off by default, so
      * the M2 suites see the observe-only skeleton they test.
      */
-    hackLoop?: boolean;
+    withHackLoop?: boolean;
   },
 ): BrainInSimulation {
   const channel = new ControlChannel({ token, clock: game.clock });
   if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
-  if (hackLoop && !data) throw new Error("the hack loop keeps its switch in the store: give the brain its data");
-  const hackLoopController = hackLoop && data ? new HackLoopController({ channel, store: data.store }) : null;
+  let hackLoopController: HackLoopController | null = null;
+  if (withHackLoop) {
+    if (!data) throw new Error("the hack loop keeps its switch in the store: give the brain its data");
+    hackLoopController = new HackLoopController({ channel, store: data.store });
+  }
   const deployer = new Deployer({
     build,
     controlPort: CONTROL_PORT,

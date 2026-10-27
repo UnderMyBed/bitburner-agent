@@ -7,6 +7,7 @@ export {
   encodeControlMessage,
   type GameInfo,
   type HelloMessage,
+  MAX_HACK_LOOP_HOSTS,
   type ParsedMessage,
   parseAgentMessage,
   parseBrainMessage,
@@ -38,13 +39,14 @@ export {
   type HackLoopRootReport,
   isHackLoopFile,
 } from "./hack-loop.ts";
+export { homeWorkerFileNames } from "./home-workers.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,
   type MediumSnapshotData,
   type SlowSnapshotData,
-  SNAPSHOT_WORKER_PORT,
-  type SnapshotWorkerReport,
   type StaticSnapshotData,
   snapshotWorkerFileName,
+  WORKER_REPORT_PORT,
+  type WorkerReport,
 } from "./snapshots.ts";
