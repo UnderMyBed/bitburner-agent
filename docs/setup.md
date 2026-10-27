@@ -14,7 +14,11 @@ How to run the agent against Bitburner on Steam, from a clone of this repository
 
 ## 1. Clone and bootstrap
 
-Only tagged releases go to Steam (architecture §6). Clone the repository and check out the newest release tag. `v0.2.0`, the first with these steps, is the example below. For a release's own Steam soak ([#99](https://github.com/UnderMyBed/bitburner-agent/issues/99)) or the owner's check, check out the candidate commit you were given instead.
+Only tagged releases go to Steam (architecture §6). Clone the repository and check out the newest release tag. `v0.2.0`, the first with these steps, is the example below.
+
+For [the owner's check](#the-owners-check) or a release's own Steam soak ([#99](https://github.com/UnderMyBed/bitburner-agent/issues/99)), check out the candidate commit instead. It's recorded on the milestone's review issue. Then follow [this page as it is on `main`](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md), not the copy in your checkout: docs fixed after the candidate are only there.
+
+**Already have a clone?** Use it, except for the owner's check, which starts from a new one. Stop its brain if it's running, then follow [Upgrading to a new release](#upgrading-to-a-new-release) with the tag or commit you want. That ends with step 2's `npm run brain`, so carry on at step 3. Its `.data/`, if it has one, carries over: the config, the store and the save backups.
 
 ```
 git clone https://github.com/UnderMyBed/bitburner-agent.git
@@ -22,8 +26,6 @@ cd bitburner-agent
 git checkout v0.2.0
 npm run bootstrap
 ```
-
-**Already have a clone?** Use it: stop its brain if it's running, then follow [Upgrading to a new release](#upgrading-to-a-new-release) with the tag or commit you want. Its `.data/` carries over.
 
 `npm run bootstrap` fetches the game's source (the `vendor/bitburner-src` submodule), installs this repository's packages, then the game's own dependencies. It says each step, stops at the first that fails, and can be run again. The brain needs the submodule: it checks the game's version against it, and stops at start if it's missing.
 
@@ -41,7 +43,7 @@ It runs in that terminal until you stop it (Ctrl+C) or close the terminal.
 - builds the in-game code (a few seconds);
 - creates `.data/config.json` in the repo, the first time;
 - serves the dashboard at **http://127.0.0.1:12527/**;
-- **launches Bitburner through Steam within 30 s**.
+- **launches Bitburner through Steam about 30 s later**.
 
 The brain's output is its log: deploys, connections, save backups, errors. If it stops at start, the last lines say why. A `config.json` it doesn't accept names the field and what it should be.
 
@@ -96,7 +98,7 @@ Stop the brain, then:
 
 ```
 git fetch --tags
-git checkout v0.3.0
+git checkout v0.3.0                 # or the candidate commit, for a check or a soak
 npm run bootstrap
 npm run brain
 ```
@@ -114,14 +116,16 @@ The brain builds the new in-game code at start and deploys it when the game conn
 
 ## The owner's check
 
-Before relying on it, check on your machine, on the commit you were given. Do these in order, and record what you saw on [#95](https://github.com/UnderMyBed/bitburner-agent/issues/95) (steps 1–5) and [#94](https://github.com/UnderMyBed/bitburner-agent/issues/94) (step 6). Times are approximate: the supervisor looks every 30 s.
+Before relying on it, check it on your machine, on the candidate commit (step 1). Do these checks in order, and record what you saw on [#95](https://github.com/UnderMyBed/bitburner-agent/issues/95) (checks 1–5) and [#94](https://github.com/UnderMyBed/bitburner-agent/issues/94) (check 6). Times are approximate: the supervisor looks every 30 s.
 
-1. **From a fresh clone:** steps 1 and 2. The brain starts, and if the game isn't open, launches it within 30 s (a `relaunch` event, cause `notRunning`). Note anything you had to install or set up outside the repo: there should be nothing beyond Node, git and Steam.
-2. **Setting the game up:** steps 3 to 5. The game connects, and the dashboard shows the Agent reporting. Steam's origin isn't logged when it's accepted: if it connected with the default `allowedOrigins`, record `file://`; otherwise record the origin you added.
+1. **From a new clone:** setup steps 1 and 2, in a new folder, even if you already have a clone. Stop any other clone's brain first: the ports are fixed. The brain starts, and if the game isn't open, it launches it about 30 s later (a `relaunch` event, cause `notRunning`). Note anything you had to install or set up outside the repo: there should be nothing beyond Node, git and Steam. Note, too, how long Steam took to open the game.
+2. **Setting the game up:** setup steps 3 to 5. The game connects, and the dashboard shows the Agent reporting. Steam's origin isn't logged when it's accepted: if it connected with the default `allowedOrigins`, record `file://`; otherwise record the origin you added.
 3. **The game's commit:** note what the dashboard's Agent table shows on its "Game" line.
 4. **Stopping and starting the brain:** Ctrl+C, then `npm run brain` again. The game's Remote API reconnects within a few seconds (its reconnection delay is 5 s), and the Agent reports again.
-5. **A brain crash:** in Task Manager, end the brain's own `node` process: the one whose command line has `packages\brain\src\main.ts`, not `start.ts`. To see command lines, open the Details page in the left-hand menu, right-click a column header, then Select columns → Command line. Within about 5 s a `brain runner:` line shows the restart, and the game reconnects.
-6. **Supervision (#94).** These launch the game up to twice more, so with the brain's launch in check 1 they can use the 3 launches an hour allows.
+5. **A brain crash:** in Task Manager, end the brain's own `node` process: the one whose command line has `packages\brain\src\main.ts`, not `start.ts`. To see command lines, open the Details page in the left-hand menu, right-click a column header, then Select columns → Command line. A `brain runner:` line says the brain exited and restarts in 5 s. The brain's own start lines follow, and the game reconnects.
+6. **Supervision (#94).** Checks 6.1 and 6.2 each launch the game. With the brain's launch in check 1, that's 3 launches, the most allowed in an hour, so do check 6 once, in one go. If a launch within the hour would be a 4th (a part repeated, say), the supervisor gives up instead, with a `supervisionGaveUp` alert. That's the rate limit working: click "Resume supervision", which starts the count afresh, and carry on.
    1. **Close the game.** Within about 30 s it's relaunched (cause `notRunning`). Wait until the Agent reports again: autoexec starts it.
-   2. **Kill the Agent** in the game's terminal: `kill agent/<id>/agent.js`, with the deployment's folder. Once the Agent has been silent for 5 minutes, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec. That's no sooner than 10 minutes after the last launch, which leaves 5 minutes for Steam to start the game and 5 for the Agent to boot. So after check 6.1 it takes about 10 minutes.
-   3. **Pause supervision, then close the game.** It stays closed. Start it from Steam yourself, then resume. If you resume with the game closed, the supervisor launches it, unless that would be a 4th launch within the hour. Then it gives up instead, with a `supervisionGaveUp` alert. That's the rate limit working. Resume again: the count starts afresh, and the game is launched.
+   2. **Kill the Agent** in the game's terminal: `kill agent/<id>/agent.js`, where `<id>` is the "Deployment" in the dashboard's Agent table. Once the Agent has been silent for 5 minutes, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec. That's never sooner than 10 minutes after the last launch, which leaves 5 minutes for Steam to start the game and 5 for the Agent to boot. So expect it about 10 minutes after check 6.1's relaunch, or 5 minutes after you kill the Agent, whichever is later.
+   3. **Pause supervision, then close the game.** Wait a couple of minutes: no `relaunch` event appears. Then start the game from Steam yourself, and once it's open, resume. (Resuming while it's still closed would launch it: a 4th launch if check 1 launched the game, so the supervisor would give up as above.)
+
+**Afterwards,** the dashboard should show supervision running and the Agent connected. For a release's soak, that's the time to take `<start>` from. Leave it running for 24 h with the PC awake ([releasing step 2](releasing.md)).
