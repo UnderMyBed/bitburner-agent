@@ -1,6 +1,6 @@
 # 0011 — The simulator compares at checkpoints; full-length runs are occasional
 
-- **Status:** Accepted (2026-10-25)
+- **Status:** Accepted (2026-10-25). Amended by [owner decision 32](owner-decisions.md) (the baseline runs only when it can change, not at every release).
 - **Amends:** [0007](0007-headless-engine-simulator.md) (what the simulator is used for), and the M1 and M4 exit criteria in [architecture §13](../architecture.md#13-milestones)
 
 ## Context
@@ -20,7 +20,7 @@ ADR 0007 and §13 assumed full-length runs were cheap enough to repeat. M1's exi
 - **The agent is designed with the cost in mind:** fewer, larger batch jobs rather than tens of thousands of small ones. That's cheaper in the real game too.
 
 ## Consequences
-- **M1** records the fork baseline at checkpoints, not its time-to-destroy. The release check (`docs/releasing.md` step 2) takes about an hour on one core.
+- **M1** records the fork baseline at checkpoints, not its time-to-destroy. A run takes about an hour on one core. It's part of a release only when the simulator, the legacy package or the game pin has changed since its last rows (`docs/releasing.md` step 2, owner decision 32).
 - **M4** compares the agent with the fork at the same checkpoints over the same seeds: the agent must be at least as far along at each. Which measures decide that, and how, is open question Q10 ([#83](https://github.com/UnderMyBed/bitburner-agent/issues/83)), settled while planning M4. The agent must also destroy BN1 autonomously in the simulator at least once, as a measured full-length run, before the campaign starts on Steam.
 - Comparisons can only rank strategies over the first half-day of a BitNode. Longer-horizon quality is judged by the fast model, by the occasional full-length run, and on Steam.
 - The work that remains on simulator speed is overhead the simulator itself adds, where a profile shows any. The game's own work isn't ours to remove.

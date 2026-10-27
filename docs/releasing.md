@@ -23,7 +23,13 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 
 2. **Run the heavy suites on it.** Check out the candidate commit, run each suite, and post its printed table on the review issue, naming the commit:
    - the workloads: `npm run sim -- packages/sim/scenarios/<name>.json` for each `.json` file there
-   - the baselines: `npm run baseline -w @bitburner-agent/legacy` runs the legacy fork's BN1 baseline over its 8 seeds, to 4, 8 and 12 virtual hours, and prints its rows: paste them into [`docs/sim/baselines.md`](sim/baselines.md), and explain any failed seed in its Failures section. It takes about an hour on one core; a seed that hits its 60-minute limit has gone wrong ([running it](sim/baselines.md#running-it))
+   - the baselines, **only when they can change** (owner decision 32). The baseline is deterministic, so it runs only if, since the commit of its last rows in [`docs/sim/baselines.md`](sim/baselines.md), the simulator, the legacy package or the game pin has changed, or for M4's comparison. Check with:
+
+     ```
+     git diff --stat <last baseline commit> <candidate> -- packages/sim packages/legacy vendor/bitburner-src
+     ```
+
+     If that lists nothing, cite the last rows on the review issue, and don't run it. Otherwise, `npm run baseline -w @bitburner-agent/legacy` runs the legacy fork's BN1 baseline over its 8 seeds, to 4, 8 and 12 virtual hours, and prints its rows. Paste them into `docs/sim/baselines.md`, and explain any failed seed in its Failures section. It takes about an hour on one core. A seed that hits its 60-minute limit has gone wrong ([running it](sim/baselines.md#running-it)).
    - the benchmarks, on the reference rig: `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md` ([benchmarks](sim/benchmarks.md)). Post the printed row. A regression (exit 1) isn't recorded. Find the cause before going on: fix it, or say on the review issue why it's accepted and record it with `-- --accept` ([regressions](sim/benchmarks.md#regressions)).
    - the upstream watchers ([ADR 0009](decisions/0009-upstream-watchers-on-demand.md), [`tools/upstream-watch`](../tools/upstream-watch/README.md)). They run on `main`, which is the candidate commit until the close-out:
 
@@ -53,7 +59,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
    It closes with a line on whether the docs match what was built. Every issue in the milestone is closed or moved with a reason, except the review issue, the release task, and any epic whose last criterion is the release, which close in step 6.
 
 4. **Close out the docs, in one PR:**
-   - the new rows and reports from step 2 (`docs/sim/benchmarks.md`, `docs/sim/baselines.md`)
+   - the new rows and reports from step 2 (`docs/sim/benchmarks.md`, and `docs/sim/baselines.md` if the baseline ran)
    - the README's status and roadmap, plan.md's status, and the status lines of the packages' READMEs, showing the milestone done
    - anything in the README that waited on the milestone, such as "Getting started"
 
