@@ -1,6 +1,6 @@
 # 0011 — The simulator compares at checkpoints; full-length runs are occasional
 
-- **Status:** Accepted (2026-10-25)
+- **Status:** Accepted (2026-10-25). Amended by [owner decision 32](owner-decisions.md) (the fork baseline runs only when it can change, not at every release).
 - **Amends:** [0007](0007-headless-engine-simulator.md) (what the simulator is used for), and the M1 and M4 exit criteria in [architecture §13](../architecture.md#13-milestones)
 
 ## Context

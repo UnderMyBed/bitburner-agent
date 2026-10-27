@@ -1,6 +1,6 @@
 # Baselines
 
-What the agent has to beat. The legacy fork, played headless from a BitNode start a player can reach, sets the bar. Both are compared at fixed checkpoints, since a full run to a destroy costs hours per seed ([ADR 0011](../decisions/0011-checkpointed-simulator-comparisons.md)). M1 records the fork's progress at each checkpoint, and the M4 exit criterion needs the agent to be at least as far along at every one ([architecture §12.3](../architecture.md#123-migration-from-the-fork-strangler-pattern), [§13](../architecture.md#13-milestones)). A baseline runs on each release ([releasing](../releasing.md), step 2) and adds rows below.
+What the agent has to beat. The legacy fork, played headless from a BitNode start a player can reach, sets the bar. Both are compared at fixed checkpoints, since a full run to a destroy costs hours per seed ([ADR 0011](../decisions/0011-checkpointed-simulator-comparisons.md)). M1 records the fork's progress at each checkpoint, and the M4 exit criterion needs the agent to be at least as far along at every one ([architecture §12.3](../architecture.md#123-migration-from-the-fork-strangler-pattern), [§13](../architecture.md#13-milestones)). The baseline is deterministic: on the same code and Node version, every seed ends in the same state. So it runs only when something it runs on has changed since its last run, and at M4 ([releasing](../releasing.md), step 2; owner decision 32). Each run adds rows below.
 
 ## The BN1 baseline
 
