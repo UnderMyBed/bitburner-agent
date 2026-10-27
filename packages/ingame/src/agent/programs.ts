@@ -15,8 +15,6 @@ import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 
 /** Rounds between one try and the next while an item isn't bought: 30 s. */
 const PROGRAMS_ROUNDS_BETWEEN = 15;
-/** The least of the round worth starting the page's work in. */
-const MIN_TIME_FOR_THE_PAGE_MS = 1_000;
 /** How long before the round ends the worker gives up, to report and exit in time. */
 const WORKER_MARGIN_MS = 200;
 
@@ -56,8 +54,6 @@ export function createProgramBuyer(
         roundsUntilDue -= 1;
         return;
       }
-      // Driving the page takes a moment: with too little of the round left, the next round tries.
-      if (deadlineMs - Date.now() < MIN_TIME_FOR_THE_PAGE_MS) return;
       const workerFile = deployedFilePath(deploymentId, BUY_PROGRAM_WORKER_NAME);
       // The worker gives up a little before the round ends, so its report is in before the Agent stops waiting.
       const workerDeadlineMs = deadlineMs - WORKER_MARGIN_MS;

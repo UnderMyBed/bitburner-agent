@@ -53,8 +53,10 @@ const allOwned = (medium: MediumSnapshotData | null) =>
  * and a reload, autoexec starts the Agent. `beforeAgent` runs on the page just before the reload's Agent starts.
  */
 async function moneyedGameWithAgent({
+  money = MONEY,
   beforeAgent = async () => {},
 }: {
+  money?: number;
   beforeAgent?: (page: Page) => Promise<void>;
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
@@ -71,7 +73,7 @@ async function moneyedGameWithAgent({
         AutoexecScript: BOOT_SCRIPT,
       },
     }),
-    MONEY,
+    money,
   );
   const page = await gameFromSave(e2.browser, e2.server, save);
   started.pages.push(page);
@@ -107,6 +109,18 @@ test("with money, the Agent buys the TOR router at Alpha Enterprises and every p
   expect(latestMedium(dataDirectory)?.player.money).toBeGreaterThanOrEqual(money);
 });
 
+test("the TOR router alone: bought, its dialog closed, and the page back on the Terminal", async () => {
+  // Enough for the TOR router ($200k), not for BruteSSH.exe ($500k): nothing after it moves the page.
+  const { dataDirectory, page } = await moneyedGameWithAgent({ money: 300_000 });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.hasTorRouter === true, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  await advanceGameTime(page, 2_000);
+  await expect(page.getByText("You have purchased a TOR router").count()).resolves.toBe(0);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  expect(latestMedium(dataDirectory)?.programs).toEqual([]);
+});
 /** The sidebar's "World" section header, which holds City: the click goes to the header itself, wherever it sits. */
 const toggleWorldSection = (page: Page) =>
   page.locator("xpath=//div[@role='button' and .//p[normalize-space()='World']]").first().dispatchEvent("click");

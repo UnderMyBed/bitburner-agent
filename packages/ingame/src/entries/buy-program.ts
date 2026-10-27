@@ -3,8 +3,8 @@
 // name), the tech vendor in the player's city for the TOR router (else ""), and when to give up (the game's
 // `Date.now()`), so it ends within its Agent's round.
 // - The game first: an item already owned is done, without touching the page.
-// - The TOR router: the City, the vendor, "Purchase TOR router" (`Locations/ui/TorButton.tsx`), then that purchase's
-//   dialog closed with its own close button (Escape would dismiss every dialog), then back to the Terminal.
+// - The TOR router: the City, the vendor, "Purchase TOR router" (`Locations/ui/TorButton.tsx`), then back to the
+//   Terminal. No dialog is left open: E2 checks the page.
 // - A program: the Terminal, and `buy <program>` in it (`Terminal/commands/buy.ts`).
 // RAM: `hasTorRouter` 0.05 + `fileExists` 0.1 (ram-budget.json); the page costs nothing.
 import { type BuyProgramReport, TOR_ROUTER } from "@bitburner-agent/core";
@@ -27,8 +27,6 @@ async function buyTorRouter(gamePage: GamePage, vendor: string): Promise<string 
     )) ??
     (await gamePage.clickWhenThere("//button[contains(normalize-space(), 'Purchase TOR router')]", "TOR button"));
   if (problem !== null) return problem;
-  // The purchase's own dialog: the modal's close button sits beside its text (`ui/React/Modal.tsx`).
-  await gamePage.clickWhenThere("//div[button and contains(., 'You have purchased a TOR router')]/button", "dialog");
   return gamePage.openSidebarPage("Terminal");
 }
 

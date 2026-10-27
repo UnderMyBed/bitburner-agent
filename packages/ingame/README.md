@@ -170,10 +170,10 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 
 M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/programs.ts`, `src/page/game-page.ts`, `src/entries/buy-program.js`).
 - **What the brain sends:** `desiredState { programs: { enabled, next } }`, `next` being `{ item, vendor }` or null ([protocol](../../docs/bridge/protocol.md#brain--agent); [packages/brain](../brain/README.md#the-hacking-programs) picks it). The Agent keeps it until it disconnects, like the hack loop.
-- **When:** a new `next` is bought in the next round with at least 1 s left, after the snapshots and the hack loop. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it tries again every 15 rounds (30 s) and logs why.
+- **When:** a new `next` is bought in the next round, after the snapshots and the hack loop, in what's left of the round. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it tries again every 15 rounds (30 s) and logs why.
 - **`buy-program.js`**, with the item, the vendor and a deadline, so it ends within the Agent's round like any other worker:
   1. **The game first:** the TOR router owned (`hasTorRouter`) or the program on home (`fileExists`) is done, without touching the page.
-  2. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off), "Purchase TOR router", then that purchase's dialog closed with its own close button (Escape would dismiss every dialog), then back to the Terminal.
+  2. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off), "Purchase TOR router", then back to the Terminal. No dialog is left open (E2 checks).
   3. **A program:** the sidebar's Terminal, and `buy <program>` typed into it.
 
   It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a sidebar section collapsed (its items unmount), a button missing.

@@ -374,6 +374,12 @@ test("the hacking programs' button (#136) sends its switch, and each state reads
   );
   expect(textOf(document, "#programs")).toContain("Hacking programs: not buying");
   expect(textOf(document, "#programs button")).toBe("Start buying programs");
+  (document.querySelector("#programs button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => request.body)).toEqual([
+    '{"enabled":false}',
+    '{"enabled":true}',
+  ]);
 });
 
 test.each([
