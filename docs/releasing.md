@@ -23,13 +23,18 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 
 2. **Run the heavy suites on it.** Check out the candidate commit, run each suite, and post its printed table on the review issue, naming the commit:
    - the workloads: `npm run sim -- packages/sim/scenarios/<name>.json` for each `.json` file there
-   - the baselines, **only when they can change** (owner decision 32). The baseline is deterministic, so it runs only if, since the commit of its last rows in [`docs/sim/baselines.md`](sim/baselines.md), the simulator, the legacy package or the game pin has changed, or for M4's comparison. Check with:
+   - the BN1 baseline, **only when it can change** (owner decision 32). It's deterministic: on the same code and Node version, it gives the same results.
+     - **Its last run** is the Commit of the last rows in [`docs/sim/baselines.md`](sim/baselines.md), or of rows already on this release's review issue, which reach that file only at step 4. Drop a `-dirty` suffix.
+     - **Check what it runs on** since then, docs and tests aside:
 
-     ```
-     git diff --stat <last baseline commit> <candidate> -- packages/sim packages/legacy vendor/bitburner-src
-     ```
+       ```
+       git diff --stat <last run> <candidate> -- packages/sim packages/legacy packages/core vendor/bitburner-src package-lock.json tsconfig.json tsconfig.base.json tsconfig.node.json ':(exclude,glob)**/*.md' ':(exclude,glob)**/test/**'
+       ```
 
-     If that lists nothing, cite the last rows on the review issue, and don't run it. Otherwise, `npm run baseline -w @bitburner-agent/legacy` runs the legacy fork's BN1 baseline over its 8 seeds, to 4, 8 and 12 virtual hours, and prints its rows. Paste them into `docs/sim/baselines.md`, and explain any failed seed in its Failures section. It takes about an hour on one core. A seed that hits its 60-minute limit has gone wrong ([running it](sim/baselines.md#running-it)).
+       Also compare `node --version` with the last rows' Node column.
+     - **Nothing changed:** don't run it. Post the empty output and the last rows' commit on the review issue.
+     - **Something changed:** run it. Or, if a change can't reach the simulation (code the simulator never loads), say why on the review issue instead. To run it, `npm run baseline -w @bitburner-agent/legacy` plays the legacy fork's BN1 baseline over its 8 seeds, to 4, 8 and 12 virtual hours, and prints its rows. It takes about an hour on one core. A seed that hits its 60-minute limit has gone wrong ([running it](sim/baselines.md#running-it)). Explain any failed seed in the file's Failures section at step 4.
+     - **At M4,** run it whatever the check says: the planner is compared with it then.
    - the benchmarks, on the reference rig: `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md` ([benchmarks](sim/benchmarks.md)). Post the printed row. A regression (exit 1) isn't recorded. Find the cause before going on: fix it, or say on the review issue why it's accepted and record it with `-- --accept` ([regressions](sim/benchmarks.md#regressions)).
    - the upstream watchers ([ADR 0009](decisions/0009-upstream-watchers-on-demand.md), [`tools/upstream-watch`](../tools/upstream-watch/README.md)). They run on `main`, which is the candidate commit until the close-out:
 
@@ -59,7 +64,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
    It closes with a line on whether the docs match what was built. Every issue in the milestone is closed or moved with a reason, except the review issue, the release task, and any epic whose last criterion is the release, which close in step 6.
 
 4. **Close out the docs, in one PR:**
-   - the new rows and reports from step 2 (`docs/sim/benchmarks.md`, and `docs/sim/baselines.md` if the baseline ran)
+   - the new rows and reports from step 2: `docs/sim/benchmarks.md`, and, if the baseline ran during this release, its last run's rows in `docs/sim/baselines.md`, under the commit it ran on
    - the README's status and roadmap, plan.md's status, and the status lines of the packages' READMEs, showing the milestone done
    - anything in the README that waited on the milestone, such as "Getting started"
 
@@ -92,6 +97,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 `0.<n>.<patch>`, for fixes after milestone n's release:
 - The fixing PRs are merged as usual.
 - Steps 1, 2 (the suites the fix touches, and always the workloads), 5 and 6 apply. There's no milestone review and no milestone to close.
+- The baseline follows step 2's check. If it runs, its rows go into `docs/sim/baselines.md` in a docs PR before the tag.
 - The title is `v0.<n>.<patch> — fix: <what it fixes>`, and the notes link the fixing PRs.
 
 ## Release notes

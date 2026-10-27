@@ -1,6 +1,6 @@
 # 0004 — Merge gate and test regime
 
-- **Status:** Accepted (2026-10-24)
+- **Status:** Accepted (2026-10-24). Amended by [owner decision 32](owner-decisions.md) (the fork baseline runs only when it can change, not before every release).
 - **Extended by:** [0008](0008-work-tracking-and-reviews.md)
 
 ## Context

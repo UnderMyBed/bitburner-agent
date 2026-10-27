@@ -14,7 +14,7 @@ Every change to logic starts with a failing test. The bar is "a test would catch
 | Property | Planner, reconciler and protocol invariants under randomised inputs | Every PR (CI) |
 | Contract | In-game bundles type-check against the pinned game's API definitions; static RAM within budget | Every PR (CI) |
 | Integration | The brain, bridge and in-game code together in the headless simulator, including the skeleton suite (`packages/brain`) | Every PR (CI) |
-| Scenario / chaos | Seeded full runs in the headless simulator; injected failures | On demand, and before every release |
+| Scenario / chaos | Seeded full runs in the headless simulator; injected failures | On demand, and before every release; the BN1 baseline only when it can change ([releasing](docs/releasing.md) step 2) |
 | End-to-end | Real game UI in a source build, driven by Playwright | On demand, and before every release |
 
 Mutation testing runs periodically on core logic to check that the tests actually catch broken code.
@@ -107,7 +107,7 @@ Everything stays in the repo: nothing is installed outside it, npm's own downloa
 | `npm run setup:engine` / `npm run build:engine` | Install the game's dependencies / bundle the engine for the simulator ([`packages/sim`](packages/sim/README.md)) |
 | `npm run sim -- <scenario.json>` | Run a simulator scenario across seeds and print the results ([docs/sim/scenarios.md](docs/sim/scenarios.md)) |
 | `npm run bench -w @bitburner-agent/sim` | Benchmark the simulator's speed and memory and record a row ([docs/sim/benchmarks.md](docs/sim/benchmarks.md)); before releases, not in CI |
-| `npm run baseline -w @bitburner-agent/legacy` | Run the legacy fork's BN1 baseline to 4, 8 and 12 virtual hours over seeds 1–8 and print its rows ([docs/sim/baselines.md](docs/sim/baselines.md)); about an hour on one core. It's run when its rows can change ([releasing](docs/releasing.md) step 2), not in CI |
+| `npm run baseline -w @bitburner-agent/legacy` | Run the legacy fork's BN1 baseline to 4, 8 and 12 virtual hours over seeds 1–8 and print its rows ([docs/sim/baselines.md](docs/sim/baselines.md)); about an hour on one core; when it can change ([releasing](docs/releasing.md) step 2), not in CI |
 
 Code lives in npm workspaces under `packages/` (see architecture §12.2). `tools/` holds repository tooling run by Node, under the same gates, such as [`tools/upstream-watch`](tools/upstream-watch/README.md), the upstream `stable` and `dev` watchers. `spikes/` is throwaway and excluded from the gates. `packages/legacy/fork/` is vendored third-party JS: Biome skips it, it's never edited, `packages/legacy/test/fork.test.ts` checks its bytes, and `.claude/settings.json` keeps Claude Code from loading its `CLAUDE.md` as memory.
 
