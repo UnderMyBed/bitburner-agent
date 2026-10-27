@@ -121,6 +121,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now: how many gaps and their total time, with the newest 20 listed. Any time without snapshots in the window counts: from the window's start to the first snapshot with a new store, or while the brain or the Agent was down.
   - **Supervision:** off, running, paused, or gave up; the supervisor's recent relaunches; and the switch (hidden when off).
   - **Hack loop:** on or off; on, whether the brain is waiting for the Agent's snapshots, has no target yet (while servers are being rooted), or runs it against a target on so many servers; and its switch ([the hack loop](#the-hack-loop)).
+  - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, or travel); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
 - **When it can't show the status,** it says why in place of the data, rather than showing stale numbers:
   - "Brain unreachable": the brain stopped, or crashed;
@@ -171,9 +172,9 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - **On** waits for that Agent's own static and medium snapshots, which come in its first round, then sends the target (or none yet, while the servers get rooted) and the hosts. It never sends the last brain's or the last game's view:
     - a brain that restarts sends the running Agent the same state, which changes nothing;
     - an Agent after a reset is never given a target its game can't hack.
-  - The channel sends each connection a state once, then again on a change. It sends only to a welcomed Agent running the deployed code, and while the brain holds, only "off" ([protocol](../../docs/bridge/protocol.md#rules)).
+  - The channel sends each connection a state once, then again on a change. It sends only to a welcomed Agent running the deployed code. While the brain holds, it sends only what starts nothing new: the hack loop off, or as last sent, and nothing bought ([protocol](../../docs/bridge/protocol.md#rules)).
   - The dashboard shows the controller's own view: on or off, waiting for the snapshots, the target and the number of hosts.
-- **Wiring:** `main.ts` makes the controller before the control channel listens. The simulator suite wires it the same way through `test/helpers/brain-in-simulation.ts` (`withHackLoop`). `brain-process.test.ts` doesn't cover it.
+- **Wiring:** `main.ts` makes the controller before the control channel listens. The simulator suite wires it the same way through `test/helpers/brain-in-simulation.ts` (`withDesiredState`). `brain-process.test.ts` doesn't cover it.
 - **The suite** (`test/hack-loop-skeleton.test.ts`), in an 8 GB fresh start in the simulator:
   - The Agent roots the no-port servers and runs the loop on each against the brain's target (n00dles). The money grows by over $500,000 in 10 virtual minutes.
   - An owner's script already on foodnstuff is untouched, and the loop there has only the RAM it left.
@@ -184,18 +185,19 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - **After a disconnect,** the Agent acts only on the next brain's instructions. From a brain that sends none, a loop that stops stays stopped.
   - **With the desired state set directly:** only the named hosts run the loop, a new target restarts the loops against it, a dropped host's loop goes, and another deployment's loop is stopped.
   - **Home too full for the deploy worker:** home never holds more than the Agent, the owner's script and one worker, and the deploy worker runs within two rounds of there being room.
+  - **A purchase the page can't make** (#136; the simulator's page has no sidebar): each try logs why, the next comes 30 s later, and home never holds more than the Agent and one worker. E2 buys on the real page ([packages/e2](../e2/README.md)).
 
 ## The hacking programs
 
 M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the brain tells the Agent which hacking program to buy next, and the Agent buys it through the game's page ([`packages/ingame`](../ingame/README.md#the-hacking-programs)). The code is `src/programs.ts`.
 
-- **The switch:** "Buy hacking programs" on the dashboard, on unless the owner turns it off (the store's `programs.enabled`), like the hack loop's.
+- **The switch:** "Stop buying programs" on the dashboard ("Start buying programs" when off), on unless the owner turns it off (the store's `programs.enabled`), like the hack loop's.
 - **The next item** (`chooseNextPurchase`), from the connected Agent's medium snapshot (`hasTorRouter`, `programs`, the player's money and city):
   - the first not owned, in the order TOR router, BruteSSH.exe, FTPCrack.exe, relaySMTP.exe, HTTPWorm.exe, SQLInject.exe;
   - once the player's money covers its price: $200k, $500k, $1.5m, $5m, $30m, $250m (`Constants.ts:44`, `DarkWeb/DarkWebItems.ts`);
-  - the TOR router needs a tech vendor in the player's city: Sector-12 Alpha Enterprises, Aevum NetLink Technologies, Ishima Omega Software, Volhaven CompuTek. Chongqing and New Tokyo have none, and the dashboard says travel is needed.
+  - the TOR router needs a tech vendor in the player's city, one per city that has any (`TOR_VENDORS` in core): Sector-12 Alpha Enterprises, Aevum NetLink Technologies, Ishima Omega Software, Volhaven CompuTek. Chongqing and New Tokyo have none, and the dashboard says travel is needed.
 - **The dashboard** shows what's owned, what's being bought, or what it waits for (money for an item, or travel).
-- **One desired state:** `DesiredStateController` (`src/desired-state.ts`) sends the hack loop and the hacking programs together, whole each time, with the hack loop's rules: nothing new until the connected Agent's own snapshots; while the brain holds, only a state that starts nothing (`desiredStateWhileHolding` in core: the hack loop off, nothing bought).
+- **One desired state:** `DesiredStateController` (`src/desired-state.ts`) sends the hack loop and the hacking programs together, whole each time, with the hack loop's rules: nothing new until the connected Agent's own snapshots; while the brain holds, only a state that starts nothing new (`desiredStateWhileHolding` in core: the hack loop off, or as last sent, and nothing bought).
 
 ## Supervision
 
@@ -326,9 +328,10 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/supervision.ts` | The supervision switch, in the store's settings |
 | `src/hack-loop.ts` | The hack loop's switch and rules (target and hosts) |
 | `src/programs.ts` | Buying the hacking programs: the switch, the next item, the prices and vendors |
-| `src/desired-state.ts` | The controller that sends both as the desired state |
+| `src/desired-state.ts` | The controller that sends the hack loop and the hacking programs as one desired state |
+| `src/switches.ts` | The dashboard's on/off switches, as settings in the store |
 | `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
-| `test/hack-loop-skeleton.test.ts` | The hack loop's suite |
-| `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the hack loop's controller only when a test asks, so the M2 suites see the observe-only skeleton they test |
+| `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the program buyer |
+| `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the desired-state controller only when a test asks (`withDesiredState`), so the M2 suites see the observe-only skeleton they test |

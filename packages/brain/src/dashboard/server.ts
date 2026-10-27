@@ -1,6 +1,6 @@
 // The dashboard's server (#93, architecture §7): one page and a JSON API, on 127.0.0.1 only (owner decision 14). Any
-// web page can reach localhost, so it also refuses a Host header that isn't its own (DNS rebinding), any request another
-// site's page makes (so none can make the brain build status over and over), and a write from any page but its own.
+// web page can reach localhost, so it also refuses a Host header that isn't its own (DNS rebinding), any request
+// another site's page makes (so none can make the brain build status over and over), and a write from any other page.
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";

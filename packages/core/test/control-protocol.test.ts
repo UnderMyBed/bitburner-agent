@@ -139,6 +139,10 @@ describe("rejected, each with a reason", () => {
       { ...desiredState, programs: { enabled: true, next: { item: "TOR router", vendor: null } } },
     ],
     [
+      "the TOR router at a vendor that doesn't sell it",
+      { ...desiredState, programs: { enabled: true, next: { item: "TOR router", vendor: "Noodle Bar" } } },
+    ],
+    [
       "a program with a vendor",
       { ...desiredState, programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: "Alpha Enterprises" } } },
     ],
@@ -163,16 +167,31 @@ describe("while the brain holds (#136)", () => {
   const hackLoopOff = { enabled: false, target: null, hosts: [] };
   const buying = { enabled: true, next: { item: "BruteSSH.exe", vendor: null } };
 
-  test("a state that would start something isn't sent: the hack loop on", () => {
-    expect(
-      desiredStateWhileHolding({ hackLoop: { enabled: true, target: "n00dles", hosts: [] }, programs: buying }),
-    ).toBeNull();
+  const hackLoopOn = { enabled: true, target: "n00dles", hosts: ["foodnstuff"] };
+
+  test("with the hack loop on and nothing sent yet, nothing goes: it would start the loop", () => {
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: buying }, null)).toBeNull();
+  });
+
+  test("with the hack loop on, it goes as last sent, buying nothing", () => {
+    const lastSent = { hackLoop: { ...hackLoopOn, target: "joesguns" }, programs: buying };
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: buying }, lastSent)).toEqual({
+      hackLoop: lastSent.hackLoop,
+      programs: { enabled: true, next: null },
+    });
   });
 
   test("with the hack loop off, it goes, buying nothing", () => {
-    expect(desiredStateWhileHolding({ hackLoop: hackLoopOff, programs: buying })).toEqual({
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOff, programs: buying }, null)).toEqual({
       hackLoop: hackLoopOff,
       programs: { enabled: true, next: null },
     });
+  });
+
+  test("buying turned off goes too, so the Agent stops at once", () => {
+    const lastSent = { hackLoop: hackLoopOn, programs: buying };
+    expect(
+      desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: { enabled: false, next: null } }, lastSent),
+    ).toEqual({ hackLoop: hackLoopOn, programs: { enabled: false, next: null } });
   });
 });

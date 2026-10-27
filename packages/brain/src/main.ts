@@ -1,7 +1,8 @@
 // npm run brain [-- --data-dir <dir>]: the long-running brain process (architecture D1), run from the repo, with its
 // data in the repo's .data/ unless told otherwise. It runs the control channel and stores what the Agent reports,
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
-// to run (the hack loop, #134, and the hacking programs, #136), serves the dashboard, and (for Steam, on Windows) supervises the game itself.
+// to run (the hack loop, #134, and the hacking programs, #136), serves the dashboard, and (for Steam, on Windows)
+// supervises the game itself.
 import path from "node:path";
 import process from "node:process";
 import {

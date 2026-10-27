@@ -59,6 +59,11 @@ const expectations: Record<string, EnvironmentExpectation> = {
     allowed: [domGlobal, nsCalledRight],
     rejected: [nodeGlobal, nodeModule, nsCalledWrong],
   },
+  // The in-game code's unit tests: checked as the in-game code is.
+  "packages/ingame/test/agent/tsconfig.json": {
+    allowed: [domGlobal, nsCalledRight],
+    rejected: [nodeGlobal, nodeModule, nsCalledWrong],
+  },
   "packages/ingame/tsconfig.json": nodeEnvironment,
   "packages/legacy/tsconfig.json": nodeEnvironment,
   "tools/tsconfig.json": nodeEnvironment,

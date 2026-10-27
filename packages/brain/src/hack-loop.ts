@@ -1,25 +1,22 @@
 // The brain's side of the hack loop (#134, M3's first slice): its switch, and the starter rules for its target and the
-// servers it runs on, over the connected Agent's snapshots, until the planner (M4) decides. The dashboard's switch turns
-// it on and off; on is the default (owner decision 34). `DesiredStateController` (desired-state.ts) sends it.
+// servers it runs on, over the connected Agent's snapshots, until the planner (M4) decides. The dashboard's switch
+// turns it on and off; on is the default (owner decision 34). `DesiredStateController` (desired-state.ts) sends it.
 import {
   MAX_FIELD_LENGTH,
   MAX_HACK_LOOP_HOSTS,
   type MediumSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import { readSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 export const HACK_LOOP_ENABLED_SETTING = "hackLoop.enabled";
 
 type StaticServer = StaticSnapshotData["servers"][number];
 
-/** The dashboard's switch: on unless the owner turned it off. Fails on a value it didn't write, rather than guess. */
+/** The dashboard's switch: on unless the owner turned it off. */
 export function readHackLoopEnabled(store: TelemetryStore): boolean {
-  const enabled = store.getSetting(HACK_LOOP_ENABLED_SETTING);
-  if (enabled !== null && enabled !== "true" && enabled !== "false") {
-    throw new Error(`the ${HACK_LOOP_ENABLED_SETTING} setting is ${JSON.stringify(enabled)}, not true or false`);
-  }
-  return enabled !== "false";
+  return readSwitch(store, HACK_LOOP_ENABLED_SETTING, true);
 }
 
 /**

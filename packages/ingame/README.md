@@ -2,20 +2,20 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first action, [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)) and [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)).
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, and `buy-program.js` |
-| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `programs.ts`, and `run-worker.ts`, the runner they share for their home workers |
+| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `program-buyer.ts`, and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effector: `game-page.ts` |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
 | `src/` | In-game code, typechecked as the game's page sees it: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` (`src/tsconfig.json`) |
 | `scripts/` | The build (Node): `bundles.ts`, and `build.ts`, its command |
-| `test/` | Tests (Node), which test the built bundles in the simulator |
+| `test/` | Tests (Node), which test the built bundles in the simulator; `test/agent/` unit-tests the Agent's modules, typechecked as in-game code (its own `tsconfig.json`) |
 | `ram-budget.json` | Each bundle's RAM budget, in GB |
 
 In-game code imports `@bitburner-agent/core` (for the deploy layout, the control protocol, and the snapshot types and port) and its own modules. The bundle includes them; nothing is imported at runtime.
@@ -76,7 +76,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -104,8 +104,8 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 **Lifecycle:**
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
-3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s.
-4. **`desiredState`:** it keeps the latest until it disconnects, and the hack loop converges on it.
+3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, then buys [the next hacking program](#the-hacking-programs) when that's due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s.
+4. **`desiredState`:** it keeps the latest until it disconnects: the hack loop converges on it, and the program buyer buys what it names.
 5. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 6. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
@@ -142,7 +142,7 @@ While the new-game tutorial runs, finished scripts never free their RAM (archite
 
 ## The hack loop
 
-The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134), owner decision 34). The brain decides; the Agent carries it out (`src/agent/hack-loop.ts`). It's the thinnest version of the reconciler (architecture §5.3), with one activity in it:
+The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134), owner decision 34). The brain decides; the Agent carries it out (`src/agent/hack-loop.ts`). It's the thinnest version of the reconciler (architecture §5.3), and its first activity:
 - **What the brain sends:** `desiredState { hackLoop: { enabled, target, hosts } }` ([protocol](../../docs/bridge/protocol.md#brain--agent)).
   - It's on unless the owner turns it off on the dashboard.
   - `target` and `hosts` come from the brain's starter rules ([packages/brain](../brain/README.md#the-hack-loop)). The hosts are the game's rooted servers, never home and never the player's own purchased or Hacknet servers.
@@ -168,19 +168,21 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 
 ## The hacking programs
 
-M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/programs.ts`, `src/page/game-page.ts`, `src/entries/buy-program.js`).
+M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/program-buyer.ts`, `src/page/game-page.ts`, `src/entries/buy-program.ts`).
 - **What the brain sends:** `desiredState { programs: { enabled, next } }`, `next` being `{ item, vendor }` or null ([protocol](../../docs/bridge/protocol.md#brain--agent); [packages/brain](../brain/README.md#the-hacking-programs) picks it). The Agent keeps it until it disconnects, like the hack loop.
-- **When:** a new `next` is bought in the next round, after the snapshots and the hack loop, in what's left of the round. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it tries again every 15 rounds (30 s) and logs why.
+- **When:** a new `next` is bought in the next round, after the snapshots and the hack loop, in what's left of the round; with under 1 s left, in the round after. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it logs why, every try, and tries again every 15 rounds (30 s).
 - **`buy-program.js`**, with the item, the vendor and a deadline, so it ends within the Agent's round like any other worker:
   1. **The game first:** the TOR router owned (`hasTorRouter`) or the program on home (`fileExists`) is done, without touching the page.
-  2. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off), "Purchase TOR router", then back to the Terminal. No dialog is left open (E2 checks).
-  3. **A program:** the sidebar's Terminal, and `buy <program>` typed into it.
+  2. **Never over an open dialog:** that's the owner's to read and close, so it does nothing and tries again later.
+  3. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off), "Purchase TOR router" while it can be bought (not disabled), then the purchase's dialog closed with its own close button (never Escape, which closes every dialog). No dialog is left open (E2 checks).
+  4. **A program:** the sidebar's Terminal, and `buy <program>` typed into it, unless the owner has a line typed there: that's left alone.
+  5. **Back to the Terminal,** however it went, once it has moved the page.
 
-  It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a sidebar section collapsed (its items unmount), a button missing.
-- **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. No wait goes past the worker's deadline.
+  It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a dialog open, a sidebar section collapsed (its items unmount), a button missing, a line typed in the terminal, or the deadline reached. A problem on the way back to the Terminal is reported even when the item was bought.
+- **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. The Enter handler is read after the line is typed: the one from before would run the empty line. Every step checks the worker's deadline first, and every wait ends by it.
 - **What the owner sees:** a few times a session, the page switches to the City and back to the Terminal, or a `buy` is typed into the terminal. The dashboard's "Stop buying programs" switch stops it.
 
-E2 buys all six on the real page, and checks a collapsed World section stops it until it's open again ([`packages/e2`](../e2/README.md)).
+E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/program-buyer.test.ts` checks when the Agent runs the worker and what it logs.
 
 ## Hygiene and tests
 

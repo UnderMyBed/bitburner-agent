@@ -1,5 +1,7 @@
 {
   // The package's Node side: its build script and tests. The in-game code itself is src/ (src/tsconfig.json).
   "extends": "../../tsconfig.node.json",
-  "include": ["scripts/**/*.ts", "test/**/*.ts"]
+  "include": ["scripts/**/*.ts", "test/**/*.ts"],
+  // test/agent/ has its own config: it tests the in-game code.
+  "exclude": ["test/agent/**"]
 }

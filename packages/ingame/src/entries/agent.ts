@@ -1,8 +1,8 @@
 // agent/<deploymentId>/agent.js: the always-running in-game Agent (architecture §5.1). It holds the control channel to
 // the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff. While
 // welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), converges the hack loop on the brain's
-// desired state when that's due (../agent/hack-loop.ts, #134), buys the next hacking program (../agent/programs.ts,
-// #136), and sleeps in between.
+// desired state when that's due (../agent/hack-loop.ts, #134), buys the next hacking program
+// (../agent/program-buyer.ts, #136), and sleeps in between.
 //
 // Two rules make it safe:
 // - Socket handlers never call `ns`. While the script awaits `ns.sleep` (between rounds), the game kills it for any
@@ -28,7 +28,7 @@ import {
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import { createHackLoop } from "../agent/hack-loop.ts";
-import { createProgramBuyer } from "../agent/programs.ts";
+import { createProgramBuyer } from "../agent/program-buyer.ts";
 import { createWorkerRunner } from "../agent/run-worker.ts";
 import { createSnapshotter, SNAPSHOT_ROUND_MS } from "../agent/snapshotter.ts";
 import type { NS } from "../ns.ts";

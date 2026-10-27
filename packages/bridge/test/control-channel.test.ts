@@ -399,6 +399,22 @@ describe("desired state (#134)", () => {
     channel.setDesiredState({ ...loopOff, programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: null } } });
     expect(connection.sentMessages().slice(1)).toEqual([{ protocolVersion: 1, type: "desiredState", ...loopOff }]);
   });
+
+  test("while holding with the hack loop on, buying off still goes, with the hack loop as last sent (#136)", () => {
+    channel.setDeploymentState(deployedA);
+    const connection = connectAgent();
+    channel.setDesiredState(loopOn);
+    channel.setDeploymentState({ ...deployedA, hold: true });
+    // A new target isn't sent while holding: the loop stays as the Agent has it.
+    const newTarget = { ...loopOn.hackLoop, target: "joesguns" };
+    channel.setDesiredState({ hackLoop: newTarget, programs: noPurchase });
+    channel.setDesiredState({ hackLoop: newTarget, programs: { enabled: false, next: null } });
+    expect(connection.sentMessages().slice(1)).toEqual([
+      { protocolVersion: 1, type: "desiredState", ...loopOn },
+      { protocolVersion: 1, type: "desiredState", hackLoop: loopOn.hackLoop, programs: { enabled: false, next: null } },
+    ]);
+  });
+
   test("once the game has drifted, only off goes out", () => {
     channel.setDeploymentState(deployedA);
     const drifted = connectAgent(

@@ -309,13 +309,15 @@ test("a purchase the page can't make (#136): the Agent logs why and when it trie
     hackLoop: { enabled: false, target: null, hosts: [] },
     programs: { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } },
   });
-  await game.run(CONVERGE_EVERY_MS + 2 * SNAPSHOT_ROUND_MS);
+  // Long enough for three tries 30 s apart, not for a fourth.
+  await game.run(2 * CONVERGE_EVERY_MS + 3 * SNAPSHOT_ROUND_MS);
   const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
   const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("couldn't buy TOR router"));
-  // The simulator's page has nothing to click: a problem, logged once (the log notes changes), and not bought.
-  expect(tries).toHaveLength(1);
-  expect(tries[0]).toContain("trying again in 30 s");
+  // The simulator's page has no sidebar: each try waits for it until its deadline, logs why, and isn't bought.
+  expect(tries).toHaveLength(3);
+  for (const line of tries) expect(line).toContain('out of time before the "City" in the sidebar');
+  for (const line of tries) expect(line).toContain("trying again in 30 s");
   expect(loop.medium()?.hasTorRouter).toBe(false);
   // Each try ends within its round, so home never held more than the Agent and one worker. (E2 shows the retry:
   // bought once the page allows it.)

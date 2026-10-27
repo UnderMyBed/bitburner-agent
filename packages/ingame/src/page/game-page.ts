@@ -5,12 +5,14 @@
 // - A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own
 //   `onChange` and `onKeyDown`, as the legacy fork does. So a hidden element (a collapsed menu) still works, as long as
 //   it's in the page.
-// - Every wait is `ns.asleep`, which doesn't mark the script busy (packages/ingame/README.md, "The Agent"), and none
-//   goes past the caller's deadline: a worker that drives the page ends within its Agent's round, like any other.
+// - Every step checks the caller's deadline first, and every wait ends by it: a worker that drives the page ends within
+//   its Agent's round, like any other. Waits are `ns.asleep`, which doesn't mark the script busy.
 import type { NS } from "../ns.ts";
 
 /** How often a wait for an element looks again, and how long a click is given to render. */
 const POLL_MS = 50;
+/** Any modal open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). */
+const OPEN_DIALOG_XPATH = "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ')]";
 
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
 function reactPropsOf(element: Element): Record<string, unknown> | null {
@@ -20,7 +22,7 @@ function reactPropsOf(element: Element): Record<string, unknown> | null {
 
 /**
  * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
- * Each step returns its problem, or null once it's done; an element that never appears is a problem at the deadline.
+ * Each step returns its problem, or null once it's done.
  */
 export function openGamePage(ns: NS, deadlineMs: number) {
   let page: Document | undefined;
@@ -36,34 +38,42 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   const findElement = (xpath: string): Element | null =>
     gamePage.evaluate(xpath, gamePage, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
       .singleNodeValue as Element | null;
+  const timeLeftMs = () => deadlineMs - Date.now();
+  /** Lets the page render after an action, without passing the deadline. */
+  const letRender = () => ns.asleep(Math.max(0, Math.min(POLL_MS, timeLeftMs())));
 
   /** The element, once it's in the page, or null at the deadline. */
   async function waitForElement(xpath: string): Promise<Element | null> {
     for (;;) {
+      if (timeLeftMs() <= 0) return null;
       const element = findElement(xpath);
       if (element) return element;
-      if (Date.now() + POLL_MS >= deadlineMs) return null;
-      await ns.asleep(POLL_MS);
+      await ns.asleep(Math.min(POLL_MS, timeLeftMs()));
     }
   }
 
   /** Waits for the element and clicks it as a player would, then lets the page render. */
   async function clickWhenThere(xpath: string, what: string): Promise<string | null> {
     const element = await waitForElement(xpath);
-    if (!element) return `no ${what} on the page`;
+    if (!element) return timeLeftMs() <= 0 ? `out of time before the ${what}` : `no ${what} on the page`;
     const onClick = reactPropsOf(element)?.onClick;
     if (typeof onClick !== "function") return `the ${what} can't be clicked`;
     await onClick({ isTrusted: true, preventDefault: () => {}, stopPropagation: () => {} });
-    await ns.asleep(POLL_MS);
+    await letRender();
     return null;
   }
 
   return {
     clickWhenThere,
 
+    /** Whether a dialog is open: the owner's to read and close, so nothing is done over it. */
+    dialogOpen(): boolean {
+      return findElement(OPEN_DIALOG_XPATH) !== null;
+    },
+
     /**
      * Opens one of the sidebar's pages ("Terminal", "City"). The sidebar's items are list buttons labelled with the
-     * page's name (`Sidebar/ui/SidebarItem.tsx`).
+     * page's name (`Sidebar/ui/SidebarItem.tsx`), in sections that unmount their items when collapsed.
      */
     openSidebarPage(pageName: string): Promise<string | null> {
       return clickWhenThere(
@@ -72,18 +82,25 @@ export function openGamePage(ns: NS, deadlineMs: number) {
       );
     },
 
-    /** Types `command` into the terminal and runs it, as a player would. The Terminal page must be open. */
+    /**
+     * Types `command` into the terminal and runs it, as a player would. The Terminal page must be open. A line the
+     * owner has started typing is theirs: then nothing is typed.
+     */
     async runTerminalCommand(command: string): Promise<string | null> {
       const terminalInput = (await waitForElement("//*[@id='terminal-input']")) as HTMLInputElement | null;
-      if (!terminalInput) return "no terminal on the page";
-      const props = reactPropsOf(terminalInput);
-      const onChange = props?.onChange;
-      const onKeyDown = props?.onKeyDown;
-      if (typeof onChange !== "function" || typeof onKeyDown !== "function") return "the terminal can't be typed into";
+      if (!terminalInput) return timeLeftMs() <= 0 ? "out of time before the terminal" : "no terminal on the page";
+      if (terminalInput.value !== "") return "the terminal has a line typed in it";
+      const onChange = reactPropsOf(terminalInput)?.onChange;
+      if (typeof onChange !== "function") return "the terminal can't be typed into";
       terminalInput.value = command;
       onChange({ target: terminalInput });
+      await letRender();
+      // Read only now: the game's Enter handler runs the line its last render saw (`Terminal/ui/TerminalInput.tsx`),
+      // so the one from before the line was typed would run an empty line.
+      const onKeyDown = reactPropsOf(terminalInput)?.onKeyDown;
+      if (typeof onKeyDown !== "function") return "the terminal can't be typed into";
       await onKeyDown({ key: "Enter", preventDefault: () => {}, stopPropagation: () => {} });
-      await ns.asleep(POLL_MS);
+      await letRender();
       return null;
     },
   };

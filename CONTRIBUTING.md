@@ -119,12 +119,13 @@ Code runs in three environments, and each file is typechecked in its own (archit
 |---|---|---|
 | `packages/core/src` | `packages/core/tsconfig.json` | Neither: imported by in-game and Node code alike, so no DOM and no Node types |
 | `packages/ingame/src` | `packages/ingame/src/tsconfig.json` | The game's page: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` |
+| `packages/ingame/test/agent` | `packages/ingame/test/agent/tsconfig.json` (extends `src`'s) | The same: unit tests of the Agent's modules, which import in-game sources (#136) |
 | Everything else: other packages, the tests, build scripts, `tools/`, the root's own files | the package's `tsconfig.json` (for `ingame`, its build script and tests); `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node (`packages/e2`: Node and the DOM) |
 
 - Every config extends `tsconfig.base.json` (the shared strict options, environment-neutral) or `tsconfig.node.json` (the same, plus Node types).
 - **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom), `packages/brain` (its dashboard page test) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.
 - **`packages/e2` is Node plus the DOM** (`lib: ["es2024", "dom"]`): its harness runs in Node, and the functions it passes to Playwright's `page.evaluate` run in the page. `tools/typecheck`'s tests expect both.
-- **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. `ingame`'s tests test the built bundles in the simulator; they don't import in-game sources (a Node config doing so would have to map `@nsdefs` too).
+- **A new package or folder of TypeScript needs a config.** A package that isn't Node code also needs a separate one for its tests, which run in Node. `ingame`'s tests test the built bundles in the simulator, and don't import in-game sources, except `test/agent/`, which has the in-game config for that.
 - `npm run typecheck` (`tools/typecheck`) finds every `tsconfig.json` and fails on any TypeScript file none of them covers. Its tests check each config's environment with probe files, so a change that lets Node or the DOM back in fails CI.
 
 ## Rules of engagement

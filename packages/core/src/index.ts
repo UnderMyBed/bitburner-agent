@@ -48,6 +48,7 @@ export {
   type BuyProgramReport,
   PORT_OPENER_PROGRAMS,
   TOR_ROUTER,
+  TOR_VENDORS,
 } from "./programs.ts";
 export {
   type FastSnapshotData,

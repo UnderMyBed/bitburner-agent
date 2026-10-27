@@ -10,6 +10,17 @@ export const TOR_ROUTER = "TOR router";
 /** The port openers, cheapest first: each opens one more port, so more servers can be rooted. */
 export const PORT_OPENER_PROGRAMS = ["BruteSSH.exe", "FTPCrack.exe", "relaySMTP.exe", "HTTPWorm.exe", "SQLInject.exe"];
 
+/**
+ * The tech vendor the brain buys the TOR router at, in each city that has one (`Locations/data/LocationsMetadata.ts`,
+ * the `techVendor` locations; `Locations/Enums.ts` for the names). Chongqing and New Tokyo have none.
+ */
+export const TOR_VENDORS: Record<string, string> = {
+  "Sector-12": "Alpha Enterprises",
+  Aevum: "NetLink Technologies",
+  Ishima: "Omega Software",
+  Volhaven: "CompuTek",
+};
+
 /** Home worker: buys one item through the game's page. */
 export const BUY_PROGRAM_WORKER_NAME = "buy-program.js";
 

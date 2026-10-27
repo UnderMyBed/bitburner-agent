@@ -1,7 +1,7 @@
 // The dashboard's server (#93) on a random local port: the page, the status, the switch, and the Host and Origin
 // checks that keep other pages (and DNS rebinding) out.
 import { request } from "node:http";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { type RunningDashboardServer, startDashboardServer } from "../src/dashboard/server.ts";
 
 let server: RunningDashboardServer | undefined;
@@ -147,34 +147,47 @@ test.each([
   expect(pausedCalls).toEqual([]);
 });
 
-test("POST /api/hack-loop sets the hack loop's switch, from the dashboard's own page (#134)", async () => {
-  const { port, hackLoopCalls, pausedCalls } = await start();
-  const off = await send(port, {
-    method: "POST",
-    path: "/api/hack-loop",
-    headers: sameOrigin(port),
-    body: JSON.stringify({ enabled: false }),
-  });
-  expect(off.status).toBe(200);
-  expect(JSON.parse(off.body)).toEqual({ enabled: false });
-  await send(port, { method: "POST", path: "/api/hack-loop", headers: sameOrigin(port), body: '{"enabled":true}' });
-  expect(hackLoopCalls).toEqual([false, true]);
-  expect(pausedCalls).toEqual([]);
-});
+/** The dashboard's on/off switches: each its own path, and each changes only its own setting. */
+const SWITCHES = [
+  ["the hack loop (#134)", "/api/hack-loop", "hackLoopCalls", "programsCalls"],
+  ["the hacking programs (#136)", "/api/programs", "programsCalls", "hackLoopCalls"],
+] as const;
 
-test.each([
-  ["another origin", { origin: "https://attacker.example" }, '{"enabled":false}', 403],
-  ["no origin", { origin: "" }, '{"enabled":false}', 403],
-  ["a body with paused instead", {}, '{"paused":true}', 400],
-  ["enabled not a boolean", {}, '{"enabled":"no"}', 400],
-  ["another field too", {}, '{"enabled":false,"other":1}', 400],
-])("a hack loop switch from %s is refused, and nothing changes", async (_description, override, body, expected) => {
-  const { port, hackLoopCalls } = await start();
-  const headers: Record<string, string> = { ...sameOrigin(port), ...override };
-  if (headers.origin === "") delete headers.origin;
-  const reply = await send(port, { method: "POST", path: "/api/hack-loop", headers, body });
-  expect(reply.status).toBe(expected);
-  expect(hackLoopCalls).toEqual([]);
+test.each(SWITCHES)(
+  "POST sets the switch for %s, from the dashboard's own page",
+  async (_name, switchPath, own, other) => {
+    const started = await start();
+    const { port } = started;
+    const off = await send(port, {
+      method: "POST",
+      path: switchPath,
+      headers: sameOrigin(port),
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(off.status).toBe(200);
+    expect(JSON.parse(off.body)).toEqual({ enabled: false });
+    await send(port, { method: "POST", path: switchPath, headers: sameOrigin(port), body: '{"enabled":true}' });
+    expect(started[own]).toEqual([false, true]);
+    expect(started[other]).toEqual([]);
+    expect(started.pausedCalls).toEqual([]);
+  },
+);
+
+describe.each(SWITCHES)("the switch for %s", (_name, switchPath, own) => {
+  test.each([
+    ["another origin", { origin: "https://attacker.example" }, '{"enabled":false}', 403],
+    ["no origin", { origin: "" }, '{"enabled":false}', 403],
+    ["a body with paused instead", {}, '{"paused":true}', 400],
+    ["enabled not a boolean", {}, '{"enabled":"no"}', 400],
+    ["another field too", {}, '{"enabled":false,"other":1}', 400],
+  ])("from %s is refused, and nothing changes", async (_description, override, body, expected) => {
+    const started = await start();
+    const headers: Record<string, string> = { ...sameOrigin(started.port), ...override };
+    if (headers.origin === "") delete headers.origin;
+    const reply = await send(started.port, { method: "POST", path: switchPath, headers, body });
+    expect(reply.status).toBe(expected);
+    expect(started[own]).toEqual([]);
+  });
 });
 
 test("a switch body streamed past 1 KiB, with no length declared, is refused, 413", async () => {
@@ -283,25 +296,4 @@ test("a status that fails is a 500, reported, and the server carries on", async 
   expect((await send(port, { path: "/api/status" })).status).toBe(500);
   expect(errors).toEqual([new Error("the store is locked")]);
   expect((await send(port, { path: "/api/status" })).status).toBe(200);
-});
-
-test("POST /api/programs sets the hacking programs' switch, from the dashboard's own page (#136)", async () => {
-  const { port, programsCalls, hackLoopCalls } = await start();
-  const off = await send(port, {
-    method: "POST",
-    path: "/api/programs",
-    headers: sameOrigin(port),
-    body: '{"enabled":false}',
-  });
-  expect(off.status).toBe(200);
-  expect(JSON.parse(off.body)).toEqual({ enabled: false });
-  const foreign = await send(port, {
-    method: "POST",
-    path: "/api/programs",
-    headers: { ...sameOrigin(port), origin: "https://attacker.example" },
-    body: '{"enabled":true}',
-  });
-  expect(foreign.status).toBe(403);
-  expect(programsCalls).toEqual([false]);
-  expect(hackLoopCalls).toEqual([]);
 });

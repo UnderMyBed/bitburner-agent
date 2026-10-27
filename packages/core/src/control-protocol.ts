@@ -4,7 +4,7 @@
  * so its names must not collide with NS function names (packages/ingame/README.md, "RAM").
  */
 import { isValidDeploymentId } from "./deploy-layout.ts";
-import { PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
+import { PORT_OPENER_PROGRAMS, TOR_ROUTER, TOR_VENDORS } from "./programs.ts";
 
 export const CONTROL_PROTOCOL_VERSION = 1;
 
@@ -72,13 +72,16 @@ export interface DesiredState {
 export const MAX_HACK_LOOP_HOSTS = 1_000;
 
 /**
- * What may go to the game while the brain holds (on hold, after a failed deploy, or once the game has drifted): only a
- * state that starts nothing new. The hack loop must be off (stopping our own loops is always safe), and nothing is
- * bought. Null when the state would start something.
+ * What may go to an Agent while the brain holds (on hold, after a failed deploy, or once the game has drifted), or to
+ * an outdated one: only a state that starts nothing new, given `lastSent`, what that Agent was last sent (null for
+ * nothing yet). Nothing is bought. The hack loop off goes as it is (stopping our own loops is always safe); on, it
+ * stays as last sent, and with nothing sent yet, nothing goes. So "Stop buying programs" gets through a hold whatever
+ * the hack loop does.
  */
-export function desiredStateWhileHolding(state: DesiredState): DesiredState | null {
-  if (state.hackLoop.enabled) return null;
-  return { hackLoop: state.hackLoop, programs: { enabled: state.programs.enabled, next: null } };
+export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
+  const programs = { enabled: state.programs.enabled, next: null };
+  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, programs };
+  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, programs };
 }
 
 export type BrainMessage =
@@ -223,10 +226,10 @@ function parsePrograms(programs: unknown): ParsedMessage<DesiredState["programs"
   if (!isTor && !PORT_OPENER_PROGRAMS.includes(item as string)) {
     return { ok: false, reason: `desiredState's programs.next.item is ${describeValue(item)}` };
   }
-  if (isTor ? !isShortNonEmptyString(vendor) : vendor !== null) {
+  if (isTor ? !Object.values(TOR_VENDORS).includes(vendor as string) : vendor !== null) {
     return {
       ok: false,
-      reason: "desiredState's programs.next.vendor must name a vendor for TOR, and be null otherwise",
+      reason: "desiredState's programs.next.vendor must be a known TOR vendor for TOR, and null otherwise",
     };
   }
   return { ok: true, message: { enabled, next: { item: item as string, vendor: vendor as string | null } } };

@@ -1,19 +1,20 @@
-// The brain's side of buying the hacking programs (#136): the next item, its order, affordability and vendor.
-import type { MediumSnapshotData } from "@bitburner-agent/core";
-import { describe, expect, test } from "vitest";
-import { chooseNextPurchase } from "../src/programs.ts";
+// The brain's side of buying the hacking programs (#136): the next item, its order, affordability and vendor, and the
+// dashboard's switch.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { type MediumSnapshotData, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "@bitburner-agent/core";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { chooseNextPurchase, PURCHASE_PRICES, readProgramsEnabled } from "../src/programs.ts";
+import { TelemetryStore } from "../src/telemetry-store.ts";
+import { mediumData } from "./helpers/snapshot-fixtures.ts";
 
-const medium = ({
-  money,
-  city = "Sector-12",
-  hasTorRouter = false,
-  programs = [],
-}: {
-  money: number;
-  city?: string;
-  hasTorRouter?: boolean;
-  programs?: string[];
-}): MediumSnapshotData => ({ player: { money, city }, hasTorRouter, programs, servers: [] });
+/** The player's money, city and programs: the rest of the snapshot doesn't matter here. */
+const medium = (options: Parameters<typeof mediumData>[2]) => mediumData(1, {}, options);
+
+test("every item has a price: one without would always look affordable", () => {
+  for (const item of [TOR_ROUTER, ...PORT_OPENER_PROGRAMS]) expect(PURCHASE_PRICES[item]).toBeGreaterThan(0);
+});
 
 describe("chooseNextPurchase", () => {
   test("TOR first, at the city's tech vendor, once its $200k is there", () => {
@@ -82,5 +83,29 @@ describe("chooseNextPurchase", () => {
       next: null,
       waitingFor: "money for TOR router ($200,000)",
     });
+  });
+});
+
+describe("the switch", () => {
+  let directory: string;
+  let store: TelemetryStore;
+  beforeEach(() => {
+    directory = mkdtempSync(path.join(os.tmpdir(), "programs-"));
+    store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  });
+  afterEach(() => {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("on until the owner turns it off", () => {
+    expect(readProgramsEnabled(store)).toBe(true);
+    store.setSetting("programs.enabled", "false");
+    expect(readProgramsEnabled(store)).toBe(false);
+  });
+
+  test("a value it didn't write fails, rather than guess", () => {
+    store.setSetting("programs.enabled", "maybe");
+    expect(() => readProgramsEnabled(store)).toThrow(/programs\.enabled/);
   });
 });

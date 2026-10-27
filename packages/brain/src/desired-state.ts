@@ -4,7 +4,8 @@
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import type { DesiredState, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
-import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, readProgramsEnabled } from "./programs.ts";
+import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type PurchasePlan, readProgramsEnabled } from "./programs.ts";
+import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 /** What the dashboard shows of the hack loop. */
@@ -45,8 +46,8 @@ export class DesiredStateController {
   #staticData: StaticSnapshotData | null = null;
   #mediumData: MediumSnapshotData | null = null;
   #desired: DesiredState | null = null;
-  #purchaseWaitingFor: string | null = null;
-  #owned: string[] = [];
+  /** From the connected Agent's latest medium snapshot, or null. */
+  #purchasePlan: PurchasePlan | null = null;
 
   constructor({ channel, store }: { channel: ControlChannel; store: TelemetryStore }) {
     this.#channel = channel;
@@ -69,13 +70,13 @@ export class DesiredStateController {
 
   /** The hack loop's switch: kept in the store, so it survives restarts of the brain, and sent at once. */
   setHackLoopEnabled(enabled: boolean): void {
-    this.#store.setSetting(HACK_LOOP_ENABLED_SETTING, String(enabled));
+    writeSwitch(this.#store, HACK_LOOP_ENABLED_SETTING, enabled);
     this.#update();
   }
 
   /** The hacking programs' switch, likewise. */
   setProgramsEnabled(enabled: boolean): void {
-    this.#store.setSetting(PROGRAMS_ENABLED_SETTING, String(enabled));
+    writeSwitch(this.#store, PROGRAMS_ENABLED_SETTING, enabled);
     this.#update();
   }
 
@@ -92,12 +93,15 @@ export class DesiredStateController {
 
   programsView(): ProgramsView {
     const enabled = readProgramsEnabled(this.#store);
+    // Read from what was sent and what it was worked out from: either missing is waiting, never "all bought".
+    const sent = this.#desired?.programs ?? null;
+    const waiting = enabled && (sent === null || this.#purchasePlan === null);
     return {
       enabled,
-      waiting: this.#mediumData === null,
-      owned: this.#owned,
-      buying: this.#desired?.programs.next?.item ?? null,
-      waitingFor: enabled ? this.#purchaseWaitingFor : null,
+      waiting,
+      owned: this.#purchasePlan?.owned ?? [],
+      buying: sent?.next?.item ?? null,
+      waitingFor: enabled && !waiting ? (this.#purchasePlan?.waitingFor ?? null) : null,
     };
   }
 
@@ -105,8 +109,7 @@ export class DesiredStateController {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     const programsEnabled = readProgramsEnabled(this.#store);
     const plan = this.#mediumData === null ? null : chooseNextPurchase(this.#mediumData);
-    this.#owned = plan?.owned ?? [];
-    this.#purchaseWaitingFor = plan?.waitingFor ?? null;
+    this.#purchasePlan = plan;
     const programs = { enabled: programsEnabled, next: programsEnabled ? (plan?.next ?? null) : null };
     if (!hackLoopEnabled) {
       this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, programs };
