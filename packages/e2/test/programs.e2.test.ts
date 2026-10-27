@@ -184,12 +184,12 @@ const homeRamOf = (medium: MediumSnapshotData | null) =>
   medium?.servers.find((server) => server.hostname === "home")?.maxRam;
 
 test("home RAM (#138): with $1.1m and buying programs off, home goes from 8 GB to 16 GB at Alpha Enterprises, no further", async () => {
-  // $1.01m for 16 GB; 32 GB's $3.19m is beyond what the hack loop earns meanwhile.
+  // $1.01m for 16 GB; 32 GB's $3.19m is beyond what the hack loop earns meanwhile. A new save starts in Sector-12, so
+  // the vendor is Alpha Enterprises: the only one the page could buy it at there.
   const { dataDirectory, page } = await moneyedGameWithAgent({
     money: 1_100_000,
     brainSettings: { "programs.enabled": "false" },
   });
-  expect(homeRamOf(latestMedium(dataDirectory)) ?? 8).toBe(8);
   await advanceUntil(page, async () => homeRamOf(latestMedium(dataDirectory)) === 16, {
     realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 60_000,

@@ -240,7 +240,7 @@ function parsePrograms(programs: unknown): ParsedMessage<DesiredState["programs"
   if (isTor ? !isTechVendor(vendor) : vendor !== null) {
     return {
       ok: false,
-      reason: "desiredState's programs.next.vendor must be a known TOR vendor for TOR, and null otherwise",
+      reason: "desiredState's programs.next.vendor must be a tech vendor for TOR, and null otherwise",
     };
   }
   return { ok: true, message: { enabled, next: { item: item as string, vendor: vendor as string | null } } };

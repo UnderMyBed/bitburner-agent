@@ -16,8 +16,9 @@ const medium = (homeRam: number, options: Parameters<typeof mediumData>[2] = {})
 test("the price is the game's, in BN1: the getting-started guide's $1.010m for 8 GB to 16 GB, ×3.16 a doubling", () => {
   // PersonObjects/Player/PlayerObjectServerMethods.ts:30: ram × 32,000 × 1.58^log2(ram) × HomeComputerRamCost (1).
   expect(homeRamUpgradePrice(1)).toBe(32_000);
-  expect(homeRamUpgradePrice(8)).toBeCloseTo(1_009_743.872, 3);
-  expect(homeRamUpgradePrice(16)).toBeCloseTo(3_190_790.636, 3);
+  // To the last bit, as the game's own formula gives them (Node's V8, as the game's Electron): affordability is exact.
+  expect(homeRamUpgradePrice(8)).toBe(1_009_743.8720000001);
+  expect(homeRamUpgradePrice(16)).toBe(3_190_790.6355200005);
   expect(homeRamUpgradePrice(64)).toBeCloseTo(31_861_958.97, 2);
   expect(homeRamUpgradePrice(256)).toBeCloseTo(318_160_777.49, 2);
 });

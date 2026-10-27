@@ -5,7 +5,7 @@ import type { ControlChannel } from "@bitburner-agent/bridge";
 import type { DesiredState, MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
-import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type PurchasePlan, readProgramsEnabled } from "./programs.ts";
+import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
@@ -46,14 +46,15 @@ export interface HomeRamView {
 
 /**
  * Keeps the channel's desired state in step with the switches and the connected Agent's snapshots.
- * - Both activities go in one state, whole each time. With no snapshots from the connected Agent yet (it sends them
+ * - Every activity goes in one state, whole each time. With no snapshots from the connected Agent yet (it sends them
  *   in its first round), only a state that starts nothing goes out: the hack loop off, nothing bought. If the hack
  *   loop is on, nothing goes out until then. So a stale target or the last brain's view is never sent: a brain that
  *   restarts sends the running Agent the same state, which changes nothing, and an Agent after a reset is never given
  *   a target its game can't hack.
  * - The channel sends each connection a state once, then again on a change.
  * - One purchase at a time, cheapest first: of the next program and the next RAM upgrade, both affordable, the cheaper
- *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it.
+ *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
+ *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -63,8 +64,9 @@ export class DesiredStateController {
   #mediumData: MediumSnapshotData | null = null;
   #slowData: SlowSnapshotData | null = null;
   #desired: DesiredState | null = null;
-  /** From the connected Agent's latest medium (and slow) snapshot, or null. */
-  #purchasePlan: PurchasePlan | null = null;
+  /** From the connected Agent's latest medium snapshot, or null. */
+  #programsPlan: ProgramsPlan | null = null;
+  /** From its latest medium and slow snapshots, or null. */
   #homeRamPlan: HomeRamPlan | null = null;
   /** Why each activity's purchase isn't asked for now, or null: its plan's reason, or the cheaper purchase first. */
   #waitingFor: { programs: string | null; homeRam: string | null } = { programs: null, homeRam: null };
@@ -124,11 +126,11 @@ export class DesiredStateController {
     const enabled = readProgramsEnabled(this.#store);
     // Read from what was sent and what it was worked out from: either missing is waiting, never "all bought".
     const sent = this.#desired?.programs ?? null;
-    const waiting = enabled && (sent === null || this.#purchasePlan === null);
+    const waiting = enabled && (sent === null || this.#programsPlan === null);
     return {
       enabled,
       waiting,
-      owned: this.#purchasePlan?.owned ?? [],
+      owned: this.#programsPlan?.owned ?? [],
       buying: sent?.next?.item ?? null,
       waitingFor: enabled && !waiting ? this.#waitingFor.programs : null,
     };
@@ -153,11 +155,16 @@ export class DesiredStateController {
     const homeRamEnabled = readHomeRamEnabled(this.#store);
     const programsPlan = this.#mediumData === null ? null : chooseNextPurchase(this.#mediumData);
     const homeRamPlan = this.#mediumData === null ? null : chooseHomeRamUpgrade(this.#mediumData, this.#slowData);
-    this.#purchasePlan = programsPlan;
+    this.#programsPlan = programsPlan;
     this.#homeRamPlan = homeRamPlan;
     let programsNext = programsEnabled ? (programsPlan?.next ?? null) : null;
     let homeRamNext = homeRamEnabled ? (homeRamPlan?.next ?? null) : null;
     this.#waitingFor = { programs: programsPlan?.waitingFor ?? null, homeRam: homeRamPlan?.waitingFor ?? null };
+    // Until the slow snapshot says which BitNode, the upgrade's price isn't known, so neither is which goes first.
+    if (programsNext !== null && homeRamEnabled && this.#slowData === null) {
+      this.#waitingFor.programs = "the Agent's slow snapshot (which BitNode), to compare with home RAM";
+      programsNext = null;
+    }
     if (programsNext !== null && homeRamNext !== null) {
       // Both plans have a price when they have a next item.
       if ((homeRamPlan?.price ?? 0) < (programsPlan?.price ?? 0)) {

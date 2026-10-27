@@ -29,7 +29,7 @@ export function readProgramsEnabled(store: TelemetryStore): boolean {
 }
 
 /** What's owned, what's next and why it isn't bought yet. */
-export interface PurchasePlan {
+export interface ProgramsPlan {
   /** The TOR router and the port openers owned, in buying order. */
   owned: string[];
   /** The next item to buy now, or null. */
@@ -45,7 +45,7 @@ export interface PurchasePlan {
  * player's money covers it. The TOR router needs a tech vendor in the player's city. Snapshot data comes from the
  * game, so nothing in it is taken on trust: what can't be read counts as not owned, and as no money.
  */
-export function chooseNextPurchase(mediumData: MediumSnapshotData): PurchasePlan {
+export function chooseNextPurchase(mediumData: MediumSnapshotData): ProgramsPlan {
   const ownedPrograms = Array.isArray(mediumData.programs) ? mediumData.programs : [];
   const owned = [
     ...(mediumData.hasTorRouter === true ? [TOR_ROUTER] : []),
@@ -57,7 +57,7 @@ export function chooseNextPurchase(mediumData: MediumSnapshotData): PurchasePlan
   const price = PURCHASE_PRICES[item];
   // Fail fast: an item with no price would otherwise always look affordable.
   if (price === undefined) throw new Error(`no price for ${item}`);
-  const waiting = (waitingFor: string): PurchasePlan => ({ owned, next: null, price, waitingFor });
+  const waiting = (waitingFor: string): ProgramsPlan => ({ owned, next: null, price, waitingFor });
   if (money < price) return waiting(`money for ${item} ($${price.toLocaleString("en-US")})`);
   if (item !== TOR_ROUTER) return { owned, next: { item, vendor: null }, price, waitingFor: null };
   const city = mediumData.player?.city;

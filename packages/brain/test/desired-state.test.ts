@@ -160,6 +160,7 @@ test("programs (#136): the next item once it's affordable, the views say what's 
   const controller = new DesiredStateController({ channel, store });
   const connection = connectAgent();
   send(connection, "static", network);
+  send(connection, "slow", slowData());
   send(connection, "medium", mediumData(1, { n00dles: true }, { money: 100_000 }));
   expect(controller.programsView()).toEqual({
     enabled: true,
@@ -229,6 +230,23 @@ describe("home RAM (#138), one purchase at a time with the programs, cheapest fi
       upgradingTo: 16,
       waitingFor: null,
     });
+  });
+
+  test("with home RAM on, no program before the slow snapshot: which goes first isn't known until then", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    // FTPCrack.exe affordable, but 16 GB is cheaper: without the BitNode, the brain can't tell, so it buys neither.
+    send(connection, "medium", afterBruteSsh(2e6));
+    expect(sentPurchases(connection)).toEqual({ programs: null, homeRam: null });
+    expect(controller.programsView()).toMatchObject({
+      waitingFor: "the Agent's slow snapshot (which BitNode), to compare with home RAM",
+    });
+    send(connection, "slow", slowData());
+    expect(sentPurchases(connection)).toEqual({ programs: null, homeRam: upgradeFrom8 });
+    // With home RAM off, the programs don't wait for it.
+    controller.setHomeRamEnabled(false);
+    expect(sentPurchases(connection)).toEqual({ programs: { item: "FTPCrack.exe", vendor: null }, homeRam: null });
   });
 
   test("both affordable: the cheaper goes first, and the other says it waits for it", () => {
@@ -308,6 +326,7 @@ test("programs are bought with the hack loop off too, once the Agent's medium sn
   store.setSetting("hackLoop.enabled", "false");
   new DesiredStateController({ channel, store });
   const connection = connectAgent();
+  send(connection, "slow", slowData());
   send(connection, "medium", mediumData(1, {}, { money: 1e9 }));
   expect(desiredStates(connection).at(-1)).toEqual({
     hackLoop: loopOff,
