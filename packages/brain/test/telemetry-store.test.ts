@@ -68,6 +68,35 @@ test("fast snapshots' receipt times, by environment and window, for the gap repo
   expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 1_000, untilMs: 3_000 })).toEqual([1_000, 3_000]);
 });
 
+test("fast snapshots' page heaps, by environment and window, in order of arrival, numbers only", () => {
+  for (const [receivedAtMs, tier, environment, data] of [
+    [3_000, "fast", "E0", { pageHeapUsedBytes: 30 }],
+    [1_000, "fast", "E0", { pageHeapUsedBytes: 10 }],
+    [2_000, "fast", "E0", { pageHeapUsedBytes: null }],
+    // E2's shape: Playwright's page has no performance.memory, so the key is missing.
+    [2_100, "fast", "E0", {}],
+    [2_200, "fast", "E0", { pageHeapUsedBytes: "12" }],
+    [2_500, "medium", "E0", { pageHeapUsedBytes: 99 }],
+    [2_600, "fast", "E2", { pageHeapUsedBytes: 98 }],
+    [9_000, "fast", "E0", { pageHeapUsedBytes: 90 }],
+  ] as const) {
+    store.recordSnapshot(
+      { environment, release: "r" },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: receivedAtMs,
+        gameTimeMs: 0,
+        receivedAtMs,
+        missedBefore: 0,
+        data,
+      },
+    );
+  }
+  expect(store.fastSnapshotPageHeaps({ environment: "E0", sinceMs: 1_000, untilMs: 3_000 })).toEqual([10, 30]);
+  expect(store.fastSnapshotPageHeaps({ environment: "E0", sinceMs: 4_000, untilMs: 8_000 })).toEqual([]);
+});
+
 test("the store is in WAL mode, so a reader never blocks the brain's writes; a read-only open can't write", () => {
   expect(store.journalMode()).toBe("wal");
   const reader = TelemetryStore.openReadOnly(path.join(directory, "telemetry.sqlite"));

@@ -1,5 +1,6 @@
 // npm run gaps -- [--data-dir <dir>] --since <ISO time> [--until <ISO time>] [--environment E0] [--threshold-seconds 6]
-// Lists every gap in the fast snapshots (the heartbeat) in a window: the evidence for M2's 24 h Steam criterion.
+// Lists every gap in the fast snapshots (the heartbeat) in a window: the evidence for M2's 24 h Steam criterion. Also
+// prints the page heap over the window (#124).
 // Exits 0 when there are none, 1 when there are gaps, 2 when it couldn't run, including for a window that checks
 // nothing (one that ends before it starts).
 import { existsSync } from "node:fs";
@@ -20,6 +21,21 @@ function parseIsoTime(text: string, flagName: string): number {
 
 const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
 const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
+const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+/** The page heap over the window, for a person to read: growth would show here first (architecture R10). */
+function describePageHeap(pageHeapsBytes: number[]): string {
+  const first = pageHeapsBytes[0];
+  const last = pageHeapsBytes.at(-1);
+  if (first === undefined || last === undefined) return "page heap: not reported";
+  const lowest = pageHeapsBytes.reduce((low, bytes) => Math.min(low, bytes));
+  const highest = pageHeapsBytes.reduce((high, bytes) => Math.max(high, bytes));
+  return (
+    `page heap: first ${formatMegabytes(first)}, last ${formatMegabytes(last)}, lowest ${formatMegabytes(lowest)}, ` +
+    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshot${pageHeapsBytes.length === 1 ? "" : "s"} ` +
+    "reported it)"
+  );
+}
 
 try {
   const argv = process.argv.slice(2);
@@ -39,6 +55,7 @@ try {
 
   const store = TelemetryStore.openReadOnly(storePath);
   const snapshotTimes = store.fastSnapshotTimes({ environment, sinceMs, untilMs });
+  const pageHeapsBytes = store.fastSnapshotPageHeaps({ environment, sinceMs, untilMs });
   store.close();
   const report = findGaps(snapshotTimes, { sinceMs, untilMs, thresholdMs });
   console.log(
@@ -49,6 +66,8 @@ try {
     `  ${report.count} snapshots, first ${formatIsoTime(report.firstMs)}, last ${formatIsoTime(report.lastMs)}`,
   );
   console.log(`  longest interval ${formatSeconds(report.longestIntervalMs)}`);
+  // Evidence, not a verdict: the exit code stays the gaps'.
+  console.log(`  ${describePageHeap(pageHeapsBytes)}`);
   for (const gap of report.gaps) {
     console.log(`  gap: ${formatIsoTime(gap.fromMs)} to ${formatIsoTime(gap.toMs)} (${formatSeconds(gap.lengthMs)})`);
   }

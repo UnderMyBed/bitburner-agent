@@ -184,7 +184,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
   - each launch is a `relaunch` event, with its cause;
   - a give-up is a `supervisionGaveUp` event, with the cause and the launches in the last hour, or with the failure that kept happening;
   - the start of a run of failed checks is a `supervisionFailed` event, with the failure and the cause it was acting on.
-- **Stopping the brain** stops the checks first, so the game isn't relaunched while it closes with the session at logoff.
+- **Stopping the brain** stops the checks first, so the game isn't relaunched while the brain shuts down.
 - **Config:** `steamAppId` (1812820, verified on the reference rig) and `gameExecutable` (`bitburner.exe`).
 - **The owner's check** on the reference rig (game closed, Agent killed, paused) is to be recorded on #94.
 
@@ -197,6 +197,7 @@ npm run gaps -- --since 2026-10-27T00:00:00Z --until 2026-10-28T00:00:00Z
 ```
 
 - **What it lists:** every interval between consecutive fast snapshots (the heartbeat, every 2 s) longer than the threshold, including from the window's start to the first snapshot and from the last one to its end. It also shows the count, the first and last snapshots, and the longest interval.
+- **The page heap** over the same window, from the fast snapshots' `pageHeapUsedBytes`: the first and last values, the lowest and highest, and how many snapshots reported one, or "not reported" (E2 has none). Growth would show here first (architecture R10). It's for reading: it doesn't change the exit code.
 - **What it proves:** that the Agent was alive. A fast snapshot counts even when its tiers are degraded (`game: null`, [degraded snapshots](../ingame/README.md#snapshots)); whether data arrived shows in each snapshot's `degradedTiers`.
 - **Options:**
   - `--threshold-seconds`, default 6: three cadences. Exactly the threshold isn't a gap.
@@ -270,7 +271,8 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 
 | Path | What |
 |---|---|
-| `src/main.ts` | The process (`npm run brain`) |
+| `src/start.ts`, `src/restart-on-crash.ts` | `npm run brain`: runs `main.ts` and restarts it after a crash |
+| `src/main.ts` | The brain's process |
 | `src/config.ts` | The data directory and `config.json` |
 | `src/telemetry-store.ts` | The store |
 | `src/record-channel-events.ts` | The control channel's, the deployer's and the save backups' events into the store |

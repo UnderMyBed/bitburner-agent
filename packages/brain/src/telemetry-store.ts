@@ -191,6 +191,30 @@ export class TelemetryStore {
     return rows.map((row) => row.received_at_ms);
   }
 
+  /**
+   * The `pageHeapUsedBytes` of each fast snapshot in the window (both edges included) that reported a number, in order
+   * of arrival: for the gap report. Null, a missing key (E2) and anything not a number are skipped.
+   */
+  fastSnapshotPageHeaps({
+    environment,
+    sinceMs,
+    untilMs,
+  }: {
+    environment: Environment;
+    sinceMs: number;
+    untilMs: number;
+  }): number[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT json_extract(data, '$.pageHeapUsedBytes') AS page_heap_used_bytes FROM snapshots
+          WHERE environment = ? AND tier = 'fast' AND received_at_ms BETWEEN ? AND ?
+            AND json_type(data, '$.pageHeapUsedBytes') IN ('integer', 'real')
+          ORDER BY received_at_ms`,
+      )
+      .all(environment, sinceMs, untilMs) as { page_heap_used_bytes: number }[];
+    return rows.map((row) => row.page_heap_used_bytes);
+  }
+
   /** Every event from an environment, in the order stored. */
   events({ environment }: { environment: Environment }): (RecordContext & StoredEvent)[] {
     const rows = this.#database

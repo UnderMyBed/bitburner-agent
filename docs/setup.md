@@ -84,7 +84,7 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
 - **Closing the game on purpose?** Pause supervision first, or it's relaunched within 30 s. A pause lasts until you resume it, even across brain restarts, so resume when you're done.
 - **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like.
 - **Don't run `git clean -x` in this clone:** it deletes `.data/`, with the store and the save backups.
-- **Gaps over a window:** `npm run gaps -- --since 2026-10-27T00:00:00Z` ([the gap report](../packages/brain/README.md#the-gap-report)).
+- **Gaps over a window:** `npm run gaps -- --since 2026-10-27T00:00:00Z` ([the gap report](../packages/brain/README.md#the-gap-report)). It also prints the page's heap over the window.
 - **Save backups** are in `.data/saves/E0/`: one every 30 minutes and one each time the game connects (on load and on reconnecting), the newest 96 kept. To restore one, follow [the steps](../packages/brain/README.md#save-backups). Stop the brain first, or copy the backup out. Backups are personal data: `.data/` is gitignored, keep it that way.
 - **Another data directory:** `npm run brain -- --data-dir <dir>` (or `BITBURNER_AGENT_DATA_DIR`), if you'd rather keep the data elsewhere.
 
@@ -120,5 +120,5 @@ Before relying on it, check on your machine, and record what you saw on [#95](ht
   - kill the Agent in the game's terminal (`kill agent/<id>/agent.js`, the deployment's folder): after about 5 minutes with no heartbeat, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec;
   - pause supervision and close the game: it stays closed until you resume.
 - **Stopping and starting the brain:** Ctrl+C, then `npm run brain` again; the game's Remote API reconnects and the Agent carries on.
-- **A brain crash:** end the brain's own `node` process (the one whose command line has `packages\brain\src\main.ts`, not `start.ts`) in Task Manager; within about 5 s a `brain runner:` line shows the restart, and the game reconnects.
+- **A brain crash:** end the brain's own `node` process (the one whose command line has `packages\brain\src\main.ts`, not `start.ts`) in Task Manager (the Details page, in the left-hand menu; right-click a column header → Select columns → Command line to see it); within about 5 s a `brain runner:` line shows the restart, and the game reconnects.
 - **The game's commit:** note what the dashboard's Agent table shows on its "Game" line.

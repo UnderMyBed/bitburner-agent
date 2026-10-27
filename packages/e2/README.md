@@ -15,7 +15,7 @@ npm run e2:install     # once: Playwright's Chromium headless shell
 npm run e2             # all E2 tests; npm run e2 -- clock runs the files whose names match
 ```
 
-- The whole suite takes about 90 s on the reference rig (12 tests; the skeleton's five start a brain each, which builds the in-game code). The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
+- The whole suite takes about 90 s on the reference rig (13 tests; the skeleton's five start a brain each, which builds the in-game code). The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
 - On Linux, Chromium may need system libraries: `npx playwright install-deps chromium`.
 - E2 builds and downloads go under the repository's gitignored `.cache/e2/`, so deleting that folder undoes `e2:build` and `e2:install`. The exception is babel's cache, which the game's webpack config keeps in the submodule's gitignored `node_modules/.cache/`. Builds of earlier commits stay there, about 117 MB each, until you delete them.
 

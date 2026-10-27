@@ -95,7 +95,7 @@ Every refusal is reported (`connectionRejected`, with the reason, and the origin
     1. `boot.js` starts the old deployment again, which is welcomed and reports.
     2. The deployer reconnects over RFA and reads `current.txt`, which names the old id.
     3. It deploys again, and that change lets the next restart through.
-- **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The numbering stays with the session across reconnects, for the 4 most recent sessions, so a 24/7 run doesn't grow. Property tests check this against a reference model under:
+- **Snapshots in order:** a snapshot whose `sequenceNumber` isn't above the last one passed on for its session and tier is dropped (a duplicate, or one that arrived late). A jump counts the skipped numbers as missed. The numbering stays with the session across reconnects within one run of the brain ([#119](https://github.com/UnderMyBed/bitburner-agent/issues/119)), for the 4 most recent sessions, so a 24/7 run doesn't grow. Property tests check this against a reference model under:
   - duplicated, dropped and reordered frames;
   - reconnects and replacements;
   - frames still in flight to a replaced connection.
