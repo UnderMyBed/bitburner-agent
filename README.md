@@ -2,7 +2,7 @@
 
 An autonomous agent that plays [Bitburner](https://github.com/bitburner-official/bitburner-src) from a fresh save to **every Source-File maxed**, unattended and repeatably.
 
-> **Status: pre-alpha.** M2 is done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the walking skeleton runs on Steam. The brain deploys an observe-only Agent into the game, stores what it reports, backs up the save, serves a local dashboard and keeps the game running, and it ran 24 h on Steam without a gap. M1 ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)) built the simulator and recorded the legacy fork's BN1 baseline, the bar the agent must beat. The agent starts acting in M3. See [Roadmap](#roadmap).
+> **Status: pre-alpha.** M2 is done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the walking skeleton runs on Steam. The brain deploys an observe-only Agent into the game, stores what it reports, backs up the save, serves a local dashboard and, on Windows, keeps Steam's game running. It ran 24 h on Steam without a gap. M1 ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)) built the simulator and recorded the legacy fork's BN1 baseline, the bar the agent must beat. The agent starts acting in M3. See [Roadmap](#roadmap).
 
 ---
 
@@ -57,7 +57,7 @@ Test harnesses (simulator, source builds) may use any tooling. The rules govern 
 | S1 | Simulator spike: prove the real engine runs headless in Node, deterministically, fast | ✅ [report](docs/spikes/s1-headless-engine.md) |
 | M1 | Toolchain and CI, then the simulator core: headless engine, virtual clock, seeded RNG, worker pool; the legacy fork's BN1 baseline | ✅ [v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0) |
 | M2 | Walking skeleton: bridge, in-game agent, telemetry, dashboard (observe-only), automatic recovery | ✅ [v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0) |
-| M3 | Effectors (UI and Singularity backends), the reconciler, restart-after-reset | |
+| M3 | Effectors (UI and Singularity backends), the reconciler, restart-after-reset | ⏳ next |
 | M4 | Fast model and planner v0: autonomous BitNode 1 clear in sim, then **the live campaign starts at BN1.1 from a fresh save** | |
 | M5+ | More activities and actions: gangs, Bladeburner, stocks, hacknet, corporations, Dark Net, sleeves, Stanek, IPvGO … | |
 | M6 | Campaign selector, calibration loop | |
