@@ -6,16 +6,19 @@
  */
 import type { SnapshotTier } from "./control-protocol.ts";
 
-/** The in-game port the snapshot workers write to and the Agent reads. Nothing else uses it (the fork uses no ports). */
-export const SNAPSHOT_WORKER_PORT = 89_001;
+/**
+ * The in-game port every home worker reports on (the snapshot workers, and the hack loop's, #134), and the Agent reads.
+ * Nothing else uses it (the fork uses no ports).
+ */
+export const WORKER_REPORT_PORT = 89_001;
 
 /** A tier's worker script, inside a deployment's folder: `snapshot-<tier>.js`. */
 export function snapshotWorkerFileName(tier: SnapshotTier): string {
   return `snapshot-${tier}.js`;
 }
 
-/** What a worker writes to the port. `workerPid` tells the Agent it's the worker it just started. */
-export interface SnapshotWorkerReport {
+/** What a home worker writes to the port. `workerPid` tells the Agent it's the worker it just started. */
+export interface WorkerReport {
   workerPid: number;
   /** The game's `Date.now()` when the worker read the game. */
   gameTimeMs: number;
@@ -38,6 +41,8 @@ export interface StaticSnapshotData {
     minDifficulty?: number;
     requiredHackingSkill?: number;
     numOpenPortsRequired?: number;
+    /** How fast its money grows back (#134): the hack loop's target rule weighs it. */
+    serverGrowth?: number;
   }[];
 }
 

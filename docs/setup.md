@@ -84,9 +84,12 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
 
 ## Day to day
 
+- **The hack loop** (from M3, on `main` until it's released) is on by default (owner decision 34). Once the Agent connects, it roots the servers it can and runs a loop on the game's servers against the target the brain picks; the dashboard's "Hack loop" line names it. It never runs on home or on your purchased or Hacknet servers, and never touches your own scripts ([the hack loop](../packages/ingame/README.md#the-hack-loop)).
+  - **It fills the free RAM** on the servers it runs on, so a script you start there later may not fit. A loop you kill comes back within about 30 s. To use those servers yourself, stop the loop first.
+  - **To stop it,** click **"Stop the hack loop"** on the dashboard: every loop stops within a few seconds, and it stays off, across brain restarts, until you start it again.
 - **The dashboard** at http://127.0.0.1:12527/ shows the Agent, the snapshots, gaps over the last 24 h, alerts and recent events ([packages/brain](../packages/brain/README.md#the-dashboard)).
 - **Closing the game on purpose?** Pause supervision first, or it's relaunched within 30 s. A pause lasts until you resume it, even across brain restarts, so resume when you're done.
-- **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like.
+- **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like. The hack loops keep running too, untended: they're the game's own scripts. Stop the hack loop on the dashboard first if you want them gone.
 - **Don't run `git clean -x` in this clone:** it deletes `.data/`, with the store and the save backups.
 - **Gaps over a window:** `npm run gaps -- --since 2026-10-27T00:00:00Z` ([the gap report](../packages/brain/README.md#the-gap-report)). It also prints the page's heap over the window.
 - **Save backups** are in `.data/saves/E0/`: one every 30 minutes and one each time the game connects (on load and on reconnecting), the newest 96 kept. To restore one, follow [the steps](../packages/brain/README.md#save-backups). Stop the brain first, or copy the backup out. Backups are personal data: `.data/` is gitignored, keep it that way.
@@ -109,7 +112,7 @@ The brain builds the new in-game code at start and deploys it when the game conn
 
 - **The dashboard says "Brain unreachable", or doesn't load:** the brain isn't running. If its terminal shows `brain runner:` restart lines, it's crashing at start: the lines before them say why. If the terminal was closed, start it again.
 - **A `deployFailed` alert:** the brain couldn't deploy to the game. The alert and the brain's output say why. It retries each time the game connects; Options → Remote API → Connect makes it reconnect now.
-- **A `versionDrift` alert:** the game isn't the version this release was built for, usually because Steam updated it. The brain holds: it deploys nothing and restarts no Agent. Wait for a release built for the new version.
+- **A `versionDrift` alert:** the game isn't the version this release was built for, usually because Steam updated it. The brain holds: it deploys nothing, restarts no Agent, and gives the hack loop no new instructions (only "Stop the hack loop" still gets through); loops already running keep running. Wait for a release built for the new version.
   - The alert says what differs. If the dashboard's Agent table still says "the pinned one" on its "Version" line, the game's API definitions differ under the same version: tell the developer.
 - **A `supervisionGaveUp` alert:** the game was relaunched 3 times in an hour, or the supervisor's checks or launch commands kept failing. Check the game and Steam, then click "Resume supervision".
 - **An `agentSilent` alert:** no heartbeat for over a minute. If it lasts, the supervisor relaunches the game after 5 minutes. If the game is running and the Agent isn't, `run agent/boot.js` in the terminal starts it.

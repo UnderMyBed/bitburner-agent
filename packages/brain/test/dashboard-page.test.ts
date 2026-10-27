@@ -64,6 +64,7 @@ const BUSY_STATUS: DashboardStatus = {
     { atMs: NOW_MS - 2_000, kind: "agentConnected", detail: { agentSessionId: "session-1" } },
   ],
   supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
+  hackLoop: { enabled: true, waiting: false, target: "n00dles", hosts: ["foodnstuff", "joesguns", "n00dles"] },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -88,6 +89,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     brainStartedAtMs,
     brainStartedEventId,
     supervising: true,
+    hackLoop: { enabled: true, waiting: true, target: null, hosts: [] },
     nowMs: NOW_MS,
   });
   store.close();
@@ -191,6 +193,8 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#gaps")).toContain("(100 s)");
   expect(textOf(document, "#supervision")).toContain("Supervision: running");
   expect(textOf(document, "#supervision button")).toBe("Pause supervision");
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: on, against n00dles, on 3 servers");
+  expect(textOf(document, "#hack-loop button")).toBe("Stop the hack loop");
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
 });
 
@@ -287,13 +291,56 @@ test("the button sends the switch, the other way from the status, then shows the
   expect(textOf(document, "#supervision")).toContain("Supervision: running");
 });
 
-test("a switch the brain refuses says so, and the data stays", async () => {
+test("the hack loop's button (#134) sends its switch, the other way from the status, then shows the new state", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = {
+        ...BUSY_STATUS,
+        hackLoop: enabled ? BUSY_STATUS.hackLoop : { enabled, waiting: false, target: null, hosts: [] },
+      };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  (document.querySelector("#hack-loop button") as HTMLButtonElement).click();
+  await settle();
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: off");
+  expect(textOf(document, "#hack-loop button")).toBe("Start the hack loop");
+  (document.querySelector("#hack-loop button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [
+      ["/api/hack-loop", '{"enabled":false}'],
+      ["/api/hack-loop", '{"enabled":true}'],
+    ],
+  );
+  expect(textOf(document, "#hack-loop")).toContain("Hack loop: on, against n00dles, on 3 servers");
+});
+
+test.each([
+  [
+    "waiting for the Agent's snapshots",
+    { enabled: true, waiting: true, target: null, hosts: [] },
+    "on, waiting for the Agent's snapshots",
+  ],
+  ["no target yet", { enabled: true, waiting: false, target: null, hosts: [] }, "on, rooting servers; no target yet"],
+])("the hack loop on, %s, says so", async (_description, hackLoop, text) => {
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, hackLoop } }));
+  expect(textOf(document, "#hack-loop")).toContain(`Hack loop: ${text}`);
+});
+
+test.each([
+  ["supervision", "#supervision button", "#supervision-problem"],
+  ["hack loop", "#hack-loop button", "#hack-loop-problem"],
+])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
   );
-  (document.querySelector("#supervision button") as HTMLButtonElement).click();
+  (document.querySelector(button) as HTMLButtonElement).click();
   await settle();
-  expect(textOf(document, "#switch-problem")).toBe("The switch didn't change: HTTP 403");
-  expect(isShown(document, "#switch-problem")).toBe(true);
+  expect(textOf(document, problem)).toBe("The switch didn't change: HTTP 403");
+  expect(isShown(document, problem)).toBe(true);
   expectDataShown(document);
 });

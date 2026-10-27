@@ -14,14 +14,16 @@ const STATUS = { nowMs: 1, alerts: [] };
 
 async function start({ status = () => STATUS as never }: { status?: () => never } = {}) {
   const pausedCalls: boolean[] = [];
+  const hackLoopCalls: boolean[] = [];
   const errors: unknown[] = [];
   server = await startDashboardServer({
     port: 0,
     status,
     setSupervisionPaused: (paused) => pausedCalls.push(paused),
+    setHackLoopEnabled: (enabled) => hackLoopCalls.push(enabled),
     onError: (error) => errors.push(error),
   });
-  return { port: server.port, pausedCalls, errors };
+  return { port: server.port, pausedCalls, hackLoopCalls, errors };
 }
 
 interface Reply {
@@ -143,6 +145,36 @@ test.each([
   expect(pausedCalls).toEqual([]);
 });
 
+test("POST /api/hack-loop sets the hack loop's switch, from the dashboard's own page (#134)", async () => {
+  const { port, hackLoopCalls, pausedCalls } = await start();
+  const off = await send(port, {
+    method: "POST",
+    path: "/api/hack-loop",
+    headers: sameOrigin(port),
+    body: JSON.stringify({ enabled: false }),
+  });
+  expect(off.status).toBe(200);
+  expect(JSON.parse(off.body)).toEqual({ enabled: false });
+  await send(port, { method: "POST", path: "/api/hack-loop", headers: sameOrigin(port), body: '{"enabled":true}' });
+  expect(hackLoopCalls).toEqual([false, true]);
+  expect(pausedCalls).toEqual([]);
+});
+
+test.each([
+  ["another origin", { origin: "https://attacker.example" }, '{"enabled":false}', 403],
+  ["no origin", { origin: "" }, '{"enabled":false}', 403],
+  ["a body with paused instead", {}, '{"paused":true}', 400],
+  ["enabled not a boolean", {}, '{"enabled":"no"}', 400],
+  ["another field too", {}, '{"enabled":false,"other":1}', 400],
+])("a hack loop switch from %s is refused, and nothing changes", async (_description, override, body, expected) => {
+  const { port, hackLoopCalls } = await start();
+  const headers: Record<string, string> = { ...sameOrigin(port), ...override };
+  if (headers.origin === "") delete headers.origin;
+  const reply = await send(port, { method: "POST", path: "/api/hack-loop", headers, body });
+  expect(reply.status).toBe(expected);
+  expect(hackLoopCalls).toEqual([]);
+});
+
 test("a switch body streamed past 1 KiB, with no length declared, is refused, 413", async () => {
   const { port, pausedCalls, errors } = await start();
   // A valid switch, but padded past 1 KiB: refused for its length alone.
@@ -233,6 +265,7 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { path: "/nothing" })).status).toBe(404);
   expect((await send(port, { method: "DELETE", path: "/api/status", headers: sameOrigin(port) })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/supervision" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/hack-loop" })).status).toBe(405);
 });
 
 test("a status that fails is a 500, reported, and the server carries on", async () => {

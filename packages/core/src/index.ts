@@ -3,9 +3,12 @@ export {
   type BrainMessage,
   CONTROL_CLOSE_CODES,
   CONTROL_PROTOCOL_VERSION,
+  type DesiredState,
   encodeControlMessage,
   type GameInfo,
   type HelloMessage,
+  MAX_FIELD_LENGTH,
+  MAX_HACK_LOOP_HOSTS,
   type ParsedMessage,
   parseAgentMessage,
   parseBrainMessage,
@@ -24,18 +27,28 @@ export {
   deployedFilePath,
   deploymentFolder,
   deploymentIdOfPath,
+  isGeneratedDeploymentId,
   isValidDeploymentId,
   parseAgentConfig,
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
+  HACK_LOOP_DEPLOY_WORKER_NAME,
+  HACK_LOOP_ROOT_WORKER_NAME,
+  HACK_LOOP_SCRIPT_NAME,
+  type HackLoopDeployReport,
+  type HackLoopRootReport,
+  isHackLoopFile,
+} from "./hack-loop.ts";
+export { homeWorkerFileNames } from "./home-workers.ts";
+export {
   type FastSnapshotData,
   type FastWorkerData,
   type MediumSnapshotData,
   type SlowSnapshotData,
-  SNAPSHOT_WORKER_PORT,
-  type SnapshotWorkerReport,
   type StaticSnapshotData,
   snapshotWorkerFileName,
+  WORKER_REPORT_PORT,
+  type WorkerReport,
 } from "./snapshots.ts";

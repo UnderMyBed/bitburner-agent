@@ -55,6 +55,14 @@ export function deploymentIdOfPath(filePath: string): string | null {
   return isValidDeploymentId(deploymentId) ? deploymentId : null;
 }
 
+/**
+ * An id the deployer generated (`deploymentIdOf` in the bridge): 12 hex digits. Only these folders are ever cleaned up, and
+ * only their loops stopped (#134), never a player's own `agent/<name>/`.
+ */
+export function isGeneratedDeploymentId(deploymentId: string): boolean {
+  return /^[0-9a-f]{12}$/.test(deploymentId);
+}
+
 /** A deployment id names a folder: letters, digits, `-` and `_` only, so it can't reach outside `agent/`. */
 export function isValidDeploymentId(deploymentId: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(deploymentId);

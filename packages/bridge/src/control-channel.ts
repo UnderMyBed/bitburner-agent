@@ -1,9 +1,11 @@
 // The control channel's session logic (docs/bridge/protocol.md): authenticates the in-game Agent, keeps one at a time,
-// passes its snapshots on in order, and tells it to restart onto the deployed deployment, never in a loop.
+// passes its snapshots on in order, tells it to restart onto the deployed deployment, never in a loop, and gives it the
+// brain's desired state (#134).
 import {
   type BrainMessage,
   CONTROL_CLOSE_CODES,
   CONTROL_PROTOCOL_VERSION,
+  type DesiredState,
   encodeControlMessage,
   type GameInfo,
   gameDrift,
@@ -66,6 +68,10 @@ export interface ConnectedAgent {
 
 interface AgentSession extends ConnectedAgent {
   connection: Connection;
+  /** Sent `welcome` (not `restart`): it may be given the desired state. */
+  welcomed: boolean;
+  /** The desired state last sent to it, as encoded, or null. */
+  sentDesiredState: string | null;
 }
 
 export class ControlChannel {
@@ -88,6 +94,8 @@ export class ControlChannel {
   readonly #restartsSentFrom = new Set<string>();
   /** The last sequence number passed on, by session and tier, for the most recent sessions (oldest first). */
   readonly #lastPassedOnBySession = new Map<string, Map<string, number>>();
+  /** What the brain wants running in the game (#134), or null until it says. */
+  #desiredState: DesiredState | null = null;
 
   constructor({ token, clock, onListenerError = raiseAsUncaught }: ControlChannelOptions) {
     if (token === "") throw new Error("the control channel needs a token");
@@ -120,7 +128,23 @@ export class ControlChannel {
   setDeploymentState(state: DeploymentState): void {
     if (state.deployedId !== this.#deploymentState.deployedId) this.#restartsSentFrom.clear();
     this.#deploymentState = { ...state };
-    if (this.#currentSession) this.#restartIfOutdated(this.#currentSession);
+    if (this.#currentSession) {
+      if (this.#restartIfOutdated(this.#currentSession)) this.#currentSession.welcomed = false;
+      this.#sendDesiredStateIfDue(this.#currentSession);
+    }
+  }
+
+  /**
+   * What the brain wants running in the game (architecture D2, #134), whole, or null to send nothing new. The brain's
+   * controller sets it, and sets it again for each newly connected Agent once it knows that Agent's game, so a stale
+   * state never goes out with a welcome. Each connection is sent a state once, then again only when it changes. It's
+   * sent only to a welcomed Agent running the deployed deployment. While the brain holds (on hold, after a failed
+   * deploy, or once the game has drifted), only "off" goes out, and it goes to any connected Agent: stopping our own
+   * loops is always safe. A new connection clears it.
+   */
+  setDesiredState(state: DesiredState | null): void {
+    this.#desiredState = structuredClone(state);
+    if (this.#currentSession) this.#sendDesiredStateIfDue(this.#currentSession);
   }
 
   /** Takes a new connection from the game's page: it has `HELLO_TIMEOUT_MS` to say a valid hello. */
@@ -176,9 +200,13 @@ export class ControlChannel {
       agentSessionId: hello.agentSessionId,
       deploymentId: hello.deploymentId,
       game: hello.game,
+      welcomed: false,
+      sentDesiredState: null,
     };
     this.#currentSession = session;
     this.#rememberSession(session.agentSessionId);
+    // Whatever was wanted for the last Agent isn't for this one: the controller sets it afresh (#134).
+    this.#desiredState = null;
     previous?.connection.close(CONTROL_CLOSE_CODES.replaced, "replaced");
     // Before the restart decision, so a drifted game is never sent one. Reported once: it holds for the brain's run.
     const drift = gameDrift(hello.game);
@@ -186,6 +214,7 @@ export class ControlChannel {
     if (drift !== null) this.#gameDrifted = true;
     if (!this.#restartIfOutdated(session)) {
       this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" });
+      session.welcomed = true;
     }
     const atMs = this.#clock.now();
     // versionDrift after agentConnected, so it's recorded against the Agent that reported it.
@@ -209,14 +238,38 @@ export class ControlChannel {
    * Returns whether it did.
    */
   #restartIfOutdated(session: AgentSession): boolean {
-    const { deployedId, hold, deployFailed } = this.#deploymentState;
-    if (deployedId === null || hold || this.#gameDrifted || deployFailed || session.deploymentId === deployedId) {
-      return false;
-    }
+    const { deployedId } = this.#deploymentState;
+    if (deployedId === null || this.#holding() || session.deploymentId === deployedId) return false;
     if (this.#restartsSentFrom.has(session.deploymentId)) return false;
     this.#restartsSentFrom.add(session.deploymentId);
     this.#send(session, { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: deployedId });
     return true;
+  }
+
+  /** On hold, after a failed deploy, or once the game has drifted: the brain deploys and restarts nothing. */
+  #holding(): boolean {
+    const { hold, deployFailed } = this.#deploymentState;
+    return hold || deployFailed || this.#gameDrifted;
+  }
+
+  /** Sends the desired state if the brain has one this welcomed Agent may have and hasn't had yet. */
+  #sendDesiredStateIfDue(session: AgentSession): void {
+    if (this.#desiredState === null) return;
+    // "Off" goes to any connected Agent, whatever the brain knows: it only stops our own loops, and an Agent too old
+    // to know it ignores it. After a Steam update the brain holds before it ever learns the deployed id.
+    const off = !this.#desiredState.hackLoop.enabled;
+    if (!off && (!session.welcomed || session.deploymentId !== this.#deploymentState.deployedId || this.#holding())) {
+      return;
+    }
+    const message: BrainMessage = {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      ...this.#desiredState,
+    };
+    const encoded = encodeControlMessage(message);
+    if (encoded === session.sentDesiredState) return;
+    session.sentDesiredState = encoded;
+    session.connection.send(encoded);
   }
 
   /** Keeps the numbering of the most recent sessions only. */

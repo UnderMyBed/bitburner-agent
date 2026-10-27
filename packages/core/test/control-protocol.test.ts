@@ -34,6 +34,21 @@ describe("round trips", () => {
   test.each<BrainMessage>([
     { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "welcome" },
     { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: "0123abcd" },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] },
+    },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: true, target: null, hosts: [] },
+    },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: false, target: null, hosts: [] },
+    },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
   });
@@ -92,5 +107,29 @@ describe("rejected, each with a reason", () => {
     expect(parseBrainMessage(JSON.stringify({ protocolVersion: 1, type: "restart", deploymentId: 123 })).ok).toBe(
       false,
     );
+  });
+
+  const hackLoop = { enabled: true, target: "n00dles", hosts: ["foodnstuff"] };
+  const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop };
+  test.each([
+    ["no hack loop", { ...desiredState, hackLoop: undefined }],
+    ["a hack loop that isn't an object", { ...desiredState, hackLoop: true }],
+    ["enabled that isn't a boolean", { ...desiredState, hackLoop: { ...hackLoop, enabled: "yes" } }],
+    ["no target", { ...desiredState, hackLoop: { ...hackLoop, target: undefined } }],
+    ["an empty target", { ...desiredState, hackLoop: { ...hackLoop, target: "" } }],
+    ["a numeric target", { ...desiredState, hackLoop: { ...hackLoop, target: 7 } }],
+    ["an over-long target", { ...desiredState, hackLoop: { ...hackLoop, target: "x".repeat(257) } }],
+    ["no hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: undefined } }],
+    ["a host that isn't a hostname", { ...desiredState, hackLoop: { ...hackLoop, hosts: ["n00dles", 7] } }],
+    ["too many hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: Array(1_001).fill("n00dles") } }],
+  ])("a desired state with %s", (_description, message) => {
+    const result = parseBrainMessage(JSON.stringify(message));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).not.toBe("");
+  });
+
+  test("a desired state keeps only its known fields", () => {
+    const extras = JSON.stringify({ ...desiredState, extra: 1, hackLoop: { ...desiredState.hackLoop, extra: 2 } });
+    expect(parseBrainMessage(extras)).toEqual({ ok: true, message: desiredState });
   });
 });

@@ -9,6 +9,8 @@ import {
   BOOT_SCRIPT,
   deployedFilePath,
   type FastSnapshotData,
+  HACK_LOOP_SCRIPT_NAME,
+  homeWorkerFileNames,
   type MediumSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
@@ -298,11 +300,10 @@ describe("the skeleton on E2", () => {
     await untilEventCount(page, dataDirectory, "agentConnected", 1);
     await advanceGameTime(page, TWO_GAME_MINUTES_MS);
 
-    // The game's own RAM figures (`mem`) for the Agent, each worker, and boot.js (beside the Agent at a handover).
+    // The game's own RAM figures (`mem`) for the Agent, each home worker (the snapshots' and the hack loop's, #134),
+    // and boot.js (beside the Agent at a handover).
     const agentFile = deployedFilePath(brain.deploymentId, AGENT_SCRIPT_NAME);
-    const workerFiles = SNAPSHOT_TIERS.map((tier) =>
-      deployedFilePath(brain.deploymentId, snapshotWorkerFileName(tier)),
-    );
+    const workerFiles = homeWorkerFileNames().map((fileName) => deployedFilePath(brain.deploymentId, fileName));
     const ramGbByScript: Record<string, number> = {};
     for (const file of [agentFile, ...workerFiles, BOOT_SCRIPT]) {
       const terminalLengthBeforeCommand = (await terminalText(page)).length;
@@ -336,7 +337,7 @@ describe("the skeleton on E2", () => {
     // What a fast snapshot sees is the Agent and the fast worker, exactly: runtime RAM is the static figure.
     const agentPlusFastWorkerGb =
       (ramGbByScript[agentFile] as number) +
-      (ramGbByScript[workerFiles[SNAPSHOT_TIERS.indexOf("fast")] as string] as number);
+      (ramGbByScript[deployedFilePath(brain.deploymentId, snapshotWorkerFileName("fast"))] as number);
     expect(Math.abs(mostHomeRamUsedGb - agentPlusFastWorkerGb)).toBeLessThan(0.01);
     expect(mostHomeRamUsedGb).toBeLessThanOrEqual(agentPlusLargestWorkerGb);
     // The page's heap: missing on E2, where Playwright's fake `performance` has no `memory.usedJSHeapSize`.
@@ -349,5 +350,19 @@ describe("the skeleton on E2", () => {
       `Q1 on E2: ${JSON.stringify(ramGbByScript)}; the Agent plus its largest worker ${agentPlusLargestWorkerGb} GB; ` +
         `home RAM in use at each fast snapshot at most ${mostHomeRamUsedGb} GB of 8; page heap ${heapText}`,
     );
+
+    // The hack loop (#134), on by default, in the real game: n00dles is rooted, and runs the loop.
+    const latestMedium = rowsOf(rows, session, "medium").at(-1)?.data as MediumSnapshotData;
+    expect(latestMedium.servers.find((server) => server.hostname === "n00dles")).toMatchObject({
+      hasAdminRights: true,
+    });
+    await typeCommand(page, "connect n00dles");
+    const terminalLengthBeforePs = (await terminalText(page)).length;
+    await typeCommand(page, "ps");
+    const loopFile = deployedFilePath(brain.deploymentId, HACK_LOOP_SCRIPT_NAME);
+    await advanceUntil(page, async () => (await terminalText(page)).slice(terminalLengthBeforePs).includes(loopFile), {
+      realTimeoutMs: 10_000,
+    });
+    await typeCommand(page, "home");
   });
 });

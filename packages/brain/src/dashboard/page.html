@@ -33,7 +33,11 @@
   <section id="gaps"><h2>Gaps in the last 24 h</h2><div></div></section>
   <section id="supervision">
     <h2>Supervision</h2><div></div><button type="button">Pause supervision</button>
-    <div class="bad" id="switch-problem" hidden></div>
+    <div class="bad" id="supervision-problem" hidden></div>
+  </section>
+  <section id="hack-loop">
+    <h2>Hack loop</h2><div></div><button type="button">Stop the hack loop</button>
+    <div class="bad" id="hack-loop-problem" hidden></div>
   </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
@@ -44,6 +48,8 @@
 const POLL_MS = 2000;
 /** What the switch sends next: resume unless supervision is running. */
 let pauseNext = true;
+/** What the hack loop's switch sends next (#134): the other way from the status. */
+let enableHackLoopNext = false;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -144,6 +150,20 @@ function render(status) {
   // Off, nothing reads the switch: no button to suggest otherwise.
   switchButton.hidden = supervision.state === "off";
 
+  const hackLoop = status.hackLoop;
+  enableHackLoopNext = !hackLoop.enabled;
+  const hackLoopText = !hackLoop.enabled
+    ? "off"
+    : hackLoop.waiting
+      ? "on, waiting for the Agent's snapshots"
+      : hackLoop.target === null
+        ? "on, rooting servers; no target yet"
+        : `on, against ${hackLoop.target}, on ${hackLoop.hosts.length} servers`;
+  document.querySelector("#hack-loop div").replaceChildren(
+    element("div", `Hack loop: ${hackLoopText}`, hackLoop.enabled ? "ok" : "muted"),
+  );
+  document.querySelector("#hack-loop button").textContent = hackLoop.enabled ? "Stop the hack loop" : "Start the hack loop";
+
   const events = document.querySelector("#events table");
   events.replaceChildren(
     ...status.events.map((event) => {
@@ -174,14 +194,15 @@ async function refresh() {
   }
 }
 
-document.querySelector("#supervision button").addEventListener("click", async () => {
-  const switchProblem = document.querySelector("#switch-problem");
+/** Sends a switch's new value, says so if it didn't take, and shows the state afterwards. */
+async function sendSwitch(path, body, problemSelector) {
+  const switchProblem = document.querySelector(problemSelector);
   switchProblem.hidden = true;
   try {
-    const response = await fetch("/api/supervision", {
+    const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paused: pauseNext }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
   } catch (error) {
@@ -189,7 +210,14 @@ document.querySelector("#supervision button").addEventListener("click", async ()
     switchProblem.hidden = false;
   }
   await refresh();
-});
+}
+
+document.querySelector("#supervision button").addEventListener("click", () =>
+  sendSwitch("/api/supervision", { paused: pauseNext }, "#supervision-problem"),
+);
+document.querySelector("#hack-loop button").addEventListener("click", () =>
+  sendSwitch("/api/hack-loop", { enabled: enableHackLoopNext }, "#hack-loop-problem"),
+);
 
 refresh();
 setInterval(refresh, POLL_MS);

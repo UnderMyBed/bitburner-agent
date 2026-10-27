@@ -1,6 +1,7 @@
 // Every in-game script's static RAM, measured with the game's own calculator, is within its budget (architecture R4).
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { homeWorkerFileNames } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { NEW_GAME, useInGameBuild, useSimulations } from "./helpers/simulation.ts";
 
@@ -32,11 +33,12 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
   }
 });
 
-test("the Agent's budget plus its largest worker's fits in a fresh save's 8 GB home", () => {
-  const largestWorkerBudget = Math.max(
-    ...Object.entries(budgets)
-      .filter(([fileName]) => fileName.startsWith("snapshot-"))
-      .map(([, budget]) => budget),
-  );
+/** What isn't a worker beside the Agent on home: the Agent, `boot.js`, and the loop, which runs on other servers. */
+const NOT_HOME_WORKERS = ["agent.js", "boot.js", "hack-loop.js"];
+
+test("the Agent's budget plus its largest home worker's fits in a fresh save's 8 GB home", () => {
+  // Every bundle is one or the other, so a new worker can't be left out of the sum (#134).
+  expect([...homeWorkerFileNames(), ...NOT_HOME_WORKERS].sort()).toEqual(Object.keys(budgets).sort());
+  const largestWorkerBudget = Math.max(...homeWorkerFileNames().map((fileName) => budgets[fileName] as number));
   expect((budgets["agent.js"] as number) + largestWorkerBudget).toBeLessThanOrEqual(8);
 });

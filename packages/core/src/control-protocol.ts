@@ -50,10 +50,26 @@ export interface SnapshotMessage {
 
 export type AgentMessage = HelloMessage | SnapshotMessage;
 
+/**
+ * What the brain wants running in the game (architecture D2), whole each time: the Agent converges on the last one it
+ * got. M3's first slice has one activity in it (#134).
+ */
+export interface DesiredState {
+  /**
+   * The hack loop: servers rooted where possible, and the loop running on `hosts` against `target` (null: none worth
+   * hacking yet). Off, every loop stops, wherever it runs.
+   */
+  hackLoop: { enabled: boolean; target: string | null; hosts: string[] };
+}
+
+/** The most hosts a desired state names: a whole network is well under it. */
+export const MAX_HACK_LOOP_HOSTS = 1_000;
+
 export type BrainMessage =
   | { protocolVersion: typeof CONTROL_PROTOCOL_VERSION; type: "welcome" }
   /** The Agent isn't running the deployed deployment: it runs `agent/boot.js` and exits. */
-  | { protocolVersion: typeof CONTROL_PROTOCOL_VERSION; type: "restart"; deploymentId: string };
+  | { protocolVersion: typeof CONTROL_PROTOCOL_VERSION; type: "restart"; deploymentId: string }
+  | ({ protocolVersion: typeof CONTROL_PROTOCOL_VERSION; type: "desiredState" } & DesiredState);
 
 export type ParsedMessage<Message> = { ok: true; message: Message } | { ok: false; reason: string };
 
@@ -193,6 +209,28 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
         ok: true,
         message: { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: fields.deploymentId },
       };
+    case "desiredState": {
+      const hackLoop = fields.hackLoop;
+      if (typeof hackLoop !== "object" || hackLoop === null) {
+        return { ok: false, reason: "desiredState without a hackLoop" };
+      }
+      const { enabled, target, hosts } = hackLoop as JsonObject;
+      if (typeof enabled !== "boolean") return { ok: false, reason: "desiredState's hackLoop.enabled isn't a boolean" };
+      if (target !== null && !isShortNonEmptyString(target)) {
+        return { ok: false, reason: `desiredState's hackLoop.target is ${describeValue(target)}` };
+      }
+      if (!Array.isArray(hosts) || hosts.length > MAX_HACK_LOOP_HOSTS || !hosts.every(isShortNonEmptyString)) {
+        return { ok: false, reason: "desiredState's hackLoop.hosts isn't a list of hostnames" };
+      }
+      return {
+        ok: true,
+        message: {
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "desiredState",
+          hackLoop: { enabled, target, hosts: [...hosts] },
+        },
+      };
+    }
     default:
       return { ok: false, reason: `unknown message type ${describeValue(fields.type)}` };
   }
