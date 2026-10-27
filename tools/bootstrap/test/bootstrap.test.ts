@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { BOOTSTRAP_STEPS, bootstrap } from "../bootstrap.ts";
+import { BOOTSTRAP_STEPS, bootstrap, runCommandIn } from "../bootstrap.ts";
 
 const REPOSITORY_ROOT = path.resolve(import.meta.dirname, "../../..");
 
@@ -22,7 +22,7 @@ describe("bootstrap", () => {
     expect(scripts.bootstrap).toBe("node tools/bootstrap/cli.ts");
   });
 
-  test("says each step, runs them all, and ends by saying how to run the brain", () => {
+  test("says each step, runs them all, and ends by saying what to do next", () => {
     const ran: string[] = [];
     const said: string[] = [];
     const exitCode = bootstrap(
@@ -36,7 +36,8 @@ describe("bootstrap", () => {
     expect(exitCode).toBe(0);
     expect(ran).toHaveLength(3);
     expect(said[0]).toMatch(/^\[1\/3\] the game's source/);
-    expect(said.at(-1)).toContain("npm run brain");
+    expect(said.at(-1)).toContain("npm run check");
+    expect(said.at(-1)).toContain("docs/setup.md");
   });
 
   test("stops at the first step that fails, with its exit code, and runs nothing after it", () => {
@@ -53,5 +54,11 @@ describe("bootstrap", () => {
     expect(exitCode).toBe(3);
     expect(ran).toEqual(["git submodule update --init", "npm ci"]);
     expect(said.at(-1)).toBe('Stopped: "npm ci" exited with 3. Fix that, then run this again.');
+  });
+
+  test("runCommandIn runs a real command in the directory and returns its exit code; a missing one fails", () => {
+    const run = runCommandIn(REPOSITORY_ROOT);
+    expect(run("git", ["--version"])).toBe(0);
+    expect(run("no-such-command-for-bootstrap-tests", [])).not.toBe(0);
   });
 });

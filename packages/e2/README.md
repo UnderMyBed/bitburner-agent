@@ -9,7 +9,7 @@ E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and bef
 ## Running it
 
 ```
-npm run setup:engine   # once: the game's own dependencies (packages/sim uses them too)
+npm run bootstrap      # once: the submodule, npm ci and the game's own dependencies (packages/sim uses them too)
 npm run e2:build       # once per pinned commit
 npm run e2:install     # once: Playwright's Chromium headless shell
 npm run e2             # all E2 tests; npm run e2 -- clock runs the files whose names match

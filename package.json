@@ -16,7 +16,7 @@
     "setup:engine": "node packages/sim/scripts/setup-engine.ts",
     "build:engine": "node packages/sim/scripts/build-engine.ts",
     "sim": "node packages/sim/scripts/run-scenario.ts",
-    "brain": "node packages/brain/src/main.ts",
+    "brain": "node packages/brain/src/start.ts",
     "gaps": "node packages/brain/src/gaps-cli.ts",
     "e2:build": "node packages/e2/scripts/build-game.ts",
     "e2:install": "node packages/e2/scripts/install-browser.ts",

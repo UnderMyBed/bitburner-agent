@@ -38,7 +38,7 @@ afterEach(async () => {
 // Never by starting a brain without a data directory: that brain would run in the repository's own .data/, and a
 // config it creates there is E0, which on Windows launches Steam's game.
 test("without a data directory, the brain's is the repository's .data/ (gitignored)", () => {
-  expect(resolveDataDirectory([], { BITBURNER_AGENT_DATA_DIR: "" })).toBe(DEFAULT_DATA_DIRECTORY);
+  expect(resolveDataDirectory([], {})).toBe(DEFAULT_DATA_DIRECTORY);
   expect(DEFAULT_DATA_DIRECTORY).toBe(path.resolve(import.meta.dirname, "../../../.data"));
   const ignored = execFileSync("git", ["check-ignore", ".data/telemetry.sqlite"], {
     cwd: path.resolve(import.meta.dirname, "../../.."),
@@ -91,6 +91,30 @@ test("a config that isn't JSON, or isn't an object, is refused with its path", (
   expect(() => loadOrCreateConfig(dataDirectory)).toThrow(`${configPath}: not valid JSON`);
   writeFileSync(configPath, "null");
   expect(() => loadOrCreateConfig(dataDirectory)).toThrow(`${configPath}: must be a JSON object`);
+});
+
+test("the environment variable gives the data directory; the flag beats it", () => {
+  expect(resolveDataDirectory([], { BITBURNER_AGENT_DATA_DIR: "from-env", INIT_CWD: dataDirectory })).toBe(
+    path.join(dataDirectory, "from-env"),
+  );
+  expect(
+    resolveDataDirectory(["--data-dir", "from-flag"], {
+      BITBURNER_AGENT_DATA_DIR: "from-env",
+      INIT_CWD: dataDirectory,
+    }),
+  ).toBe(path.join(dataDirectory, "from-flag"));
+});
+
+test("a given but empty data directory is refused, never taken as .data/", () => {
+  expect(() => resolveDataDirectory(["--data-dir", ""], {})).toThrow(/is empty/);
+  expect(() => resolveDataDirectory(["--data-dir", ""], { BITBURNER_AGENT_DATA_DIR: "elsewhere" })).toThrow(/is empty/);
+  expect(() => resolveDataDirectory([], { BITBURNER_AGENT_DATA_DIR: " " })).toThrow(/is empty/);
+});
+
+test("under a test runner, no data directory is refused: a test's brain never uses .data/", () => {
+  expect(() => resolveDataDirectory([], { VITEST: "true" })).toThrow(/must be given its own data directory/);
+  // This test runs under Vitest: so does any brain it would start.
+  expect(process.env.VITEST).toBeTruthy();
 });
 
 test("a flag without a value is an error, never taken from elsewhere", () => {

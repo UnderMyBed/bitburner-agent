@@ -84,7 +84,7 @@ Bitburner **v3.0.1** (VersionNumber 51), the current Steam release. The game sou
 
 ## Getting started
 
-M2 is under way: the brain (`npm run brain`, [packages/brain](packages/brain/README.md)) deploys the in-game Agent, stores what it reports, backs up the save, serves a dashboard at http://127.0.0.1:12527/, and on Windows keeps Steam's game running while it runs. Everything runs from the repo, and nothing is installed outside it: to run it against Steam, follow **[docs/setup.md](docs/setup.md)**. The simulator runs too, with the legacy fork's baseline in it. You need Node 24 (`.node-version`) and git.
+M2 is under way: the brain (`npm run brain`, [packages/brain](packages/brain/README.md)) deploys the in-game Agent, stores what it reports, backs up the save, serves a dashboard at http://127.0.0.1:12527/, and on Windows keeps Steam's game running while it runs. Everything runs from the repo, and nothing is installed outside it (npm's own download cache aside): to run it against Steam, follow **[docs/setup.md](docs/setup.md)**. The simulator runs too, with the legacy fork's baseline in it. You need Node 24 (`.node-version`) and git.
 
 ```sh
 git clone https://github.com/UnderMyBed/bitburner-agent.git

@@ -1,8 +1,8 @@
 # Setup
 
-How to run the agent against Bitburner on Steam, from a clone of this repository ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95), [#122](https://github.com/UnderMyBed/bitburner-agent/issues/122); architecture §10.1, §10.2). The brain runs from the repo, in a terminal. It launches the game, deploys the in-game Agent, and keeps both going while it runs.
+How to run the agent against Bitburner on Steam, from a clone of this repository ([#95](https://github.com/UnderMyBed/bitburner-agent/issues/95), [#122](https://github.com/UnderMyBed/bitburner-agent/issues/122); architecture §10.1, §10.2). The brain runs from the repo, in a terminal, and is started again if it crashes. It launches the game, deploys the in-game Agent, and keeps both going while it runs.
 
-**Nothing is installed.** There's no service, no scheduled task and no standalone binary. Everything the agent writes stays in the repo: its data in `.data/`, the in-game build, the save backups, all gitignored (owner decision 30). To stop it, stop the brain. To remove it, delete the clone.
+**Nothing is installed.** There's no service, no scheduled task and no standalone binary (owner decision 30). Everything the brain writes goes in the repo's gitignored `.data/`: its config (with the control channel's token), the store, the in-game build and the save backups, unless you give it another data directory (below). npm's own download cache is the one exception. To stop it, stop the brain. To remove it, delete the clone, after copying out any save backups in `.data/saves/` you want to keep.
 
 **You run these steps yourself.** They act on your game. Claude builds the agent but never drives your game or your system.
 
@@ -31,7 +31,9 @@ npm run bootstrap
 npm run brain
 ```
 
-It runs in that terminal until you stop it (Ctrl+C) or close the terminal. Nothing restarts it: after a crash or a reboot, run it again.
+It runs in that terminal until you stop it (Ctrl+C) or close the terminal.
+- **If the brain crashes, it's started again** after 5 s, then 10, 30 and 60 s if it keeps crashing; a run of 5 minutes or more starts that over. Each restart is a `brain runner:` line.
+- **After a reboot**, run `npm run brain` again: nothing is installed to do it for you.
 
 **What happens next.** The brain:
 - builds the in-game code (a few seconds);
@@ -80,7 +82,8 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
 
 - **The dashboard** at http://127.0.0.1:12527/ shows the Agent, the snapshots, gaps over the last 24 h, alerts and recent events ([packages/brain](../packages/brain/README.md#the-dashboard)).
 - **Closing the game on purpose?** Pause supervision first, or it's relaunched within 30 s. A pause lasts until you resume it, even across brain restarts, so resume when you're done.
-- **Stopping:** Ctrl+C in the brain's terminal. The game keeps running without it; close it yourself if you like.
+- **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like.
+- **Don't run `git clean -x` in this clone:** it deletes `.data/`, with the store and the save backups.
 - **Gaps over a window:** `npm run gaps -- --since 2026-10-27T00:00:00Z` ([the gap report](../packages/brain/README.md#the-gap-report)).
 - **Save backups** are in `.data/saves/E0/`: one every 30 minutes and one each time the game connects (on load and on reconnecting), the newest 96 kept. To restore one, follow [the steps](../packages/brain/README.md#save-backups). Stop the brain first, or copy the backup out. Backups are personal data: `.data/` is gitignored, keep it that way.
 - **Another data directory:** `npm run brain -- --data-dir <dir>` (or `BITBURNER_AGENT_DATA_DIR`), if you'd rather keep the data elsewhere.
@@ -100,7 +103,7 @@ The brain builds the new in-game code at start and deploys it when the game conn
 
 ## When something's wrong
 
-- **The dashboard says "Brain unreachable", or doesn't load:** the brain isn't running. Read the last lines in its terminal, and start it again.
+- **The dashboard says "Brain unreachable", or doesn't load:** the brain isn't running. If its terminal shows `brain runner:` restart lines, it's crashing at start: the lines before them say why. If the terminal was closed, start it again.
 - **A `deployFailed` alert:** the brain couldn't deploy to the game. The alert and the brain's output say why. It retries each time the game connects; Options → Remote API → Connect makes it reconnect now.
 - **A `versionDrift` alert:** the game isn't the version this release was built for, usually because Steam updated it. The brain holds: it deploys nothing and restarts no Agent. Wait for a release built for the new version.
   - If the alert names the commit, for example `commit DEV`, tell the developer. It means Steam's build reports its version differently from what the release expects.
@@ -117,4 +120,5 @@ Before relying on it, check on your machine, and record what you saw on [#95](ht
   - kill the Agent in the game's terminal (`kill agent/<id>/agent.js`, the deployment's folder): after about 5 minutes with no heartbeat, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec;
   - pause supervision and close the game: it stays closed until you resume.
 - **Stopping and starting the brain:** Ctrl+C, then `npm run brain` again; the game's Remote API reconnects and the Agent carries on.
+- **A brain crash:** end the brain's own `node` process (the one whose command line has `packages\brain\src\main.ts`, not `start.ts`) in Task Manager; within about 5 s a `brain runner:` line shows the restart, and the game reconnects.
 - **The game's commit:** note what the dashboard's Agent table shows on its "Game" line.

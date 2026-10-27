@@ -8,12 +8,12 @@ The long-running brain process (architecture D1): the bridge to the game, the te
 npm run brain
 ```
 
-From the repo, in a terminal: it runs until stopped (Ctrl+C), and nothing restarts it. Nothing is installed (owner decision 30). [docs/setup.md](../../docs/setup.md) has the owner's steps, from a clone (`npm run bootstrap`) to a running skeleton. One brain per game.
+From the repo, in a terminal, until stopped (Ctrl+C). Nothing is installed (owner decision 30). `npm run brain` runs `src/start.ts`, which runs the brain (`src/main.ts`) as a child process and starts it again after a crash: after 5 s, then 10, 30 and 60 s in a crash loop, back to 5 s after a run of 5 minutes (`src/restart-on-crash.ts`). Ctrl+C reaches both, the brain shuts down cleanly, and nothing is restarted. After a reboot, run it again. [docs/setup.md](../../docs/setup.md) has the owner's steps, from a clone (`npm run bootstrap`) to a running skeleton. One brain per game.
 
 - **On Windows, an E0 brain (the default) runs the game itself.** Within 30 s it launches Bitburner through Steam. If no Agent reports for about 5 minutes, it kills and relaunches the game ([Supervision](#supervision)). Pause supervision on the dashboard while you set the game up.
-- **The data directory is the repo's `.data/`** (gitignored), so everything stays in the repo ([#122](https://github.com/UnderMyBed/bitburner-agent/issues/122)). `--data-dir <dir>` or `BITBURNER_AGENT_DATA_DIR` picks another; a relative path is taken from the directory the command was run in. Tests always give their own, since a brain in `.data/` with a new config is E0.
+- **The data directory is the repo's `.data/`** (gitignored), so everything stays in the repo ([#122](https://github.com/UnderMyBed/bitburner-agent/issues/122)). `--data-dir <dir>` or `BITBURNER_AGENT_DATA_DIR` picks another; a relative path is taken from the directory the command was run in. Tests always pass their own (with an E2 config): a brain started in `.data/` creates an E0 config, which on Windows launches Steam's game.
 - **Logs** go to stdout, one line per event, each cut at 500 characters; fatal errors go to stderr, and the brain exits non-zero. The startup lines name the release, the deployment it deploys, the control channel's and the Remote File API's ports, where the save backups go, the dashboard's address, and whether it supervises the game.
-- **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`git clone --recurse-submodules`), or the brain stops at start, saying which file is missing.
+- **At start it builds the in-game code** from its own checkout (`packages/ingame`, with esbuild from `npm ci`) into `<data dir>/ingame-build/`, rebuilt from scratch every start, and checks each file against the build's manifest. So it always deploys the code it was started from, with no separate build step. It also reads the pinned game's definition file, for the version check: the checkout needs the `vendor/bitburner-src` submodule (`npm run bootstrap` fetches it), or the brain stops at start, saying which file is missing.
 - **Deploying:** whenever the game connects to the Remote File API (on load, and after a drop, by its own reconnection setting), the brain checks the game's version and deploys if `agent/current.txt` names another deployment ([the steps](../../docs/bridge/protocol.md#deploying)). The very first start of the Agent on a save is by hand: `run agent/boot.js` in the game's terminal; autoexec does it on every load after that (#95).
 
 ## The data directory
@@ -105,7 +105,7 @@ The brain backs up the game's save over the Remote File API (`getSaveFile`; arch
   2. In the game: Options → Import Game, pick the `.json.gz`, then confirm. The game replaces the current save and reloads. It accepts these gzip files as they are (`src/SaveObject.ts:338-355`).
   3. When the brain runs again, the reload's RFA connection backs up the restored save.
   - **Only `E0` backups may ever go into Steam.** Saves flow one way: nothing from the simulator or a source build goes back (architecture §9.4).
-  - Backups are personal data. They live in the data directory, outside the repository; never commit one.
+  - Backups are personal data. They live in the data directory, by default the repo's gitignored `.data/`; never commit one, and keep `.data/` ignored.
 - **In the simulator:** a backup loads as a save fixture as it is (`{ kind: "save", path }`), to the same state as the game's own save at that moment (`test/save-backup-round-trip.test.ts`).
 - **Backups before irreversible intents** (R8) come with intents, in M3 (#11).
 
