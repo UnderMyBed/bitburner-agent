@@ -16,7 +16,7 @@ How to run the agent against Bitburner on Steam, from a clone of this repository
 
 Only tagged releases go to Steam (architecture §6). Clone the repository and check out the newest release tag. `v0.2.0`, the first with these steps, is the example below.
 
-For [the owner's check](#the-owners-check) or a release's own Steam soak ([#99](https://github.com/UnderMyBed/bitburner-agent/issues/99)), check out the candidate commit instead. It's recorded on the milestone's review issue. Then follow [this page as it is on `main`](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md), not the copy in your checkout: docs fixed after the candidate are only there.
+For [the owner's check](#the-owners-check) or a release's live run on Steam ([releasing](releasing.md) step 2), check out the candidate commit instead. It's recorded on the milestone's review issue. Then follow [this page as it is on `main`](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md), not the copy in your checkout: docs fixed after the candidate are only there.
 
 **Already have a clone?** Use it, except for the owner's check, which starts from a new one. Stop its brain if it's running, then follow [Upgrading to a new release](#upgrading-to-a-new-release) with the tag or commit you want. That ends with step 2's `npm run brain`, so carry on at step 3. Its `.data/`, if it has one, carries over: the config, the store and the save backups.
 
@@ -98,7 +98,7 @@ Stop the brain, then:
 
 ```
 git fetch --tags
-git checkout v0.3.0                 # or the candidate commit, for a check or a soak
+git checkout v0.3.0                 # or the candidate commit, for a check or a live run
 npm run bootstrap
 npm run brain
 ```
@@ -128,4 +128,4 @@ Before relying on it, check it on your machine, on the candidate commit (step 1)
    2. **Kill the Agent** in the game's terminal: `kill agent/<id>/agent.js`, where `<id>` is the "Deployment" in the dashboard's Agent table. Once the Agent has been silent for 5 minutes, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec. That's never sooner than 10 minutes after the last launch, which leaves 5 minutes for Steam to start the game and 5 for the Agent to boot. So expect it about 10 minutes after check 6.1's relaunch, or 5 minutes after you kill the Agent, whichever is later.
    3. **Pause supervision, then close the game.** Wait a couple of minutes: no `relaunch` event appears. Then start the game from Steam yourself, and once it's open, resume. (Resuming while it's still closed would launch it: a 4th launch if check 1 launched the game, so the supervisor would give up as above.)
 
-**Afterwards,** the dashboard should show supervision running and the Agent connected. For a release's soak, that's the time to take `<start>` from. Leave it running for 24 h with the PC awake ([releasing step 2](releasing.md)).
+**Afterwards,** the dashboard should show supervision running and the Agent connected. For a release's live run, that's the time to take `<start>` from ([releasing step 2](releasing.md)).

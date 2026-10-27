@@ -2,7 +2,7 @@
 
 The brain's connections to the game (architecture §6): the control channel to the in-game Agent, and the Remote File API, over which the deployer deploys the in-game code and the brain backs up the game's save.
 
-> **Status:** M2. Built: the control channel ([#87](https://github.com/UnderMyBed/bitburner-agent/issues/87)), the RFA client and deployer ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)), and the RFA's `getSaveFile` for the save backups ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). The backups themselves are in [`packages/brain`](../brain/README.md#save-backups), which owns the data directory.
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the control channel ([#87](https://github.com/UnderMyBed/bitburner-agent/issues/87)), the RFA client and deployer ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)), and the RFA's `getSaveFile` for the save backups ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). The backups themselves are in [`packages/brain`](../brain/README.md#save-backups), which owns the data directory. Later milestones extend it.
 
 ## The control channel
 

@@ -1,6 +1,6 @@
 # @bitburner-agent/brain
 
-The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. In M2 it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)), and, for Steam on Windows, [supervises](#supervision) the game itself ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)).
+The long-running brain process (architecture D1): the bridge to the game, the telemetry store, and from M4 the planner. Since M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)) it runs the control channel and stores what the in-game Agent reports, and serves the Remote File API, over which it deploys the in-game code ([#91](https://github.com/UnderMyBed/bitburner-agent/issues/91)) and backs up the game's save ([#92](https://github.com/UnderMyBed/bitburner-agent/issues/92)). It also serves the local [dashboard](#the-dashboard) ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93)), and, for Steam on Windows, [supervises](#supervision) the game itself ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)).
 
 ## Running it
 
@@ -190,7 +190,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
 
 ## The gap report
 
-The evidence for M2's exit criterion, "live snapshots on Steam for 24 h without gaps" (architecture §13):
+The evidence for M2's exit criterion, "live snapshots on Steam without gaps" (architecture §13), and for each release's live run ([releasing](../../docs/releasing.md) step 2):
 
 ```
 npm run gaps -- --since 2026-10-27T00:00:00Z --until 2026-10-28T00:00:00Z
