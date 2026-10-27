@@ -171,7 +171,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
     - At most the progress since the last autosave (60 s by default) is lost.
     - The heartbeat comes even when home is full and no worker can run, so a full home never looks silent.
     - If taskkill reports a failure but the game is gone anyway, it still launches.
-  - **Grace:** silence counts only after 10 checks (5 minutes) since the brain started, since a launch, or since supervision was resumed. That gives the game time to load and the Agent time to boot.
+  - **Grace:** silence counts only after 10 checks (5 minutes) since the brain started or supervision was resumed. After a launch, the 10 checks start once the launch's wait is over, so the earliest kill is 10 minutes after the launch. That gives Steam time to start the game, and the Agent time to boot.
   - **Running** is what `tasklist /FI "IMAGENAME eq bitburner.exe" /FO CSV /NH` lists, matched by image name. Its "no tasks" message is in the system's language, so it isn't read. Any `bitburner.exe` counts, so don't run another copy of the game (a non-Steam download, say) alongside.
   - The three programs are run by their full path in System32, never through a shell's parsing.
   - The switch is read again just before anything is killed or launched, so a pause is never late.
