@@ -228,7 +228,7 @@ export function giveInstalledAugmentation(augmentation: string) {
 
 /**
  * Queues `augmentation`, unpaid, as if bought and not yet installed: a harness edit for test scenarios (#164), not
- * something a player can do. The game's own `queueAugmentation`, as a purchase calls it (`Faction/FactionHelpers.tsx`).
+ * something a player can do. The game's own `queueAugmentation`, as a purchase calls it (`Faction/FactionHelpers.tsx:119`).
  * Unknown, or owned already (installed or queued; NeuroFlux Governor may be queued again), it throws.
  */
 export function queueAugmentation(augmentation: string) {

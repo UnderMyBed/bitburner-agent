@@ -770,8 +770,9 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
       await release();
       expect(sentIds()).toEqual([INSTALL.id]);
-      // A slow snapshot of the same game changes nothing.
+      // A slow snapshot of the same game changes nothing, nor one from before that reset (a save that old, reloaded).
       send(connection, "slow", slowAt(1_000));
+      send(connection, "slow", slowAt(500));
       expect(sentIds()).toEqual([INSTALL.id]);
       // The install kills the Agent; the next one connects to the reset game.
       connection.dropFromGameSide();

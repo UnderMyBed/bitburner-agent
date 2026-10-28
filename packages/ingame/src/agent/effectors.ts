@@ -117,7 +117,8 @@ export function effectorFor(intent: Intent): Effector {
       };
     }
     // Installing kills every script, the Agent too, and resets the game; `boot.js`, started after it, starts the next
-    // Agent (#164, architecture §5.7). Sent again after the reset, it's done: nothing is left to install.
+    // Agent (#164, architecture §5.7). Sent again after the reset, it's done through `singularity` or `sim`: nothing is
+    // left to install. The `ui` worker is a placeholder until slice 10b.
     case "installAugmentations":
       return {
         description: "install the augmentations queued",

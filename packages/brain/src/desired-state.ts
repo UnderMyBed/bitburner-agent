@@ -76,8 +76,8 @@ export interface IntentView {
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
-   * Why an irreversible intent isn't sent yet, to follow "not sent: " (#147), or null once it's sent, or for any
-   * other.
+   * Why an irreversible intent (#147), or one queued after an install (#164), isn't sent yet, to follow "not sent: ",
+   * or null once it's sent, or for any other.
    */
   waitingFor: string | null;
 }
