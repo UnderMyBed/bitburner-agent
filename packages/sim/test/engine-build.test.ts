@@ -132,9 +132,11 @@ describe("collectTsconfigs", () => {
 
   test("fails on an extends it can't follow, rather than leave that config out of the fingerprint", () => {
     const fromPackage = tree({ "tsconfig.json": '{ "extends": "@tsconfig/node22" }', "src/a.ts": "" });
-    expect(() => collectTsconfigs(path.join(fromPackage, "src"))).toThrow(/@tsconfig\/node22/);
+    expect(() => collectTsconfigs(path.join(fromPackage, "src"))).toThrow(
+      /extends @tsconfig\/node22, a package's config/,
+    );
     const missing = tree({ "tsconfig.json": '{ "extends": "./gone.json" }', "src/a.ts": "" });
-    expect(() => collectTsconfigs(path.join(missing, "src"))).toThrow(/gone\.json/);
+    expect(() => collectTsconfigs(path.join(missing, "src"))).toThrow(/extends \.\/gone\.json, which isn't there/);
   });
 });
 
