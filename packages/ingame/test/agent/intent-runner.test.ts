@@ -18,6 +18,7 @@ const NEUROFLUX_3 = intent({
   action: "purchaseAugmentation",
   args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 },
 });
+const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -72,6 +73,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     AEVUM,
     JOIN_SECTOR_12,
     NEUROFLUX_3,
+    PSERV_0,
   ]);
   await round(10 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
@@ -82,6 +84,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/travel.js", ["Aevum"]],
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
+    ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -199,6 +202,7 @@ describe("backends (#145)", () => {
       acceptFactionInvitation: (faction: string) => effector(DONE)(`acceptFactionInvitation ${faction}`),
       buyAugmentationFrom: (faction: string, augmentation: string, level: number) =>
         effector(DONE)(`buyAugmentationFrom ${faction} ${augmentation} ${level}`),
+      buyCloudServer: (hostname: string, ram: number) => effector(DONE)(`buyCloudServer ${hostname} ${ram}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
     runner.desire([
@@ -208,6 +212,7 @@ describe("backends (#145)", () => {
       AEVUM,
       JOIN_SECTOR_12,
       NEUROFLUX_3,
+      PSERV_0,
     ]);
     await round();
     expect(runWorker).not.toHaveBeenCalled();
@@ -218,11 +223,13 @@ describe("backends (#145)", () => {
       "travelTo Aevum",
       "acceptFactionInvitation Sector-12",
       "buyAugmentationFrom Sector-12 NeuroFlux Governor 3",
+      "buyCloudServer pserv-0 8",
     ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
       [true, "sim"],
       [false, "sim"],
+      [true, "sim"],
       [true, "sim"],
       [true, "sim"],
       [true, "sim"],
@@ -251,6 +258,17 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
+  });
+
+  test("an action with no Singularity worker (#159): its NS worker, reported as ui, with Singularity or without", async () => {
+    for (const available of [true, false]) {
+      const { runner, workerFiles, round, lines } = runnerWith(() => DONE, { available }, { maxRam: 16 });
+      runner.desire([PSERV_0]);
+      await round();
+      expect(workerFiles()).toEqual(["agent/abcdef123456/buy-server.js"]);
+      expect(runner.outcomes()).toMatchObject([{ done: true, backend: "ui" }]);
+      expect(lines).toEqual(["agent: buy the 8 GB server pserv-0 (ui): done"]);
+    }
   });
 
   test("a Singularity worker that doesn't fit home beside the Agent: the page, logged once, until home grows", async () => {

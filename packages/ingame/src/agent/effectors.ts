@@ -1,15 +1,17 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #156, #158, architecture §5.6): for each action an intent can
-// name, and for the work activity's work, how each backend does it.
+// The Effectors (#141, #145, #147, #149, #151, #153, #156, #158, #159, architecture §5.6): for each action an intent
+// can name, and for the work activity's work, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
-// - `ui`: a home worker that drives the game's page, before Singularity.
+// - `ui`: a home worker that does it without Singularity: through the game's page, or with NS calls alone where the
+//   API has them (`buyServer`, #159). Such an action has no Singularity worker: the `ui` one does it in any game.
 // The brain never knows which backend does an intent or the work. The simulator's effectors aren't named like NS
 // functions: the game charges RAM for such names in in-game code.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   BUY_AUGMENTATION_WORKER_NAME,
   BUY_PROGRAM_WORKER_NAME,
+  BUY_SERVER_WORKER_NAME,
   CLASS_WORK_WORKER_NAME,
   COMPANY_WORK_WORKER_NAME,
   CRIME_WORK_WORKER_NAME,
@@ -45,6 +47,7 @@ export interface SimEffectors {
   buyAugmentationFrom(faction: string, augmentation: string, level: number): EffectorReport;
   convergeFactionWork(faction: string, workType: string, focus: boolean): EffectorReport;
   convergeCompanyWork(company: string, field: string, focus: boolean): EffectorReport;
+  buyCloudServer(hostname: string, ram: number): EffectorReport;
   convergeCrimeWork(crime: string, focus: boolean): EffectorReport;
   convergeClassWork(location: string, classType: string, focus: boolean): EffectorReport;
 }
@@ -59,7 +62,8 @@ export interface Effector {
   /** What it does, for the log: "travel to Aevum". */
   description: string;
   ui: WorkerEffector;
-  singularity: WorkerEffector;
+  /** Null for an action the NS API does without Singularity (#159): the `ui` worker does it in any game. */
+  singularity: WorkerEffector | null;
   sim(effectors: SimEffectors): EffectorReport;
 }
 
@@ -114,6 +118,15 @@ export function effectorFor(intent: Intent): Effector {
         ui: { workerName: BUY_AUGMENTATION_WORKER_NAME, workerArguments },
         singularity: { workerName: SINGULARITY_BUY_AUGMENTATION_WORKER_NAME, workerArguments },
         sim: (effectors) => effectors.buyAugmentationFrom(faction, augmentation, level),
+      };
+    }
+    case "buyServer": {
+      const { hostname, ram } = intent.args;
+      return {
+        description: `buy the ${ram} GB server ${hostname}`,
+        ui: { workerName: BUY_SERVER_WORKER_NAME, workerArguments: [hostname, ram] },
+        singularity: null,
+        sim: (effectors) => effectors.buyCloudServer(hostname, ram),
       };
     }
   }
