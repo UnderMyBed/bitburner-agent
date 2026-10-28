@@ -8,6 +8,7 @@
 import { gunzipSync } from "node:zlib";
 import { playerLastUpdate } from "@bitburner-agent/sim";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import { diagnoseLoad, UNREADABLE_PREFIX } from "./load-diagnosis.ts";
 import { BLANK_PAGE_PATH, type GameServer } from "./server.ts";
 
 /** One game cycle (the engine's 200 ms tick): the step game time moves in. */
@@ -22,6 +23,11 @@ export const MAX_GAME_SPEEDUP = 20;
 export const TERMINAL_INPUT = "#terminal-input";
 /** How long a fixture waits, in real time, for the game to load. */
 const LOAD_TIMEOUT_MS = 60_000;
+/**
+ * How long a fixture's first try at a load gets before it reloads the page and waits again (#120): a load takes under
+ * 1 s on the reference rig (at most 837 ms over 474 loads and reloads), so this is ample.
+ */
+const FIRST_LOAD_TIMEOUT_MS = 20_000;
 /**
  * What a load that fails adds to its error: the page's visible text, cut to this; its first and last events (the first
  * is often the cause); and the requests still pending.
@@ -164,7 +170,7 @@ export async function waitForTerminal(page: Page, { timeoutMs = LOAD_TIMEOUT_MS 
     const visibleText = await page
       .locator("body")
       .innerText({ timeout: 1_000 })
-      .catch((readError: Error) => `(unreadable: ${readError.message.split("\n")[0]})`);
+      .catch((readError: Error) => `${UNREADABLE_PREFIX}: ${readError.message.split("\n")[0]})`);
     const { events, pendingRequests } = historyByPage.get(page) ?? { events: [], pendingRequests: new Set() };
     const eventsShown =
       events.length <= LOAD_FAILURE_FIRST_EVENTS_SHOWN + LOAD_FAILURE_LAST_EVENTS_SHOWN
@@ -179,12 +185,45 @@ export async function waitForTerminal(page: Page, { timeoutMs = LOAD_TIMEOUT_MS 
     throw new Error(
       [
         message,
+        `Looks like: ${diagnoseLoad(visibleText)}`,
         `The page showed: ${visibleText.slice(0, LOAD_FAILURE_TEXT_CHARACTERS)}`,
         `What it went through:\n${eventsShown.join("\n") || "nothing recorded"}`,
         `Requests still pending: ${pending.join(", ") || "none"}`,
       ].join("\n"),
       { cause: error },
     );
+  }
+}
+
+/**
+ * Waits for a fixture's load (`waitForTerminal`), and if it hasn't shown the terminal within `firstTimeoutMs`, reloads
+ * the page once and waits again (#120: one load in about 15 suite runs never showed it, and loads hundreds of times in a
+ * row didn't: packages/e2/README.md). The first try's report goes to `warn`, so a retried load still shows in the run's output; a load that
+ * fails again throws with both reports. Only for a fixture's own load: a test's reload is what it tests.
+ */
+export async function untilGameLoaded(
+  page: Page,
+  {
+    firstTimeoutMs = FIRST_LOAD_TIMEOUT_MS,
+    retryTimeoutMs = LOAD_TIMEOUT_MS,
+    warn = (message: string) => console.warn(message),
+  }: { firstTimeoutMs?: number; retryTimeoutMs?: number; warn?: (message: string) => void } = {},
+): Promise<void> {
+  let firstReport: string;
+  try {
+    return await waitForTerminal(page, { timeoutMs: firstTimeoutMs });
+  } catch (error) {
+    firstReport = error instanceof Error ? error.message : String(error);
+  }
+  warn(`E2: the game didn't load within ${firstTimeoutMs} ms, so the page is reloaded once (#120).\n${firstReport}`);
+  try {
+    await page.reload();
+    await waitForTerminal(page, { timeoutMs: retryTimeoutMs });
+  } catch (error) {
+    const retryReport = error instanceof Error ? error.message : String(error);
+    throw new Error(`The game didn't load, twice (#120). The first try:\n${firstReport}\nThe retry:\n${retryReport}`, {
+      cause: error,
+    });
   }
 }
 
@@ -226,7 +265,7 @@ export async function gameFromSave(
       database.close();
     }, Buffer.from(save).toString("base64"));
     await page.goto(server.origin);
-    await waitForTerminal(page);
+    await untilGameLoaded(page);
     // From here on, game time moves only when the test moves it.
     if (clockDuringLoad === "running") await pauseFlowingClock(page);
   });
@@ -268,7 +307,7 @@ export async function freshGame(
   const page = await newGamePage(browser, startTimeMs, "paused");
   return await closedIfItFails(page, async () => {
     await page.goto(server.origin);
-    await waitForTerminal(page);
+    await untilGameLoaded(page);
   });
 }
 

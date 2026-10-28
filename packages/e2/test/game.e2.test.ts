@@ -1,5 +1,6 @@
 // The fixtures, on the built game (#96): a simulator-made save loads, a reload gets through the unload prompt, a
-// brand-new game's tutorial can be exited, and a script started by the save runs on the stepped clock.
+// brand-new game's tutorial can be exited, and a script started by the save runs on the stepped clock. A load that
+// fails says why, and a fixture's load stuck on the loading screen is tried once more (#120).
 import type { Page } from "playwright";
 import { describe, expect, test } from "vitest";
 import {
@@ -11,6 +12,7 @@ import {
   TERMINAL_INPUT,
   terminalText,
   typeCommand,
+  untilGameLoaded,
   waitForTerminal,
 } from "../src/game.ts";
 import { BLANK_PAGE_PATH } from "../src/server.ts";
@@ -95,6 +97,53 @@ describe("the game in Playwright", () => {
       expect(failure).toContain("page error: an E2 probe error");
       expect(failure).toContain(`navigated to ${e2.server.origin}${BLANK_PAGE_PATH}`);
       expect(failure).toContain("Requests still pending: none");
+      expect(failure).toContain("Looks like: neither the loading screen nor recovery mode");
+    } finally {
+      await closeGame(page);
+    }
+  });
+
+  /** Holds the game's wasm request (initSwc's, LoadingScreen.tsx:37) `times` times, so a load sticks on its screen. */
+  async function holdWasm(page: Page, times: number): Promise<void> {
+    let held = 0;
+    await page.route("**/*.wasm", async (route) => {
+      if (held++ < times) return; // never answered: the load waits on it
+      await route.continue();
+    });
+  }
+
+  test("a fixture's load stuck on the loading screen is tried once more, and the first try says why (#120)", async () => {
+    const page = await freshGame(e2.browser, e2.server);
+    try {
+      await holdWasm(page, 1);
+      await page.reload();
+      const warnings: string[] = [];
+      await untilGameLoaded(page, { firstTimeoutMs: 2_000, warn: (message) => warnings.push(message) });
+      await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/^E2: the game didn't load within 2000 ms, so the page is reloaded once \(#120\)/);
+      expect(warnings[0]).toContain("Looks like: stuck on the loading screen, before its 2 s hint");
+      expect(warnings[0]).toMatch(/Requests still pending: .*\.wasm/);
+    } finally {
+      await closeGame(page);
+    }
+  });
+
+  test("a load that fails again after its retry fails, with both tries' reports", async () => {
+    const page = await freshGame(e2.browser, e2.server);
+    try {
+      await holdWasm(page, 2);
+      await page.reload();
+      const failure = await untilGameLoaded(page, {
+        firstTimeoutMs: 1_000,
+        retryTimeoutMs: 1_000,
+        warn: () => {},
+      }).then(
+        () => null,
+        (error: Error) => error.message,
+      );
+      expect(failure).toMatch(/^The game didn't load, twice \(#120\)/);
+      expect(failure?.match(/Looks like: stuck on the loading screen/g)).toHaveLength(2);
     } finally {
       await closeGame(page);
     }
