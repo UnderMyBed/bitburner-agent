@@ -23,7 +23,7 @@ npm run build:engine   # bundles the engine (also done automatically before test
   | `engine.cjs.map` | Its source map, back to the game's source |
   | `engine.meta.json` | An inputs fingerprint plus a bundle report: size, input count, game files, packages, stubs used |
 
-  - The build is **skipped** when the fingerprint is unchanged. The fingerprint covers the game's commit, any uncommitted changes in it, the game's lockfile, the build code, our bundled sources and the esbuild version.
+  - The build is **skipped** when the fingerprint is unchanged. The fingerprint covers the game's commit, any uncommitted changes in it, the game's lockfile, the build code, our bundled sources, the esbuild version, and the tsconfig esbuild applies to our sources (`packages/sim/tsconfig.json` and the root ones it extends, #132).
   - Outputs are written to temporary files and renamed into place, so a concurrent load never sees a half-written bundle.
 - **`npm test` and `npm run typecheck` need setup first.** The typecheck checks the bundled sources with the game's TypeScript ([below](#typecheck-boundary)). The test runner builds the bundle before any test runs (`test/global-setup.ts`), including tests in other packages. Watch mode doesn't rebuild it: re-run `build:engine` after changing `src/engine/bundle/`.
 

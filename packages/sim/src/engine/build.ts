@@ -19,6 +19,11 @@ export interface EngineInputs {
   /** Path (relative to src/engine/bundle, forward slashes) → content. */
   bundleSources: Record<string, string>;
   esbuildVersion: string;
+  /**
+   * The tsconfig esbuild applies to our bundled sources, and the files it extends (#132): path (relative to
+   * src/engine/bundle, forward slashes) → content. The game's own is covered by its commit and working tree.
+   */
+  tsconfigs: Record<string, string>;
 }
 
 export interface BundleReport {
@@ -37,13 +42,70 @@ export interface BuildResult {
 }
 
 export function engineFingerprint(inputs: EngineInputs): string {
-  const sources = Object.keys(inputs.bundleSources)
-    .sort()
-    .map((name) => [name, inputs.bundleSources[name]]);
+  const sorted = (files: Record<string, string>) =>
+    Object.keys(files)
+      .sort()
+      .map((name) => [name, files[name]]);
   const { vendorCommit, vendorWorkingTree, vendorLockfile, buildScript, esbuildVersion } = inputs;
+  const sources = sorted(inputs.bundleSources);
+  const tsconfigs = sorted(inputs.tsconfigs);
   return createHash("sha256")
-    .update(JSON.stringify([vendorCommit, vendorWorkingTree, vendorLockfile, buildScript, sources, esbuildVersion]))
+    .update(
+      JSON.stringify([
+        vendorCommit,
+        vendorWorkingTree,
+        vendorLockfile,
+        buildScript,
+        sources,
+        esbuildVersion,
+        tsconfigs,
+      ]),
+    )
     .digest("hex");
+}
+
+/**
+ * The tsconfig files esbuild applies to the sources in `dir`: the nearest tsconfig.json at or above it, as esbuild
+ * finds it, then every file that one extends, in turn. Path (relative to `dir`, forward slashes) → content. Throws on an
+ * `extends` it can't follow (a package's config, a missing file), rather than leave that config out of the fingerprint.
+ */
+export function collectTsconfigs(dir: string): Record<string, string> {
+  let nearest = path.resolve(dir);
+  while (!existsSync(path.join(nearest, "tsconfig.json"))) {
+    const parent = path.dirname(nearest);
+    if (parent === nearest) return {};
+    nearest = parent;
+  }
+  const configs: Record<string, string> = {};
+  const add = (file: string) => {
+    const key = path.relative(dir, file).replaceAll("\\", "/");
+    if (key in configs) return;
+    const content = readFileSync(file, "utf8");
+    configs[key] = content;
+    for (const extended of extendsOf(content)) add(resolveExtends(file, extended));
+  };
+  add(path.join(nearest, "tsconfig.json"));
+  return configs;
+}
+
+/** A tsconfig's `extends`, one name or a list (TypeScript 5), read past its comments. */
+function extendsOf(content: string): string[] {
+  const withoutComments = content.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (_, text) => text ?? "");
+  const match = /"extends"\s*:\s*("(?:[^"\\]|\\.)*"|\[[^\]]*\])/.exec(withoutComments);
+  if (!match?.[1]) return [];
+  const value = JSON.parse(match[1].replace(/,\s*\]$/, "]")) as string | string[];
+  return typeof value === "string" ? [value] : value;
+}
+
+/** A relative `extends` from `file`, with `.json` added where TypeScript would add it. */
+function resolveExtends(file: string, extended: string): string {
+  if (!extended.startsWith(".") && !path.isAbsolute(extended)) {
+    throw new Error(`${file} extends ${extended}, a package's config: add it to the engine's fingerprint (build.ts)`);
+  }
+  const resolved = path.resolve(path.dirname(file), extended);
+  if (existsSync(resolved)) return resolved;
+  if (!resolved.endsWith(".json") && existsSync(`${resolved}.json`)) return `${resolved}.json`;
+  throw new Error(`${file} extends ${extended}, which isn't there`);
 }
 
 export function collectBundleSources(dir: string): Record<string, string> {
@@ -66,6 +128,8 @@ export function collectEngineInputs(): EngineInputs {
     buildScript: readFileSync(import.meta.filename, "utf8"),
     bundleSources: collectBundleSources(enginePaths.bundleSourceDir),
     esbuildVersion: esbuild.version,
+    // packages/sim/tsconfig.json's: esbuild ignores its `exclude`, which only keeps tsc off the bundle.
+    tsconfigs: collectTsconfigs(enginePaths.bundleSourceDir),
   };
 }
 
