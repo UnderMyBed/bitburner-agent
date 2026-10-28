@@ -64,7 +64,7 @@ The package's other tests (`test/*.test.ts`: the static server, the build's chec
 | `advanceGameTime(page, ms)`, `advanceUntil(page, condition, { realTimeoutMs, gameTimeoutMs })` | Game time, below |
 | `typeCommand(page, command)`, `terminalText(page)` | Types a command into the terminal (focusing the input, not clicking it) and presses Enter; the terminal's output so far |
 | `closeGame(page)` | Closes the page's browser context |
-| `simulatorSave({ gameSettings, prepare })`, `moneyInSave(save)`, `withMoney(save, money)` (`test/helpers/saves.ts`) | A save from the simulator: a new game, with `prepare` writing files, running scripts or moving time first, and `gameSettings` (the Remote API's address and port, autoexec) saved in it, with the game's default autosave (every 60 s) on; `withMoney` gives a save's player that much money |
+| `simulatorSave({ gameSettings, prepare })`, `moneyInSave(save)`, `withMoney(save, money)` (`test/helpers/saves.ts`) | A save from the simulator: a new game, with `prepare` writing files, running scripts, moving time or making a harness edit (`diagnostics.joinFactionWithReputation`, #149) first, and `gameSettings` (the Remote API's address and port, autoexec) saved in it, with the game's default autosave (every 60 s) on; `withMoney` gives a save's player that much money |
 
 - **Saves come from the simulator.** That's allowed: saves only flow from Steam into test environments, never back.
 - **The game's settings live in the save**, so a test sets the RFA port or autoexec by making the save with them.

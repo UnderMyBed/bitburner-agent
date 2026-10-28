@@ -312,9 +312,9 @@ test("joining Sector-12 (#147): past the brain's guard and a save backup, the Ag
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
 /** A save in CyberSec with plenty of reputation, as the simulator sets it up: augmentations to buy (#149). */
-const inCyberSec = (sim: Simulation) => sim.diagnostics.setFactionReputation("CyberSec", 1e6);
+const inCyberSec = (sim: Simulation) => sim.diagnostics.joinFactionWithReputation("CyberSec", 1e6);
 
-test("buying augmentations (#149): Neurotrainer I and NeuroFlux level 1 from CyberSec, confirmed, alerts closed", async () => {
+test("buying augmentations (#149): Neurotrainer I and NeuroFlux level 1 from CyberSec, confirmed, alerts closed; again, nothing paid", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     money: 100_000_000,
     prepareSave: inCyberSec,
@@ -343,6 +343,24 @@ test("buying augmentations (#149): Neurotrainer I and NeuroFlux level 1 from Cyb
     gameTimeoutMs: 15_000,
   });
   expect(spent()).toBeLessThan(6_000_000);
+  // The worker closed each "You purchased" alert itself: the dialog watcher (#143) reported none.
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You purchased"))).toEqual([]);
+  // Queued again: done from the page alone (Neurotrainer I's "Owned", NeuroFlux's next level past 1), nothing paid.
+  const moneyAfter = latestMedium(dataDirectory)?.player.money;
+  await queueIntent(ports.dashboardPort, {
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 },
+  });
+  await queueIntent(ports.dashboardPort, {
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "NeuroFlux Governor", level: 1 },
+  });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  await advanceGameTime(page, 11_000);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyAfter);
   await advanceGameTime(page, 2_000);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);

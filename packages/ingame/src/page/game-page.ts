@@ -33,6 +33,17 @@ export function xpathString(text: string): string {
   return `concat('${text.split("'").join(`', "'", '`)}')`;
 }
 
+/** An XPath predicate: the element has the class `name` among its classes. */
+export const hasClass = (name: string) => `contains(concat(' ', @class, ' '), ' ${name} ')`;
+
+/**
+ * The button labelled `label` on `faction`'s row of the Factions page (`Faction/ui/FactionsRoot.tsx`), in `section`:
+ * `factions-invites` ("Join!", #147) or `factions-joined` ("Augments", #149). Each row is a `Paper` naming its faction.
+ */
+export const factionRowButtonXpath = (section: string, faction: string, label: string) =>
+  `//span[${hasClass(section)}]//div[${hasClass("MuiPaper-root")} and .//span[normalize-space()=${xpathString(faction)}]]` +
+  `//button[normalize-space()=${xpathString(label)}]`;
+
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
 function reactPropsOf(element: Element): Record<string, unknown> | null {
   const key = Object.keys(element).find((each) => each.startsWith("__reactProps"));
@@ -120,8 +131,8 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     /** The element, once it's in the page, or null by the steps' end: for reading it before acting on it. */
     findWhenThere: (xpath: string) => waitForElement(xpath, stepsEndMs),
 
-    /** The element if it's in the page now, or null. */
-    find: findElement,
+    /** The element if it's in the page now, without waiting, or null. */
+    findElementNow: findElement,
 
     /** Every dialog open now, in the page's order (MUI's `Modal` roots, `ui/React/Modal.tsx`). */
     openDialogs(): Element[] {

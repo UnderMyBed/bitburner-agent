@@ -1,6 +1,6 @@
-// What every `ui` effector's worker does around its own steps (#136, #138, #141, #147): the game first, then the page,
-// never over a dialog the dialog watcher leaves for the owner (#143), back to the Terminal however the steps went, and
-// the game again, reported to the Agent.
+// What every `ui` effector's worker does around its own steps (#136, #138, #141, #147, #149): the game first, then the
+// page, never over a dialog the dialog watcher leaves for the owner (#143), back to the Terminal however the steps
+// went, and the game again, reported to the Agent.
 import type { EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";

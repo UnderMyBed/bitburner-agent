@@ -1,6 +1,8 @@
 // Intents (#141): each action's args, the id made from them, and which are irreversible (#147).
+
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "../src/augmentations.ts";
+import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR, neuroFluxLevel } from "../src/augmentations.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
 import {
   INTENT_ACTIONS,
@@ -116,8 +118,25 @@ describe("isIrreversibleIntent", () => {
   });
 });
 
-test("AUGMENTATION_NAMES has the game's 137, each once, NeuroFlux Governor among them", () => {
-  expect(AUGMENTATION_NAMES).toHaveLength(137);
-  expect(new Set(AUGMENTATION_NAMES).size).toBe(137);
+/** The string values of `enumName` in the pinned game's source file `file` (commented-out entries left out). */
+function gameEnumValues(file: string, enumName: string): string[] {
+  const source = readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
+  const start = source.indexOf(`export enum ${enumName}`);
+  const body = source.slice(start, source.indexOf("}", start));
+  return [...body.matchAll(/^\s+\w+ = "([^"]+)",/gm)].map((match) => match[1] as string);
+}
+
+test("AUGMENTATION_NAMES and FACTION_NAMES are the pinned game's, exactly", () => {
+  expect(AUGMENTATION_NAMES).toEqual(gameEnumValues("Augmentation/Enums.ts", "AugmentationName"));
   expect(AUGMENTATION_NAMES).toContain(NEUROFLUX_GOVERNOR);
+  expect(FACTION_NAMES).toEqual(gameEnumValues("Faction/Enums.ts", "FactionName"));
+});
+
+test.each([
+  ["none installed or queued", 0, [], 0],
+  ["none installed, two queued", 0, ["Neurotrainer I", NEUROFLUX_GOVERNOR, NEUROFLUX_GOVERNOR], 2],
+  ["level 5 installed, none queued", 5, [NEUROFLUX_GOVERNOR, "Neurotrainer I"], 5],
+  ["level 2 installed, one queued", 2, [NEUROFLUX_GOVERNOR, NEUROFLUX_GOVERNOR], 3],
+])("neuroFluxLevel: %s is level %s", (_description, installedLevel, ownedNames, level) => {
+  expect(neuroFluxLevel(installedLevel as number, ownedNames as string[])).toBe(level);
 });

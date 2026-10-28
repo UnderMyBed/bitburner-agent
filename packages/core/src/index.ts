@@ -1,4 +1,10 @@
-export { AUGMENTATION_NAMES, BUY_AUGMENTATION_WORKER_NAME, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
+export {
+  AUGMENTATION_NAMES,
+  augmentationProblems,
+  BUY_AUGMENTATION_WORKER_NAME,
+  NEUROFLUX_GOVERNOR,
+  neuroFluxLevel,
+} from "./augmentations.ts";
 export {
   AGENT_SIM_EFFECTORS_GLOBAL,
   SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,

@@ -149,5 +149,28 @@ export const AUGMENTATION_NAMES = [
 /** The augmentation bought again and again, a level each time. */
 export const NEUROFLUX_GOVERNOR = "NeuroFlux Governor";
 
+/**
+ * NeuroFlux Governor's level, as the game counts it (`Augmentation/Augmentation.ts`, `getLevel`): the installed level
+ * (`getResetInfo().ownedAugs`) plus one per queued copy. `ownedNames` is `getOwnedAugmentations(true)`: the installed
+ * once, then each queued copy.
+ */
+export function neuroFluxLevel(installedLevel: number, ownedNames: readonly string[]): number {
+  const copies = ownedNames.filter((name) => name === NEUROFLUX_GOVERNOR).length;
+  return installedLevel + copies - (installedLevel > 0 ? 1 : 0);
+}
+
+/** The backends' problems for an augmentation not bought, worded once so every backend reports the same (§5.6). */
+export const augmentationProblems = {
+  outOfTurn: (nextLevel: number, level: number) =>
+    `${NEUROFLUX_GOVERNOR}'s next level is ${nextLevel}, not ${level}: the levels before it come first`,
+  cantBuyYet: (augmentation: string, faction: string) =>
+    `can't buy ${augmentation} from ${faction} yet (the money, the reputation or a prerequisite?)`,
+  /** Singularity's refusal, which doesn't say why. */
+  refused: (augmentation: string, faction: string) =>
+    `the game refused ${augmentation} from ${faction} (joined? sold by it? the money, the reputation, a prerequisite?)`,
+  notOffered: (augmentation: string, faction: string) =>
+    `${faction} doesn't offer ${augmentation} (is it joined, and does it sell it?)`,
+};
+
 /** Home worker: buys an augmentation through the game's page (#149). */
 export const BUY_AUGMENTATION_WORKER_NAME = "buy-augmentation.js";

@@ -1,4 +1,5 @@
-// The Effectors (#141, #145, #147, #149, architecture §5.6): for each action an intent can name, how each backend does it.
+// The Effectors (#141, #145, #147, #149, architecture §5.6): for each action an intent can name, how each backend
+// does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -12,6 +13,7 @@ import {
   type EffectorReport,
   type Intent,
   JOIN_FACTION_WORKER_NAME,
+  NEUROFLUX_GOVERNOR,
   SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
@@ -94,7 +96,7 @@ export function effectorFor(intent: Intent): Effector {
       const { faction, augmentation, level } = intent.args;
       const workerArguments = [faction, augmentation, level];
       return {
-        description: `buy ${augmentation}${level > 1 ? ` level ${level}` : ""} from ${faction}`,
+        description: `buy ${augmentation}${augmentation === NEUROFLUX_GOVERNOR ? ` level ${level}` : ""} from ${faction}`,
         ui: { workerName: BUY_AUGMENTATION_WORKER_NAME, workerArguments },
         singularity: { workerName: SINGULARITY_BUY_AUGMENTATION_WORKER_NAME, workerArguments },
         sim: (effectors) => effectors.buyAugmentationFrom(faction, augmentation, level),

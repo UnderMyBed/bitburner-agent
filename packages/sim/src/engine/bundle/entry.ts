@@ -203,7 +203,7 @@ export function setMoney(money: number) {
  * Makes the player a member of `faction` (the game's own `joinFaction`, which bans its enemies) with this reputation: a
  * harness edit for test scenarios, not something a player can do. An unknown faction throws.
  */
-export function setFactionReputation(faction: string, reputation: number) {
+export function joinFactionWithReputation(faction: string, reputation: number) {
   if (!Object.values(FactionName).includes(faction as FactionName)) throw new RangeError(`no faction ${faction}`);
   joinFaction(Factions[faction as FactionName]);
   Factions[faction as FactionName].playerReputation = reputation;

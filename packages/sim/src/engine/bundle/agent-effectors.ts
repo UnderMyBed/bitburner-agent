@@ -90,9 +90,9 @@ const effectors = {
     return result(isMember(), `not a member of ${factionName} after joining (is there an invitation?)`);
   },
   /**
-   * A faction's augmentations page's "Buy" (`Faction/ui/AugmentationsPage.tsx:237-255`): only for a member, an
-   * augmentation the faction sells, not owned (NeuroFlux at the level to buy next), and only while the page enables
-   * it: the prerequisites, the reputation and the money. Not named `purchaseAugmentation`, which is an NS function.
+   * A faction's augmentations page's "Buy" (`Faction/ui/AugmentationsPage.tsx:137-141`, `:240-255`): only for a
+   * member, an augmentation the faction sells, not owned (NeuroFlux at the level to buy next), and only while the page
+   * enables it: the prerequisites, the reputation and the money. Not named `purchaseAugmentation`, which is an NS function.
    */
   buyAugmentationFrom(factionName: string, augmentationName: string, level: number): EffectorResult {
     const augmentation = Object.values(AugmentationName).includes(augmentationName as AugmentationName)
@@ -101,28 +101,27 @@ const effectors = {
     const faction = Object.values(FactionName).includes(factionName as FactionName)
       ? Factions[factionName as FactionName]
       : undefined;
-    const isNeuroFlux = augmentationName === AugmentationName.NeuroFluxGovernor;
-    // NeuroFlux's level counts the installed and the queued; another is owned once either has it.
-    const levelNow = () =>
-      augmentation === undefined
-        ? 0
-        : isNeuroFlux
-          ? augmentation.getLevel()
-          : Player.hasAugmentation(augmentation.name)
-            ? 1
-            : 0;
+    /** NeuroFlux's level (the installed and the queued); for another augmentation, 1 if owned, else 0. */
+    const levelNow = () => {
+      if (augmentation === undefined) return 0;
+      if (augmentationName === AugmentationName.NeuroFluxGovernor) return augmentation.getLevel();
+      return Player.hasAugmentation(augmentation.name) ? 1 : 0;
+    };
     if (levelNow() >= level) return result(true, "");
-    // The page lists only what the faction sells, to a member.
+    // The page lists only what the faction sells, to a member. These problems read as core's `augmentationProblems`.
     if (
       augmentation === undefined ||
       faction === undefined ||
       !faction.isMember ||
       !getFactionAugmentationsFiltered(faction).includes(augmentation.name)
     ) {
-      return result(false, `${factionName} isn't joined, or doesn't sell ${augmentationName}`);
+      return result(false, `${factionName} doesn't offer ${augmentationName} (is it joined, and does it sell it?)`);
     }
     if (levelNow() + 1 !== level) {
-      return result(false, `${augmentationName}'s next level is ${levelNow() + 1}, not ${level}`);
+      return result(
+        false,
+        `${augmentationName}'s next level is ${levelNow() + 1}, not ${level}: the levels before it come first`,
+      );
     }
     const costs = getAugCost(augmentation);
     const enabled =
