@@ -3,7 +3,8 @@
 // backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
 // Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work
-// (#151, #153, #156, #158): faction work, company work, the job applied for first, crime, and classes.
+// (#151, #153, #156, #158): faction work, company work, the job applied for first, crime, and classes. Buying a cloud
+// server (#159): one NS worker for the page's backend and Singularity's alike.
 import { gunzipSync } from "node:zlib";
 import {
   classStartProblem,
@@ -16,7 +17,7 @@ import {
   type Work,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
+import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
 const freshStart = useFreshStarts();
 const intent = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
@@ -474,6 +475,134 @@ test("company work (singularity, #153): with SF4.3, through its Singularity work
   expect(await workedAt(fresh, software, false)).toMatchObject({
     converged: false,
     problem: "MegaCorp didn't hire for a Software job (not qualified yet, or not offered to applyToCompany)",
+  });
+});
+
+const server = (hostname: string, ram = 8) => intent({ action: "buyServer", args: { hostname, ram } });
+/** An 8 GB server's price in BN1: 55,000 a GB (`Server/data/Constants.ts:4`). */
+const EIGHT_GB_PRICE = 8 * 55_000;
+
+/** The owner's script that buys 1 GB servers until the game refuses: the BitNode's limit, 25. */
+const BUY_TO_THE_LIMIT = 'export async function main(ns) { while (ns.cloud.purchaseServer("owners", 1) !== "") {} }';
+
+/**
+ * A fresh start with `money`, the simulator's effectors taken away unless `sim`, in a game with SF4.3 if `singularity`,
+ * and the owner's servers bought to the limit first if `atTheLimit`.
+ */
+function forServers(
+  money: number,
+  { sim, singularity, atTheLimit = false }: { sim: boolean; singularity: boolean; atTheLimit?: boolean },
+) {
+  return freshStart({
+    withDesiredState: false,
+    ...(singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(money);
+      if (atTheLimit) await ownerRunsOnHome(game, BUY_TO_THE_LIMIT);
+      if (!sim) await withoutSimEffectors(game);
+    },
+  });
+}
+type ForServers = Awaited<ReturnType<typeof forServers>>;
+
+/** The medium snapshot's RAM for `hostname`, once a snapshot shows it; undefined until then. */
+async function serverRamSeen(fresh: ForServers, hostname: string) {
+  const ramOf = () => fresh.medium()?.servers.find((each) => each.hostname === hostname)?.maxRam;
+  await fresh.game.runUntil(() => ramOf() !== undefined, 15_000);
+  return ramOf();
+}
+
+/** `pserv-0` bought once, paid for once; sent again, done with nothing paid; and the two refusals before any purchase. */
+async function boughtOnceAndRefused(fresh: ForServers, backend: "sim" | "ui") {
+  await fresh.game.runUntil(() => fresh.money() !== null, 10_000);
+  const moneyBefore = fresh.money() as number;
+  const outcomes = await boughtEach(fresh, [server("pserv-0")]);
+  expect(outcomes).toEqual([{ id: "buyServer(pserv-0, 8)", done: true, tries: 1, problem: null, backend }]);
+  expect(await serverRamSeen(fresh, "pserv-0")).toBe(8);
+  await fresh.game.runUntil(() => fresh.money() === moneyBefore - EIGHT_GB_PRICE, 5_000);
+  // Sent again as a new intent, and at another RAM: the player's server of that name, done, nothing more paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  const again = await boughtEach(fresh, [server("pserv-0"), server("pserv-0", 64)]);
+  expect(again.map(({ done, problem }) => [done, problem])).toEqual([
+    [true, null],
+    [true, null],
+  ]);
+  await fresh.game.run(2_000);
+  expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE);
+  // A name the game's servers have: nothing bought (the game would have named it n00dles-0), nothing paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("n00dles")] });
+  expect(await triedOnce(fresh, "buyServer(n00dles, 8)")).toMatchObject({
+    done: false,
+    problem: "n00dles is the name of a server that isn't one of the player's cloud servers",
+    backend,
+  });
+  await fresh.game.run(2_500);
+  expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE);
+  // Without the money, the price says why.
+  await fresh.simulation.diagnostics.setMoney(EIGHT_GB_PRICE - 1);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-1")] });
+  expect(await triedOnce(fresh, "buyServer(pserv-1, 8)")).toMatchObject({
+    done: false,
+    problem: "not enough money: the 8 GB server costs $440000",
+    backend,
+  });
+  // Neither bought, as a medium snapshot taken after both tries shows (one comes every 10 s).
+  const mediumSnapshots = () =>
+    fresh.brain.channelEvents.filter((event) => event.type === "snapshotReceived" && event.snapshot.tier === "medium")
+      .length;
+  const mediumsBefore = mediumSnapshots();
+  await fresh.game.runUntil(() => mediumSnapshots() > mediumsBefore, 12_000);
+  const servers = fresh.medium()?.servers.map((each) => each.hostname) ?? [];
+  expect(servers.filter((hostname) => /^(n00dles-|pserv-1)/.test(hostname))).toEqual([]);
+  expect(fresh.money()).toBe(EIGHT_GB_PRICE - 1);
+}
+
+test("buying a server (sim, #159): bought once; again, done with nothing paid; a game server's name and the money refused", async () => {
+  await boughtOnceAndRefused(await forServers(1e10, { sim: true, singularity: false }), "sim");
+});
+
+test("buying a server (its worker, #159): on a fresh save's 8 GB home beside the Agent, through the NS API alone", async () => {
+  await boughtOnceAndRefused(await forServers(1e10, { sim: false, singularity: false }), "ui");
+});
+
+test("buying a server (its worker, #159): with SF4.3 still the same worker, reported as ui; at the limit of 25, refused", async () => {
+  // The owner has bought up to the limit (the BitNode's 25) before the Agent starts; the next is refused, saying so.
+  const fresh = await forServers(1e10, { sim: false, singularity: true, atTheLimit: true });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-1")] });
+  expect(await triedOnce(fresh, "buyServer(pserv-1, 8)")).toMatchObject({
+    done: false,
+    problem: "the game's limit of 25 cloud servers is reached",
+    backend: "ui",
+  });
+});
+
+test("buying a server (sim, #159): a name only a server off the network has is bought renamed, done, as the worker says", async () => {
+  // Core refuses w0r1d_d43m0n (#161's review), so the owner's script calls the effector itself: before The Red Pill
+  // the daemon has no links, so the worker's `serverExists` doesn't see it, and the game names the purchase -0.
+  const fresh = await forServers(1e10, { sim: true, singularity: false });
+  await fresh.simulation.writeFile(
+    "home",
+    "owner-buys.js",
+    'export async function main(ns) { ns.print(JSON.stringify(globalThis.__bitburnerAgentSim.buyCloudServer("w0r1d_d43m0n", 8))); }',
+  );
+  const { pid } = await fresh.simulation.run("home", "owner-buys.js");
+  await fresh.game.run(1_000);
+  // The script's own line, before the game's "Script finished running".
+  const logged = (await fresh.simulation.logs(pid as number)).filter((line) => line.startsWith("{"));
+  expect(logged.map((line) => JSON.parse(line))).toEqual([
+    { done: true, problem: "bought as w0r1d_d43m0n-0: a server off the network held w0r1d_d43m0n" },
+  ]);
+});
+
+test("buying a server (sim, #159): at the limit of 25, refused as the worker refuses it", async () => {
+  const fresh = await forServers(1e10, { sim: true, singularity: false, atTheLimit: true });
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-0")] });
+  expect(await triedOnce(fresh, "buyServer(pserv-0, 8)")).toMatchObject({
+    done: false,
+    problem: "the game's limit of 25 cloud servers is reached",
+    backend: "sim",
   });
 });
 

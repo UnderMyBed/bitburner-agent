@@ -6,7 +6,8 @@
 // brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one. Work (#151,
 // #153): faction work started and kept focused on the real page; company work applied for, the hiring's alert closed,
 // and worked, then worked again from the Job page in another city; crime (#156) at the Slums; classes (#158) at a
-// university, unfocused, and held back by the city and the money guard.
+// university, unfocused, and held back by the city and the money guard. Buying a cloud server (#159) needs no page:
+// the NS API's `cloud.purchaseServer`, from a worker that fits a fresh save beside the Agent.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -805,6 +806,39 @@ test("home RAM (#138): with $1.1m and buying programs off, home goes from 8 GB t
   expect(medium?.hasTorRouter).toBe(false);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("buying a server (#159): queued on the dashboard, pserv-0 bought through the NS API; queued again, nothing paid", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    // Nothing else moves the money: purchases and the hack loop off.
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  const moneyBefore = latestMedium(dataDirectory)?.player.money as number;
+  await queueIntent(ports.dashboardPort, { action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  const pserv0 = () => latestMedium(dataDirectory)?.servers.find((server) => server.hostname === "pserv-0");
+  await advanceUntil(page, async () => pserv0() !== undefined, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
+  // The player's, with root, at 8 GB, for 8 × $55k; the worker didn't touch the page.
+  expect(pserv0()).toMatchObject({ maxRam: 8, hasAdminRights: true });
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // Queued again: done from the game alone, and no second server (the game would have named it pserv-0-0).
+  await queueIntent(ports.dashboardPort, { action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceGameTime(page, 11_000);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000);
+  expect(latestMedium(dataDirectory)?.servers.map((server) => server.hostname)).not.toContain("pserv-0-0");
 });
 
 /** Queues an intent on the brain's dashboard, as its page does: from its own origin, as JSON. */
