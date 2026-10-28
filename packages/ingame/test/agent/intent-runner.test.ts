@@ -277,6 +277,7 @@ describe("backends (#145)", () => {
       [true, "sim"],
       [true, "sim"],
       [true, "sim"],
+      [true, "sim"],
     ]);
   });
 
