@@ -59,7 +59,7 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap r
 
 | Table | Rows |
 |---|---|
-| `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
+| `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before` (numbers skipped before it; after a brain restart, counted from the highest stored for its session and tier, #119), `data` (JSON) |
 | `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and the supervisor's `relaunch`, `supervisionGaveUp`, `supervisionFailed`. The game's dialogs the Agent handled, as `gameDialog` (#143), with their kind and text. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch), `supervision.gaveUpAtMs` (the supervisor's give-up, #94), `hackLoop.enabled` (the hack loop's switch, on when unset, #134), `work.desired` (the work the owner set on the dashboard, #151, #153, #156), `programs.enabled` (buying the hacking programs, likewise, #136), `homeRam.enabled` (upgrading home's RAM, likewise, #138), and `intents.manual` (the owner's manual intents queue, as `[{ action, args }]`, #141) |
 

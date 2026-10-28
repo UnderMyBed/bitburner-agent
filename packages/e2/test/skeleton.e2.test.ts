@@ -272,6 +272,14 @@ describe("the skeleton on E2", () => {
         tier,
       ).toEqual(oneUpTo(rowsOf(rows, sessionBefore, tier).length));
     }
+    // The restarted brain carries on from the store's numbering (#119): no row counts a stored one as missed.
+    const afterRestart = rows.filter(
+      (row) => row.agentSessionId === sessionBefore && row.receivedAtMs >= reconnectedAtMs,
+    );
+    expect(afterRestart.length).toBeGreaterThanOrEqual(SNAPSHOT_TIERS.length);
+    expect(afterRestart.map((row) => `${row.tier}#${row.sequenceNumber} missed ${row.missedBefore}`)).toEqual(
+      afterRestart.map((row) => `${row.tier}#${row.sequenceNumber} missed 0`),
+    );
   });
 
   test("8 GB fresh start: options set in the UI, the first boot typed; every tier arrives within the Agent plus one worker", async () => {
