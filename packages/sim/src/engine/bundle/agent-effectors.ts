@@ -14,7 +14,16 @@ import { companyNameAsLocationName } from "../../../../../vendor/bitburner-src/s
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { Crimes } from "../../../../../vendor/bitburner-src/src/Crime/Crimes";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
-import { CityName, CrimeType, FactionWorkType, type JobField } from "../../../../../vendor/bitburner-src/src/Enums";
+import {
+  CityName,
+  ClassType,
+  CrimeType,
+  FactionWorkType,
+  GymType,
+  type JobField,
+  LocationName,
+  LocationType,
+} from "../../../../../vendor/bitburner-src/src/Enums";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
 import {
   getFactionAugmentationsFiltered,
@@ -32,6 +41,7 @@ import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Setti
 import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { dialogBoxCreate } from "../../../../../vendor/bitburner-src/src/ui/React/DialogBox";
 import { Page } from "../../../../../vendor/bitburner-src/src/ui/Router";
+import { Classes, ClassWork, isClassWork } from "../../../../../vendor/bitburner-src/src/Work/ClassWork";
 import { CompanyWork, isCompanyWork } from "../../../../../vendor/bitburner-src/src/Work/CompanyWork";
 import { isCrimeWork } from "../../../../../vendor/bitburner-src/src/Work/CrimeWork";
 import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/src/Work/FactionWork";
@@ -266,6 +276,67 @@ const effectors = {
       }
     }
     return result(isThisWork() && Player.focus === focus, `not ${focus ? "focused on" : "doing"} ${crimeName}`);
+  },
+  /**
+   * The work activity's effector for a class (#158), as a university's or gym's page does it
+   * (`Locations/ui/UniversityLocation.tsx`, `GymLocation.tsx`: the class started, focused, on the Work page), reached
+   * from the City only in its city; then the focus as the focus buttons set it (the Work page's "Do something else
+   * simultaneously" goes to the location, `ui/WorkInProgressRoot.tsx:266-268`). Before starting one, the guard every
+   * backend applies (core's `classStartProblem`, the same words): the city, then 10 minutes of the class's cost (base ×
+   * the location's `costMult`, the backdoor's discount left out). The location is checked exactly, as the page can't.
+   * Already so: nothing touched. Not named `universityCourse` or `gymWorkout`, NS functions.
+   */
+  convergeClassWork(locationName: string, classType: string, focus: boolean): EffectorResult {
+    const location = Object.values(LocationName).includes(locationName as LocationName)
+      ? Locations[locationName as LocationName]
+      : undefined;
+    const classs = Object.values(ClassType).includes(classType as ClassType)
+      ? Classes[classType as ClassType]
+      : undefined;
+    const isGym = Object.values(GymType).includes(classType as GymType);
+    const gymStat = Object.entries(GymType).find(([, value]) => value === classType)?.[0] ?? "";
+    const label = `${isGym ? `${gymStat.charAt(0).toUpperCase()}${gymStat.slice(1)} training` : classType} at ${locationName}`;
+    const isThisWork = () =>
+      isClassWork(Player.currentWork) &&
+      Player.currentWork.classType === classType &&
+      Player.currentWork.location === locationName;
+    const notConverged = `not ${focus ? "focused on" : "doing"} ${label}`;
+    if (location === undefined || classs === undefined) return result(false, notConverged);
+    if (!location.types.includes(isGym ? LocationType.Gym : LocationType.University))
+      return result(false, notConverged);
+    if (!isThisWork()) {
+      if (location.city !== Player.city) {
+        return result(
+          false,
+          `${locationName} is in ${location.city}, and the player is in ${Player.city} (travel there first)`,
+        );
+      }
+      const perSecond = -classs.earnings.money * location.costMult;
+      const guard = perSecond * 600;
+      if (perSecond !== 0 && Player.money < guard) {
+        const dollars = (amount: number) => `$${amount.toLocaleString("en-US")}`;
+        return result(
+          false,
+          `${label} costs ${dollars(perSecond)} a second: the Agent starts it with 10 minutes of that ` +
+            `(${dollars(guard)}) or more, and the player has ${dollars(Math.floor(Player.money))}`,
+        );
+      }
+      Player.startWork(
+        new ClassWork({ classType: classType as ClassType, location: location.name, singularity: false }),
+      );
+      Player.startFocusing();
+      Router.toPage(Page.Work);
+    }
+    if (isThisWork() && Player.focus !== focus) {
+      if (focus) {
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      } else {
+        // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
+        Router.toPage(Page.Location, { location });
+      }
+    }
+    return result(isThisWork() && Player.focus === focus, notConverged);
   },
 };
 

@@ -5,7 +5,8 @@
 // invitations, and leaves the owner's and scripts' dialogs alone. Joining a faction (#147) clicks "Join!" past the
 // brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one. Work (#151,
 // #153): faction work started and kept focused on the real page; company work applied for, the hiring's alert closed,
-// and worked, then worked again from the Job page in another city; crime (#156) at the Slums.
+// and worked, then worked again from the Job page in another city; crime (#156) at the Slums; classes (#158) at a
+// university, unfocused, and held back by the city and the money guard.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -411,13 +412,14 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
 /** The brain's switches for a test of work alone: no purchases, and the hack loop off. */
 const ONLY_WORK = { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" };
 
-/** Sets the work the brain manages (#151, #153, #156), as the dashboard's Work forms do. */
+/** Sets the work the brain manages (#151, #153, #156, #158), as the dashboard's Work forms do. */
 async function setWork(
   dashboardPort: number,
   work:
     | { faction: string; workType: string }
     | { kind: "company"; company: string; field: string }
     | { kind: "crime"; crime: string }
+    | { kind: "class"; location: string; classType: string }
     | null,
 ) {
   const origin = `http://127.0.0.1:${dashboardPort}`;
@@ -627,6 +629,87 @@ test("crime unfocused (#156): with the Neuroreceptor Management Implant installe
   await advanceGameTime(page, 35_000);
   expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
   await expect(shopliftingOverviewShown(page)()).resolves.toBe(true);
+});
+
+/** Whether the overview's header says `text` exactly: the player's work, unfocused. */
+const overviewSays = (page: Page, text: string) => async () =>
+  (await page
+    .locator("p")
+    .filter({ hasText: new RegExp(`^${text}$`) })
+    .count()) > 0;
+/** Whether the Work page's title starts "You are currently": the player focused on any work. */
+const focusedOnWork = (page: Page) => async () =>
+  (await page
+    .locator("h6")
+    .filter({ hasText: /^You are currently / })
+    .count()) > 0;
+
+test("a class (#158): Computer Science at Rothman University started and left unfocused on the Terminal; then a paid course in its place", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ money: 1_000_000, brainSettings: ONLY_WORK });
+  await setWork(ports.dashboardPort, { kind: "class", location: "Rothman University", classType: "Computer Science" });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  // Unfocused (focus gains a class nothing), on the Terminal: the overview says what it is.
+  await expect(overviewSays(page, "You are studying Computer Science")()).resolves.toBe(true);
+  await expect(focusedOnWork(page)()).resolves.toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await advanceGameTime(page, 35_000);
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  await expect(overviewSays(page, "You are studying Computer Science")()).resolves.toBe(true);
+  // A paid course in its place ($1m covers 10 minutes of $120 a second): the class the page started ends with the
+  // game's "After studying Computer Science for …" alert, which the dialog watcher closes.
+  await setWork(ports.dashboardPort, { kind: "class", location: "Rothman University", classType: "Data Structures" });
+  await advanceUntil(page, overviewSays(page, "You are taking a Data Structures course"), {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceUntil(
+    page,
+    async () => gameDialogs(dataDirectory).some((dialog) => dialog.text.startsWith("After studying Computer Science")),
+    { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 10_000 },
+  );
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
+test("a class held back (#158): a gym in Aevum from Sector-12, and a paid course without 10 minutes of its cost; nothing started", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ money: 1_000, brainSettings: ONLY_WORK });
+  const problemNow = () => latestFast(dataDirectory)?.work?.problem ?? null;
+  await setWork(ports.dashboardPort, { kind: "class", location: "Crush Fitness Gym", classType: "str" });
+  await advanceUntil(page, async () => problemNow() !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({
+    converged: false,
+    problem: "Crush Fitness Gym is in Aevum, and the player is in Sector-12 (travel there first)",
+    backend: "ui",
+  });
+  await setWork(ports.dashboardPort, { kind: "class", location: "Rothman University", classType: "Data Structures" });
+  await advanceUntil(page, async () => problemNow()?.startsWith("Data Structures") === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(problemNow()).toBe(
+    "Data Structures at Rothman University costs $120 a second: the Agent starts it with 10 minutes of that " +
+      "($72,000) or more, and the player has $1,000",
+  );
+  // The page untouched: no class under way, the Terminal, and the money as it was.
+  await expect(
+    page
+      .locator("p")
+      .filter({ hasText: /^You are (studying|taking|training)/ })
+      .count(),
+  ).resolves.toBe(0);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(1_000);
 });
 
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */

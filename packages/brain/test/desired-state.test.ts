@@ -790,6 +790,18 @@ describe("work (#151, owner decision 37)", () => {
     expect(sentWork(connection)).toMatchObject({ crime: "Mug" });
   });
 
+  test("a class (#158): set, kept and sent unfocused, as focus gains it nothing; one the location doesn't teach refused", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    expect(controller.setWork({ kind: "class", location: "Iron Gym", classType: "str" })).toEqual({ ok: true });
+    expect(sentWork(connection)).toEqual({ kind: "class", location: "Iron Gym", classType: "str", focus: false });
+    expect(controller.workView().desired).toMatchObject({ focus: false });
+    expect(controller.setWork({ kind: "class", location: "Iron Gym", classType: "Algorithms" })).toEqual({
+      ok: false,
+      reason: "work's classType isn't taught at Iron Gym",
+    });
+    expect(sentWork(connection)).toMatchObject({ classType: "str" });
+  });
+
   test("part-time company work (#153) goes unfocused: the game gives it full gains either way", () => {
     const { controller, connection } = connectedWithLoopOff();
     controller.setWork({ kind: "company", company: "Noodle Bar", field: "Part-time Waiter" });
