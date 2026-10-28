@@ -150,3 +150,36 @@ test("reactPropsAbove finds a component's props up the fiber tree; reactText rea
   expect(reactPropsAbove(header, "nothing")).toBeNull();
   expect(reactText([" Doing ", { props: { children: [7, " things"] } }])).toBe("Doing 7 things");
 });
+
+/** The terminal's input line, as the game renders it, recording each line run with Enter, as React's props. */
+function terminalInput({ disabled }: { disabled: boolean }) {
+  const ran: string[] = [];
+  const input = Object.assign(document.createElement("input"), { id: "terminal-input", disabled });
+  Object.assign(input, {
+    __reactProps$test: {
+      onChange: () => {},
+      onKeyDown: (event: { key: string }) => {
+        if (event.key === "Enter") ran.push(input.value);
+      },
+    },
+  });
+  document.body.replaceChildren(input);
+  return { input, ran };
+}
+
+test("the terminal (#162): a command typed and run; while it's busy (input disabled), nothing typed, 'terminal busy'", async () => {
+  const idle = terminalInput({ disabled: false });
+  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  expect(gamePage?.terminalBusy()).toBe(false);
+  expect(await gamePage?.runTerminalCommand("buy BruteSSH.exe")).toBeNull();
+  expect(idle.ran).toEqual(["buy BruteSSH.exe"]);
+
+  const busy = terminalInput({ disabled: true });
+  expect(gamePage?.terminalBusy()).toBe(true);
+  expect(await gamePage?.runTerminalCommand("buy BruteSSH.exe")).toBe("terminal busy");
+  expect(busy.ran).toEqual([]);
+  expect(busy.input.value).toBe("");
+
+  document.body.replaceChildren();
+  expect(gamePage?.terminalBusy()).toBeNull();
+});

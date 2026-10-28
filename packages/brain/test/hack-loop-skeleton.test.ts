@@ -284,7 +284,7 @@ test("home too full for the deploy worker: it never piles up, and runs within tw
   const loop = await freshStart({
     // A brain with no controller: with home this full, the Agent's medium snapshots can't run either.
     withDesiredState: false,
-    // The owner's own script on home: 2.85 + 1.6 leaves room for the root worker (2.35) but not the deploy one (4.65).
+    // The owner's own script on home: 2.9 + 1.6 leaves room for the root worker (2.35) but not the deploy one (4.65).
     beforeAgent: (fresh) =>
       ownerRunsOnHome(fresh, `export async function main(ns) { ns.exec("${OWNER_SCRIPT}", "home", 1); }`),
   });

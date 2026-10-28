@@ -439,6 +439,11 @@ export interface HostMethods {
    */
   "diagnostics.giveInstalledAugmentation"(params: { augmentation: string }): void;
   /**
+   * Gives the player hacking experience (finite, 0 or more) through the game's own `gainHackingExp`, which sets the
+   * skill from it, for test scenarios that need a server's required level (#162). A harness edit.
+   */
+  "diagnostics.gainHackingExp"(params: { exp: number }): void;
+  /**
    * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
    * installed, for test scenarios (#164). A harness edit, not something a player can do.
    */

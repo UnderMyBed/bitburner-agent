@@ -19,6 +19,7 @@ const NEUROFLUX_3 = intent({
   args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 },
 });
 const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
 const INSTALL = intent({ action: "installAugmentations", args: {} });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
@@ -26,12 +27,13 @@ const DONE: EffectorReport = { done: true, problem: null };
 /**
  * A runner whose stand-in workers report what `answer` gives for each run, and its log. `singularity` says whether the
  * game has Singularity; a stand-in for a worker that "can't start" is `"no report"`, and one that "didn't report" is
- * `"silent"`. Home has `home.maxRam` GB; the Agent takes 3 and each worker 4.65.
+ * `"silent"`. Home has `home.maxRam` GB, `home.usedRam` of it in use (the Agent's 3 unless said); the Agent takes 3
+ * and each worker 4.65.
  */
 function runnerWith(
   answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report" | "silent",
   singularity = { available: false },
-  home = { maxRam: 8 },
+  home: { maxRam: number; usedRam?: number } = { maxRam: 8 },
 ) {
   const lines: string[] = [];
   const ns = {
@@ -39,6 +41,7 @@ function runnerWith(
     getScriptName: () => "agent/abcdef123456/agent.js",
     getScriptRam: (script: string) => (script.endsWith("/agent.js") ? 3 : 4.65),
     getServerMaxRam: () => home.maxRam,
+    getServerUsedRam: () => home.usedRam ?? 3,
   } as unknown as NS;
   const runWorker = vi.fn(async (workerFile: string, workerArguments: unknown[]): Promise<WorkerRun> => {
     const report = answer(workerFile, workerArguments);
@@ -75,6 +78,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     JOIN_SECTOR_12,
     NEUROFLUX_3,
     PSERV_0,
+    BACKDOOR_CSEC,
     INSTALL,
   ]);
   await round(10 * ROUND_MS);
@@ -87,6 +91,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
+    ["agent/abcdef123456/backdoor.js", ["CSEC"]],
     ["agent/abcdef123456/install-augmentations.js", ["agent/boot.js"]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
@@ -137,6 +142,34 @@ test("done: never run again while it stays, and a problem on the way is still lo
   expect(runWorker).toHaveBeenCalledTimes(1);
   expect(lines).toEqual([`agent: travel to Aevum (ui): done: ${backProblem}`]);
   expect(runner.outcomes()).toEqual([{ id: AEVUM.id, done: true, tries: 1, problem: backProblem, backend: "ui" }]);
+});
+
+test("a worker whose last copy is still running (#162) is tried again 30 s later, as one not done, and counted", async () => {
+  const { runner, lines, runWorker, round } = runnerWith(() => DONE);
+  runWorker.mockImplementationOnce(async () => ({ outcome: "stillRunning" }));
+  runner.desire([BACKDOOR_CSEC]);
+  for (let each = 0; each < 15; each += 1) await round();
+  expect(runWorker).toHaveBeenCalledTimes(1);
+  expect(runner.outcomes()).toMatchObject([{ done: false, tries: 1, problem: "its last worker is still running" }]);
+  expect(lines).toEqual(["agent: install a backdoor on CSEC: its last worker is still running; trying again in 30 s"]);
+  await round();
+  expect(runWorker).toHaveBeenCalledTimes(2);
+  expect(runner.outcomes()).toMatchObject([{ done: true, tries: 2 }]);
+});
+
+test("still running after it reported (#162): the outcome keeps what the worker said, the countdown, and says so", async () => {
+  const installing = notDone("installing the backdoor on CSEC: about 40 s left");
+  const { runner, runWorker, round } = runnerWith(() => installing);
+  runWorker.mockImplementationOnce(async () => ({
+    outcome: "reported",
+    report: { workerPid: 1, data: installing } as never,
+  }));
+  runWorker.mockImplementationOnce(async () => ({ outcome: "stillRunning" }));
+  runner.desire([BACKDOOR_CSEC]);
+  for (let each = 0; each < 16; each += 1) await round();
+  expect(runner.outcomes()).toMatchObject([
+    { done: false, tries: 2, problem: "installing the backdoor on CSEC: about 40 s left (its worker is still at it)" },
+  ]);
 });
 
 test("a worker that doesn't run is tried again next round, logged on a change, and counted as a try", async () => {
@@ -206,6 +239,7 @@ describe("backends (#145)", () => {
       buyAugmentationFrom: (faction: string, augmentation: string, level: number) =>
         effector(DONE)(`buyAugmentationFrom ${faction} ${augmentation} ${level}`),
       buyCloudServer: (hostname: string, ram: number) => effector(DONE)(`buyCloudServer ${hostname} ${ram}`),
+      backdoorServer: (hostname: string) => effector(DONE)(`backdoorServer ${hostname}`),
       installQueuedAugmentations: (callbackScript: string) =>
         effector(DONE)(`installQueuedAugmentations ${callbackScript}`),
     };
@@ -218,6 +252,7 @@ describe("backends (#145)", () => {
       JOIN_SECTOR_12,
       NEUROFLUX_3,
       PSERV_0,
+      BACKDOOR_CSEC,
       INSTALL,
     ]);
     await round();
@@ -230,12 +265,14 @@ describe("backends (#145)", () => {
       "acceptFactionInvitation Sector-12",
       "buyAugmentationFrom Sector-12 NeuroFlux Governor 3",
       "buyCloudServer pserv-0 8",
+      "backdoorServer CSEC",
       "installQueuedAugmentations agent/boot.js",
     ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
       [true, "sim"],
       [false, "sim"],
+      [true, "sim"],
       [true, "sim"],
       [true, "sim"],
       [true, "sim"],
@@ -254,6 +291,7 @@ describe("backends (#145)", () => {
       AEVUM,
       JOIN_SECTOR_12,
       NEUROFLUX_3,
+      BACKDOOR_CSEC,
       INSTALL,
     ]);
     await round(10 * ROUND_MS);
@@ -265,6 +303,7 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-travel.js", ["Aevum"]],
       ["agent/abcdef123456/singularity-join-faction.js", ["Sector-12"]],
       ["agent/abcdef123456/singularity-buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
+      ["agent/abcdef123456/singularity-backdoor.js", ["CSEC"]],
       // Installing, with the script the game starts after the reset (#164).
       ["agent/abcdef123456/singularity-install-augmentations.js", ["agent/boot.js"]],
     ]);
@@ -308,6 +347,23 @@ describe("backends (#145)", () => {
     expect(workerFiles()).toEqual(Array(3).fill("agent/abcdef123456/singularity-travel.js"));
     expect(runner.outcomes()).toMatchObject([{ done: true, tries: 3, backend: "singularity" }]);
     expect(lines.filter((line) => line.includes("doesn't fit home"))).toEqual([]);
+  });
+
+  test("a Singularity worker that fits home but not its free RAM now (#162: a backdoor's worker holds 8 GB): the page, this try", async () => {
+    // 16 GB with 12 in use (the Agent's 3, a Singularity backdoor's 8, and the owner's 1): 4 free, short of the
+    // stand-in worker's 4.65.
+    const home = { maxRam: 16, usedRam: 3 + 8 + 1 };
+    const { runner, lines, workerFiles, round } = runnerWith(() => notDone("not yet"), { available: true }, home);
+    runner.desire([AEVUM]);
+    await round();
+    expect(workerFiles()).toEqual(["agent/abcdef123456/travel.js"]);
+    expect(runner.outcomes()).toMatchObject([{ backend: "ui" }]);
+    // Not the "can never fit" line: it fits once the backdoor's worker is gone.
+    expect(lines.filter((line) => line.includes("doesn't fit home"))).toEqual([]);
+    home.usedRam = 3;
+    for (let each = 0; each < 15; each += 1) await round();
+    expect(workerFiles().at(-1)).toBe("agent/abcdef123456/singularity-travel.js");
+    expect(runner.outcomes()).toMatchObject([{ backend: "singularity" }]);
   });
 
   test("without Singularity, and without the simulator's effectors: the page", async () => {

@@ -1,7 +1,8 @@
 // How the Agent runs a home worker (#89, #134, #141), for the snapshotter, the hack loop and the intent runner alike:
 // never a second copy of one still running, nothing once the deadline has passed, then the worker as a temporary
 // script, waiting for its report on the worker port and for it to exit, so its RAM is free for the next one, never past
-// the deadline.
+// the deadline. One worker outlives its round: the Singularity backdoor's (#162), which reports at once and stays until
+// the backdoor ends; the effector runner allows for its RAM (free RAM, not just home's size).
 import { WORKER_REPORT_PORT, type WorkerReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 

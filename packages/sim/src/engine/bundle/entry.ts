@@ -227,6 +227,14 @@ export function giveInstalledAugmentation(augmentation: string) {
 }
 
 /**
+ * Gives the player `exp` hacking experience through the game's own `gainHackingExp` (`PersonObjects/Person.ts:50-62`),
+ * which sets the hacking skill from it: a harness edit for test scenarios, not something a player can do (#162).
+ */
+export function gainHackingExp(exp: number) {
+  Player.gainHackingExp(exp);
+}
+
+/**
  * Queues `augmentation`, unpaid, as if bought and not yet installed: a harness edit for test scenarios (#164), not
  * something a player can do. The game's own `queueAugmentation`, as a purchase calls it (`Faction/FactionHelpers.tsx:119`).
  * Unknown, or owned already (installed or queued; NeuroFlux Governor may be queued again), it throws.

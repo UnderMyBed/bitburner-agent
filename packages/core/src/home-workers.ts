@@ -1,13 +1,14 @@
 /**
- * Every worker the Agent runs on home beside itself, one at a time: the snapshot tiers', the hack loop's (#134), the
- * program buyer's (#136), the home RAM upgrader's (#138), the traveller's (#141), the Singularity backend's (#145), the
- * faction joiner's (#147), the augmentation buyer's (#149), the faction, company, crime and class workers' (#151,
- * #153, #156, #158), the cloud server buyer's (#159), and the installer's (#164). A fresh save's home must hold the
- * Agent plus the largest of those it can run (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the
- * simulator and E2 suites read these lists. Functions, not constants, so in-game bundles that don't use them leave
- * them out.
+ * Every worker the Agent runs on home beside itself, one at a time (the Singularity backdoor's stays past its round,
+ * #162): the snapshot tiers', the hack loop's (#134), the program buyer's (#136), the home RAM upgrader's (#138), the
+ * traveller's (#141), the Singularity backend's (#145), the faction joiner's (#147), the augmentation buyer's (#149),
+ * the faction, company, crime and class workers' (#151, #153, #156, #158), the cloud server buyer's (#159), the
+ * backdoor's (#162), and the installer's (#164). A fresh save's home must hold the Agent plus the largest of those it
+ * can run (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2 suites read these lists.
+ * Functions, not constants, so in-game bundles that don't use them leave them out.
  */
 import { BUY_AUGMENTATION_WORKER_NAME, INSTALL_AUGMENTATIONS_WORKER_NAME } from "./augmentations.ts";
+import { BACKDOOR_WORKER_NAME } from "./backdoors.ts";
 import { singularityWorkerFileNames } from "./backends.ts";
 import { BUY_SERVER_WORKER_NAME } from "./cloud-servers.ts";
 import { SNAPSHOT_TIERS } from "./control-protocol.ts";
@@ -39,6 +40,7 @@ export function homeWorkerFileNames(): string[] {
     BUY_SERVER_WORKER_NAME,
     CRIME_WORK_WORKER_NAME,
     CLASS_WORK_WORKER_NAME,
+    BACKDOOR_WORKER_NAME,
     INSTALL_AUGMENTATIONS_WORKER_NAME,
     ...singularityWorkerFileNames(),
   ];

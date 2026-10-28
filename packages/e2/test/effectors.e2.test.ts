@@ -7,9 +7,10 @@
 // #153): faction work started and kept focused on the real page; company work applied for, the hiring's alert closed,
 // and worked, then worked again from the Job page in another city; crime (#156) at the Slums; classes (#158) at a
 // university, unfocused, and held back by the city and the money guard. Buying a cloud server (#159) needs no page:
-// the NS API's `cloud.purchaseServer`, from a worker that fits a fresh save beside the Agent. Installing augmentations
-// (#167): through the page, then the page timer's `run /agent/boot.js` in the terminal, or its save-and-reload, cycle
-// after cycle, which answers Q5 (#36).
+// the NS API's `cloud.purchaseServer`, from a worker that fits a fresh save beside the Agent. A backdoor (#162) is
+// typed into the real terminal, which is busy for its time: a purchase that types `buy` meanwhile waits for it.
+// Installing augmentations (#167): through the page, then the page timer's `run /agent/boot.js` in the terminal, or
+// its save-and-reload, cycle after cycle, which answers Q5 (#36).
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1061,6 +1062,89 @@ test("buying a server (#159): queued on the dashboard, pserv-0 bought through th
   await advanceGameTime(page, 11_000);
   expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000);
   expect(latestMedium(dataDirectory)?.servers.map((server) => server.hostname)).not.toContain("pserv-0-0");
+});
+
+/**
+ * A save where nectar-net (layer 2, required level 20, no ports) can be backdoored: 500 hacking exp, level 22 (the
+ * simulator's `gainHackingExp`), and NUKE.exe run on it by the owner's script.
+ */
+async function nectarNetReady(sim: Simulation) {
+  await sim.diagnostics.gainHackingExp(500);
+  await sim.writeFile("home", "owner-nuke.js", 'export async function main(ns) { ns.nuke("nectar-net"); }');
+  expect((await sim.run("home", "owner-nuke.js")).error).toBeUndefined();
+  await sim.advance(1_000);
+}
+
+test("a backdoor (#162): typed into the real terminal, home and connect by connect; a purchase meanwhile is 'terminal busy' until it ends", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: nectarNetReady,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    // The owner has left the terminal on n00dles: the way to nectar-net starts from home, so `home` comes first.
+    beforeAgent: (page) => typeCommand(page, "connect n00dles"),
+  });
+  await queueIntent(ports.dashboardPort, { action: "backdoor", args: { hostname: "nectar-net" } });
+  await queueIntent(ports.dashboardPort, { action: "buyTor", args: { vendor: "Alpha Enterprises" } });
+  await queueIntent(ports.dashboardPort, { action: "buyProgram", args: { program: "BruteSSH.exe" } });
+  const outcome = (id: string) => latestFast(dataDirectory)?.intents.find((each) => each.id === id);
+  await advanceUntil(page, async () => (outcome("buyProgram(BruteSSH.exe)")?.tries ?? 0) >= 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  // The backdoor's action runs (about 26 s at level 22): the input is disabled, and `buy` isn't typed.
+  expect(outcome("backdoor(nectar-net)")?.problem).toMatch(/^installing the backdoor on nectar-net: about \d+ s left$/);
+  expect(outcome("buyProgram(BruteSSH.exe)")).toMatchObject({ done: false, problem: "terminal busy", backend: "ui" });
+  await expect(page.locator(TERMINAL_INPUT).isDisabled()).resolves.toBe(true);
+  expect(await terminalText(page)).not.toContain("buy BruteSSH.exe");
+  // Then each is done: the backdoor's next try types `home`, and the purchase's types `buy`.
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: 3 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 90_000,
+  });
+  await advanceGameTime(page, 11_000);
+  const medium = latestMedium(dataDirectory);
+  expect(medium?.servers.find((server) => server.hostname === "nectar-net")?.backdoorInstalled).toBe(true);
+  expect(medium?.programs).toContain("BruteSSH.exe");
+  // The terminal's own words, in order: the owner's connect, home, two connects, the backdoor, home again.
+  const text = await terminalText(page);
+  const at = (words: string) => text.indexOf(words);
+  expect(at("Connected to home")).toBeGreaterThan(at("Connected to n00dles"));
+  expect(at("Connected to nectar-net")).toBeGreaterThan(at("Connected to home"));
+  expect(at("Backdoor on 'nectar-net' successful!")).toBeGreaterThan(at("Connected to nectar-net"));
+  expect(text.lastIndexOf("Connected to home")).toBeGreaterThan(at("Backdoor on 'nectar-net' successful!"));
+  expect((text.match(/Connected to /g) ?? []).length).toBeGreaterThanOrEqual(5);
+  // The purchase's `buy` was typed only after the backdoor ended.
+  expect(text.indexOf("buy BruteSSH.exe")).toBeGreaterThan(at("Backdoor on 'nectar-net' successful!"));
+  // Left home (the input's prompt, `Terminal/ui/TerminalInput.tsx:453-455`), the input free, no dialog.
+  await expect(page.locator(TERMINAL_INPUT).locator("xpath=preceding-sibling::p").innerText()).resolves.toMatch(
+    /^\[home\s\/\]>/,
+  );
+  await expect(page.locator(TERMINAL_INPUT).isDisabled()).resolves.toBe(false);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("a short backdoor (#162): one that ends within the round is waited for, and done at the first try, the terminal home", async () => {
+  // Level 1,000 or so (the simulator's `gainHackingExp`): n00dles's hacking time is about 2.4 s, its backdoor 0.6 s.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: async (sim) => {
+      await sim.diagnostics.gainHackingExp(1e17);
+      await sim.writeFile("home", "owner-nuke.js", 'export async function main(ns) { ns.nuke("n00dles"); }');
+      expect((await sim.run("home", "owner-nuke.js")).error).toBeUndefined();
+      await sim.advance(1_000);
+    },
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await queueIntent(ports.dashboardPort, { action: "backdoor", args: { hostname: "n00dles" } });
+  const outcome = () => latestFast(dataDirectory)?.intents.find((each) => each.id === "backdoor(n00dles)");
+  await advanceUntil(page, async () => (outcome()?.tries ?? 0) >= 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(outcome()).toMatchObject({ done: true, tries: 1, problem: null, backend: "ui" });
+  const text = await terminalText(page);
+  expect(text.lastIndexOf("Connected to home")).toBeGreaterThan(text.indexOf("Backdoor on 'n00dles' successful!"));
+  await expect(page.locator(TERMINAL_INPUT).locator("xpath=preceding-sibling::p").innerText()).resolves.toMatch(
+    /^\[home\s\/\]>/,
+  );
 });
 
 /** Queues an intent on the brain's dashboard, as its page does: from its own origin, as JSON. */

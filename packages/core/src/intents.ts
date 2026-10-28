@@ -7,6 +7,7 @@
  * "RAM"), so the actions are only ever strings here, never identifiers: `upgradeHomeRam` is a Singularity function.
  */
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
+import { isServerHostname } from "./backdoors.ts";
 import {
   CLOUD_SERVER_MAX_RAM,
   isCloudServerHostname,
@@ -30,6 +31,8 @@ export type IntentRequest =
   | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } }
   /** A cloud server named `hostname` with `ram` GB (#159): done once the player has one of that name. */
   | { action: "buyServer"; args: { hostname: string; ram: number } }
+  /** A backdoor on `hostname`, through the terminal (#162): done once it's installed, the terminal not left on it. */
+  | { action: "backdoor"; args: { hostname: string } }
   /** Installs every augmentation queued (#164): irreversible, and done once nothing is left to install. */
   | { action: "installAugmentations"; args: Record<string, never> };
 
@@ -42,6 +45,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   joinFaction: true,
   purchaseAugmentation: true,
   buyServer: true,
+  backdoor: true,
   installAugmentations: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
@@ -152,6 +156,19 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         return { ok: false, reason: `buyServer's ram isn't a power of two GB from 1 to ${CLOUD_SERVER_MAX_RAM}` };
       }
       return { ok: true, message: { action, args: { hostname: args.hostname, ram: args.ram } } };
+    case "backdoor":
+      if (!isServerHostname(args.hostname)) {
+        return {
+          ok: false,
+          reason:
+            `backdoor's hostname isn't 1 to ${MAX_CLOUD_SERVER_HOSTNAME_LENGTH} letters, digits, '.', '_' or '-' ` +
+            "(not an IP address)",
+        };
+      }
+      if (args.hostname === WORLD_DAEMON) {
+        return { ok: false, reason: `a backdoor on ${WORLD_DAEMON} ends the BitNode: that's not a backdoor intent` };
+      }
+      return { ok: true, message: { action, args: { hostname: args.hostname } } };
     case "installAugmentations":
       return { ok: true, message: { action, args: {} } };
     default:

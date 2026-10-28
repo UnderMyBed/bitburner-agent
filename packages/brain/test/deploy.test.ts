@@ -130,12 +130,12 @@ test("a brain with a new token: the old Agent is refused (4003), finds the new d
 
 test("a build the game measures over its RAM budget isn't switched to, and the running Agent stays", async () => {
   const { simulation, game, deployerEvents, agentsConnected, deployer, startBrain, runUntil } = await gameWithAgent();
-  // getServer costs 2.0 GB: agent.js would need 4.85 GB, over its 3.0 GB budget.
+  // getServer costs 2.0 GB: agent.js would need 4.9 GB, over its 3.0 GB budget.
   startBrain({ build: withAgentLine("function tooCostly(ns) { return ns.getServer; }") });
   await runUntil(() => deployerEvents().length === 2, AFTER_A_BRAIN_RESTART_MS);
   expect(deployerEvents()[1]).toMatchObject({
     type: "deployFailed",
-    reason: "agent.js needs 4.85 GB, over its budget of 3 GB",
+    reason: "agent.js needs 4.9 GB, over its budget of 3 GB",
   });
   await game.run(5_000);
   expect(await readOnHome(simulation, game, CURRENT_DEPLOYMENT_FILE)).toBe(deployer.deploymentId);

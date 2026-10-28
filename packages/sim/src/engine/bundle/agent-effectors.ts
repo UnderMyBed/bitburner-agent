@@ -110,6 +110,39 @@ function runAfterReset(callbackScript: string): void {
 }
 
 /**
+ * What the `ui` effectors that type report while the terminal runs an action: its input is disabled (#162). A copy of
+ * the in-game `TERMINAL_BUSY` (`ingame/src/page/game-page.ts`), which this bundle can't import (see
+ * `AGENT_SIM_EFFECTORS_GLOBAL`); the effector-backends suite checks the wording, and fails if the two drift.
+ */
+const TERMINAL_BUSY = "terminal busy";
+
+/**
+ * The hostnames to `connect` to, in turn, from home to `hostname`, breadth-first as the `ui` worker's `scan` finds:
+ * a copy of `ingame/src/workers/route-from-home.ts`, over the game's own links, for the same reason.
+ */
+function routeFromHome(hostname: string): string[] | null {
+  const cameFrom = new Map<string, string | null>([["home", null]]);
+  const queue = ["home"];
+  for (let index = 0; index < queue.length; index++) {
+    const here = queue[index] as string;
+    if (here === hostname) {
+      const route: string[] = [];
+      for (let step: string | null = here; step !== null && step !== "home"; step = cameFrom.get(step) ?? null) {
+        route.unshift(step);
+      }
+      return route;
+    }
+    for (const neighbour of GetServer(here)?.serversOnNetwork ?? []) {
+      if (!cameFrom.has(neighbour)) {
+        cameFrom.set(neighbour, here);
+        queue.push(neighbour);
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Each action's effector, as the page's handler does it. Not named like NS functions (`upgradeHomeRam`): the game
  * charges RAM for such names in the in-game code that calls these.
  */
@@ -127,6 +160,8 @@ const effectors = {
     // The brain names it as a string; the game types its programs as file paths.
     const owned = () => (Player.getHomeComputer().programs as readonly string[]).includes(program);
     if (!Player.hasTorRouter()) return result(owned(), "no TOR router to buy programs through");
+    // The `ui` worker types `buy`, which a terminal busy with an action refuses (#162).
+    if (!owned() && Terminal.action !== null) return result(false, TERMINAL_BUSY);
     if (!owned()) buyDarkwebItem(program);
     return result(owned(), `the game didn't sell ${program} (is the money there?)`);
   },
@@ -443,6 +478,54 @@ const effectors = {
       }
     }
     return result(isThisWork() && Player.focus === focus, notConverged);
+  },
+  /**
+   * A backdoor (#162) as the `ui` worker types it: the same checks and problems first (`commands/backdoor.ts`),
+   * then the terminal's own commands (`Terminal.executeCommands`): `home`, `connect` along the way, `backdoor`. The
+   * engine counts its action down (hacking time / 4, `Terminal/Terminal.ts:233-243`, `engine.tsx:96`) as on the page,
+   * the terminal busy meanwhile; the try that finds it installed, the terminal still there, types `home`. Not named
+   * `installBackdoor`, which is an NS function.
+   */
+  backdoorServer(hostname: string): EffectorResult {
+    const server = GetServer(hostname);
+    // The `ui` worker's `serverExists`: a server on the network, or the dark net's (`NetscriptFunctions.ts:1051-1055`).
+    if (server === null || (server.serversOnNetwork.length === 0 && !(server instanceof DarknetServer))) {
+      return result(false, `no server ${hostname}`);
+    }
+    const installed = () => server.backdoorInstalled;
+    // Read afresh each time: the terminal's commands start and end its action.
+    const action = (): { timeLeft: number } | null => Terminal.action;
+    if (installed() && !server.isConnectedTo) return result(true, "");
+    // In the `ui` worker's order: its refusals come first, and only the typing finds the terminal busy.
+    if (installed()) {
+      if (action() !== null) return result(false, TERMINAL_BUSY);
+      Terminal.executeCommands("home");
+      return result(!server.isConnectedTo, `the terminal is still on ${hostname}`);
+    }
+    if (server.purchasedByPlayer) {
+      return result(false, `${hostname} is the player's own: the game backdoors only others' servers`);
+    }
+    if (!server.hasAdminRights) return result(false, `no root access on ${hostname} (NUKE.exe first)`);
+    const required = "requiredHackingSkill" in server ? (server.requiredHackingSkill as number) : 0;
+    if (required > Player.skills.hacking) {
+      return result(false, `hacking level ${Player.skills.hacking}: ${hostname} needs ${required}`);
+    }
+    const route = routeFromHome(hostname);
+    if (route === null) return result(false, `no way from home to ${hostname}`);
+    if (action() !== null) return result(false, TERMINAL_BUSY);
+    if (Player.currentServer !== "home") Terminal.executeCommands("home");
+    for (const hop of route) {
+      Terminal.executeCommands(`connect ${hop}`);
+      if (Player.currentServer !== hop) return result(false, `couldn't connect to ${hop} on the way to ${hostname}`);
+    }
+    Terminal.executeCommands("backdoor");
+    const running = action();
+    if (running === null) return result(false, `the terminal didn't start the backdoor on ${hostname}`);
+    // The `ui` worker's wording (`installingProblem`, `ingame/src/workers/backdoor-standing.ts`); `timeLeft` is in s.
+    return result(
+      false,
+      `installing the backdoor on ${hostname}: about ${Math.max(1, Math.ceil(running.timeLeft))} s left`,
+    );
   },
 };
 
