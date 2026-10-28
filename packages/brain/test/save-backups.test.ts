@@ -4,8 +4,9 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { RFA_REQUEST_TIMEOUT_MS } from "@bitburner-agent/bridge";
 import { FakeRfaGame, ManualClock, steamSaveFile } from "@bitburner-agent/bridge/test-helpers";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { MAX_BACKUP_INTERVAL_MS, type SaveBackupEvent, SaveBackups } from "../src/save-backups.ts";
 
 const THIRTY_MINUTES_MS = 30 * 60_000;
@@ -242,4 +243,48 @@ test("an interval a timer can't wait, or no backup kept, is refused at the start
   expect(() => new SaveBackups({ ...options, backupIntervalMs: 0 })).toThrow(RangeError);
   expect(() => new SaveBackups({ ...options, backupIntervalMs: 1_000, backupsKept: 0 })).toThrow(RangeError);
   expect(() => new SaveBackups({ ...options, backupIntervalMs: MAX_BACKUP_INTERVAL_MS })).not.toThrow();
+});
+
+describe("backupNow (#147): a backup before an irreversible intent", () => {
+  test("resolves with its own backup's event", async () => {
+    const { backups, events } = startBackups();
+    backups.accept(new FakeRfaGame());
+    await settle();
+    clock.advance(1_000);
+    const event = await backups.backupNow();
+    expect(event).toEqual({
+      type: "saveBackup",
+      atMs: clock.now(),
+      file: "saves/E0/2026-10-26T12-00-01.000Z.json.gz",
+      sizeBytes: expect.any(Number),
+    });
+    expect(events.at(-1)).toEqual(event);
+  });
+
+  test("asked while another backup is under way: resolves with the next one's, never that one's", async () => {
+    const { backups, events } = startBackups();
+    const game = new FakeRfaGame();
+    // The connection's own backup gets no reply until the request times out.
+    game.silentAtRequest = 1;
+    backups.accept(game);
+    await settle();
+    let resolved: SaveBackupEvent | null = null;
+    void backups.backupNow().then((event) => {
+      resolved = event;
+    });
+    await settle();
+    expect(resolved).toBeNull();
+    clock.advance(RFA_REQUEST_TIMEOUT_MS);
+    await settle();
+    await settle();
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ failure: expect.any(String) });
+    expect(resolved).toEqual(events[1]);
+    expect(resolved).toMatchObject({ file: expect.any(String) });
+  });
+
+  test("with no connection: resolves with the failure", async () => {
+    const { backups } = startBackups();
+    await expect(backups.backupNow()).resolves.toMatchObject({ failure: "no Remote File API connection" });
+  });
 });

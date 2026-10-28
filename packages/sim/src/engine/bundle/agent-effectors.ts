@@ -6,6 +6,9 @@
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
 import { CityName } from "../../../../../vendor/bitburner-src/src/Enums";
+import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
+import { joinFaction } from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
+import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { ServerConstants } from "../../../../../vendor/bitburner-src/src/Server/data/Constants";
@@ -65,6 +68,18 @@ const effectors = {
       Router.toPage(Page.City);
     }
     return result(Player.city === city, `not in ${city} after travelling (is the $200k ticket there?)`);
+  },
+  /**
+   * The Factions page's "Join!" (`Faction/ui/FactionsRoot.tsx:88-94`): only for an invited faction that isn't banned.
+   * Not named `joinFaction`, which is an NS function.
+   */
+  acceptFactionInvitation(factionName: string): EffectorResult {
+    const isMember = () => Player.factions.includes(factionName as FactionName);
+    const faction = Object.values(FactionName).includes(factionName as FactionName)
+      ? Factions[factionName as FactionName]
+      : undefined;
+    if (!isMember() && faction?.alreadyInvited && !faction.isBanned) joinFaction(faction);
+    return result(isMember(), `not a member of ${factionName} after joining (is there an invitation?)`);
   },
 };
 

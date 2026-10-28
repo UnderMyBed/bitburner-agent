@@ -10,10 +10,10 @@
 //   $200k: without it, the game does nothing.
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `getPlayer` 0.5 (ram-budget.json); the page costs nothing.
-import { type EffectorReport, TRAVEL_COST } from "@bitburner-agent/core";
+import { TRAVEL_COST } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
-import { type GamePage, openGamePage } from "../page/game-page.ts";
-import { reportToAgent } from "../workers/report-to-agent.ts";
+import type { GamePage } from "../page/game-page.ts";
+import { reportPageEffect } from "../page/page-effect.ts";
 
 /** The modal holding the game's travel confirmation (`Locations/ui/TravelConfirmationModal.tsx`). */
 const CONFIRMATION_XPATH =
@@ -46,22 +46,10 @@ export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
   const city = String(ns.args[0] ?? "");
   const deadlineMs = Number(ns.args[1] ?? 0);
-  const inCity = () => ns.getPlayer().city === city;
-  const report: EffectorReport = { done: inCity(), problem: null };
-  if (!report.done) {
-    const gamePage = openGamePage(ns, deadlineMs);
-    if (gamePage === null) {
-      report.problem = "no game page to travel through";
-    } else if (await gamePage.dialogStaysOpen()) {
-      report.problem = "a dialog the Agent leaves for the owner is open";
-    } else {
-      const problem = await travelTo(ns, gamePage, city);
-      // Back to the Terminal, however it went, in the time kept for it: the page was moved.
-      const backProblem = await gamePage.returnToTerminal();
-      report.problem = problem ?? backProblem;
-      report.done = inCity();
-      if (!report.done) report.problem ??= `not in ${city} after travelling`;
-    }
-  }
-  reportToAgent(ns, report);
+  await reportPageEffect(ns, deadlineMs, {
+    isDone: () => ns.getPlayer().city === city,
+    doing: "travel through",
+    steps: (gamePage) => travelTo(ns, gamePage, city),
+    notDoneAfter: `not in ${city} after travelling`,
+  });
 }

@@ -2,7 +2,8 @@
 // real brain, the built Agent: the Agent buys the TOR router at Alpha Enterprises and every port opener through the
 // terminal, upgrades home's RAM at Alpha Enterprises, and travels where the owner's manual queue says, as a player
 // would, and leaves the page on the Terminal with no dialog open. It closes the game's alerts and answers faction
-// invitations, and leaves the owner's and scripts' dialogs alone.
+// invitations, and leaves the owner's and scripts' dialogs alone. Joining a faction (#147) clicks "Join!" past the
+// brain's gate for irreversible intents.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,6 +57,14 @@ function latestMedium(dataDirectory: string): MediumSnapshotData | null {
     .snapshots.filter((row) => row.tier === "medium")
     .at(-1);
   return (medium?.data as MediumSnapshotData | undefined) ?? null;
+}
+
+/** The newest fast snapshot the brain has stored, or null: the intents' outcomes are in it. */
+function latestFast(dataDirectory: string): FastSnapshotData | null {
+  const fast = readStore(dataDirectory)
+    .snapshots.filter((row) => row.tier === "fast")
+    .at(-1);
+  return (fast?.data as FastSnapshotData | undefined) ?? null;
 }
 
 const offlineAlertShown = (page: Page) => async () => (await page.getByText(/^Offline for/).count()) > 0;
@@ -236,6 +245,67 @@ test("a faction invitation (#143): $20m in Sector-12 earns one, the Agent answer
   await expect(page.getByRole("button", { name: "Join!" }).count()).resolves.toBe(1);
 });
 
+/** The intents the dashboard lists now (`GET /api/status`), with what each waits for. */
+async function dashboardIntents(dashboardPort: number): Promise<{ id: string; waitingFor: string | null }[]> {
+  const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);
+  return ((await response.json()) as { intents: { id: string; waitingFor: string | null }[] }).intents;
+}
+
+test("joining Sector-12 (#147): past the brain's guard and a save backup, the Agent clicks Join! on the Factions page", async () => {
+  // As above: the travel to Sector-12 earns the invitation, which the Agent answers "Decide later".
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 20_000_000,
+    city: "Aevum",
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Sector-12" } });
+  await advanceUntil(
+    page,
+    async () => gameDialogs(dataDirectory).some((dialog) => dialog.kind === "factionInvitation"),
+    { realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 90_000 },
+  );
+
+  // A faction with no invitation (and no enemies, so it goes at once): the Factions page has no row to join it by.
+  await queueIntent(ports.dashboardPort, { action: "joinFaction", args: { faction: "CyberSec" } });
+  const cyberSecOutcome = () => latestFast(dataDirectory)?.intents.find((each) => each.id === "joinFaction(CyberSec)");
+  await advanceUntil(page, async () => (cyberSecOutcome()?.tries ?? 0) >= 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(cyberSecOutcome()).toMatchObject({
+    done: false,
+    problem: "no invitation from CyberSec on the Factions page",
+    backend: "ui",
+  });
+  await cancelIntent(ports.dashboardPort, "joinFaction(CyberSec)");
+
+  const queuedAtMs = Date.now();
+  await queueIntent(ports.dashboardPort, { action: "joinFaction", args: { faction: "Sector-12" } });
+  // Held at first: the guard hasn't held on two medium snapshots yet.
+  expect(
+    (await dashboardIntents(ports.dashboardPort)).find((each) => each.id === "joinFaction(Sector-12)"),
+  ).toMatchObject({ waitingFor: expect.stringMatching(/^waiting for the guard/) });
+  // Two medium snapshots (10 s apart), the backup, then the next round's try.
+  await advanceUntil(
+    page,
+    async () => ((latestMedium(dataDirectory)?.player.factions ?? []) as string[]).includes("Sector-12"),
+    { realTimeoutMs: 3 * STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 90_000 },
+  );
+  // A save backup succeeded after the queueing, and before the first medium snapshot showing Sector-12 joined.
+  const { events, snapshots } = readStore(dataDirectory);
+  const backupAtMs = events.find(
+    (event) => event.kind === "saveBackup" && event.atMs >= queuedAtMs && "file" in (event.detail as object),
+  )?.atMs;
+  const joinedSeenAtMs = snapshots.find(
+    (row) =>
+      row.tier === "medium" && ((row.data as MediumSnapshotData).player.factions as string[]).includes("Sector-12"),
+  )?.receivedAtMs;
+  expect(backupAtMs).toBeDefined();
+  expect(joinedSeenAtMs).toBeGreaterThan(backupAtMs as number);
+  await advanceGameTime(page, 2_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
 async function dashboardAlerts(dashboardPort: number): Promise<{ name: string; detail: string }[]> {
   const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);
@@ -335,6 +405,17 @@ async function queueIntent(dashboardPort: number, request: { action: string; arg
   expect(response.status, await response.text()).toBe(200);
 }
 
+/** Takes an intent off the dashboard's queue, as its Cancel button does. */
+async function cancelIntent(dashboardPort: number, id: string) {
+  const origin = `http://127.0.0.1:${dashboardPort}`;
+  const response = await fetch(`${origin}/api/intents/cancel`, {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  expect(response.status, await response.text()).toBe(200);
+}
+
 /** Counts the game's travel dialogs as they open, in the page, for a test to read back. */
 const countTravelDialogs = (page: Page) =>
   page.evaluate(() => {
@@ -403,12 +484,7 @@ test("travel without the ticket's money: not done, the reason logged as the outc
     brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
   });
   await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
-  const outcome = () => {
-    const fast = readStore(dataDirectory)
-      .snapshots.filter((row) => row.tier === "fast")
-      .at(-1)?.data as FastSnapshotData | undefined;
-    return fast?.intents.find((each) => each.id === "travel(Aevum)");
-  };
+  const outcome = () => latestFast(dataDirectory)?.intents.find((each) => each.id === "travel(Aevum)");
   await advanceUntil(page, async () => (outcome()?.tries ?? 0) >= 1, {
     realTimeoutMs: STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 20_000,

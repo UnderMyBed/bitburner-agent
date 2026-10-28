@@ -1,4 +1,4 @@
-// The Effectors (#141, #145, architecture §5.6): for each action an intent can name, how each backend does it.
+// The Effectors (#141, #145, #147, architecture §5.6): for each action an intent can name, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -10,8 +10,10 @@ import {
   BUY_PROGRAM_WORKER_NAME,
   type EffectorReport,
   type Intent,
+  JOIN_FACTION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_JOIN_FACTION_WORKER_NAME,
   SINGULARITY_TRAVEL_WORKER_NAME,
   SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
   TOR_ROUTER,
@@ -25,6 +27,7 @@ export interface SimEffectors {
   buyDarkwebProgram(program: string): EffectorReport;
   buyHomeRam(fromRam: number): EffectorReport;
   travelTo(city: string): EffectorReport;
+  acceptFactionInvitation(faction: string): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -76,6 +79,13 @@ export function effectorFor(intent: Intent): Effector {
         ui: { workerName: TRAVEL_WORKER_NAME, workerArguments: [intent.args.city] },
         singularity: { workerName: SINGULARITY_TRAVEL_WORKER_NAME, workerArguments: [intent.args.city] },
         sim: (effectors) => effectors.travelTo(intent.args.city),
+      };
+    case "joinFaction":
+      return {
+        description: `join ${intent.args.faction}`,
+        ui: { workerName: JOIN_FACTION_WORKER_NAME, workerArguments: [intent.args.faction] },
+        singularity: { workerName: SINGULARITY_JOIN_FACTION_WORKER_NAME, workerArguments: [intent.args.faction] },
+        sim: (effectors) => effectors.acceptFactionInvitation(intent.args.faction),
       };
   }
 }

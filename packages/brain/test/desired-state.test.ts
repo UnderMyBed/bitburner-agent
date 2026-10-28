@@ -16,12 +16,13 @@ import {
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
 import { readManualIntents } from "../src/manual-intents.ts";
 import { readProgramsEnabled } from "../src/programs.ts";
+import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
@@ -422,10 +423,10 @@ describe("the manual queue (#141, owner decision 36)", () => {
   test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
     const controller = new DesiredStateController({ channel, store });
     controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
-    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null, waitingFor: null }]);
     const connection = connectAgent();
     send(connection, "fast", { ...fastWith(), intents: [{ id: AEVUM.id, done: "yes", tries: 1, problem: null }] });
-    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null, waitingFor: null }]);
   });
 
   test("an Agent from before backends (#145) sends outcomes without one: kept, with the backend unknown", () => {
@@ -441,6 +442,7 @@ describe("the manual queue (#141, owner decision 36)", () => {
         id: AEVUM.id,
         source: "manual",
         outcome: { id: AEVUM.id, done: false, tries: 1, problem: "no Travel", backend: null },
+        waitingFor: null,
       },
     ]);
   });
@@ -459,7 +461,7 @@ describe("the manual queue (#141, owner decision 36)", () => {
     send(connection, "static", network);
     send(connection, "medium", mediumData(1, { n00dles: true }));
     controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
-    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null, waitingFor: null }]);
     const outcome: IntentOutcome = {
       id: AEVUM.id,
       done: false,
@@ -468,18 +470,258 @@ describe("the manual queue (#141, owner decision 36)", () => {
       backend: "ui",
     };
     send(connection, "fast", fastWith(outcome));
-    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome }]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome, waitingFor: null }]);
     connection.dropFromGameSide();
-    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null, waitingFor: null }]);
     // A new Agent holds no intents yet: the last one's outcomes aren't its own.
     const again = connectAgent("session-2");
     send(again, "static", network, "session-2");
     send(again, "medium", mediumData(1, { n00dles: true }), "session-2");
-    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null, waitingFor: null }]);
   });
 
   test("a store value the brain didn't write fails, rather than guess", () => {
     store.setSetting("intents.manual", '[{"action":"travel","args":{"city":"Atlantis"}}]');
     expect(() => new DesiredStateController({ channel, store })).toThrow(/intents\.manual/);
+  });
+});
+
+describe("irreversible intents (#147): the guard on two consecutive medium snapshots, then a save backup", () => {
+  const SECTOR_12 = intent({ action: "joinFaction", args: { faction: "Sector-12" } });
+  const CHONGQING = intent({ action: "joinFaction", args: { faction: "Chongqing" } });
+  const CYBERSEC = intent({ action: "joinFaction", args: { faction: "CyberSec" } });
+  const SAVED: SaveBackupEvent = { type: "saveBackup", atMs: 1, file: "saves/E0/x.json.gz", sizeBytes: 10 };
+  const FAILED: SaveBackupEvent = { type: "saveBackup", atMs: 1, failure: "the game sent its save as text" };
+  const counting = (held: number, of = 2) =>
+    `waiting for the guard to hold on ${of} consecutive medium snapshots (${held} so far)`;
+
+  /** A stand-in for the brain's save backups: each `backupNow` waits until the test settles it. */
+  function standInBackups() {
+    const pending: ((event: SaveBackupEvent) => void)[] = [];
+    const backupNow = vi.fn(
+      () =>
+        new Promise<SaveBackupEvent>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    const letItRun = () => new Promise((resolve) => setTimeout(resolve, 0));
+    /** Settles the oldest backup asked for with `event`, and lets the controller see it. */
+    const settleBackup = async (event: SaveBackupEvent) => {
+      pending.shift()?.(event);
+      await letItRun();
+    };
+    /** Settles the newest. */
+    const settleNewestBackup = async (event: SaveBackupEvent) => {
+      pending.pop()?.(event);
+      await letItRun();
+    };
+    return { saveBackups: { backupNow }, backupNow, settleBackup, settleNewestBackup };
+  }
+
+  /** An Agent connected with its static snapshot sent, the hack loop off so the intents go without a medium one. */
+  function connectedWithLoopOff() {
+    store.setSetting("hackLoop.enabled", "false");
+    const backups = standInBackups();
+    const controller = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    const sentIds = () =>
+      desiredStates(connection)
+        .at(-1)
+        ?.intents.map((each) => each.id) ?? [];
+    const medium = (factions: string[] = []) => send(connection, "medium", mediumData(1, {}, { factions }));
+    const waitingFor = (id: string) => controller.intentsView().find((view) => view.id === id)?.waitingFor;
+    /** Two medium snapshots and the backup's success: the first irreversible intent released. */
+    const release = async (factions: string[] = []) => {
+      medium(factions);
+      medium(factions);
+      await backups.settleBackup(SAVED);
+    };
+    return { controller, connection, sentIds, medium, waitingFor, release, ...backups };
+  }
+
+  test("a reversible intent goes out at once; an irreversible one waits, its view saying for what", () => {
+    const { controller, sentIds, waitingFor } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "CyberSec" } });
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    expect(sentIds()).toEqual([CYBERSEC.id]);
+    expect(waitingFor(CYBERSEC.id)).toBeNull();
+    expect(waitingFor(SECTOR_12.id)).toBe(counting(0));
+  });
+
+  test("two medium snapshots with the guard holding, then a backup is asked for; it goes out on that backup's success", async () => {
+    const { controller, sentIds, medium, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    medium();
+    expect(backupNow).not.toHaveBeenCalled();
+    expect(waitingFor(SECTOR_12.id)).toBe(counting(1));
+    medium();
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe("waiting for a save backup");
+    // More snapshots while it's taken ask for no other.
+    medium();
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    await settleBackup(SAVED);
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+    expect(waitingFor(SECTOR_12.id)).toBeNull();
+  });
+
+  test("a failed backup starts the count again, with a minute of snapshots before the next", async () => {
+    const { controller, sentIds, medium, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    medium();
+    medium();
+    await settleBackup(FAILED);
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe(`${counting(0, 6)}: the save backup failed: the game sent its save as text`);
+    for (let each = 0; each < 5; each += 1) medium();
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    medium();
+    expect(backupNow).toHaveBeenCalledTimes(2);
+    await settleBackup(SAVED);
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+  });
+
+  test("the guard failing starts the count again, saying why: an enemy joined", () => {
+    const { controller, sentIds, medium, waitingFor, backupNow } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    medium();
+    medium(["Chongqing"]);
+    expect(waitingFor(SECTOR_12.id)).toBe("held: Sector-12's enemy Chongqing is joined");
+    medium();
+    expect(backupNow).not.toHaveBeenCalled();
+    expect(sentIds()).toEqual([]);
+  });
+
+  test("a guard that fails while the backup is taken: that backup's success releases nothing", async () => {
+    const { controller, sentIds, medium, waitingFor, settleBackup } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    medium();
+    medium();
+    medium(["Volhaven"]);
+    await settleBackup(SAVED);
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe("held: Sector-12's enemy Volhaven is joined");
+  });
+
+  test("a backup asked for before the count started again releases nothing, even once the next is asked for", async () => {
+    const { controller, sentIds, medium, backupNow, settleBackup, settleNewestBackup } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    medium();
+    medium();
+    medium(["Volhaven"]);
+    medium();
+    medium();
+    expect(backupNow).toHaveBeenCalledTimes(2);
+    // The first one's answer comes now: it isn't for this count.
+    await settleBackup(SAVED);
+    expect(sentIds()).toEqual([]);
+    await settleNewestBackup(SAVED);
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+  });
+
+  test("a medium snapshot without the factions joined holds it: the guard fails closed, and nothing throws", () => {
+    const { controller, connection, sentIds, waitingFor, backupNow } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    send(connection, "medium", { ...mediumData(1, {}), player: { money: 0 } });
+    send(connection, "medium", { ...mediumData(1, {}), player: undefined });
+    expect(backupNow).not.toHaveBeenCalled();
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe("held: the medium snapshot has no list of the factions joined");
+  });
+
+  test("one irreversible intent at a time: the next is judged only once the first is done, so enemies never go together", async () => {
+    const { controller, connection, sentIds, medium, waitingFor, release } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Chongqing" } });
+    expect(waitingFor(CHONGQING.id)).toBe(
+      "waiting for joinFaction(Sector-12) first: one irreversible intent at a time",
+    );
+    await release();
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: SECTOR_12.id, done: true, tries: 1, problem: null, backend: "ui" }],
+    });
+    medium(["Sector-12"]);
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(CHONGQING.id)).toBe("held: Chongqing's enemy Sector-12 is joined");
+  });
+
+  test("once out, its guard is still judged: failing, it's withdrawn", async () => {
+    const { controller, sentIds, medium, waitingFor, release } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    await release();
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+    medium(["Ishima"]);
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe("held: Sector-12's enemy Ishima is joined");
+  });
+
+  test("out for 60 medium snapshots and not done: withdrawn until a new backup, so the backup is never stale", async () => {
+    const { controller, sentIds, medium, waitingFor, backupNow, release, settleBackup } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    await release();
+    for (let each = 0; each < 59; each += 1) medium();
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+    medium();
+    expect(sentIds()).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe(
+      `${counting(0)}: out 60 medium snapshots without being done, it needs a new backup`,
+    );
+    medium();
+    medium();
+    expect(backupNow).toHaveBeenCalledTimes(2);
+    await settleBackup(SAVED);
+    expect(sentIds()).toEqual([SECTOR_12.id]);
+  });
+
+  test("a disconnect starts the count again, and a backup that ends after it releases nothing", async () => {
+    const { controller, connection, medium, waitingFor, settleBackup } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    medium();
+    medium();
+    connection.dropFromGameSide();
+    await settleBackup(SAVED);
+    const again = connectAgent("session-2");
+    send(again, "static", network, "session-2");
+    expect(desiredStates(again).at(-1)?.intents).toEqual([]);
+    expect(waitingFor(SECTOR_12.id)).toBe(counting(0));
+  });
+
+  test("done, it leaves the queue and the gate", async () => {
+    const { controller, sentIds, connection, release } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    await release();
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: SECTOR_12.id, done: true, tries: 1, problem: null, backend: "ui" }],
+    });
+    expect(sentIds()).toEqual([]);
+    expect(controller.intentsView()).toEqual([]);
+  });
+
+  test("a held one doesn't hold up the intents queued after it", () => {
+    const { controller, sentIds } = connectedWithLoopOff();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+    expect(sentIds()).toEqual(["travel(Aevum)"]);
+  });
+
+  test("a brain that takes no save backups never sends one, and says so", () => {
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Sector-12" } });
+    send(connection, "medium", mediumData(1, {}));
+    send(connection, "medium", mediumData(1, {}));
+    expect(desiredStates(connection).at(-1)?.intents).toEqual([]);
+    expect(controller.intentsView()[0]?.waitingFor).toBe("waiting for a save backup, which this brain doesn't take");
   });
 });

@@ -9,10 +9,10 @@
 // - A program: the Terminal, and `buy <program>` in it (`Terminal/commands/buy.ts`).
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `hasTorRouter` 0.05 + `fileExists` 0.1 (ram-budget.json); the page costs nothing.
-import { type EffectorReport, TOR_ROUTER } from "@bitburner-agent/core";
+import { TOR_ROUTER } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
-import { type GamePage, openGamePage } from "../page/game-page.ts";
-import { reportToAgent } from "../workers/report-to-agent.ts";
+import type { GamePage } from "../page/game-page.ts";
+import { reportPageEffect } from "../page/page-effect.ts";
 
 /** Owned: the TOR router by the game's own flag, a program by its file on home. */
 function owns(ns: NS, item: string): boolean {
@@ -20,7 +20,7 @@ function owns(ns: NS, item: string): boolean {
 }
 
 async function buyTorRouter(gamePage: GamePage, vendor: string): Promise<string | null> {
-  const problem =
+  return (
     (await gamePage.openCityLocation(vendor)) ??
     // A disabled button means the player can't afford it now: its click handler would still run, and open a dialog.
     (await gamePage.clickWhenThere(
@@ -31,10 +31,8 @@ async function buyTorRouter(gamePage: GamePage, vendor: string): Promise<string 
     (await gamePage.clickWhenThere(
       "//div[button and contains(., 'You have purchased a TOR router')]/button",
       "close button on the TOR purchase's dialog",
-    ));
-  // Back to the Terminal, however it went, in the time kept for it: the page was moved.
-  const backProblem = await gamePage.returnToTerminal();
-  return problem ?? backProblem;
+    ))
+  );
 }
 
 async function buyProgram(gamePage: GamePage, program: string): Promise<string | null> {
@@ -46,18 +44,10 @@ export async function main(ns: NS): Promise<void> {
   const item = String(ns.args[0] ?? "");
   const vendor = String(ns.args[1] ?? "");
   const deadlineMs = Number(ns.args[2] ?? 0);
-  const report: EffectorReport = { done: owns(ns, item), problem: null };
-  if (!report.done) {
-    const gamePage = openGamePage(ns, deadlineMs);
-    if (gamePage === null) {
-      report.problem = "no game page to buy it through";
-    } else if (await gamePage.dialogStaysOpen()) {
-      report.problem = "a dialog the Agent leaves for the owner is open";
-    } else {
-      report.problem = item === TOR_ROUTER ? await buyTorRouter(gamePage, vendor) : await buyProgram(gamePage, item);
-      report.done = owns(ns, item);
-      if (!report.done) report.problem ??= `${item} isn't owned after buying it`;
-    }
-  }
-  reportToAgent(ns, report);
+  await reportPageEffect(ns, deadlineMs, {
+    isDone: () => owns(ns, item),
+    doing: "buy it through",
+    steps: (gamePage) => (item === TOR_ROUTER ? buyTorRouter(gamePage, vendor) : buyProgram(gamePage, item)),
+    notDoneAfter: `${item} isn't owned after buying it`,
+  });
 }

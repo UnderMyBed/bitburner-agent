@@ -1,8 +1,8 @@
-// Rotating save backups (#92, architecture §6; R8's backups before irreversible intents come with intents, M3): the
-// game's save, taken over the Remote File API on every connection and every interval, validated, filed under its
-// environment, and rotated. Insurance against a bug or a corrupted save, and a source of real starting states for the
-// simulator: a backup is the game's save at that moment in the format Steam writes to bitburnerSave_*.json.gz, which the
-// simulator loads as a save fixture and the game's Options → Import Game accepts.
+// Rotating save backups (#92, architecture §6; R8's backup before an irreversible intent, #147): the game's save, taken
+// over the Remote File API on every connection and every interval, validated, filed under its environment, and rotated.
+// Insurance against a bug or a corrupted save, and a source of real starting states for the simulator: a backup is the
+// game's save at that moment in the format Steam writes to bitburnerSave_*.json.gz, which the simulator loads as a save
+// fixture and the game's Options → Import Game accepts.
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -71,6 +71,8 @@ export class SaveBackups {
   #takingBackup = false;
   /** A backup was asked for while one was under way: it's taken as soon as that one ends (several become one). */
   #backupAskedForWhileTaking = false;
+  /** Those waiting on the next backup to start (`backupNow`): each is given that backup's event. */
+  #waitingForNextBackup: ((event: SaveBackupEvent) => void)[] = [];
 
   /** Starts the interval at once; each connection brings a backup of its own. */
   constructor(options: SaveBackupsOptions) {
@@ -108,6 +110,18 @@ export class SaveBackups {
   }
 
   /**
+   * A backup now, before an irreversible intent (R8): resolves with that backup's own event, saved or failed. Asked
+   * while one is under way, it waits for the next, which starts as that one ends: so the event is never from a backup
+   * that began before the asking.
+   */
+  backupNow(): Promise<SaveBackupEvent> {
+    return new Promise((resolve) => {
+      this.#waitingForNextBackup.push(resolve);
+      void this.#takeBackup();
+    });
+  }
+
+  /**
    * One at a time. A backup asked for while one is under way follows it, over the newest connection then, so a new
    * connection's backup isn't lost to one still waiting on an older connection.
    */
@@ -116,19 +130,25 @@ export class SaveBackups {
       this.#backupAskedForWhileTaking = true;
       return;
     }
+    // Those waiting from now on are given this backup's event.
+    const waiting = this.#waitingForNextBackup.splice(0);
+    const emit = (event: SaveBackupEvent) => {
+      this.#listeners.emit(event);
+      for (const resolve of waiting) resolve(event);
+    };
     const client = this.#client;
-    if (!client) return this.#recordFailure("no Remote File API connection");
+    if (!client) return emit(this.#failure("no Remote File API connection"));
     this.#takingBackup = true;
     try {
       const bytes = validSaveBytes(await client.getSaveFile());
       const fileName = this.#writeBackup(bytes);
       const file = path.posix.join(SAVE_BACKUPS_DIRECTORY_NAME, this.#options.environment, fileName);
-      this.#listeners.emit({ type: "saveBackup", atMs: this.#options.clock.now(), file, sizeBytes: bytes.length });
+      emit({ type: "saveBackup", atMs: this.#options.clock.now(), file, sizeBytes: bytes.length });
       this.#rotateBackups(fileName);
     } catch (error) {
       // The game's side, or the disk: recorded, never kept. Anything else is a bug, which crashes the brain.
       if (!(error instanceof RfaError || error instanceof DamagedSaveError || error instanceof DiskError)) throw error;
-      this.#recordFailure(error.message);
+      emit(this.#failure(error.message));
     } finally {
       this.#takingBackup = false;
     }
@@ -138,8 +158,8 @@ export class SaveBackups {
     }
   }
 
-  #recordFailure(failure: string): void {
-    this.#listeners.emit({ type: "saveBackup", atMs: this.#options.clock.now(), failure });
+  #failure(failure: string): SaveBackupEvent {
+    return { type: "saveBackup", atMs: this.#options.clock.now(), failure };
   }
 
   /**

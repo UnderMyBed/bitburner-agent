@@ -28,9 +28,18 @@ export const mediumData = (
     hasTorRouter = false,
     programs = [],
     homeRam,
-  }: { money?: number; city?: string; hasTorRouter?: boolean; programs?: string[]; homeRam?: number } = {},
+    factions = [],
+  }: {
+    money?: number;
+    city?: string;
+    hasTorRouter?: boolean;
+    programs?: string[];
+    homeRam?: number;
+    /** The factions joined (#147). */
+    factions?: string[];
+  } = {},
 ): MediumSnapshotData => ({
-  player: { skills: { hacking }, money, city },
+  player: { skills: { hacking }, money, city, factions },
   hasTorRouter,
   programs,
   servers: Object.entries(homeRam === undefined ? rooted : { home: true, ...rooted }).map(

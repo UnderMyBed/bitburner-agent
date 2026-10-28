@@ -1,6 +1,7 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
-// the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue.
+// the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue. Irreversible
+// intents wait for their guard and a save backup first (#147).
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
@@ -17,6 +18,7 @@ import {
 } from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
+import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
 import { readManualIntents, writeManualIntents } from "./manual-intents.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import { writeSwitch } from "./switches.ts";
@@ -64,6 +66,11 @@ export interface IntentView {
   source: "manual" | "purchase";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
+  /**
+   * Why an irreversible intent isn't sent yet, to follow "not sent: " (#147), or null once it's sent, or for any
+   * other.
+   */
+  waitingFor: string | null;
 }
 
 /** A manual intent added, or why it wasn't. */
@@ -83,6 +90,9 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - Intents go in order: the owner's manual queue first, as added, then the purchase. A manual intent leaves the queue
  *   once the connected Agent reports it done: the game's state can change again (a travel there and back), so a
  *   snapshot can't say it was done.
+ * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
+ *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
+ *   intents after it go on without it: a held join doesn't hold up a travel queued later.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -101,16 +111,29 @@ export class DesiredStateController {
   #homeRamPlan: HomeRamPlan | null = null;
   /** Why each activity's purchase isn't asked for now, or null: its plan's reason, or the cheaper purchase first. */
   #waitingFor: { programs: string | null; homeRam: string | null } = { programs: null, homeRam: null };
+  /** Each irreversible intent queued and not yet done (none goes out with a brain that takes no save backups). */
+  readonly #gates: IrreversibleIntentGates;
 
-  constructor({ channel, store }: { channel: ControlChannel; store: TelemetryStore }) {
+  constructor({
+    channel,
+    store,
+    saveBackups = null,
+  }: {
+    channel: ControlChannel;
+    store: TelemetryStore;
+    saveBackups?: BackupsBeforeIrreversibleIntents | null;
+  }) {
     this.#channel = channel;
     this.#store = store;
+    this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
         this.#staticData = null;
         this.#mediumData = null;
         this.#slowData = null;
         this.#fastData = null;
+        // Counted on the last Agent's snapshots: every gate starts again.
+        this.#gates.forget();
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' outcomes: for the views, and the manual intents done. Anything else changes nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
@@ -119,6 +142,7 @@ export class DesiredStateController {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
+        this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store));
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
       } else {
@@ -188,7 +212,11 @@ export class DesiredStateController {
     return [
       ...manual.map(({ id }) => ({ id, source: "manual" as const })),
       ...purchase.map(({ id }) => ({ id, source: "purchase" as const })),
-    ].map((view) => ({ ...view, outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null }));
+    ].map((view) => ({
+      ...view,
+      outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null,
+      waitingFor: this.#gates.waitingFor(view.id),
+    }));
   }
 
   /**
@@ -312,8 +340,10 @@ export class DesiredStateController {
     this.#purchase = this.#choosePurchase();
     // The manual queue first; the purchase only if the owner hasn't queued the same.
     const manual = readManualIntents(this.#store);
+    // An irreversible intent goes only once its gate lets it.
+    this.#gates.sync(manual);
     const intents = [
-      ...manual,
+      ...manual.filter((each) => this.#gates.isReleased(each.id)),
       ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
     ];
     if (!hackLoopEnabled) {

@@ -2,6 +2,7 @@ export {
   AGENT_SIM_EFFECTORS_GLOBAL,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_JOIN_FACTION_WORKER_NAME,
   SINGULARITY_MOST_RAM_MULTIPLIER,
   SINGULARITY_TRAVEL_WORKER_NAME,
   SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
@@ -43,6 +44,7 @@ export {
   parseAgentConfig,
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
+export { FACTION_ENEMIES, FACTION_NAMES, JOIN_FACTION_WORKER_NAME } from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   HACK_LOOP_DEPLOY_WORKER_NAME,
@@ -57,11 +59,13 @@ export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-worker
 export {
   type ActionName,
   type EffectorReport,
+  INTENT_ACTIONS,
   INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,
   intentId,
+  isIrreversibleIntent,
   MAX_INTENTS,
   parseIntentRequest,
 } from "./intents.ts";

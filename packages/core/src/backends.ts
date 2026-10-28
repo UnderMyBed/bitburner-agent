@@ -1,13 +1,16 @@
 /**
  * The Singularity backend's home workers (#145, architecture §5.6): one per action, so each costs only its own call.
- * At SF4.3 or in BN4 each is within the 4.65 GB home-worker rule; with less of SF4 the game charges 4× or 16×
- * (`Netscript/RamCostGenerator.ts:82-95`), so on a small home they can't start, and the Agent uses the page instead.
+ * They never run on a fresh save, so the fresh-save check (the Agent's budget plus its largest worker within 8 GB) leaves
+ * them out: at SF4.3 or in BN4 the first four are within today's largest fresh-save worker, and the faction join is 5.1 GB. With less of SF4 the game charges their calls 4× or 16×
+ * (`Netscript/RamCostGenerator.ts:82-95`). One that doesn't fit home beside the Agent leaves its action to the page.
  * Used by the in-game code and the bridge's deployer.
  */
 export const SINGULARITY_TRAVEL_WORKER_NAME = "singularity-travel.js";
 export const SINGULARITY_BUY_TOR_WORKER_NAME = "singularity-buy-tor.js";
 export const SINGULARITY_BUY_PROGRAM_WORKER_NAME = "singularity-buy-program.js";
 export const SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME = "singularity-upgrade-home-ram.js";
+/** 5.1 GB, more than any fresh-save worker: no Singularity worker runs on a fresh save (#147). */
+export const SINGULARITY_JOIN_FACTION_WORKER_NAME = "singularity-join-faction.js";
 
 /** The most the game multiplies a Singularity function's RAM by: 16, with no SF4 or SF4.1 outside BN4. */
 export const SINGULARITY_MOST_RAM_MULTIPLIER = 16;
@@ -29,6 +32,7 @@ export function singularityWorkerFileNames(): string[] {
     SINGULARITY_BUY_TOR_WORKER_NAME,
     SINGULARITY_BUY_PROGRAM_WORKER_NAME,
     SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
+    SINGULARITY_JOIN_FACTION_WORKER_NAME,
   ];
 }
 
