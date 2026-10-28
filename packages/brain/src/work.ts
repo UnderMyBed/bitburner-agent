@@ -8,6 +8,7 @@ import {
   type SlowSnapshotData,
   type Work,
   type WorkOutcome,
+  type WorkPromotion,
 } from "@bitburner-agent/core";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
@@ -87,5 +88,20 @@ export function reportedWorkOutcome(outcome: unknown): WorkOutcome | null {
   ) {
     return null;
   }
-  return { converged: fields.converged, problem: fields.problem, backend: fields.backend ?? null };
+  const promotion = reportedPromotion(fields.promotion);
+  return {
+    converged: fields.converged,
+    problem: fields.problem,
+    backend: fields.backend ?? null,
+    ...(promotion === null ? {} : { promotion }),
+  };
+}
+
+/** The latest promotion a work outcome reports (#155): only a well-formed one, its known fields only; else null. */
+export function reportedPromotion(promotion: unknown): WorkPromotion | null {
+  const fields = promotion as Partial<WorkPromotion> | null | undefined;
+  const { company, from, to, gameTimeMs } = fields ?? {};
+  if (typeof company !== "string" || typeof from !== "string" || typeof to !== "string") return null;
+  if (typeof gameTimeMs !== "number" || !Number.isFinite(gameTimeMs)) return null;
+  return { company, from, to, gameTimeMs };
 }

@@ -36,7 +36,7 @@ Follow [CONTRIBUTING.md "How work flows"](CONTRIBUTING.md#how-work-flows). It's 
 - **Saves flow one way:** Steam saves may become test fixtures. Nothing produced in test environments goes back into Steam.
 
 ## Game version
-- `vendor/bitburner-src` is a submodule pinned to the commit Steam ships (currently v3.0.1, `1da7316ff`, VersionNumber 51). Treat it as read-only. See ADR 0003 for the patch strategy.
+- `vendor/bitburner-src` is a submodule pinned to the source Steam ships (currently v3.0.1: `1da7316ff`, the same source as Steam's `3162fd2`, VersionNumber 51). Treat it as read-only. See ADR 0003 for the patch strategy.
 - Clone with `git submodule update --init` (shallow is configured).
 - The mechanics docs in `docs/mechanics/` cite `file:line` into this submodule. Verify a claim against the source before depending on it, and back the dependency with a test.
 

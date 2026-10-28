@@ -10,6 +10,8 @@ import {
   getBitNodeLevel,
   getDefaultBitNodeOptions,
 } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
+import { CompanyName } from "../../../../../vendor/bitburner-src/src/Company/Enums";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { save as saveToIndexedDb } from "../../../../../vendor/bitburner-src/src/db";
 import { Engine } from "../../../../../vendor/bitburner-src/src/engine";
@@ -213,6 +215,21 @@ export function joinFactionWithReputation(faction: string, reputation: number) {
 }
 
 /**
+ * Makes the player `job` at `company`, as an application sets it (`Player.jobs`, `applyForJob`), with this reputation
+ * there: a harness edit for test scenarios (#155), not something a player can do. A company the game doesn't have, or
+ * a job it doesn't offer, throws.
+ */
+export function employWithReputation(company: string, job: string, reputation: number) {
+  if (!Object.values(CompanyName).includes(company as CompanyName)) throw new RangeError(`no company ${company}`);
+  const employer = Companies[company as CompanyName];
+  if (![...employer.companyPositions].some((offered) => offered === job)) {
+    throw new RangeError(`${company} offers no job ${job}`);
+  }
+  Player.jobs[company as CompanyName] = job as (typeof Player.jobs)[CompanyName];
+  employer.playerReputation = reputation;
+}
+
+/**
  * Gives the player `augmentation`, installed, as if bought and installed in an earlier run: a harness edit for test
  * scenarios, not something a player can do. Unknown or already installed, it throws.
  */
@@ -232,6 +249,14 @@ export function giveInstalledAugmentation(augmentation: string) {
  */
 export function gainHackingExp(exp: number) {
   Player.gainHackingExp(exp);
+}
+
+/**
+ * Gives the player `exp` charisma experience through the game's own `gainCharismaExp` (`PersonObjects/Person.ts:133`),
+ * which sets the charisma skill from it: a harness edit for test scenarios, not something a player can do (#155).
+ */
+export function gainCharismaExp(exp: number) {
+  Player.gainCharismaExp(exp);
 }
 
 /**

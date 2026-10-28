@@ -282,7 +282,8 @@ function render(status) {
     ...(intentRows.length === 0 ? [element("tr", "None.")] : intentRows),
   );
 
-  // The work the brain manages (#151, #153, #156, #158), and how the Agent last reported it. A gym's stat by name.
+  // The work the brain manages (#151, #153, #156, #158), and how the Agent last reported it, with the latest
+  // promotion it took (#155). A gym's stat by name.
   const { desired, outcome: workOutcome } = status.work;
   const gymStats = { str: "Strength", def: "Defense", dex: "Dexterity", agi: "Agility" };
   const className = (work) =>
@@ -304,7 +305,8 @@ function render(status) {
         (workOutcome === null
           ? "not reported yet"
           : `${workOutcome.converged ? "converged" : "not converged"}${via(workOutcome)}` +
-            (workOutcome.problem === null ? "" : ` (${workOutcome.problem})`));
+            (workOutcome.problem === null ? "" : ` (${workOutcome.problem})`) +
+            (workOutcome.promotion ? `; promoted from ${workOutcome.promotion.from} to ${workOutcome.promotion.to}` : ""));
   document.querySelector("#work div").replaceChildren(element("div", workText, desired === null ? "muted" : "ok"));
 
   const events = document.querySelector("#events table");

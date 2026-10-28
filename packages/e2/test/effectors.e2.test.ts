@@ -623,6 +623,70 @@ test("company work in another city (#153): not converged, saying where the playe
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
 });
 
+/** The Work page's title for a job at Carmichael Security: shown while the player is focused on it. */
+const carmichaelPageShown = (page: Page, title: string) => async () =>
+  (await page.locator("h6", { hasText: `You are currently working as a ${title} at Carmichael Security` }).count()) > 0;
+
+test("a promotion (#155): an IT Intern at Carmichael Security worked from Aevum; not yet at the start, then 10 minutes on, kept focused", async () => {
+  // Hacking 168, and 6,800 of the 7,000 reputation IT Analyst wants there (hacking 100, with the company's offset):
+  // the work earns the rest in about 5 minutes (0.7 a second), after the start's check, before the next.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    city: "Aevum",
+    brainSettings: ONLY_WORK,
+    prepareSave: async (sim) => {
+      await sim.diagnostics.gainHackingExp(1e5);
+      await sim.diagnostics.employWithReputation("Carmichael Security", "IT Intern", 6_800);
+    },
+  });
+  await setWork(ports.dashboardPort, { kind: "company", company: "Carmichael Security", field: "IT" });
+  // The start's check: the Job page's "Apply for IT Analyst Job" is disabled, so the job is as it was, worked from it.
+  await advanceUntil(page, carmichaelPageShown(page, "IT Intern"), {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  const jobs = () => JSON.stringify(latestMedium(dataDirectory)?.player.jobs);
+  await advanceUntil(page, async () => jobs() === '{"Carmichael Security":"IT Intern"}', {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 12_000,
+  });
+
+  // 10 minutes after the first, the next check: the Job page from Aevum, "Apply for IT Analyst Job", its alert
+  // closed by the worker, and the work focused again, under the new title.
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.promotion !== undefined, {
+    realTimeoutMs: 5 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 11 * 60_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({
+    converged: true,
+    problem: null,
+    backend: "ui",
+    promotion: { company: "Carmichael Security", from: "IT Intern", to: "IT Analyst", gameTimeMs: expect.any(Number) },
+  });
+  await advanceUntil(page, carmichaelPageShown(page, "IT Analyst"), {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 4_000,
+  });
+  await advanceUntil(page, async () => jobs() === '{"Carmichael Security":"IT Analyst"}', {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 12_000,
+  });
+  expect(latestMedium(dataDirectory)?.player.city).toBe("Aevum");
+  // The work went on: never restarted ("You finished working for…"), and the dialog watcher never saw the
+  // "Congratulations" alert, so the worker closed it.
+  expect(gameDialogs(dataDirectory).filter((dialog) => /^(Congratulations|You finished)/.test(dialog.text))).toEqual(
+    [],
+  );
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // The brain stored it, once.
+  const promotions = readStore(dataDirectory).events.filter((event) => event.kind === "workPromotion");
+  expect(promotions.map((event) => event.detail)).toMatchObject([{ from: "IT Intern", to: "IT Analyst" }]);
+});
+
 /** The Work page's title while the player is focused on shoplifting, and the overview's header while unfocused. */
 const shopliftingPageShown = (page: Page) => async () =>
   (await page.locator("h6", { hasText: /^You are attempting to shoplift$/ }).count()) > 0;

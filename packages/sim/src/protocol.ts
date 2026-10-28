@@ -434,6 +434,12 @@ export interface HostMethods {
    */
   "diagnostics.joinFactionWithReputation"(params: { faction: string; reputation: number }): void;
   /**
+   * Makes the player `job` (one of the game's titles, offered by `company`) at `company` (one of the game's names), as
+   * an application does, with this reputation there (finite, 0 or more), for test scenarios (#155). A harness edit,
+   * not something a player can do.
+   */
+  "diagnostics.employWithReputation"(params: { company: string; job: string; reputation: number }): void;
+  /**
    * Gives the player an augmentation (one of the game's names, not already installed), installed and unpaid, for test
    * scenarios (#151). A harness edit, not something a player can do.
    */
@@ -443,6 +449,11 @@ export interface HostMethods {
    * skill from it, for test scenarios that need a server's required level (#162). A harness edit.
    */
   "diagnostics.gainHackingExp"(params: { exp: number }): void;
+  /**
+   * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
+   * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.
+   */
+  "diagnostics.gainCharismaExp"(params: { exp: number }): void;
   /**
    * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
    * installed, for test scenarios (#164). A harness edit, not something a player can do.

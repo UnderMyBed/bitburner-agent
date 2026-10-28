@@ -161,3 +161,55 @@ test("a part's events are stored with their time, kind and the rest as detail, u
   ]);
   store.close();
 });
+
+test("a promotion the Agent took (#155): a workPromotion event and a log line, once, after a brain restart too", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const lines: string[] = [];
+  const promotion = { company: "Carmichael Security", from: "IT Intern", to: "IT Analyst", gameTimeMs: 5_000 };
+  /** A brain's run, the Agent connected and sending fast snapshots whose work reports `promotions`, in turn. */
+  const brainRun = (session: string, promotions: unknown[]) => {
+    const channel = new ControlChannel({ token: TOKEN, clock: fixedClock });
+    recordChannelEvents(channel, store, { environment: "E2", brainRelease: "v0.2.0", log: (line) => lines.push(line) });
+    const page = connectionFromTest();
+    channel.accept(page.connection);
+    const message = (type: string, fields: object) =>
+      page.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, type, ...fields } as never));
+    message("hello", {
+      token: TOKEN,
+      deploymentId: "deployment-a",
+      agentSessionId: session,
+      game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+    });
+    for (const [index, each] of promotions.entries()) {
+      message("snapshot", {
+        agentSessionId: session,
+        tier: "fast",
+        sequenceNumber: index + 1,
+        gameTimeMs: 1_000,
+        data: {
+          degradedTiers: [],
+          pageHeapUsedBytes: null,
+          game: null,
+          intents: [],
+          dialogs: { handled: [], blocking: null },
+          work: { converged: true, problem: null, backend: "ui", ...(each === undefined ? {} : { promotion: each }) },
+        },
+      });
+    }
+  };
+  // None, then the same promotion snapshot after snapshot, and one that isn't well-formed.
+  brainRun("session-1", [undefined, promotion, promotion, { ...promotion, to: 7 }]);
+  brainRun("session-2", [promotion, { ...promotion, to: "IT Manager", gameTimeMs: 9_000 }]);
+  const promotions = store.events({ environment: "E2" }).filter((event) => event.kind === "workPromotion");
+  expect(promotions.map((event) => event.detail)).toEqual([
+    promotion,
+    { ...promotion, to: "IT Manager", gameTimeMs: 9_000 },
+  ]);
+  expect(lines).toEqual([
+    "the Agent took a promotion at Carmichael Security: IT Intern to IT Analyst",
+    "the Agent took a promotion at Carmichael Security: IT Intern to IT Manager",
+  ]);
+  store.close();
+});

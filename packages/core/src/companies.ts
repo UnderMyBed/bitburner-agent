@@ -123,5 +123,40 @@ export function holdsJobInField(jobs: Record<string, string | undefined>, compan
   return title !== undefined && jobTitles(field).includes(title);
 }
 
+/**
+ * The jobs of `field` after `title`, in order: what a promotion in the field can bring (#155). Each position's
+ * `nextPosition` is the next of its track (`Company/data/CompanyPositionsMetadata.ts`), but for the last of IT,
+ * Security Engineer and Network Engineer, whose next is Software's Head of Engineering: the game's climb
+ * (`applyForJob`) leaves the field there, and a promotion in the field doesn't. None where `title` isn't one of the
+ * field's, or is its last.
+ */
+export function laterJobs(field: string, title: string | undefined): Job[] {
+  const jobs = (Object.hasOwn(JOB_FIELDS, field) ? JOB_FIELDS[field] : undefined) ?? [];
+  const held = jobs.findIndex((job) => job.title === title);
+  return held === -1 ? [] : jobs.slice(held + 1);
+}
+
+/** A promotion (#155): the title held before, and the later title of the same field after. */
+export interface Promotion {
+  from: string;
+  to: string;
+}
+
+/**
+ * The promotion between two of `getPlayer().jobs` (the title held at each company), at `company` in `field`: a title
+ * of the field before, and a later one after. Null for none: no change, a hire (no title before), or another field.
+ */
+export function promotionBetween(
+  before: Record<string, string | undefined>,
+  after: Record<string, string | undefined>,
+  company: string,
+  field: string,
+): Promotion | null {
+  const from = Object.hasOwn(before, company) ? before[company] : undefined;
+  const to = Object.hasOwn(after, company) ? after[company] : undefined;
+  if (from === undefined || to === undefined) return null;
+  return laterJobs(field, from).some((job) => job.title === to) ? { from, to } : null;
+}
+
 /** The part-time fields: the game gives them full gains unfocused (`Work/CompanyWork.tsx:36`), so focus buys nothing. */
 export const PART_TIME_JOB_FIELDS = ["Part-time Employee", "Part-time Waiter"];

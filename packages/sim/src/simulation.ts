@@ -237,11 +237,16 @@ export class Simulation {
     /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
     joinFactionWithReputation: (faction: string, reputation: number) =>
       this.rpc.call("diagnostics.joinFactionWithReputation", { faction, reputation }),
+    /** Makes the player `job` at `company`, with this reputation there. A harness edit, for test scenarios (#155). */
+    employWithReputation: (company: string, job: string, reputation: number) =>
+      this.rpc.call("diagnostics.employWithReputation", { company, job, reputation }),
     /** Gives the player an augmentation, installed and unpaid. A harness edit, for test scenarios (#151). */
     giveInstalledAugmentation: (augmentation: string) =>
       this.rpc.call("diagnostics.giveInstalledAugmentation", { augmentation }),
     /** Gives the player hacking experience, through the game's own gain. A harness edit, for test scenarios (#162). */
     gainHackingExp: (exp: number) => this.rpc.call("diagnostics.gainHackingExp", { exp }),
+    /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
+    gainCharismaExp: (exp: number) => this.rpc.call("diagnostics.gainCharismaExp", { exp }),
     /** Queues an augmentation, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
     queueAugmentation: (augmentation: string) => this.rpc.call("diagnostics.queueAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */

@@ -60,7 +60,10 @@ export {
   JOB_FIELDS,
   type Job,
   jobTitles,
+  laterJobs,
   PART_TIME_JOB_FIELDS,
+  type Promotion,
+  promotionBetween,
 } from "./companies.ts";
 export {
   type AgentMessage,
@@ -152,7 +155,10 @@ export {
   FACTION_WORK_WORKER_NAME,
   type FactionWorkType,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
+  PROMOTION_CHECK_INTERVAL_MS,
   parseWork,
   type Work,
+  type WorkEffectorReport,
   type WorkOutcome,
+  type WorkPromotion,
 } from "./work.ts";
