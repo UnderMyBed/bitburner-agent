@@ -12,7 +12,16 @@
 // - After a failed backup, the guard must hold on `GUARD_SNAPSHOTS_AFTER_FAILED_BACKUP` before the next is asked for,
 //   so a backup that can't be taken (no Remote File API connection) is tried once a minute, not every 20 s.
 // - Everything here is in memory: a disconnect, a new Agent or a restarted brain starts every gate again, the safe way.
-import { FACTION_ENEMIES, type Intent, isIrreversibleIntent, type MediumSnapshotData } from "@bitburner-agent/core";
+import {
+  FACTION_ENEMIES,
+  type Intent,
+  isIrreversibleIntent,
+  type MediumSnapshotData,
+  resetsTheGame,
+  type StaticSnapshotData,
+  WORLD_DAEMON,
+  worldDaemonProblem,
+} from "@bitburner-agent/core";
 import type { SaveBackupEvent } from "./save-backups.ts";
 
 /** Consecutive medium snapshots an irreversible intent's guard must hold on before its backup (R8). */
@@ -55,24 +64,51 @@ const newGate = (): Gate => ({
 });
 
 /**
- * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2), `queue` being the owner's manual queue.
+ * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2), `queue` being the owner's manual queue and
+ * `staticData` the connected Agent's static snapshot. A snapshot without what a guard reads fails it: the Agent's word,
+ * so never assumed.
  * - Joining a faction: none of its enemies is joined (the game refuses a banned faction then:
- *   `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`). A snapshot without the list of factions joined fails
- *   it: the Agent's word, so never assumed.
- * - Installing augmentations (#164): nothing queued before it is still undone. It resets the game, so what was queued
- *   before it (a purchase, say) was for this game, and goes first. The augmentations queued can't be the guard: no NS
- *   call shows them without Singularity. Done intents leave the queue, so the first one left is the one undone.
+ *   `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`).
+ * - An intent that resets the game, installing augmentations (#164) or destroying the BitNode (#175): nothing queued
+ *   before it is still undone. What was queued before it (a purchase, say) was for this game, and goes first. The
+ *   augmentations queued can't be an install's guard: no NS call shows them without Singularity. Done intents leave
+ *   the queue, so the first one left is the one undone.
+ * - Destroying the BitNode, then: w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`), so it's held before any
+ *   backup. Reachable: among the medium snapshot's servers, which `scan` finds from home only once The Red Pill is
+ *   installed. Root, there too, and the hacking level against its required level, from the static snapshot: 3000 times
+ *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode.
  */
-export function guardFailure(intent: Intent, medium: MediumSnapshotData, queue: Intent[]): string | null {
-  if (intent.action === "installAugmentations") {
+export function guardFailure(
+  intent: Intent,
+  medium: MediumSnapshotData,
+  queue: Intent[],
+  staticData: StaticSnapshotData | null,
+): string | null {
+  if (resetsTheGame(intent)) {
     const first = queue[0];
-    return first === undefined || first.id === intent.id ? null : `${first.id}, queued before it, isn't done`;
+    if (first !== undefined && first.id !== intent.id) return `${first.id}, queued before it, isn't done`;
+    return intent.action === "destroyBitNode" ? worldDaemonGuardFailure(medium, staticData) : null;
   }
   if (intent.action !== "joinFaction") return null;
   const joined = (medium.player as { factions?: unknown } | undefined)?.factions;
   if (!Array.isArray(joined)) return "the medium snapshot has no list of the factions joined";
   const joinedEnemy = (FACTION_ENEMIES[intent.args.faction] ?? []).find((enemy) => joined.includes(enemy));
   return joinedEnemy === undefined ? null : `${intent.args.faction}'s enemy ${joinedEnemy} is joined`;
+}
+
+/** w0r1d_d43m0n's preconditions on the snapshots (#175): `worldDaemonProblem`, or what a snapshot lacks for them. */
+function worldDaemonGuardFailure(medium: MediumSnapshotData, staticData: StaticSnapshotData | null): string | null {
+  const daemon = medium.servers?.find((server) => server.hostname === WORLD_DAEMON);
+  if (daemon === undefined) return worldDaemonProblem(null);
+  const hackingLevel = (medium.player?.skills as { hacking?: unknown } | undefined)?.hacking;
+  if (typeof hackingLevel !== "number") return "the medium snapshot has no hacking level";
+  const requiredHackingLevel = staticData?.servers?.find(
+    (server) => server.hostname === WORLD_DAEMON,
+  )?.requiredHackingSkill;
+  if (typeof requiredHackingLevel !== "number") {
+    return `the static snapshot has no required hacking level for ${WORLD_DAEMON}`;
+  }
+  return worldDaemonProblem({ rooted: daemon.hasAdminRights === true, hackingLevel, requiredHackingLevel });
 }
 
 export class IrreversibleIntentGates {
@@ -112,14 +148,17 @@ export class IrreversibleIntentGates {
     return gate === undefined || gate.stage === "released";
   }
 
-  /** A medium snapshot from the connected Agent: the first gate's guard, its backup, or its release going stale. */
-  mediumSnapshot(medium: MediumSnapshotData, queue: Intent[]): void {
+  /**
+   * A medium snapshot from the connected Agent, with its static one: the first gate's guard, its backup, or its release
+   * going stale.
+   */
+  mediumSnapshot(medium: MediumSnapshotData, queue: Intent[], staticData: StaticSnapshotData | null): void {
     const [first] = this.#gates;
     if (first === undefined) return;
     const [id, gate] = first;
     const intent = queue.find((each) => each.id === id);
     if (intent === undefined) return;
-    gate.guardFailure = guardFailure(intent, medium, queue);
+    gate.guardFailure = guardFailure(intent, medium, queue, staticData);
     if (gate.guardFailure !== null) {
       this.#restart(gate, null);
       return;

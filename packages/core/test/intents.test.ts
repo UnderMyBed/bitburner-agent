@@ -1,4 +1,4 @@
-// Intents (#141): each action's args, the id made from them, and which are irreversible (#147, #164).
+// Intents (#141): each action's args, the id made from them, and which are irreversible (#147, #164, #175).
 
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
@@ -16,6 +16,7 @@ import {
   intentId,
   isIrreversibleIntent,
   parseIntentRequest,
+  resetsTheGame,
 } from "../src/intents.ts";
 
 describe("parseIntentRequest", () => {
@@ -36,6 +37,9 @@ describe("parseIntentRequest", () => {
     ["backdoor", { hostname: "I.I.I.I" }],
     ["backdoor", { hostname: "run4theh111z" }],
     ["installAugmentations", {}],
+    ["destroyBitNode", { nextBitNode: 1 }],
+    ["destroyBitNode", { nextBitNode: 12 }],
+    ["destroyBitNode", { nextBitNode: 15 }],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -106,6 +110,11 @@ describe("parseIntentRequest", () => {
     ["a backdoor on a name that isn't text", { action: "backdoor", args: { hostname: 7 } }],
     ["a backdoor on an IP address", { action: "backdoor", args: { hostname: "10.0.0.1" } }],
     ["a backdoor on w0r1d_d43m0n, which ends the BitNode", { action: "backdoor", args: { hostname: "w0r1d_d43m0n" } }],
+    ["a destroy into BitNode 0", { action: "destroyBitNode", args: { nextBitNode: 0 } }],
+    ["a destroy into BitNode 16", { action: "destroyBitNode", args: { nextBitNode: 16 } }],
+    ["a destroy into BitNode 1.5", { action: "destroyBitNode", args: { nextBitNode: 1.5 } }],
+    ["a destroy into BitNode '2'", { action: "destroyBitNode", args: { nextBitNode: "2" } }],
+    ["a destroy into no BitNode", { action: "destroyBitNode", args: {} }],
   ])("refuses %s, with a reason", (_description, request) => {
     const parsed = parseIntentRequest(request);
     expect(parsed.ok).toBe(false);
@@ -130,6 +139,7 @@ test("an intent's id is its action and args, in the args' fixed order", () => {
   expect(intentId("backdoor", { hostname: "CSEC" })).toBe("backdoor(CSEC)");
   // An install has no args (#164): one id, whatever was queued.
   expect(intentId("installAugmentations", {})).toBe("installAugmentations()");
+  expect(intentId("destroyBitNode", { nextBitNode: 2 })).toBe("destroyBitNode(2)");
   const reordered = parseIntentRequest({ action: "upgradeHomeRam", args: { vendor: "CompuTek", fromRam: 8 } });
   expect(reordered.ok && reordered.message.id).toBe("upgradeHomeRam(8, CompuTek)");
 });
@@ -154,6 +164,19 @@ describe("isIrreversibleIntent", () => {
 
   test("installing augmentations is irreversible: it resets the game (#164)", () => {
     expect(isIrreversibleIntent(intent({ action: "installAugmentations", args: {} }))).toBe(true);
+  });
+
+  test("destroying the BitNode is irreversible, into any BitNode (#175)", () => {
+    for (const nextBitNode of [1, 2, 12]) {
+      expect(isIrreversibleIntent(intent({ action: "destroyBitNode", args: { nextBitNode } }))).toBe(true);
+    }
+  });
+
+  test("an install and a destroy reset the game; nothing else does (#164, #175)", () => {
+    expect(resetsTheGame(intent({ action: "installAugmentations", args: {} }))).toBe(true);
+    expect(resetsTheGame(intent({ action: "destroyBitNode", args: { nextBitNode: 2 } }))).toBe(true);
+    expect(resetsTheGame(intent({ action: "joinFaction", args: { faction: "Sector-12" } }))).toBe(false);
+    expect(resetsTheGame(intent({ action: "backdoor", args: { hostname: "CSEC" } }))).toBe(false);
   });
 
   test("nothing else so far is irreversible", () => {

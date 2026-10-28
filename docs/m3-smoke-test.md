@@ -6,7 +6,7 @@ One run-through of M3's effectors on your own game on Steam, in an order an earl
 
 **For each step:** do what it says, and check you see what it describes. If it holds, close the issue named. If it doesn't, comment on that issue with what you saw and leave it open. Times are approximate: the Agent looks about every 30 s.
 
-**Excluded: destroying a BitNode.** BN1's red pill isn't reachable early on. A destroy can't be tried on a copy and brought back, since saves never flow back to Steam. Destroying a BitNode is slice 11b, not built yet; its tests will cover it.
+**Excluded: destroying a BitNode.** BN1's red pill isn't reachable early on. A destroy can't be tried on a copy and brought back, since saves never flow back to Steam. Destroying a BitNode is slice 11b (#175): its simulator suite covers it, and through the page E2 will (11b-2). It stays out of this checklist.
 
 ## Before you start
 

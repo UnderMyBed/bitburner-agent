@@ -553,6 +553,15 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     return { controller, connection, sentIds, medium, waitingFor, release, ...backups };
   }
 
+  /** A new brain on the same store (and so the same queue): its own channel and controller, with stand-in backups. */
+  function restartedBrain() {
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    const backups = standInBackups();
+    const restarted = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+    return { restarted, ...backups };
+  }
+
   test("a reversible intent goes out at once; an irreversible one waits, its view saying for what", () => {
     const { controller, sentIds, waitingFor } = connectedWithLoopOff();
     controller.addManualIntent({ action: "joinFaction", args: { faction: "CyberSec" } });
@@ -813,20 +822,31 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(readManualIntents(store)).toEqual([]);
     });
 
-    test("a brain restarted mid-install doesn't know it was sent: gated again, it's done on the Agent's word", async () => {
+    test("a brain restarted mid-install knows it was sent (#175: the note is in the store): the reset takes it off, no second gate", async () => {
       const { controller, connection, release } = connectedWithLoopOff();
       send(connection, "slow", slowAt(1_000));
       controller.addManualIntent({ action: "installAugmentations", args: {} });
       await release();
       connection.dropFromGameSide();
-      // A new brain: its own channel and controller, the store (and so the queue) kept.
-      channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
-      channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
-      const backups = standInBackups();
-      const restarted = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+      const { restarted, backupNow } = restartedBrain();
       const again = connectAgent("session-2");
       send(again, "static", network, "session-2");
+      expect(restarted.intentsView()).toMatchObject([{ id: INSTALL.id, waitingFor: counting(0) }]);
       send(again, "slow", slowAt(90_000), "session-2");
+      expect(restarted.intentsView()).toEqual([]);
+      expect(backupNow).not.toHaveBeenCalled();
+    });
+
+    test("a brain restarted before the install: the same game's slow snapshot keeps it, gated again", async () => {
+      const { controller, connection, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_000));
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      await release();
+      connection.dropFromGameSide();
+      const { restarted } = restartedBrain();
+      const again = connectAgent("session-2");
+      send(again, "static", network, "session-2");
+      send(again, "slow", slowAt(1_000), "session-2");
       expect(restarted.intentsView()).toMatchObject([{ id: INSTALL.id, waitingFor: counting(0) }]);
       // The Agent checks the game first: nothing left to install is done.
       reportedDone(again, INSTALL.id, "session-2");
@@ -843,6 +863,155 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([]);
       send(connection, "slow", slowAt(90_000));
       expect(controller.intentsView().map((view) => view.id)).toEqual([INSTALL.id]);
+    });
+  });
+
+  describe("destroying the BitNode (#175)", () => {
+    const DESTROY = intent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+    const AEVUM = intent({ action: "travel", args: { city: "Aevum" } });
+    const VOLHAVEN = intent({ action: "travel", args: { city: "Volhaven" } });
+    const AFTER_DESTROY = "waiting for destroyBitNode(2) first: queued after a destroy, it's for the next BitNode";
+    const WD = "w0r1d_d43m0n";
+    /** The static snapshot once The Red Pill is installed: w0r1d_d43m0n among the servers, needing `required`. */
+    const staticWithDaemon = (required = 3000): StaticSnapshotData => ({
+      servers: [...network.servers, staticServer(WD, { requiredHackingSkill: required, numOpenPortsRequired: 5 })],
+    });
+    const slowAt = (lastAugReset: number, lastNodeReset: number) => ({
+      ...slowData(),
+      resetInfo: { ...slowData().resetInfo, lastAugReset, lastNodeReset },
+    });
+
+    /** Connected as above, with w0r1d_d43m0n in the static snapshot, and the game's last resets at 1,000. */
+    function readyToDestroy() {
+      const connected = connectedWithLoopOff();
+      send(connected.connection, "static", staticWithDaemon());
+      send(connected.connection, "slow", slowAt(1_000, 1_000));
+      /** A medium snapshot at `hacking`, with w0r1d_d43m0n reachable and rooted, unless said. */
+      const daemonMedium = (hacking = 3000, { reachable = true, rooted = true } = {}) =>
+        send(connected.connection, "medium", mediumData(hacking, reachable ? { [WD]: rooted } : {}));
+      const releaseDestroy = async () => {
+        daemonMedium();
+        daemonMedium();
+        await connected.settleBackup(SAVED);
+      };
+      return { ...connected, daemonMedium, releaseDestroy };
+    }
+
+    test("its guard: what's queued before it first, then w0r1d_d43m0n's preconditions, each saying why, before any backup", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, daemonMedium, releaseDestroy } = readyToDestroy();
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(VOLHAVEN.id)).toBe(AFTER_DESTROY);
+      daemonMedium();
+      expect(waitingFor(DESTROY.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+      send(connection, "fast", {
+        degradedTiers: [],
+        pageHeapUsedBytes: null,
+        game: null,
+        intents: [{ id: AEVUM.id, done: true, tries: 1, problem: null, backend: "sim" }],
+      });
+      daemonMedium(3000, { reachable: false });
+      expect(waitingFor(DESTROY.id)).toBe("held: w0r1d_d43m0n isn't reachable: The Red Pill isn't installed");
+      daemonMedium(3000, { rooted: false });
+      expect(waitingFor(DESTROY.id)).toBe("held: no root access on w0r1d_d43m0n (NUKE.exe first)");
+      daemonMedium(2999);
+      expect(waitingFor(DESTROY.id)).toBe("held: hacking level 2999: w0r1d_d43m0n needs 3000");
+      expect(backupNow).not.toHaveBeenCalled();
+      expect(sentIds()).toEqual([]);
+      await releaseDestroy();
+      expect(sentIds()).toEqual([DESTROY.id]);
+      expect(waitingFor(VOLHAVEN.id)).toBe(AFTER_DESTROY);
+      // Once out, still judged: the level short again (an augmentation's multiplier gone), it's withdrawn.
+      daemonMedium(10);
+      expect(sentIds()).toEqual([]);
+    });
+
+    test("the level is the BitNode's: the static snapshot's required hacking, and fails closed without it", () => {
+      const { controller, connection, waitingFor, backupNow, daemonMedium } = readyToDestroy();
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      // BN2's w0r1d_d43m0n needs 5 × 3000 (`WorldDaemonDifficulty`).
+      send(connection, "static", staticWithDaemon(15_000));
+      daemonMedium(14_999);
+      expect(waitingFor(DESTROY.id)).toBe("held: hacking level 14999: w0r1d_d43m0n needs 15000");
+      send(connection, "static", network);
+      daemonMedium();
+      expect(waitingFor(DESTROY.id)).toBe("held: the static snapshot has no required hacking level for w0r1d_d43m0n");
+      send(connection, "static", staticWithDaemon());
+      send(connection, "medium", { ...mediumData(3000, { [WD]: true }), player: { money: 0 } });
+      expect(waitingFor(DESTROY.id)).toBe("held: the medium snapshot has no hacking level");
+      expect(backupNow).not.toHaveBeenCalled();
+    });
+
+    test("sent, then the next BitNode: the next Agent's slow snapshot with another lastNodeReset takes it off, and what's after it goes", async () => {
+      const { controller, connection, sentIds, backupNow, releaseDestroy } = readyToDestroy();
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
+      await releaseDestroy();
+      expect(sentIds()).toEqual([DESTROY.id]);
+      // An install alone moves only lastAugReset: not a destroy.
+      send(connection, "slow", slowAt(5_000, 1_000));
+      expect(sentIds()).toEqual([DESTROY.id]);
+      connection.dropFromGameSide();
+      const again = connectAgent("session-2");
+      send(again, "static", network, "session-2");
+      send(again, "slow", slowAt(90_000, 90_000), "session-2");
+      expect(readManualIntents(store).map((each) => each.id)).toEqual([VOLHAVEN.id]);
+      expect(
+        desiredStates(again)
+          .at(-1)
+          ?.intents.map((each) => each.id),
+      ).toEqual([VOLHAVEN.id]);
+      expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("a brain restarted mid-destroy knows it was sent: the next BitNode's slow snapshot takes it off, never gated there", async () => {
+      const { controller, connection, releaseDestroy } = readyToDestroy();
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      await releaseDestroy();
+      connection.dropFromGameSide();
+      const { restarted, backupNow } = restartedBrain();
+      const again = connectAgent("session-2");
+      send(again, "static", network, "session-2");
+      send(again, "slow", slowAt(90_000, 90_000), "session-2");
+      expect(restarted.intentsView()).toEqual([]);
+      expect(readManualIntents(store)).toEqual([]);
+      expect(backupNow).not.toHaveBeenCalled();
+    });
+
+    test("an install queued after a destroy waits for it; the destroy's note is its own, and the install's comes after", async () => {
+      const { controller, connection, sentIds, waitingFor, releaseDestroy, release } = readyToDestroy();
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      expect(waitingFor("installAugmentations()")).toBe(AFTER_DESTROY);
+      await releaseDestroy();
+      expect(sentIds()).toEqual([DESTROY.id]);
+      send(connection, "slow", slowAt(90_000, 90_000));
+      expect(readManualIntents(store).map((each) => each.id)).toEqual(["installAugmentations()"]);
+      // The install now goes past its own gate, and is done on its own reset: lastAugReset.
+      await release();
+      expect(sentIds()).toEqual(["installAugmentations()"]);
+      send(connection, "slow", slowAt(90_000, 90_000));
+      expect(sentIds()).toEqual(["installAugmentations()"]);
+      send(connection, "slow", slowAt(120_000, 90_000));
+      expect(readManualIntents(store)).toEqual([]);
+    });
+
+    test("cancelled once sent, it's forgotten, in the store too: queued again, a reset seen before it's sent doesn't count", async () => {
+      const { controller, connection, releaseDestroy } = readyToDestroy();
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      await releaseDestroy();
+      expect(controller.cancelManualIntent(DESTROY.id)).toBe(true);
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      send(connection, "slow", slowAt(90_000, 90_000));
+      expect(controller.intentsView().map((view) => view.id)).toEqual([DESTROY.id]);
+      // Nor after a restart.
+      connection.dropFromGameSide();
+      const { restarted } = restartedBrain();
+      const again = connectAgent("session-2");
+      send(again, "slow", slowAt(120_000, 120_000), "session-2");
+      expect(restarted.intentsView().map((view) => view.id)).toEqual([DESTROY.id]);
     });
   });
 });

@@ -2,8 +2,8 @@
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue. Irreversible
 // intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
-// brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) holds back what's queued after it, and
-// leaves the queue once a slow snapshot shows the game reset.
+// brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
+// back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
@@ -15,13 +15,20 @@ import {
   MAX_INTENTS,
   type MediumSnapshotData,
   parseIntentRequest,
+  resetsTheGame,
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
-import { readManualIntents, writeManualIntents } from "./manual-intents.ts";
+import {
+  type ResetSentNote,
+  readManualIntents,
+  readResetSentNote,
+  writeManualIntents,
+  writeResetSentNote,
+} from "./manual-intents.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -85,8 +92,8 @@ export interface IntentView {
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
-   * Why an irreversible intent (#147), or one queued after an install (#164), isn't sent yet, to follow "not sent: ",
-   * or null once it's sent, or for any other.
+   * Why an irreversible intent (#147), or one queued after an install (#164) or a destroy (#175), isn't sent yet, to
+   * follow "not sent: ", or null once it's sent, or for any other.
    */
   waitingFor: string | null;
 }
@@ -111,15 +118,19 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
  *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
  *   intents after it go on without it: a held join doesn't hold up a travel queued later.
- * - An install of augmentations (#164) is the exception: what's queued after it waits until it's done, since it was
- *   queued for the game after the reset. Its own guard is that nothing queued before it is undone.
- * - An install's done check: the connected Agent's `lastAugReset` (the slow snapshot) is noted when the install is
- *   sent, and another one shows the game reset: it leaves the queue at once, not gated and backed up again for the new
- *   game. Another, not a later one: the game sets it from the clock
- *   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:122-126`), which can be set back (#167: E2's page clock is).
- *   It moves only with a reset or another save loaded; either way the install is dropped, the safe direction for an
- *   irreversible intent. The note outlives a disconnect (the install kills the Agent), not a restart of the brain:
- *   then the Agent's own check, nothing left to install, says it's done.
+ * - An intent that resets the game (core's `resetsTheGame`: an install of augmentations, #164, or a destroy of the
+ *   BitNode, #175) is the exception: what's queued after it waits until it's done, since it was queued for the game
+ *   after the reset. Its own guard is that nothing queued before it is undone (and, for a destroy, w0r1d_d43m0n's
+ *   preconditions).
+ * - Its done check: the connected Agent's reset time (the slow snapshot's `lastAugReset` for an install,
+ *   `lastNodeReset` for a destroy, which an install doesn't move) is noted when it's sent, and another one shows the
+ *   game reset: it leaves the queue at once, not gated and backed up again for the new game. Another, not a later one:
+ *   the game sets them from the clock (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:122-126`, `:173`), which
+ *   can be set back (#167: E2's page clock is). They move only with a reset or another save loaded; either way the
+ *   intent is dropped, the safe direction for an irreversible one.
+ * - The note is kept in the store (#175): it outlives a disconnect (the reset kills the Agent) and a restart of the
+ *   brain. A destroy can't be seen done in the game (another can follow): a brain that forgot it sent one would gate
+ *   it again in the next BitNode, and destroy that too once its requirements were met.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -140,8 +151,8 @@ export class DesiredStateController {
   #waitingFor: { programs: string | null; homeRam: string | null } = { programs: null, homeRam: null };
   /** Each irreversible intent queued and not yet done (none goes out with a brain that takes no save backups). */
   readonly #gates: IrreversibleIntentGates;
-  /** The connected Agent's `lastAugReset` when an install was sent, while one is queued, or null (#164). */
-  #installSentAtReset: number | null = null;
+  /** The reset time when the first intent that resets the game was sent, while it's queued, or null (#164, #175). */
+  #resetSent: ResetSentNote | null;
 
   constructor({
     channel,
@@ -154,6 +165,7 @@ export class DesiredStateController {
   }) {
     this.#channel = channel;
     this.#store = store;
+    this.#resetSent = readResetSentNote(store);
     this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
@@ -172,10 +184,10 @@ export class DesiredStateController {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
-        this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store));
+        this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
-        this.#dropInstallOnceReset();
+        this.#dropResetIntentOnceReset();
       } else {
         return;
       }
@@ -269,8 +281,8 @@ export class DesiredStateController {
       ...view,
       outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null,
       waitingFor:
-        view.source === "manual" && afterInstall(manual, index)
-          ? `waiting for ${INSTALL_ID} first: queued after an install, it's for the game after the reset`
+        view.source === "manual" && afterReset(manual, index)
+          ? waitingForReset(manual.find(resetsTheGame) as Intent)
           : this.#gates.waitingFor(view.id),
     }));
   }
@@ -378,18 +390,27 @@ export class DesiredStateController {
   }
 
   /**
-   * A slow snapshot showing the game reset since the install was sent (#164): the install is done, and leaves the
-   * queue. `lastAugReset` moves only with a reset, which empties the game's queue of augmentations, or another save
-   * loaded. Any other value counts, not just a later one: it comes from the clock, which can be set back (#167).
+   * A slow snapshot showing the game reset since the intent that resets it was sent (#164, #175): it's done, and leaves
+   * the queue. Its reset time moves only with a reset or another save loaded. Any other value counts, not just a later
+   * one: it comes from the clock, which can be set back (#167).
    */
-  #dropInstallOnceReset(): void {
-    const lastAugReset = lastAugResetOf(this.#slowData);
-    if (this.#installSentAtReset === null || lastAugReset === null || lastAugReset === this.#installSentAtReset) return;
-    this.#installSentAtReset = null;
+  #dropResetIntentOnceReset(): void {
+    const sent = this.#resetSent;
+    if (sent === null) return;
+    const resetAt = resetTimeOf(this.#slowData, sent.field);
+    if (resetAt === null || resetAt === sent.resetAt) return;
+    this.#noteResetSent(null);
     writeManualIntents(
       this.#store,
-      readManualIntents(this.#store).filter((each) => each.id !== INSTALL_ID),
+      readManualIntents(this.#store).filter((each) => each.id !== sent.id),
     );
+  }
+
+  /** The note, here and in the store, written only when it changes. */
+  #noteResetSent(note: ResetSentNote | null): void {
+    if (JSON.stringify(note) === JSON.stringify(this.#resetSent)) return;
+    this.#resetSent = note;
+    writeResetSentNote(this.#store, note);
   }
 
   /** Takes off the manual queue what the connected Agent reports done; whether it took any. */
@@ -411,10 +432,10 @@ export class DesiredStateController {
     this.#purchase = this.#choosePurchase();
     // The manual queue first; the purchase only if the owner hasn't queued the same.
     const manual = readManualIntents(this.#store);
-    // An irreversible intent goes only once its gate lets it, and nothing queued after an install before it's done.
+    // An irreversible intent goes once its gate lets it, and nothing queued after a reset's intent before it's done.
     this.#gates.sync(manual);
     const intents = [
-      ...manual.filter((each, index) => !afterInstall(manual, index) && this.#gates.isReleased(each.id)),
+      ...manual.filter((each, index) => !afterReset(manual, index) && this.#gates.isReleased(each.id)),
       ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
     ];
     // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says
@@ -438,26 +459,44 @@ export class DesiredStateController {
       };
     }
     this.#channel.setDesiredState(this.#desired);
-    // The install's done check: the reset as of its sending, noted once (#164).
-    if (!manual.some((each) => each.id === INSTALL_ID)) {
-      this.#installSentAtReset = null;
-    } else if (this.#installSentAtReset === null && this.#desired?.intents.some((each) => each.id === INSTALL_ID)) {
-      this.#installSentAtReset = lastAugResetOf(this.#slowData);
+    // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).
+    // Only the first can be out: what's after it waits.
+    const reset = manual.find(resetsTheGame);
+    if (reset === undefined || (this.#resetSent !== null && this.#resetSent.id !== reset.id)) {
+      this.#noteResetSent(null);
+    }
+    if (
+      reset !== undefined &&
+      this.#resetSent === null &&
+      this.#desired?.intents.some((each) => each.id === reset.id)
+    ) {
+      const field = resetFieldOf(reset);
+      const resetAt = resetTimeOf(this.#slowData, field);
+      if (resetAt !== null) this.#noteResetSent({ id: reset.id, field, resetAt });
     }
   }
 }
 
-/** An install's id: it has no args, so there's one (#164). */
-const INSTALL_ID = intentId("installAugmentations", {});
-
-/** Whether the manual queue's intent at `index` comes after an install, so waits for it (#164). */
-function afterInstall(queue: Intent[], index: number): boolean {
-  const installAt = queue.findIndex((each) => each.id === INSTALL_ID);
-  return installAt !== -1 && index > installAt;
+/** Whether the manual queue's intent at `index` comes after one that resets the game, so waits for it (#164, #175). */
+function afterReset(queue: Intent[], index: number): boolean {
+  const resetAt = queue.findIndex(resetsTheGame);
+  return resetAt !== -1 && index > resetAt;
 }
 
-/** The slow snapshot's `lastAugReset`, or null if it hasn't one: the Agent's word, so checked. */
-function lastAugResetOf(slow: SlowSnapshotData | null): number | null {
-  const lastAugReset = (slow?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
-  return typeof lastAugReset === "number" && Number.isFinite(lastAugReset) ? lastAugReset : null;
+/** What an intent queued after `reset` waits for, to follow "not sent: ". */
+function waitingForReset(reset: Intent): string {
+  return reset.action === "destroyBitNode"
+    ? `waiting for ${reset.id} first: queued after a destroy, it's for the next BitNode`
+    : `waiting for ${reset.id} first: queued after an install, it's for the game after the reset`;
+}
+
+/** The reset time that moves when `reset` is done: a destroy's `lastNodeReset`, which an install leaves alone. */
+function resetFieldOf(reset: Intent): ResetSentNote["field"] {
+  return reset.action === "destroyBitNode" ? "lastNodeReset" : "lastAugReset";
+}
+
+/** The slow snapshot's reset time `field`, or null if it hasn't one: the Agent's word, so checked. */
+function resetTimeOf(slow: SlowSnapshotData | null, field: ResetSentNote["field"]): number | null {
+  const resetAt = (slow?.resetInfo as Record<string, unknown> | undefined)?.[field];
+  return typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : null;
 }
