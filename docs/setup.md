@@ -57,7 +57,7 @@ An `agentSilent` alert is expected until step 4.4.
 
 ## 4. Set the game up
 
-1. **A brand-new save:** click "Exit Tutorial" first. (From M3 the agent will do this itself, architecture §5.7.)
+1. **A brand-new save:** click "Exit Tutorial" first, in the tutorial's panel. While the tutorial runs, the game's terminal runs only the tutorial's commands, so step 4's `run agent/boot.js` would be refused, and the agent can't end it for you ([architecture §5.7](architecture.md#57-bootstrap-and-restart-c5)).
 2. **Options → Remote API:**
    - Hostname `127.0.0.1` (not the default `localhost`: the brain listens on 127.0.0.1 only);
    - Port `12525`;

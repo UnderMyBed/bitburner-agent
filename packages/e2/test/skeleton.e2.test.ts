@@ -135,6 +135,28 @@ function expectEveryTierInNumber(rows: StoredRows, session: string, spanMs: numb
   }
 }
 
+/** Options → Remote API, as the owner sets it (docs/setup.md 4.2): the brain's address and port, a delay, Connect. */
+async function connectRemoteApi(page: Page, ports: BrainPorts): Promise<void> {
+  await page.getByText("Options", { exact: true }).click();
+  await page.getByText("Remote API", { exact: true }).click();
+  const remoteApiField = (label: string) => page.locator(".MuiTextField-root", { hasText: label }).locator("input");
+  await remoteApiField("Hostname:").fill("127.0.0.1");
+  await remoteApiField("Port:").fill(String(ports.remoteFileApiPort));
+  await remoteApiField("Reconnection delay:").fill("5");
+  await page.getByRole("button", { name: "Connect" }).click();
+}
+
+/** Options → System: autoexec `agent/boot.js`, as the owner sets it (docs/setup.md 4.3). Options must be open. */
+async function setAutoexecBoot(page: Page): Promise<void> {
+  await page.getByText("System", { exact: true }).click();
+  // Its label is a paragraph just before the field, not a <label>.
+  const autoexecField = page
+    .getByText("Autoexec Script + Args", { exact: true })
+    .locator("xpath=following-sibling::div[1]//input");
+  await autoexecField.fill(BOOT_SCRIPT);
+  await expect(autoexecField.inputValue()).resolves.toBe(BOOT_SCRIPT);
+}
+
 /** Moves game time on until the brain has stored a full snapshot for the newest session. */
 function untilFullSnapshot(page: Page, dataDirectory: string) {
   return advanceUntil(
@@ -274,27 +296,55 @@ describe("the skeleton on E2", () => {
     }
   });
 
+  test("a fresh save's tutorial: the terminal refuses the deployed boot.js while it runs, and a reload ends it for autoexec", async () => {
+    // Why the Agent can't end the tutorial (#168): it can't run while the tutorial does. The terminal refuses all but
+    // the tutorial's commands (vendor/bitburner-src/src/Terminal/Terminal.ts:713-856), and autoexec runs only on a load
+    // (NetscriptWorker.ts:252-256, engine.tsx:277), which never brings the tutorial back: it isn't in the save.
+    const { dataDirectory, ports } = await newTestBrain();
+    const page = await freshGame(e2.browser, e2.server);
+    startedInThisTest.pages.push(page);
+    const exitButton = page.getByRole("button", { name: "Exit Tutorial" });
+    await expect(exitButton.count()).resolves.toBe(1);
+    // The options, set with the tutorial running: the brain deploys boot.js onto home.
+    await connectRemoteApi(page, ports);
+    await untilEventCount(page, dataDirectory, "deployed", 1);
+    await setAutoexecBoot(page);
+    await page.getByText("Terminal", { exact: true }).click();
+    const terminalLengthBeforeRun = (await terminalText(page)).length;
+    await typeCommand(page, `run ${BOOT_SCRIPT}`);
+    await advanceUntil(
+      page,
+      async () =>
+        (await terminalText(page))
+          .slice(terminalLengthBeforeRun)
+          .includes("Please follow the tutorial or click 'Exit Tutorial' if you'd like to skip it"),
+      { realTimeoutMs: 10_000 },
+    );
+    // Refused: no Agent starts.
+    await advanceGameTime(page, 30_000);
+    expect(storeContents(dataDirectory).count("agentConnected")).toBe(0);
+    await expect(exitButton.count()).resolves.toBe(1);
+    // Saved with the tutorial running, and reloaded: the tutorial is gone, and autoexec starts the Agent.
+    await advanceUntil(page, async () => (await page.getByText("Game Saved!").count()) > 0, {
+      realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+      gameTimeoutMs: AUTOSAVE_GAME_TIMEOUT_MS,
+    });
+    await page.reload();
+    await waitForTerminal(page);
+    await untilEventCount(page, dataDirectory, "agentConnected", 1);
+    await expect(exitButton.count()).resolves.toBe(0);
+  });
+
   test("8 GB fresh start: options set in the UI, the first boot typed; every tier arrives within the Agent plus one worker", async () => {
     const { dataDirectory, ports, brain } = await newTestBrain();
     const page = await freshGame(e2.browser, e2.server);
     startedInThisTest.pages.push(page);
+    // As the owner does (docs/setup.md, section 4). The tutorial first: while it runs, the terminal won't run boot.js
+    // (the test above), so the Agent can't end it (#168).
     await exitTutorial(page);
-    // As the owner does (docs/setup.md, section 4): Options → Remote API, Connect; Options → System, autoexec.
-    await page.getByText("Options", { exact: true }).click();
-    await page.getByText("Remote API", { exact: true }).click();
-    const remoteApiField = (label: string) => page.locator(".MuiTextField-root", { hasText: label }).locator("input");
-    await remoteApiField("Hostname:").fill("127.0.0.1");
-    await remoteApiField("Port:").fill(String(ports.remoteFileApiPort));
-    await remoteApiField("Reconnection delay:").fill("5");
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectRemoteApi(page, ports);
     await untilEventCount(page, dataDirectory, "deployed", 1);
-    await page.getByText("System", { exact: true }).click();
-    // Its label is a paragraph just before the field, not a <label>.
-    const autoexecField = page
-      .getByText("Autoexec Script + Args", { exact: true })
-      .locator("xpath=following-sibling::div[1]//input");
-    await autoexecField.fill(BOOT_SCRIPT);
-    await expect(autoexecField.inputValue()).resolves.toBe(BOOT_SCRIPT);
+    await setAutoexecBoot(page);
     await page.getByText("Terminal", { exact: true }).click();
     await typeCommand(page, `run ${BOOT_SCRIPT}`);
     await untilEventCount(page, dataDirectory, "agentConnected", 1);
