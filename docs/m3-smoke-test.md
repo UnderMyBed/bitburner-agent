@@ -10,7 +10,7 @@ One run-through of M3's effectors on your own game on Steam, in an order an earl
 
 ## Before you start
 
-- **The code:** M3's candidate commit, `fa9c5dc` (recorded on [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140)), or `main`. Follow [setup](setup.md) steps 1 to 5, or [upgrade](setup.md#upgrading-to-a-new-release) a clone you already have. On a brand-new save, step 0 below happens inside setup step 4.
+- **The code:** `main` at or after [#183](https://github.com/UnderMyBed/bitburner-agent/pull/183)'s merge, which step 15 needs: M3's candidate commit, recorded on [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140) and in [#181](https://github.com/UnderMyBed/bitburner-agent/pull/181). Follow [setup](setup.md) steps 1 to 5, or [upgrade](setup.md#upgrading-to-a-new-release) a clone you already have. On a brand-new save, step 0 below happens inside setup step 4.
 - **Your save.** Never reset or edit your real save for this.
   - **Export it first** (Options → Export), and know that the brain's own backups are in `.data/saves/E0/` ([restoring one](../packages/brain/README.md#save-backups)).
   - **Step 16 installs every augmentation you've bought, and resets the run.** That wipes your money, your faction and company reputation (some of it becomes favor), your jobs, TOR and the programs, and every server but home, `pserv-0` included (`Prestige.ts:69-80`). On a save mid-run, do step 16 only when you'd install anyway.
@@ -188,7 +188,7 @@ Close #167 and #164 if that holds, and say on #36 that Q5's answer holds on Stea
 
 ## Decisions
 
-The owner answered these on 2026-10-28, keeping each as built ([owner decisions](decisions/owner-decisions.md) 38 to 42).
+The owner answered these on 2026-10-28, keeping each as built ([owner decisions](decisions/owner-decisions.md) 38 to 42), and gave 44 before it was built.
 
 - **[#158](https://github.com/UnderMyBed/bitburner-agent/issues/158), the class money guard** (decision 38, [PR #163](https://github.com/UnderMyBed/bitburner-agent/pull/163)): a paid class starts only with 10 minutes of its cost in hand ($72,000 for Iron Gym), since the game would let the money go negative. One under way is left alone.
 - **[#160](https://github.com/UnderMyBed/bitburner-agent/issues/160), safe mode** (decision 39, [PR #165](https://github.com/UnderMyBed/bitburner-agent/pull/165)):
@@ -198,5 +198,5 @@ The owner answered these on 2026-10-28, keeping each as built ([owner decisions]
   4. a holding brain's state passes `ttlMs` on, so the Agent keeps it in safe mode too.
 - **[#168](https://github.com/UnderMyBed/bitburner-agent/issues/168), no tutorial page check** (decision 40, [PR #170](https://github.com/UnderMyBed/bitburner-agent/pull/170)): the tutorial stays your one click on a new game, and the Agent doesn't check the page for it. It can only run during the tutorial after your own Options → "Reset tutorial".
 - **[#153](https://github.com/UnderMyBed/bitburner-agent/issues/153), part-time work unfocused** (decision 41, [PR #154](https://github.com/UnderMyBed/bitburner-agent/pull/154)): part-time jobs are worked unfocused, as classes are, since focus gains them nothing (`Work/CompanyWork.tsx:36`). It's the exception to decision 37.
-- **[#155](https://github.com/UnderMyBed/bitburner-agent/issues/155), promotions** (decision 44, given before it was built, on Claude's recommendation): the Agent takes any promotion the game offers in the field of the company work, and the planner will choose the company and field, not the title. No travel: the Job page works from any city (step 15).
 - **[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162), the backdoor** (decision 42, [PR #171](https://github.com/UnderMyBed/bitburner-agent/pull/171)): the terminal is sent `home` after a backdoor, even if you'd connected elsewhere first. A backdoor longer than about 2 minutes raises the "intent stuck" alert until it's done, as would a purchase held behind it.
+- **[#155](https://github.com/UnderMyBed/bitburner-agent/issues/155), promotions** (decision 44, on Claude's recommendation): the Agent takes any promotion the game offers in the field of the company work, and the planner will choose the company and field, not the title. No travel: the Job page works from any city (step 15).

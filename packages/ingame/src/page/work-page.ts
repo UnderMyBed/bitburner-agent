@@ -166,7 +166,7 @@ async function startCompanyWork(
   if (holdsJobInField(jobs, company, field)) {
     return (
       (await gamePage.openSidebarPage("Job")) ??
-      (await gamePage.clickWhenThere(jobPageWorkXpath(company, jobs), noJobPageWork(company)))
+      (await gamePage.clickWhenThere(jobPageWorkXpath(company, jobs), jobPageWorkName(company)))
     );
   }
   const opened = await gamePage.openCityLocation(company);
@@ -196,8 +196,11 @@ async function startCompanyWork(
 const jobPageWorkXpath = (company: string, jobs: Record<string, string>) =>
   `(//button[normalize-space()='Work'])[${Object.keys(jobs).indexOf(company) + 1}]`;
 
-/** What a promotion check says when the company's block on the Job page shows no "Work". */
-const noJobPageWork = (company: string) => `"Work" for ${company} on the Job page`;
+/**
+ * The Job page's "Work" for `company`, as the steps name it: what's clicked to work the job held, and what's missing
+ * ("no …") when a promotion check or that click finds no block for the company.
+ */
+const jobPageWorkName = (company: string) => `"Work" for ${company} on the Job page`;
 
 /**
  * A promotion check (#155, owner decision 44), with a job in the field held at the company: the sidebar's Job page,
@@ -221,7 +224,7 @@ async function promoteOnPage(
   const opened = await gamePage.openSidebarPage("Job");
   if (opened !== null) return opened;
   const work = jobPageWorkXpath(company, jobs);
-  if ((await gamePage.findWhenThere(work)) === null) return `no ${noJobPageWork(company)}`;
+  if ((await gamePage.findWhenThere(work)) === null) return `no ${jobPageWorkName(company)}`;
   const texts = [...new Set(later.map((job) => job.applyText))];
   const apply = gamePage.findElementNow(
     `${work}/ancestor::div[h4][1]//button[${texts.map((text) => `normalize-space()=${xpathString(text)}`).join(" or ")}]`,

@@ -245,6 +245,8 @@ export class Simulation {
       this.rpc.call("diagnostics.giveInstalledAugmentation", { augmentation }),
     /** Gives the player hacking experience, through the game's own gain. A harness edit, for test scenarios (#162). */
     gainHackingExp: (exp: number) => this.rpc.call("diagnostics.gainHackingExp", { exp }),
+    /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
+    gainCharismaExp: (exp: number) => this.rpc.call("diagnostics.gainCharismaExp", { exp }),
     /** Queues an augmentation, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
     queueAugmentation: (augmentation: string) => this.rpc.call("diagnostics.queueAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */

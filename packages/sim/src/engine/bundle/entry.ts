@@ -252,6 +252,14 @@ export function gainHackingExp(exp: number) {
 }
 
 /**
+ * Gives the player `exp` charisma experience through the game's own `gainCharismaExp` (`PersonObjects/Person.ts:133`),
+ * which sets the charisma skill from it: a harness edit for test scenarios, not something a player can do (#155).
+ */
+export function gainCharismaExp(exp: number) {
+  Player.gainCharismaExp(exp);
+}
+
+/**
  * Queues `augmentation`, unpaid, as if bought and not yet installed: a harness edit for test scenarios (#164), not
  * something a player can do. The game's own `queueAugmentation`, as a purchase calls it (`Faction/FactionHelpers.tsx:119`).
  * Unknown, or owned already (installed or queued; NeuroFlux Governor may be queued again), it throws.

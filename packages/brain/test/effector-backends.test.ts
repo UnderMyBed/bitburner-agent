@@ -556,6 +556,42 @@ test("a promotion (singularity, #155): with SF4.3, `applyToCompany` at the work'
   expect(await savedCompanyWork(fresh)).toEqual({ company: "Carmichael Security", job: "IT Analyst", focus: true });
 });
 
+/**
+ * A Systems Administrator at Carmichael Security, the last of IT, who qualifies for Software's Head of Engineering,
+ * its `nextPosition` (`CompanyPositionsMetadata.ts:151`): 800,000 reputation, and hacking and charisma of about 600
+ * (`gainHackingExp`, `gainCharismaExp`; it wants 575 and 325 there).
+ */
+function aSystemsAdministrator(options: { singularity: boolean }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.gainHackingExp(1e11);
+      await game.simulation.diagnostics.gainCharismaExp(1e11);
+      await game.simulation.diagnostics.employWithReputation("Carmichael Security", "Systems Administrator", 800_000);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+
+test("a promotion stays in the field (#155): a Systems Administrator qualified for Head of Engineering keeps the title", async () => {
+  for (const singularity of [false, true]) {
+    const fresh = await aSystemsAdministrator({ singularity });
+    if (singularity) await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+    // The work's start checks, through each backend: at the top of IT, nothing is applied for.
+    expect(await workedAt(fresh, itAtCarmichael(true))).toEqual({
+      converged: true,
+      problem: null,
+      backend: singularity ? "singularity" : "sim",
+    });
+    expect(await savedCompanyWork(fresh)).toEqual({
+      company: "Carmichael Security",
+      job: "Systems Administrator",
+      focus: true,
+    });
+  }
+});
+
 const server = (hostname: string, ram = 8) => intent({ action: "buyServer", args: { hostname, ram } });
 /** An 8 GB server's price in BN1: 55,000 a GB (`Server/data/Constants.ts:4`). */
 const EIGHT_GB_PRICE = 8 * 55_000;

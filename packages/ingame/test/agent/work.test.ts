@@ -226,6 +226,19 @@ test("a promotion check (#155): with the work's first convergence, then every 10
   expect(checks(faction.calls())).toEqual([undefined]);
 });
 
+test("a promotion check whose worker doesn't run (#155): checked again next round, then every 10 minutes", async () => {
+  const answers: (EffectorReport | "no report")[] = ["no report", CONVERGED];
+  const { work, round, calls } = activityWith(() => answers.shift() ?? CONVERGED);
+  work.desire(IT);
+  await round();
+  await round();
+  expect(checks(calls())).toEqual(["true", "true"]);
+  for (let each = 0; each < 299; each += 1) await round();
+  expect(checks(calls()).filter((check) => check === "true")).toHaveLength(2);
+  await round();
+  expect(checks(calls()).at(-1)).toBe("true");
+});
+
 test("a promotion check not converged (#155): checked again with the next convergence, 30 s on", async () => {
   const answers: EffectorReport[] = [{ done: false, problem: "no Job in the sidebar" }, CONVERGED];
   const { work, round, calls } = activityWith(() => answers.shift() ?? CONVERGED);

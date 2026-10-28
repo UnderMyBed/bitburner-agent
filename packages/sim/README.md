@@ -107,6 +107,7 @@ await sim.close();
   - `joinFactionWithReputation(faction, reputation)`: makes the player a member of the faction (the game's own `joinFaction`, which bans its enemies) with that reputation (finite, 0 or more). A harness edit, for test scenarios (#149).
   - `employWithReputation(company, job, reputation)`: makes the player `job` at `company` (the game's names; a job the company offers), as an application sets `Player.jobs`, with that reputation there (finite, 0 or more). A harness edit, for test scenarios (#155): a job held, a promotion near.
   - `gainHackingExp(exp)`: gives the player hacking experience (finite, 0 or more) through the game's own `gainHackingExp`, which sets the hacking skill from it: 500 makes a new game's level 22. A harness edit, for test scenarios that need a server's required level (#162).
+  - `gainCharismaExp(exp)`: the same for charisma, through the game's own `gainCharismaExp`. A harness edit, for test scenarios that need a job's required charisma (#155).
   - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it. Measuring doesn't change the game ([Determinism](#determinism)).
   - `heapLimit()`: the process's V8 heap limit, in bytes: `maxHeapMb` plus room for the young generation, or Node's default
   - `profile("start" | "stop")`: a CPU profile of the process, through the inspector. Stopping returns it (the `.cpuprofile` format). One at a time.

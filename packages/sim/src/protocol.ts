@@ -450,6 +450,11 @@ export interface HostMethods {
    */
   "diagnostics.gainHackingExp"(params: { exp: number }): void;
   /**
+   * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
+   * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.
+   */
+  "diagnostics.gainCharismaExp"(params: { exp: number }): void;
+  /**
    * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
    * installed, for test scenarios (#164). A harness edit, not something a player can do.
    */

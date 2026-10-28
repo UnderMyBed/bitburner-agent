@@ -337,6 +337,24 @@ test("reportPageEffect's stepsWhenDone (#155): the steps go ahead though done, a
   expect(reports).toEqual([{ done: true, problem: null }]);
 });
 
+test("stepsWhenDone with the owner's dialog open (#155): the steps are skipped, and it's done as the game shows it", async () => {
+  const dialog = document.createElement("div");
+  dialog.className = "MuiModal-root";
+  document.body.replaceChildren(clickable("Job", "sidebar"), dialog);
+  for (const shown of [true, false]) {
+    reports.length = 0;
+    await reportPageEffect(ns, Date.now() + 1_500, {
+      isDone: () => shown,
+      doing: "test through",
+      steps: async (gamePage) => gamePage.openSidebarPage("Job"),
+      notDoneAfter: "not done",
+      stepsWhenDone: true,
+    });
+    expect(reports).toEqual([{ done: shown, problem: "a dialog the Agent leaves for the owner is open" }]);
+  }
+  expect(clicks).toEqual([]);
+});
+
 test("a crime (#156): The Slums, then the crime's button, which starts it focused; then unfocused if wanted", async () => {
   const workPage = () =>
     document.body.replaceChildren(

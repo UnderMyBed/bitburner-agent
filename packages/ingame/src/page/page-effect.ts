@@ -38,7 +38,8 @@ export async function reportPageEffect(
     ending?: "restore" | "steps";
     /**
      * The steps go ahead even if the game shows it done: a promotion check (#155), which only the page can make. Then
-     * it's done only once they have.
+     * it's done only once they have; skipped (no page, or the owner's dialog open), it's done as the game shows it,
+     * with the problem.
      */
     stepsWhenDone?: boolean;
     /** More for the report, read as it's sent: a promotion taken (#155). */
@@ -50,8 +51,10 @@ export async function reportPageEffect(
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {
       report.problem = `no game page to ${doing}`;
+      if (stepsWhenDone) report.done = isDone();
     } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog the Agent leaves for the owner is open";
+      if (stepsWhenDone) report.done = isDone();
     } else {
       const unfocused = await gamePage.unfocusWork();
       const problem = unfocused.problem ?? (await steps(gamePage, { wasFocused: unfocused.clicked }));

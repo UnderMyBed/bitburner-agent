@@ -1,6 +1,6 @@
 // The diagnostics' harness edits (#145, #149, #151, #155, #162, #164): state a test sets up that no player could,
 // checked in the game's own save. `setMoney`, `joinFactionWithReputation`, `employWithReputation`,
-// `giveInstalledAugmentation`, `gainHackingExp` and `queueAugmentation`.
+// `giveInstalledAugmentation`, `gainHackingExp`, `gainCharismaExp` and `queueAugmentation`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -65,6 +65,16 @@ test("gainHackingExp: the experience and the skill it makes, as the game saves t
   await expect(sim.diagnostics.gainHackingExp(-1)).rejects.toThrow(/exp/);
 });
 
+test("gainCharismaExp (#155): the experience and the skill it makes, as the game saves them; a negative amount is refused", async () => {
+  const sim = await newGame();
+  await sim.diagnostics.gainCharismaExp(500);
+  const { player } = await saved(sim);
+  expect(player.exp.charisma).toBe(500);
+  // The same formula as hacking's, so the same level: 22.
+  expect(player.skills.charisma).toBe(22);
+  await expect(sim.diagnostics.gainCharismaExp(-1)).rejects.toThrow(/exp/);
+});
+
 test("queueAugmentation: queued, not installed, as the game saves it, without its price; unknown or owned is refused", async () => {
   const sim = await newGame();
   const moneyBefore = (await saved(sim)).player.money;
@@ -83,7 +93,7 @@ test("queueAugmentation: queued, not installed, as the game saves it, without it
   await expect(sim.diagnostics.queueAugmentation("Neurotrainer I")).rejects.toThrow(/owned already/);
 });
 
-test("employWithReputation (#155): the job held and the company's reputation, as the game saves them; what isn't refused", async () => {
+test("employWithReputation (#155): the job held and the company's reputation, as the game saves them; an unknown company or job, or a negative reputation, is refused", async () => {
   const sim = await newGame();
   await sim.diagnostics.employWithReputation("Carmichael Security", "IT Intern", 6_800);
   const { player, companies } = await saved(sim);
