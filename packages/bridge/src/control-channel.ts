@@ -13,6 +13,7 @@ import {
   type HelloMessage,
   parseAgentMessage,
   type SnapshotMessage,
+  type SnapshotTier,
 } from "@bitburner-agent/core";
 import type { Clock, TimerHandle } from "./clock.ts";
 import type { Connection } from "./connection.ts";
@@ -22,7 +23,8 @@ import { raiseAsUncaught } from "./event-listeners.ts";
 export const HELLO_TIMEOUT_MS = 5_000;
 /**
  * How many Agent sessions keep their sequence numbering: the current one and a few before it, so a 24/7 run with many
- * restarts doesn't grow without limit. A session older than that which came back would count from scratch.
+ * restarts doesn't grow without limit. A session older than that which came back would count from what the store has
+ * (`storedSequenceNumbers`), or from scratch.
  */
 export const REMEMBERED_SESSIONS = 4;
 
@@ -32,7 +34,10 @@ export type ConnectionRejectedReason = "helloTimeout" | "wrongToken" | "badMessa
 export type ControlChannelEvent =
   | { type: "agentConnected"; atMs: number; agentSessionId: string; deploymentId: string; game: GameInfo }
   | { type: "agentDisconnected"; atMs: number; agentSessionId: string }
-  /** `missedBefore`: sequence numbers skipped since the last snapshot passed on for this session and tier. */
+  /**
+   * `missedBefore`: sequence numbers skipped since the last snapshot passed on for this session and tier, or, for a
+   * session the channel doesn't remember, since the last the store has (`storedSequenceNumbers`).
+   */
   | { type: "snapshotReceived"; atMs: number; snapshot: SnapshotMessage; missedBefore: number }
   | { type: "connectionRejected"; atMs: number; reason: ConnectionRejectedReason; detail: string }
   /** An Agent reported a game other than the pinned one: the channel holds, and never sends `restart` again. */
@@ -54,10 +59,17 @@ export interface ControlChannelOptions {
   token: string;
   clock: Clock;
   /**
-   * Where a listener's error goes, once the channel's state is settled. Default: raised as an uncaught exception (fail
-   * fast: the brain stops and is restarted, rather than carry on without its store).
+   * Where a listener's error, or `storedSequenceNumbers`'s, goes once the channel's state is settled. Default: raised
+   * as an uncaught exception (fail fast: the brain stops and is restarted, rather than carry on without its store).
    */
   onListenerError?: (error: unknown) => void;
+  /**
+   * The last sequence number the brain stored for each tier of an Agent session (#119), asked once, when a session the
+   * channel doesn't remember says hello. So after a brain restart the same session's numbering carries on from the
+   * store: what's stored is neither missed nor passed on again. Default: nothing stored. One that throws counts from
+   * scratch, its error going to `onListenerError` (in the brain, that fails fast).
+   */
+  storedSequenceNumbers?: (agentSessionId: string) => Partial<Record<SnapshotTier, number>>;
 }
 
 /** The Agent connected now. The deployer keeps its deployment when it tidies old ones (#91). */
@@ -79,6 +91,7 @@ export class ControlChannel {
   readonly #token: string;
   readonly #clock: Clock;
   readonly #onListenerError: (error: unknown) => void;
+  readonly #storedSequenceNumbers: (agentSessionId: string) => Partial<Record<SnapshotTier, number>>;
   readonly #listeners = new Set<(event: ControlChannelEvent) => void>();
   #currentSession: AgentSession | null = null;
   #deploymentState: DeploymentState = { deployedId: null, hold: false, deployFailed: false };
@@ -98,11 +111,12 @@ export class ControlChannel {
   /** What the brain wants running in the game (#134), or null until it says. */
   #desiredState: DesiredState | null = null;
 
-  constructor({ token, clock, onListenerError = raiseAsUncaught }: ControlChannelOptions) {
+  constructor({ token, clock, onListenerError = raiseAsUncaught, storedSequenceNumbers }: ControlChannelOptions) {
     if (token === "") throw new Error("the control channel needs a token");
     this.#token = token;
     this.#clock = clock;
     this.#onListenerError = onListenerError;
+    this.#storedSequenceNumbers = storedSequenceNumbers ?? (() => ({}));
   }
 
   /**
@@ -204,8 +218,9 @@ export class ControlChannel {
       welcomed: false,
       sentDesiredState: null,
     };
+    // First, so a store that fails changes nothing else: its error is reported after the hello's events.
+    const lookupError = this.#rememberSession(session.agentSessionId);
     this.#currentSession = session;
-    this.#rememberSession(session.agentSessionId);
     // Whatever was wanted for the last Agent isn't for this one: the controller sets it afresh (#134).
     this.#desiredState = null;
     previous?.connection.close(CONTROL_CLOSE_CODES.replaced, "replaced");
@@ -230,6 +245,7 @@ export class ControlChannel {
       },
       ...(newlyDrifted ? [{ type: "versionDrift" as const, atMs, detail: `the Agent's game: ${drift}` }] : []),
     ]);
+    if (lookupError !== null) this.#onListenerError(lookupError.error);
     return session;
   }
 
@@ -271,15 +287,30 @@ export class ControlChannel {
     session.connection.send(encoded);
   }
 
-  /** Keeps the numbering of the most recent sessions only. */
-  #rememberSession(agentSessionId: string): void {
-    const tiers = this.#lastPassedOnBySession.get(agentSessionId) ?? new Map<string, number>();
+  /**
+   * Keeps the numbering of the most recent sessions only. A session it doesn't remember starts from what the store has
+   * (#119); returns the lookup's error, if it threw, for the caller to report once its state is settled.
+   */
+  #rememberSession(agentSessionId: string): { error: unknown } | null {
+    let lookupError: { error: unknown } | null = null;
+    let tiers = this.#lastPassedOnBySession.get(agentSessionId);
+    if (!tiers) {
+      tiers = new Map<string, number>();
+      try {
+        for (const [tier, sequenceNumber] of Object.entries(this.#storedSequenceNumbers(agentSessionId))) {
+          if (sequenceNumber !== undefined) tiers.set(tier, sequenceNumber);
+        }
+      } catch (error) {
+        lookupError = { error };
+      }
+    }
     this.#lastPassedOnBySession.delete(agentSessionId);
     this.#lastPassedOnBySession.set(agentSessionId, tiers);
     for (const oldest of this.#lastPassedOnBySession.keys()) {
       if (this.#lastPassedOnBySession.size <= REMEMBERED_SESSIONS) break;
       this.#lastPassedOnBySession.delete(oldest);
     }
+    return lookupError;
   }
 
   #passOn(snapshot: SnapshotMessage): void {

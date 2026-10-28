@@ -148,6 +148,23 @@ test("the latest snapshot of a tier, in the order stored (a clock set back can't
   expect(store.latestSnapshot({ environment: "E1", tier: "slow" })).toBeNull();
 });
 
+test("a session's last sequence number of each tier (#119), in an environment, from any release", () => {
+  const ofSession = (agentSessionId: string, tier: string, sequenceNumber: number) => ({
+    ...snapshotAt(sequenceNumber, tier),
+    agentSessionId,
+    sequenceNumber,
+  });
+  store.recordSnapshot(context, ofSession("s", "fast", 7));
+  // Stored after a higher one (a clock set back can't matter: it's by number).
+  store.recordSnapshot({ ...context, release: "v0.2.0+deployment-b" }, ofSession("s", "fast", 9));
+  store.recordSnapshot(context, ofSession("s", "fast", 8));
+  store.recordSnapshot(context, ofSession("s", "slow", 2));
+  store.recordSnapshot(context, ofSession("other", "medium", 40));
+  store.recordSnapshot({ environment: "E0", release: "r" }, ofSession("s", "medium", 50));
+  expect(store.lastSequenceNumbers({ environment: "E1", agentSessionId: "s" })).toEqual({ fast: 9, slow: 2 });
+  expect(store.lastSequenceNumbers({ environment: "E1", agentSessionId: "new" })).toEqual({});
+});
+
 test("recent events newest first, up to a limit; and the latest of some kinds after an event", () => {
   const ids: number[] = [];
   for (const [atMs, kind] of [

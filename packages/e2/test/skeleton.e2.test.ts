@@ -294,6 +294,14 @@ describe("the skeleton on E2", () => {
         tier,
       ).toEqual(oneUpTo(rowsOf(rows, sessionBefore, tier).length));
     }
+    // The restarted brain carries on from the store's numbering (#119): no row counts a stored one as missed.
+    const afterRestart = rows.filter(
+      (row) => row.agentSessionId === sessionBefore && row.receivedAtMs >= reconnectedAtMs,
+    );
+    expect(afterRestart.length).toBeGreaterThanOrEqual(SNAPSHOT_TIERS.length);
+    expect(afterRestart.map((row) => `${row.tier}#${row.sequenceNumber} missed ${row.missedBefore}`)).toEqual(
+      afterRestart.map((row) => `${row.tier}#${row.sequenceNumber} missed 0`),
+    );
   });
 
   test("a fresh save's tutorial: the terminal refuses the deployed boot.js while it runs, and a reload ends it for autoexec", async () => {

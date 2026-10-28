@@ -49,6 +49,7 @@ const SCHEMA = `
     data TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS snapshots_by_tier_and_time ON snapshots (environment, tier, received_at_ms);
+  CREATE INDEX IF NOT EXISTS snapshots_by_session ON snapshots (environment, agent_session_id, tier, sequence_number);
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     environment TEXT NOT NULL,
@@ -170,6 +171,26 @@ export class TelemetryStore {
       .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT 1`)
       .get(environment, tier) as Record<string, string | number> | undefined;
     return row ? snapshotOfRow(row) : null;
+  }
+
+  /**
+   * The highest sequence number stored for each tier of an Agent session (#119): the control channel carries on from
+   * them after a brain restart. By number, not order, from any release. `{}` for a session with none.
+   */
+  lastSequenceNumbers({
+    environment,
+    agentSessionId,
+  }: {
+    environment: Environment;
+    agentSessionId: string;
+  }): Record<string, number> {
+    const rows = this.#database
+      .prepare(
+        `SELECT tier, MAX(sequence_number) AS last FROM snapshots WHERE environment = ? AND agent_session_id = ?
+          GROUP BY tier`,
+      )
+      .all(environment, agentSessionId) as { tier: string; last: number }[];
+    return Object.fromEntries(rows.map((row) => [row.tier, row.last]));
   }
 
   /** When each fast snapshot arrived, in a window: the gap report's input. */
