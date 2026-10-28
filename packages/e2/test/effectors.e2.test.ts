@@ -1,7 +1,8 @@
-// The `ui` effectors on the real page (#136, #138, #141), end to end. A save with money, a real brain, the built Agent:
-// the Agent buys the TOR router at Alpha Enterprises and every port opener through the terminal, upgrades home's RAM
-// at Alpha Enterprises, and travels where the owner's manual queue says, as a player would, and leaves the page on the
-// Terminal with no dialog open.
+// The `ui` effectors and the game's dialogs on the real page (#136, #138, #141, #143), end to end. A save with money, a
+// real brain, the built Agent: the Agent buys the TOR router at Alpha Enterprises and every port opener through the
+// terminal, upgrades home's RAM at Alpha Enterprises, and travels where the owner's manual queue says, as a player
+// would, and leaves the page on the Terminal with no dialog open. It closes the game's alerts and answers faction
+// invitations, and leaves the owner's and scripts' dialogs alone.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,11 +20,12 @@ import {
   closeGame,
   gameFromSave,
   TERMINAL_INPUT,
+  typeCommand,
   waitForTerminal,
 } from "../src/game.ts";
 import { freeBrainPorts, type RunningBrain, readStore, startBrain } from "./helpers/brain.ts";
 import { useE2 } from "./helpers/environment.ts";
-import { simulatorSave, withCity, withGameSettings, withMoney } from "./helpers/saves.ts";
+import { simulatorSave, withCity, withGameSettings, withHomeScript, withMoney } from "./helpers/saves.ts";
 
 const e2 = useE2();
 /** The game autosaves every 60 s; a deploy is in the save only after it (#91). */
@@ -59,8 +61,8 @@ function latestMedium(dataDirectory: string): MediumSnapshotData | null {
 const offlineAlertShown = (page: Page) => async () => (await page.getByText(/^Offline for/).count()) > 0;
 
 /**
- * The "Offline for…" alert the game raises 250 ms after loading a save (`engine.tsx`), closed as a player would: the
- * Agent buys nothing over an open dialog.
+ * The "Offline for…" alert the game raises 250 ms after loading a save (`engine.tsx`), closed as a player would, so a
+ * test starts from the page the Agent would leave (#143 tests the Agent closing it).
  */
 async function closeOfflineAlert(page: Page): Promise<void> {
   await advanceUntil(page, offlineAlertShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 2_000 });
@@ -86,6 +88,7 @@ async function moneyedGameWithAgent({
   brainSettings = {},
   gameSettings = {},
   city = "Sector-12",
+  homeScripts = {},
 }: {
   money?: number;
   keepOfflineAlert?: boolean;
@@ -95,6 +98,8 @@ async function moneyedGameWithAgent({
   gameSettings?: Record<string, unknown>;
   /** Where the player starts: Sector-12, as in a new game, unless said. */
   city?: string;
+  /** Scripts of the owner's on home, by file name (`withHomeScript`). */
+  homeScripts?: Record<string, string>;
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
@@ -118,7 +123,11 @@ async function moneyedGameWithAgent({
     ),
     gameSettings,
   );
-  const page = await gameFromSave(e2.browser, e2.server, save);
+  const page = await gameFromSave(
+    e2.browser,
+    e2.server,
+    Object.entries(homeScripts).reduce((edited, [filename, code]) => withHomeScript(edited, filename, code), save),
+  );
   started.pages.push(page);
   const eventCount = (kind: string) => readStore(dataDirectory).events.filter((event) => event.kind === kind).length;
   await advanceUntil(page, async () => eventCount("deployed") === 1, { realTimeoutMs: STEP_REAL_TIMEOUT_MS });
@@ -227,27 +236,70 @@ test("a faction invitation (#143): $20m in Sector-12 earns one, the Agent answer
   await expect(page.getByRole("button", { name: "Join!" }).count()).resolves.toBe(1);
 });
 
-test("a dialog the Agent doesn't know (#143): left for the owner, nothing is bought under it, and the brain's alert says so", async () => {
-  const { dataDirectory, page } = await moneyedGameWithAgent({ money: 300_000 });
-  // The owner asks to travel, and leaves the confirmation open.
-  await page.locator("xpath=//div[@role='button' and .//p[normalize-space()='Travel']]").first().click();
-  await page.locator("xpath=//h4[normalize-space()='Travel Agency']/following::p/span[normalize-space()='A']").click();
-  await expect(page.getByText(/^Would you like to travel to Aevum/).count()).resolves.toBe(1);
+/** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
+async function dashboardAlerts(dashboardPort: number): Promise<{ name: string; detail: string }[]> {
+  const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);
+  return ((await response.json()) as { alerts: { name: string; detail: string }[] }).alerts;
+}
+
+test("a dialog the owner opened (#143): left alone, nothing bought under it, and the dashboard's alert quotes it", async () => {
+  // The owner asks to travel and leaves the confirmation open, before the Agent's first round.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 300_000,
+    beforeAgent: async (page) => {
+      await page.locator("xpath=//div[@role='button' and .//p[normalize-space()='Travel']]").first().click();
+      await page
+        .locator("xpath=//h4[normalize-space()='Travel Agency']/following::p/span[normalize-space()='A']")
+        .click();
+    },
+  });
   await advanceGameTime(page, 60_000);
   await expect(page.getByText(/^Would you like to travel to Aevum/).count()).resolves.toBe(1);
   expect(latestMedium(dataDirectory)?.hasTorRouter).toBe(false);
-  const fast = readStore(dataDirectory)
-    .snapshots.filter((row) => row.tier === "fast")
-    .at(-1)?.data as FastSnapshotData;
-  expect(fast.dialogs.blocking).toMatch(/^Would you like to travel to Aevum/);
-  // The owner cancels: the TOR router follows.
+  const blocking = (await dashboardAlerts(ports.dashboardPort)).find((alert) => alert.name === "dialogBlocking");
+  expect(blocking?.detail).toMatch(/"Would you like to travel to Aevum/);
+  // The owner cancels: the TOR router follows, and the alert goes.
   await page.getByRole("button", { name: "Cancel" }).click();
   await advanceUntil(page, async () => latestMedium(dataDirectory)?.hasTorRouter === true, {
     realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 60_000,
   });
+  await advanceGameTime(page, 4_000);
+  expect((await dashboardAlerts(ports.dashboardPort)).map((alert) => alert.name)).not.toContain("dialogBlocking");
 });
 
+test("a script's ns.alert and ns.prompt (#143): the owner's, so both are left open, and nothing is bought under them", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 300_000,
+    homeScripts: {
+      "owner.js":
+        'export async function main(ns) { ns.alert("Your script says hello"); await ns.prompt("Buy the server?"); }',
+    },
+    beforeAgent: (page) => typeCommand(page, "run owner.js"),
+  });
+  await advanceGameTime(page, 30_000);
+  await expect(page.getByText("Your script says hello").count()).resolves.toBe(1);
+  await expect(page.getByText("Buy the server?").count()).resolves.toBe(1);
+  expect(latestMedium(dataDirectory)?.hasTorRouter).toBe(false);
+  // The game's own alerts may be handled meanwhile, but nothing of the script's.
+  expect(gameDialogs(dataDirectory).filter((dialog) => /hello|Buy the server/.test(dialog.text))).toEqual([]);
+  expect((await dashboardAlerts(ports.dashboardPort)).map((alert) => alert.name)).toContain("dialogBlocking");
+  // The owner answers both, each with its own button (one dialog's backdrop sits over the other: the click goes to the
+  // button itself): the purchase follows.
+  await page.getByRole("button", { name: "No" }).dispatchEvent("click");
+  await page
+    .locator(OPEN_DIALOG)
+    .filter({ hasText: "Your script says hello" })
+    .locator("button")
+    .first()
+    .dispatchEvent("click");
+  await advanceGameTime(page, 1_000);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.hasTorRouter === true, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+});
 const homeRamOf = (medium: MediumSnapshotData | null) =>
   medium?.servers.find((server) => server.hostname === "home")?.maxRam;
 

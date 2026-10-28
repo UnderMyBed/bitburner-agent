@@ -3,7 +3,7 @@
 // name), the tech vendor in the player's city for the TOR router (else ""), and when to give up (the game's
 // `Date.now()`), so it ends within its Agent's round.
 // - The game first: an item already owned is done, without touching the page.
-// - Never over an open dialog: that's the owner's to read and close.
+// - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The TOR router: the City, the vendor, "Purchase TOR router" while it can be bought (`Locations/ui/TorButton.tsx`),
 //   then the purchase's own dialog closed with its own close button (never Escape, which closes every dialog).
 // - A program: the Terminal, and `buy <program>` in it (`Terminal/commands/buy.ts`).
@@ -52,7 +52,7 @@ export async function main(ns: NS): Promise<void> {
     if (gamePage === null) {
       report.problem = "no game page to buy it through";
     } else if (await gamePage.dialogStaysOpen()) {
-      report.problem = "a dialog is open: it's the owner's to close";
+      report.problem = "a dialog the Agent leaves for the owner is open";
     } else {
       report.problem = item === TOR_ROUTER ? await buyTorRouter(gamePage, vendor) : await buyProgram(gamePage, item);
       report.done = owns(ns, item);

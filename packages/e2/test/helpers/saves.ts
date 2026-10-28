@@ -83,6 +83,23 @@ export function withCity(save: Uint8Array, city: string): Uint8Array {
   return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
 }
 
+/**
+ * `save` with a script on home, as the owner's own: a test environment's save, as for `withMoney`. Home's scripts are
+ * a `JSONMap` of `Script`s in the save (`Types/Jsonable.ts`, `Script/Script.ts` `savedKeys`).
+ */
+export function withHomeScript(save: Uint8Array, filename: string, code: string): Uint8Array {
+  const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { AllServersSave: string } };
+  const servers = JSON.parse(saveObject.data.AllServersSave) as Record<
+    string,
+    { data: { hostname: string; scripts: { data: unknown[] } } }
+  >;
+  const home = Object.values(servers).find((server) => server.data.hostname === "home");
+  if (!home) throw new Error("the save has no home");
+  home.data.scripts.data.push([filename, { ctor: "Script", data: { code, filename, server: "home" } }]);
+  saveObject.data.AllServersSave = JSON.stringify(servers);
+  return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
+}
+
 /** The player's money, as the save holds it. */
 export function moneyInSave(save: Uint8Array): number {
   return readPlayerSave(save).player.data.money;

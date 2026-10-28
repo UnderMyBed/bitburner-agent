@@ -81,22 +81,36 @@ test("a game alert is closed with its own close button, and reported with its te
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: null });
 });
 
-test("a queue of alerts is closed in turn, each as it shows", async () => {
-  const watcher = createDialogWatcher(ns);
-  modal("<p>first</p>", { ownerState: alertState(2) });
-  // The game shows the next as the first one's close takes effect.
-  const showNext = new MutationObserver(() => {
-    if (document.querySelector(".MuiModal-root") === null) {
-      showNext.disconnect();
-      modal("<p>second</p>", { ownerState: alertState(1) });
-    }
+/**
+ * A queue of alerts as the AlertManager shows them: one dialog, its content swapped for the next as each is closed
+ * (`alerts.slice(1)`), gone after the last.
+ */
+function alertQueue(texts: string[]) {
+  const shown = modal(`<p>${texts[0]}</p>`, { ownerState: alertState(texts.length) });
+  const closeButton = shown.root.querySelector("button") as HTMLButtonElement;
+  let index = 0;
+  Object.assign(closeButton, {
+    __reactProps$test: {
+      onClick: () => {
+        index += 1;
+        if (index >= texts.length) shown.root.remove();
+        else (shown.root.firstElementChild?.children[1] as HTMLElement).innerHTML = `<p>${texts[index]}</p>`;
+      },
+    },
   });
-  showNext.observe(document.body, { childList: true });
-  await watcher.handle(Date.now() + ROUND_MS);
-  expect(watcher.takeReport().handled.map((dialog) => dialog.text)).toEqual(["first", "second"]);
-  expect(document.querySelector(".MuiModal-root")).toBeNull();
-});
+  return shown;
+}
 
+test("a queue of alerts is closed in turn, in the one dialog that shows them, without waiting out a fade each", async () => {
+  alertQueue(["first", "second", "third"]);
+  const watcher = createDialogWatcher(ns);
+  const startedMs = Date.now();
+  await watcher.handle(Date.now() + ROUND_MS);
+  expect(watcher.takeReport().handled.map((dialog) => dialog.text)).toEqual(["first", "second", "third"]);
+  expect(document.querySelector(".MuiModal-root")).toBeNull();
+  // Each swap is seen at once: three 400 ms fades would take over a second.
+  expect(Date.now() - startedMs).toBeLessThan(800);
+});
 test("a faction invitation gets 'Decide later': joining is the brain's call", async () => {
   const { clicked } = modal("<h4>You received a faction invitation.</h4><p>Would you like to join Sector-12?</p>", {
     ownerState: ["Sector-12"],
@@ -151,22 +165,63 @@ test("a dialog's text is cut to 1,000 characters for the brain", async () => {
 });
 
 test("at most 10 a round: the rest wait for the next", async () => {
+  alertQueue(Array.from({ length: 15 }, (_, index) => `alert ${index}`));
   const watcher = createDialogWatcher(ns);
-  let shown = 0;
-  const showAnother = () => {
-    shown += 1;
-    modal(`<p>alert ${shown}</p>`, { ownerState: alertState() });
-  };
-  showAnother();
-  const keepShowing = new MutationObserver(() => {
-    if (document.querySelector(".MuiModal-root") === null) showAnother();
-  });
-  keepShowing.observe(document.body, { childList: true });
   await watcher.handle(Date.now() + ROUND_MS);
-  keepShowing.disconnect();
   expect(watcher.takeReport().handled).toHaveLength(10);
 });
 
+test("a script's ns.alert (the one alert made from HTML) is the owner's: left open, and reported as blocking", async () => {
+  const scriptAlert = modal("<div>Your script says hello</div>", {
+    ownerState: [
+      {
+        text: { props: { dangerouslySetInnerHTML: { __html: "Your script says hello" } } },
+        hash: "h",
+        canBeDismissedEasily: true,
+      },
+    ],
+  });
+  const watcher = createDialogWatcher(ns);
+  await watcher.handle(Date.now() + ROUND_MS);
+  expect(scriptAlert.clicked).toEqual([]);
+  expect(watcher.takeReport()).toEqual({ handled: [], blocking: "Your script says hello" });
+});
+
+test("a dialog left alone first in the page doesn't stop the watcher from handling an alert after it", async () => {
+  modal("<pre><p>Buy the server?</p></pre>", { ownerState: { txt: "Buy the server?", resolve: () => {} } });
+  const alert = modal("<p>Offline for 5 minutes.</p>", { ownerState: alertState() });
+  const watcher = createDialogWatcher(ns);
+  await watcher.handle(Date.now() + ROUND_MS);
+  expect(alert.clicked).toEqual(["close"]);
+  expect(watcher.takeReport()).toEqual({
+    handled: [{ kind: "alert", text: "Offline for 5 minutes." }],
+    blocking: "Buy the server?",
+  });
+});
+
+test("an invitation with no 'Decide later', or a close button that can't be clicked, is left and reported", async () => {
+  modal("<h4>You received a faction invitation.</h4>", { ownerState: ["Sector-12"], buttons: ["Join"] });
+  const watcher = createDialogWatcher(ns);
+  await watcher.handle(Date.now() + ROUND_MS);
+  expect(watcher.takeReport()).toEqual({ handled: [], blocking: "You received a faction invitation." });
+  document.body.replaceChildren();
+  const alert = modal("<p>Saved.</p>", { ownerState: alertState() });
+  Object.assign(alert.root.querySelector("button") as HTMLButtonElement, { __reactProps$test: {} });
+  await watcher.handle(Date.now() + ROUND_MS);
+  expect(watcher.takeReport()).toEqual({ handled: [], blocking: "Saved." });
+});
+
+test("a dialog fading out (inert) and an open dropdown (a Popover) are neither handled nor blocking", async () => {
+  const closing = modal("<p>closing</p>", { ownerState: alertState() });
+  closing.root.querySelector("div")?.setAttribute("inert", "");
+  const dropdown = Object.assign(document.createElement("div"), { className: "MuiPopover-root MuiModal-root" });
+  dropdown.textContent = "Sector-12 Aevum";
+  document.body.append(dropdown);
+  const watcher = createDialogWatcher(ns);
+  await watcher.handle(Date.now() + ROUND_MS);
+  expect(closing.clicked).toEqual([]);
+  expect(watcher.takeReport()).toEqual({ handled: [], blocking: null });
+});
 test("with nothing open, it does nothing", async () => {
   const watcher = createDialogWatcher(ns);
   await watcher.handle(Date.now() + ROUND_MS);

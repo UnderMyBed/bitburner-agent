@@ -60,7 +60,7 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap r
 | Table | Rows |
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
-| `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and the supervisor's `relaunch`, `supervisionGaveUp`, `supervisionFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON); and `gameDialog`, each of the game's dialogs the Agent handled, with its kind and text (#143) |
+| `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and the supervisor's `relaunch`, `supervisionGaveUp`, `supervisionFailed`. The game's dialogs the Agent handled, as `gameDialog` (#143), with their kind and text. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
 | `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch), `supervision.gaveUpAtMs` (the supervisor's give-up, #94), `hackLoop.enabled` (the hack loop's switch, on when unset, #134), `programs.enabled` (buying the hacking programs, likewise, #136), `homeRam.enabled` (upgrading home's RAM, likewise, #138), and `intents.manual` (the owner's manual intents queue, as `[{ action, args }]`, #141) |
 
 - **Every snapshot and event is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
@@ -142,7 +142,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or a connection finds the deployment already in place (`deploymentCurrent`), or the brain restarts |
   | `supervisionGaveUp` | The supervisor stopped after too many relaunches (#94) | When supervision is resumed |
   | `dialogBlocking` | A dialog the Agent leaves for the owner (a script's prompt, one the owner opened) is open, in the newest fast snapshot (#143), quoting its text: nothing is done on the page while it's open | When it's closed |
-| `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
+  | `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
 
   The stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
 - **Security** (owner decision 14, localhost only):

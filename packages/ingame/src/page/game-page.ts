@@ -1,7 +1,7 @@
 // The game's own page, driven from in-game code (#136): the `ui` effector's means (architecture §5.6), for what has no
 // API before Singularity. The rules of engagement allow the page's DOM and React state from in-game scripts.
-// - The page is reached with `globalThis.eval("document")`. The game charges 25 GB for the identifiers `document` and `window`,
-//   so neither appears anywhere in this code.
+// - The page is reached with `globalThis.eval("document")`: an indirect eval, run in the global scope. The game charges
+//   25 GB for the identifiers `document` and `window`, so neither appears anywhere in this code.
 // - A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own
 //   `onChange` and `onKeyDown`, as the legacy fork does. So a hidden element (a collapsed menu) still works, as long as
 //   it's in the page.
@@ -16,8 +16,12 @@ const POLL_MS = 50;
 const RETURN_RESERVE_MS = 300;
 /** The longest a closed dialog stays in the page while it fades out: MUI's `Fade`, 195 ms, and a render. */
 const DIALOG_FADE_MS = 400;
-/** Any modal open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). */
-const OPEN_DIALOG_XPATH = "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ')]";
+/**
+ * Any dialog open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). Not an open dropdown (a
+ * select or a menu): MUI makes those of a `Popover`, whose root is a `Modal`'s too.
+ */
+const OPEN_DIALOG_XPATH =
+  "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ') and not(contains(concat(' ', @class, ' '), ' MuiPopover-root '))]";
 
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
 function reactPropsOf(element: Element): Record<string, unknown> | null {
@@ -44,8 +48,8 @@ export function reactFiberOf(element: Element): ReactFiber | null {
 export function openGamePage(ns: NS, deadlineMs: number) {
   let page: Document | undefined;
   try {
-    // Indirect (not a bare `eval`), so it runs in the global scope, where `document` is, and the bundler can still rename this module's
-    // names (a direct `eval` could see them, so esbuild keeps them, and renames other modules' instead).
+    // Indirect, not a bare `eval`: the bundler then keeps its freedom to rename. A direct `eval` could see every name in
+    // reach, so esbuild keeps those and renames other modules' instead (`main(ns)` became `main(ns2)`).
     // biome-ignore lint/security/noGlobalEval: the only way to the page that the game doesn't charge 25 GB for (see above).
     page = globalThis.eval("document") as Document | undefined;
   } catch {
@@ -113,12 +117,13 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     clickElement: click,
 
     /**
-     * Waits until `element` has left the page, up to the time a dialog's fade takes: true once it has. A dialog closed
-     * stays in the page while it fades out.
+     * Waits until `element` has left the page, or what `currentText` reads of it is no longer `textBefore`, up to the
+     * time a dialog's fade takes: true once either happens. A dialog closed stays in the page while it fades out; one
+     * with more queued shows the next in place.
      */
-    async waitUntilGone(element: Element): Promise<boolean> {
+    async waitUntilGoneOrChanged(element: Element, currentText: () => string, textBefore: string): Promise<boolean> {
       const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, deadlineMs);
-      while (element.isConnected) {
+      while (element.isConnected && currentText() === textBefore) {
         if (timeLeftMs(fadeEndsMs) <= 0) return false;
         await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));
       }
