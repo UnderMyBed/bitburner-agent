@@ -142,7 +142,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   | `agentSilent` | No fast snapshot for over 60 s, counted from the brain's start if none came since | When the next one arrives |
   | `versionDrift` | The brain went on hold since it started: the game isn't the pinned version (#91) | When the brain restarts (a hold lasts the brain's run) |
   | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or a connection finds the deployment already in place (`deploymentCurrent`), or the brain restarts |
-  | `supervisionGaveUp` | The supervisor stopped after too many relaunches (#94) | When supervision is resumed |
+  | `supervisionGaveUp` | The supervisor stopped (#94): after 3 launches in an hour, or after 10 failed checks in a row with the last failure (#127) | When supervision is resumed |
   | `dialogBlocking` | A dialog the Agent leaves for the owner (a script's prompt, one the owner opened) is open, in the newest fast snapshot (#143), quoting its text: nothing is done on the page while it's open | When it's closed |
   | `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
 
@@ -276,7 +276,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
 - **At most 3 launches in any hour,** the first included. A 4th would mean a crash loop, so the supervisor gives up instead, which raises the dashboard's `supervisionGaveUp` alert.
   - It stays given up, across restarts of the brain, until you resume supervision on the dashboard. Resuming after a give-up starts the count afresh.
   - The count comes from the store, so a brain that keeps restarting can't get round it.
-- **A check that fails** (a command that errors or times out after 30 s, or a switch setting it didn't write) is recorded once, when a run of failures starts. Ten failed checks in a row (5 minutes) give up, with the same alert, so a broken Steam link doesn't fail silently for ever.
+- **A check that fails** (a command that errors or times out after 30 s, or a switch setting it didn't write) is recorded once, when a run of failures starts. Ten failed checks in a row (5 minutes) give up, with the same alert (its text says which cause, with the last failure: #127), so a broken Steam link doesn't fail silently for ever.
 - **Paused** (the dashboard's switch): nothing is launched or killed, so you can close the game on purpose, or set it up.
 - **Recorded:**
   - each launch is a `relaunch` event, with its cause;

@@ -248,12 +248,22 @@ test("a disconnected Agent, another game version, a failed deploy and a give-up 
     detail: { cause: "notRunning" },
   });
   recordSupervisionGaveUp(store, STARTED_AT_MS + 6_000);
+  // The give-up's cause is in its event (#127): here, checks that kept failing.
+  store.recordEvent(context, {
+    atMs: STARTED_AT_MS + 6_000,
+    kind: "supervisionGaveUp",
+    detail: { failedChecksInARow: 10, failure: "launch failed" },
+  });
   const built = status(STARTED_AT_MS + 7_000);
   expect(built.agent).toMatchObject({ connected: false, sinceMs: STARTED_AT_MS + 3_000, agentSessionId: "s" });
   expect(built.alerts).toEqual([
     { name: "versionDrift", sinceMs: STARTED_AT_MS + 1_000, detail: "the Agent's game: versionNumber 52, pinned 51" },
     { name: "deployFailed", sinceMs: STARTED_AT_MS + 4_000, detail: "agent.js needs 4.7 GB, over its budget of 3 GB" },
-    expect.objectContaining({ name: "supervisionGaveUp", sinceMs: STARTED_AT_MS + 6_000 }),
+    {
+      name: "supervisionGaveUp",
+      sinceMs: STARTED_AT_MS + 6_000,
+      detail: expect.stringContaining("after 10 failed checks in a row (the last: launch failed)"),
+    },
   ]);
   expect(built.supervision).toEqual({
     state: "gaveUp",
@@ -263,6 +273,20 @@ test("a disconnected Agent, another game version, a failed deploy and a give-up 
   });
   setSupervisionPaused(store, true);
   expect(status(STARTED_AT_MS + 8_000).supervision).toMatchObject({ state: "paused", paused: true });
+});
+
+test("a give-up whose own event is missing doesn't take an older give-up's cause (#127)", () => {
+  // An earlier give-up, since resumed, then one whose event wasn't recorded (the store failed, say).
+  store.recordEvent(context, {
+    atMs: STARTED_AT_MS + 1_000,
+    kind: "supervisionGaveUp",
+    detail: { cause: "silent", launchesInLastHour: 3 },
+  });
+  recordSupervisionGaveUp(store, STARTED_AT_MS + 2_000);
+  expect(status(STARTED_AT_MS + 3_000).alerts.find((alert) => alert.name === "supervisionGaveUp")?.detail).toBe(
+    "the supervisor stopped (too many launches, or its checks kept failing): see the supervisionGaveUp event; " +
+      "resume supervision to start it again",
+  );
 });
 
 test("only this run of the brain counts for the Agent and the alerts, by order, whatever the clock says", () => {

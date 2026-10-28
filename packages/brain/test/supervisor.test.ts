@@ -321,6 +321,8 @@ test("a command that keeps failing is recorded once, and gives up after 10 check
     kind: "supervisionGaveUp",
     detail: { failedChecksInARow: MAX_FAILED_CHECKS, failure: "launch failed: no such program" },
   });
+  // The event and the give-up share one time: the dashboard's alert matches them by it (#127).
+  expect(store.events({ environment: "E0" }).at(-1)?.atMs).toBe(readSupervisionSwitch(store).gaveUpAtMs);
 });
 
 test("a failure that clears starts the count again", async () => {

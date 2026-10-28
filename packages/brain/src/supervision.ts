@@ -1,6 +1,6 @@
 // The supervision switch (architecture §10.2; #93, #94), kept in the store's settings so it survives restarts of the
 // brain. The dashboard sets it; the supervisor (#94) reads it with `readSupervisionSwitch` before every launch, records
-// a give-up with `recordSupervisionGaveUp` after too many, and records each launch as a `relaunch` event. While paused,
+// a give-up with `recordSupervisionGaveUp` after too many (or after checks that kept failing), and records each launch as a `relaunch` event. While paused,
 // nothing is launched; unpausing also clears a give-up.
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -13,10 +13,15 @@ const GAVE_UP_AT_SETTING = "supervision.gaveUpAtMs";
  * `notRunning`, `silent`). The dashboard lists the newest.
  */
 export const RELAUNCH_EVENT_KIND = "relaunch";
+/**
+ * The event kind the supervisor records as it gives up, with its cause as detail: `{ cause, launchesInLastHour }` for
+ * one launch too many in the hour, or `{ failedChecksInARow, failure }` for checks that kept failing.
+ */
+export const SUPERVISION_GAVE_UP_EVENT_KIND = "supervisionGaveUp";
 
 export interface SupervisionSwitch {
   paused: boolean;
-  /** When the supervisor gave up after too many relaunches, or null. */
+  /** When the supervisor gave up (too many launches, or checks that kept failing), or null. */
   gaveUpAtMs: number | null;
 }
 
@@ -36,7 +41,7 @@ export function setSupervisionPaused(store: TelemetryStore, paused: boolean): vo
   if (!paused) store.deleteSetting(GAVE_UP_AT_SETTING);
 }
 
-/** The supervisor's: it stopped after too many relaunches, until the owner unpauses. */
+/** The supervisor's: it stopped (too many launches, or checks that kept failing), until the owner resumes it. */
 export function recordSupervisionGaveUp(store: TelemetryStore, atMs: number): void {
   store.setSetting(GAVE_UP_AT_SETTING, String(Math.round(atMs)));
 }

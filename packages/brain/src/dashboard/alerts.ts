@@ -39,8 +39,11 @@ export interface AlertFacts {
   versionDrift: { atMs: number; detail: string } | null;
   /** The newest deploy since the brain started: `deployed`, or `deployFailed` with its reason. */
   lastDeploy: { atMs: number; failed: boolean; detail: string } | null;
-  /** When the supervisor gave up (#94), until unpausing clears it. */
-  supervisionGaveUpAtMs: number | null;
+  /**
+   * When the supervisor gave up (#94), until resuming clears it, with the newest `supervisionGaveUp` event's detail
+   * (its cause, #127), or null if there's no such event.
+   */
+  supervisionGaveUp: { atMs: number; detail: unknown } | null;
   /** The intents' outcomes in the newest fast snapshot (#141), or none. */
   intentOutcomes: IntentOutcome[];
   /** The text of a dialog the Agent left open, in the newest fast snapshot (#143), or null. */
@@ -73,11 +76,11 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   if (facts.lastDeploy?.failed) {
     alerts.push({ name: "deployFailed", sinceMs: facts.lastDeploy.atMs, detail: facts.lastDeploy.detail });
   }
-  if (facts.supervisionGaveUpAtMs !== null) {
+  if (facts.supervisionGaveUp !== null) {
     alerts.push({
       name: "supervisionGaveUp",
-      sinceMs: facts.supervisionGaveUpAtMs,
-      detail: "the supervisor stopped after too many relaunches: unpause supervision to start it again",
+      sinceMs: facts.supervisionGaveUp.atMs,
+      detail: gaveUpDetail(facts.supervisionGaveUp.detail),
     });
   }
   if (facts.blockingDialog !== null) {
@@ -97,4 +100,21 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     });
   }
   return alerts;
+}
+
+/**
+ * The give-up's alert text, saying why from its event's detail (supervisor.ts `#giveUp`): a launch that would have been
+ * one too many in the hour, or too many failed checks in a row. Text covering both where the detail says neither.
+ */
+function gaveUpDetail(detail: unknown): string {
+  const resume = "resume supervision to start it again";
+  const fields = (detail ?? {}) as Record<string, unknown>;
+  if (typeof fields.failedChecksInARow === "number") {
+    const last = typeof fields.failure === "string" ? ` (the last: ${fields.failure})` : "";
+    return `the supervisor stopped after ${fields.failedChecksInARow} failed checks in a row${last}: ${resume}`;
+  }
+  if (typeof fields.launchesInLastHour === "number") {
+    return `the supervisor stopped after ${fields.launchesInLastHour} launches in an hour: ${resume}`;
+  }
+  return `the supervisor stopped (too many launches, or its checks kept failing): see the supervisionGaveUp event; ${resume}`;
 }

@@ -187,7 +187,7 @@ function render(status) {
     off: "off: only a brain for Steam's game, on Windows, supervises it",
     running: "running",
     paused: "paused: nothing is relaunched",
-    gaveUp: "gave up after too many relaunches",
+    gaveUp: "gave up (the supervisionGaveUp alert says why)",
   };
   const stateStyle = { off: "muted", running: "ok", paused: "bad", gaveUp: "bad" };
   document.querySelector("#supervision div").replaceChildren(
