@@ -3,7 +3,9 @@
 // terminal, upgrades home's RAM at Alpha Enterprises, and travels where the owner's manual queue says, as a player
 // would, and leaves the page on the Terminal with no dialog open. It closes the game's alerts and answers faction
 // invitations, and leaves the owner's and scripts' dialogs alone. Joining a faction (#147) clicks "Join!" past the
-// brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one.
+// brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one. Work (#151,
+// #153): faction work started and kept focused on the real page; company work applied for, the hiring's alert closed,
+// and worked, then worked again from the Job page in another city.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -406,8 +408,11 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
 });
 
-/** Sets the work the brain manages (#151), as the dashboard's Work form does. */
-async function setWork(dashboardPort: number, work: { faction: string; workType: string } | null) {
+/** Sets the work the brain manages (#151, #153), as the dashboard's Work forms do. */
+async function setWork(
+  dashboardPort: number,
+  work: { faction: string; workType: string } | { kind: "company"; company: string; field: string } | null,
+) {
   const origin = `http://127.0.0.1:${dashboardPort}`;
   const response = await fetch(`${origin}/api/work`, {
     method: "POST",
@@ -496,6 +501,70 @@ test("faction work a faction doesn't offer (#151): not converged, with the page'
   expect(latestFast(dataDirectory)?.work).toEqual({
     converged: false,
     problem: 'no "Field Work" on CyberSec\'s page (does it offer field work?)',
+    backend: "ui",
+  });
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
+/** The Work page's title for a waiter at Noodle Bar: shown while the player is focused on the job. */
+const waiterPageShown = (page: Page) => async () =>
+  (await page.locator("h6", { hasText: "You are currently working as a Waiter at Noodle Bar" }).count()) > 0;
+const NOODLE_BAR_WAITER = { kind: "company", company: "Noodle Bar", field: "Waiter" } as const;
+
+test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the alert closed, worked focused; refocused, not restarted; after a travel, its Job page", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    city: "New Tokyo",
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, NOODLE_BAR_WAITER);
+  await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  // The worker closed the hiring's alert itself: the dialog watcher, which would close it too, never saw it.
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("Congratulations"))).toEqual([]);
+  const hired = () => JSON.stringify(latestMedium(dataDirectory)?.player.jobs) === '{"Noodle Bar":"Waiter"}';
+  await advanceUntil(page, async () => hired(), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 12_000 });
+
+  // The owner does something else: within the activity's 30 s, the Agent focuses again, without starting the work
+  // again (which would end it first: "You finished working for Noodle Bar", `Work/CompanyWork.tsx`), or applying again.
+  await page.getByRole("button", { name: "Do something else simultaneously" }).click();
+  await expect(waiterPageShown(page)()).resolves.toBe(false);
+  await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You finished working for"))).toEqual([]);
+
+  // A travel to Aevum, then the owner stops working there: the job is still held (`getPlayer().jobs`), so within 30 s
+  // the Agent clicks its "Work" on the sidebar's Job page, away from Noodle Bar's city.
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Aevum", {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  await advanceGameTime(page, 2_000);
+  await expect(waiterPageShown(page)()).resolves.toBe(true);
+  await page.getByRole("button", { name: "Stop working" }).click();
+  await expect(waiterPageShown(page)()).resolves.toBe(false);
+  await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  expect(latestMedium(dataDirectory)?.player.city).toBe("Aevum");
+  await advanceGameTime(page, 4_000);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("company work in another city (#153): not converged, saying where the player is, and the page left on the Terminal", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, NOODLE_BAR_WAITER);
+  await advanceUntil(page, async () => (latestFast(dataDirectory)?.work?.backend ?? null) !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({
+    converged: false,
+    problem: "no Noodle Bar in the city (is the player in its city?)",
     backend: "ui",
   });
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);

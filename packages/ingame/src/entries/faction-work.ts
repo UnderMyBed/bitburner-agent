@@ -12,24 +12,27 @@
 // - Stopped on the way, it leaves the player as found: focused again on their own work, or on the Terminal.
 // - The focus is this worker's to set, so `reportPageEffect` leaves the page where the steps do.
 // RAM: nothing beyond the base (ram-budget.json); the page costs nothing.
-import type { FactionWorkType } from "@bitburner-agent/core";
+import type { FactionWorkType, Work } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
-import { convergeOnPage, workShown } from "../page/faction-work-page.ts";
 import { openGamePage } from "../page/game-page.ts";
 import { reportPageEffect } from "../page/page-effect.ts";
+import { convergeWorkOnPage, workShown } from "../page/work-page.ts";
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
-  const faction = String(ns.args[0] ?? "");
-  const workType = String(ns.args[1] ?? "") as FactionWorkType;
-  const focus = String(ns.args[2] ?? "") === "true";
+  const work: Work = {
+    kind: "faction",
+    faction: String(ns.args[0] ?? ""),
+    workType: String(ns.args[1] ?? "") as FactionWorkType,
+    focus: String(ns.args[2] ?? "") === "true",
+  };
   const deadlineMs = Number(ns.args[3] ?? 0);
   const reader = openGamePage(ns, deadlineMs);
   await reportPageEffect(ns, deadlineMs, {
-    isDone: () => reader !== null && workShown(reader, faction, workType) === (focus ? "focused" : "unfocused"),
+    isDone: () => reader !== null && workShown(reader, work) === (work.focus ? "focused" : "unfocused"),
     doing: "work through",
-    steps: (gamePage, wasFocused) => convergeOnPage(gamePage, { faction, workType, focus }, wasFocused),
-    notDoneAfter: `not ${focus ? "focused on" : "doing"} ${workType} work for ${faction} after starting it`,
+    steps: (gamePage, { wasFocused }) => convergeWorkOnPage(gamePage, work, { wasFocused }),
+    notDoneAfter: `not ${work.focus ? "focused on" : "doing"} ${work.workType} work for ${work.faction} after starting it`,
     ending: "steps",
   });
 }

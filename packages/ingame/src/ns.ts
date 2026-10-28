@@ -7,5 +7,8 @@ export type { NS };
 export type FactionName = Parameters<NS["singularity"]["joinFaction"]>[0];
 /** The game's augmentation names, likewise. */
 export type AugmentationName = Parameters<NS["singularity"]["purchaseAugmentation"]>[1];
+/** The game's company names and job fields, likewise. */
+export type CompanyName = Parameters<NS["singularity"]["applyToCompany"]>[0];
+export type JobField = Parameters<NS["singularity"]["applyToCompany"]>[1];
 /** The game's city names, likewise. */
 export type CityName = Parameters<NS["singularity"]["travelToCity"]>[0];

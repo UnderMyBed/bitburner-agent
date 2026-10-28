@@ -4,7 +4,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type FastSnapshotData, INTENT_ACTIONS } from "@bitburner-agent/core";
+import { type FastSnapshotData, INTENT_ACTIONS, JOB_FIELDS } from "@bitburner-agent/core";
 import { JSDOM } from "jsdom";
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
@@ -565,19 +565,41 @@ describe("work (#151)", () => {
     expect(textOf(unmanaged.document, "#work div")).toBe("Not managed: the game's work is left as it is.");
   });
 
-  test("the form sets the work, and the stop button stops managing it", async () => {
+  test("company work reads plainly too (#153)", async () => {
+    const work = {
+      desired: { kind: "company", company: "Noodle Bar", field: "Waiter", focus: false },
+      outcome: { converged: true, problem: null, backend: "ui" },
+    };
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work } }));
+    expect(textOf(document, "#work div")).toBe("Waiter work at Noodle Bar, unfocused: converged via ui");
+  });
+
+  test("the company form offers the game's job fields, in order, Waiter first chosen as Noodle Bar's (#153)", async () => {
+    const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
+    const field = document.querySelector("#company-work select[name=field]") as HTMLSelectElement;
+    expect([...field.options].map((option) => option.textContent)).toEqual(Object.keys(JOB_FIELDS));
+    expect(field.value).toBe("Waiter");
+  });
+
+  test("the forms set faction or company work, and the stop button stops managing it", async () => {
     const { document, requests } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
-    const form = document.querySelector("#work form") as HTMLFormElement;
+    const form = document.querySelector("#faction-work") as HTMLFormElement;
     (form.elements.namedItem("faction") as HTMLInputElement).value = "NiteSec";
     (form.elements.namedItem("workType") as HTMLSelectElement).value = "field";
     form.requestSubmit();
     await settle();
     (document.querySelector("#stop-work") as HTMLButtonElement).click();
     await settle();
+    const companyForm = document.querySelector("#company-work") as HTMLFormElement;
+    (companyForm.elements.namedItem("company") as HTMLInputElement).value = "Joe's Guns";
+    (companyForm.elements.namedItem("field") as HTMLSelectElement).value = "Employee";
+    companyForm.requestSubmit();
+    await settle();
     const posts = requests.filter((request) => request.method === "POST");
     expect(posts.map((request) => [request.url, JSON.parse(String(request.body))])).toEqual([
       ["/api/work", { work: { faction: "NiteSec", workType: "field" } }],
       ["/api/work", { work: null }],
+      ["/api/work", { work: { kind: "company", company: "Joe's Guns", field: "Employee" } }],
     ]);
   });
 });

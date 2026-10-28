@@ -126,3 +126,28 @@ test("each backend: the simulator's effector, or the Singularity worker once the
     ["agent/abcdef123456/singularity-faction-work.js", ["CyberSec", "hacking", "true"]],
   ]);
 });
+
+test("company work (#153): each backend's worker and arguments, and the simulator's effector", async () => {
+  const waiter: Work = { kind: "company", company: "Noodle Bar", field: "Waiter", focus: false };
+  const viaPage = activityWith(() => CONVERGED);
+  viaPage.work.desire(waiter);
+  await viaPage.round();
+  expect(viaPage.calls()).toEqual([["agent/abcdef123456/company-work.js", ["Noodle Bar", "Waiter", "false"]]]);
+  const viaSingularity = activityWith(() => CONVERGED, { available: true });
+  viaSingularity.work.desire(waiter);
+  await viaSingularity.round();
+  expect(viaSingularity.calls()).toEqual([
+    ["agent/abcdef123456/singularity-company-work.js", ["Noodle Bar", "Waiter", "false"]],
+  ]);
+  const simCalls: unknown[][] = [];
+  (globalThis as Record<string, unknown>).__bitburnerAgentSim = {
+    convergeCompanyWork: (...args: unknown[]) => {
+      simCalls.push(args);
+      return CONVERGED;
+    },
+  };
+  const viaSim = activityWith(() => CONVERGED);
+  viaSim.work.desire(waiter);
+  await viaSim.round();
+  expect(simCalls).toEqual([["Noodle Bar", "Waiter", false]]);
+});

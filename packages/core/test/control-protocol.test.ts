@@ -76,6 +76,13 @@ describe("round trips", () => {
       intents: [],
       work: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
     },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: false, target: null, hosts: [] },
+      intents: [],
+      work: { kind: "company", company: "Noodle Bar", field: "Waiter", focus: false },
+    },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
   });
@@ -141,6 +148,7 @@ describe("rejected, each with a reason", () => {
   const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop, intents: [travel] };
   const withIntents = (...intents: unknown[]) => ({ ...desiredState, intents });
   const factionWork = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
+  const companyWork = { kind: "company", company: "Noodle Bar", field: "Waiter", focus: true };
   test.each([
     ["no hack loop", { ...desiredState, hackLoop: undefined }],
     ["a hack loop that isn't an object", { ...desiredState, hackLoop: true }],
@@ -162,6 +170,12 @@ describe("rejected, each with a reason", () => {
     ["work for a faction that isn't one", { ...desiredState, work: { ...factionWork, faction: "The Gibson" } }],
     ["work of a type the game hasn't", { ...desiredState, work: { ...factionWork, workType: "espionage" } }],
     ["work whose focus isn't a boolean", { ...desiredState, work: { ...factionWork, focus: "yes" } }],
+    ["company work at a company that isn't one", { ...desiredState, work: { ...companyWork, company: "Gibson Inc" } }],
+    ["company work in a field that isn't one", { ...desiredState, work: { ...companyWork, field: "Juggler" } }],
+    [
+      "company work in a field named by a prototype's key",
+      { ...desiredState, work: { ...companyWork, field: "toString" } },
+    ],
     [
       "over 100 intents, each valid and different",
       withIntents(

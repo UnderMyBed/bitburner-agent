@@ -6,9 +6,14 @@
 import { getAugCost } from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
 import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
+import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
+import { CompanyPositions } from "../../../../../vendor/bitburner-src/src/Company/CompanyPositions";
+import { JobTracks } from "../../../../../vendor/bitburner-src/src/Company/data/JobTracks";
+import { CompanyName } from "../../../../../vendor/bitburner-src/src/Company/Enums";
+import { companyNameAsLocationName } from "../../../../../vendor/bitburner-src/src/Company/utils";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
-import { CityName, FactionWorkType } from "../../../../../vendor/bitburner-src/src/Enums";
+import { CityName, FactionWorkType, type JobField } from "../../../../../vendor/bitburner-src/src/Enums";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
 import {
   getFactionAugmentationsFiltered,
@@ -17,6 +22,7 @@ import {
   purchaseAugmentation,
 } from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
 import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
+import { Locations } from "../../../../../vendor/bitburner-src/src/Locations/Locations";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
 import { ServerConstants } from "../../../../../vendor/bitburner-src/src/Server/data/Constants";
@@ -25,6 +31,7 @@ import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Setti
 import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { dialogBoxCreate } from "../../../../../vendor/bitburner-src/src/ui/React/DialogBox";
 import { Page } from "../../../../../vendor/bitburner-src/src/ui/Router";
+import { CompanyWork, isCompanyWork } from "../../../../../vendor/bitburner-src/src/Work/CompanyWork";
 import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/src/Work/FactionWork";
 
 /**
@@ -177,6 +184,59 @@ const effectors = {
       isThisWork() && Player.focus === focus,
       `not ${focus ? "focused on" : "doing"} ${workType} work for ${factionName} (is it joined, and does it offer it?)`,
     );
+  },
+  /**
+   * The work activity's effector for company work (#153), as the page does it. A job in the field there already: its
+   * "Work" on the sidebar's Job page, from any city (`Locations/ui/JobRoot.tsx`). Otherwise the company's page, only in
+   * its city (`Locations/ui/CompanyLocation.tsx`), and the field's job as `Company/ui/JobListings.tsx` lists it: one the
+   * player qualifies for (applying climbs to the highest, `applyForJob`), or else the field's first, disabled; neither,
+   * nothing to apply for. Then "Work", focused on the Work page; then the focus as the focus buttons set it. Already so:
+   * nothing touched. Not named `workForCompany`, which is an NS function. The problems read as the `ui` worker's.
+   */
+  convergeCompanyWork(companyName: string, field: string, focus: boolean): EffectorResult {
+    const company = Object.values(CompanyName).includes(companyName as CompanyName)
+      ? Companies[companyName as CompanyName]
+      : undefined;
+    const track = JobTracks[field as JobField] ?? [];
+    const hasJobInField = () => track.some((job) => Player.jobs[companyName as CompanyName] === job);
+    const isThisWork = () =>
+      isCompanyWork(Player.currentWork) && Player.currentWork.companyName === companyName && hasJobInField();
+    const notConverged = `not ${focus ? "focused on" : "doing"} ${field} work at ${companyName}`;
+    if (company === undefined || track.length === 0) return result(false, notConverged);
+    if (!isThisWork()) {
+      if (!hasJobInField()) {
+        if (Locations[companyNameAsLocationName(company.name)]?.city !== Player.city) {
+          return result(false, `no ${companyName} in the city (is the player in its city?)`);
+        }
+        const offered = track.filter((job) => company.companyPositions.has(job)).map((job) => CompanyPositions[job]);
+        const position = offered.find((job) => Player.isQualified(company, job));
+        if (position === undefined) {
+          return result(
+            false,
+            offered.some((job) => job.isStartingJob)
+              ? `not qualified for a ${field} job at ${companyName} yet`
+              : `no ${field} job open to the player at ${companyName} (none offered, or not qualified yet)`,
+          );
+        }
+        const applied = Player.applyForJob(company, position);
+        if (applied.message) dialogBoxCreate(applied.message);
+      }
+      if (hasJobInField()) {
+        Player.startWork(new CompanyWork({ singularity: false, companyName: company.name }));
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      }
+    }
+    if (isThisWork() && Player.focus !== focus) {
+      if (focus) {
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      } else {
+        // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
+        Router.toPage(Page.Job);
+      }
+    }
+    return result(isThisWork() && Player.focus === focus, notConverged);
   },
 };
 

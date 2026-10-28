@@ -3,6 +3,7 @@
 import {
   EFFECTOR_BACKENDS,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
+  PART_TIME_JOB_FIELDS,
   parseWork,
   type SlowSnapshotData,
   type Work,
@@ -12,8 +13,11 @@ import type { TelemetryStore } from "./telemetry-store.ts";
 
 export const WORK_SETTING = "work.desired";
 
+/** `Omit` over each member of a union, not over their common fields. */
+type OmitEach<Union, Key extends PropertyKey> = Union extends unknown ? Omit<Union, Key> : never;
+
 /** The work as the owner sets it: what, not the focus, which the brain works out (`workFocus`). */
-export type OwnersWork = Omit<Work, "focus">;
+export type OwnersWork = OmitEach<Work, "focus">;
 
 /** What the dashboard shows of the work. */
 export interface WorkView {
@@ -26,7 +30,10 @@ export interface WorkView {
   outcome: WorkOutcome | null;
 }
 
-/** `request` (`{ faction, workType }`, or null to stop managing work) as the owner's work, or why it isn't valid. */
+/**
+ * `request` (`{ faction, workType }`, `{ kind: "company", company, field }`, or null to stop managing work) as the
+ * owner's work, or why it isn't valid.
+ */
 export function parseOwnersWork(
   request: unknown,
 ): { ok: true; work: OwnersWork | null } | { ok: false; reason: string } {
@@ -58,10 +65,12 @@ export function writeOwnersWork(store: TelemetryStore, work: OwnersWork | null):
 }
 
 /**
- * Whether work goes focused (decision 37): yes, for full gains, unless the Neuroreceptor Management Implant is
- * installed, which gives them unfocused too. No work is sent before the slow snapshot says; the view shows focused.
+ * Whether work goes focused (decision 37): yes, for full gains, unless they come unfocused too: the Neuroreceptor
+ * Management Implant installed, or a part-time job (#153). No work is sent before the slow snapshot says; the view
+ * shows focused.
  */
-export function workFocus(slowData: SlowSnapshotData | null): boolean {
+export function workFocus(work: OwnersWork, slowData: SlowSnapshotData | null): boolean {
+  if (work.kind === "company" && PART_TIME_JOB_FIELDS.includes(work.field)) return false;
   const installed = slowData?.resetInfo?.ownedAugs;
   return !(typeof installed === "object" && installed !== null && NEURORECEPTOR_MANAGEMENT_IMPLANT in installed);
 }
