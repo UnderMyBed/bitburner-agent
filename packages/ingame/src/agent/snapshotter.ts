@@ -4,7 +4,8 @@
 // - fast, every round, always sent (the heartbeat), even when its worker can't run;
 // - medium every 5th round (10 s), slow every 30th (60 s), both in the first round after each welcome;
 // - static, once per Agent start, resent from memory after each welcome.
-// Workers run one at a time, as temporary scripts, and report through a port. Every wait ends with the round, so a
+// Workers run one at a time (but the Singularity backdoor's, which outlives its round, #162), as temporary scripts, and
+// report through a port. Every wait ends with the round, so a
 // round never runs past 2 s and the heartbeat is never more than two rounds apart. A tier whose worker can't start,
 // doesn't report in time, or is still running from before is skipped, named in `degradedTiers`, and tried again next
 // round, until it succeeds.

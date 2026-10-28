@@ -4,7 +4,9 @@
 // - `connect` home, then along the way from home (`NetscriptFunctions/Singularity.ts:476-511`), then
 //   `installBackdoor()` (`:518-560`), which takes hacking time / 4 and leaves the terminal free. A script killed
 //   meanwhile leaves no backdoor, so the worker stays until it ends, then `connect`s home. One that won't end within
-//   the round is reported at once ("installing … s left"); the next try finds this worker still running.
+//   the round writes its report at once ("installing … s left"), though the Agent still waits out the round for the
+//   worker (`run-worker.ts`); the next try, 30 s on, finds it still running if it is, and holds 8 GB of home meanwhile,
+//   which the backend choice allows for (`effector-runner.ts`, free RAM).
 // RAM: `getServer` 2.0 + `scan` 0.2 + `serverExists` 0.1 + `getHackingLevel` and `getHackTime` 0.05 each +
 // `singularity.connect` and `singularity.installBackdoor` 2 each at SF4.3 or in BN4 (ram-budget.json).
 import type { EffectorReport } from "@bitburner-agent/core";

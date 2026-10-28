@@ -2,8 +2,10 @@
  * The Singularity backend's home workers (#145, architecture §5.6): one per action, so each costs only its own call.
  * They never run on a fresh save, so the fresh-save check (the Agent's budget plus its largest worker within 8 GB) leaves
  * them out: at SF4.3 or in BN4 the first four are within today's largest fresh-save worker, the faction join is 5.1 GB,
- * the augmentation purchase 12.6 GB, faction work 5.3 GB (#151), company work 8.8 GB (#153), crime 7.3 GB (#156) and classes 6.8 GB (#158). With less of SF4 the game charges their calls 4× or 16×
- * (`Netscript/RamCostGenerator.ts:82-95`). One that doesn't fit home beside the Agent leaves its action to the page.
+ * the augmentation purchase 12.6 GB, faction work 5.3 GB (#151), company work 8.8 GB (#153), crime 7.3 GB (#156),
+ * classes 6.8 GB (#158) and backdoors 8.0 GB (#162). With less of SF4 the game charges their calls 4× or 16×
+ * (`Netscript/RamCostGenerator.ts:82-95`). One that doesn't fit home beside the Agent, or home's free RAM at the time,
+ * leaves its action to the page.
  * Used by the in-game code and the bridge's deployer.
  */
 export const SINGULARITY_TRAVEL_WORKER_NAME = "singularity-travel.js";
@@ -18,12 +20,15 @@ export const SINGULARITY_BUY_AUGMENTATION_WORKER_NAME = "singularity-buy-augment
 export const SINGULARITY_FACTION_WORK_WORKER_NAME = "singularity-faction-work.js";
 /** 8.8 GB: `getPlayer`, `getCurrentWork`, `isFocused`, `applyToCompany`, `workForCompany` and `setFocus` (#153). */
 export const SINGULARITY_COMPANY_WORK_WORKER_NAME = "singularity-company-work.js";
-/** `getServer`, `scan`, `singularity.connect` and `singularity.installBackdoor` (#162). */
-export const SINGULARITY_BACKDOOR_WORKER_NAME = "singularity-backdoor.js";
 /** 7.3 GB: `getCurrentWork`, `isFocused`, `commitCrime` and `setFocus` (#156). */
 export const SINGULARITY_CRIME_WORK_WORKER_NAME = "singularity-crime-work.js";
 /** 6.8 GB: `getPlayer`, `getCurrentWork`, `isFocused`, `universityCourse`, `gymWorkout` and `setFocus` (#158). */
 export const SINGULARITY_CLASS_WORK_WORKER_NAME = "singularity-class-work.js";
+/**
+ * 8.0 GB: `getServer`, `scan`, `serverExists`, `getHackingLevel`, `getHackTime`, `singularity.connect` and
+ * `singularity.installBackdoor` (#162). It stays past its round until the backdoor ends.
+ */
+export const SINGULARITY_BACKDOOR_WORKER_NAME = "singularity-backdoor.js";
 
 /** The most the game multiplies a Singularity function's RAM by: 16, with no SF4 or SF4.1 outside BN4. */
 export const SINGULARITY_MOST_RAM_MULTIPLIER = 16;

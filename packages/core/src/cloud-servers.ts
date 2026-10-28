@@ -23,8 +23,8 @@ export const WORLD_DAEMON = "w0r1d_d43m0n";
 /** The longest hostname the brain asks for: the game sets none, but a hostname is shown and typed. */
 export const MAX_CLOUD_SERVER_HOSTNAME_LENGTH = 64;
 
-/** An IP address, as the game tells one (`Types/strings.ts:10-14`): the game refuses it as a hostname. */
-const IP_ADDRESS =
+/** An IP address, as the game tells one (also refused as a server for a backdoor, #162) (`Types/strings.ts:10-14`): the game refuses it as a hostname. */
+export const IP_ADDRESS =
   /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
 /**

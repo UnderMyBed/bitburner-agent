@@ -800,9 +800,10 @@ const BRUTE_SSH = intent({ action: "buyProgram", args: { program: "BruteSSH.exe"
 /**
  * A fresh start where nectar-net (layer 2, required level 20, no ports: `Server/data/servers.ts`) can be backdoored:
  * hacking level 22 (500 exp, the harness's `gainHackingExp`), and the owner's NUKE.exe run on it and on hong-fang-tea
- * (level 30). With money for the TOR router and BruteSSH.exe.
+ * (level 30), and the owner's cloud server `pserv-0` bought. With money for the TOR router and BruteSSH.exe, and home
+ * at `homeRam` GB if said.
  */
-function readyToBackdoor(options: { singularity: boolean } = { singularity: false }) {
+function readyToBackdoor(options: { singularity: boolean; homeRam?: number } = { singularity: false }) {
   return freshStart({
     withDesiredState: false,
     ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
@@ -811,19 +812,23 @@ function readyToBackdoor(options: { singularity: boolean } = { singularity: fals
       await game.simulation.diagnostics.gainHackingExp(500);
       await ownerRunsOnHome(
         game,
-        'export async function main(ns) { ns.nuke("nectar-net"); ns.nuke("hong-fang-tea"); }',
+        'export async function main(ns) { ns.nuke("nectar-net"); ns.nuke("hong-fang-tea"); ns.cloud.purchaseServer("pserv-0", 8); }',
       );
+      if (options.homeRam !== undefined) await game.simulation.diagnostics.setHomeRam(options.homeRam);
       if (options.singularity) await withoutSimEffectors(game);
     },
   });
 }
 type ReadyToBackdoor = Awaited<ReturnType<typeof readyToBackdoor>>;
 
-/** The server the terminal is connected to, as the game saves it. */
-async function terminalServer(fresh: ReadyToBackdoor) {
+/** The player as the game saves it. */
+async function savedPlayer(fresh: ReadyToBackdoor) {
   const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
-  return JSON.parse(saveObject.data.PlayerSave).data.currentServer as string;
+  return JSON.parse(saveObject.data.PlayerSave).data as { currentServer: string; terminalCommandHistory: string[] };
 }
+
+/** The server the terminal is connected to, as the game saves it. */
+const terminalServer = async (fresh: ReadyToBackdoor) => (await savedPlayer(fresh)).currentServer;
 
 /** Whether the medium snapshot shows `hostname` backdoored (`backdoorInstalled`, `snapshot-medium.ts`). */
 const backdoorSeen = (fresh: ReadyToBackdoor, hostname: string) =>
@@ -851,20 +856,31 @@ test("a backdoor (sim, #162): typed through the terminal, which stays busy for i
   ]);
   // The try that found it installed typed `home`.
   expect(await terminalServer(fresh)).toBe("home");
+  // Sent again as a new intent: done at its first try, from the game alone, nothing typed.
+  const historyBefore = (await savedPlayer(fresh)).terminalCommandHistory;
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [backdoorOn("nectar-net")] });
+  expect(await triedOnce(fresh, "backdoor(nectar-net)")).toMatchObject({ done: true, tries: 1, problem: null });
+  expect((await savedPlayer(fresh)).terminalCommandHistory).toEqual(historyBefore);
 });
 
-test("a backdoor (sim, #162): refused without root, below the required level, on home and on no server, each saying why", async () => {
+test("a backdoor (sim, #162): refused without root, below the required level, on home, a cloud server and no server, each saying why, nothing typed", async () => {
   const fresh = await readyToBackdoor();
-  const refused = ["foodnstuff", "hong-fang-tea", "home", "nowhere"].map(backdoorOn);
+  const historyBefore = (await savedPlayer(fresh)).terminalCommandHistory;
+  const refused = ["foodnstuff", "hong-fang-tea", "home", "pserv-0", "nowhere"].map(backdoorOn);
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: refused });
   const outcomes = () => fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
-  await fresh.game.runUntil(() => outcomes().length === 4 && outcomes().every((each) => each.tries >= 1), 10_000);
+  await fresh.game.runUntil(() => outcomes().length === 5 && outcomes().every((each) => each.tries >= 1), 10_000);
   expect(outcomes().map(({ done, problem }) => [done, problem])).toEqual([
     [false, "no root access on foodnstuff (NUKE.exe first)"],
     [false, "hacking level 22: hong-fang-tea needs 30"],
     [false, "home is the player's own: the game backdoors only others' servers"],
+    [false, "pserv-0 is the player's own: the game backdoors only others' servers"],
     [false, "no server nowhere"],
   ]);
+  // Not a command typed: the terminal's history is as it was.
+  expect((await savedPlayer(fresh)).terminalCommandHistory).toEqual(historyBefore);
   expect(await terminalServer(fresh)).toBe("home");
 });
 
@@ -893,4 +909,21 @@ test("a backdoor (singularity, #162): with SF4.3, connected along the way and in
     "home is the player's own: the game backdoors only others' servers",
   ]);
   expect(await terminalServer(fresh)).toBe("home");
+});
+
+test("a backdoor (singularity, #162): its worker holds 8 GB of a 16 GB home meanwhile, so work uses the page, then Singularity again", async () => {
+  // 16 GB: the Agent's 3 and the backdoor worker's 8 leave 5 free, short of the crime worker's 7.3 (#156).
+  const fresh = await readyToBackdoor({ singularity: true, homeRam: 16 });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  const shoplift: Work = { kind: "crime", crime: "Shoplift", focus: false };
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [backdoorOn("nectar-net")], work: shoplift });
+  expect((await triedOnce(fresh, "backdoor(nectar-net)"))?.problem).toMatch(/^installing the backdoor/);
+  const work = () => fresh.latest<FastSnapshotData>("fast")?.work;
+  await fresh.game.runUntil(() => work()?.backend != null, 10_000);
+  // The page, which the simulator doesn't render: not a Singularity worker that couldn't start.
+  expect(work()).toMatchObject({ converged: false, backend: "ui" });
+  expect(work()?.problem).not.toMatch(/couldn't start/);
+  await fresh.game.runUntil(() => backdoorSeen(fresh, "nectar-net"), 60_000);
+  await fresh.game.runUntil(() => work()?.converged === true, 40_000);
+  expect(work()).toMatchObject({ converged: true, backend: "singularity" });
 });

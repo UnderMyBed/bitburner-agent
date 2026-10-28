@@ -5,8 +5,9 @@
 // - A new intent is due at once. One not done is tried again every 15 rounds (30 s), logging why each time.
 // - One done is never run again while the brain keeps sending it: the brain sees it done in its next medium snapshot,
 //   and stops sending it. One that leaves the list and comes back is new.
-// - A worker that doesn't run (home full, no time left) is tried again next round. It counts as a try. One whose last
-//   copy is still running (a Singularity backdoor waits for it to end, #162) is tried again 30 s later, as one not done.
+// - A worker that doesn't run (home full, no time left) is tried again next round. It counts as a try. One whose
+//   last copy is still running (a Singularity backdoor's waits for it to end, #162) is tried again 30 s later, as if
+//   not done.
 // - What happened to each is in the fast snapshot (`outcomes`), for the brain and the dashboard.
 // - Each try picks its backend (#145) and runs the effector through ./effector-runner.ts. A Singularity worker that
 //   can't start for now (home full) or doesn't report is tried again, as any worker is.
@@ -27,6 +28,8 @@ interface HeldIntent {
   schedule: ReturnType<typeof createRoundSchedule>;
   logChange: (line: string) => void;
   outcome: IntentOutcome;
+  /** The last problem a worker reported, kept while its worker is still at it (a Singularity backdoor's, #162). */
+  lastReported: string | null;
 }
 
 export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner: EffectorRunner }) {
@@ -42,6 +45,8 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
     if (report === null) {
       entry.outcome.problem = tried.noReportReason;
       if (tried.stillRunning) {
+        // What it said when it started ("installing the backdoor on CSEC: about 40 s left") says more.
+        if (entry.lastReported !== null) entry.outcome.problem = `${entry.lastReported} (its worker is still at it)`;
         entry.schedule.dueAfter(ROUNDS_BETWEEN_TRIES);
         entry.logChange(
           `${entry.outcome.problem}; trying again in ${(ROUNDS_BETWEEN_TRIES * SNAPSHOT_ROUND_MS) / 1000} s`,
@@ -52,6 +57,7 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
       return;
     }
     entry.outcome.problem = report.problem;
+    entry.lastReported = report.problem;
     // A problem after it's done is still worth knowing: the page may not be back on the Terminal.
     const problem = report.problem === null ? "" : `: ${report.problem}`;
     if (report.done) {
@@ -78,6 +84,7 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
           schedule: createRoundSchedule(),
           logChange: createChangeLog(ns, effectorFor(intent).description),
           outcome: { id: intent.id, done: false, tries: 0, problem: null, backend: null },
+          lastReported: null,
         };
       });
     },

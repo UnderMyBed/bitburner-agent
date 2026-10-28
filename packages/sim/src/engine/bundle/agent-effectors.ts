@@ -80,10 +80,17 @@ type EffectorResult = { done: boolean; problem: string | null };
 
 const result = (done: boolean, problem: string): EffectorResult => ({ done, problem: done ? null : problem });
 
-/** What the `ui` effectors that type report while the terminal runs an action: its input is disabled (#162). */
+/**
+ * What the `ui` effectors that type report while the terminal runs an action: its input is disabled (#162). A copy of
+ * the in-game `TERMINAL_BUSY` (`ingame/src/page/game-page.ts`), which this bundle can't import (see
+ * `AGENT_SIM_EFFECTORS_GLOBAL`); the effector-backends suite checks the wording, and fails if the two drift.
+ */
 const TERMINAL_BUSY = "terminal busy";
 
-/** The hostnames to `connect` to, in turn, from home to `hostname`, breadth-first as the `ui` worker's `scan` finds. */
+/**
+ * The hostnames to `connect` to, in turn, from home to `hostname`, breadth-first as the `ui` worker's `scan` finds:
+ * a copy of `ingame/src/workers/route-from-home.ts`, over the game's own links, for the same reason.
+ */
 function routeFromHome(hostname: string): string[] | null {
   const cameFrom = new Map<string, string | null>([["home", null]]);
   const queue = ["home"];
@@ -429,22 +436,25 @@ const effectors = {
     return result(isThisWork() && Player.focus === focus, notConverged);
   },
   /**
-   * A backdoor (#162) as the `ui` worker types it: the same checks and problems first (`Terminal/commands/backdoor.ts`),
+   * A backdoor (#162) as the `ui` worker types it: the same checks and problems first (`commands/backdoor.ts`),
    * then the terminal's own commands (`Terminal.executeCommands`): `home`, `connect` along the way, `backdoor`. The
-   * engine counts its action down (hacking time / 4, `Terminal/Terminal.ts:233-253`, `engine.tsx:96`) as on the page,
+   * engine counts its action down (hacking time / 4, `Terminal/Terminal.ts:233-243`, `engine.tsx:96`) as on the page,
    * the terminal busy meanwhile; the try that finds it installed, the terminal still there, types `home`. Not named
    * `installBackdoor`, which is an NS function.
    */
   backdoorServer(hostname: string): EffectorResult {
     const server = GetServer(hostname);
-    // The `ui` worker's `serverExists`: a server on the network (`NetscriptFunctions.ts:1051-1055`).
-    if (server === null || server.serversOnNetwork.length === 0) return result(false, `no server ${hostname}`);
+    // The `ui` worker's `serverExists`: a server on the network, or the dark net's (`NetscriptFunctions.ts:1051-1055`).
+    if (server === null || (server.serversOnNetwork.length === 0 && !(server instanceof DarknetServer))) {
+      return result(false, `no server ${hostname}`);
+    }
     const installed = () => server.backdoorInstalled;
     // Read afresh each time: the terminal's commands start and end its action.
     const action = (): { timeLeft: number } | null => Terminal.action;
     if (installed() && !server.isConnectedTo) return result(true, "");
-    if (action() !== null) return result(false, TERMINAL_BUSY);
+    // In the `ui` worker's order: its refusals come first, and only the typing finds the terminal busy.
     if (installed()) {
+      if (action() !== null) return result(false, TERMINAL_BUSY);
       Terminal.executeCommands("home");
       return result(!server.isConnectedTo, `the terminal is still on ${hostname}`);
     }
@@ -458,6 +468,7 @@ const effectors = {
     }
     const route = routeFromHome(hostname);
     if (route === null) return result(false, `no way from home to ${hostname}`);
+    if (action() !== null) return result(false, TERMINAL_BUSY);
     if (Player.currentServer !== "home") Terminal.executeCommands("home");
     for (const hop of route) {
       Terminal.executeCommands(`connect ${hop}`);
@@ -465,11 +476,11 @@ const effectors = {
     }
     Terminal.executeCommands("backdoor");
     const running = action();
-    if (running === null) return result(false, `the terminal didn't install the backdoor on ${hostname}`);
-    const msLeft = running.timeLeft * 1000;
+    if (running === null) return result(false, `the terminal didn't start the backdoor on ${hostname}`);
+    // The `ui` worker's wording (`installingProblem`, `ingame/src/workers/backdoor-standing.ts`); `timeLeft` is in s.
     return result(
       false,
-      `installing the backdoor on ${hostname}: about ${Math.max(1, Math.ceil(msLeft / 1000))} s left`,
+      `installing the backdoor on ${hostname}: about ${Math.max(1, Math.ceil(running.timeLeft))} s left`,
     );
   },
 };

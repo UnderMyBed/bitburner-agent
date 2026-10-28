@@ -18,6 +18,7 @@ function activityWith(answer: () => EffectorReport | "no report", singularity = 
     getScriptName: () => "agent/abcdef123456/agent.js",
     getScriptRam: (script: string) => (script.endsWith("/agent.js") ? 3 : 4.65),
     getServerMaxRam: () => 32,
+    getServerUsedRam: () => 3,
   } as unknown as NS;
   const runWorker = vi.fn(async (): Promise<WorkerRun> => {
     const report = answer();

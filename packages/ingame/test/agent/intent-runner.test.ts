@@ -26,12 +26,13 @@ const DONE: EffectorReport = { done: true, problem: null };
 /**
  * A runner whose stand-in workers report what `answer` gives for each run, and its log. `singularity` says whether the
  * game has Singularity; a stand-in for a worker that "can't start" is `"no report"`, and one that "didn't report" is
- * `"silent"`. Home has `home.maxRam` GB; the Agent takes 3 and each worker 4.65.
+ * `"silent"`. Home has `home.maxRam` GB, `home.usedRam` of it in use (the Agent's 3 unless said); the Agent takes 3
+ * and each worker 4.65.
  */
 function runnerWith(
   answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report" | "silent",
   singularity = { available: false },
-  home = { maxRam: 8 },
+  home: { maxRam: number; usedRam?: number } = { maxRam: 8 },
 ) {
   const lines: string[] = [];
   const ns = {
@@ -39,6 +40,7 @@ function runnerWith(
     getScriptName: () => "agent/abcdef123456/agent.js",
     getScriptRam: (script: string) => (script.endsWith("/agent.js") ? 3 : 4.65),
     getServerMaxRam: () => home.maxRam,
+    getServerUsedRam: () => home.usedRam ?? 3,
   } as unknown as NS;
   const runWorker = vi.fn(async (workerFile: string, workerArguments: unknown[]): Promise<WorkerRun> => {
     const report = answer(workerFile, workerArguments);
@@ -150,6 +152,21 @@ test("a worker whose last copy is still running (#162) is tried again 30 s later
   await round();
   expect(runWorker).toHaveBeenCalledTimes(2);
   expect(runner.outcomes()).toMatchObject([{ done: true, tries: 2 }]);
+});
+
+test("still running after it reported (#162): the outcome keeps what the worker said, the countdown, and says so", async () => {
+  const installing = notDone("installing the backdoor on CSEC: about 40 s left");
+  const { runner, runWorker, round } = runnerWith(() => installing);
+  runWorker.mockImplementationOnce(async () => ({
+    outcome: "reported",
+    report: { workerPid: 1, data: installing } as never,
+  }));
+  runWorker.mockImplementationOnce(async () => ({ outcome: "stillRunning" }));
+  runner.desire([BACKDOOR_CSEC]);
+  for (let each = 0; each < 16; each += 1) await round();
+  expect(runner.outcomes()).toMatchObject([
+    { done: false, tries: 2, problem: "installing the backdoor on CSEC: about 40 s left (its worker is still at it)" },
+  ]);
 });
 
 test("a worker that doesn't run is tried again next round, logged on a change, and counted as a try", async () => {
@@ -319,6 +336,23 @@ describe("backends (#145)", () => {
     expect(workerFiles()).toEqual(Array(3).fill("agent/abcdef123456/singularity-travel.js"));
     expect(runner.outcomes()).toMatchObject([{ done: true, tries: 3, backend: "singularity" }]);
     expect(lines.filter((line) => line.includes("doesn't fit home"))).toEqual([]);
+  });
+
+  test("a Singularity worker that fits home but not its free RAM now (#162: a backdoor's worker holds 8 GB): the page, this try", async () => {
+    // 16 GB with 12 in use (the Agent's 3, a Singularity backdoor's 8, and the owner's 1): 4 free, short of the
+    // stand-in worker's 4.65.
+    const home = { maxRam: 16, usedRam: 3 + 8 + 1 };
+    const { runner, lines, workerFiles, round } = runnerWith(() => notDone("not yet"), { available: true }, home);
+    runner.desire([AEVUM]);
+    await round();
+    expect(workerFiles()).toEqual(["agent/abcdef123456/travel.js"]);
+    expect(runner.outcomes()).toMatchObject([{ backend: "ui" }]);
+    // Not the "can never fit" line: it fits once the backdoor's worker is gone.
+    expect(lines.filter((line) => line.includes("doesn't fit home"))).toEqual([]);
+    home.usedRam = 3;
+    for (let each = 0; each < 15; each += 1) await round();
+    expect(workerFiles().at(-1)).toBe("agent/abcdef123456/singularity-travel.js");
+    expect(runner.outcomes()).toMatchObject([{ backend: "singularity" }]);
   });
 
   test("without Singularity, and without the simulator's effectors: the page", async () => {

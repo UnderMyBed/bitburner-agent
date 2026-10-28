@@ -6,9 +6,10 @@
 //   not done, with why, and nothing typed.
 // - The Terminal page; nothing typed while the terminal is busy (its input disabled) or holds the owner's line.
 // - `home` unless the terminal is there, `connect` along the way from home (each hop checked), then `backdoor`. Its
-//   action takes hacking time / 4 (`Terminal/Terminal.ts:233-253`) and disables the input until it ends: within the
-//   round, the worker waits and types `home`; longer, the backdoor goes on alone ("installing … s left"), and the try
-//   that finds it installed with the terminal still on the server types `home`. So the terminal ends home.
+//   action takes hacking time / 4 (`Terminal/Terminal.ts:233-243`) and disables the input until it ends: within the
+//   round, the worker waits and types `home`; longer, the backdoor goes on alone ("installing … s left", reported at
+//   once), and the try that finds it installed with the terminal still on the server types `home`. So the terminal
+//   ends home.
 // RAM: `getServer` 2.0 + `scan` 0.2 + `serverExists` 0.1 + `getHackingLevel` and `getHackTime` 0.05 each
 // (ram-budget.json); the page costs nothing.
 import type { NS } from "../ns.ts";
@@ -17,7 +18,15 @@ import { reportPageEffect } from "../page/page-effect.ts";
 import { backdoorStanding, installingProblem } from "../workers/backdoor-standing.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
 
-async function backdoorThroughTerminal(ns: NS, gamePage: GamePage, hostname: string): Promise<string | null> {
+/** Renders the page is given to show the backdoor's action started (its input disabled), before it's called refused. */
+const STARTED_WITHIN_RENDERS = 5;
+
+async function backdoorThroughTerminal(
+  ns: NS,
+  gamePage: GamePage,
+  hostname: string,
+  deadlineMs: number,
+): Promise<string | null> {
   const opened = await gamePage.openSidebarPage("Terminal");
   if (opened !== null) return opened;
   const standing = backdoorStanding(ns, hostname);
@@ -36,10 +45,17 @@ async function backdoorThroughTerminal(ns: NS, gamePage: GamePage, hostname: str
   const endsAtMs = Date.now() + ns.getHackTime(hostname) / 4;
   const typed = await gamePage.runTerminalCommand("backdoor");
   if (typed !== null) return typed;
-  // The game disables the input while the action runs.
+  // The game disables the input while the action runs: given a few renders to show, as a page under load is slow.
+  const installed = () => ns.getServer(hostname).backdoorInstalled === true;
+  for (let render = 0; render < STARTED_WITHIN_RENDERS && gamePage.terminalBusy() !== true && !installed(); render++) {
+    await gamePage.waitARender();
+  }
+  if (gamePage.terminalBusy() !== true && !installed()) return `the terminal didn't start the backdoor on ${hostname}`;
+  // One that won't end within the round goes on alone: the round's time is the other intents'.
+  if (endsAtMs >= deadlineMs) return installingProblem(hostname, endsAtMs - Date.now());
   while (gamePage.terminalBusy() === true && !gamePage.stepsTimeUp()) await gamePage.waitARender();
   if (gamePage.terminalBusy() === true) return installingProblem(hostname, endsAtMs - Date.now());
-  if (!ns.getServer(hostname).backdoorInstalled) return `the terminal didn't install the backdoor on ${hostname}`;
+  if (!installed()) return `the terminal didn't install the backdoor on ${hostname}`;
   return gamePage.runTerminalCommand("home");
 }
 
@@ -58,7 +74,7 @@ export async function main(ns: NS): Promise<void> {
       return now.installed && !now.terminalThere;
     },
     doing: "type the backdoor into",
-    steps: (gamePage) => backdoorThroughTerminal(ns, gamePage, hostname),
+    steps: (gamePage) => backdoorThroughTerminal(ns, gamePage, hostname, deadlineMs),
     notDoneAfter: `no backdoor on ${hostname}, or the terminal still on it`,
   });
 }

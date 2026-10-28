@@ -51,7 +51,7 @@ const TERMINAL_INPUT_XPATH = "//*[@id='terminal-input']";
  * What a terminal effector reports while the terminal runs an action (a backdoor, a hack, #162): the game disables the
  * input until it ends (`Terminal/ui/TerminalInput.tsx:442`), and refuses any command meanwhile (`Terminal.ts:707`).
  */
-export const TERMINAL_BUSY = "terminal busy";
+const TERMINAL_BUSY = "terminal busy";
 
 /** The Work page's button that unfocuses the player. */
 const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";

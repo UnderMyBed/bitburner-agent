@@ -103,6 +103,7 @@ describe("parseIntentRequest", () => {
     ["a backdoor on ''", { action: "backdoor", args: { hostname: "" } }],
     ["a backdoor on a name of 65 characters", { action: "backdoor", args: { hostname: "x".repeat(65) } }],
     ["a backdoor on a name that isn't text", { action: "backdoor", args: { hostname: 7 } }],
+    ["a backdoor on an IP address", { action: "backdoor", args: { hostname: "10.0.0.1" } }],
     ["a backdoor on w0r1d_d43m0n, which ends the BitNode", { action: "backdoor", args: { hostname: "w0r1d_d43m0n" } }],
   ])("refuses %s, with a reason", (_description, request) => {
     const parsed = parseIntentRequest(request);

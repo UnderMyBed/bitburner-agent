@@ -7,7 +7,7 @@
  * "RAM"), so the actions are only ever strings here, never identifiers: `upgradeHomeRam` is a Singularity function.
  */
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
-import { isServerHostname, MAX_HOSTNAME_LENGTH } from "./backdoors.ts";
+import { isServerHostname } from "./backdoors.ts";
 import {
   CLOUD_SERVER_MAX_RAM,
   isCloudServerHostname,
@@ -31,7 +31,7 @@ export type IntentRequest =
   | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } }
   /** A cloud server named `hostname` with `ram` GB (#159): done once the player has one of that name. */
   | { action: "buyServer"; args: { hostname: string; ram: number } }
-  /** A backdoor on `hostname`, through the terminal (#162): done once it's installed and the terminal is back home. */
+  /** A backdoor on `hostname`, through the terminal (#162): done once it's installed, the terminal not left on it. */
   | { action: "backdoor"; args: { hostname: string } };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
@@ -157,7 +157,9 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
       if (!isServerHostname(args.hostname)) {
         return {
           ok: false,
-          reason: `backdoor's hostname isn't 1 to ${MAX_HOSTNAME_LENGTH} letters, digits, '.', '_' or '-'`,
+          reason:
+            `backdoor's hostname isn't 1 to ${MAX_CLOUD_SERVER_HOSTNAME_LENGTH} letters, digits, '.', '_' or '-' ` +
+            "(not an IP address)",
         };
       }
       if (args.hostname === WORLD_DAEMON) {
