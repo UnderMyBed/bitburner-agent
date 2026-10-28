@@ -7,12 +7,15 @@
 // - It never calls `ns`: after the kill every `ns` call throws (`Netscript/NetscriptHelpers.tsx:399-403`). Only the
 //   page's DOM and React's props, as the `ui` workers drive them (./game-page.ts), and the page's own timers.
 // - The steps, each with its own time limit, polled every 100 ms of the page's time:
-//   1. The caller's (the install's alert; the BitVerse's portal). Each says what its time running out means: go on,
-//      the fallback, or stop, the reset never having happened.
+//   1. The caller's (the install's alert; the BitVerse's portal). Each says what its time running out means: go on;
+//      the fallback; stop, the reset never having happened; or give up, the reset done but no way to reload from that
+//      page (the BitVerse and BitNode 6's cinematic have no sidebar: `ui/GameRoot.tsx:314-327`), leaving it to the
+//      brain's supervisor (§10.2) or the owner. A throw in such a step ends it the same way: never a fallback that could
+//      kill a live Agent.
 //   2. The terminal, there, enabled and empty (`Terminal/ui/TerminalInput.tsx:438-468`): `run /agent/boot.js` typed
-//      (`onChange`), absolute because an install leaves the terminal's directory as the owner's `cd` left it
-//      (`Prestige.ts:108-113`); then, once the input has rendered it (React's `value` prop), Enter (`onKeyDown`, which
-//      runs the line its last render saw).
+//      (`onChange`), absolute because a reset leaves the terminal's directory as the owner's `cd` left it (an install,
+//      `Prestige.ts:108-113`; a destroy, `:214-219`); then, once the input has rendered it (React's `value` prop),
+//      Enter (`onKeyDown`, which runs the line its last render saw).
 //   3. A new echo of the line, and the line after it: "Running script with 1 thread, pid N and args: []."
 //      (`Terminal/commands/runScript.ts:79-83`). `boot.js` starts the Agent, which connects to the brain afresh.
 //   4. Otherwise the fallback: the sidebar's Options, then "Force kill all active scripts"
@@ -21,7 +24,7 @@
 //      never on Steam's `file://`) is cleared first, or the reload could be stopped. A page loaded with `?noScripts`
 //      (Steam's "Reload && Kill All Scripts") keeps it, and autoexec skips (`NetscriptWorker.ts:233-236`): then, as
 //      when nothing here works, the brain's supervisor relaunches the silent game (§10.2).
-//   Anything that throws on the way goes to the fallback; anything that throws there ends it.
+//   Anything else that throws on the way goes to the fallback; anything that throws there ends it.
 import { findOnPage, playerEvent, reactPropsOf, sidebarItemXpath } from "./game-page.ts";
 
 /** How often the timer looks at the page. */
@@ -32,21 +35,25 @@ export const SHARED_STEP_LIMITS_MS = { terminal: 10_000, started: 5_000, fallbac
 const RUN_STARTED = /^Running script with 1 thread, pid \d+ and args: \[\]\.$/;
 const FORCE_KILL_XPATH = "//button[normalize-space()='Force kill all active scripts']";
 
+/**
+ * What a caller's step running out of time means: go on to the next step anyway; the fallback (the reset happened, so
+ * the scripts are dead); stop (it never happened: the scripts live, so there's nothing to restart); or give up (it
+ * happened, but this page has no way to the fallback). With the reason.
+ */
+export type StepEnd = { action: "next" } | { action: "fallback" | "stop" | "giveUp"; reason: string };
+
 /** One of the caller's steps before the terminal. */
 export interface StepBeforeTheTerminal {
   limitMs: number;
   /** One look at the page: whether to go on to the next step. */
   look(): boolean;
-  /**
-   * Its time up: go on to the next step anyway, the fallback (the reset happened, so the scripts are dead), or stop
-   * (it never happened: the scripts live, so there's nothing to restart). With the reason.
-   */
-  late: { action: "next" } | { action: "fallback" | "stop"; reason: string };
+  /** Its time up, or a throw in it: what then, read from the page at that moment if it's a function. */
+  late: StepEnd | (() => StepEnd);
 }
 
 /**
  * How the restart went: still going, disarmed or stopped (nothing reset), the script started, the fallback's reload, or
- * neither.
+ * neither (given up).
  */
 type RestartOutcome = "waiting" | "disarmed" | "stopped" | "started" | "reloading" | "gaveUp";
 
@@ -61,7 +68,7 @@ export function callHandler(element: Element, name: string, event: unknown): boo
 /**
  * Arms the restart on `page`: from now, the timer takes `before`'s steps in turn, then starts `bootScript` from the
  * terminal, or reloads. `disarm` stops it: the worker that armed it calls it when it's still alive after the action
- * that would have killed it.
+ * that would have killed it, or when that action was never set off (the destroy's, #177).
  */
 export function armRestart(page: Document, bootScript: string, before: StepBeforeTheTerminal[]) {
   const command = `run /${bootScript}`;
@@ -88,6 +95,11 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
     reason = why;
     startStep("fallback", SHARED_STEP_LIMITS_MS.fallback);
   };
+  /** What the caller's step at `index` running out (or throwing) means now. */
+  const endOf = (index: number): StepEnd => {
+    const { late } = before[index] as StepBeforeTheTerminal;
+    return typeof late === "function" ? late() : late;
+  };
   /** After the caller's step at `index`: its next, or the terminal. */
   const afterStep = (index: number) => {
     const next = before[index + 1];
@@ -104,13 +116,14 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
       if (caller.look()) {
         afterStep(index);
       } else if (late) {
-        if (caller.late.action === "next") {
+        const end = endOf(index);
+        if (end.action === "next") {
           afterStep(index);
-        } else if (caller.late.action === "fallback") {
-          fallBack(caller.late.reason);
+        } else if (end.action === "fallback") {
+          fallBack(end.reason);
         } else {
-          reason = caller.late.reason;
-          outcome = "stopped";
+          reason = end.reason;
+          outcome = end.action === "stop" ? "stopped" : "gaveUp";
           return false;
         }
       }
@@ -182,12 +195,19 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
     try {
       again = look();
     } catch (error) {
-      // A page that isn't as expected: the fallback, unless that's what threw.
+      const threw = `the page threw: ${error instanceof Error ? error.message : String(error)}`;
+      // A page that isn't as expected: the fallback, unless that's what threw, or the step says stop or give up.
       if (step === "fallback") {
         outcome = "gaveUp";
         return;
       }
-      fallBack(`the page threw: ${error instanceof Error ? error.message : String(error)}`);
+      const end = typeof step === "number" ? endOf(step) : null;
+      if (end !== null && (end.action === "stop" || end.action === "giveUp")) {
+        reason = threw;
+        outcome = end.action === "stop" ? "stopped" : "gaveUp";
+        return;
+      }
+      fallBack(threw);
       again = true;
     }
     if (again) setTimeout(tick, POLL_MS);

@@ -17,7 +17,8 @@ export const element = (tag: string, fields: Record<string, unknown> = {}) =>
  * The Terminal: its output and its controlled input, as `Terminal/ui/TerminalInput.tsx` renders it. Typing sets the
  * line, which the input renders `RENDER_MS` later, with its `value` prop and new handlers; Enter runs the line its last
  * render saw: the echo, then what `answer` prints for it, rendered `RENDER_MS` later too. `earlier` lines are in the
- * output already.
+ * output already. `renderMs` sets how long a render takes; `onRun` sees each line run at once, as the game's commands
+ * act (a `backdoor` disables the input).
  */
 export function terminal({
   answer = (_line: string) => STARTED,
@@ -26,6 +27,8 @@ export function terminal({
   neverRenders = false,
   disabled = false,
   earlier = [] as string[],
+  renderMs = RENDER_MS,
+  onRun = (_line: string, _input: HTMLInputElement) => {},
 } = {}) {
   const output = element("ul", { id: "terminal" });
   for (const line of ["Bitburner v3.0.1 (1da7316)", ...earlier]) output.append(element("li", { textContent: line }));
@@ -36,16 +39,17 @@ export function terminal({
     withProps(input, {
       value: line,
       onChange: (event: { target: { value: string } }) => {
-        if (!neverRenders) setTimeout(() => render(event.target.value), RENDER_MS);
+        if (!neverRenders) setTimeout(() => render(event.target.value), renderMs);
       },
       onKeyDown: (event: { key: string }) => {
         if (event.key !== "Enter" || enterDoesNothing) return;
         ran.push(line);
+        onRun(line, input);
         // The output renders a moment later, as the game's does: what's there before is what a look sees first.
         setTimeout(() => {
           output.append(element("li", { textContent: `[home /]> ${line}` }));
           if (line !== "") output.append(element("li", { textContent: answer(line) }));
-        }, RENDER_MS);
+        }, renderMs);
         render("");
       },
     });

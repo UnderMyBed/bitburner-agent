@@ -1123,7 +1123,7 @@ test("a game that loads at the BitVerse (#177): w0r1d_d43m0n backdoored by the o
   await expectInBitNode(page, dataDirectory, 2, lastNodeResetBefore);
 });
 
-test("destroying before The Red Pill (#177): held by the brain's guard in core's words, with no backup and nothing typed", async () => {
+test("destroying before The Red Pill (#177): held by the brain's guard in core's words, never sent, nothing typed", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({ brainSettings: ONLY_THE_DESTROY });
   const textBefore = await terminalText(page);
   await queueIntent(ports.dashboardPort, { action: "destroyBitNode", args: { nextBitNode: 2 } });

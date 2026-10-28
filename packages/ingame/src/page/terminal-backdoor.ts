@@ -9,34 +9,38 @@ import type { GamePage } from "./game-page.ts";
 const STARTED_WITHIN_RENDERS = 5;
 
 /**
- * Types the backdoor on `hostname` along `route` (its hops from home): its problem, or when its action ends (the
- * game's `Date.now()`), once it has started. One already ended by the time it's looked at (a short one) counts too.
+ * Types the backdoor on `hostname` along `route` (its hops from home): its problem, and whether `backdoor` was entered
+ * by then (its action may have started unseen, #177's review); or when its action ends (the game's `Date.now()`), once
+ * it has started. One already ended by the time it's looked at (a short one) counts too.
  */
 export async function typeBackdoor(
   ns: NS,
   gamePage: GamePage,
   hostname: string,
   route: string[],
-): Promise<{ problem: string } | { endsAtMs: number }> {
+): Promise<{ problem: string; backdoorEntered: boolean } | { endsAtMs: number }> {
   if (!ns.getServer("home").isConnectedTo) {
     const home = await gamePage.runTerminalCommand("home");
-    if (home !== null) return { problem: home };
+    if (home !== null) return { problem: home, backdoorEntered: false };
   }
   for (const hop of route) {
     const connected = await gamePage.runTerminalCommand(`connect ${hop}`);
-    if (connected !== null) return { problem: connected };
-    if (!ns.getServer(hop).isConnectedTo) return { problem: `couldn't connect to ${hop} on the way to ${hostname}` };
+    if (connected !== null) return { problem: connected, backdoorEntered: false };
+    if (!ns.getServer(hop).isConnectedTo) {
+      return { problem: `couldn't connect to ${hop} on the way to ${hostname}`, backdoorEntered: false };
+    }
   }
   const endsAtMs = Date.now() + ns.getHackTime(hostname) / 4;
+  // Its problems all come before Enter (`game-page.ts`, `runTerminalCommand`).
   const typed = await gamePage.runTerminalCommand("backdoor");
-  if (typed !== null) return { problem: typed };
+  if (typed !== null) return { problem: typed, backdoorEntered: false };
   // The game disables the input while the action runs: given a few renders to show, as a page under load is slow.
   const installed = () => ns.getServer(hostname).backdoorInstalled === true;
   for (let render = 0; render < STARTED_WITHIN_RENDERS && gamePage.terminalBusy() !== true && !installed(); render++) {
     await gamePage.waitARender();
   }
   if (gamePage.terminalBusy() !== true && !installed()) {
-    return { problem: `the terminal didn't start the backdoor on ${hostname}` };
+    return { problem: `the terminal didn't start the backdoor on ${hostname}`, backdoorEntered: true };
   }
   return { endsAtMs };
 }
