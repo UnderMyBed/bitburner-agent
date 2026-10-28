@@ -5,13 +5,7 @@
 // manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself.
 import path from "node:path";
 import process from "node:process";
-import {
-  ControlChannel,
-  Deployer,
-  REMOTE_FILE_API_MAX_FRAME_BYTES,
-  startWebSocketServer,
-  systemClock,
-} from "@bitburner-agent/bridge";
+import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
@@ -21,7 +15,7 @@ import { readHackLoopEnabled } from "./hack-loop.ts";
 import { readHomeRamEnabled } from "./home-ram.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
 import { readProgramsEnabled } from "./programs.ts";
-import { recordChannelEvents, recordEvents } from "./record-channel-events.ts";
+import { brainChannel, recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
 import { setSupervisionPaused } from "./supervision.ts";
@@ -55,7 +49,8 @@ try {
     { environment: config.environment, release },
     { atMs: startedAtMs, kind: BRAIN_STARTED_EVENT_KIND, detail: { release } },
   );
-  const channel = new ControlChannel({ token: config.token, clock: systemClock });
+  // Its numbering seeded from the store, so an Agent reconnecting after a restart carries on (#119).
+  const channel = brainChannel({ token: config.token, clock: systemClock, store, environment: config.environment });
   recordChannelEvents(channel, store, { environment: config.environment, brainRelease: release });
   channel.subscribe((event) => {
     if (event.type !== "snapshotReceived") log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`);

@@ -276,7 +276,7 @@ test("gave up, from the real builder: the Agent gone, a relaunch listed, and the
   expectDataShown(document);
   expect(textOf(document, "#agent")).toContain("Connectedno");
   expect(textOf(document, "#alerts")).toContain("supervisionGaveUp");
-  expect(textOf(document, "#supervision")).toContain("Supervision: gave up after too many relaunches");
+  expect(textOf(document, "#supervision")).toContain("Supervision: gave up (the supervisionGaveUp alert says why)");
   expect(textOf(document, "#supervision")).toContain("Relaunched");
   expect(textOf(document, "#supervision")).toContain('{"cause":"notRunning"}');
   // One click starts it again: resume, which clears the give-up.

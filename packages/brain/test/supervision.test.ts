@@ -39,7 +39,7 @@ test("a value it didn't write is an error, never read as running", () => {
   expect(() => readSupervisionSwitch(store)).toThrow('the supervision.gaveUpAtMs setting is "soon", not a time');
 });
 
-test("a give-up stays until supervision is unpaused; pausing alone keeps it", () => {
+test("a give-up stays until supervision is resumed; pausing alone keeps it", () => {
   recordSupervisionGaveUp(store, 1_000);
   expect(readSupervisionSwitch(store)).toEqual({ paused: false, gaveUpAtMs: 1_000 });
   setSupervisionPaused(store, true);

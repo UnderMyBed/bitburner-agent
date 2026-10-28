@@ -10,6 +10,7 @@ import {
   buildEngine,
   collectBundleSources,
   collectEngineInputs,
+  collectTsconfigs,
   type EngineInputs,
   engineFingerprint,
   holdModules,
@@ -27,6 +28,10 @@ const inputs: EngineInputs = {
   buildScript: "build v1",
   bundleSources: { "entry.ts": "export const a = 1;", "stubs/empty.js": "export default {};" },
   esbuildVersion: "0.28.2",
+  tsconfigs: {
+    "../../../tsconfig.json": '{ "extends": "../../tsconfig.base.json" }',
+    "../../../../../tsconfig.base.json": "{}",
+  },
 };
 
 describe("engineFingerprint", () => {
@@ -46,6 +51,15 @@ describe("engineFingerprint", () => {
     ["bundle source content", { bundleSources: { ...inputs.bundleSources, "entry.ts": "export const a = 2;" } }],
     ["bundle source set", { bundleSources: { ...inputs.bundleSources, "extra.ts": "" } }],
     ["esbuild version", { esbuildVersion: "0.28.3" }],
+    // #132: esbuild applies their options (`target`, `verbatimModuleSyntax`, ...) to our bundled sources.
+    [
+      "tsconfig esbuild applies",
+      { tsconfigs: { ...inputs.tsconfigs, "../../../tsconfig.json": '{ "compilerOptions": { "target": "es2022" } }' } },
+    ],
+    [
+      "root tsconfig it extends",
+      { tsconfigs: { ...inputs.tsconfigs, "../../../../../tsconfig.base.json": '{ "compilerOptions": {} }' } },
+    ],
   ])("changes when the %s changes", (_, change) => {
     expect(engineFingerprint({ ...inputs, ...change })).not.toBe(engineFingerprint(inputs));
   });
@@ -71,6 +85,65 @@ describe("collectEngineInputs", () => {
     expect(collected.vendorCommit).toBe(git("rev-parse", "HEAD"));
     expect(collected.vendorLockfile).toBe(lockfileHash(enginePaths.gameRoot));
     expect(collected.buildScript).toContain("export async function buildEngine");
+  });
+
+  test("reads the tsconfig esbuild applies to our bundled sources, and the root ones it extends (#132)", () => {
+    const repoRoot = path.resolve(enginePaths.bundleSourceDir, "../../../../..");
+    const read = (file: string) => readFileSync(path.join(repoRoot, file), "utf8");
+    expect(collectEngineInputs().tsconfigs).toEqual({
+      "../../../tsconfig.json": read("packages/sim/tsconfig.json"),
+      "../../../../../tsconfig.node.json": read("tsconfig.node.json"),
+      "../../../../../tsconfig.base.json": read("tsconfig.base.json"),
+    });
+  });
+});
+
+describe("collectTsconfigs", () => {
+  /** A tree of files under a new temporary directory; returns its path. */
+  function tree(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(tmpdir(), "tsconfigs-"));
+    for (const [name, content] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+      writeFileSync(path.join(root, name), content);
+    }
+    return root;
+  }
+
+  test("takes the nearest tsconfig.json above the sources, as esbuild does, then each file it extends", () => {
+    const files = {
+      // Comments, as the repository's have (one an old extends); an extends without its .json (beside a directory of
+      // the same name); then a list of them, with a trailing comma; and a cycle back, followed once.
+      "pkg/tsconfig.json":
+        '{\n  // the package\'s, once "extends": "./gone.json"\n  "extends": "../node",\n  "include": ["src/**/*.ts"]\n}',
+      "node.json": '{ /* node */ "extends": ["./base.json", "./strict.json", ] }',
+      "node/readme.txt": "a directory named like the extends, without its .json",
+      "base.json": '{ "compilerOptions": { "target": "es2024" } }',
+      "strict.json": '{ "extends": "./node.json", "compilerOptions": { "strict": true } }',
+      // Not on the chain: another directory's, and a parent's beyond the nearest.
+      "other/tsconfig.json": "{}",
+      "tsconfig.json": "{}",
+    };
+    const root = tree({ ...files, "pkg/src/bundle/entry.ts": "" });
+    expect(collectTsconfigs(path.join(root, "pkg/src/bundle"))).toEqual({
+      "../../tsconfig.json": files["pkg/tsconfig.json"],
+      "../../../node.json": files["node.json"],
+      "../../../base.json": files["base.json"],
+      "../../../strict.json": files["strict.json"],
+    });
+  });
+
+  test("fails on an extends it can't follow, rather than leave that config out of the fingerprint", () => {
+    const fromPackage = tree({ "tsconfig.json": '{ "extends": "@tsconfig/node22" }', "src/a.ts": "" });
+    expect(() => collectTsconfigs(path.join(fromPackage, "src"))).toThrow(
+      /extends @tsconfig\/node22, a package's config/,
+    );
+    const missing = tree({ "tsconfig.json": '{ "extends": "./gone.json" }', "src/a.ts": "" });
+    expect(() => collectTsconfigs(path.join(missing, "src"))).toThrow(/extends \.\/gone\.json, which isn't there/);
+  });
+
+  test("fails on a jsconfig.json esbuild would take before a tsconfig.json further up", () => {
+    const root = tree({ "pkg/jsconfig.json": "{}", "tsconfig.json": "{}", "pkg/src/a.ts": "" });
+    expect(() => collectTsconfigs(path.join(root, "pkg/src"))).toThrow(/jsconfig\.json.*fingerprint/);
   });
 });
 

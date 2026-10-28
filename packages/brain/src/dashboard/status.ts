@@ -10,7 +10,7 @@ import {
 } from "@bitburner-agent/core";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
-import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
+import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
 import { type Alert, activeAlerts } from "./alerts.ts";
@@ -150,6 +150,10 @@ export function buildDashboardStatus({
   // A connection that finds the deployment already in place resolves an earlier failure as much as a new deploy does.
   const deployEvent = store.latestEvent({ ...sinceStart, kinds: ["deployed", "deploymentCurrent", "deployFailed"] });
   const supervision = readSupervisionSwitch(store);
+  // The give-up's cause (#127): its event, from any run of the brain (a give-up lasts until resumed). Only the event
+  // recorded with this give-up, so an older one can't give the wrong cause if recording this one failed.
+  const gaveUpEvent = store.latestEvent({ environment, kinds: [SUPERVISION_GAVE_UP_EVENT_KIND], afterEventId: 0 });
+  const gaveUpCause = gaveUpEvent?.atMs === supervision.gaveUpAtMs ? gaveUpEvent.detail : null;
 
   const gapWindow = { sinceMs: nowMs - GAP_WINDOW_MS, untilMs: nowMs, thresholdMs: DEFAULT_GAP_THRESHOLD_MS };
   const gapReport = findGaps(store.fastSnapshotTimes({ environment, ...gapWindow }), gapWindow);
@@ -204,7 +208,7 @@ export function buildDashboardStatus({
             detail: detailText(deployEvent.detail, "reason"),
           }
         : null,
-      supervisionGaveUpAtMs: supervision.gaveUpAtMs,
+      supervisionGaveUp: supervision.gaveUpAtMs === null ? null : { atMs: supervision.gaveUpAtMs, detail: gaveUpCause },
       // Only what's well formed: the snapshot is the Agent's word.
       blockingDialog: typeof fast?.dialogs?.blocking === "string" ? fast.dialogs.blocking : null,
       intentOutcomes: (Array.isArray(fast?.intents) ? fast.intents : []).filter(

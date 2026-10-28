@@ -8,6 +8,8 @@
 import { gunzipSync } from "node:zlib";
 import { playerLastUpdate } from "@bitburner-agent/sim";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import { diagnoseLoad, type LoadDiagnosis, RETRIED_LOAD_STATES, unreadableText } from "./load-diagnosis.ts";
+import { recordRetriedLoad } from "./retried-loads.ts";
 import { BLANK_PAGE_PATH, type GameServer } from "./server.ts";
 
 /** One game cycle (the engine's 200 ms tick): the step game time moves in. */
@@ -20,8 +22,13 @@ export const GAME_CYCLE_MS = 200;
 export const MAX_GAME_SPEEDUP = 20;
 /** The game's terminal input: on the page once the game has loaded. */
 export const TERMINAL_INPUT = "#terminal-input";
-/** How long a fixture waits, in real time, for the game to load. */
+/** How long `waitForTerminal` waits by default (a test's reload), and a fixture's retry (#120), in real time. */
 const LOAD_TIMEOUT_MS = 60_000;
+/**
+ * How long a fixture's first try at a load gets before it reloads the page and waits again (#120): a load takes
+ * under 1 s on the reference rig (at most 837 ms over 474 loads and reloads), so this is ample.
+ */
+const FIRST_LOAD_TIMEOUT_MS = 20_000;
 /**
  * What a load that fails adds to its error: the page's visible text, cut to this; its first and last events (the first
  * is often the cause); and the requests still pending.
@@ -161,10 +168,8 @@ export async function waitForTerminal(page: Page, { timeoutMs = LOAD_TIMEOUT_MS 
     await page.locator(TERMINAL_INPUT).waitFor({ timeout: timeoutMs });
   } catch (error) {
     // Why the text can't be read tells a hung page (a timeout) from a crashed or closed one.
-    const visibleText = await page
-      .locator("body")
-      .innerText({ timeout: 1_000 })
-      .catch((readError: Error) => `(unreadable: ${readError.message.split("\n")[0]})`);
+    const visibleText = await page.locator("body").innerText({ timeout: 1_000 }).catch(unreadableText);
+    const diagnosis = diagnoseLoad(visibleText);
     const { events, pendingRequests } = historyByPage.get(page) ?? { events: [], pendingRequests: new Set() };
     const eventsShown =
       events.length <= LOAD_FAILURE_FIRST_EVENTS_SHOWN + LOAD_FAILURE_LAST_EVENTS_SHOWN
@@ -176,15 +181,72 @@ export async function waitForTerminal(page: Page, { timeoutMs = LOAD_TIMEOUT_MS 
           ];
     const pending = [...pendingRequests].slice(0, LOAD_FAILURE_PENDING_REQUESTS_SHOWN);
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
+    throw new LoadFailure(
       [
         message,
+        `Looks like: ${diagnosis.text}`,
         `The page showed: ${visibleText.slice(0, LOAD_FAILURE_TEXT_CHARACTERS)}`,
         `What it went through:\n${eventsShown.join("\n") || "nothing recorded"}`,
         `Requests still pending: ${pending.join(", ") || "none"}`,
       ].join("\n"),
+      diagnosis,
       { cause: error },
     );
+  }
+}
+
+/** A load that never showed the terminal: its report, and what the page looked like. */
+export class LoadFailure extends Error {
+  readonly diagnosis: LoadDiagnosis;
+  constructor(report: string, diagnosis: LoadDiagnosis, options?: ErrorOptions) {
+    super(report, options);
+    this.name = "LoadFailure";
+    this.diagnosis = diagnosis;
+  }
+}
+
+/** How a fixture's load is waited for: its tries' timeouts, and where a retry is reported. */
+export interface LoadOptions {
+  firstTimeoutMs?: number;
+  retryTimeoutMs?: number;
+  /** Default: printed as a warning, and counted for the run's teardown (`recordRetriedLoad`). */
+  onRetry?: (message: string) => void;
+}
+
+/** A retry's default report: the run's output, and its count of retried loads. */
+function reportRetry(message: string): void {
+  console.warn(message);
+  recordRetriedLoad(message);
+}
+
+/**
+ * Waits for a fixture's load (`waitForTerminal`), and if it hasn't shown the terminal within `firstTimeoutMs`, reloads
+ * the page once and waits again (#120: one load in about 15 suite runs never showed it, and loads hundreds of times
+ * in a row didn't: packages/e2/README.md). Only a load still under way, or a page never rendered, is retried
+ * (`RETRIED_LOAD_STATES`): recovery mode, a hung page or a crashed one fails at once. The first try's report goes to
+ * `onRetry`, so a retried load still shows, and counts; a load that fails again throws with both reports. Only for a
+ * fixture's own load: a test's reload is what it tests.
+ */
+export async function untilGameLoaded(
+  page: Page,
+  { firstTimeoutMs = FIRST_LOAD_TIMEOUT_MS, retryTimeoutMs = LOAD_TIMEOUT_MS, onRetry = reportRetry }: LoadOptions = {},
+): Promise<void> {
+  let firstReport: string;
+  try {
+    return await waitForTerminal(page, { timeoutMs: firstTimeoutMs });
+  } catch (error) {
+    if (!(error instanceof LoadFailure) || !RETRIED_LOAD_STATES.has(error.diagnosis.state)) throw error;
+    firstReport = error.message;
+  }
+  onRetry(`E2: the game didn't load within ${firstTimeoutMs} ms, so the page is reloaded once (#120).\n${firstReport}`);
+  try {
+    await page.reload();
+    await waitForTerminal(page, { timeoutMs: retryTimeoutMs });
+  } catch (error) {
+    const retryReport = error instanceof Error ? error.message : String(error);
+    throw new Error(`The game didn't load, twice (#120). The first try:\n${firstReport}\nThe retry:\n${retryReport}`, {
+      cause: error,
+    });
   }
 }
 
@@ -203,7 +265,11 @@ export async function gameFromSave(
   browser: Browser,
   server: GameServer,
   save: Uint8Array,
-  { offlineMs = 0, clockDuringLoad = "paused" }: { offlineMs?: number; clockDuringLoad?: ClockDuringLoad } = {},
+  {
+    offlineMs = 0,
+    clockDuringLoad = "paused",
+    load,
+  }: { offlineMs?: number; clockDuringLoad?: ClockDuringLoad; load?: LoadOptions } = {},
 ): Promise<Page> {
   const page = await newGamePage(browser, saveLastUpdate(save) + offlineMs, clockDuringLoad);
   return await closedIfItFails(page, async () => {
@@ -226,7 +292,7 @@ export async function gameFromSave(
       database.close();
     }, Buffer.from(save).toString("base64"));
     await page.goto(server.origin);
-    await waitForTerminal(page);
+    await untilGameLoaded(page, load);
     // From here on, game time moves only when the test moves it.
     if (clockDuringLoad === "running") await pauseFlowingClock(page);
   });
@@ -263,12 +329,12 @@ async function closedIfItFails(page: Page, load: () => Promise<void>): Promise<P
 export async function freshGame(
   browser: Browser,
   server: GameServer,
-  { startTimeMs = Date.UTC(2026, 0, 1) }: { startTimeMs?: number } = {},
+  { startTimeMs = Date.UTC(2026, 0, 1), load }: { startTimeMs?: number; load?: LoadOptions } = {},
 ): Promise<Page> {
   const page = await newGamePage(browser, startTimeMs, "paused");
   return await closedIfItFails(page, async () => {
     await page.goto(server.origin);
-    await waitForTerminal(page);
+    await untilGameLoaded(page, load);
   });
 }
 

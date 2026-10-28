@@ -1,20 +1,28 @@
 // The supervisor (#94, architecture §10.2, R9): keeps the game itself running for unattended play. It launches the game
 // when it isn't running, and kills and relaunches it when the Agent has gone silent (a frozen page, or a dead Agent: a
 // reload brings the Agent back through autoexec). At most 3 launches an hour, then it gives up until the owner resumes
-// it, and never while paused (the dashboard's switch, src/supervision.ts).
+// it (as it does after 10 failed checks in a row), and never while paused (the dashboard's switch, src/supervision.ts).
 //
 // It judges by what it sees at each check, never by timestamps: a heartbeat counts as new only if it's a new snapshot,
 // and every wait is a number of checks. So the clock stepping (time sync, waking from sleep) can't make a healthy game
 // look silent, or hide a frozen one.
 import type { Clock, TimerHandle } from "@bitburner-agent/bridge";
-import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, recordSupervisionGaveUp } from "./supervision.ts";
+import {
+  RELAUNCH_EVENT_KIND,
+  readSupervisionSwitch,
+  recordSupervisionGaveUp,
+  SUPERVISION_GAVE_UP_EVENT_KIND,
+} from "./supervision.ts";
 import type { Environment, RecordContext, TelemetryStore } from "./telemetry-store.ts";
 
 /** How often the supervisor looks. */
 export const SUPERVISION_CHECK_INTERVAL_MS = 30_000;
 /** Checks with no new heartbeat (the fast snapshot, every 2 s) before a running game counts as silent: 5 minutes. */
 export const SILENT_AFTER_CHECKS = 10;
-/** Checks after the brain starts, a launch, or a resume, before silence counts: 5 minutes to boot. */
+/**
+ * Checks after the brain starts or a resume, before silence counts: 5 minutes to boot. After a launch, they start once
+ * the launch's wait (`LAUNCH_WAIT_CHECKS`) is over, so the earliest kill is 10 minutes after the launch.
+ */
 export const GRACE_CHECKS = 10;
 /** Checks after a launch with nothing done at all, so Steam can start, log in or update: 5 minutes. */
 export const LAUNCH_WAIT_CHECKS = 10;
@@ -22,7 +30,6 @@ export const LAUNCH_WAIT_CHECKS = 10;
 export const MAX_FAILED_CHECKS = 10;
 export const MAX_LAUNCHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
-const GAVE_UP_EVENT_KIND = "supervisionGaveUp";
 const FAILED_EVENT_KIND = "supervisionFailed";
 
 /** The game's process, as the supervisor sees it: on Windows, `WindowsGameProcess`; in tests, a fake. */
@@ -63,7 +70,7 @@ export class Supervisor {
   #checking = false;
   /** Checks left in which nothing is done: after a launch. */
   #launchWaitChecks = 0;
-  /** Checks left in which silence doesn't count: after the start, a launch, or a resume. */
+  /** Checks left in which silence doesn't count: after the start or a resume, and after a launch's wait. */
   #graceChecks = GRACE_CHECKS;
   /** The newest heartbeat seen, and how many checks in a row it has stayed the newest. */
   #lastHeartbeat: string | null = null;
@@ -180,7 +187,7 @@ export class Supervisor {
   #launchesInLastHour(): number {
     const { store, context, clock } = this.#options;
     const environment = context.environment;
-    const lastGaveUpId = store.latestEventId({ environment, kinds: [GAVE_UP_EVENT_KIND] });
+    const lastGaveUpId = store.latestEventId({ environment, kinds: [SUPERVISION_GAVE_UP_EVENT_KIND] });
     return store.countEvents({
       environment,
       kinds: [RELAUNCH_EVENT_KIND],
@@ -191,8 +198,10 @@ export class Supervisor {
 
   #giveUp(detail: Record<string, unknown>): void {
     const { store, context, clock } = this.#options;
-    recordSupervisionGaveUp(store, clock.now());
-    store.recordEvent(context, { atMs: clock.now(), kind: GAVE_UP_EVENT_KIND, detail });
+    // One time for both: the dashboard matches the event to the give-up by it.
+    const atMs = Math.round(clock.now());
+    recordSupervisionGaveUp(store, atMs);
+    store.recordEvent(context, { atMs, kind: SUPERVISION_GAVE_UP_EVENT_KIND, detail });
   }
 
   /**
