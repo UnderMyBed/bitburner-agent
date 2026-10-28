@@ -1,5 +1,5 @@
-// The diagnostics' harness edits (#145, #149): state a test sets up that no player could, checked in the game's own
-// save. `setMoney`, `joinFactionWithReputation` and `giveInstalledAugmentation`.
+// The diagnostics' harness edits (#145, #149, #151, #164): state a test sets up that no player could, checked in the
+// game's own save. `setMoney`, `joinFactionWithReputation`, `giveInstalledAugmentation` and `queueAugmentation`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -44,4 +44,22 @@ test("giveInstalledAugmentation: installed, as the game saves it, without its pr
   await expect(sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant")).rejects.toThrow(
     /installed already/,
   );
+});
+
+test("queueAugmentation: queued, not installed, as the game saves it, without its price; unknown or owned is refused", async () => {
+  const sim = await newGame();
+  const moneyBefore = (await saved(sim)).player.money;
+  await sim.diagnostics.queueAugmentation("Neurotrainer I");
+  await sim.diagnostics.queueAugmentation("NeuroFlux Governor");
+  await sim.diagnostics.queueAugmentation("NeuroFlux Governor");
+  const { player } = await saved(sim);
+  expect(player.queuedAugmentations.map((each: { name: string }) => each.name)).toEqual([
+    "Neurotrainer I",
+    "NeuroFlux Governor",
+    "NeuroFlux Governor",
+  ]);
+  expect(player.augmentations).toEqual([]);
+  expect(player.money).toBe(moneyBefore);
+  await expect(sim.diagnostics.queueAugmentation("Gibson Implant")).rejects.toThrow(/no augmentation/);
+  await expect(sim.diagnostics.queueAugmentation("Neurotrainer I")).rejects.toThrow(/owned already/);
 });

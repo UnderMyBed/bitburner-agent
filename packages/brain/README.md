@@ -225,14 +225,14 @@ M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/13
 
 ## Intents
 
-M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam`, `travel`, `joinFaction` (#147) and `purchaseAugmentation` (#149) so far. Core validates them (`parseIntentRequest`) and says which are irreversible (`isIrreversibleIntent`).
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam`, `travel`, `joinFaction` (#147), `purchaseAugmentation` (#149) and `installAugmentations` (#164) so far. Core validates them (`parseIntentRequest`) and says which are irreversible (`isIrreversibleIntent`).
 
 - **Where they come from,** in this order:
   1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result: that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 99 at most, leaving room in the protocol's 100 for the purchase. The dashboard lists the queue even with no Agent connected, so it can be cancelled.
   2. **The purchase rules:** [the hacking programs](#the-hacking-programs) and [home RAM](#home-ram), one purchase at a time, the cheaper first. If the owner queued the same purchase, it goes once, as the owner's.
 - **When they go:** with the hack loop, in the one desired state. With the hack loop off, the manual queue goes before any snapshot: each intent checks the game first, so a stale one does nothing. While the brain holds, none go.
-- **Irreversible ones** (R8, #147; so far, joining one of the six city factions, which bans its enemies) go only past a gate (`src/irreversible-gate.ts`):
-  1. the guard (none of the faction's enemies joined) holds on two consecutive medium snapshots from the connected Agent, received after it was queued;
+- **Irreversible ones** (R8, #147; so far, joining one of the six city factions, which bans its enemies, and installing augmentations, #164) go only past a gate (`src/irreversible-gate.ts`):
+  1. the guard holds on two consecutive medium snapshots from the connected Agent, received after it was queued: for a join, none of the faction's enemies joined; for an install, nothing queued before it undone (it resets the game, so what was queued before it was for this game; the augmentations queued can't be the guard, as no NS call shows them without Singularity);
   2. then a save backup is asked for ([`backupNow`](#save-backups)), and the intent goes out once that backup succeeds.
 
   Around that:
@@ -242,8 +242,10 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   - **Out, it's still watched:** its guard failing withdraws it, and so does staying out 60 medium snapshots (about 10 minutes) without being done; it goes out again past a new backup, so the backup is never older than that when the game acts.
   - **A failed backup** starts the count again, needing 6 medium snapshots (a minute) before the next.
   - A disconnect, a new Agent or a restarted brain starts every gate again.
-  - A held intent doesn't hold up those queued after it.
-  - Each intent's view says why it isn't sent (`waitingFor`), and the dashboard shows it ("not sent: held: Sector-12's enemy Chongqing is joined"). A brain without save backups never sends one.- **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`: a worker that didn't run counts as a try. The outcome also names the backend the Agent used (`sim`, `singularity` or `ui`, #145), which the dashboard shows ("2 tries via ui: …"): the brain never chooses it.
+  - A held intent doesn't hold up those queued after it, but for an install (#164): what's queued after it waits until it's done, as it was queued for the game after the reset.
+  - Each intent's view says why it isn't sent (`waitingFor`), and the dashboard shows it ("not sent: held: Sector-12's enemy Chongqing is joined", "not sent: waiting for installAugmentations() first: queued after an install, it's for the game after the reset"). A brain without save backups never sends one.
+- **An install's done check** (#164): the install kills the Agent, so the one that sent it never reports it done. When the brain sends it, it notes the connected Agent's `lastAugReset` (the slow snapshot); a slow snapshot with a later one, from the next Agent, takes the install off the queue, so it isn't gated and backed up again for the new game. The note is in memory: a brain restarted meanwhile gates it again, and the Agent's check of the game (nothing left to install) says it's done.
+- **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`: a worker that didn't run counts as a try. The outcome also names the backend the Agent used (`sim`, `singularity` or `ui`, #145), which the dashboard shows ("2 tries via ui: …"): the brain never chooses it.
 
 ## Work
 
@@ -345,6 +347,20 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
   - The steps then drive the new simulation, and the brain stays as it was.
   - The brain's clock never goes back: if the save's time is a moment behind it, the clock waits for the reloaded game to catch up.
 
+## The install suite
+
+`test/install-restart.test.ts` (#164, architecture §5.7): installing augmentations and the restart after it, the Agent's side, in the simulator. The game starts with an augmentation queued (`diagnostics.queueAugmentation`, a harness edit) and the brain's desired state; the owner queues the install.
+
+| Scenario | What it shows |
+|---|---|
+| Reconnecting to the reset game (`sim`) | One backup, then the install; `boot.js`, started 500 ms after the reset, starts the next Agent in a new session; its first slow snapshot shows the reset (the augmentation installed, `lastAugReset` later) and the brain takes the install off its queue with no second backup. A travel queued after the install waited for it, and goes in the reset game (not done: the new start's money). The hack loop roots n00dles again. No third session 30 s on |
+| Through Singularity (SF4.3) | The same through `singularity-install-augmentations.js`, which names `boot.js` for after the reset |
+| Nothing queued | Done at once, with no reset and no disconnect |
+| The brain down mid-install | As the old Agent dies, the brain goes (every connection refused) for 30 s; a new brain with the same store knows nothing of the install, gates it again (two medium snapshots and a backup of the reset game), and the next Agent finds nothing left to install: done, installed once |
+| A reload just after the install | Before `boot.js`'s 500 ms, the game reloads from a save taken then: autoexec brings the Agent back, the brain sees the reset and takes the install off its queue, installed once |
+
+The `ui` backend's restart (the page timer, the terminal, save-and-reload) is E2's, in slice 10b.
+
 ## The skeleton suite
 
 `test/skeleton.test.ts` is M2's exit criterion in the simulator (environment E1): "connect, snapshot, reload, reconnect, Agent RAM in an 8 GB fresh start" ([architecture §13](../../docs/architecture.md#13-milestones)). It runs on every PR, in about 25 s in CI, against a budget of 60 s.
@@ -384,7 +400,7 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/programs.ts` | Buying the hacking programs: the switch, the next item, the prices and vendors |
 | `src/desired-state.ts` | The controller that sends the hack loop, the intents (purchases, the manual queue) and the work as one desired state |
 | `src/work.ts` | The work the owner sets (#151, #153, #156): kept in the store, its focus, and the Agent's outcome read |
-| `src/irreversible-gate.ts` | The gate before an irreversible intent (#147): its guard on medium snapshots, then a save backup |
+| `src/irreversible-gate.ts` | The gate before an irreversible intent (#147, #164): its guard on medium snapshots, then a save backup |
 | `src/manual-intents.ts` | The owner's manual intents queue, in the store |
 | `src/home-ram.ts` | Upgrading home's RAM: the switch, the price, the next upgrade |
 | `src/switches.ts` | The dashboard's on/off switches, as settings in the store |
@@ -393,5 +409,6 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the intents |
 | `test/effector-backends.test.ts` | The simulator suite for the Effectors' `sim` and `singularity` backends (#145): each action with money and without, and in BN1 with SF4.3. Faction work (#151) in Sector-12: with `sim`, started focused, unfocused, switched, and left alone with none wanted; with `singularity`, started focused, unfocused and switched; and, with `sim`, not converged where a joined faction (CyberSec) doesn't offer it. Company work (#153), a Waiter at Noodle Bar: with `sim`, after a travel to New Tokyo, focused then unfocused, and worked again from Sector-12 as the job is held; not converged from Sector-12 (not in its city), where the player doesn't qualify (Software at MegaCorp), or where the company offers only later jobs (Business at DeltaOne); with `singularity`, from Sector-12 (Singularity doesn't ask the city), started unfocused, then focused, and not qualified likewise. Crime (#156): with `sim`, shoplifting focused, unfocused, then mugging, still the work 20 s on (a crime repeats); with `singularity`, unfocused, focused, then a switch to homicide. Buying augmentations (#149) from CyberSec, set up with reputation: through each backend, NeuroFlux a level at a time, nothing paid twice, and a level out of turn or no money not done. Joining Sector-12 (#147) through each, past the gate: sent only after two medium snapshots and a save backup; then, with `sim`, Chongqing held by the guard, and CyberSec (no enemies) sent at once but not done without an invitation |
-| `test/helpers/fresh-start.ts` | A game in the simulator with the brain and the built Agent in it, and the owner's setup before the Agent starts: the start of the suites above |
+| `test/install-restart.test.ts` | The [install suite](#the-install-suite) (#164) |
+| `test/helpers/fresh-start.ts` | A game in the simulator with the brain and the built Agent in it, and the owner's setup before the Agent starts: the start of the suites above. `reload()` reloads it from a save taken then (#164) |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the desired-state controller only when a test asks (`withDesiredState`), so the M2 suites see the observe-only skeleton they test |

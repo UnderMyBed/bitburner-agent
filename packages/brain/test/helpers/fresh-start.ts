@@ -106,6 +106,20 @@ export function useFreshStarts() {
       latest,
       money: () => latest<FastSnapshotData>("fast")?.game?.money ?? null,
       medium: () => latest<MediumSnapshotData>("medium"),
+      /**
+       * The game reloaded now, from a save taken now, as a page reload does (#164): its sockets close, and autoexec
+       * brings the Agent back. Returns the reloaded simulation, which the steps drive from here on (`simulation` above
+       * is the old page's).
+       */
+      reload: async (): Promise<Simulation> => {
+        const reloaded = await start({
+          seed: 1,
+          fixture: { kind: "save", bytes: await simulation.save() },
+          network: { listenUrls: [CONTROL_URL, RFA_URL] },
+        });
+        game.replaceSimulation(reloaded);
+        return reloaded;
+      },
       /** The brain's desired state controller; fails at once if the brain has none. */
       controller: (): DesiredStateController => {
         if (!brain.desiredState) throw new Error("this brain has no desired state controller");

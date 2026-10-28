@@ -55,11 +55,19 @@ const newGate = (): Gate => ({
 });
 
 /**
- * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2). Joining a faction: none of its enemies is
- * joined (the game refuses a banned faction then: `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`). A
- * snapshot without the list of factions joined fails it: the Agent's word, so never assumed.
+ * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2), `queue` being the owner's manual queue.
+ * - Joining a faction: none of its enemies is joined (the game refuses a banned faction then:
+ *   `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`). A snapshot without the list of factions joined fails
+ *   it: the Agent's word, so never assumed.
+ * - Installing augmentations (#164): nothing queued before it is still undone. It resets the game, so what was queued
+ *   before it (a purchase, say) was for this game, and goes first. The augmentations queued can't be the guard: no NS
+ *   call shows them without Singularity. Done intents leave the queue, so the first one left is the one undone.
  */
-export function guardFailure(intent: Intent, medium: MediumSnapshotData): string | null {
+export function guardFailure(intent: Intent, medium: MediumSnapshotData, queue: Intent[]): string | null {
+  if (intent.action === "installAugmentations") {
+    const first = queue[0];
+    return first === undefined || first.id === intent.id ? null : `${first.id}, queued before it, isn't done`;
+  }
   if (intent.action !== "joinFaction") return null;
   const joined = (medium.player as { factions?: unknown } | undefined)?.factions;
   if (!Array.isArray(joined)) return "the medium snapshot has no list of the factions joined";
@@ -111,7 +119,7 @@ export class IrreversibleIntentGates {
     const [id, gate] = first;
     const intent = queue.find((each) => each.id === id);
     if (intent === undefined) return;
-    gate.guardFailure = guardFailure(intent, medium);
+    gate.guardFailure = guardFailure(intent, medium, queue);
     if (gate.guardFailure !== null) {
       this.#restart(gate, null);
       return;

@@ -1,4 +1,4 @@
-// Intents (#141): each action's args, the id made from them, and which are irreversible (#147).
+// Intents (#141): each action's args, the id made from them, and which are irreversible (#147, #164).
 
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
@@ -22,6 +22,7 @@ describe("parseIntentRequest", () => {
     ["purchaseAugmentation", { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 }],
     ["purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 7 }],
     ["purchaseAugmentation", { faction: "Blade Industries", augmentation: "The Blade's Simulacrum", level: 1 }],
+    ["installAugmentations", {}],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -87,6 +88,8 @@ test("an intent's id is its action and args, in the args' fixed order", () => {
   expect(intentId("purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 })).toBe(
     "purchaseAugmentation(Sector-12, NeuroFlux Governor, 3)",
   );
+  // An install has no args (#164): one id, whatever was queued.
+  expect(intentId("installAugmentations", {})).toBe("installAugmentations()");
   const reordered = parseIntentRequest({ action: "upgradeHomeRam", args: { vendor: "CompuTek", fromRam: 8 } });
   expect(reordered.ok && reordered.message.id).toBe("upgradeHomeRam(8, CompuTek)");
 });
@@ -107,6 +110,10 @@ describe("isIrreversibleIntent", () => {
     for (const [faction, enemies] of Object.entries(FACTION_ENEMIES)) {
       for (const enemy of enemies) expect(FACTION_ENEMIES[enemy], `${enemy} against ${faction}`).toContain(faction);
     }
+  });
+
+  test("installing augmentations is irreversible: it resets the game (#164)", () => {
+    expect(isIrreversibleIntent(intent({ action: "installAugmentations", args: {} }))).toBe(true);
   });
 
   test("nothing else so far is irreversible", () => {

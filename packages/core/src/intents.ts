@@ -20,7 +20,9 @@ export type IntentRequest =
   | { action: "travel"; args: { city: string } }
   | { action: "joinFaction"; args: { faction: string } }
   /** `level` is 1 but for NeuroFlux Governor, where it's the level bought: each level its own intent (#149). */
-  | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } };
+  | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } }
+  /** Installs every augmentation queued (#164): irreversible, and done once nothing is left to install. */
+  | { action: "installAugmentations"; args: Record<string, never> };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -30,6 +32,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   upgradeHomeRam: true,
   joinFaction: true,
   purchaseAugmentation: true,
+  installAugmentations: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -123,6 +126,8 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         },
       };
     }
+    case "installAugmentations":
+      return { ok: true, message: { action, args: {} } };
     default:
       return null;
   }
@@ -153,9 +158,10 @@ export function parseIntentRequest(value: unknown): Parsed<Intent> {
 
 /**
  * Whether doing `intent` can't be undone (R2, R8; #147): the brain then sends it only once its guard has held on two
- * consecutive snapshots and a save backup has been taken. So far: joining a faction with enemies, which bans them.
- * Installs and BitNode changes come with their slices.
+ * consecutive snapshots and a save backup has been taken. So far: joining a faction with enemies, which bans them, and
+ * installing augmentations, which resets the game (#164). BitNode changes come with their slice.
  */
 export function isIrreversibleIntent(intent: Intent): boolean {
+  if (intent.action === "installAugmentations") return true;
   return intent.action === "joinFaction" && FACTION_ENEMIES[intent.args.faction] !== undefined;
 }

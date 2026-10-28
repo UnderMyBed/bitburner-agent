@@ -198,6 +198,10 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       engine.giveInstalledAugmentation(augmentation);
     },
+    "diagnostics.queueAugmentation": ({ augmentation }) => {
+      booted();
+      engine.queueAugmentation(augmentation);
+    },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
     "diagnostics.heapLimit": () => heapLimit(),
