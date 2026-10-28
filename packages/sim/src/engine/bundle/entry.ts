@@ -226,6 +226,21 @@ export function giveInstalledAugmentation(augmentation: string) {
   Player.augmentations.push(new PlayerOwnedAugmentation(augmentation as AugmentationName));
 }
 
+/**
+ * Queues `augmentation`, unpaid, as if bought and not yet installed: a harness edit for test scenarios (#164), not
+ * something a player can do. The game's own `queueAugmentation`, as a purchase calls it (`Faction/FactionHelpers.tsx:119`).
+ * Unknown, or owned already (installed or queued; NeuroFlux Governor may be queued again), it throws.
+ */
+export function queueAugmentation(augmentation: string) {
+  if (!Object.values(AugmentationName).includes(augmentation as AugmentationName)) {
+    throw new RangeError(`no augmentation ${augmentation}`);
+  }
+  if (augmentation !== AugmentationName.NeuroFluxGovernor && Player.hasAugmentation(augmentation as AugmentationName)) {
+    throw new RangeError(`${augmentation} is owned already`);
+  }
+  Player.queueAugmentation(augmentation as AugmentationName);
+}
+
 /** The page the game's Router is on. */
 export function page(): string {
   return Router.page();

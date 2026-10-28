@@ -438,6 +438,11 @@ export interface HostMethods {
    * scenarios (#151). A harness edit, not something a player can do.
    */
   "diagnostics.giveInstalledAugmentation"(params: { augmentation: string }): void;
+  /**
+   * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
+   * installed, for test scenarios (#164). A harness edit, not something a player can do.
+   */
+  "diagnostics.queueAugmentation"(params: { augmentation: string }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */

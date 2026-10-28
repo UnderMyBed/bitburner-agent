@@ -64,6 +64,8 @@ export interface EngineApi {
   joinFactionWithReputation(faction: string, reputation: number): void;
   /** Gives the player `augmentation`, installed, unpaid. A harness edit, for test scenarios (#151). */
   giveInstalledAugmentation(augmentation: string): void;
+  /** Queues `augmentation`, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
+  queueAugmentation(augmentation: string): void;
   /** The page the game's Router is on. */
   page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
@@ -143,6 +145,7 @@ const API_FUNCTIONS = {
   setMoney: true,
   joinFactionWithReputation: true,
   giveInstalledAugmentation: true,
+  queueAugmentation: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

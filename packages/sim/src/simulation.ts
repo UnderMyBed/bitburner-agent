@@ -240,6 +240,8 @@ export class Simulation {
     /** Gives the player an augmentation, installed and unpaid. A harness edit, for test scenarios (#151). */
     giveInstalledAugmentation: (augmentation: string) =>
       this.rpc.call("diagnostics.giveInstalledAugmentation", { augmentation }),
+    /** Queues an augmentation, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
+    queueAugmentation: (augmentation: string) => this.rpc.call("diagnostics.queueAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     /** The host's V8 heap in use, in bytes, after a full garbage collection. */

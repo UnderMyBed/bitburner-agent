@@ -106,6 +106,21 @@ export function useFreshStarts() {
       latest,
       money: () => latest<FastSnapshotData>("fast")?.game?.money ?? null,
       medium: () => latest<MediumSnapshotData>("medium"),
+      /**
+       * The game reloaded now (#164): its sockets close, and autoexec brings the Agent back. From `save`, or by default
+       * from a save taken now, as a save-then-reload does (Options' "Force kill all active scripts"). A plain reload
+       * loads the last save instead, often older (the autosave runs every 60 s): pass that save's bytes. Returns the
+       * reloaded simulation, which the steps drive from here on (`simulation` above is the old page's).
+       */
+      reload: async (save?: Uint8Array): Promise<Simulation> => {
+        const reloaded = await start({
+          seed: 1,
+          fixture: { kind: "save", bytes: save ?? (await simulation.save()) },
+          network: { listenUrls: [CONTROL_URL, RFA_URL] },
+        });
+        game.replaceSimulation(reloaded);
+        return reloaded;
+      },
       /** The brain's desired state controller; fails at once if the brain has none. */
       controller: (): DesiredStateController => {
         if (!brain.desiredState) throw new Error("this brain has no desired state controller");

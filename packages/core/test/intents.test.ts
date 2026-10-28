@@ -1,4 +1,4 @@
-// Intents (#141): each action's args, the id made from them, and which are irreversible (#147).
+// Intents (#141): each action's args, the id made from them, and which are irreversible (#147, #164).
 
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
@@ -31,6 +31,7 @@ describe("parseIntentRequest", () => {
     ["buyServer", { hostname: "pserv-0", ram: 8 }],
     ["buyServer", { hostname: "a", ram: 1 }],
     ["buyServer", { hostname: `Big_Box.${"x".repeat(56)}`, ram: 2 ** 20 }],
+    ["installAugmentations", {}],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -116,6 +117,8 @@ test("an intent's id is its action and args, in the args' fixed order", () => {
     "purchaseAugmentation(Sector-12, NeuroFlux Governor, 3)",
   );
   expect(intentId("buyServer", { hostname: "pserv-0", ram: 8 })).toBe("buyServer(pserv-0, 8)");
+  // An install has no args (#164): one id, whatever was queued.
+  expect(intentId("installAugmentations", {})).toBe("installAugmentations()");
   const reordered = parseIntentRequest({ action: "upgradeHomeRam", args: { vendor: "CompuTek", fromRam: 8 } });
   expect(reordered.ok && reordered.message.id).toBe("upgradeHomeRam(8, CompuTek)");
 });
@@ -136,6 +139,10 @@ describe("isIrreversibleIntent", () => {
     for (const [faction, enemies] of Object.entries(FACTION_ENEMIES)) {
       for (const enemy of enemies) expect(FACTION_ENEMIES[enemy], `${enemy} against ${faction}`).toContain(faction);
     }
+  });
+
+  test("installing augmentations is irreversible: it resets the game (#164)", () => {
+    expect(isIrreversibleIntent(intent({ action: "installAugmentations", args: {} }))).toBe(true);
   });
 
   test("nothing else so far is irreversible", () => {
