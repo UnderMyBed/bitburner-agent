@@ -1,5 +1,6 @@
-// The diagnostics' harness edits (#145, #149): state a test sets up that no player could, checked in the game's own
-// save. `setMoney`, `joinFactionWithReputation`, `giveInstalledAugmentation` and `gainHackingExp`.
+// The diagnostics' harness edits (#145, #149, #151, #162, #164): state a test sets up that no player could, checked in
+// the game's own save. `setMoney`, `joinFactionWithReputation`, `giveInstalledAugmentation`, `gainHackingExp` and
+// `queueAugmentation`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -54,4 +55,22 @@ test("gainHackingExp: the experience and the skill it makes, as the game saves t
   // The game's own formula: floor(32 × ln(500 + 534.6) − 200) (`PersonObjects/formulas/skill.ts`).
   expect(player.skills.hacking).toBe(22);
   await expect(sim.diagnostics.gainHackingExp(-1)).rejects.toThrow(/exp/);
+});
+
+test("queueAugmentation: queued, not installed, as the game saves it, without its price; unknown or owned is refused", async () => {
+  const sim = await newGame();
+  const moneyBefore = (await saved(sim)).player.money;
+  await sim.diagnostics.queueAugmentation("Neurotrainer I");
+  await sim.diagnostics.queueAugmentation("NeuroFlux Governor");
+  await sim.diagnostics.queueAugmentation("NeuroFlux Governor");
+  const { player } = await saved(sim);
+  expect(player.queuedAugmentations.map((each: { name: string }) => each.name)).toEqual([
+    "Neurotrainer I",
+    "NeuroFlux Governor",
+    "NeuroFlux Governor",
+  ]);
+  expect(player.augmentations).toEqual([]);
+  expect(player.money).toBe(moneyBefore);
+  await expect(sim.diagnostics.queueAugmentation("Gibson Implant")).rejects.toThrow(/no augmentation/);
+  await expect(sim.diagnostics.queueAugmentation("Neurotrainer I")).rejects.toThrow(/owned already/);
 });

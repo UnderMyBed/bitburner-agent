@@ -20,6 +20,7 @@ const NEUROFLUX_3 = intent({
 });
 const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
 const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
+const INSTALL = intent({ action: "installAugmentations", args: {} });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -78,6 +79,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     NEUROFLUX_3,
     PSERV_0,
     BACKDOOR_CSEC,
+    INSTALL,
   ]);
   await round(10 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
@@ -90,6 +92,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
     ["agent/abcdef123456/backdoor.js", ["CSEC"]],
+    ["agent/abcdef123456/install-augmentations.js", ["agent/boot.js"]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -237,6 +240,8 @@ describe("backends (#145)", () => {
         effector(DONE)(`buyAugmentationFrom ${faction} ${augmentation} ${level}`),
       buyCloudServer: (hostname: string, ram: number) => effector(DONE)(`buyCloudServer ${hostname} ${ram}`),
       backdoorServer: (hostname: string) => effector(DONE)(`backdoorServer ${hostname}`),
+      installQueuedAugmentations: (callbackScript: string) =>
+        effector(DONE)(`installQueuedAugmentations ${callbackScript}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
     runner.desire([
@@ -248,6 +253,7 @@ describe("backends (#145)", () => {
       NEUROFLUX_3,
       PSERV_0,
       BACKDOOR_CSEC,
+      INSTALL,
     ]);
     await round();
     expect(runWorker).not.toHaveBeenCalled();
@@ -260,6 +266,7 @@ describe("backends (#145)", () => {
       "buyAugmentationFrom Sector-12 NeuroFlux Governor 3",
       "buyCloudServer pserv-0 8",
       "backdoorServer CSEC",
+      "installQueuedAugmentations agent/boot.js",
     ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
@@ -284,6 +291,7 @@ describe("backends (#145)", () => {
       JOIN_SECTOR_12,
       NEUROFLUX_3,
       BACKDOOR_CSEC,
+      INSTALL,
     ]);
     await round(10 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
@@ -295,6 +303,8 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-join-faction.js", ["Sector-12"]],
       ["agent/abcdef123456/singularity-buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
       ["agent/abcdef123456/singularity-backdoor.js", ["CSEC"]],
+      // Installing, with the script the game starts after the reset (#164).
+      ["agent/abcdef123456/singularity-install-augmentations.js", ["agent/boot.js"]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });

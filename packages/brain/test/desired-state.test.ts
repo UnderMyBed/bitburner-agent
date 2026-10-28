@@ -737,6 +737,114 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     expect(desiredStates(connection).at(-1)?.intents).toEqual([]);
     expect(controller.intentsView()[0]?.waitingFor).toBe("waiting for a save backup, which this brain doesn't take");
   });
+
+  describe("installing augmentations (#164)", () => {
+    const INSTALL = intent({ action: "installAugmentations", args: {} });
+    const AEVUM = intent({ action: "travel", args: { city: "Aevum" } });
+    const VOLHAVEN = intent({ action: "travel", args: { city: "Volhaven" } });
+    const AFTER_INSTALL =
+      "waiting for installAugmentations() first: queued after an install, it's for the game after the reset";
+    const slowAt = (lastAugReset: number) => ({ ...slowData(), resetInfo: { ...slowData().resetInfo, lastAugReset } });
+    const reportedDone = (connection: MemoryConnection, id: string, agentSessionId = "session-1") =>
+      send(
+        connection,
+        "fast",
+        {
+          degradedTiers: [],
+          pageHeapUsedBytes: null,
+          game: null,
+          intents: [{ id, done: true, tries: 1, problem: null, backend: "sim" }],
+        },
+        agentSessionId,
+      );
+
+    test("its guard: what's queued before it goes first; what's queued after it waits for it", async () => {
+      const { controller, connection, sentIds, medium, waitingFor, backupNow, release } = connectedWithLoopOff();
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(VOLHAVEN.id)).toBe(AFTER_INSTALL);
+      medium();
+      medium();
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+      expect(backupNow).not.toHaveBeenCalled();
+      // The travel done, the install's count starts, and it goes on its backup's success; Volhaven still waits.
+      reportedDone(connection, AEVUM.id);
+      await release();
+      expect(sentIds()).toEqual([INSTALL.id]);
+      expect(waitingFor(VOLHAVEN.id)).toBe(AFTER_INSTALL);
+    });
+
+    test("sent, then the game resets: the next Agent's slow snapshot takes it off the queue, and what's after it goes", async () => {
+      const { controller, connection, sentIds, backupNow, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_000));
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
+      await release();
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // A slow snapshot of the same game changes nothing.
+      send(connection, "slow", slowAt(1_000));
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // The install kills the Agent; the next one connects to the reset game.
+      connection.dropFromGameSide();
+      const again = connectAgent("session-2");
+      send(again, "static", network, "session-2");
+      expect(controller.intentsView().map((view) => view.id)).toEqual([INSTALL.id, VOLHAVEN.id]);
+      send(again, "slow", slowAt(90_000), "session-2");
+      expect(readManualIntents(store).map((each) => each.id)).toEqual([VOLHAVEN.id]);
+      expect(
+        desiredStates(again)
+          .at(-1)
+          ?.intents.map((each) => each.id),
+      ).toEqual([VOLHAVEN.id]);
+      // Not gated and backed up again for the new game.
+      expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("a reset with the clock set back (#167): an earlier lastAugReset is another reset all the same, and takes it off", async () => {
+      const { controller, connection, sentIds, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_767_225_600_000));
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      await release();
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // The game sets it from the clock (E2's page clock starts near 0, the save's from 2026).
+      send(connection, "slow", slowAt(82_500));
+      expect(readManualIntents(store)).toEqual([]);
+    });
+
+    test("a brain restarted mid-install doesn't know it was sent: gated again, it's done on the Agent's word", async () => {
+      const { controller, connection, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_000));
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      await release();
+      connection.dropFromGameSide();
+      // A new brain: its own channel and controller, the store (and so the queue) kept.
+      channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+      channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+      const backups = standInBackups();
+      const restarted = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+      const again = connectAgent("session-2");
+      send(again, "static", network, "session-2");
+      send(again, "slow", slowAt(90_000), "session-2");
+      expect(restarted.intentsView()).toMatchObject([{ id: INSTALL.id, waitingFor: counting(0) }]);
+      // The Agent checks the game first: nothing left to install is done.
+      reportedDone(again, INSTALL.id, "session-2");
+      expect(restarted.intentsView()).toEqual([]);
+    });
+
+    test("cancelled once sent, it's forgotten: queued again, a reset seen before it's sent again doesn't count", async () => {
+      const { controller, connection, sentIds, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_000));
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      await release();
+      expect(controller.cancelManualIntent(INSTALL.id)).toBe(true);
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      expect(sentIds()).toEqual([]);
+      send(connection, "slow", slowAt(90_000));
+      expect(controller.intentsView().map((view) => view.id)).toEqual([INSTALL.id]);
+    });
+  });
 });
 
 describe("work (#151, owner decision 37)", () => {

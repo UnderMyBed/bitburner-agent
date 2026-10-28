@@ -174,3 +174,5 @@ export const augmentationProblems = {
 
 /** Home worker: buys an augmentation through the game's page (#149). */
 export const BUY_AUGMENTATION_WORKER_NAME = "buy-augmentation.js";
+/** Home worker: installs the queued augmentations through the game's page (#164). */
+export const INSTALL_AUGMENTATIONS_WORKER_NAME = "install-augmentations.js";

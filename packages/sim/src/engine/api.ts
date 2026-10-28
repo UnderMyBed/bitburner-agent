@@ -66,6 +66,8 @@ export interface EngineApi {
   giveInstalledAugmentation(augmentation: string): void;
   /** Gives the player hacking experience, through the game's own gain. A harness edit, for test scenarios (#162). */
   gainHackingExp(exp: number): void;
+  /** Queues `augmentation`, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
+  queueAugmentation(augmentation: string): void;
   /** The page the game's Router is on. */
   page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
@@ -146,6 +148,7 @@ const API_FUNCTIONS = {
   joinFactionWithReputation: true,
   giveInstalledAugmentation: true,
   gainHackingExp: true,
+  queueAugmentation: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

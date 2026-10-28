@@ -203,6 +203,10 @@ async function start(options: HostOptions): Promise<Host> {
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);
       engine.gainHackingExp(exp);
     },
+    "diagnostics.queueAugmentation": ({ augmentation }) => {
+      booted();
+      engine.queueAugmentation(augmentation);
+    },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
     "diagnostics.heapLimit": () => heapLimit(),

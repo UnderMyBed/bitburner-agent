@@ -3,7 +3,10 @@
 // which the simulator captures as events, and routes), so the simulator can play past what its page can show. They
 // never grant Source-Files. The Agent finds them on the page's global object; in a browser they're absent.
 
-import { getAugCost } from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
+import {
+  getAugCost,
+  installAugmentations,
+} from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
 import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
@@ -34,7 +37,10 @@ import {
 import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
 import { Locations } from "../../../../../vendor/bitburner-src/src/Locations/Locations";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
+import { startWorkerScript } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
+import type { ScriptFilePath } from "../../../../../vendor/bitburner-src/src/Paths/ScriptFilePath";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
+import { RunningScript } from "../../../../../vendor/bitburner-src/src/Script/RunningScript";
 import {
   AddToAllServers,
   createUniqueRandomIp,
@@ -79,6 +85,29 @@ const dollars = (amount: number) => `${amount < 0 ? "-" : ""}$${Math.abs(amount)
 type EffectorResult = { done: boolean; problem: string | null };
 
 const result = (done: boolean, problem: string): EffectorResult => ({ done, problem: done ? null : problem });
+
+/** How long after an install the game starts the script named for after it (`NetscriptFunctions/Singularity.ts:210`). */
+const CALLBACK_AFTER_RESET_MS = 500;
+
+/**
+ * Starts `callbackScript` on home after a reset, with 1 thread and no args, as Singularity's `runAfterReset` does
+ * (`NetscriptFunctions/Singularity.ts:59-76`): only if it's there and fits home's free RAM.
+ */
+function runAfterReset(callbackScript: string): void {
+  const home = Player.getHomeComputer();
+  const script = home.scripts.get(callbackScript as ScriptFilePath);
+  if (!script) return;
+  const ramUsage = script.getRamUsage(home.scripts);
+  if (!ramUsage) {
+    Terminal.error(`Attempted to launch ${callbackScript} after reset but could not calculate ram usage.`);
+    return;
+  }
+  if (ramUsage > home.maxRam - home.ramUsed + 0.001) {
+    Terminal.error(`Attempted to launch ${callbackScript} after reset but there was not enough ram.`);
+    return;
+  }
+  startWorkerScript(new RunningScript(script, ramUsage, []), home);
+}
 
 /**
  * What the `ui` effectors that type report while the terminal runs an action: its input is disabled (#162). A copy of
@@ -373,6 +402,21 @@ const effectors = {
       }
     }
     return result(isThisWork() && Player.focus === focus, `not ${focus ? "focused on" : "doing"} ${crimeName}`);
+  },
+  /**
+   * The Augmentations page's "Install Augmentations", confirmed (#164): `installAugmentations()`, as the page's handler
+   * calls it (`ui/GameRoot.tsx:469-471`), only with something queued (the page disables it otherwise,
+   * `Augmentation/ui/AugmentationsRoot.tsx:173`). Nothing queued is done: nothing is left to install. The install kills
+   * every script, the Agent that called this too, and resets the game; `callbackScript` starts 500 ms later, as
+   * Singularity's `installAugmentations(cbScript)` does it, in place of the `ui` backend's restart. Not named
+   * `installAugmentations`, which is an NS function.
+   */
+  installQueuedAugmentations(callbackScript: string): EffectorResult {
+    if (Player.queuedAugmentations.length > 0) {
+      installAugmentations();
+      setTimeout(() => runAfterReset(callbackScript), CALLBACK_AFTER_RESET_MS);
+    }
+    return result(Player.queuedAugmentations.length === 0, "augmentations are still queued after installing them");
   },
   /**
    * The work activity's effector for a class (#158), as a university's or gym's page does it

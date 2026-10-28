@@ -9,6 +9,8 @@
 // university, unfocused, and held back by the city and the money guard. Buying a cloud server (#159) needs no page:
 // the NS API's `cloud.purchaseServer`, from a worker that fits a fresh save beside the Agent. A backdoor (#162) is
 // typed into the real terminal, which is busy for its time: a purchase that types `buy` meanwhile waits for it.
+// Installing augmentations (#167): through the page, then the page timer's `run /agent/boot.js` in the terminal, or
+// its save-and-reload, cycle after cycle, which answers Q5 (#36).
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +19,7 @@ import {
   type FastSnapshotData,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
+  type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import type { Simulation } from "@bitburner-agent/sim";
 import type { Page } from "playwright";
@@ -757,6 +760,187 @@ test("a class held back (#158): a gym in Aevum from Sector-12, and a paid course
     gameTimeoutMs: 15_000,
   });
   expect(latestMedium(dataDirectory)?.player.money).toBe(1_000);
+});
+
+/** What the terminal shows once the page timer's `run /agent/boot.js` has started it (`Terminal/commands/runScript.ts`). */
+const BOOT_STARTED = /> run \/agent\/boot\.js\s+Running script with 1 thread, pid \d+ and args: \[\]\./;
+const eventsOf = (dataDirectory: string, kind: string) =>
+  readStore(dataDirectory).events.filter((event) => event.kind === kind);
+/** The newest slow snapshot the brain has stored, or null: the installed augmentations and the last reset. */
+function latestSlow(dataDirectory: string): SlowSnapshotData | null {
+  const slow = readStore(dataDirectory)
+    .snapshots.filter((row) => row.tier === "slow")
+    .at(-1);
+  return (slow?.data as SlowSnapshotData | undefined) ?? null;
+}
+/** The Agent's first slow snapshot's last reset: the game's, before anything is installed. */
+async function firstLastAugReset(page: Page, dataDirectory: string): Promise<number> {
+  await advanceUntil(page, async () => latestSlow(dataDirectory) !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  return latestSlow(dataDirectory)?.resetInfo.lastAugReset as number;
+}
+/** Q5's evidence (#36): each install cycle's restart, and its game time from the Agent's death to the next Agent. */
+const q5Cycles: { cycle: string; path: "terminal" | "reload"; agentBackGameMs: number }[] = [];
+afterAll(() => {
+  if (q5Cycles.length > 0) console.log(`Q5 cycles: ${JSON.stringify(q5Cycles)}`);
+});
+
+/**
+ * One install through the page (#167), from a save the simulator sets up: `installed` already installed, `queued`
+ * queued, and the game's Options changed by `gameSettings`. With `ownerLine`, the owner has left that line typed in the
+ * terminal, which the page timer never types over. Runs until the Agent that installed has died and the next is
+ * connected, and returns what the test checks.
+ */
+async function installedThroughThePage({
+  installed,
+  queued,
+  gameSettings = {},
+  ownerLine = "",
+  ownerCommand = "",
+}: {
+  installed: string[];
+  queued: string;
+  gameSettings?: Record<string, unknown>;
+  ownerLine?: string;
+  /** A command the owner ran in the terminal before the install, as `cd agent`. */
+  ownerCommand?: string;
+}) {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: async (sim) => {
+      for (const augmentation of installed) await sim.diagnostics.giveInstalledAugmentation(augmentation);
+      await sim.diagnostics.queueAugmentation(queued);
+    },
+    gameSettings,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  const navigations: string[] = [];
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) navigations.push(frame.url());
+  });
+  // The browser's own dialogs, answered as a player at the screen would: "stay" on the unload prompt, which would
+  // stop a reload the page asked for (with no listener, Playwright lets every navigation through: ../src/game.ts).
+  const browserDialogs: string[] = [];
+  page.on("dialog", (dialog) => {
+    browserDialogs.push(dialog.type());
+    void dialog.dismiss().catch(() => {});
+  });
+  if (ownerCommand !== "") await typeCommand(page, ownerCommand);
+  if (ownerLine !== "") {
+    // Typed as a player types: the page then has the user's activation, so its unload prompt would really ask.
+    await page.locator(TERMINAL_INPUT).focus();
+    await page.keyboard.type(ownerLine);
+  }
+  const unloadPromptArmed = await page.evaluate(() => typeof window.onbeforeunload === "function");
+  const lastAugResetBefore = await firstLastAugReset(page, dataDirectory);
+  await queueIntent(ports.dashboardPort, { action: "installAugmentations", args: {} });
+  // The gate (two medium snapshots, a backup), then the worker installs: the Agent dies with it.
+  await advanceUntil(page, async () => eventsOf(dataDirectory, "agentDisconnected").length > 0, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  // Then the next Agent: through the terminal, or after the fallback's reload, which the steps can't drive through.
+  let agentBackGameMs = 0;
+  const agentBack = async () => eventsOf(dataDirectory, "agentConnected").length === 2;
+  const deadline = performance.now() + 2 * STEP_REAL_TIMEOUT_MS;
+  while (!(await agentBack())) {
+    if (performance.now() > deadline || agentBackGameMs > 60_000) throw new Error("the next Agent never connected");
+    try {
+      await advanceGameTime(page, 200);
+      agentBackGameMs += 200;
+    } catch (error) {
+      // A reload under way: the game's clock is back once it has loaded. The clock can fail a moment before the
+      // navigation is reported, so that gets a moment too.
+      if (navigations.length === 0) await page.waitForEvent("framenavigated", { timeout: 5_000 }).catch(() => {});
+      if (navigations.length === 0) throw error;
+      await waitForTerminal(page);
+    }
+  }
+  q5Cycles.push({ cycle: queued, path: navigations.length === 0 ? "terminal" : "reload", agentBackGameMs });
+  return { dataDirectory, page, ports, navigations, unloadPromptArmed, lastAugResetBefore, browserDialogs };
+}
+
+/** After the install: the next Agent's slow snapshot shows it, and the brain takes the install off its queue. */
+async function expectInstalled(page: Page, dataDirectory: string, augmentations: string[], lastAugResetBefore: number) {
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  const resetInfo = latestSlow(dataDirectory)?.resetInfo;
+  expect(Object.keys(resetInfo?.ownedAugs ?? {}).sort()).toEqual([...augmentations].sort());
+  // Another reset: not a later one here, as the game takes it from the page's clock, which E2 starts near 0 while the
+  // simulator's save is from 2026 (the brain counts any change: #167).
+  expect(resetInfo?.lastAugReset).not.toBe(lastAugResetBefore);
+}
+
+/** The augmentations the install cycles queue, one each, the ones before it installed in its save. */
+const CYCLE_AUGMENTATIONS = ["Neurotrainer I", "BitWire", "Synaptic Enhancement Implant", "Neurotrainer II"];
+
+test("installing through the page (#167, Q5): cycle after cycle, the page timer's `run /agent/boot.js` brings the Agent back, with no reload", async () => {
+  for (const [index, queued] of CYCLE_AUGMENTATIONS.entries()) {
+    const installed = CYCLE_AUGMENTATIONS.slice(0, index);
+    // Every other cycle with the install's confirmation turned off in Options: Install itself installs.
+    const gameSettings = index % 2 === 1 ? { SuppressBuyAugmentationConfirmation: true } : {};
+    // The last two with the owner's `cd agent` first: an install leaves the terminal there, so the line is absolute.
+    const ownerCommand = index >= 2 ? "cd agent" : "";
+    const cycle = await installedThroughThePage({ installed, queued, gameSettings, ownerCommand });
+    const { dataDirectory, page, navigations } = cycle;
+    expect(navigations, `cycle ${index + 1}`).toEqual([]);
+    expect(await terminalText(page)).toMatch(BOOT_STARTED);
+    if (ownerCommand !== "") expect(await terminalText(page)).toMatch(/\[home \/agent\/\]> run \/agent\/boot\.js/);
+    await expectInstalled(page, dataDirectory, [...installed, queued], cycle.lastAugResetBefore);
+    // The install's alert was closed by the page timer, before the next Agent's dialog watcher ever saw it.
+    expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.includes("You slowly drift"))).toEqual([]);
+    await advanceGameTime(page, 4_000);
+    await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+    await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+    // Done with this game: the next cycle has its own page and brain.
+    for (const opened of started.pages.splice(0)) await closeGame(opened).catch(() => {});
+    for (const brain of started.brains.splice(0)) await brain.stop();
+  }
+});
+
+test("the restart's fallback (#167, Q5): a line the owner left in the terminal, so the timer saves and reloads; autoexec, twice", async () => {
+  for (const [index, queued] of ["Neurotrainer I", "BitWire"].entries()) {
+    const installed = index === 0 ? [] : ["Neurotrainer I"];
+    const cycle = await installedThroughThePage({ installed, queued, ownerLine: "ls" });
+    const { dataDirectory, page, navigations } = cycle;
+    // The production build's unload prompt was armed (the owner's typing made it ask): the timer cleared it, so the
+    // game's own save-then-reload went through.
+    expect(cycle.unloadPromptArmed).toBe(true);
+    expect(navigations, `cycle ${index + 1}`).toHaveLength(1);
+    expect(cycle.browserDialogs).toEqual([]);
+    // The reloaded game was saved after the install: it's installed, and autoexec brought the Agent back.
+    await expectInstalled(page, dataDirectory, [...installed, queued], cycle.lastAugResetBefore);
+    expect(await terminalText(page)).not.toMatch(BOOT_STARTED);
+    for (const opened of started.pages.splice(0)) await closeGame(opened).catch(() => {});
+    for (const brain of started.brains.splice(0)) await brain.stop();
+  }
+});
+
+test("installing with nothing queued (#167): the Augmentations page's Install is disabled, so it's done, with no reset", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: (sim) => sim.diagnostics.giveInstalledAugmentation("Neurotrainer I"),
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  const lastAugResetBefore = await firstLastAugReset(page, dataDirectory);
+  await queueIntent(ports.dashboardPort, { action: "installAugmentations", args: {} });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  // The Agent's report, at its first try: the page shows nothing left to install.
+  const reported = readStore(dataDirectory)
+    .snapshots.filter((row) => row.tier === "fast")
+    .flatMap((row) => (row.data as FastSnapshotData).intents ?? [])
+    .filter((outcome) => outcome.id === "installAugmentations()" && outcome.done);
+  expect(reported[0]).toMatchObject({ done: true, problem: null, backend: "ui", tries: 1 });
+  expect(eventsOf(dataDirectory, "agentDisconnected")).toEqual([]);
+  expect(latestSlow(dataDirectory)?.resetInfo.lastAugReset).toBe(lastAugResetBefore);
+  await advanceGameTime(page, 2_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
 
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
