@@ -25,7 +25,7 @@ One run-through of M3's effectors on your own game on Steam, in an order an earl
 1. Type `run agent/boot.js` in the terminal. It's refused: "Please follow the tutorial or click 'Exit Tutorial' if you'd like to skip it".
 2. Click **Exit Tutorial**, then carry on with setup steps 4.3 and 4.4. The Agent starts as setup says.
 
-Close #168 if that holds and you agree with its decision (below).
+#168 is closed on its decision ([below](#decisions)). If this doesn't hold on a brand-new save, reopen it.
 
 ## 1. The hack loop
 
@@ -43,7 +43,7 @@ The dashboard reads "Hack loop: on, against n00dles, on N servers" (or another t
 4. Set **Crush Fitness Gym / Strength** (in Aevum) while in Sector-12: not started, with a problem saying to travel there first.
 5. Set **Rothman University / Computer Science** again: a gym left running costs $120 a second, and Computer Science is free and raises your hacking level toward CSEC's (step 6). Then click "Stop managing work": the class is left as it is.
 
-Close #158 if that holds, and answer its money guard decision (below).
+Close #158 if that holds. Its money guard is decided ([below](#decisions)).
 
 ## 3. The hacking programs, in the background
 
@@ -148,7 +148,7 @@ Close #159 if that holds.
 4. **Start the brain again** (`npm run brain`): the Agent reconnects, and the brain's state takes over.
 5. To play by hand with the brain stopped: before stopping it, click "Stop managing work" (and stop the hack loop if you want it gone). Or afterwards, `rm agent/desired-state.json`, then `kill` the Agent ([setup](setup.md#day-to-day)).
 
-Close #160 if that holds, and answer its four decisions (below).
+Close #160 if that holds. Its four choices are decided ([below](#decisions)).
 
 ## 14. A destroy, held before The Red Pill
 
@@ -174,16 +174,16 @@ Close #175 and #177 if that holds. A real destroy isn't part of this smoke test,
 
 Close #167 and #164 if that holds, and say on #36 that Q5's answer holds on Steam (and which path you saw).
 
-## Decisions still open
+## Decisions
 
-Answer these on their issues in the same sitting. Each was given the conservative choice for now.
+The owner answered these on 2026-10-28, keeping each as built ([owner decisions](decisions/owner-decisions.md) 38 to 42).
 
-- **[#158](https://github.com/UnderMyBed/bitburner-agent/issues/158), the class money guard** ([PR #163](https://github.com/UnderMyBed/bitburner-agent/pull/163)): a paid class starts only with 10 minutes of its cost in hand ($72,000 for Iron Gym), since the game would let the money go negative. One under way is left alone. Keep it, change the 10 minutes, or drop it?
-- **[#160](https://github.com/UnderMyBed/bitburner-agent/issues/160), safe mode's four choices** ([PR #165](https://github.com/UnderMyBed/bitburner-agent/pull/165)):
+- **[#158](https://github.com/UnderMyBed/bitburner-agent/issues/158), the class money guard** (decision 38, [PR #163](https://github.com/UnderMyBed/bitburner-agent/pull/163)): a paid class starts only with 10 minutes of its cost in hand ($72,000 for Iron Gym), since the game would let the money go negative. One under way is left alone.
+- **[#160](https://github.com/UnderMyBed/bitburner-agent/issues/160), safe mode** (decision 39, [PR #165](https://github.com/UnderMyBed/bitburner-agent/pull/165)):
   1. `ttlMs` is 12 hours, from the last moment connected to the brain that sent the state;
   2. taking over by hand with the brain stopped means `rm agent/desired-state.json`, then `kill` the Agent;
   3. a brain that connects and holds gets #134's rule: the Agent waits for that brain's word, and safe mode resumes only if it goes again;
   4. a holding brain's state passes `ttlMs` on, so the Agent keeps it in safe mode too.
-- **[#168](https://github.com/UnderMyBed/bitburner-agent/issues/168), no tutorial page check** ([PR #170](https://github.com/UnderMyBed/bitburner-agent/pull/170)): the tutorial stays your one click on a new game, and the Agent doesn't check the page for it. It can only run during the tutorial after your own Options → "Reset tutorial". Close #168 if you agree; comment if you'd rather the Agent checked.
-- **[#153](https://github.com/UnderMyBed/bitburner-agent/issues/153), part-time work unfocused** ([PR #154](https://github.com/UnderMyBed/bitburner-agent/pull/154)): part-time jobs are worked unfocused, as classes are, since focus gains them nothing. Owner decision 37 says work is focused by default; this is the exception.
-- **[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162), the backdoor** ([PR #171](https://github.com/UnderMyBed/bitburner-agent/pull/171)): the terminal is sent `home` after a backdoor, even if you'd connected elsewhere first. A backdoor longer than about 2 minutes raises the "intent stuck" alert until it's done, as would a purchase held behind it.
+- **[#168](https://github.com/UnderMyBed/bitburner-agent/issues/168), no tutorial page check** (decision 40, [PR #170](https://github.com/UnderMyBed/bitburner-agent/pull/170)): the tutorial stays your one click on a new game, and the Agent doesn't check the page for it. It can only run during the tutorial after your own Options → "Reset tutorial".
+- **[#153](https://github.com/UnderMyBed/bitburner-agent/issues/153), part-time work unfocused** (decision 41, [PR #154](https://github.com/UnderMyBed/bitburner-agent/pull/154)): part-time jobs are worked unfocused, as classes are, since focus gains them nothing (`Work/CompanyWork.tsx:36`). It's the exception to decision 37.
+- **[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162), the backdoor** (decision 42, [PR #171](https://github.com/UnderMyBed/bitburner-agent/pull/171)): the terminal is sent `home` after a backdoor, even if you'd connected elsewhere first. A backdoor longer than about 2 minutes raises the "intent stuck" alert until it's done, as would a purchase held behind it.
