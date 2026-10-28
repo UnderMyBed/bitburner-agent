@@ -61,7 +61,7 @@
   </section>
   <section id="work">
     <h2>Work</h2><div></div>
-    <form>
+    <form id="faction-work">
       <input name="faction" aria-label="Faction" value="CyberSec">
       <select name="workType" aria-label="Work type">
         <option>hacking</option><option>field</option><option>security</option>
@@ -72,7 +72,7 @@
     <form id="company-work">
       <input name="company" aria-label="Company" value="Noodle Bar">
       <select name="field" aria-label="Job field">
-        <option>Software</option><option>Software Consultant</option><option>IT</option><option>Security Engineer</option><option>Network Engineer</option><option>Business</option><option>Business Consultant</option><option>Security</option><option>Agent</option><option>Employee</option><option>Part-time Employee</option><option>Waiter</option><option>Part-time Waiter</option>
+        <option>Software</option><option>Software Consultant</option><option>IT</option><option>Security Engineer</option><option>Network Engineer</option><option>Business</option><option>Business Consultant</option><option>Security</option><option>Agent</option><option>Employee</option><option>Part-time Employee</option><option selected>Waiter</option><option>Part-time Waiter</option>
       </select>
       <button type="submit">Work there</button>
     </form>
@@ -358,7 +358,7 @@ document.querySelector("#intents form").addEventListener("submit", (event) => {
   sendWrite("/api/intents", { action: form.elements.action.value, args }, "#intents-problem", "Not queued");
 });
 
-document.querySelector("#work form:not(#company-work)").addEventListener("submit", (event) => {
+document.querySelector("#faction-work").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const work = { faction: form.elements.faction.value, workType: form.elements.workType.value };

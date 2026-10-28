@@ -35,6 +35,9 @@ export const NEURORECEPTOR_MANAGEMENT_IMPLANT = "Neuroreceptor Management Implan
 /** Home worker: converges the player's work on faction work through the game's page (#151), focus included. */
 export const FACTION_WORK_WORKER_NAME = "faction-work.js";
 
+/** Home worker: converges the player's work on company work through the game's page (#153), focus included. */
+export const COMPANY_WORK_WORKER_NAME = "company-work.js";
+
 type Parsed<Value> = { ok: true; message: Value } | { ok: false; reason: string };
 
 /** `work` from outside (the protocol, the dashboard, the store): the known fields only, or why it isn't valid. */

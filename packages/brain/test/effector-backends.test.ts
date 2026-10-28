@@ -412,19 +412,31 @@ function withTicketMoney(options: { singularity: boolean } = { singularity: fals
 
 const noodleBar = (focus: boolean): Work => ({ kind: "company", company: "Noodle Bar", field: "Waiter", focus });
 
-test("company work (sim, #153): in New Tokyo, a Waiter at Noodle Bar, focused, then unfocused", async () => {
-  const fresh = await withTicketMoney();
+/** Sends a travel to `city` and runs until the medium snapshot shows the player there. */
+async function travelledTo(fresh: Awaited<ReturnType<typeof withTicketMoney>>, city: string) {
   fresh.brain.channel.setDesiredState({
     hackLoop: HACK_LOOP_OFF,
-    intents: [intent({ action: "travel", args: { city: "New Tokyo" } })],
+    intents: [intent({ action: "travel", args: { city } })],
   });
-  await fresh.game.runUntil(() => fresh.medium()?.player.city === "New Tokyo", 30_000);
+  await fresh.game.runUntil(() => fresh.medium()?.player.city === city, 30_000);
+}
+
+test("company work (sim, #153): in New Tokyo, a Waiter at Noodle Bar, focused, then unfocused; the job held, from any city", async () => {
+  const fresh = await withTicketMoney();
+  await travelledTo(fresh, "New Tokyo");
   expect(await workedAt(fresh, noodleBar(true))).toEqual({ converged: true, problem: null, backend: "sim" });
   expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: true });
   expect((await fresh.simulation.diagnostics.game()).page).toBe("Work");
   await workedAt(fresh, noodleBar(false));
   expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: false });
   expect((await fresh.simulation.diagnostics.game()).page).not.toBe("Work");
+  // Back in Sector-12, working for its faction meanwhile: the job held is worked again from there, as the Job page does.
+  await travelledTo(fresh, "Sector-12");
+  await fresh.simulation.diagnostics.joinFactionWithReputation("Sector-12", 0);
+  await workedAt(fresh, { kind: "faction", faction: "Sector-12", workType: "hacking", focus: false });
+  expect(await savedCompanyWork(fresh)).toBeNull();
+  expect(await workedAt(fresh, noodleBar(true))).toEqual({ converged: true, problem: null, backend: "sim" });
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: true });
 });
 
 test("company work (sim, #153): not in the company's city, or not qualified, isn't converged, with the reason", async () => {
@@ -438,6 +450,12 @@ test("company work (sim, #153): not in the company's city, or not qualified, isn
   expect(await workedAt(fresh, software, false)).toMatchObject({
     converged: false,
     problem: "not qualified for a Software job at MegaCorp yet",
+  });
+  // DeltaOne offers Business from Operations Manager up, which the page lists only once the player qualifies.
+  const business: Work = { kind: "company", company: "DeltaOne", field: "Business", focus: true };
+  expect(await workedAt(fresh, business, false)).toMatchObject({
+    converged: false,
+    problem: "no Business job open to the player at DeltaOne (none offered, or not qualified yet)",
   });
   expect(await savedCompanyWork(fresh)).toBeNull();
 });
@@ -454,6 +472,6 @@ test("company work (singularity, #153): with SF4.3, through its Singularity work
   const software: Work = { kind: "company", company: "MegaCorp", field: "Software", focus: true };
   expect(await workedAt(fresh, software, false)).toMatchObject({
     converged: false,
-    problem: "not qualified for a Software job at MegaCorp yet",
+    problem: "MegaCorp didn't hire for a Software job (not qualified yet, or not offered to applyToCompany)",
   });
 });

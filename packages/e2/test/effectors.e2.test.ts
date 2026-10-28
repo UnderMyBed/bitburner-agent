@@ -3,7 +3,9 @@
 // terminal, upgrades home's RAM at Alpha Enterprises, and travels where the owner's manual queue says, as a player
 // would, and leaves the page on the Terminal with no dialog open. It closes the game's alerts and answers faction
 // invitations, and leaves the owner's and scripts' dialogs alone. Joining a faction (#147) clicks "Join!" past the
-// brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one.
+// brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one. Work (#151,
+// #153): faction work started and kept focused on the real page; company work applied for, the hiring's alert closed,
+// and worked, then worked again from the Job page in another city.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -509,7 +511,7 @@ const waiterPageShown = (page: Page) => async () =>
   (await page.locator("h6", { hasText: "You are currently working as a Waiter at Noodle Bar" }).count()) > 0;
 const NOODLE_BAR_WAITER = { kind: "company", company: "Noodle Bar", field: "Waiter" } as const;
 
-test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the alert closed, worked focused; refocused, not restarted; restarted, not reapplied", async () => {
+test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the alert closed, worked focused; refocused, not restarted; after a travel, its Job page", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     city: "New Tokyo",
     brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
@@ -521,7 +523,9 @@ test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the al
     gameTimeoutMs: 10_000,
   });
   expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  // The worker closed the hiring's alert itself: the dialog watcher, which would close it too, never saw it.
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("Congratulations"))).toEqual([]);
   const hired = () => JSON.stringify(latestMedium(dataDirectory)?.player.jobs) === '{"Noodle Bar":"Waiter"}';
   await advanceUntil(page, async () => hired(), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 12_000 });
 
@@ -532,13 +536,20 @@ test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the al
   await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
   expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You finished working for"))).toEqual([]);
 
-  // The owner stops working: the job is still held (`getPlayer().jobs`), so within 30 s the Agent goes straight to
-  // "Work", without applying again (the game would say "You are already Waiter! No promotion available.").
+  // A travel to Aevum, then the owner stops working there: the job is still held (`getPlayer().jobs`), so within 30 s
+  // the Agent clicks its "Work" on the sidebar's Job page, away from Noodle Bar's city.
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Aevum", {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  await advanceGameTime(page, 2_000);
+  await expect(waiterPageShown(page)()).resolves.toBe(true);
   await page.getByRole("button", { name: "Stop working" }).click();
   await expect(waiterPageShown(page)()).resolves.toBe(false);
   await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  expect(latestMedium(dataDirectory)?.player.city).toBe("Aevum");
   await advanceGameTime(page, 4_000);
-  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You are already"))).toEqual([]);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
 

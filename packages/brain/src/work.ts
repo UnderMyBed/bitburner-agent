@@ -3,6 +3,7 @@
 import {
   EFFECTOR_BACKENDS,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
+  PART_TIME_JOB_FIELDS,
   parseWork,
   type SlowSnapshotData,
   type Work,
@@ -64,10 +65,12 @@ export function writeOwnersWork(store: TelemetryStore, work: OwnersWork | null):
 }
 
 /**
- * Whether work goes focused (decision 37): yes, for full gains, unless the Neuroreceptor Management Implant is
- * installed, which gives them unfocused too. No work is sent before the slow snapshot says; the view shows focused.
+ * Whether work goes focused (decision 37): yes, for full gains, unless they come unfocused too: the Neuroreceptor
+ * Management Implant installed, or a part-time job (#153). No work is sent before the slow snapshot says; the view
+ * shows focused.
  */
-export function workFocus(slowData: SlowSnapshotData | null): boolean {
+export function workFocus(work: OwnersWork, slowData: SlowSnapshotData | null): boolean {
+  if (work.kind === "company" && PART_TIME_JOB_FIELDS.includes(work.field)) return false;
   const installed = slowData?.resetInfo?.ownedAugs;
   return !(typeof installed === "object" && installed !== null && NEURORECEPTOR_MANAGEMENT_IMPLANT in installed);
 }

@@ -782,6 +782,13 @@ describe("work (#151, owner decision 37)", () => {
     });
   });
 
+  test("part-time company work (#153) goes unfocused: the game gives it full gains either way", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    controller.setWork({ kind: "company", company: "Noodle Bar", field: "Part-time Waiter" });
+    expect(sentWork(connection)).toMatchObject({ field: "Part-time Waiter", focus: false });
+    expect(controller.workView().desired).toMatchObject({ focus: false });
+  });
+
   test("unfocused once the Neuroreceptor Management Implant is installed, as the slow snapshot says", () => {
     const { controller, connection } = connectedWithLoopOff();
     controller.setWork(HACKING_FOR_CYBERSEC);

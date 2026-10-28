@@ -19,7 +19,14 @@ export {
   singularityWorkerFileNames,
   singularityWorkerMostRamGb,
 } from "./backends.ts";
-export { COMPANY_NAMES, COMPANY_WORK_WORKER_NAME, JOB_FIELDS, type Job } from "./companies.ts";
+export {
+  COMPANY_NAMES,
+  holdsJobInField,
+  JOB_FIELDS,
+  type Job,
+  jobTitles,
+  PART_TIME_JOB_FIELDS,
+} from "./companies.ts";
 export {
   type AgentMessage,
   type BrainMessage,
@@ -96,6 +103,7 @@ export {
   type WorkerReport,
 } from "./snapshots.ts";
 export {
+  COMPANY_WORK_WORKER_NAME,
   FACTION_WORK_TYPES,
   FACTION_WORK_WORKER_NAME,
   type FactionWorkType,

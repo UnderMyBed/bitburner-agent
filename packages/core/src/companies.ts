@@ -109,5 +109,19 @@ export const JOB_FIELDS: Record<string, Job[]> = {
   "Part-time Waiter": [{ title: "Part-time Waiter", applyText: "Apply to be a Part-time Waiter" }],
 };
 
-/** Home worker: converges the player's work on company work through the game's page (#153), focus included. */
-export const COMPANY_WORK_WORKER_NAME = "company-work.js";
+/** The job titles of a job field, from the first; none for a field the game doesn't have. */
+export function jobTitles(field: string): string[] {
+  return ((Object.hasOwn(JOB_FIELDS, field) ? JOB_FIELDS[field] : undefined) ?? []).map((job) => job.title);
+}
+
+/**
+ * Whether `jobs` (`getPlayer().jobs`: the title held at each company) holds a job in `field` at `company`. Titles are
+ * unique across fields, so the title says the field.
+ */
+export function holdsJobInField(jobs: Record<string, string | undefined>, company: string, field: string): boolean {
+  const title = Object.hasOwn(jobs, company) ? jobs[company] : undefined;
+  return title !== undefined && jobTitles(field).includes(title);
+}
+
+/** The part-time fields: the game gives them full gains unfocused (`Work/CompanyWork.tsx:36`), so focus buys nothing. */
+export const PART_TIME_JOB_FIELDS = ["Part-time Employee", "Part-time Waiter"];

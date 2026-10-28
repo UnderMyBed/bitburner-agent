@@ -186,11 +186,12 @@ const effectors = {
     );
   },
   /**
-   * The work activity's effector for company work (#153): as the company's page does it (`Locations/ui/CompanyLocation
-   * .tsx`), so only in the company's city. No job in the field there: the field's first job applied for, as Singularity's
-   * `applyToCompany` does, where the company offers it and the player qualifies (the page disables the button
-   * otherwise); then "Work", focused on the Work page; then the focus as the focus buttons set it. Already so: nothing
-   * touched. Not named `workForCompany`, which is an NS function. The problems read as the `ui` worker's.
+   * The work activity's effector for company work (#153), as the page does it. A job in the field there already: its
+   * "Work" on the sidebar's Job page, from any city (`Locations/ui/JobRoot.tsx`). Otherwise the company's page, only in
+   * its city (`Locations/ui/CompanyLocation.tsx`), and the field's job as `Company/ui/JobListings.tsx` lists it: one the
+   * player qualifies for (applying climbs to the highest, `applyForJob`), or else the field's first, disabled; neither,
+   * nothing to apply for. Then "Work", focused on the Work page; then the focus as the focus buttons set it. Already so:
+   * nothing touched. Not named `workForCompany`, which is an NS function. The problems read as the `ui` worker's.
    */
   convergeCompanyWork(companyName: string, field: string, focus: boolean): EffectorResult {
     const company = Object.values(CompanyName).includes(companyName as CompanyName)
@@ -203,15 +204,19 @@ const effectors = {
     const notConverged = `not ${focus ? "focused on" : "doing"} ${field} work at ${companyName}`;
     if (company === undefined || track.length === 0) return result(false, notConverged);
     if (!isThisWork()) {
-      if (Locations[companyNameAsLocationName(company.name)]?.city !== Player.city) {
-        return result(false, `no ${companyName} in the city (is the player in its city?)`);
-      }
       if (!hasJobInField()) {
-        const position = CompanyPositions[track[0] as (typeof track)[number]];
-        if (!company.companyPositions.has(position.name))
-          return result(false, `no ${field} job offered at ${companyName}`);
-        if (!Player.isQualified(company, position)) {
-          return result(false, `not qualified for a ${field} job at ${companyName} yet`);
+        if (Locations[companyNameAsLocationName(company.name)]?.city !== Player.city) {
+          return result(false, `no ${companyName} in the city (is the player in its city?)`);
+        }
+        const offered = track.filter((job) => company.companyPositions.has(job)).map((job) => CompanyPositions[job]);
+        const position = offered.find((job) => Player.isQualified(company, job));
+        if (position === undefined) {
+          return result(
+            false,
+            offered.some((job) => job.isStartingJob)
+              ? `not qualified for a ${field} job at ${companyName} yet`
+              : `no ${field} job open to the player at ${companyName} (none offered, or not qualified yet)`,
+          );
         }
         const applied = Player.applyForJob(company, position);
         if (applied.message) dialogBoxCreate(applied.message);

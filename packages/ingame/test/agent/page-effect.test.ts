@@ -106,13 +106,55 @@ test("company work the player doesn't qualify for (#153): the disabled Apply isn
   expect(clicks).toEqual(["City", "MegaCorp", "Terminal"]);
 });
 
-test("company work with a job in the field already (#153): straight to Work, not applied again; a name with an apostrophe", async () => {
-  const gamePage = inTheCity("Joe's Guns", clickable("Apply to be an Employee", "button"), clickable("Work", "button"));
+test("company work, hired (#153): Apply, the hiring's alert closed, Work, then unfocused; a name with an apostrophe", async () => {
+  // The Work page: its unfocus button, which leaves the sidebar showing.
+  const work = clickable("Work", "button", () =>
+    document.body.replaceChildren(
+      clickable("Do something else simultaneously", "button", () =>
+        document.body.replaceChildren(clickable("Terminal", "sidebar")),
+      ),
+    ),
+  );
+  // Applying opens the game's alert (a consultant's wording: any "Congratulations, you …"), closed by its button.
+  const alert = document.createElement("div");
+  alert.append(
+    "Congratulations, you got a contract as a Employee at Joe's Guns!",
+    clickable("Close", "button", () => alert.remove()),
+  );
+  const apply = clickable("Apply to be an Employee", "button", () => document.body.append(alert));
+  const gamePage = inTheCity("Joe's Guns", apply, work);
+  const problem = await convergeWorkOnPage(
+    gamePage,
+    { kind: "company", company: "Joe's Guns", field: "Employee", focus: false },
+    { wasFocused: false },
+  );
+  expect(problem).toBeNull();
+  expect(clicks).toEqual([
+    "City",
+    "Joe's Guns",
+    "Apply to be an Employee",
+    "Close",
+    "Work",
+    "Do something else simultaneously",
+    "Terminal",
+  ]);
+});
+
+test("company work with a job in the field already (#153): that job's Work on the Job page, from any city", async () => {
+  // The Job page lists each job held, in `getPlayer().jobs`' order, each with its own Work.
+  const jobPage = () =>
+    document.body.replaceChildren(
+      clickable("Work", "button", () => clicks.push("Noodle Bar's")),
+      clickable("Work", "button", () => clicks.push("Joe's Guns'")),
+    );
+  document.body.replaceChildren(clickable("Job", "sidebar", jobPage), clickable("City", "sidebar"));
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
   const problem = await convergeWorkOnPage(
     gamePage,
     { kind: "company", company: "Joe's Guns", field: "Employee", focus: true },
-    { wasFocused: false, hasJobInField: true },
+    { wasFocused: false, jobs: { "Noodle Bar": "Waiter", "Joe's Guns": "Employee" } },
   );
   expect(problem).toBeNull();
-  expect(clicks).toEqual(["City", "Joe's Guns", "Work"]);
+  expect(clicks).toEqual(["Job", "Work", "Joe's Guns'"]);
 });
