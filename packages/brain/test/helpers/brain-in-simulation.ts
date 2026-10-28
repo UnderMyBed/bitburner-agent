@@ -12,7 +12,7 @@ import {
 } from "@bitburner-agent/bridge";
 import { DesiredStateController } from "../../src/desired-state.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
-import { recordChannelEvents, recordEvents } from "../../src/record-channel-events.ts";
+import { brainChannel, recordChannelEvents, recordEvents } from "../../src/record-channel-events.ts";
 import { type SaveBackupEvent, SaveBackups } from "../../src/save-backups.ts";
 import type { SimulatedGame } from "../../src/simulated-game.ts";
 import type { TelemetryStore } from "../../src/telemetry-store.ts";
@@ -90,7 +90,9 @@ export function startBrainInSimulation(
     withDesiredState?: boolean;
   },
 ): BrainInSimulation {
-  const channel = new ControlChannel({ token, clock: game.clock });
+  const channel = data
+    ? brainChannel({ token, clock: game.clock, store: data.store, environment: "E1" })
+    : new ControlChannel({ token, clock: game.clock });
   if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
   const saveBackups =
     data &&
