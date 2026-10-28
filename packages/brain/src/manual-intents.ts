@@ -41,8 +41,10 @@ export interface ResetSentNote {
   resetAt: number;
 }
 
-/** The note kept with the queue, so a restarted brain still knows (#175); null for none. As for the queue, a value the
- * brain didn't write fails. */
+/**
+ * The note kept with the queue, so a restarted brain still knows (#175); null for none. As for the queue, a value the
+ * brain didn't write fails.
+ */
 export function readResetSentNote(store: TelemetryStore): ResetSentNote | null {
   const value = store.getSetting(RESET_SENT_SETTING);
   if (value === null) return null;
