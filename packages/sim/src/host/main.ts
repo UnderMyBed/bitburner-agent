@@ -188,6 +188,12 @@ async function start(options: HostOptions): Promise<Host> {
         throw new RangeError(`money must be finite and 0 or more, not ${money}`);
       engine.setMoney(money);
     },
+    "diagnostics.joinFactionWithReputation": ({ faction, reputation }) => {
+      booted();
+      if (!Number.isFinite(reputation) || reputation < 0)
+        throw new RangeError(`reputation must be finite and 0 or more, not ${reputation}`);
+      engine.joinFactionWithReputation(faction, reputation);
+    },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
     "diagnostics.heapLimit": () => heapLimit(),

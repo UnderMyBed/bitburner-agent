@@ -428,6 +428,11 @@ export interface HostMethods {
   "diagnostics.setHomeRam"(params: { gb: number }): void;
   /** Sets the player's money (finite, 0 or more), for test scenarios. A harness edit, not something a player can do. */
   "diagnostics.setMoney"(params: { money: number }): void;
+  /**
+   * Makes the player a member of `faction` (one of the game's names; joining bans its enemies) with this reputation
+   * (finite, 0 or more), for test scenarios (#149). A harness edit, not something a player can do.
+   */
+  "diagnostics.joinFactionWithReputation"(params: { faction: string; reputation: number }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */

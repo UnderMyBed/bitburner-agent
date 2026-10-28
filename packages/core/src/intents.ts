@@ -6,6 +6,7 @@
  * In-game code bundles this, and the game charges RAM for identifiers named like NS functions (packages/ingame/README.md,
  * "RAM"), so the actions are only ever strings here, never identifiers: `upgradeHomeRam` is a Singularity function.
  */
+import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "./factions.ts";
 import { isUpgradableHomeRam } from "./home-ram.ts";
 import { CITIES, TECH_VENDORS } from "./locations.ts";
@@ -17,7 +18,9 @@ export type IntentRequest =
   | { action: "buyProgram"; args: { program: string } }
   | { action: "upgradeHomeRam"; args: { fromRam: number; vendor: string } }
   | { action: "travel"; args: { city: string } }
-  | { action: "joinFaction"; args: { faction: string } };
+  | { action: "joinFaction"; args: { faction: string } }
+  /** `level` is 1 but for NeuroFlux Governor, where it's the level bought: each level its own intent (#149). */
+  | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -26,6 +29,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   buyProgram: true,
   upgradeHomeRam: true,
   joinFaction: true,
+  purchaseAugmentation: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -96,6 +100,28 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         return { ok: false, reason: "joinFaction's faction isn't one of the game's" };
       }
       return { ok: true, message: { action, args: { faction: args.faction as string } } };
+    case "purchaseAugmentation": {
+      if (!FACTION_NAMES.includes(args.faction as string)) {
+        return { ok: false, reason: "purchaseAugmentation's faction isn't one of the game's" };
+      }
+      if (!AUGMENTATION_NAMES.includes(args.augmentation as string)) {
+        return { ok: false, reason: "purchaseAugmentation's augmentation isn't one of the game's" };
+      }
+      const level = args.level;
+      if (!Number.isInteger(level) || (level as number) < 1) {
+        return { ok: false, reason: "purchaseAugmentation's level isn't a whole number from 1" };
+      }
+      if (args.augmentation !== NEUROFLUX_GOVERNOR && level !== 1) {
+        return { ok: false, reason: "purchaseAugmentation's level is 1 for any augmentation but NeuroFlux Governor" };
+      }
+      return {
+        ok: true,
+        message: {
+          action,
+          args: { faction: args.faction as string, augmentation: args.augmentation as string, level: level as number },
+        },
+      };
+    }
     default:
       return null;
   }

@@ -9,19 +9,16 @@
 // Joining a faction with enemies bans them: the brain sends that only past its guard and a save backup (#147).
 // RAM: `getPlayer` 0.5 (ram-budget.json); the page costs nothing.
 import type { FactionName, NS } from "../ns.ts";
-import type { GamePage } from "../page/game-page.ts";
+import { factionRowButtonXpath, type GamePage } from "../page/game-page.ts";
 import { reportPageEffect } from "../page/page-effect.ts";
-
-/** "Join!" on `faction`'s row among the invitations: each row is a `Paper` naming its faction. */
-const joinButtonXpath = (faction: string) =>
-  "//span[contains(concat(' ', @class, ' '), ' factions-invites ')]" +
-  `//div[contains(concat(' ', @class, ' '), ' MuiPaper-root ') and .//span[normalize-space()='${faction}']]` +
-  "//button[normalize-space()='Join!']";
 
 async function joinOnPage(gamePage: GamePage, faction: string): Promise<string | null> {
   return (
     (await gamePage.openSidebarPage("Factions")) ??
-    (await gamePage.clickWhenThere(joinButtonXpath(faction), `invitation from ${faction} on the Factions page`))
+    (await gamePage.clickWhenThere(
+      factionRowButtonXpath("factions-invites", faction, "Join!"),
+      `invitation from ${faction} on the Factions page`,
+    ))
   );
 }
 

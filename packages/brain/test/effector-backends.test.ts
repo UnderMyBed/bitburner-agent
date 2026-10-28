@@ -2,6 +2,7 @@
 // them through the simulator's own effectors, or, in a game with SF4.3, through its Singularity workers. The `ui`
 // backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
+// Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time.
 import {
   type DesiredState,
   type FastSnapshotData,
@@ -174,4 +175,120 @@ test("joining Sector-12 (singularity): with SF4.3, through its Singularity worke
   await joinedThroughTheGate(fresh, "Sector-12");
   await fresh.game.runUntil(() => joined(fresh).includes("Sector-12"), 15_000);
   expect(await agentLogLines(fresh, "join Sector-12")).toEqual(["agent: join Sector-12 (singularity): done"]);
+});
+
+const NEUROTRAINER = intent({
+  action: "purchaseAugmentation",
+  args: { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 },
+});
+const neuroFlux = (level: number) =>
+  intent({ action: "purchaseAugmentation", args: { faction: "CyberSec", augmentation: "NeuroFlux Governor", level } });
+
+/** A fresh start with `money`, in CyberSec with plenty of reputation, as the test sets it: the backend's to buy from. */
+function inCyberSec(money: number, options: { singularity: boolean } = { singularity: false }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(money);
+      await game.simulation.diagnostics.joinFactionWithReputation("CyberSec", 1e6);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+
+/** The Agent's latest outcome for `id`, once it has tried it, or undefined. */
+async function triedOnce(fresh: Awaited<ReturnType<typeof inCyberSec>>, id: string) {
+  const outcome = () => fresh.latest<FastSnapshotData>("fast")?.intents?.find((each) => each.id === id);
+  await fresh.game.runUntil(() => (outcome()?.tries ?? 0) >= 1, 10_000);
+  return outcome();
+}
+
+/** Runs until the Agent reports each of `intents` done, or `timeoutMs` passes; their outcomes. */
+async function boughtEach(fresh: Awaited<ReturnType<typeof inCyberSec>>, intents: Intent[], timeoutMs = 30_000) {
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents });
+  const outcomes = () => fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
+  await fresh.game.runUntil(
+    () => outcomes().length === intents.length && outcomes().every((each) => each.done),
+    timeoutMs,
+  );
+  return outcomes();
+}
+
+test("buying augmentations (sim): Neurotrainer I, then NeuroFlux levels 1 and 2, each paid for once", async () => {
+  const fresh = await inCyberSec(1e10);
+  const outcomes = await boughtEach(fresh, [NEUROTRAINER, neuroFlux(1), neuroFlux(2)]);
+  expect(outcomes.map(({ id, done, tries, backend }) => [id, done, tries, backend])).toEqual([
+    [NEUROTRAINER.id, true, 1, "sim"],
+    [neuroFlux(1).id, true, 1, "sim"],
+    [neuroFlux(2).id, true, 1, "sim"],
+  ]);
+  const moneyAfter = fresh.money() as number;
+  // Sent again, as new intents: each is done from the game alone, and nothing more is paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  const again = await boughtEach(fresh, [NEUROTRAINER, neuroFlux(2)]);
+  expect(again.every((each) => each.done)).toBe(true);
+  expect(fresh.money()).toBe(moneyAfter);
+  // NeuroFlux is at level 2 exactly: level 4 is out of turn, the next being 3.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [neuroFlux(4)] });
+  expect((await triedOnce(fresh, neuroFlux(4).id))?.problem).toBe(
+    "NeuroFlux Governor's next level is 3, not 4: the levels before it come first",
+  );
+});
+
+test("buying augmentations (sim): a NeuroFlux level out of turn waits, and without the money nothing is bought", async () => {
+  const fresh = await inCyberSec(0);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [NEUROTRAINER, neuroFlux(2)] });
+  await fresh.game.runUntil(() => {
+    const outcomes = fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
+    return outcomes.length === 2 && outcomes.every((each) => each.tries >= 1);
+  }, 10_000);
+  expect(fresh.latest<FastSnapshotData>("fast")?.intents?.map(({ done, problem }) => [done, problem])).toEqual([
+    [false, "can't buy Neurotrainer I from CyberSec yet (the money, the reputation or a prerequisite?)"],
+    [false, "NeuroFlux Governor's next level is 1, not 2: the levels before it come first"],
+  ]);
+  // As the page: its Buy is disabled, so nothing was tried, and no dialog says why not.
+  const alerts = (await fresh.simulation.events(0)).events.filter((event) => event.type === "alert");
+  expect(alerts.map((event) => ("text" in event ? event.text : ""))).not.toContainEqual(
+    expect.stringMatching(/afford|enough money/),
+  );
+});
+
+test("buying augmentations (singularity): with SF4.3, through its Singularity worker, levels in turn, refused without money", async () => {
+  const fresh = await inCyberSec(1e10, { singularity: true });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  const outcomes = await boughtEach(fresh, [NEUROTRAINER, neuroFlux(1), neuroFlux(2)]);
+  expect(outcomes.map(({ done, tries, backend }) => [done, tries, backend])).toEqual([
+    [true, 1, "singularity"],
+    [true, 1, "singularity"],
+    [true, 1, "singularity"],
+  ]);
+  const moneyAfter = fresh.money() as number;
+  // Sent again as new intents, owned ones are done from the game alone; a NeuroFlux level out of turn isn't bought.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [NEUROTRAINER, neuroFlux(2), neuroFlux(4)] });
+  await fresh.game.runUntil(() => {
+    const again = fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
+    return again.length === 3 && again.every((each) => each.tries >= 1);
+  }, 15_000);
+  expect(fresh.latest<FastSnapshotData>("fast")?.intents?.map(({ done, problem }) => [done, problem])).toEqual([
+    [true, null],
+    [true, null],
+    [false, "NeuroFlux Governor's next level is 3, not 4: the levels before it come first"],
+  ]);
+  expect(fresh.money()).toBe(moneyAfter);
+  // Without the money, Singularity's refusal (which says no more than false).
+  await fresh.simulation.diagnostics.setMoney(0);
+  const signalProcessors = intent({
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "Cranial Signal Processors - Gen I", level: 1 },
+  });
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [signalProcessors] });
+  expect(await triedOnce(fresh, signalProcessors.id)).toMatchObject({
+    done: false,
+    problem:
+      "the game refused Cranial Signal Processors - Gen I from CyberSec (joined? sold by it? the money, the reputation, a prerequisite?)",
+  });
 });

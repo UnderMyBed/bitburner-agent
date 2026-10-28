@@ -3,7 +3,7 @@
 // renders them, with React's props on them. E2 drives the real page (packages/e2/test/effectors.e2.test.ts).
 import { afterEach, expect, test } from "vitest";
 import type { NS } from "../../src/ns.ts";
-import { openGamePage } from "../../src/page/game-page.ts";
+import { openGamePage, xpathString } from "../../src/page/game-page.ts";
 
 const clicks: string[] = [];
 const ns = { asleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)) } as unknown as NS;
@@ -111,4 +111,24 @@ test("a step the game may skip (#141): clicked if it's there now, and no problem
 test("the steps' time is up 300 ms before the deadline, kept for the way back", () => {
   const gamePage = openGamePage(ns, Date.now() + 200);
   expect(gamePage?.stepsTimeUp()).toBe(true);
+});
+
+test.each([
+  ["plain", "Neurotrainer I"],
+  ["with an apostrophe", "The Shadow's Simulacrum"],
+  ["with a double quote", 'a "quoted" name'],
+  ["with both", `it's "both"`],
+])("xpathString quotes a %s text so XPath matches it exactly (#149)", (_description, text) => {
+  document.body.replaceChildren(Object.assign(document.createElement("p"), { textContent: text }));
+  const found = document.evaluate(`//p[normalize-space()=${xpathString(text)}]`, document, null, 9, null);
+  expect((found.singleNodeValue as Element | null)?.textContent).toBe(text);
+});
+
+test("findWhenThere waits for an element without clicking it, and gives null by the steps' end", async () => {
+  sidebarWith("Terminal");
+  setTimeout(() => document.body.append(Object.assign(document.createElement("button"), { textContent: "Buy" })), 100);
+  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  expect((await gamePage?.findWhenThere("//button[normalize-space()='Buy']"))?.textContent).toBe("Buy");
+  expect(await gamePage?.findWhenThere("//button[normalize-space()='Owned']")).toBeNull();
+  expect(clicks).toEqual([]);
 });

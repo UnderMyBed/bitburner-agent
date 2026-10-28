@@ -3,11 +3,19 @@
 // which the simulator captures as events, and routes), so the simulator can play past what its page can show. They
 // never grant Source-Files. The Agent finds them on the page's global object; in a browser they're absent.
 
+import { getAugCost } from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
+import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
+import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
 import { CityName } from "../../../../../vendor/bitburner-src/src/Enums";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
-import { joinFaction } from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
+import {
+  getFactionAugmentationsFiltered,
+  hasAugmentationPrereqs,
+  joinFaction,
+  purchaseAugmentation,
+} from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
 import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
@@ -80,6 +88,51 @@ const effectors = {
       : undefined;
     if (!isMember() && faction?.alreadyInvited && !faction.isBanned) joinFaction(faction);
     return result(isMember(), `not a member of ${factionName} after joining (is there an invitation?)`);
+  },
+  /**
+   * A faction's augmentations page's "Buy" (`Faction/ui/AugmentationsPage.tsx:137-141`, `:240-255`): only for a
+   * member, an augmentation the faction sells, not owned (NeuroFlux at the level to buy next), and only while the page
+   * enables it: the prerequisites, the reputation and the money. Not named `purchaseAugmentation`, which is an NS function.
+   */
+  buyAugmentationFrom(factionName: string, augmentationName: string, level: number): EffectorResult {
+    const augmentation = Object.values(AugmentationName).includes(augmentationName as AugmentationName)
+      ? Augmentations[augmentationName as AugmentationName]
+      : undefined;
+    const faction = Object.values(FactionName).includes(factionName as FactionName)
+      ? Factions[factionName as FactionName]
+      : undefined;
+    /** NeuroFlux's level (the installed and the queued); for another augmentation, 1 if owned, else 0. */
+    const levelNow = () => {
+      if (augmentation === undefined) return 0;
+      if (augmentationName === AugmentationName.NeuroFluxGovernor) return augmentation.getLevel();
+      return Player.hasAugmentation(augmentation.name) ? 1 : 0;
+    };
+    if (levelNow() >= level) return result(true, "");
+    // The page lists only what the faction sells, to a member. These problems read as core's `augmentationProblems`.
+    if (
+      augmentation === undefined ||
+      faction === undefined ||
+      !faction.isMember ||
+      !getFactionAugmentationsFiltered(faction).includes(augmentation.name)
+    ) {
+      return result(false, `${factionName} doesn't offer ${augmentationName} (is it joined, and does it sell it?)`);
+    }
+    if (levelNow() + 1 !== level) {
+      return result(
+        false,
+        `${augmentationName}'s next level is ${levelNow() + 1}, not ${level}: the levels before it come first`,
+      );
+    }
+    const costs = getAugCost(augmentation);
+    const enabled =
+      hasAugmentationPrereqs(augmentation) &&
+      faction.playerReputation >= costs.repCost &&
+      (costs.moneyCost === 0 || Player.money >= costs.moneyCost);
+    if (enabled) purchaseAugmentation(faction, augmentation);
+    return result(
+      levelNow() >= level,
+      `can't buy ${augmentationName} from ${factionName} yet (the money, the reputation or a prerequisite?)`,
+    );
   },
 };
 
