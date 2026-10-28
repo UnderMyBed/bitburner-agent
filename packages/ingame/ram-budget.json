@@ -1,5 +1,6 @@
 {
   "agent.js": 3.0,
+  "backdoor.js": 4.0,
   "boot.js": 2.7,
   "buy-augmentation.js": 2.6,
   "buy-program.js": 1.75,
@@ -12,6 +13,7 @@
   "hack-loop-root.js": 2.35,
   "hack-loop.js": 2.4,
   "join-faction.js": 2.1,
+  "singularity-backdoor.js": 8.0,
   "singularity-buy-augmentation.js": 12.6,
   "singularity-buy-program.js": 3.7,
   "singularity-buy-tor.js": 3.65,

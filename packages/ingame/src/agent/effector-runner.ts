@@ -13,10 +13,13 @@ import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 /** How long before the round ends the worker gives up, to report and exit in time. */
 const WORKER_MARGIN_MS = 200;
 
-/** One try: its backend, and the effector's report, or why there's none (the worker didn't run, or didn't report). */
+/**
+ * One try: its backend, and the effector's report, or why there's none (the worker didn't run, or didn't report).
+ * `stillRunning`: the last try's worker hasn't exited, as a Singularity backdoor's waits for it to end (#162).
+ */
 export type EffectorRun = { backend: EffectorBackend } & (
-  | { report: EffectorReport; noReportReason: null }
-  | { report: null; noReportReason: string }
+  | { report: EffectorReport; noReportReason: null; stillRunning?: undefined }
+  | { report: null; noReportReason: string; stillRunning: boolean }
 );
 
 export function createEffectorRunner(
@@ -74,7 +77,12 @@ export function createEffectorRunner(
       if (workerRun.outcome === "reported") {
         return { backend, report: workerRun.report.data as EffectorReport, noReportReason: null };
       }
-      return { backend, report: null, noReportReason: whyNoReport(workerRun, workerFile) };
+      return {
+        backend,
+        report: null,
+        noReportReason: whyNoReport(workerRun, workerFile),
+        stillRunning: workerRun.outcome === "stillRunning",
+      };
     },
   };
 }

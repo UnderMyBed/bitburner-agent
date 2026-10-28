@@ -31,6 +31,10 @@ describe("parseIntentRequest", () => {
     ["buyServer", { hostname: "pserv-0", ram: 8 }],
     ["buyServer", { hostname: "a", ram: 1 }],
     ["buyServer", { hostname: `Big_Box.${"x".repeat(56)}`, ram: 2 ** 20 }],
+    ["backdoor", { hostname: "CSEC" }],
+    ["backdoor", { hostname: "." }],
+    ["backdoor", { hostname: "I.I.I.I" }],
+    ["backdoor", { hostname: "run4theh111z" }],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -95,6 +99,11 @@ describe("parseIntentRequest", () => {
       "a server named w0r1d_d43m0n, which the game would buy as w0r1d_d43m0n-0, every try",
       { action: "buyServer", args: { hostname: "w0r1d_d43m0n", ram: 8 } },
     ],
+    ["a backdoor on a name with a space", { action: "backdoor", args: { hostname: "The Cave" } }],
+    ["a backdoor on ''", { action: "backdoor", args: { hostname: "" } }],
+    ["a backdoor on a name of 65 characters", { action: "backdoor", args: { hostname: "x".repeat(65) } }],
+    ["a backdoor on a name that isn't text", { action: "backdoor", args: { hostname: 7 } }],
+    ["a backdoor on w0r1d_d43m0n, which ends the BitNode", { action: "backdoor", args: { hostname: "w0r1d_d43m0n" } }],
   ])("refuses %s, with a reason", (_description, request) => {
     const parsed = parseIntentRequest(request);
     expect(parsed.ok).toBe(false);
@@ -116,6 +125,7 @@ test("an intent's id is its action and args, in the args' fixed order", () => {
     "purchaseAugmentation(Sector-12, NeuroFlux Governor, 3)",
   );
   expect(intentId("buyServer", { hostname: "pserv-0", ram: 8 })).toBe("buyServer(pserv-0, 8)");
+  expect(intentId("backdoor", { hostname: "CSEC" })).toBe("backdoor(CSEC)");
   const reordered = parseIntentRequest({ action: "upgradeHomeRam", args: { vendor: "CompuTek", fromRam: 8 } });
   expect(reordered.ok && reordered.message.id).toBe("upgradeHomeRam(8, CompuTek)");
 });
@@ -145,6 +155,7 @@ describe("isIrreversibleIntent", () => {
     const augmentation = { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 };
     expect(isIrreversibleIntent(intent({ action: "purchaseAugmentation", args: augmentation }))).toBe(false);
     expect(isIrreversibleIntent(intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } }))).toBe(false);
+    expect(isIrreversibleIntent(intent({ action: "backdoor", args: { hostname: "CSEC" } }))).toBe(false);
   });
 });
 

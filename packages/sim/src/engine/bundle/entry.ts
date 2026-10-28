@@ -226,6 +226,14 @@ export function giveInstalledAugmentation(augmentation: string) {
   Player.augmentations.push(new PlayerOwnedAugmentation(augmentation as AugmentationName));
 }
 
+/**
+ * Gives the player `exp` hacking experience through the game's own `gainHackingExp` (`PersonObjects/Person.ts:50-62`),
+ * which sets the hacking skill from it: a harness edit for test scenarios, not something a player can do (#162).
+ */
+export function gainHackingExp(exp: number) {
+  Player.gainHackingExp(exp);
+}
+
 /** The page the game's Router is on. */
 export function page(): string {
   return Router.page();

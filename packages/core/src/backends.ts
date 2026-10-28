@@ -18,6 +18,8 @@ export const SINGULARITY_BUY_AUGMENTATION_WORKER_NAME = "singularity-buy-augment
 export const SINGULARITY_FACTION_WORK_WORKER_NAME = "singularity-faction-work.js";
 /** 8.8 GB: `getPlayer`, `getCurrentWork`, `isFocused`, `applyToCompany`, `workForCompany` and `setFocus` (#153). */
 export const SINGULARITY_COMPANY_WORK_WORKER_NAME = "singularity-company-work.js";
+/** `getServer`, `scan`, `singularity.connect` and `singularity.installBackdoor` (#162). */
+export const SINGULARITY_BACKDOOR_WORKER_NAME = "singularity-backdoor.js";
 /** 7.3 GB: `getCurrentWork`, `isFocused`, `commitCrime` and `setFocus` (#156). */
 export const SINGULARITY_CRIME_WORK_WORKER_NAME = "singularity-crime-work.js";
 /** 6.8 GB: `getPlayer`, `getCurrentWork`, `isFocused`, `universityCourse`, `gymWorkout` and `setFocus` (#158). */
@@ -49,6 +51,7 @@ export function singularityWorkerFileNames(): string[] {
     SINGULARITY_COMPANY_WORK_WORKER_NAME,
     SINGULARITY_CRIME_WORK_WORKER_NAME,
     SINGULARITY_CLASS_WORK_WORKER_NAME,
+    SINGULARITY_BACKDOOR_WORKER_NAME,
   ];
 }
 

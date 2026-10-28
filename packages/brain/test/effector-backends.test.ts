@@ -4,7 +4,8 @@
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
 // Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work
 // (#151, #153, #156, #158): faction work, company work, the job applied for first, crime, and classes. Buying a cloud
-// server (#159): one NS worker for the page's backend and Singularity's alike.
+// server (#159): one NS worker for the page's backend and Singularity's alike. Backdoors (#162): through the terminal's
+// own commands, the terminal busy meanwhile, or Singularity's.
 import { gunzipSync } from "node:zlib";
 import {
   classStartProblem,
@@ -790,4 +791,106 @@ test("a class (singularity, #158): with SF4.3, through its Singularity worker, a
     converged: false,
     problem: crushFromSector12,
   });
+});
+
+const backdoorOn = (hostname: string) => intent({ action: "backdoor", args: { hostname } });
+const TOR = intent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } });
+const BRUTE_SSH = intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } });
+
+/**
+ * A fresh start where nectar-net (layer 2, required level 20, no ports: `Server/data/servers.ts`) can be backdoored:
+ * hacking level 22 (500 exp, the harness's `gainHackingExp`), and the owner's NUKE.exe run on it and on hong-fang-tea
+ * (level 30). With money for the TOR router and BruteSSH.exe.
+ */
+function readyToBackdoor(options: { singularity: boolean } = { singularity: false }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(1e10);
+      await game.simulation.diagnostics.gainHackingExp(500);
+      await ownerRunsOnHome(
+        game,
+        'export async function main(ns) { ns.nuke("nectar-net"); ns.nuke("hong-fang-tea"); }',
+      );
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+type ReadyToBackdoor = Awaited<ReturnType<typeof readyToBackdoor>>;
+
+/** The server the terminal is connected to, as the game saves it. */
+async function terminalServer(fresh: ReadyToBackdoor) {
+  const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
+  return JSON.parse(saveObject.data.PlayerSave).data.currentServer as string;
+}
+
+/** Whether the medium snapshot shows `hostname` backdoored (`backdoorInstalled`, `snapshot-medium.ts`). */
+const backdoorSeen = (fresh: ReadyToBackdoor, hostname: string) =>
+  fresh.medium()?.servers.find((server) => server.hostname === hostname)?.backdoorInstalled === true;
+
+test("a backdoor (sim, #162): typed through the terminal, which stays busy for its time; a purchase meanwhile waits, then both are done", async () => {
+  const fresh = await readyToBackdoor();
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [backdoorOn("nectar-net"), TOR, BRUTE_SSH] });
+  expect((await triedOnce(fresh, "backdoor(nectar-net)"))?.problem).toMatch(
+    /^installing the backdoor on nectar-net: about 2\d s left$/,
+  );
+  // The TOR router needs no terminal; the program's `buy` does, and the terminal is busy.
+  expect(await triedOnce(fresh, BRUTE_SSH.id)).toMatchObject({ done: false, problem: "terminal busy" });
+  expect(await terminalServer(fresh)).toBe("nectar-net");
+  // Hacking time / 4 at level 22 is about 26 s: not installed 15 s on.
+  await fresh.game.run(15_000);
+  expect(backdoorSeen(fresh, "nectar-net")).toBe(false);
+  await fresh.game.runUntil(() => backdoorSeen(fresh, "nectar-net"), 30_000);
+  const outcomes = () => fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
+  await fresh.game.runUntil(() => outcomes().every((each) => each.done), 40_000);
+  expect(outcomes().map(({ id, done, tries }) => [id, done, tries])).toEqual([
+    ["backdoor(nectar-net)", true, 2],
+    [TOR.id, true, 1],
+    [BRUTE_SSH.id, true, 2],
+  ]);
+  // The try that found it installed typed `home`.
+  expect(await terminalServer(fresh)).toBe("home");
+});
+
+test("a backdoor (sim, #162): refused without root, below the required level, on home and on no server, each saying why", async () => {
+  const fresh = await readyToBackdoor();
+  const refused = ["foodnstuff", "hong-fang-tea", "home", "nowhere"].map(backdoorOn);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: refused });
+  const outcomes = () => fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
+  await fresh.game.runUntil(() => outcomes().length === 4 && outcomes().every((each) => each.tries >= 1), 10_000);
+  expect(outcomes().map(({ done, problem }) => [done, problem])).toEqual([
+    [false, "no root access on foodnstuff (NUKE.exe first)"],
+    [false, "hacking level 22: hong-fang-tea needs 30"],
+    [false, "home is the player's own: the game backdoors only others' servers"],
+    [false, "no server nowhere"],
+  ]);
+  expect(await terminalServer(fresh)).toBe("home");
+});
+
+test("a backdoor (singularity, #162): with SF4.3, connected along the way and installed, the terminal left home", async () => {
+  const fresh = await readyToBackdoor({ singularity: true });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [backdoorOn("nectar-net")] });
+  const first = await triedOnce(fresh, "backdoor(nectar-net)");
+  expect(first).toMatchObject({ done: false, backend: "singularity" });
+  expect(first?.problem).toMatch(/^installing the backdoor on nectar-net: about \d+ s left$/);
+  await fresh.game.runUntil(() => backdoorSeen(fresh, "nectar-net"), 60_000);
+  const outcome = () => fresh.latest<FastSnapshotData>("fast")?.intents?.[0];
+  await fresh.game.runUntil(() => outcome()?.done === true, 40_000);
+  expect(outcome()).toMatchObject({ done: true, problem: null, backend: "singularity" });
+  expect(await terminalServer(fresh)).toBe("home");
+  // Its refusals are the `ui` worker's: the same checks, before any `connect`.
+  fresh.brain.channel.setDesiredState({
+    hackLoop: HACK_LOOP_OFF,
+    intents: ["foodnstuff", "hong-fang-tea", "home"].map(backdoorOn),
+  });
+  const outcomes = () => fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
+  await fresh.game.runUntil(() => outcomes().length === 3 && outcomes().every((each) => each.tries >= 1), 10_000);
+  expect(outcomes().map(({ problem }) => problem)).toEqual([
+    "no root access on foodnstuff (NUKE.exe first)",
+    expect.stringMatching(/^hacking level \d+: hong-fang-tea needs 30$/),
+    "home is the player's own: the game backdoors only others' servers",
+  ]);
+  expect(await terminalServer(fresh)).toBe("home");
 });

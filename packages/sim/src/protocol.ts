@@ -438,6 +438,11 @@ export interface HostMethods {
    * scenarios (#151). A harness edit, not something a player can do.
    */
   "diagnostics.giveInstalledAugmentation"(params: { augmentation: string }): void;
+  /**
+   * Gives the player hacking experience (finite, 0 or more) through the game's own `gainHackingExp`, which sets the
+   * skill from it, for test scenarios that need a server's required level (#162). A harness edit.
+   */
+  "diagnostics.gainHackingExp"(params: { exp: number }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */

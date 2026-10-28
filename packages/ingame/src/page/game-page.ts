@@ -44,6 +44,15 @@ export const factionRowButtonXpath = (section: string, faction: string, label: s
   `//span[${hasClass(section)}]//div[${hasClass("MuiPaper-root")} and .//span[normalize-space()=${xpathString(faction)}]]` +
   `//button[normalize-space()=${xpathString(label)}]`;
 
+/** The terminal's input line (`Terminal/ui/TerminalInput.tsx`, its `id` "for players to hook in"). */
+const TERMINAL_INPUT_XPATH = "//*[@id='terminal-input']";
+
+/**
+ * What a terminal effector reports while the terminal runs an action (a backdoor, a hack, #162): the game disables the
+ * input until it ends (`Terminal/ui/TerminalInput.tsx:442`), and refuses any command meanwhile (`Terminal.ts:707`).
+ */
+export const TERMINAL_BUSY = "terminal busy";
+
 /** The Work page's button that unfocuses the player. */
 const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
 
@@ -253,12 +262,23 @@ export function openGamePage(ns: NS, deadlineMs: number) {
       clickWhenThere("//button[normalize-space()='Focus']", '"Focus" on the overview\'s work', deadlineMs),
 
     /**
+     * Whether the terminal runs an action now (its input disabled), or null with no terminal on the page: the Terminal
+     * page must be open.
+     */
+    terminalBusy(): boolean | null {
+      const terminalInput = findElement(TERMINAL_INPUT_XPATH) as HTMLInputElement | null;
+      return terminalInput === null ? null : terminalInput.disabled;
+    },
+
+    /**
      * Types `command` into the terminal and runs it, as a player would. The Terminal page must be open. A line the
-     * owner has started typing is theirs: then nothing is typed.
+     * owner has started typing is theirs: then nothing is typed. Nor while the terminal is busy with an action (#162),
+     * which the game would refuse: `TERMINAL_BUSY`, for the next try.
      */
     async runTerminalCommand(command: string): Promise<string | null> {
-      const terminalInput = (await waitForElement("//*[@id='terminal-input']", stepsEndMs)) as HTMLInputElement | null;
+      const terminalInput = (await waitForElement(TERMINAL_INPUT_XPATH, stepsEndMs)) as HTMLInputElement | null;
       if (!terminalInput) return "no terminal on the page";
+      if (terminalInput.disabled) return TERMINAL_BUSY;
       if (terminalInput.value !== "") return "the terminal has a line typed in it";
       const onChange = reactPropsOf(terminalInput)?.onChange;
       if (typeof onChange !== "function") return "the terminal can't be typed into";

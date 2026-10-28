@@ -15,7 +15,8 @@ export const BUY_SERVER_WORKER_NAME = "buy-server.js";
 /**
  * The server whose name the brain never buys a cloud server under (#161 review). Before The Red Pill it has no network
  * links (`Server/data/servers.ts`, `Prestige.ts:175-181`), so `ns.serverExists` hides it, yet the purchase finds it
- * and renames the new server `w0r1d_d43m0n-0` (`Server/ServerHelpers.ts:42-65`). Its backdoor ends the BitNode.
+ * and renames the new server `w0r1d_d43m0n-0` (`Server/ServerHelpers.ts:42-65`). Its backdoor ends the BitNode
+ * (`Terminal/Terminal.ts:382-387`): that's slice 11's irreversible `destroyBitNode`, never a `backdoor` intent (#162).
  */
 export const WORLD_DAEMON = "w0r1d_d43m0n";
 

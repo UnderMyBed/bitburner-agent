@@ -1,5 +1,5 @@
 // The diagnostics' harness edits (#145, #149): state a test sets up that no player could, checked in the game's own
-// save. `setMoney`, `joinFactionWithReputation` and `giveInstalledAugmentation`.
+// save. `setMoney`, `joinFactionWithReputation`, `giveInstalledAugmentation` and `gainHackingExp`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -44,4 +44,14 @@ test("giveInstalledAugmentation: installed, as the game saves it, without its pr
   await expect(sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant")).rejects.toThrow(
     /installed already/,
   );
+});
+
+test("gainHackingExp: the experience and the skill it makes, as the game saves them; a negative amount is refused", async () => {
+  const sim = await newGame();
+  await sim.diagnostics.gainHackingExp(500);
+  const { player } = await saved(sim);
+  expect(player.exp.hacking).toBe(500);
+  // The game's own formula: floor(32 × ln(500 + 534.6) − 200) (`PersonObjects/formulas/skill.ts`).
+  expect(player.skills.hacking).toBe(22);
+  await expect(sim.diagnostics.gainHackingExp(-1)).rejects.toThrow(/exp/);
 });

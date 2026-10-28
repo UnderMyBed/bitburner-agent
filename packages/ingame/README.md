@@ -8,7 +8,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, `crime-work.js`, `class-work.js` and `buy-server.js`, and the Singularity workers `singularity-*.js` (#145) |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, `crime-work.js`, `class-work.js`, `buy-server.js` and `backdoor.js`, and the Singularity workers `singularity-*.js` (#145) |
 | `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), `work.ts` (#151, #153, #156, #158), and what they share: `effector-runner.ts`, which picks each try's backend and runs its effector, `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts`, `work-page.ts` (the work workers' reading and steps, #151, #153, #156, #158), and `page-effect.ts`, what every `ui` worker does around its own steps (the game first, never over a dialog left for the owner, the player's focus on work kept, back to the Terminal) |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
@@ -71,6 +71,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `faction-work.js` | nothing beyond the base; the page costs nothing | 1.6 GB (1.6) |
 | `company-work.js` | `getPlayer` (0.5 GB), for the jobs held; the page costs nothing | 2.1 GB (2.1) |
 | `buy-server.js` | `cloud.purchaseServer` (2.25 GB), `cloud.getServerCost` (0.25 GB), `serverExists`, `getServerMoneyAvailable`, `cloud.getServerUpgradeCost` (0.1 GB each), `getServerMaxRam`, `cloud.getServerLimit` (0.05 GB each); no page | 4.5 GB (4.5) |
+| `backdoor.js` | `getServer` (2.0 GB), `scan` (0.2 GB), `serverExists` (0.1 GB), `getHackingLevel`, `getHackTime` (0.05 GB each); the page costs nothing | 4.0 GB (4.0) |
 | `crime-work.js` | nothing beyond the base; the page costs nothing | 1.6 GB (1.6) |
 | `class-work.js` | `getPlayer` (0.5 GB), for the money and the city; the page costs nothing | 2.1 GB (2.1) |
 | `singularity-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
@@ -83,11 +84,12 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `singularity-company-work.js` | `getPlayer`, `singularity.getCurrentWork` (0.5 GB each), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.applyToCompany`, `singularity.workForCompany` (3 GB each) | 8.8 GB (8.8) |
 | `singularity-crime-work.js` | `singularity.getCurrentWork` (0.5 GB), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.commitCrime` (5 GB) | 7.3 GB (7.3) |
 | `singularity-class-work.js` | `getPlayer`, `singularity.getCurrentWork` (0.5 GB each), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.universityCourse`, `singularity.gymWorkout` (2 GB each) | 6.8 GB (6.8) |
+| `singularity-backdoor.js` | `getServer` (2.0 GB), `scan` (0.2 GB), `serverExists` (0.1 GB), `getHackingLevel`, `getHackTime` (0.05 GB each), `singularity.connect`, `singularity.installBackdoor` (2 GB each) | 8.0 GB (8.0) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
-The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it. No Singularity worker runs on a fresh save, so the fresh-save check (the Agent's budget plus the largest worker within 8 GB) leaves them out: the faction join's is 5.1 GB (#147), the augmentation purchase's 12.6 GB (#149), the faction work's 5.3 GB (#151), the company work's 8.8 GB (#153), the crime's 7.3 GB (#156), and the class's 6.8 GB (#158). The join's fits beside today's 2.85 GB Agent in an 8 GB home (were the Agent to grow past 2.9 GB, the fit check would leave joins to the page there); the purchase's and the work's need a home of 16 GB or more.
+The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it. No Singularity worker runs on a fresh save, so the fresh-save check (the Agent's budget plus the largest worker within 8 GB) leaves them out: the faction join's is 5.1 GB (#147), the augmentation purchase's 12.6 GB (#149), the faction work's 5.3 GB (#151), the company work's 8.8 GB (#153), the crime's 7.3 GB (#156), the class's 6.8 GB (#158), and the backdoor's 8.0 GB (#162). The join's fits beside today's 2.85 GB Agent in an 8 GB home (were the Agent to grow past 2.9 GB, the fit check would leave joins to the page there); the purchase's and the work's need a home of 16 GB or more.
 
-`buy-server.js` (#159, 4.5 GB) is a fresh-save worker: its NS calls need no Singularity.
+`buy-server.js` (#159, 4.5 GB) is a fresh-save worker: its NS calls need no Singularity. So is `backdoor.js` (#162, 4.0 GB).
 
 The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.5 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
@@ -99,7 +101,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, `crime-work.js`, `class-work.js`, `buy-server.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, `crime-work.js`, `class-work.js`, `buy-server.js`, `backdoor.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -196,7 +198,7 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
   - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time, with the backend ("travel to Aevum (ui): not done: …; trying again in 30 s");
   - one done ("travel to Aevum (ui): done") is never run again while the brain keeps sending it; the brain sees it done in its next medium snapshot and stops sending it. One that leaves the list and comes back is new;
-  - a worker that doesn't run (home full, still running, no time left) is tried again next round; it counts as a try, so one that never runs shows as stuck.
+  - a worker that doesn't run (home full, no time left) is tried again next round; it counts as a try, so one that never runs shows as stuck. One whose last copy is still running (a Singularity backdoor waits for its end, #162) is tried again 30 s later, like one not done.
 - **The Effector table** (`src/agent/effectors.ts`): for each action, how each of the three backends does it (architecture §5.6, #145):
 
   | Action | `ui` worker (arguments) | `singularity` worker (arguments) | `sim` |
@@ -208,6 +210,7 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   | `joinFaction` | `join-faction.js` (the faction) | `singularity-join-faction.js` (the faction) | `acceptFactionInvitation(faction)` |
   | `purchaseAugmentation` | `buy-augmentation.js` (the faction, the augmentation, the level) | `singularity-buy-augmentation.js` (the same) | `buyAugmentationFrom(faction, augmentation, level)` |
   | `buyServer` | `buy-server.js` (the hostname, the RAM): NS calls alone, no page | none: `buy-server.js` needs no Singularity | `buyCloudServer(hostname, ram)` |
+  | `backdoor` | `backdoor.js` (the server) | `singularity-backdoor.js` (the server) | `backdoorServer(hostname)` |
 
   Each worker also gets a deadline 200 ms before the round's end, checks the game first (an intent already done is done without touching the page or calling anything), and reports `{ done, problem }` (`EffectorReport`).
 - **The backend** is picked per try: the simulator's own effectors where the page's global object has them (`__bitburnerAgentSim`, packages/sim: the simulator renders no page; absent in a browser), called directly; else Singularity, once the Agent's own slow snapshot shows SF4 at any level or BN4, when that action's Singularity worker fits home beside the Agent, however empty home is (`getScriptRam` against home's RAM: the game charges it 4× at SF4.2 and 16× below); else the page, logged the first time. The fit is checked every try, so a home upgrade brings Singularity back. A Singularity worker that can't start for now (home full) or doesn't report is tried again, like any worker. The outcome and the done or not-done log line name the backend of the last try. An action the NS API does without Singularity (`buyServer`, #159) has no Singularity worker (its `singularity` is `null`): its `ui` worker runs in any game, and the outcome names `ui`.
@@ -306,6 +309,20 @@ E2 buys Neurotrainer I and NeuroFlux level 1 from CyberSec (a save the simulator
   5. **Bought under another name** all the same, because a server `serverExists` doesn't see held it: done, saying "bought as …", so it's never bought twice. The game has one such server, `w0r1d_d43m0n` (no network links before The Red Pill), and core refuses that name (found in #161's review: each try would have bought another).
   - Its logic is in `src/workers/cloud-server-purchase.ts`, which `test/agent/cloud-server-purchase.test.ts` drives with a stand-in NS for the branches BN1 can't reach.
 - **What the owner sees:** nothing on the page; the server is in the next medium snapshot (its `scan` from home reaches it) and the slow one's `purchasedServers`.
+
+## Backdoors
+
+[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`.
+- **Checked first, by every backend** (`src/workers/backdoor-standing.ts`, `getServer`): installed, with the terminal not on the server, is done. Refused with why, as the terminal's `backdoor` would refuse it (`Terminal/commands/backdoor.ts`): "no server …", "… is the player's own", "no root access on … (NUKE.exe first)", "hacking level 22: hong-fang-tea needs 30", or "no way from home to …".
+- **`backdoor.js`**, with the server and a deadline:
+  1. The Terminal page (unfocusing work first, and focusing it again after, as every page effector does).
+  2. `home` unless the terminal is there (`getServer("home").isConnectedTo`), then `connect` for each hop of the way from home (`src/workers/route-from-home.ts`, breadth-first with `scan`), each checked to have arrived, then `backdoor`.
+  3. The action takes hacking time / 4 (`Terminal/Terminal.ts:233-253`) and disables the input until it ends. Ending within the round, the worker waits, checks it's installed and types `home`. Longer, the backdoor goes on alone, and the outcome says "installing the backdoor on nectar-net: about 26 s left".
+  4. A later try finds the terminal busy ("terminal busy"), then the backdoor installed with the terminal still on the server: it types `home`, and it's done. So the terminal ends home.
+- **"Terminal busy":** `runTerminalCommand` (`src/page/game-page.ts`), through which every effector types, types nothing while the input is disabled and says "terminal busy". `buy-program.js`'s `buy` waits for a backdoor that way and is tried again 30 s later. Effectors that only click aren't held up: the game counts the action down on any page.
+- **`singularity-backdoor.js`:** `connect` home and along the way, then `installBackdoor()`, which leaves the terminal free. A script killed meanwhile leaves no backdoor, so the worker stays until it ends and `connect`s home; one that won't end within the round is reported at once ("installing …"), and the intent runner tries again 30 s later while it still runs.
+- **`sim`, `backdoorServer`:** the same checks, then the terminal's own commands (`Terminal.executeCommands`); the engine counts the action down as on the page.
+- **What the owner sees:** the Terminal page, the commands and the game's "Backdoor on 'nectar-net' successful!", then `home`. A backdoor longer than about 2 minutes (5 tries) raises the brain's "intent stuck" alert until it's done.
 
 ## Work
 

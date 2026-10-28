@@ -19,6 +19,7 @@ const NEUROFLUX_3 = intent({
   args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 },
 });
 const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -74,6 +75,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     JOIN_SECTOR_12,
     NEUROFLUX_3,
     PSERV_0,
+    BACKDOOR_CSEC,
   ]);
   await round(10 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
@@ -85,6 +87,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
+    ["agent/abcdef123456/backdoor.js", ["CSEC"]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -134,6 +137,19 @@ test("done: never run again while it stays, and a problem on the way is still lo
   expect(runWorker).toHaveBeenCalledTimes(1);
   expect(lines).toEqual([`agent: travel to Aevum (ui): done: ${backProblem}`]);
   expect(runner.outcomes()).toEqual([{ id: AEVUM.id, done: true, tries: 1, problem: backProblem, backend: "ui" }]);
+});
+
+test("a worker whose last copy is still running (#162) is tried again 30 s later, as one not done, and counted", async () => {
+  const { runner, lines, runWorker, round } = runnerWith(() => DONE);
+  runWorker.mockImplementationOnce(async () => ({ outcome: "stillRunning" }));
+  runner.desire([BACKDOOR_CSEC]);
+  for (let each = 0; each < 15; each += 1) await round();
+  expect(runWorker).toHaveBeenCalledTimes(1);
+  expect(runner.outcomes()).toMatchObject([{ done: false, tries: 1, problem: "its last worker is still running" }]);
+  expect(lines).toEqual(["agent: install a backdoor on CSEC: its last worker is still running; trying again in 30 s"]);
+  await round();
+  expect(runWorker).toHaveBeenCalledTimes(2);
+  expect(runner.outcomes()).toMatchObject([{ done: true, tries: 2 }]);
 });
 
 test("a worker that doesn't run is tried again next round, logged on a change, and counted as a try", async () => {
@@ -203,6 +219,7 @@ describe("backends (#145)", () => {
       buyAugmentationFrom: (faction: string, augmentation: string, level: number) =>
         effector(DONE)(`buyAugmentationFrom ${faction} ${augmentation} ${level}`),
       buyCloudServer: (hostname: string, ram: number) => effector(DONE)(`buyCloudServer ${hostname} ${ram}`),
+      backdoorServer: (hostname: string) => effector(DONE)(`backdoorServer ${hostname}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
     runner.desire([
@@ -213,6 +230,7 @@ describe("backends (#145)", () => {
       JOIN_SECTOR_12,
       NEUROFLUX_3,
       PSERV_0,
+      BACKDOOR_CSEC,
     ]);
     await round();
     expect(runWorker).not.toHaveBeenCalled();
@@ -224,11 +242,13 @@ describe("backends (#145)", () => {
       "acceptFactionInvitation Sector-12",
       "buyAugmentationFrom Sector-12 NeuroFlux Governor 3",
       "buyCloudServer pserv-0 8",
+      "backdoorServer CSEC",
     ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
       [true, "sim"],
       [false, "sim"],
+      [true, "sim"],
       [true, "sim"],
       [true, "sim"],
       [true, "sim"],
@@ -246,6 +266,7 @@ describe("backends (#145)", () => {
       AEVUM,
       JOIN_SECTOR_12,
       NEUROFLUX_3,
+      BACKDOOR_CSEC,
     ]);
     await round(10 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
@@ -256,6 +277,7 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-travel.js", ["Aevum"]],
       ["agent/abcdef123456/singularity-join-faction.js", ["Sector-12"]],
       ["agent/abcdef123456/singularity-buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
+      ["agent/abcdef123456/singularity-backdoor.js", ["CSEC"]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });

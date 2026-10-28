@@ -5,7 +5,8 @@
 // - A new intent is due at once. One not done is tried again every 15 rounds (30 s), logging why each time.
 // - One done is never run again while the brain keeps sending it: the brain sees it done in its next medium snapshot,
 //   and stops sending it. One that leaves the list and comes back is new.
-// - A worker that doesn't run (home full, still running, no time left) is tried again next round. It counts as a try.
+// - A worker that doesn't run (home full, no time left) is tried again next round. It counts as a try. One whose last
+//   copy is still running (a Singularity backdoor waits for it to end, #162) is tried again 30 s later, as one not done.
 // - What happened to each is in the fast snapshot (`outcomes`), for the brain and the dashboard.
 // - Each try picks its backend (#145) and runs the effector through ./effector-runner.ts. A Singularity worker that
 //   can't start for now (home full) or doesn't report is tried again, as any worker is.
@@ -40,7 +41,14 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
     const { report } = tried;
     if (report === null) {
       entry.outcome.problem = tried.noReportReason;
-      entry.logChange(`${entry.outcome.problem}; trying again next round`);
+      if (tried.stillRunning) {
+        entry.schedule.dueAfter(ROUNDS_BETWEEN_TRIES);
+        entry.logChange(
+          `${entry.outcome.problem}; trying again in ${(ROUNDS_BETWEEN_TRIES * SNAPSHOT_ROUND_MS) / 1000} s`,
+        );
+      } else {
+        entry.logChange(`${entry.outcome.problem}; trying again next round`);
+      }
       return;
     }
     entry.outcome.problem = report.problem;
