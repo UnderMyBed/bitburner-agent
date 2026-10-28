@@ -47,6 +47,18 @@ export function flagValue(argv: string[], name: string): string | undefined {
 }
 
 /**
+ * A time from a command-line flag (`npm run gaps`, `npm run report`): ISO, with a `Z` or an explicit offset, since
+ * without one JavaScript reads a date-time as local time.
+ */
+export function parseIsoTime(text: string, flagName: string): number {
+  const epochMs = /(Z|[+-]\d\d:\d\d)$/.test(text) ? Date.parse(text) : Number.NaN;
+  if (Number.isNaN(epochMs)) {
+    throw new Error(`${flagName} must be an ISO time with Z or an offset, e.g. 2026-10-26T00:00:00Z; got ${text}`);
+  }
+  return epochMs;
+}
+
+/**
  * The data directory when none is given: the repository's own `.data/` (gitignored). The agent runs from the repo and
  * keeps everything in it (owner decision 30, #122).
  */

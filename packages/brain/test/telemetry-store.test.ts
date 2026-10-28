@@ -68,6 +68,38 @@ test("fast snapshots' receipt times, by environment and window, for the gap repo
   expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 1_000, untilMs: 3_000 })).toEqual([1_000, 3_000]);
 });
 
+test("snapshots of a tier and events, by environment and window (both edges), in order: the run report", () => {
+  for (const [receivedAtMs, tier, environment] of [
+    [3_000, "medium", "E1"],
+    [1_000, "medium", "E1"],
+    [2_000, "fast", "E1"],
+    [4_000, "medium", "E0"],
+    [5_000, "medium", "E1"],
+    [9_000, "medium", "E1"],
+  ] as const) {
+    store.recordSnapshot(
+      { environment, release: "r" },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: 1,
+        gameTimeMs: 0,
+        receivedAtMs,
+        missedBefore: 0,
+        data: receivedAtMs,
+      },
+    );
+    store.recordEvent({ environment, release: "r" }, { atMs: receivedAtMs, kind: tier, detail: receivedAtMs });
+  }
+  const window = { environment: "E1", sinceMs: 1_000, untilMs: 5_000 } as const;
+  // By time of arrival, not the order stored.
+  expect(store.snapshotsInWindow({ ...window, tier: "medium" }).map((snapshot) => snapshot.data)).toEqual([
+    1_000, 3_000, 5_000,
+  ]);
+  // Events in the order stored.
+  expect(store.eventsInWindow(window).map((event) => event.detail)).toEqual([3_000, 1_000, 2_000, 5_000]);
+});
+
 test("fast snapshots' page heaps, by environment and window, in order of arrival, numbers only", () => {
   for (const [receivedAtMs, tier, environment, data] of [
     [3_000, "fast", "E0", { pageHeapUsedBytes: 30 }],

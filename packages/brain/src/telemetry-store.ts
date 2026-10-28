@@ -236,6 +236,43 @@ export class TelemetryStore {
     return rows.map((row) => row.page_heap_used_bytes);
   }
 
+  /** The snapshots of a tier that arrived in a window (both edges included), in order of arrival: the run report. */
+  snapshotsInWindow({
+    environment,
+    tier,
+    sinceMs,
+    untilMs,
+  }: {
+    environment: Environment;
+    tier: string;
+    sinceMs: number;
+    untilMs: number;
+  }): (RecordContext & StoredSnapshot)[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
+          AND received_at_ms BETWEEN ? AND ? ORDER BY received_at_ms, id`,
+      )
+      .all(environment, tier, sinceMs, untilMs) as Record<string, string | number>[];
+    return rows.map(snapshotOfRow);
+  }
+
+  /** The events in a window (both edges included), in the order stored: the run report. */
+  eventsInWindow({
+    environment,
+    sinceMs,
+    untilMs,
+  }: {
+    environment: Environment;
+    sinceMs: number;
+    untilMs: number;
+  }): (RecordContext & StoredEvent)[] {
+    const rows = this.#database
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND at_ms BETWEEN ? AND ? ORDER BY id`)
+      .all(environment, sinceMs, untilMs) as Record<string, string | number>[];
+    return rows.map(eventOfRow);
+  }
+
   /** Every event from an environment, in the order stored. */
   events({ environment }: { environment: Environment }): (RecordContext & StoredEvent)[] {
     const rows = this.#database

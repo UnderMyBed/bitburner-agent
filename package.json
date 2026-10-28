@@ -18,6 +18,7 @@
     "sim": "node packages/sim/scripts/run-scenario.ts",
     "brain": "node packages/brain/src/start.ts",
     "gaps": "node packages/brain/src/gaps-cli.ts",
+    "report": "node packages/brain/src/report-cli.ts",
     "e2:build": "node packages/e2/scripts/build-game.ts",
     "e2:install": "node packages/e2/scripts/install-browser.ts",
     "e2": "vitest run --config packages/e2/vitest.config.ts",

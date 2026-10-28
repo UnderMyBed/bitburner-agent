@@ -51,3 +51,24 @@ export function findGaps(receivedAtMs: number[], { sinceMs, untilMs, thresholdMs
     longestIntervalMs,
   };
 }
+
+export const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
+export const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
+const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+/**
+ * The page heap over a window, for a person to read (`npm run gaps`, `npm run report`): growth would show here first
+ * (architecture R10).
+ */
+export function describePageHeap(pageHeapsBytes: number[]): string {
+  const first = pageHeapsBytes[0];
+  const last = pageHeapsBytes.at(-1);
+  if (first === undefined || last === undefined) return "page heap: not reported";
+  const lowest = pageHeapsBytes.reduce((low, bytes) => Math.min(low, bytes));
+  const highest = pageHeapsBytes.reduce((high, bytes) => Math.max(high, bytes));
+  return (
+    `page heap: first ${formatMegabytes(first)}, last ${formatMegabytes(last)}, lowest ${formatMegabytes(lowest)}, ` +
+    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshot${pageHeapsBytes.length === 1 ? "" : "s"} ` +
+    "reported it)"
+  );
+}

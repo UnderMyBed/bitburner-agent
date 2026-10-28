@@ -6,36 +6,9 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { flagValue, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
-import { DEFAULT_GAP_THRESHOLD_MS, findGaps } from "./gap-report.ts";
+import { flagValue, parseIsoTime, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
+import { DEFAULT_GAP_THRESHOLD_MS, describePageHeap, findGaps, formatIsoTime, formatSeconds } from "./gap-report.ts";
 import { ENVIRONMENTS, type Environment, TelemetryStore } from "./telemetry-store.ts";
-
-/** An ISO time with a `Z` or an explicit offset: without one, JavaScript reads a date-time as local time. */
-function parseIsoTime(text: string, flagName: string): number {
-  const epochMs = /(Z|[+-]\d\d:\d\d)$/.test(text) ? Date.parse(text) : Number.NaN;
-  if (Number.isNaN(epochMs)) {
-    throw new Error(`${flagName} must be an ISO time with Z or an offset, e.g. 2026-10-26T00:00:00Z; got ${text}`);
-  }
-  return epochMs;
-}
-
-const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
-const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
-const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-
-/** The page heap over the window, for a person to read: growth would show here first (architecture R10). */
-function describePageHeap(pageHeapsBytes: number[]): string {
-  const first = pageHeapsBytes[0];
-  const last = pageHeapsBytes.at(-1);
-  if (first === undefined || last === undefined) return "page heap: not reported";
-  const lowest = pageHeapsBytes.reduce((low, bytes) => Math.min(low, bytes));
-  const highest = pageHeapsBytes.reduce((high, bytes) => Math.max(high, bytes));
-  return (
-    `page heap: first ${formatMegabytes(first)}, last ${formatMegabytes(last)}, lowest ${formatMegabytes(lowest)}, ` +
-    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshot${pageHeapsBytes.length === 1 ? "" : "s"} ` +
-    "reported it)"
-  );
-}
 
 try {
   const argv = process.argv.slice(2);

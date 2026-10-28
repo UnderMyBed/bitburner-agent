@@ -106,7 +106,7 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
 - **Stopping:** Ctrl+C in the brain's terminal stops it for good (no restart). The game keeps running without it; close it yourself if you like. The hack loops keep running too: they're the game's own scripts. Stop the hack loop on the dashboard first if you want them gone.
 - **Without the brain (safe mode, from M3, on `main`):** whether it's stopped or has crashed, the Agent keeps doing what the brain last asked, for 12 hours from when it was last connected to it, through reloads and new deployments: the hack loop is kept running and the work kept up (refocused within 30 s), and the game's routine dialogs closed. Nothing one-shot happens (no purchases, travel, joins or augmentations), and an install or a new BitNode ends it. On a game version other than the pinned one (after a Steam update), only the hack loop goes on, not the work. The Agent's log says when it starts and until when. **To play by hand,** the easy way is before stopping the brain: click **Stop managing work** on the dashboard (and stop the hack loop if you want it gone), so that's what the Agent keeps. With the brain already stopped, stop the Agent first: in the game's terminal, `rm agent/desired-state.json`, then `kill` the Agent (`ps` shows it, `agent/<id>/agent.js`). A `kill` alone isn't enough: on the next load autoexec's Agent would carry on from the file. Starting the brain again takes over as usual.
 - **Don't run `git clean -x` in this clone:** it deletes `.data/`, with the store and the save backups.
-- **Gaps over a window:** `npm run gaps -- --since 2026-10-27T00:00:00Z` ([the gap report](../packages/brain/README.md#the-gap-report)). It also prints the page's heap over the window.
+- **Gaps over a window:** `npm run gaps -- --since 2026-10-27T00:00:00Z` ([the gap report](../packages/brain/README.md#the-gap-report)). It also prints the page's heap over the window. For everything else a run did, see [the run report](#after-a-run-the-run-report).
 - **Save backups** are in `.data/saves/E0/`: one every 30 minutes and one each time the game connects (on load and on reconnecting), the newest 96 kept. To restore one, follow [the steps](../packages/brain/README.md#save-backups). Stop the brain first, or copy the backup out. Backups are personal data: `.data/` is gitignored, keep it that way.
 - **Another data directory:** `npm run brain -- --data-dir <dir>` (or `BITBURNER_AGENT_DATA_DIR`), if you'd rather keep the data elsewhere.
 
@@ -122,6 +122,24 @@ npm run brain
 ```
 
 The brain builds the new in-game code at start and deploys it when the game connects. The running Agent hands over to the new one by itself. Release notes say if `config.json` needs new fields.
+
+## After a run: the run report
+
+After a live run (or during one), `npm run report` says what the run did and what went wrong, from the brain's store alone, so nobody has to dig through SQLite by hand (owner decision 45). It reads; it never changes anything, so it's safe while the brain runs.
+
+```
+npm run report                                                  # from the newest brain start to now
+npm run report -- --since 2026-10-28T21:26:00Z --until 2026-10-28T22:40:00Z
+```
+
+Times need a `Z` or an offset. It prints four sections, then a verdict:
+
+1. **The window:** the brain's starts, the game's relaunches, the deploys, the Agent's connections and disconnections (with each session's deployment) and the save backups, in order.
+2. **Progress, first snapshot → last:** money, hacking and the other skills, home RAM, the TOR router and port openers, the game's servers rooted, city, factions, jobs, installed augmentations, the BitNode and the purchased servers. Then the hack loop's target over time: inferred from which of the game's servers' money and security moved, so your own scripts would show there too.
+3. **Actions:** each intent the Agent was given (the purchases, your queue), done or not, with its tries, backend and last problem; the work as it changed; promotions; and the game's dialogs the Agent closed, with their first words.
+4. **Health:** the heartbeat's gaps over 6 s (as `npm run gaps`, but from the first heartbeat to the run's last record: the game starting and the run stopping aren't gaps), the page heap, income stalls (money not rising for 10 minutes or more once it first rose; a purchase isn't a rise), intents tried 5 times or more and not done, dialogs left blocking the page, Agent disconnects with no reconnect within 60 s, and `deployFailed`, `versionDrift` and `supervisionGaveUp` events.
+
+**The verdict** is `PASS`, or `FAIL` and one line per failure from section 4. It exits 0 on PASS, 1 on FAIL, and 2 when it couldn't run (no store, no brain start to begin from, or nothing recorded in the window). **On a FAIL,** each line has its times: look at that stretch in section 1 (what the brain and the Agent did then) and section 3 (what the Agent was trying), and at the brain's terminal for those times. An income stall usually means the hack loop's target changed or the loop stopped: section 2's target line shows which. Put the report's output on the issue for the run ([packages/brain](../packages/brain/README.md#the-run-report)).
 
 ## When something's wrong
 
