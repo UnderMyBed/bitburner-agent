@@ -140,7 +140,10 @@ test("the brain down for an hour, with a reload in the middle: the loops and the
   const fresh = await keptGame();
   const { game, brain } = fresh;
   // The file has the state's activities, never its intents.
-  const kept = parseSafeModeState(await fileOnHome(fresh, DESIRED_STATE_FILE));
+  const keptText = await fileOnHome(fresh, DESIRED_STATE_FILE);
+  // The raw file: the parse would drop an intents field.
+  expect(Object.keys(JSON.parse(keptText)).sort()).toEqual(["hackLoop", "heardAtMs", "lastAugReset", "ttlMs", "work"]);
+  const kept = parseSafeModeState(keptText);
   expect(kept).toMatchObject({
     ok: true,
     message: {
@@ -149,7 +152,6 @@ test("the brain down for an hour, with a reload in the middle: the loops and the
       ttlMs: SAFE_MODE_TTL_MS,
     },
   });
-  expect(Object.keys(kept.ok ? kept.message : {})).not.toContain("intents");
   // Connected to the brain that sent it, its clock moves on: written again every 60 s.
   await game.run(2 * MINUTE);
   const later = parseSafeModeState(await fileOnHome(fresh, DESIRED_STATE_FILE));
@@ -258,6 +260,7 @@ test("a reset with no brain (a new BitNode): the kept state is from before it, s
     expect.stringContaining("agent: safe mode: dropped the last desired state: it's from before the game's last reset"),
   );
   expect(await loopsRunning(simulation)).toEqual([]);
+  // (The reset itself ended the work and the loops: the log line above is what shows the state wasn't used.)
   expect(await savedWork(simulation)).toBeNull();
   expect(await fileOnHome(fresh, DESIRED_STATE_FILE)).toBe("");
 });
@@ -267,6 +270,8 @@ test("deployed again while the brain is down: the new deployment's Agent carries
   const { simulation, game, brain, build } = fresh;
   brain.stop();
   await game.run(5 * ROUND_MS);
+  // The owner switches the work meanwhile: the new Agent must put it back from the file.
+  await ownerSwitchesWork(fresh);
   // As a deploy would leave it (#91), written by hand: the brain is gone.
   const newId = "0123456789ab";
   for (const [fileName, source] of Object.entries(build.scripts)) {
@@ -286,5 +291,22 @@ test("deployed again while the brain is down: the new deployment's Agent carries
   const loops = await loopsRunning(simulation);
   expect(loops.map((loop) => loop.hostname).sort()).toEqual(NO_PORT_SERVERS);
   for (const loop of loops) expect(loop.filename).toBe(deployedFilePath(newId, HACK_LOOP_SCRIPT_NAME));
+  expect(await savedWork(simulation)).toEqual(HACKING_FOCUSED);
+});
+
+test("a brain that accepts the connection and never answers: while the Agent waits for its welcome, safe mode goes on", async () => {
+  const fresh = await keptGame();
+  const { simulation, game, brain } = fresh;
+  brain.stop();
+  // Something listening that never says hello back: the Agent's next connection opens, and stays unwelcomed.
+  const silent: unknown[] = [];
+  game.listen(CONTROL_URL, (connection) => silent.push(connection));
+  await game.runUntil(() => silent.length > 0, 2 * MINUTE);
+  await game.run(10 * ROUND_MS);
+  await killJoesgunsLoop(simulation);
+  await ownerSwitchesWork(fresh);
+  await game.run(CONVERGE_EVERY_MS + 2 * ROUND_MS);
+  expect(silent).toHaveLength(1);
+  expect(await hostsOf(simulation)).toEqual(NO_PORT_SERVERS);
   expect(await savedWork(simulation)).toEqual(HACKING_FOCUSED);
 });

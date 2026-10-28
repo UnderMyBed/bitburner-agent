@@ -25,6 +25,7 @@ import {
   deployedFilePath,
   deploymentIdOfPath,
   encodeControlMessage,
+  gameDrift,
   isValidDeploymentId,
   parseAgentConfig,
   parseBrainMessage,
@@ -114,7 +115,15 @@ export async function main(ns: NS): Promise<void> {
   singularityAvailable = () => snapshotter.singularityAvailable();
   const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });
   // The last desired state, from agent/desired-state.json if a brain sent one before this Agent started.
-  const safeMode = createSafeMode(ns);
+  // On a game other than the pinned release, only what a hold would send: no work (architecture §12.4).
+  const safeMode = createSafeMode(ns, {
+    gameDrift: gameDrift({
+      version: game.version,
+      versionNumber: game.versionNumber,
+      commit: game.commit,
+      platform: game.platform,
+    }),
+  });
 
   /**
    * One round: with a brain (`connection`), its snapshots; without, safe mode's kept state for the hack loop and the
@@ -184,7 +193,7 @@ export async function main(ns: NS): Promise<void> {
     let welcomed = false;
     while (closeCode === 0) {
       // Welcomed, or connecting while safe mode keeps a state: rounds go on, and socket events queue meanwhile.
-      const event = welcomed || safeMode.holds() ? events.takeIfAny() : await events.next();
+      const event = welcomed || safeMode.keepsState() ? events.takeIfAny() : await events.next();
       if (event === undefined) {
         // Nothing to act on: a round (with snapshots once welcomed), then sleep until the next.
         await takeRound(welcomed ? connection : null);
@@ -230,23 +239,25 @@ export async function main(ns: NS): Promise<void> {
     // One-shot actions need the brain: the next one sends its own. The hack loop and the work go on in safe mode, on
     // the last state, its clock stopping here; with none kept, they wait for the next brain.
     intentRunner.forget();
-    safeMode.disconnected(Date.now());
 
-    // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one).
+    // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one), nor
+    // write the file over the newer one's.
     if (closeCode === CONTROL_CLOSE_CODES.replaced) {
       ns.print("agent: replaced by a newer Agent; exiting");
       return;
     }
+    safeMode.disconnected(Date.now());
     // Deployed again while disconnected (a new token or port means a new deployment): the new one takes over. Not
     // for an empty or invalid current.txt, which boot.js would refuse, leaving no Agent.
     const currentDeploymentId = ns.read(CURRENT_DEPLOYMENT_FILE).trim();
     const deployedElsewhere = isValidDeploymentId(currentDeploymentId) && currentDeploymentId !== deploymentId;
     if (deployedElsewhere && startedBoot(`${CURRENT_DEPLOYMENT_FILE} now names ${currentDeploymentId}`)) return;
     ns.print(`agent: disconnected (${closeCode}); reconnecting in ${reconnectDelayMs / 1000} s`);
-    // The wait: in safe mode's rounds while it keeps a state, else asleep.
-    const reconnectAtMs = Date.now() + reconnectDelayMs;
-    while (safeMode.holds() && Date.now() < reconnectAtMs) await takeRound(null);
-    await ns.sleep(Math.min(Math.max(0, reconnectAtMs - Date.now()), reconnectDelayMs));
+    // The wait: in safe mode's rounds while it keeps a state, counted so a clock that steps back can't stretch it; else
+    // asleep, for what's left of it.
+    let roundsLeft = Math.ceil(reconnectDelayMs / SNAPSHOT_ROUND_MS);
+    for (; roundsLeft > 0 && safeMode.keepsState(); roundsLeft -= 1) await takeRound(null);
+    if (roundsLeft > 0) await ns.sleep(Math.min(roundsLeft * SNAPSHOT_ROUND_MS, reconnectDelayMs));
     reconnectDelayMs = Math.min(reconnectDelayMs * 2, LONGEST_RECONNECT_DELAY_MS);
   }
 }

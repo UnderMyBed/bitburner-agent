@@ -74,11 +74,14 @@ export interface DesiredState {
   work?: Work | null;
   /**
    * Safe mode (#160, architecture §5.4): with the brain gone, the Agent keeps converging on this state, minus its
-   * intents, for this long after it was last connected to the brain that sent it. Absent (or 0, from an older brain):
-   * it isn't kept past the brain.
+   * intents, for this long after it was last connected to the brain that sent it, at most `MAX_SAFE_MODE_TTL_MS`. Absent
+   * (an older brain) or 0: it isn't kept past the brain.
    */
   ttlMs?: number;
 }
+
+/** The longest `ttlMs` taken: 7 days, so a time it makes is always one a date can show (#160). */
+export const MAX_SAFE_MODE_TTL_MS = 604_800_000;
 
 /** The most hosts a desired state names: a whole network is well under it. */
 export const MAX_HACK_LOOP_HOSTS = 1_000;
@@ -136,7 +139,7 @@ function describeValue(value: unknown): string {
 }
 const isShortNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value !== "" && value.length <= MAX_FIELD_LENGTH;
-const isSafeIntegerAtLeast = (value: unknown, minimum: number): value is number =>
+export const isSafeIntegerAtLeast = (value: unknown, minimum: number): value is number =>
   Number.isSafeInteger(value) && (value as number) >= minimum;
 const isDeploymentId = (value: unknown): value is string => isShortNonEmptyString(value) && isValidDeploymentId(value);
 
@@ -286,7 +289,7 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       const work = parseWork(fields.work);
       if (!work.ok) return { ok: false, reason: `desiredState's ${work.reason}` };
       const { ttlMs } = fields;
-      if (ttlMs !== undefined && !isSafeIntegerAtLeast(ttlMs, 0)) {
+      if (ttlMs !== undefined && (!isSafeIntegerAtLeast(ttlMs, 0) || ttlMs > MAX_SAFE_MODE_TTL_MS)) {
         return { ok: false, reason: `desiredState's ttlMs is ${describeValue(ttlMs)}` };
       }
       return {

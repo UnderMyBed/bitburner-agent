@@ -3,7 +3,17 @@
  * had, minus its intents, until its `ttlMs` passes. It keeps that state in `DESIRED_STATE_FILE` on home, in this
  * format, so the next Agent (after a reload, an install, a new deployment) has it too. In-game code bundles this.
  */
-import { type DesiredState, type ParsedMessage, parseHackLoop } from "./control-protocol.ts";
+import {
+  type DesiredState,
+  isSafeIntegerAtLeast,
+  MAX_SAFE_MODE_TTL_MS,
+  type ParsedMessage,
+  parseHackLoop,
+} from "./control-protocol.ts";
+
+/** The latest `heardAtMs` taken: `new Date`'s last time (8.64e15 ms) less the longest `ttlMs`, so the end is a date. */
+const LATEST_HEARD_AT_MS = 8_640_000_000_000_000 - MAX_SAFE_MODE_TTL_MS;
+
 import { parseWork, type Work } from "./work.ts";
 
 /** What's kept: the activities of the last desired state, never its intents, and when it stops counting. */
@@ -42,9 +52,10 @@ export function parseSafeModeState(text: string): ParsedMessage<SafeModeState> {
   const work = parseWork(fields.work);
   if (!work.ok) return work;
   const { ttlMs, heardAtMs, lastAugReset } = fields;
-  if (!Number.isSafeInteger(ttlMs) || (ttlMs as number) < 1)
-    return { ok: false, reason: "ttlMs isn't a positive integer" };
-  if (typeof heardAtMs !== "number" || !Number.isFinite(heardAtMs) || heardAtMs < 0) {
+  if (!isSafeIntegerAtLeast(ttlMs, 1) || ttlMs > MAX_SAFE_MODE_TTL_MS) {
+    return { ok: false, reason: `ttlMs isn't from 1 to ${MAX_SAFE_MODE_TTL_MS}` };
+  }
+  if (typeof heardAtMs !== "number" || !Number.isFinite(heardAtMs) || heardAtMs < 0 || heardAtMs > LATEST_HEARD_AT_MS) {
     return { ok: false, reason: "no valid heardAtMs" };
   }
   if (typeof lastAugReset !== "number" || !Number.isFinite(lastAugReset)) {
@@ -55,7 +66,7 @@ export function parseSafeModeState(text: string): ParsedMessage<SafeModeState> {
     message: {
       hackLoop: hackLoop.message,
       work: work.message,
-      ttlMs: ttlMs as number,
+      ttlMs,
       heardAtMs,
       lastAugReset,
     },

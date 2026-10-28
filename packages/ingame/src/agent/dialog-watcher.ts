@@ -110,7 +110,7 @@ export function createDialogWatcher(ns: NS) {
       blocking = unclickable ?? blockingIn(gamePage);
     },
 
-    /** What's been handled since the last report, and what's left open: for the fast snapshot. */
+    /** What's been handled since the last report (the latest 100), and what's left open: for the fast snapshot. */
     takeReport(): { handled: HandledDialog[]; blocking: string | null } {
       const report = { handled, blocking };
       handled = [];

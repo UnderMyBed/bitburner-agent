@@ -6,12 +6,14 @@
 //   brain that sent it, and at the disconnect, with its time. `ns.write` replaces the whole text at once, and costs no
 //   RAM; nor does `ns.read` (RamCostGenerator.ts:621-625).
 // - The clock runs from when the Agent was last connected to the brain that sent it: a brain that connects and sends
-//   nothing (one that holds) vouches for nothing.
+//   nothing (one that holds with the hack loop on, which sends nothing until it has sent something) vouches for nothing.
 // - Dropped `ttlMs` after that, and once the slow snapshot's `lastAugReset` isn't the one it was kept with: a reset
 //   (an install, a new BitNode) may have made its target unhackable, its work gone. A reset always means a new Agent,
 //   so only a state from the file is checked, and it waits for the check. `getResetInfo` itself would cost the Agent
 //   1 GB, so the check takes the slow worker's.
 // - The file never holds a state older than the last one heard: one that can't be stamped yet empties it.
+// - On a game the brain hasn't checked (`gameDrift`, architecture §12.4), only what a hold would send: the hack loop as
+//   kept, no work, since the work effectors drive the game's page (`desiredStateWhileHolding`).
 import {
   DESIRED_STATE_FILE,
   type DesiredState,
@@ -32,10 +34,20 @@ export type SafeModeActivities = Pick<SafeModeState, "hackLoop" | "work">;
 const describeDuration = (ms: number): string =>
   ms % 3_600_000 === 0 ? `${ms / 3_600_000} h` : ms % 60_000 === 0 ? `${ms / 60_000} min` : `${ms / 1_000} s`;
 
+/** A time for the log, or its number if a date can't show it (past `new Date`'s range, 8.64e15 ms). */
+const describeTime = (ms: number): string => {
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? `${ms} ms` : date.toISOString();
+};
+
 /** A kept state; `lastAugReset` null until this Agent knows it, for a state it heard before its first slow snapshot. */
 type Kept = Omit<SafeModeState, "lastAugReset"> & { lastAugReset: number | null };
 
-export function createSafeMode(ns: NS) {
+/**
+ * `gameDrift`: how the game differs from the pinned release (core's `gameDrift`), or null: on another game, only the
+ * hack loop goes on.
+ */
+export function createSafeMode(ns: NS, { gameDrift }: { gameDrift: string | null }) {
   const logChange = createChangeLog(ns, "safe mode");
   let kept: Kept | null = null;
   /** Its `lastAugReset` is known to be this game's: heard by this Agent, or checked against its slow snapshot. */
@@ -128,13 +140,13 @@ export function createSafeMode(ns: NS) {
         drop(`no brain for ${describeDuration(kept.ttlMs)}, its ttlMs`);
         return null;
       }
-      logChange(
-        `no brain: converging on its last desired state, without intents, until ${new Date(untilMs).toISOString()}`,
-      );
-      return { hackLoop: kept.hackLoop, work: kept.work };
+      // As a hold would: the hack loop as kept, never the work on a game nobody has checked.
+      const what = gameDrift === null ? "without intents" : `the hack loop only (the game differs: ${gameDrift})`;
+      logChange(`no brain: converging on its last desired state, ${what}, until ${describeTime(untilMs)}`);
+      return { hackLoop: kept.hackLoop, work: gameDrift === null ? kept.work : null };
     },
 
     /** A state is kept, checked or waiting for its check: rounds go on while the Agent has no brain. */
-    holds: (): boolean => kept !== null,
+    keepsState: (): boolean => kept !== null,
   };
 }

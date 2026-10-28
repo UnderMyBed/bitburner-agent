@@ -5,6 +5,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   desiredStateWhileHolding,
   encodeControlMessage,
+  MAX_SAFE_MODE_TTL_MS,
   parseAgentMessage,
   parseBrainMessage,
 } from "../src/control-protocol.ts";
@@ -331,6 +332,7 @@ describe("safe mode's ttlMs (#160)", () => {
     expect(ttlOf(JSON.stringify({ ...state, ttlMs: 43_200_000 }))).toBe(43_200_000);
     expect(ttlOf(JSON.stringify(state))).toBeUndefined();
     expect(ttlOf(JSON.stringify({ ...state, ttlMs: 0 }))).toBeUndefined();
+    expect(ttlOf(JSON.stringify({ ...state, ttlMs: MAX_SAFE_MODE_TTL_MS }))).toBe(7 * 24 * 60 * 60_000);
   });
 
   test.each([
@@ -339,6 +341,7 @@ describe("safe mode's ttlMs (#160)", () => {
     ["a string", "600000"],
     ["null", null],
     ["unsafe", 2 ** 53],
+    ["over 7 days, so a time it makes can't be shown as a date", 604_800_001],
   ])("one that's %s is refused, with a reason", (_description, ttlMs) => {
     const result = parseBrainMessage(JSON.stringify({ ...state, ttlMs }));
     expect(result).toEqual({ ok: false, reason: expect.stringContaining("ttlMs") });

@@ -3,6 +3,7 @@
 import {
   DESIRED_STATE_FILE,
   type DesiredState,
+  MAX_SAFE_MODE_TTL_MS,
   parseSafeModeState,
   type SafeModeState,
   type Work,
@@ -21,7 +22,7 @@ const TRAVEL = { id: "travel(Aevum)", action: "travel" as const, args: { city: "
 const STATE: DesiredState = { hackLoop: LOOP, intents: [TRAVEL], work: HACKING, ttlMs: HOUR };
 
 /** A home with files, and an Agent's log: `restart()` is a new Agent on the same home (a reload, a new deployment). */
-function homeWith(files = new Map<string, string>()) {
+function homeWith(files = new Map<string, string>(), gameDrift: string | null = null) {
   const lines: string[] = [];
   const ns = {
     read: (file: string) => files.get(file) ?? "",
@@ -38,12 +39,12 @@ function homeWith(files = new Map<string, string>()) {
     if (!parsed.ok) throw new Error(`the file doesn't parse: ${parsed.reason}`);
     return parsed.message;
   };
-  return { safeMode: createSafeMode(ns), files, lines, kept, restart: () => homeWith(files) };
+  return { safeMode: createSafeMode(ns, { gameDrift }), files, lines, kept, restart: () => homeWith(files, gameDrift) };
 }
 
 test("nothing kept: nothing to converge on, and no rounds needed", () => {
   const { safeMode } = homeWith();
-  expect(safeMode.holds()).toBe(false);
+  expect(safeMode.keepsState()).toBe(false);
   expect(safeMode.toConverge(START, RESET)).toBeNull();
 });
 
@@ -51,7 +52,7 @@ test("a state heard is kept and written at once: its activities, never its inten
   const { safeMode, kept } = homeWith();
   safeMode.heard(STATE, START, RESET);
   expect(kept()).toEqual({ hackLoop: LOOP, work: HACKING, ttlMs: HOUR, heardAtMs: START, lastAugReset: RESET });
-  expect(safeMode.holds()).toBe(true);
+  expect(safeMode.keepsState()).toBe(true);
   // Disconnected at once: converged on, the intents left out.
   safeMode.disconnected(START);
   expect(safeMode.toConverge(START, RESET)).toEqual({ hackLoop: LOOP, work: HACKING });
@@ -70,7 +71,7 @@ test("a state with no ttlMs (an older brain) isn't kept, and the one kept before
   safeMode.heard(STATE, START, RESET);
   safeMode.heard({ hackLoop: LOOP, intents: [] }, START + 1_000, RESET);
   expect(files.get(DESIRED_STATE_FILE)).toBe("");
-  expect(safeMode.holds()).toBe(false);
+  expect(safeMode.keepsState()).toBe(false);
   safeMode.disconnected(START + 2_000);
   expect(safeMode.toConverge(START + 2_000, RESET)).toBeNull();
   expect(lines).toEqual(["agent: safe mode: dropped the last desired state: the brain's latest has no ttlMs"]);
@@ -80,7 +81,7 @@ test("a ttlMs of 0 is none: the state isn't kept", () => {
   const { safeMode, lines } = homeWith();
   safeMode.heard(STATE, START, RESET);
   safeMode.heard({ ...STATE, ttlMs: 0 }, START + 1_000, RESET);
-  expect(safeMode.holds()).toBe(false);
+  expect(safeMode.keepsState()).toBe(false);
   expect(lines).toEqual(["agent: safe mode: dropped the last desired state: the brain's latest has no ttlMs"]);
 });
 
@@ -92,7 +93,7 @@ test("a state heard before the last reset is known empties the file: a new Agent
   second.safeMode.heard({ ...STATE, hackLoop: { ...LOOP, target: "joesguns" } }, START + 10_000, null);
   expect(second.files.get(DESIRED_STATE_FILE)).toBe("");
   const third = second.restart();
-  expect(third.safeMode.holds()).toBe(false);
+  expect(third.safeMode.keepsState()).toBe(false);
 });
 
 test("before the Agent knows the last reset, it's kept but not written; written once the slow snapshot says", () => {
@@ -126,7 +127,7 @@ test("with no brain: converged on until ttlMs after the disconnect, then dropped
     `agent: safe mode: no brain: converging on its last desired state, without intents, until ${new Date(START + 10_000 + HOUR).toISOString()}`,
   ]);
   expect(safeMode.toConverge(START + 10_000 + HOUR, RESET)).toBeNull();
-  expect(safeMode.holds()).toBe(false);
+  expect(safeMode.keepsState()).toBe(false);
   expect(files.get(DESIRED_STATE_FILE)).toBe("");
   expect(lines.at(-1)).toBe("agent: safe mode: dropped the last desired state: no brain for 1 h, its ttlMs");
 });
@@ -143,6 +144,27 @@ test("a brain connected that sends nothing doesn't move the clock on: it runs fr
   expect(safeMode.toConverge(START + HOUR, RESET)).toBeNull();
 });
 
+test("on a game other than the pinned release, only what a hold would send: the hack loop, never the work", () => {
+  const before = homeWith();
+  before.safeMode.heard(STATE, START, RESET);
+  before.safeMode.disconnected(START);
+  // Steam updated the game while the brain was down: the Agent that starts on it reads the same file.
+  const drifted = homeWith(before.files, "versionNumber 52, pinned 51");
+  expect(drifted.safeMode.toConverge(START + 60_000, RESET)).toEqual({ hackLoop: LOOP, work: null });
+  expect(drifted.lines).toEqual([
+    `agent: safe mode: no brain: converging on its last desired state, the hack loop only (the game differs: versionNumber 52, pinned 51), until ${new Date(START + HOUR).toISOString()}`,
+  ]);
+});
+
+test("a time past what a date can show is logged as a number, never thrown", () => {
+  const { safeMode, lines } = homeWith();
+  const latest = 8.64e15;
+  safeMode.heard({ ...STATE, ttlMs: MAX_SAFE_MODE_TTL_MS }, latest, RESET);
+  safeMode.disconnected(latest);
+  expect(safeMode.toConverge(latest, RESET)).not.toBeNull();
+  expect(lines.at(-1)).toContain(`until ${latest + MAX_SAFE_MODE_TTL_MS} ms`);
+});
+
 describe("a new Agent (a reload, an install's restart, a new deployment) reads the file", () => {
   function keptThenRestarted() {
     const before = homeWith();
@@ -153,7 +175,7 @@ describe("a new Agent (a reload, an install's restart, a new deployment) reads t
 
   test("with the game's last reset unchanged, it converges on it, until the same time as before", () => {
     const { safeMode } = keptThenRestarted();
-    expect(safeMode.holds()).toBe(true);
+    expect(safeMode.keepsState()).toBe(true);
     expect(safeMode.toConverge(START + 30 * 60_000, RESET)).toEqual({ hackLoop: LOOP, work: HACKING });
     expect(safeMode.toConverge(START + 5_000 + HOUR, RESET)).toBeNull();
   });
@@ -161,14 +183,14 @@ describe("a new Agent (a reload, an install's restart, a new deployment) reads t
   test("before it knows the game's last reset, it waits: kept, not converged on", () => {
     const { safeMode } = keptThenRestarted();
     expect(safeMode.toConverge(START + 10_000, null)).toBeNull();
-    expect(safeMode.holds()).toBe(true);
+    expect(safeMode.keepsState()).toBe(true);
     expect(safeMode.toConverge(START + 12_000, RESET)).not.toBeNull();
   });
 
   test("after a reset (an install, a new BitNode), it's dropped: its target may be unhackable", () => {
     const { safeMode, files, lines } = keptThenRestarted();
     expect(safeMode.toConverge(START + 10_000, RESET + 1)).toBeNull();
-    expect(safeMode.holds()).toBe(false);
+    expect(safeMode.keepsState()).toBe(false);
     expect(files.get(DESIRED_STATE_FILE)).toBe("");
     expect(lines).toEqual(["agent: safe mode: dropped the last desired state: it's from before the game's last reset"]);
     // Never back, whatever it's told of the reset afterwards.
@@ -178,7 +200,7 @@ describe("a new Agent (a reload, an install's restart, a new deployment) reads t
   test("checked while connected, too: the slow snapshot's reset drops a stale one before any disconnect", () => {
     const { safeMode } = keptThenRestarted();
     safeMode.connectedRound(START + 10_000, RESET + 1);
-    expect(safeMode.holds()).toBe(false);
+    expect(safeMode.keepsState()).toBe(false);
   });
 
   test("a brain's state replaces it, without the check: this Agent heard it itself", () => {
@@ -194,7 +216,7 @@ describe("a new Agent (a reload, an install's restart, a new deployment) reads t
 
   test("a file that doesn't parse is ignored, and the log says why", () => {
     const { safeMode, lines } = homeWith(new Map([[DESIRED_STATE_FILE, '{"hackLoop":true}']]));
-    expect(safeMode.holds()).toBe(false);
+    expect(safeMode.keepsState()).toBe(false);
     expect(lines).toEqual([`agent: safe mode: ignored ${DESIRED_STATE_FILE}: hackLoop isn't an object`]);
   });
 });
