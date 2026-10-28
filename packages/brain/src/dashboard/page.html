@@ -76,6 +76,12 @@
       </select>
       <button type="submit">Work there</button>
     </form>
+    <form id="crime-work">
+      <select name="crime" aria-label="Crime">
+        <option>Shoplift</option><option>Rob Store</option><option>Mug</option><option>Larceny</option><option>Deal Drugs</option><option>Bond Forgery</option><option>Traffick Arms</option><option>Homicide</option><option>Grand Theft Auto</option><option>Kidnap</option><option>Assassination</option><option>Heist</option>
+      </select>
+      <button type="submit">Commit it</button>
+    </form>
     <div class="bad" id="work-problem" hidden></div>
   </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
@@ -267,12 +273,18 @@ function render(status) {
     ...(intentRows.length === 0 ? [element("tr", "None.")] : intentRows),
   );
 
-  // The work the brain manages (#151), and how the Agent last reported it.
+  // The work the brain manages (#151, #153, #156), and how the Agent last reported it.
   const { desired, outcome: workOutcome } = status.work;
+  const workName = (work) =>
+    work.kind === "company"
+      ? `${work.field} work at ${work.company}`
+      : work.kind === "crime"
+        ? work.crime
+        : `${work.workType} work for ${work.faction}`;
   const workText =
     desired === null
       ? "Not managed: the game's work is left as it is."
-      : `${desired.kind === "company" ? `${desired.field} work at ${desired.company}` : `${desired.workType} work for ${desired.faction}`}, ${desired.focus ? "focused" : "unfocused"}: ` +
+      : `${workName(desired)}, ${desired.focus ? "focused" : "unfocused"}: ` +
         (workOutcome === null
           ? "not reported yet"
           : `${workOutcome.converged ? "converged" : "not converged"}${via(workOutcome)}` +
@@ -368,6 +380,11 @@ document.querySelector("#company-work").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const work = { kind: "company", company: form.elements.company.value, field: form.elements.field.value };
+  sendWrite("/api/work", { work }, "#work-problem", "Not set");
+});
+document.querySelector("#crime-work").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const work = { kind: "crime", crime: event.currentTarget.elements.crime.value };
   sendWrite("/api/work", { work }, "#work-problem", "Not set");
 });
 document.querySelector("#stop-work").addEventListener("click", () =>

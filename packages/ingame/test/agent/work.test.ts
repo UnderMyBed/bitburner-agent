@@ -151,3 +151,26 @@ test("company work (#153): each backend's worker and arguments, and the simulato
   await viaSim.round();
   expect(simCalls).toEqual([["Noodle Bar", "Waiter", false]]);
 });
+
+test("crime (#156): each backend's worker and arguments, and the simulator's effector", async () => {
+  const shoplift: Work = { kind: "crime", crime: "Shoplift", focus: true };
+  const viaPage = activityWith(() => CONVERGED);
+  viaPage.work.desire(shoplift);
+  await viaPage.round();
+  expect(viaPage.calls()).toEqual([["agent/abcdef123456/crime-work.js", ["Shoplift", "true"]]]);
+  const viaSingularity = activityWith(() => CONVERGED, { available: true });
+  viaSingularity.work.desire(shoplift);
+  await viaSingularity.round();
+  expect(viaSingularity.calls()).toEqual([["agent/abcdef123456/singularity-crime-work.js", ["Shoplift", "true"]]]);
+  const simCalls: unknown[][] = [];
+  (globalThis as Record<string, unknown>).__bitburnerAgentSim = {
+    convergeCrimeWork: (...args: unknown[]) => {
+      simCalls.push(args);
+      return CONVERGED;
+    },
+  };
+  const viaSim = activityWith(() => CONVERGED);
+  viaSim.work.desire(shoplift);
+  await viaSim.round();
+  expect(simCalls).toEqual([["Shoplift", true]]);
+});

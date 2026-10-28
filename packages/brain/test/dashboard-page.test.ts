@@ -4,7 +4,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type FastSnapshotData, INTENT_ACTIONS, JOB_FIELDS } from "@bitburner-agent/core";
+import { CRIME_NAMES, type FastSnapshotData, INTENT_ACTIONS, JOB_FIELDS } from "@bitburner-agent/core";
 import { JSDOM } from "jsdom";
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
@@ -581,7 +581,20 @@ describe("work (#151)", () => {
     expect(field.value).toBe("Waiter");
   });
 
-  test("the forms set faction or company work, and the stop button stops managing it", async () => {
+  test("crime reads plainly too, and its form offers the game's crimes, in order (#156)", async () => {
+    const work = {
+      desired: { kind: "crime", crime: "Grand Theft Auto", focus: true },
+      outcome: { converged: false, problem: 'no "Grand Theft Auto" at the Slums', backend: "ui" },
+    };
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work } }));
+    expect(textOf(document, "#work div")).toBe(
+      'Grand Theft Auto, focused: not converged via ui (no "Grand Theft Auto" at the Slums)',
+    );
+    const crime = document.querySelector("#crime-work select[name=crime]") as HTMLSelectElement;
+    expect([...crime.options].map((option) => option.textContent)).toEqual(CRIME_NAMES);
+  });
+
+  test("the forms set faction, company or crime work, and the stop button stops managing it", async () => {
     const { document, requests } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
     const form = document.querySelector("#faction-work") as HTMLFormElement;
     (form.elements.namedItem("faction") as HTMLInputElement).value = "NiteSec";
@@ -595,11 +608,16 @@ describe("work (#151)", () => {
     (companyForm.elements.namedItem("field") as HTMLSelectElement).value = "Employee";
     companyForm.requestSubmit();
     await settle();
+    const crimeForm = document.querySelector("#crime-work") as HTMLFormElement;
+    (crimeForm.elements.namedItem("crime") as HTMLSelectElement).value = "Heist";
+    crimeForm.requestSubmit();
+    await settle();
     const posts = requests.filter((request) => request.method === "POST");
     expect(posts.map((request) => [request.url, JSON.parse(String(request.body))])).toEqual([
       ["/api/work", { work: { faction: "NiteSec", workType: "field" } }],
       ["/api/work", { work: null }],
       ["/api/work", { work: { kind: "company", company: "Joe's Guns", field: "Employee" } }],
+      ["/api/work", { work: { kind: "crime", crime: "Heist" } }],
     ]);
   });
 });

@@ -83,6 +83,13 @@ describe("round trips", () => {
       intents: [],
       work: { kind: "company", company: "Noodle Bar", field: "Waiter", focus: false },
     },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: false, target: null, hosts: [] },
+      intents: [],
+      work: { kind: "crime", crime: "Grand Theft Auto", focus: true },
+    },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
   });
@@ -166,7 +173,7 @@ describe("rejected, each with a reason", () => {
     ["an intent whose id isn't its own", withIntents({ ...travel, id: "travel(Aevum)" })],
     ["the same intent twice", withIntents(travel, travel)],
     ["work that isn't an object", { ...desiredState, work: "hacking" }],
-    ["work of an unknown kind", { ...desiredState, work: { ...factionWork, kind: "crime" } }],
+    ["work of an unknown kind", { ...desiredState, work: { ...factionWork, kind: "gardening" } }],
     ["work for a faction that isn't one", { ...desiredState, work: { ...factionWork, faction: "The Gibson" } }],
     ["work of a type the game hasn't", { ...desiredState, work: { ...factionWork, workType: "espionage" } }],
     ["work whose focus isn't a boolean", { ...desiredState, work: { ...factionWork, focus: "yes" } }],
@@ -176,6 +183,20 @@ describe("rejected, each with a reason", () => {
       "company work in a field named by a prototype's key",
       { ...desiredState, work: { ...companyWork, field: "toString" } },
     ],
+    ["crime work naming no crime", { ...desiredState, work: { kind: "crime", focus: true } }],
+    [
+      "crime work naming a crime the game hasn't",
+      { ...desiredState, work: { kind: "crime", crime: "Jaywalk", focus: true } },
+    ],
+    [
+      "crime work naming a crime in lower case",
+      { ...desiredState, work: { kind: "crime", crime: "shoplift", focus: true } },
+    ],
+    [
+      "crime work naming a prototype's key",
+      { ...desiredState, work: { kind: "crime", crime: "toString", focus: true } },
+    ],
+    ["crime work naming no string", { ...desiredState, work: { kind: "crime", crime: 7, focus: true } }],
     [
       "over 100 intents, each valid and different",
       withIntents(
