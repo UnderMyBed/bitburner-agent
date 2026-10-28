@@ -354,12 +354,19 @@ interface Effectors {
 
 `agent/boot.js` (its fixed path in the [deploy layout](../packages/ingame/README.md#deploy-layout)) is re-entrant: it is safe to run at any time and in any number of copies. It starts the current deployment's Agent if that isn't running; everything else follows from reconciliation.
 
-**Fresh save:** a new game starts the interactive tutorial. On v3.0.1, while it runs, finished scripts are never cleaned up and never free their RAM (fixed on `dev`; S1 finding). **The Agent never runs alongside it, so it doesn't end it; the owner's "Exit Tutorial" click does** (#168):
+**Fresh save:** a new game starts the interactive tutorial. On v3.0.1, while it runs, finished scripts are never cleaned up and never free their RAM (fixed on `dev`; S1 finding). **On the owner's and the brain's normal paths the Agent never runs alongside it, so it doesn't end it; the owner's "Exit Tutorial" click does** (#168):
 - while the tutorial runs, the terminal runs only the tutorial's own commands, so `run agent/boot.js` is refused (`Terminal/Terminal.ts:713-856`);
 - autoexec runs only when a save loads (`NetscriptWorker.ts:252-256`), and a load never brings the tutorial back: it isn't in the save;
 - Options' "Reset tutorial" kills every script first, the Agent included. The supervisor's relaunch after 5 silent minutes (§10.2) loads the save, without the tutorial.
+- `ls`'s clickable file links open a file in the script editor, but folders aren't clickable (`Terminal/commands/ls.tsx:164-165`, `:226-245`), so `agent/boot.js` can't be reached that way during the tutorial's `ls` step.
 
-So on a fresh save the owner clicks "Exit Tutorial" before the first `run agent/boot.js` ([setup](setup.md)). A save and a reload end it too. The E2 skeleton test pins both. NS can't see the tutorial; only the page shows it. If a later game version lets a script run during it, that test fails, and the Agent gets the step then.
+**The exceptions** are deliberate owner actions after "Reset tutorial", and a hand-edited tutorial script. With the tutorial running again, the owner can restart the killed Agent:
+- from its log's "Run" button: Active Scripts' Recently Killed opens the log (`ui/ActiveScripts/RecentScriptAccordion.tsx:51`), or a tail window was left open. Its `run` calls `startWorkerScript` with no tutorial check (`ui/React/LogBoxManager.tsx:228-250`). The Agent is listed there because only autoexec's run is `temporary` (`NetscriptWorker.ts:210`);
+- from the script editor's Run on a file still open (`ScriptEditor/ui/ScriptEditorRoot.tsx:224-252`): the editor's open files survive the reset.
+
+The tutorial's own `n00dles.js` can also carry extra code: the editor only checks that it `includes` the tutorial's (`ScriptEditorRoot.tsx:203-205`). The Agent has no page check for any of these (owner's decision, #168).
+
+So on a fresh save the owner clicks "Exit Tutorial" before the first `run agent/boot.js` ([setup](setup.md)). A save and a reload end it too. The E2 skeleton's "a fresh save's tutorial" test pins both. NS can't see the tutorial; only the page shows it. If a later version's terminal runs `agent/boot.js` during the tutorial, or the save keeps the tutorial, that test fails, and the Agent gets the step then.
 
 ---
 

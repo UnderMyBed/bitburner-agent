@@ -113,7 +113,7 @@ await sim.close();
 
 A fixture is the game state a simulation starts from.
 - **`{ kind: "new", tutorial }`** boots a new game through the game's own `Engine.load`.
-  - **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the Skip button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
+  - **`tutorial` is required.** A new game starts the interactive tutorial, and `"skipped"` ends it as the "Exit Tutorial" button does (`iTutorialEnd`). On v3.0.1 a running tutorial stops finished scripts from being cleaned up, so there is no safe default.
 - **`{ kind: "bitnode", n, sourceFiles }`** starts BitNode `n` with the given Source-Files (`{ [BitNode]: level }`, e.g. `{ 4: 3 }`). It boots a new game, sets the Source-Files, and enters the BitNode through the game's own `enterBitNode` (`RedPill.tsx`), as `b1t_flum3.exe` does. That resets everything for the new BitNode without granting a Source-File. The game's own tests set up the same way.
   - **The level** is the BitNode's own Source-File level + 1, capped at 3 except in BitNode 12, as the game's `getBitNodeLevel` computes it. So `{ n: 4, sourceFiles: { 4: 2 } }` is BN4.3, and so is `{ 4: 3 }`.
   - **It is a player with these Source-Files and no other history.** Compared with arriving by a real destroy of BitNode d (the portal's `enterBitNode(false, …)`, from the same Source-Files with SF d one level lower), the saved player and home server are identical, except:

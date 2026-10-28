@@ -303,7 +303,8 @@ describe("the skeleton on E2", () => {
     const { dataDirectory, ports } = await newTestBrain();
     const page = await freshGame(e2.browser, e2.server);
     startedInThisTest.pages.push(page);
-    const exitButton = page.getByRole("button", { name: "Exit Tutorial" });
+    // Found by its text, not its role: an alert's modal hides the rest of the page from role queries.
+    const exitButton = page.locator("button", { hasText: /^Exit Tutorial$/ });
     await expect(exitButton.count()).resolves.toBe(1);
     // The options, set with the tutorial running: the brain deploys boot.js onto home.
     await connectRemoteApi(page, ports);

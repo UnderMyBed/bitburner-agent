@@ -64,7 +64,7 @@ Other numbers:
 3. **A new game starts the interactive tutorial.** On v3.0.1, while it runs, `killWorkerScript` returns early (`src/Netscript/killWorkerScript.ts`), so **scripts that finish are never cleaned up and their RAM is never freed**.
    - Fixed on `dev`, but present on Steam.
    - **The agent's BN1.1 bootstrap on a fresh save must end the tutorial first** (the Skip button calls `iTutorialEnd`). This is an M3 requirement.
-   - *Since (M3, #168):* the Agent can't run while the tutorial does (the terminal refuses `run`, and autoexec runs only on a load, which never brings the tutorial back), so the owner's "Exit Tutorial" click ends it. Architecture §5.7.
+   - *Since (M3, #168):* the Agent can't run while the tutorial does (the terminal refuses `run agent/boot.js`, and autoexec runs only on a load, which never brings the tutorial back), so the owner's "Exit Tutorial" click ends it. Architecture §5.7.
 4. **DOM-dependent scripts fail headless.** No UI is rendered, so anything reading game DOM fails. In the fork that's the HUD/stats overlay, the stock summary and the casino's save-button lookup; for us it's our `ui` effectors. As planned, those are covered by E2 (§9.2).
 5. **Q8 (formula import), first answer:** the engine can't be imported without pulling in the whole UI. The bundle has 894 game source files plus React, MUI, Markdown and so on, but it runs in Node regardless. Extracting formula modules for `core/` without UI deps is still open.
 
