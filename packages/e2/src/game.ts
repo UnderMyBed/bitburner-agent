@@ -198,8 +198,9 @@ export async function waitForTerminal(page: Page, { timeoutMs = LOAD_TIMEOUT_MS 
 /**
  * Waits for a fixture's load (`waitForTerminal`), and if it hasn't shown the terminal within `firstTimeoutMs`, reloads
  * the page once and waits again (#120: one load in about 15 suite runs never showed it, and loads hundreds of times in a
- * row didn't: packages/e2/README.md). The first try's report goes to `warn`, so a retried load still shows in the run's output; a load that
- * fails again throws with both reports. Only for a fixture's own load: a test's reload is what it tests.
+ * row didn't: packages/e2/README.md). The first try's report goes to `warn`, so a retried load still shows in the run's
+ * output; a load that fails again throws with both reports. Only for a fixture's own load: a test's reload is what it
+ * tests.
  */
 export async function untilGameLoaded(
   page: Page,
