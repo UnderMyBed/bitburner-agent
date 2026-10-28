@@ -1,6 +1,6 @@
 // The Agent's intent runner (#141, architecture §5.3): it keeps the intents the brain it's connected to sends, and does
-// each through its effector (./effectors.ts) until the game shows it done. Like the hack loop, it forgets on a
-// disconnect.
+// each through its effector (./effectors.ts) until the game shows it done. Unlike the hack loop and the work, it forgets
+// on a disconnect, and never runs in safe mode (#160): one-shot actions need the brain.
 // - In order, after the hack loop, each only with enough of the round left for the page; one that isn't waits a round.
 // - A new intent is due at once. One not done is tried again every 15 rounds (30 s), logging why each time.
 // - One done is never run again while the brain keeps sending it: the brain sees it done in its next medium snapshot,

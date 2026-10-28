@@ -2,15 +2,13 @@
 // The owner queues an install; the brain's gate lets it out (nothing undone queued before it, two medium snapshots, a
 // save backup); the Agent installs through the simulator's own effector or its Singularity worker; every script dies,
 // the Agent too; the game starts `agent/boot.js` 500 ms later, which starts the next Agent, in a new session of the
-// reset game. Chaos: the brain down mid-install; a reload just after it, of a save taken then (a save-then-reload) and
+// reset game. Chaos: the brain down mid-install (safe mode drops the state kept from before the reset, #160); a reload just after it, of a save taken then (a save-then-reload) and
 // of the last save from before it (a plain reload); and the reconnect to the reset game. The `ui` backend's restart
 // (the page timer, the terminal, save-and-reload) is E2's.
-import type { Connection } from "@bitburner-agent/bridge";
 import type { FastSnapshotData, MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import type { IntentView } from "../src/desired-state.ts";
-import { CONTROL_URL } from "./helpers/agent-in-simulation.ts";
-import { RFA_URL, startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
+import { startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
 import { useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
 const freshStart = useFreshStarts();
@@ -167,15 +165,20 @@ test.each([
   );
 });
 
-test("the brain down mid-install: a new brain gates it again, and the game's check says done; installed once", async () => {
+test("the brain down mid-install: safe mode drops the kept state from before the reset; a new brain gates the install again, and the game's check says done", async () => {
   const fresh = await withAugmentationQueued();
   const { lastAugResetBefore } = await installed(fresh);
   // The brain goes down as the old Agent dies: the next one, and the game's Remote File API, can't connect.
-  fresh.brain.closeConnections();
-  const refuse = (connection: Connection) => connection.close(1011, "the brain is down");
-  fresh.game.listen(CONTROL_URL, refuse);
-  fresh.game.listen(RFA_URL, refuse);
+  fresh.brain.stop();
   await fresh.game.run(30_000);
+  // The next Agent, alone, has the last desired state kept on home (#160): from before the reset, so dropped, never
+  // converged on. The reset game's servers stay unrooted, with no loop.
+  const [agent] = (await fresh.simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  if (!agent) throw new Error("no Agent on home");
+  expect(await fresh.simulation.logs(agent.pid)).toContainEqual(
+    expect.stringContaining("agent: safe mode: dropped the last desired state: it's from before the game's last reset"),
+  );
+  expect(await fresh.simulation.ps("n00dles")).toEqual([]);
   // A new brain, with the same store (the queue in it), knows nothing of the install it didn't send.
   const restarted = startBrainInSimulation(fresh.game, {
     build: fresh.build,
