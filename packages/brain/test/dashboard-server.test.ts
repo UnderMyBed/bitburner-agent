@@ -19,6 +19,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const homeRamCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
+  const workRequests: unknown[] = [];
   const errors: unknown[] = [];
   server = await startDashboardServer({
     port: 0,
@@ -38,6 +39,13 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
       cancelledIds.push(id);
       return id === "travel(Aevum)";
     },
+    // A stand-in for the controller: CyberSec's hacking work, or none, is valid.
+    setWork: (request) => {
+      workRequests.push(request);
+      return request === null || JSON.stringify(request) === '{"faction":"CyberSec","workType":"hacking"}'
+        ? { ok: true }
+        : { ok: false, reason: "work's faction isn't one of the game's" };
+    },
     onError: (error) => errors.push(error),
   });
   return {
@@ -48,6 +56,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     homeRamCalls,
     intentRequests,
     cancelledIds,
+    workRequests,
     errors,
   };
 }
@@ -209,6 +218,35 @@ describe.each(SWITCHES)("the switch for %s", (_name, switchPath, own) => {
     const reply = await send(started.port, { method: "POST", path: switchPath, headers, body });
     expect(reply.status).toBe(expected);
     expect(started[own]).toEqual([]);
+  });
+});
+
+describe("the work (#151)", () => {
+  const post = (port: number, body: string, headers: Record<string, string> = sameOrigin(port)) =>
+    send(port, { method: "POST", path: "/api/work", headers, body });
+
+  test("sets or stops the work from the dashboard's own page; refuses what the controller refuses, or no work field", async () => {
+    const started = await start();
+    expect((await post(started.port, '{"work":{"faction":"CyberSec","workType":"hacking"}}')).status).toBe(200);
+    expect((await post(started.port, '{"work":null}')).status).toBe(200);
+    const refused = await post(started.port, '{"work":{"faction":"The Gibson","workType":"hacking"}}');
+    expect([refused.status, refused.body]).toEqual([400, "work's faction isn't one of the game's"]);
+    expect((await post(started.port, '{"faction":"CyberSec"}')).status).toBe(400);
+    expect(started.workRequests).toEqual([
+      { faction: "CyberSec", workType: "hacking" },
+      null,
+      { faction: "The Gibson", workType: "hacking" },
+    ]);
+  });
+
+  test("from another origin it's refused, and nothing is set", async () => {
+    const started = await start();
+    const reply = await post(started.port, '{"work":null}', {
+      ...sameOrigin(started.port),
+      origin: "https://attacker.example",
+    });
+    expect(reply.status).toBe(403);
+    expect(started.workRequests).toEqual([]);
   });
 });
 

@@ -6,6 +6,7 @@
  */
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { IntentOutcome } from "./intents.ts";
+import type { WorkOutcome } from "./work.ts";
 
 /**
  * The in-game port every home worker reports on (the snapshot workers, and the hack loop's, #134), and the Agent reads.
@@ -111,6 +112,8 @@ export interface FastSnapshotData {
   intents: IntentOutcome[];
   /** The game's dialogs (#143): those handled since the last fast snapshot, and the text of one left open, or null. */
   dialogs: { handled: HandledDialog[]; blocking: string | null };
+  /** How the work the brain wants went (#151): null while it wants none, or absent from an older Agent. */
+  work?: WorkOutcome | null;
 }
 
 /** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */

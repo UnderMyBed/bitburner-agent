@@ -59,6 +59,18 @@
     </form>
     <div class="bad" id="intents-problem" hidden></div>
   </section>
+  <section id="work">
+    <h2>Work</h2><div></div>
+    <form>
+      <input name="faction" aria-label="Faction" value="CyberSec">
+      <select name="workType" aria-label="Work type">
+        <option>hacking</option><option>field</option><option>security</option>
+      </select>
+      <button type="submit">Work at it</button>
+      <button type="button" id="stop-work">Stop managing work</button>
+    </form>
+    <div class="bad" id="work-problem" hidden></div>
+  </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -248,6 +260,18 @@ function render(status) {
     ...(intentRows.length === 0 ? [element("tr", "None.")] : intentRows),
   );
 
+  // The work the brain manages (#151), and how the Agent last reported it.
+  const { desired, outcome: workOutcome } = status.work;
+  const workText =
+    desired === null
+      ? "Not managed: the game's work is left as it is."
+      : `${desired.workType} work for ${desired.faction}, ${desired.focus ? "focused" : "unfocused"}: ` +
+        (workOutcome === null
+          ? "not reported yet"
+          : `${workOutcome.converged ? "converged" : "not converged"}${via(workOutcome)}` +
+            (workOutcome.problem === null ? "" : ` (${workOutcome.problem})`));
+  document.querySelector("#work div").replaceChildren(element("div", workText, desired === null ? "muted" : "ok"));
+
   const events = document.querySelector("#events table");
   events.replaceChildren(
     ...status.events.map((event) => {
@@ -326,6 +350,16 @@ document.querySelector("#intents form").addEventListener("submit", (event) => {
   }
   sendWrite("/api/intents", { action: form.elements.action.value, args }, "#intents-problem", "Not queued");
 });
+
+document.querySelector("#work form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const work = { faction: form.elements.faction.value, workType: form.elements.workType.value };
+  sendWrite("/api/work", { work }, "#work-problem", "Not set");
+});
+document.querySelector("#stop-work").addEventListener("click", () =>
+  sendWrite("/api/work", { work: null }, "#work-problem", "Not stopped"),
+);
 
 refresh();
 setInterval(refresh, POLL_MS);

@@ -3,7 +3,7 @@
 // renders them, with React's props on them. E2 drives the real page (packages/e2/test/effectors.e2.test.ts).
 import { afterEach, expect, test } from "vitest";
 import type { NS } from "../../src/ns.ts";
-import { openGamePage, xpathString } from "../../src/page/game-page.ts";
+import { openGamePage, reactPropsAbove, reactText, xpathString } from "../../src/page/game-page.ts";
 
 const clicks: string[] = [];
 const ns = { asleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)) } as unknown as NS;
@@ -131,4 +131,22 @@ test("findWhenThere waits for an element without clicking it, and gives null by 
   expect((await gamePage?.findWhenThere("//button[normalize-space()='Buy']"))?.textContent).toBe("Buy");
   expect(await gamePage?.findWhenThere("//button[normalize-space()='Owned']")).toBeNull();
   expect(clicks).toEqual([]);
+});
+
+test("reactPropsAbove finds a component's props up the fiber tree; reactText reads what a node would render (#151)", () => {
+  // The overview's work block (`ui/React/CharacterOverview.tsx`): its header is rendered, its tooltip only on hover.
+  const header = Object.assign(document.createElement("p"), { textContent: "Working for CyberSec" });
+  const tooltip = { props: { children: ["Doing ", "hacking", " work"] } };
+  const overview = {
+    memoizedState: null,
+    memoizedProps: { tooltip, header: "Working for", children: [] },
+    return: null,
+  };
+  const typography = { memoizedState: null, memoizedProps: { className: "workHeader" }, return: overview };
+  Object.assign(header, { __reactFiber$test: typography });
+  const props = reactPropsAbove(header, "tooltip");
+  expect(props?.header).toBe("Working for");
+  expect(reactText(props?.tooltip)).toBe("Doing hacking work");
+  expect(reactPropsAbove(header, "nothing")).toBeNull();
+  expect(reactText([" Doing ", { props: { children: [7, " things"] } }])).toBe("Doing 7 things");
 });

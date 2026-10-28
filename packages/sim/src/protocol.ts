@@ -433,6 +433,11 @@ export interface HostMethods {
    * (finite, 0 or more), for test scenarios (#149). A harness edit, not something a player can do.
    */
   "diagnostics.joinFactionWithReputation"(params: { faction: string; reputation: number }): void;
+  /**
+   * Gives the player an augmentation (one of the game's names, not already installed), installed and unpaid, for test
+   * scenarios (#151). A harness edit, not something a player can do.
+   */
+  "diagnostics.giveInstalledAugmentation"(params: { augmentation: string }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */

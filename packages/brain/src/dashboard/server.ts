@@ -21,6 +21,7 @@ const WRITE_PATHS = [
   "/api/home-ram",
   "/api/intents",
   "/api/intents/cancel",
+  "/api/work",
 ];
 
 export interface DashboardServerOptions {
@@ -39,6 +40,8 @@ export interface DashboardServerOptions {
   addIntent(request: unknown): AddedIntent;
   /** Takes an intent off the manual queue by id; false if it isn't there. */
   cancelIntent(id: string): boolean;
+  /** The work the owner wants (#151): `{ faction, workType }`, or null to stop managing work. */
+  setWork(request: unknown): { ok: true } | { ok: false; reason: string };
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
 }
@@ -114,6 +117,15 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         if (typeof body?.id !== "string") throw new RequestError(400, 'the body must be {"id": "<intent id>"}');
         if (!options.cancelIntent(body.id)) throw new RequestError(404, "no such intent in the manual queue");
         return reply(response, 200, "application/json", JSON.stringify({ id: body.id }));
+      }
+      case "POST /api/work": {
+        const body = (await readJsonWrite(request, origin)) as { work?: unknown } | null;
+        if (body === null || typeof body !== "object" || !("work" in body)) {
+          throw new RequestError(400, 'the body must be {"work": {"faction": …, "workType": …}} or {"work": null}');
+        }
+        const set = options.setWork(body.work);
+        if (!set.ok) throw new RequestError(400, set.reason);
+        return reply(response, 200, "application/json", JSON.stringify({ work: body.work }));
       }
       default:
         if (WRITE_PATHS.includes(path) || path === "/" || path === "/api/status") {

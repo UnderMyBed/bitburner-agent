@@ -1,6 +1,9 @@
 // Bundled together with the game's source into dist/engine.cjs. It imports the game, so it's typechecked the game's way
 // (tsconfig.bundle.json, README "Typecheck boundary"), not by the repo's tsc. Keep it minimal; its exports must match
 // EngineApi (../api.ts), which the typecheck checks at the end of this file.
+
+import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
+import { PlayerOwnedAugmentation } from "../../../../../vendor/bitburner-src/src/Augmentation/PlayerOwnedAugmentation";
 import { getBitNodeMultipliers } from "../../../../../vendor/bitburner-src/src/BitNode/BitNode";
 import { currentNodeMults } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeMultipliers";
 import {
@@ -207,6 +210,20 @@ export function joinFactionWithReputation(faction: string, reputation: number) {
   if (!Object.values(FactionName).includes(faction as FactionName)) throw new RangeError(`no faction ${faction}`);
   joinFaction(Factions[faction as FactionName]);
   Factions[faction as FactionName].playerReputation = reputation;
+}
+
+/**
+ * Gives the player `augmentation`, installed, as if bought and installed in an earlier run: a harness edit for test
+ * scenarios, not something a player can do. Unknown or already installed, it throws.
+ */
+export function giveInstalledAugmentation(augmentation: string) {
+  if (!Object.values(AugmentationName).includes(augmentation as AugmentationName)) {
+    throw new RangeError(`no augmentation ${augmentation}`);
+  }
+  if (Player.augmentations.some((owned) => owned.name === augmentation)) {
+    throw new RangeError(`${augmentation} is installed already`);
+  }
+  Player.augmentations.push(new PlayerOwnedAugmentation(augmentation as AugmentationName));
 }
 
 /** The page the game's Router is on. */

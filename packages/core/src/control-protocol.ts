@@ -5,6 +5,7 @@
  */
 import { isValidDeploymentId } from "./deploy-layout.ts";
 import { type Intent, intentId, MAX_INTENTS, parseIntentRequest } from "./intents.ts";
+import { parseWork, type Work } from "./work.ts";
 
 export const CONTROL_PROTOCOL_VERSION = 1;
 
@@ -66,6 +67,11 @@ export interface DesiredState {
    * purchase rules), and anything the owner queued (the dashboard). An intent that leaves the list isn't tried again.
    */
   intents: Intent[];
+  /**
+   * The work the player does, converged on when it changes and every 30 s (#151), or absent (null): the brain doesn't
+   * manage work, and the Agent leaves whatever work there is alone.
+   */
+  work?: Work | null;
 }
 
 /** The most hosts a desired state names: a whole network is well under it. */
@@ -76,7 +82,7 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * an outdated one: only a state that starts nothing new, given `lastSent`, what that Agent was last sent (null for
  * nothing yet). No intents. The hack loop off goes as it is (stopping our own loops is always safe); on, it stays as
  * last sent, and with nothing sent yet, nothing goes. So the intents' removal gets through a hold whatever the hack
- * loop does.
+ * loop does. No work either: the Agent leaves the work as it is (#151).
  */
 export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
   if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, intents: [] };
@@ -265,6 +271,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       }
       const intents = parseIntents(fields.intents);
       if (!intents.ok) return intents;
+      const work = parseWork(fields.work);
+      if (!work.ok) return { ok: false, reason: `desiredState's ${work.reason}` };
       return {
         ok: true,
         message: {
@@ -272,6 +280,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
           type: "desiredState",
           hackLoop: { enabled, target, hosts: [...hosts] },
           intents: intents.message,
+          // Absent and null are the same: no work managed. Only a work to do is carried.
+          ...(work.message === null ? {} : { work: work.message }),
         },
       };
     }

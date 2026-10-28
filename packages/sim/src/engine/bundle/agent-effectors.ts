@@ -8,7 +8,7 @@ import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentat
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
-import { CityName } from "../../../../../vendor/bitburner-src/src/Enums";
+import { CityName, FactionWorkType } from "../../../../../vendor/bitburner-src/src/Enums";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
 import {
   getFactionAugmentationsFiltered,
@@ -25,6 +25,7 @@ import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Setti
 import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { dialogBoxCreate } from "../../../../../vendor/bitburner-src/src/ui/React/DialogBox";
 import { Page } from "../../../../../vendor/bitburner-src/src/ui/Router";
+import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/src/Work/FactionWork";
 
 /**
  * The global the Agent looks for: core's `AGENT_SIM_EFFECTORS_GLOBAL`. This bundle is typechecked and built as the
@@ -132,6 +133,49 @@ const effectors = {
     return result(
       levelNow() >= level,
       `can't buy ${augmentationName} from ${factionName} yet (the money, the reputation or a prerequisite?)`,
+    );
+  },
+  /**
+   * The work activity's effector (#151): faction work as the faction's page starts it (`Faction/ui/FactionRoot.tsx:59-
+   * 95`: a member, where the faction offers that work and isn't the player's gang; started focused, on the Work page),
+   * then the focus as the overview's "Focus" or the Work page's "Do something else simultaneously" sets it. Already so:
+   * nothing touched. Not named `workForFaction`, which is an NS function.
+   */
+  convergeFactionWork(factionName: string, workType: string, focus: boolean): EffectorResult {
+    const faction = Object.values(FactionName).includes(factionName as FactionName)
+      ? Factions[factionName as FactionName]
+      : undefined;
+    const isThisWork = () =>
+      isFactionWork(Player.currentWork) &&
+      Player.currentWork.factionName === factionName &&
+      Player.currentWork.factionWorkType === workType;
+    if (!isThisWork() && faction?.isMember && !(Player.gang && Player.getGangName() === factionName)) {
+      const info = faction.getInfo();
+      const offered = {
+        [FactionWorkType.hacking]: info.offerHackingWork,
+        [FactionWorkType.field]: info.offerFieldWork,
+        [FactionWorkType.security]: info.offerSecurityWork,
+      }[workType as FactionWorkType];
+      if (offered) {
+        Player.startWork(
+          new FactionWork({ singularity: false, faction: faction.name, factionWorkType: workType as FactionWorkType }),
+        );
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      }
+    }
+    if (isThisWork() && faction !== undefined && Player.focus !== focus) {
+      if (focus) {
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      } else {
+        // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
+        Router.toPage(Page.Faction, { faction });
+      }
+    }
+    return result(
+      isThisWork() && Player.focus === focus,
+      `not ${focus ? "focused on" : "doing"} ${workType} work for ${factionName} (is it joined, and does it offer it?)`,
     );
   },
 };

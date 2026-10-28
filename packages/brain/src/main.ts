@@ -134,6 +134,7 @@ try {
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
         intents: desiredState.intentsView(),
+        work: desiredState.workView(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -161,6 +162,12 @@ try {
       const cancelled = desiredState.cancelManualIntent(id);
       if (cancelled) log(`intent ${id} cancelled from the dashboard`);
       return cancelled;
+    },
+    setWork: (request) => {
+      const set = desiredState.setWork(request);
+      if (set.ok)
+        log(`work ${request === null ? "no longer managed" : `set to ${JSON.stringify(request)}`} from the dashboard`);
+      return set;
     },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });
