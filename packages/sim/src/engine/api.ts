@@ -62,6 +62,8 @@ export interface EngineApi {
   setMoney(money: number): void;
   /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
   joinFactionWithReputation(faction: string, reputation: number): void;
+  /** Gives the player `augmentation`, installed, unpaid. A harness edit, for test scenarios (#151). */
+  giveInstalledAugmentation(augmentation: string): void;
   /** The page the game's Router is on. */
   page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
@@ -140,6 +142,7 @@ const API_FUNCTIONS = {
   setHomeRam: true,
   setMoney: true,
   joinFactionWithReputation: true,
+  giveInstalledAugmentation: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

@@ -441,6 +441,9 @@ test("faction work (#151): started focused on the real page, refocused after the
   await expect(workPageShown(page)()).resolves.toBe(false);
   await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
 
+  // Focused again, not started again: a restart would have raised the "You worked for…" alert (`Work/FactionWork.tsx`).
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You worked for"))).toEqual([]);
+
   // A travel while focused: the Work page hides the sidebar, so the travel unfocuses, flies, and focuses again.
   await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
   await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Aevum", {
@@ -455,6 +458,29 @@ test("faction work (#151): started focused on the real page, refocused after the
   await setWork(ports.dashboardPort, null);
   await advanceGameTime(page, 35_000);
   await expect(workPageShown(page)()).resolves.toBe(true);
+});
+
+test("faction work unfocused (#151): with the Neuroreceptor Management Implant installed, started then left unfocused, not restarted", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: async (sim) => {
+      await inCyberSec(sim);
+      await sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant");
+    },
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  // Working, unfocused: the overview says so, the Work page isn't open, and the page is on the Terminal.
+  await expect(page.locator("p", { hasText: /^Working for CyberSec$/ }).count()).resolves.toBe(1);
+  await expect(workPageShown(page)()).resolves.toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  // Seen as converged from the overview from then on: no restart, so no "You worked for…" alert.
+  await advanceGameTime(page, 35_000);
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You worked for"))).toEqual([]);
 });
 
 test("faction work a faction doesn't offer (#151): not converged, with the page's reason, and the page left on the Terminal", async () => {

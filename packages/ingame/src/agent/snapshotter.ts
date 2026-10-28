@@ -54,7 +54,7 @@ export function createSnapshotter(
     agentSessionId,
     workerRunner,
     intentOutcomes,
-    workOutcome = () => null,
+    workOutcome,
     dialogReport,
   }: {
     deploymentId: string;
@@ -63,7 +63,7 @@ export function createSnapshotter(
     /** How the intents went (#141), for the fast snapshot. */
     intentOutcomes: () => IntentOutcome[];
     /** How the work went (#151), for the fast snapshot: null while the brain wants none. */
-    workOutcome?: () => WorkOutcome | null;
+    workOutcome: () => WorkOutcome | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
   },

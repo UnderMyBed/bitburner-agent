@@ -44,15 +44,19 @@ export const factionRowButtonXpath = (section: string, faction: string, label: s
   `//span[${hasClass(section)}]//div[${hasClass("MuiPaper-root")} and .//span[normalize-space()=${xpathString(faction)}]]` +
   `//button[normalize-space()=${xpathString(label)}]`;
 
+/** The Work page's button that unfocuses the player. */
+const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
+
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
 function reactPropsOf(element: Element): Record<string, unknown> | null {
   const key = Object.keys(element).find((each) => each.startsWith("__reactProps"));
   return key ? ((element as unknown as Record<string, Record<string, unknown>>)[key] ?? null) : null;
 }
 
-/** A React fiber, as far as this code reads one: its hooks' state, and the fiber above it. */
+/** A React fiber, as far as this code reads one: its hooks' state, its props, and the fiber above it. */
 export interface ReactFiber {
   memoizedState: unknown;
+  memoizedProps?: unknown;
   return: ReactFiber | null;
 }
 
@@ -60,6 +64,31 @@ export interface ReactFiber {
 export function reactFiberOf(element: Element): ReactFiber | null {
   const key = Object.keys(element).find((each) => each.startsWith("__reactFiber"));
   return key ? ((element as unknown as Record<string, ReactFiber>)[key] ?? null) : null;
+}
+
+/**
+ * The props of the nearest component above `element` (itself included) that has a prop named `propName`, or null. For
+ * what a component holds but doesn't render, such as a closed tooltip's title (#151).
+ */
+export function reactPropsAbove(element: Element, propName: string): Record<string, unknown> | null {
+  for (let fiber = reactFiberOf(element); fiber !== null; fiber = fiber.return) {
+    const props = fiber.memoizedProps;
+    if (typeof props === "object" && props !== null && propName in props) return props as Record<string, unknown>;
+  }
+  return null;
+}
+
+/** The text a React node would render: strings and numbers, through elements' children, whitespace collapsed. */
+export function reactText(node: unknown): string {
+  const collect = (each: unknown): string => {
+    if (typeof each === "string" || typeof each === "number") return String(each);
+    if (Array.isArray(each)) return each.map(collect).join("");
+    if (typeof each === "object" && each !== null && "props" in each) {
+      return collect((each as { props: { children?: unknown } }).props.children);
+    }
+    return "";
+  };
+  return collect(node).replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -105,6 +134,14 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     await onClick({ isTrusted: true, preventDefault: () => {}, stopPropagation: () => {} });
     await letRender();
     return null;
+  }
+
+  /** Clicks the element, `what`, if it's in the page now; `problem` is null unless it was there and couldn't be. */
+  async function clickIfThereNow(xpath: string, what: string): Promise<{ clicked: boolean; problem: string | null }> {
+    const element = findElement(xpath);
+    if (!element) return { clicked: false, problem: null };
+    const problem = await click(element, what);
+    return { clicked: problem === null, problem };
   }
 
   /** Waits for the element, `what` (named for the problem), and clicks it. */
@@ -164,12 +201,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
      * Clicks the element, `what`, if it's in the page now: for a step the game may skip, such as a confirmation the
      * player's Options turn off. `problem` is null unless it was there and couldn't be clicked.
      */
-    async clickIfThere(xpath: string, what: string): Promise<{ clicked: boolean; problem: string | null }> {
-      const element = findElement(xpath);
-      if (!element) return { clicked: false, problem: null };
-      const problem = await click(element, what);
-      return { clicked: problem === null, problem };
-    },
+    clickIfThere: (xpath: string, what: string) => clickIfThereNow(xpath, what),
 
     /** Lets the page render, without passing the steps' end: for a step that waits on the game. */
     waitARender: () => ns.asleep(Math.max(0, Math.min(POLL_MS, timeLeftMs(stepsEndMs)))),
@@ -206,6 +238,9 @@ export function openGamePage(ns: NS, deadlineMs: number) {
         ))
       );
     },
+
+    /** Unfocuses the player from the Work page (`ui/WorkInProgressRoot.tsx:533-534`): clicked only if it's there. */
+    unfocusWork: () => clickIfThereNow(UNFOCUS_XPATH, 'the Work page\'s "Do something else simultaneously"'),
 
     /** Back to the Terminal, with the time kept for it: the last step of anything that moved the page. */
     returnToTerminal: () => openSidebarPage("Terminal", deadlineMs),

@@ -741,8 +741,20 @@ describe("work (#151, owner decision 37)", () => {
     const controller = new DesiredStateController({ channel, store });
     const connection = connectAgent();
     send(connection, "static", network);
+    send(connection, "slow", slowData(1));
     return { controller, connection };
   }
+
+  test("before the connected Agent's slow snapshot, no work goes: the focus isn't known yet (the implant)", () => {
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    controller.setWork(HACKING_FOR_CYBERSEC);
+    const connection = connectAgent();
+    send(connection, "static", network);
+    expect(sentWork(connection)).toBeUndefined();
+    send(connection, "slow", slowData(1));
+    expect(sentWork(connection)).toMatchObject({ faction: "CyberSec", focus: true });
+  });
 
   test("none set: none sent, so the Agent leaves the game's work alone", () => {
     const { controller, connection } = connectedWithLoopOff();

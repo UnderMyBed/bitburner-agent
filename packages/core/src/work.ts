@@ -1,9 +1,10 @@
 /**
- * Work as an activity (#151, architecture D2's player focus, owner decision 37): what the player works at, as the
- * brain wants it, converged on every round by the Agent. Faction work first; company work, crime and classes follow.
- * Shared by the in-game code and the brain; plain literals, as in factions.ts.
+ * Work as an activity (#151, architecture D2's player focus, owner decision 37): what the player works at, as the brain
+ * wants it, converged on by the Agent when it changes and every 30 s. Faction work first; company work, crime and
+ * classes follow. Shared by the in-game code and the brain; plain literals, as in factions.ts.
  */
 import { FACTION_NAMES } from "./factions.ts";
+import type { EffectorBackend } from "./intents.ts";
 
 /** A faction's kinds of work, as the game names them (`Enums.ts`, `FactionWorkType`). */
 export const FACTION_WORK_TYPES = ["hacking", "field", "security"] as const;
@@ -19,13 +20,13 @@ export interface WorkOutcome {
   /** Why not, or a problem on the way; null for none. */
   problem: string | null;
   /** The backend of the last look (#145), or null before the first. */
-  backend: "sim" | "singularity" | "ui" | null;
+  backend: EffectorBackend | null;
 }
 
 /** The augmentation that makes focus irrelevant (decision 37): installed, work goes unfocused. */
 export const NEURORECEPTOR_MANAGEMENT_IMPLANT = "Neuroreceptor Management Implant";
 
-/** Home worker: starts or refocuses faction work through the game's page (#151). */
+/** Home worker: converges the player's work on faction work through the game's page (#151), focus included. */
 export const FACTION_WORK_WORKER_NAME = "faction-work.js";
 
 type Parsed<Value> = { ok: true; message: Value } | { ok: false; reason: string };

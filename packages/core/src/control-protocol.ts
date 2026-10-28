@@ -68,8 +68,8 @@ export interface DesiredState {
    */
   intents: Intent[];
   /**
-   * The work the player does, converged on every round (#151), or absent (null): the brain doesn't manage work, and
-   * the Agent leaves whatever work there is alone.
+   * The work the player does, converged on when it changes and every 30 s (#151), or absent (null): the brain doesn't
+   * manage work, and the Agent leaves whatever work there is alone.
    */
   work?: Work | null;
 }

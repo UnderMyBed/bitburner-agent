@@ -1,5 +1,5 @@
 // The diagnostics' harness edits (#145, #149): state a test sets up that no player could, checked in the game's own
-// save. `setMoney` and `joinFactionWithReputation`.
+// save. `setMoney`, `joinFactionWithReputation` and `giveInstalledAugmentation`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -31,4 +31,17 @@ test("joinFactionWithReputation and setMoney refuse what isn't a faction, or isn
   await expect(sim.diagnostics.joinFactionWithReputation("CyberSec", Number.NaN)).rejects.toThrow(/reputation/);
   await expect(sim.diagnostics.setMoney(-1)).rejects.toThrow(/money/);
   expect((await saved(sim)).player.factions).toEqual([]);
+});
+
+test("giveInstalledAugmentation: installed, as the game saves it, without its price; unknown or twice is refused", async () => {
+  const sim = await newGame();
+  const moneyBefore = (await saved(sim)).player.money;
+  await sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant");
+  const { player } = await saved(sim);
+  expect(JSON.stringify(player.augmentations)).toContain("Neuroreceptor Management Implant");
+  expect(player.money).toBe(moneyBefore);
+  await expect(sim.diagnostics.giveInstalledAugmentation("Gibson Implant")).rejects.toThrow(/no augmentation/);
+  await expect(sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant")).rejects.toThrow(
+    /installed already/,
+  );
 });

@@ -194,6 +194,10 @@ async function start(options: HostOptions): Promise<Host> {
         throw new RangeError(`reputation must be finite and 0 or more, not ${reputation}`);
       engine.joinFactionWithReputation(faction, reputation);
     },
+    "diagnostics.giveInstalledAugmentation": ({ augmentation }) => {
+      booted();
+      engine.giveInstalledAugmentation(augmentation);
+    },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
     "diagnostics.heapLimit": () => heapLimit(),

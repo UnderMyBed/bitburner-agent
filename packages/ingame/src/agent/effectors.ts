@@ -1,11 +1,11 @@
-// The Effectors (#141, #145, #147, #149, architecture §5.6): for each action an intent can name, how each backend
-// does it.
+// The Effectors (#141, #145, #147, #149, #151, architecture §5.6): for each action an intent can name, and for the
+// work activity's work, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
 // - `ui`: a home worker that drives the game's page, before Singularity.
-// The brain never knows which backend does an intent. The simulator's effectors aren't named like NS functions: the
-// game charges RAM for such names in in-game code.
+// The brain never knows which backend does an intent or the work. The simulator's effectors aren't named like NS
+// functions: the game charges RAM for such names in in-game code.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   BUY_AUGMENTATION_WORKER_NAME,

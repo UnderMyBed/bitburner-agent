@@ -5,8 +5,8 @@
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
+  EFFECTOR_BACKENDS,
   type FastSnapshotData,
-  INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,
   intentId,
@@ -265,7 +265,7 @@ export class DesiredStateController {
           (fields.problem === null || typeof fields.problem === "string") &&
           (fields.backend === undefined ||
             fields.backend === null ||
-            (INTENT_BACKENDS as readonly string[]).includes(fields.backend))
+            (EFFECTOR_BACKENDS as readonly string[]).includes(fields.backend))
         );
       })
       .map(({ id, done, tries, problem, backend }) => ({ id, done, tries, problem, backend: backend ?? null }));
@@ -376,8 +376,9 @@ export class DesiredStateController {
       ...manual.filter((each) => this.#gates.isReleased(each.id)),
       ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
     ];
-    // The owner's work, its focus from the latest slow snapshot (decision 37); none: not managed.
-    const work = this.workView().desired;
+    // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says
+    // whether the implant is in, so the focus never flips on a connect. None set: not managed.
+    const work = this.#slowData === null ? null : this.workView().desired;
     const withWork = work === null ? {} : { work };
     if (!hackLoopEnabled) {
       this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...withWork };

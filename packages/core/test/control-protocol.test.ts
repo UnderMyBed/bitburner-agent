@@ -237,5 +237,8 @@ describe("work (#151)", () => {
     const work = { kind: "faction" as const, faction: "CyberSec", workType: "hacking" as const, focus: true };
     const desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [], work };
     expect(desiredStateWhileHolding(desired, null)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
+    // The hack loop on, with a last state that had work: the loop as last sent, still no work.
+    const loopOn = { ...desired, hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles"] } };
+    expect(desiredStateWhileHolding(loopOn, loopOn)).toEqual({ hackLoop: loopOn.hackLoop, intents: [] });
   });
 });

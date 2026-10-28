@@ -1,6 +1,7 @@
 // The work the owner wants (#151, owner decision 37): set on the dashboard, kept in the store so it survives restarts
 // of the brain, and sent in the desired state as `work`, its focus worked out here. Choosing work is M4's planner.
 import {
+  EFFECTOR_BACKENDS,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
   parseWork,
   type SlowSnapshotData,
@@ -16,7 +17,10 @@ export type OwnersWork = Omit<Work, "focus">;
 
 /** What the dashboard shows of the work. */
 export interface WorkView {
-  /** What the brain sends, focus included; null while no work is managed. */
+  /**
+   * The owner's work, focus included, as the brain sends it once it has the connected Agent's slow snapshot (and not
+   * while it holds); null while no work is managed.
+   */
   desired: Work | null;
   /** How it went, from the connected Agent's latest fast snapshot, or null. */
   outcome: WorkOutcome | null;
@@ -55,7 +59,7 @@ export function writeOwnersWork(store: TelemetryStore, work: OwnersWork | null):
 
 /**
  * Whether work goes focused (decision 37): yes, for full gains, unless the Neuroreceptor Management Implant is
- * installed, which gives them unfocused too. Before the slow snapshot says, focused.
+ * installed, which gives them unfocused too. No work is sent before the slow snapshot says; the view shows focused.
  */
 export function workFocus(slowData: SlowSnapshotData | null): boolean {
   const installed = slowData?.resetInfo?.ownedAugs;
@@ -68,7 +72,7 @@ export function reportedWorkOutcome(outcome: unknown): WorkOutcome | null {
   if (
     typeof fields?.converged !== "boolean" ||
     !(fields.problem === null || typeof fields.problem === "string") ||
-    ![null, "sim", "singularity", "ui"].includes(fields.backend as string | null)
+    !(fields.backend === null || (EFFECTOR_BACKENDS as readonly string[]).includes(fields.backend as string))
   ) {
     return null;
   }

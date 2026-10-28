@@ -382,4 +382,7 @@ test("work (singularity, #151): with SF4.3, started focused and unfocused throug
   expect(await savedWork(fresh)).toEqual({ faction: "Sector-12", workType: "security", focus: true });
   await workedAt(fresh, sectorWork("security", false));
   expect(await savedWork(fresh)).toEqual({ faction: "Sector-12", workType: "security", focus: false });
+  // Another type, focused: `workForFaction` switches it.
+  await workedAt(fresh, sectorWork("field", true));
+  expect(await savedWork(fresh)).toEqual({ faction: "Sector-12", workType: "field", focus: true });
 });

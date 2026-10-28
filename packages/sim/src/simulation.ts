@@ -237,6 +237,9 @@ export class Simulation {
     /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
     joinFactionWithReputation: (faction: string, reputation: number) =>
       this.rpc.call("diagnostics.joinFactionWithReputation", { faction, reputation }),
+    /** Gives the player an augmentation, installed and unpaid. A harness edit, for test scenarios (#151). */
+    giveInstalledAugmentation: (augmentation: string) =>
+      this.rpc.call("diagnostics.giveInstalledAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     /** The host's V8 heap in use, in bytes, after a full garbage collection. */

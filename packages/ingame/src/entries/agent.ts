@@ -2,8 +2,8 @@
 // the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff. While
 // welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), converges the hack loop on the brain's
 // desired state when that's due (../agent/hack-loop.ts, #134), does the brain's intents through their effectors
-// (../agent/intent-runner.ts, #141), and sleeps in between. Before the hack loop and the intents, it handles the game's
-// routine dialogs (../agent/dialog-watcher.ts, #143).
+// (../agent/intent-runner.ts, #141), converges the work last (../agent/work.ts, #151), and sleeps in between. Before
+// the hack loop, the intents and the work, it handles the game's routine dialogs (../agent/dialog-watcher.ts, #143).
 //
 // Two rules make it safe:
 // - Socket handlers never call `ns`. While the script awaits `ns.sleep` (between rounds), the game kills it for any
@@ -98,14 +98,14 @@ export async function main(ns: NS): Promise<void> {
     singularityAvailable: () => singularityAvailable(),
   });
   const intentRunner = createIntentRunner(ns, { effectorRunner });
-  const work = createWorkActivity(ns, { effectorRunner });
+  const workActivity = createWorkActivity(ns, { effectorRunner });
   const dialogWatcher = createDialogWatcher(ns);
   const snapshotter = createSnapshotter(ns, {
     deploymentId,
     agentSessionId,
     workerRunner,
     intentOutcomes: () => intentRunner.outcomes(),
-    workOutcome: () => work.outcome(),
+    workOutcome: () => workActivity.outcome(),
     dialogReport: () => dialogWatcher.takeReport(),
   });
   singularityAvailable = () => snapshotter.singularityAvailable();
@@ -157,7 +157,7 @@ export async function main(ns: NS): Promise<void> {
         await hackLoop.convergeIfDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         await intentRunner.runDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         // Last, after the intents' page work: it leaves the work as the brain wants it, focused or not (#151).
-        await work.convergeIfDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
+        await workActivity.convergeIfDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         // Clamped, so a clock that steps back can't stretch the sleep.
         const untilNextRoundMs = roundStartedAtMs + SNAPSHOT_ROUND_MS - Date.now();
         await ns.sleep(Math.min(Math.max(0, untilNextRoundMs), SNAPSHOT_ROUND_MS));
@@ -188,7 +188,7 @@ export async function main(ns: NS): Promise<void> {
         } else if (event.message.type === "desiredState") {
           hackLoop.desire(event.message.hackLoop);
           intentRunner.desire(event.message.intents);
-          work.desire(event.message.work ?? null);
+          workActivity.desire(event.message.work ?? null);
         }
       } else {
         closeCode = event.code;
@@ -198,7 +198,7 @@ export async function main(ns: NS): Promise<void> {
     // Instructions come only from the brain it's connected to: the next one sends its own.
     hackLoop.forget();
     intentRunner.forget();
-    work.forget();
+    workActivity.forget();
 
     // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one).
     if (closeCode === CONTROL_CLOSE_CODES.replaced) {

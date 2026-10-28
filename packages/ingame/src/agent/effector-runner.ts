@@ -4,7 +4,7 @@
 //   action's Singularity worker fits home beside the Agent, however empty home is (the game charges it 4× or 16× with
 //   less than SF4.3); else the page. Looked at every try, so a home upgrade brings Singularity back.
 // - A worker gives up a little before the round ends, so its report is in before the Agent stops waiting.
-import { deployedFilePath, type EffectorReport } from "@bitburner-agent/core";
+import { deployedFilePath, type EffectorBackend, type EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { type Effector, simEffectors } from "./effectors.ts";
 import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
@@ -12,12 +12,10 @@ import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 /** How long before the round ends the worker gives up, to report and exit in time. */
 const WORKER_MARGIN_MS = 200;
 
-export type Backend = "sim" | "singularity" | "ui";
-
 /** One try: its backend, and the effector's report, or why there's none (the worker didn't run, or didn't report). */
-export type EffectorRun = { backend: Backend } & (
-  | { report: EffectorReport; whyNoReport: null }
-  | { report: null; whyNoReport: string }
+export type EffectorRun = { backend: EffectorBackend } & (
+  | { report: EffectorReport; noReportReason: null }
+  | { report: null; noReportReason: string }
 );
 
 export function createEffectorRunner(
@@ -60,7 +58,7 @@ export function createEffectorRunner(
     /** Runs `effector` once, through the backend picked now, within `deadlineMs`. */
     async run(effector: Effector, deadlineMs: number): Promise<EffectorRun> {
       const sim = simEffectors();
-      if (sim !== null) return { backend: "sim", report: effector.sim(sim), whyNoReport: null };
+      if (sim !== null) return { backend: "sim", report: effector.sim(sim), noReportReason: null };
       const backend = useSingularityFor(effector.singularity.workerName, effector.description) ? "singularity" : "ui";
       const { workerName, workerArguments } = backend === "singularity" ? effector.singularity : effector.ui;
       const workerFile = deployedFilePath(deploymentId, workerName);
@@ -70,9 +68,9 @@ export function createEffectorRunner(
         deadlineMs,
       );
       if (workerRun.outcome === "reported") {
-        return { backend, report: workerRun.report.data as EffectorReport, whyNoReport: null };
+        return { backend, report: workerRun.report.data as EffectorReport, noReportReason: null };
       }
-      return { backend, report: null, whyNoReport: whyNoReport(workerRun, workerFile) };
+      return { backend, report: null, noReportReason: whyNoReport(workerRun, workerFile) };
     },
   };
 }

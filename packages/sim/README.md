@@ -102,6 +102,7 @@ await sim.close();
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
   - `setMoney(money)`: sets the player's money (finite, 0 or more). A harness edit, for test scenarios (#145).
+  - `giveInstalledAugmentation(augmentation)`: gives the player an augmentation, installed and unpaid (one of the game's names, not already installed). A harness edit, for test scenarios (#151).
   - `joinFactionWithReputation(faction, reputation)`: makes the player a member of the faction (the game's own `joinFaction`, which bans its enemies) with that reputation (finite, 0 or more). A harness edit, for test scenarios (#149).
   - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it. Measuring doesn't change the game ([Determinism](#determinism)).
   - `heapLimit()`: the process's V8 heap limit, in bytes: `maxHeapMb` plus room for the young generation, or Node's default

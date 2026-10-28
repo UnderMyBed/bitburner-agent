@@ -39,7 +39,7 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
     entry.outcome.tries += 1;
     const { report } = tried;
     if (report === null) {
-      entry.outcome.problem = tried.whyNoReport;
+      entry.outcome.problem = tried.noReportReason;
       entry.logChange(`${entry.outcome.problem}; trying again next round`);
       return;
     }

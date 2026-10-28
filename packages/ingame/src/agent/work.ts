@@ -13,9 +13,9 @@ import { workEffectorFor } from "./effectors.ts";
 import { SNAPSHOT_ROUND_MS } from "./snapshotter.ts";
 
 /** Rounds between one convergence and the next while nothing changes: 30 s. */
-const ROUNDS_BETWEEN = 15;
+const WORK_ROUNDS_BETWEEN = 15;
 /** The least of the round worth starting with: the page takes a few renders. Less waits a round. */
-const MIN_TIME_MS = 1_000;
+const MIN_WORKER_TIME_MS = 1_000;
 
 export function createWorkActivity(ns: NS, { effectorRunner }: { effectorRunner: EffectorRunner }) {
   let desired: Work | null = null;
@@ -42,23 +42,23 @@ export function createWorkActivity(ns: NS, { effectorRunner }: { effectorRunner:
     async convergeIfDue(deadlineMs: number): Promise<void> {
       if (desired === null || outcome === null) return;
       if (!schedule.takeRound()) return;
-      if (deadlineMs - Date.now() < MIN_TIME_MS) return;
+      if (deadlineMs - Date.now() < MIN_WORKER_TIME_MS) return;
       const tried = await effectorRunner.run(workEffectorFor(desired), deadlineMs);
       outcome.backend = tried.backend;
       if (tried.report === null) {
         outcome.converged = false;
-        outcome.problem = tried.whyNoReport;
-        logChange(`${tried.whyNoReport}; trying again next round`);
+        outcome.problem = tried.noReportReason;
+        logChange(`${tried.noReportReason}; trying again next round`);
         return;
       }
       outcome.converged = tried.report.done;
       outcome.problem = tried.report.problem;
-      schedule.dueAfter(ROUNDS_BETWEEN);
+      schedule.dueAfter(WORK_ROUNDS_BETWEEN);
       const problem = tried.report.problem === null ? "" : `: ${tried.report.problem}`;
       logChange(
         tried.report.done
           ? `converged${problem}`
-          : `not converged${problem}; trying again in ${(ROUNDS_BETWEEN * SNAPSHOT_ROUND_MS) / 1000} s`,
+          : `not converged${problem}; trying again in ${(WORK_ROUNDS_BETWEEN * SNAPSHOT_ROUND_MS) / 1000} s`,
       );
     },
 

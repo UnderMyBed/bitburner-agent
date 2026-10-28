@@ -67,9 +67,10 @@ export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } fro
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
   type ActionName,
+  EFFECTOR_BACKENDS,
+  type EffectorBackend,
   type EffectorReport,
   INTENT_ACTIONS,
-  INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,
