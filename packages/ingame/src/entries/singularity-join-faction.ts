@@ -5,11 +5,8 @@
 // `joinFaction` 3 at SF4.3 or in BN4 (ram-budget.json): 5.1 GB, over the fresh-save rule, which no Singularity worker
 // runs under; the Agent uses the page where it doesn't fit home.
 import type { EffectorReport } from "@bitburner-agent/core";
-import type { NS } from "../ns.ts";
+import type { FactionName, NS } from "../ns.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
-
-/** The game's faction names, as the definitions type `joinFaction`'s argument. */
-type FactionName = Parameters<NS["singularity"]["joinFaction"]>[0];
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");

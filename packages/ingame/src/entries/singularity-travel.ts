@@ -3,11 +3,8 @@
 // game first, as the `ui` backend's worker does: the player already in the city is done without calling anything. RAM:
 // `getPlayer` 0.5 + `travelToCity` 2 at SF4.3 or in BN4 (ram-budget.json); the game charges 4× or 16× with less of SF4.
 import type { EffectorReport } from "@bitburner-agent/core";
-import type { NS } from "../ns.ts";
+import type { CityName, NS } from "../ns.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
-
-/** The game's city names, as the definitions type `travelToCity`'s argument. */
-type CityName = Parameters<NS["singularity"]["travelToCity"]>[0];
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");

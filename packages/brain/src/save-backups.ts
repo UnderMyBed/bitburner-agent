@@ -1,8 +1,8 @@
-// Rotating save backups (#92, architecture §6; R8's backup before an irreversible intent, #147): the
-// game's save, taken over the Remote File API on every connection and every interval, validated, filed under its
-// environment, and rotated. Insurance against a bug or a corrupted save, and a source of real starting states for the
-// simulator: a backup is the game's save at that moment in the format Steam writes to bitburnerSave_*.json.gz, which the
-// simulator loads as a save fixture and the game's Options → Import Game accepts.
+// Rotating save backups (#92, architecture §6; R8's backup before an irreversible intent, #147): the game's save, taken
+// over the Remote File API on every connection and every interval, validated, filed under its environment, and rotated.
+// Insurance against a bug or a corrupted save, and a source of real starting states for the simulator: a backup is the
+// game's save at that moment in the format Steam writes to bitburnerSave_*.json.gz, which the simulator loads as a save
+// fixture and the game's Options → Import Game accepts.
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";

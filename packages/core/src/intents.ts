@@ -19,6 +19,17 @@ export type IntentRequest =
   | { action: "travel"; args: { city: string } }
   | { action: "joinFaction"; args: { faction: string } };
 
+/** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
+const EVERY_ACTION: Record<ActionName, true> = {
+  travel: true,
+  buyTor: true,
+  buyProgram: true,
+  upgradeHomeRam: true,
+  joinFaction: true,
+};
+/** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
+export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
+
 /** An intent: an action, its arguments, and the id made from them (`intentId`). */
 export type Intent = IntentRequest & { id: string };
 export type ActionName = IntentRequest["action"];

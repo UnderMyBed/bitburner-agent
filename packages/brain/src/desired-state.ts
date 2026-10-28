@@ -5,13 +5,11 @@
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
-  FACTION_ENEMIES,
   type FastSnapshotData,
   INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,
   intentId,
-  isIrreversibleIntent,
   MAX_INTENTS,
   type MediumSnapshotData,
   parseIntentRequest,
@@ -20,14 +18,11 @@ import {
 } from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
+import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
 import { readManualIntents, writeManualIntents } from "./manual-intents.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
-import type { SaveBackupEvent } from "./save-backups.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
-
-/** Consecutive medium snapshots an irreversible intent's guard must hold on before its backup (R8). */
-const GUARD_SNAPSHOTS = 2;
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -71,36 +66,11 @@ export interface IntentView {
   source: "manual" | "purchase";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
-  /** What an irreversible intent waits for before it's sent (#147), or null once it's sent, or for any other. */
+  /**
+   * Why an irreversible intent isn't sent yet, to follow "not sent: " (#147), or null once it's sent, or for any
+   * other.
+   */
   waitingFor: string | null;
-}
-
-/** What the controller needs of the brain's save backups: one now, and its own event (`SaveBackups.backupNow`). */
-export interface BackupsBeforeIrreversibleIntents {
-  backupNow(): Promise<SaveBackupEvent>;
-}
-
-/** Where an irreversible intent is on its way out (#147). Forgotten with the connected Agent's snapshots. */
-interface IrreversibleGate {
-  /** Consecutive medium snapshots, since it was queued, on which its guard held. */
-  guardHeldSnapshots: number;
-  /** Why the guard failed on the latest medium snapshot, or null. */
-  guardFailure: string | null;
-  /** Its backup: none asked for yet, being taken, or taken (then it's sent). */
-  backup: "none" | "taking" | "taken";
-  /** Why the last backup failed, until the next is asked for, or null. */
-  backupFailure: string | null;
-}
-
-/**
- * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2). Joining a faction: none of its enemies is
- * joined (the game would refuse it then, `Faction/FactionHelpers.tsx:44-51`).
- */
-function guardFailure(intent: Intent, medium: MediumSnapshotData): string | null {
-  if (intent.action !== "joinFaction") return null;
-  const joined = Array.isArray(medium.player.factions) ? (medium.player.factions as string[]) : [];
-  const joinedEnemy = (FACTION_ENEMIES[intent.args.faction] ?? []).find((enemy) => joined.includes(enemy));
-  return joinedEnemy === undefined ? null : `${intent.args.faction}'s enemy ${joinedEnemy} is joined`;
 }
 
 /** A manual intent added, or why it wasn't. */
@@ -120,10 +90,9 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - Intents go in order: the owner's manual queue first, as added, then the purchase. A manual intent leaves the queue
  *   once the connected Agent reports it done: the game's state can change again (a travel there and back), so a
  *   snapshot can't say it was done.
- * - An irreversible intent (R8, #147) goes out only once its guard has held on two consecutive medium snapshots from
- *   the connected Agent, received after it was queued, and a save backup asked for then has succeeded. A failed guard
- *   or backup starts the count again; a disconnect, a new Agent or a restarted brain forgets it, the safe way. Once
- *   out, it stays out until it's done.
+ * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
+ *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
+ *   intents after it go on without it: a held join doesn't hold up a travel queued later.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -142,10 +111,8 @@ export class DesiredStateController {
   #homeRamPlan: HomeRamPlan | null = null;
   /** Why each activity's purchase isn't asked for now, or null: its plan's reason, or the cheaper purchase first. */
   #waitingFor: { programs: string | null; homeRam: string | null } = { programs: null, homeRam: null };
-  /** The brain's save backups, or null for a brain that takes none (no irreversible intent goes out then). */
-  readonly #saveBackups: BackupsBeforeIrreversibleIntents | null;
-  /** Each irreversible intent queued and not yet done, by id. */
-  #gates = new Map<string, IrreversibleGate>();
+  /** Each irreversible intent queued and not yet done (none goes out with a brain that takes no save backups). */
+  readonly #gates: IrreversibleIntentGates;
 
   constructor({
     channel,
@@ -158,15 +125,15 @@ export class DesiredStateController {
   }) {
     this.#channel = channel;
     this.#store = store;
-    this.#saveBackups = saveBackups;
+    this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
         this.#staticData = null;
         this.#mediumData = null;
         this.#slowData = null;
         this.#fastData = null;
-        // Counted on the last Agent's snapshots: a backup still being taken for them releases nothing.
-        this.#gates.clear();
+        // Counted on the last Agent's snapshots: every gate starts again.
+        this.#gates.forget();
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' outcomes: for the views, and the manual intents done. Anything else changes nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
@@ -175,7 +142,7 @@ export class DesiredStateController {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
-        this.#advanceGates(this.#mediumData);
+        this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store));
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
       } else {
@@ -248,56 +215,8 @@ export class DesiredStateController {
     ].map((view) => ({
       ...view,
       outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null,
-      waitingFor: this.#waitingForOf(view.id),
+      waitingFor: this.#gates.waitingFor(view.id),
     }));
-  }
-
-  /** What the irreversible intent `id` waits for before it's sent, or null. */
-  #waitingForOf(id: string): string | null {
-    const gate = this.#gates.get(id);
-    if (gate === undefined || gate.backup === "taken") return null;
-    if (gate.guardFailure !== null) return gate.guardFailure;
-    if (gate.backup === "taking") return "a save backup first";
-    if (gate.guardHeldSnapshots >= GUARD_SNAPSHOTS) return "a save backup first, which this brain doesn't take";
-    const count = `the guard to hold on ${GUARD_SNAPSHOTS} consecutive medium snapshots (${gate.guardHeldSnapshots} so far)`;
-    return gate.backupFailure === null ? count : `${count}, after the save backup failed: ${gate.backupFailure}`;
-  }
-
-  /** A medium snapshot from the connected Agent: each irreversible intent's guard, and its backup once it's held. */
-  #advanceGates(medium: MediumSnapshotData): void {
-    for (const [id, gate] of this.#gates) {
-      if (gate.backup === "taken") continue;
-      const intent = readManualIntents(this.#store).find((each) => each.id === id);
-      if (intent === undefined) continue;
-      gate.guardFailure = guardFailure(intent, medium);
-      if (gate.guardFailure !== null) {
-        // Starts again: a backup being taken now releases nothing.
-        gate.guardHeldSnapshots = 0;
-        gate.backup = "none";
-        continue;
-      }
-      gate.guardHeldSnapshots += 1;
-      if (gate.guardHeldSnapshots >= GUARD_SNAPSHOTS && gate.backup === "none") this.#takeBackup(id, gate);
-    }
-  }
-
-  /** Asks for the backup before `gate`'s intent; on success it's sent, on failure the count starts again. */
-  #takeBackup(id: string, gate: IrreversibleGate): void {
-    if (this.#saveBackups === null) return;
-    gate.backup = "taking";
-    gate.backupFailure = null;
-    void this.#saveBackups.backupNow().then((event) => {
-      // Forgotten (a disconnect, the intent gone) or started again (its guard failed) since: nothing to release.
-      if (this.#gates.get(id) !== gate || gate.backup !== "taking") return;
-      if ("file" in event) {
-        gate.backup = "taken";
-      } else {
-        gate.backup = "none";
-        gate.guardHeldSnapshots = 0;
-        gate.backupFailure = event.failure;
-      }
-      this.#update();
-    });
   }
 
   /**
@@ -421,16 +340,10 @@ export class DesiredStateController {
     this.#purchase = this.#choosePurchase();
     // The manual queue first; the purchase only if the owner hasn't queued the same.
     const manual = readManualIntents(this.#store);
-    // A gate for each irreversible intent queued, kept while it stays; only those whose backup is taken go out.
-    const irreversibleIds = new Set(manual.filter(isIrreversibleIntent).map((each) => each.id));
-    for (const id of this.#gates.keys()) if (!irreversibleIds.has(id)) this.#gates.delete(id);
-    for (const id of irreversibleIds) {
-      if (!this.#gates.has(id)) {
-        this.#gates.set(id, { guardHeldSnapshots: 0, guardFailure: null, backup: "none", backupFailure: null });
-      }
-    }
+    // An irreversible intent goes only once its gate lets it.
+    this.#gates.sync(manual);
     const intents = [
-      ...manual.filter((each) => (this.#gates.get(each.id)?.backup ?? "taken") === "taken"),
+      ...manual.filter((each) => this.#gates.isReleased(each.id)),
       ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
     ];
     if (!hackLoopEnabled) {

@@ -59,6 +59,7 @@ export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-worker
 export {
   type ActionName,
   type EffectorReport,
+  INTENT_ACTIONS,
   INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,

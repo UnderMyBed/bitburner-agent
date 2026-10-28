@@ -19,7 +19,7 @@ const HACK_LOOP_OFF: DesiredState["hackLoop"] = { enabled: false, target: null, 
 const homeRamOf = (medium: MediumSnapshotData | null) =>
   medium?.servers.find((server) => server.hostname === "home")?.maxRam;
 
-/** The four actions so far, home's RAM upgraded from `homeRam`. In order: the TOR router before a program. */
+/** The four actions of #141, home's RAM upgraded from `homeRam`. In order: the TOR router before a program. */
 const fourActions = (homeRam: number) => [
   intent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } }),
   intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }),
@@ -99,40 +99,44 @@ async function withTwentyMillion(options: { singularity: boolean }) {
   return fresh;
 }
 
+type FreshWithMoney = Awaited<ReturnType<typeof withTwentyMillion>>;
+
 /** The factions joined, as the latest medium snapshot says. */
-const joined = (fresh: Awaited<ReturnType<typeof withTwentyMillion>>) =>
-  (fresh.medium()?.player.factions as string[] | undefined) ?? [];
+const joined = (fresh: FreshWithMoney) => (fresh.medium()?.player.factions as string[] | undefined) ?? [];
 
 /** The Agent's log lines naming `text`. */
-async function agentLogLines(fresh: Awaited<ReturnType<typeof withTwentyMillion>>, text: string) {
+async function agentLogLines(fresh: FreshWithMoney, text: string) {
   const [agent] = (await fresh.simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
   return (await fresh.simulation.logs(agent.pid)).filter((line) => line.includes(text));
 }
 
-/** Queues joining `faction`, and runs until it's sent: when, and the medium snapshots and backups before that. */
-async function joinedThroughTheGate(fresh: Awaited<ReturnType<typeof withTwentyMillion>>, faction: string) {
-  const queuedAtMs = fresh.game.clock.now();
+/**
+ * Queues joining `faction` and runs until the brain sends it, checking it waited: at least two medium snapshots from
+ * the Agent, and a save backup that succeeded, between the queueing and the sending.
+ */
+async function joinedThroughTheGate(fresh: FreshWithMoney, faction: string) {
+  const channelEventsBefore = fresh.brain.channelEvents.length;
+  const backupEventsBefore = fresh.brain.saveBackupEvents.length;
   expect(fresh.controller().addManualIntent({ action: "joinFaction", args: { faction } })).toMatchObject({ ok: true });
   const view = () =>
     fresh
       .controller()
       .intentsView()
       .find((each) => each.id === `joinFaction(${faction})`);
-  expect(view()?.waitingFor).toMatch(/^the guard to hold on 2 consecutive medium snapshots/);
+  expect(view()?.waitingFor).toMatch(/^waiting for the guard to hold on 2 consecutive medium snapshots/);
   await fresh.game.runUntil(() => view()?.waitingFor === null, 60_000);
-  const sentAtMs = fresh.game.clock.now();
-  return { queuedAtMs, sentAtMs };
+  const mediumsBeforeSending = fresh.brain.channelEvents
+    .slice(channelEventsBefore)
+    .filter((event) => event.type === "snapshotReceived" && event.snapshot.tier === "medium").length;
+  expect(mediumsBeforeSending).toBeGreaterThanOrEqual(2);
+  expect(fresh.brain.saveBackupEvents.slice(backupEventsBefore)).toContainEqual(
+    expect.objectContaining({ file: expect.any(String) }),
+  );
 }
-
 test("joining Sector-12 (sim): sent only after two medium snapshots and a save backup, then done; its enemies are held", async () => {
   const fresh = await withTwentyMillion({ singularity: false });
-  const { queuedAtMs, sentAtMs } = await joinedThroughTheGate(fresh, "Sector-12");
-  // A medium snapshot every 10 s: two after the queueing, then the backup.
-  expect(sentAtMs - queuedAtMs).toBeGreaterThanOrEqual(10_000);
-  const backups = fresh.brain.saveBackupEvents.filter((event) => "file" in event && event.atMs >= queuedAtMs);
-  expect(backups.length).toBeGreaterThanOrEqual(1);
-  expect(backups[0]?.atMs).toBeLessThanOrEqual(sentAtMs);
+  await joinedThroughTheGate(fresh, "Sector-12");
   await fresh.game.runUntil(() => joined(fresh).includes("Sector-12"), 15_000);
   // Done, and reported so: the queue drops it.
   expect(await agentLogLines(fresh, "join Sector-12")).toEqual(["agent: join Sector-12 (sim): done"]);
@@ -145,7 +149,7 @@ test("joining Sector-12 (sim): sent only after two medium snapshots and a save b
       .controller()
       .intentsView()
       .find((each) => each.id === "joinFaction(Chongqing)")?.waitingFor,
-  ).toBe("Chongqing's enemy Sector-12 is joined");
+  ).toBe("held: Chongqing's enemy Sector-12 is joined");
 });
 
 test("joining without an invitation (sim): not done, with the reason; a faction with no enemies goes out at once", async () => {

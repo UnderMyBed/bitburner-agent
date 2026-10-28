@@ -4,7 +4,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FastSnapshotData } from "@bitburner-agent/core";
+import { type FastSnapshotData, INTENT_ACTIONS } from "@bitburner-agent/core";
 import { JSDOM } from "jsdom";
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
@@ -526,9 +526,19 @@ describe("the intents (#141)", () => {
   });
 
   test("an irreversible intent not yet sent (#147) says what it waits for", async () => {
-    const intents = [{ id: "x", source: "manual", outcome: null, waitingFor: "a save backup first" }];
+    const intents = [
+      { id: "x", source: "manual", outcome: null, waitingFor: "held: Sector-12's enemy Chongqing is joined" },
+    ];
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents } }));
-    expect(textOf(document, "#intents td:nth-child(3)")).toBe("not sent: waiting for a save backup first");
+    expect(textOf(document, "#intents td:nth-child(3)")).toBe("not sent: held: Sector-12's enemy Chongqing is joined");
+  });
+
+  test("the queue form offers every action an intent can name (#147)", async () => {
+    const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
+    const options = [...document.querySelectorAll("#intents select[name=action] option")].map(
+      (option) => option.textContent,
+    );
+    expect([...options].sort()).toEqual([...INTENT_ACTIONS].sort());
   });
 
   test("none sent says so", async () => {

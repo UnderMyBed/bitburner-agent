@@ -1,7 +1,7 @@
 /**
  * Every worker the Agent runs on home beside itself, one at a time: the snapshot tiers', the hack loop's (#134), the
- * program buyer's (#136), the home RAM upgrader's (#138), the traveller's (#141), the faction joiner's (#147), and the Singularity backend's (#145).
- * A fresh save's home must hold the Agent plus the largest of those it can run (`freshSaveHomeWorkerFileNames`), so the
+ * program buyer's (#136), the home RAM upgrader's (#138), the traveller's (#141), the Singularity backend's (#145),
+ * and the faction joiner's (#147). A fresh save's home must hold the Agent plus the largest of those it can run (`freshSaveHomeWorkerFileNames`), so the
  * RAM budget test and the simulator and E2 suites read these lists. Functions, not constants, so in-game bundles that
  * don't use them leave them out.
  */

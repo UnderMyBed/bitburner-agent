@@ -52,6 +52,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
+        <option>joinFaction</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -239,7 +240,7 @@ function render(status) {
       cancel.append(button);
     }
     // An irreversible intent not yet sent says what it waits for (#147).
-    const state = intent.waitingFor ? `not sent: waiting for ${intent.waitingFor}` : outcomeText(intent.outcome);
+    const state = intent.waitingFor ? `not sent: ${intent.waitingFor}` : outcomeText(intent.outcome);
     row.append(element("td", intent.id), element("td", intent.source), element("td", state), cancel);
     return row;
   });

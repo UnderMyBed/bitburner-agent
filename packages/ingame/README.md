@@ -10,7 +10,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 |---|---|
 | `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js` and `join-faction.js`, and the Singularity workers `singularity-*.js` (#145) |
 | `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
-| `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts` |
+| `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts`, and `page-effect.ts`, what every `ui` worker does around its own steps (the game first, never over a dialog left for the owner, back to the Terminal) |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
 | `src/` | In-game code, typechecked as the game's page sees it: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` (`src/tsconfig.json`) |
@@ -74,7 +74,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `singularity-join-faction.js` | `getPlayer` (0.5 GB), `singularity.joinFaction` (3 GB) | 5.1 GB (5.1) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
-The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it. No Singularity worker runs on a fresh save, so the 4.65 GB rule for its home doesn't bind them: the faction join's is 5.1 GB (#147), which fits beside the Agent in an 8 GB home.
+The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it. No Singularity worker runs on a fresh save, so the fresh-save check (the Agent's budget plus the largest worker within 8 GB) leaves them out: the faction join's is 5.1 GB (#147). It fits beside today's 2.85 GB Agent in an 8 GB home; were the Agent to grow past 2.9 GB, the fit check would leave joins to the page there.
 
 The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.5 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
@@ -259,9 +259,10 @@ The fourth `ui` effector ([#147](https://github.com/UnderMyBed/bitburner-agent/i
   2. **Never over an open dialog** the dialog watcher leaves. The watcher answers each invitation "Decide later" (#143), so the invitation waits on the Factions page.
   3. The sidebar's Factions, then "Join!" on the faction's row under the invitations (`Faction/ui/FactionsRoot.tsx`, `span.factions-invites`). With no such row there's no invitation: "no invitation from <faction> on the Factions page".
   4. **Back to the Terminal,** however it went.
+- **What the owner sees:** the page switches to Factions and back to the Terminal, once per try.
 - **Without Singularity nothing lists invitations** (`getPlayer` has the factions joined, not those inviting), so the worker reads them from the page; the dialog watcher's `gameDialog` events say when one arrives.
 
-E2 earns the Sector-12 invitation ($20m, travelling there), queues the join, and checks a save backup came first, Sector-12 is joined, and the page ends on the Terminal.
+E2 earns the Sector-12 invitation ($20m, travelling there), checks a join without an invitation says so, queues the join, and checks it's held at first, a save backup came before Sector-12 shows joined, and the page ends on the Terminal.
 
 ## Hygiene and tests
 

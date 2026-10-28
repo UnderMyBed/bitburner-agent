@@ -8,39 +8,25 @@
 //   player can't afford it or home is at its limit). A purchase opens no dialog (`Server/ServerPurchases.ts:168`).
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `getServerMaxRam` 0.05 (ram-budget.json); the page costs nothing.
-import type { EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
-import { openGamePage } from "../page/game-page.ts";
-import { reportToAgent } from "../workers/report-to-agent.ts";
+import { reportPageEffect } from "../page/page-effect.ts";
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
   const fromRam = Number(ns.args[0] ?? 0);
   const vendor = String(ns.args[1] ?? "");
   const deadlineMs = Number(ns.args[2] ?? 0);
-  const upgraded = () => ns.getServerMaxRam("home") > fromRam;
-  const report: EffectorReport = { done: upgraded(), problem: null };
-  if (!report.done) {
-    const gamePage = openGamePage(ns, deadlineMs);
-    if (gamePage === null) {
-      report.problem = "no game page to buy it through";
-    } else if (await gamePage.dialogStaysOpen()) {
-      report.problem = "a dialog the Agent leaves for the owner is open";
-    } else {
-      const problem =
-        (await gamePage.openCityLocation(vendor)) ??
-        // Enabled only while the player can afford it: a disabled one's click handler would still run, and open a
-        // dialog saying why not.
-        (await gamePage.clickWhenThere(
-          "//button[not(@disabled) and contains(normalize-space(), \"Upgrade 'home' RAM\")]",
-          "home RAM upgrade to buy (is the money there?)",
-        ));
-      // Back to the Terminal, however it went, in the time kept for it: the page was moved.
-      const backProblem = await gamePage.returnToTerminal();
-      report.problem = problem ?? backProblem;
-      report.done = upgraded();
-      if (!report.done) report.problem ??= `home's RAM isn't more than ${fromRam} GB after upgrading it`;
-    }
-  }
-  reportToAgent(ns, report);
+  await reportPageEffect(ns, deadlineMs, {
+    isDone: () => ns.getServerMaxRam("home") > fromRam,
+    doing: "buy it through",
+    steps: async (gamePage) =>
+      (await gamePage.openCityLocation(vendor)) ??
+      // Enabled only while the player can afford it: a disabled one's click handler would still run, and open a
+      // dialog saying why not.
+      (await gamePage.clickWhenThere(
+        "//button[not(@disabled) and contains(normalize-space(), \"Upgrade 'home' RAM\")]",
+        "home RAM upgrade to buy (is the money there?)",
+      )),
+    notDoneAfter: `home's RAM isn't more than ${fromRam} GB after upgrading it`,
+  });
 }

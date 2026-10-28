@@ -1,7 +1,13 @@
 // Intents (#141): each action's args, the id made from them, and which are irreversible (#147).
 import { describe, expect, test } from "vitest";
 import { FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
-import { type IntentRequest, intentId, isIrreversibleIntent, parseIntentRequest } from "../src/intents.ts";
+import {
+  INTENT_ACTIONS,
+  type IntentRequest,
+  intentId,
+  isIrreversibleIntent,
+  parseIntentRequest,
+} from "../src/intents.ts";
 
 describe("parseIntentRequest", () => {
   test.each([
@@ -37,6 +43,12 @@ describe("parseIntentRequest", () => {
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.reason).not.toBe("");
   });
+});
+
+test("INTENT_ACTIONS names every action the parser knows, and only those", () => {
+  const known = (action: string) =>
+    !/unknown action/.test((parseIntentRequest({ action, args: {} }) as { reason: string }).reason);
+  for (const action of INTENT_ACTIONS) expect(known(action), action).toBe(true);
 });
 
 test("an intent's id is its action and args, in the args' fixed order", () => {
