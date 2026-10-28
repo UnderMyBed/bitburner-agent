@@ -8,7 +8,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js` and `company-work.js`, and the Singularity workers `singularity-*.js` (#145) |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js` and `buy-server.js`, and the Singularity workers `singularity-*.js` (#145) |
 | `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), `work.ts` (#151, #153), and what they share: `effector-runner.ts`, which picks each try's backend and runs its effector, `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts`, `work-page.ts` (the work workers' reading and steps, #151, #153), and `page-effect.ts`, what every `ui` worker does around its own steps (the game first, never over a dialog left for the owner, the player's focus on work kept, back to the Terminal) |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
@@ -70,6 +70,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `buy-augmentation.js` | `getResetInfo` (1.0 GB); the page costs nothing | 2.6 GB (2.6) |
 | `faction-work.js` | nothing beyond the base; the page costs nothing | 1.6 GB (1.6) |
 | `company-work.js` | `getPlayer` (0.5 GB), for the jobs held; the page costs nothing | 2.1 GB (2.1) |
+| `buy-server.js` | `cloud.purchaseServer` (2.25 GB), `cloud.getServerCost` (0.25 GB), `serverExists`, `getServerMoneyAvailable`, `cloud.getServerUpgradeCost` (0.1 GB each), `getServerMaxRam`, `cloud.getServerLimit` (0.05 GB each); no page | 4.5 GB (4.5) |
 | `singularity-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
 | `singularity-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |
 | `singularity-buy-program.js` | `fileExists` (0.1 GB), `singularity.purchaseProgram` (2 GB) | 3.7 GB (3.7) |
@@ -82,6 +83,8 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 
 The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it. No Singularity worker runs on a fresh save, so the fresh-save check (the Agent's budget plus the largest worker within 8 GB) leaves them out: the faction join's is 5.1 GB (#147), the augmentation purchase's 12.6 GB (#149), the faction work's 5.3 GB (#151), and the company work's 8.8 GB (#153). The join's fits beside today's 2.85 GB Agent in an 8 GB home (were the Agent to grow past 2.9 GB, the fit check would leave joins to the page there); the purchase's and the work's need a home of 16 GB or more.
 
+`buy-server.js` (#159, 4.5 GB) is a fresh-save worker: its NS calls need no Singularity.
+
 The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.5 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
 ## Deploy layout
@@ -92,7 +95,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, `buy-server.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -200,9 +203,10 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   | `travel` | `travel.js` (the city) | `singularity-travel.js` (the city) | `travelTo(city)` |
   | `joinFaction` | `join-faction.js` (the faction) | `singularity-join-faction.js` (the faction) | `acceptFactionInvitation(faction)` |
   | `purchaseAugmentation` | `buy-augmentation.js` (the faction, the augmentation, the level) | `singularity-buy-augmentation.js` (the same) | `buyAugmentationFrom(faction, augmentation, level)` |
+  | `buyServer` | `buy-server.js` (the hostname, the RAM): NS calls alone, no page | none: `buy-server.js` needs no Singularity | `buyCloudServer(hostname, ram)` |
 
   Each worker also gets a deadline 200 ms before the round's end, checks the game first (an intent already done is done without touching the page or calling anything), and reports `{ done, problem }` (`EffectorReport`).
-- **The backend** is picked per try: the simulator's own effectors where the page's global object has them (`__bitburnerAgentSim`, packages/sim: the simulator renders no page; absent in a browser), called directly; else Singularity, once the Agent's own slow snapshot shows SF4 at any level or BN4, when that action's Singularity worker fits home beside the Agent, however empty home is (`getScriptRam` against home's RAM: the game charges it 4× at SF4.2 and 16× below); else the page, logged the first time. The fit is checked every try, so a home upgrade brings Singularity back. A Singularity worker that can't start for now (home full) or doesn't report is tried again, like any worker. The outcome and the done or not-done log line name the backend of the last try.
+- **The backend** is picked per try: the simulator's own effectors where the page's global object has them (`__bitburnerAgentSim`, packages/sim: the simulator renders no page; absent in a browser), called directly; else Singularity, once the Agent's own slow snapshot shows SF4 at any level or BN4, when that action's Singularity worker fits home beside the Agent, however empty home is (`getScriptRam` against home's RAM: the game charges it 4× at SF4.2 and 16× below); else the page, logged the first time. An action the NS API does without Singularity (`buyServer`, #159) has no Singularity worker (its `singularity` is `null`): its `ui` worker runs in any game, and the outcome names `ui`. The fit is checked every try, so a home upgrade brings Singularity back. A Singularity worker that can't start for now (home full) or doesn't report is tried again, like any worker. The outcome and the done or not-done log line name the backend of the last try.
 - **Outcomes:** the fast snapshot carries every intent the runner holds, as `{ id, done, tries, problem, backend }`, for the brain's dashboard and its "intent stuck" alert.
 - **Tests:** `test/agent/intent-runner.test.ts` covers the schedule, the order, the time rule, the logs, forgetting and the backend choice; `test/agent/singularity-available.test.ts` covers when the game has Singularity. Its property tests (fast-check) run random intent lists, worker reports and disconnects to check that the runner is idempotent (an intent reported done never runs again while it stays sent) and that it converges (every intent sent long enough, whose worker can do it, ends done).
 
@@ -286,6 +290,16 @@ The fifth `ui` effector ([#149](https://github.com/UnderMyBed/bitburner-agent/is
 - **Names with apostrophes** ("The Shadow's Simulacrum") are quoted for XPath by `xpathString` (`src/page/game-page.ts`).
 
 E2 buys Neurotrainer I and NeuroFlux level 1 from CyberSec (a save the simulator sets up with the reputation), with the confirmation and alert handled, and checks a purchase the money doesn't cover opens no dialog: its disabled "Buy" is never clicked.
+
+## Buying servers
+
+[#159](https://github.com/UnderMyBed/bitburner-agent/issues/159): the `buyServer` intent buys a cloud server, `{ hostname, ram }` (`src/entries/buy-server.ts`). The game's API does it without Singularity (`ns.cloud.purchaseServer`, `NetscriptFunctions/Cloud.ts:35-97`), so there's no page to drive and no Singularity worker: `buy-server.js` is the `ui` backend's worker in any game.
+- **`buy-server.js`**, with the hostname, the RAM and a deadline (unused: the calls are quick):
+  1. **The game first:** a server of that name that's one of the player's cloud servers is done, whatever its RAM; upgrading isn't this intent. `cloud.getServerUpgradeCost` tells (it answers -1 for a server that isn't a cloud server, `Server/ServerPurchases.ts:42-52`), at 0.1 GB where `cloud.getServerNames` would cost 1.05 and no longer fit a fresh save beside the Agent.
+  2. **A name taken by another server** (`n00dles`) is refused, and nothing is bought: the game would buy it as `n00dles-0` (`Server/ServerHelpers.ts:42-65`), and the next try another.
+  3. **The price** (`cloud.getServerCost`; Infinity past this BitNode's most) against the money: "not enough money: the 8 GB server costs $440000".
+  4. **The purchase.** With the name, the RAM and the money checked, its refusal leaves one cause: "the game's limit of 25 cloud servers is reached" (`cloud.getServerLimit`).
+- **What the owner sees:** nothing on the page; the server is in the next medium snapshot (its `scan` from home reaches it) and the slow one's `purchasedServers`.
 
 ## Work
 

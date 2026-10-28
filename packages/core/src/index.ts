@@ -20,6 +20,14 @@ export {
   singularityWorkerMostRamGb,
 } from "./backends.ts";
 export {
+  BUY_SERVER_WORKER_NAME,
+  CLOUD_SERVER_MAX_RAM,
+  isCloudServerHostname,
+  isCloudServerRam,
+  MAX_CLOUD_SERVER_HOSTNAME_LENGTH,
+  RESERVED_HOSTNAME_PREFIXES,
+} from "./cloud-servers.ts";
+export {
   COMPANY_NAMES,
   holdsJobInField,
   JOB_FIELDS,

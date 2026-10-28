@@ -2,7 +2,8 @@
 // picked for this try, then its effector run within the deadline.
 // - The simulator's own effectors where the page has them; else Singularity once the game has it (SF4, or BN4) and the
 //   action's Singularity worker fits home beside the Agent, however empty home is (the game charges it 4× or 16× with
-//   less than SF4.3); else the page. Looked at every try, so a home upgrade brings Singularity back.
+//   less than SF4.3); else the page. Looked at every try, so a home upgrade brings Singularity back. An action with no
+//   Singularity worker (`buyServer`, #159) always has its `ui` one, which needs no Singularity.
 // - A worker gives up a little before the round ends, so its report is in before the Agent stops waiting.
 import { deployedFilePath, type EffectorBackend, type EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
@@ -59,8 +60,11 @@ export function createEffectorRunner(
     async run(effector: Effector, deadlineMs: number): Promise<EffectorRun> {
       const sim = simEffectors();
       if (sim !== null) return { backend: "sim", report: effector.sim(sim), noReportReason: null };
-      const backend = useSingularityFor(effector.singularity.workerName, effector.description) ? "singularity" : "ui";
-      const { workerName, workerArguments } = backend === "singularity" ? effector.singularity : effector.ui;
+      const { singularity } = effector;
+      const { backend, workerName, workerArguments } =
+        singularity !== null && useSingularityFor(singularity.workerName, effector.description)
+          ? { backend: "singularity" as const, ...singularity }
+          : { backend: "ui" as const, ...effector.ui };
       const workerFile = deployedFilePath(deploymentId, workerName);
       const workerRun = await workerRunner.runWorker(
         workerFile,
