@@ -1,5 +1,5 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #156, architecture §5.6): for each action an intent can name,
-// and for the work activity's work, how each backend does it.
+// The Effectors (#141, #145, #147, #149, #151, #153, #156, #158, architecture §5.6): for each action an intent can
+// name, and for the work activity's work, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -10,8 +10,10 @@ import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   BUY_AUGMENTATION_WORKER_NAME,
   BUY_PROGRAM_WORKER_NAME,
+  CLASS_WORK_WORKER_NAME,
   COMPANY_WORK_WORKER_NAME,
   CRIME_WORK_WORKER_NAME,
+  classLabel,
   type EffectorReport,
   FACTION_WORK_WORKER_NAME,
   type Intent,
@@ -20,6 +22,7 @@ import {
   SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_CLASS_WORK_WORKER_NAME,
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
@@ -43,6 +46,7 @@ export interface SimEffectors {
   convergeFactionWork(faction: string, workType: string, focus: boolean): EffectorReport;
   convergeCompanyWork(company: string, field: string, focus: boolean): EffectorReport;
   convergeCrimeWork(crime: string, focus: boolean): EffectorReport;
+  convergeClassWork(location: string, classType: string, focus: boolean): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -116,9 +120,20 @@ export function effectorFor(intent: Intent): Effector {
 }
 
 /**
- * The work activity's effector (#151, #153, #156): converges the game on `work`, starting it, or setting its focus.
+ * The work activity's effector (#151, #153, #156, #158): converges the game on `work`, starting it, or setting its
+ * focus.
  */
 export function workEffectorFor(work: Work): Effector {
+  if (work.kind === "class") {
+    const { location, classType, focus } = work;
+    const workerArguments = [location, classType, String(focus)];
+    return {
+      description: `${classLabel(work)}${focus ? ", focused" : ""}`,
+      ui: { workerName: CLASS_WORK_WORKER_NAME, workerArguments },
+      singularity: { workerName: SINGULARITY_CLASS_WORK_WORKER_NAME, workerArguments },
+      sim: (effectors) => effectors.convergeClassWork(location, classType, focus),
+    };
+  }
   if (work.kind === "crime") {
     const { crime, focus } = work;
     const workerArguments = [crime, String(focus)];

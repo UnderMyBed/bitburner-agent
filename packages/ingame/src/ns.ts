@@ -12,5 +12,10 @@ export type CompanyName = Parameters<NS["singularity"]["applyToCompany"]>[0];
 export type JobField = Parameters<NS["singularity"]["applyToCompany"]>[1];
 /** The game's crime names, likewise. */
 export type CrimeType = Parameters<NS["singularity"]["commitCrime"]>[0];
+/** The game's universities and their courses, and its gyms and their stats, likewise. */
+export type UniversityLocationName = Parameters<NS["singularity"]["universityCourse"]>[0];
+export type UniversityClassType = Parameters<NS["singularity"]["universityCourse"]>[1];
+export type GymLocationName = Parameters<NS["singularity"]["gymWorkout"]>[0];
+export type GymType = Parameters<NS["singularity"]["gymWorkout"]>[1];
 /** The game's city names, likewise. */
 export type CityName = Parameters<NS["singularity"]["travelToCity"]>[0];

@@ -1,12 +1,24 @@
-// Work on the game's page (#151, #153, #156): what the page shows of the player's work, and the steps that converge
-// it, for `faction-work.js`, `company-work.js` and `crime-work.js` (../entries/), which document them. A module of its
-// own so its jsdom tests can import them: an entry's bundle exports only `main`.
+// Work on the game's page (#151, #153, #156, #158): what the page shows of the player's work, and the steps that
+// converge it, for `faction-work.js`, `company-work.js`, `crime-work.js` and `class-work.js` (../entries/), which
+// document them. A module of its own so its jsdom tests can import them: an entry's bundle exports only `main`.
 // - Focused, the Work page's title (`ui/WorkInProgressRoot.tsx`): "You are currently carrying out hacking contracts for
-//   CyberSec", "You are currently working as a Waiter at Noodle Bar", "You are attempting to shoplift".
+//   CyberSec", "You are currently working as a Waiter at Noodle Bar", "You are attempting to shoplift", "You are
+//   currently taking a Networks course".
 // - Unfocused, the overview's header (`ui/React/CharacterOverview.tsx:300-365`): "Working for CyberSec", "Working at
-//   Noodle Bar", "You are attempting to Shoplift". What faction or company work it is ("Doing hacking work", the job
-//   title) is the header's tooltip, rendered only on hover, so it's read from the overview's React props.
-import { CRIMES, type FactionWorkType, holdsJobInField, JOB_FIELDS, jobTitles, type Work } from "@bitburner-agent/core";
+//   Noodle Bar", "You are attempting to Shoplift", "You are taking a Networks course". What faction or company work it
+//   is ("Doing hacking work", the job title) is the header's tooltip, rendered only on hover, so it's read from the
+//   overview's React props. Neither text says where a class is: the page can't tell Iron Gym's strength training from
+//   Powerhouse Gym's, so a class of the type wanted counts, wherever it is.
+import {
+  CLASS_TYPES,
+  CRIMES,
+  classStartProblem,
+  type FactionWorkType,
+  holdsJobInField,
+  JOB_FIELDS,
+  jobTitles,
+  type Work,
+} from "@bitburner-agent/core";
 import { factionRowButtonXpath, type GamePage, reactPropsAbove, reactText, xpathString } from "./game-page.ts";
 
 /** How the Work page words each faction work type, and the faction page's button that starts it. */
@@ -26,6 +38,15 @@ function overviewWork(gamePage: GamePage, header: string): string | null {
 /** What the page shows of `work`: this work focused, this work unfocused, or neither. */
 export function workShown(gamePage: GamePage, work: Work): "focused" | "unfocused" | null {
   const titleShown = (title: string) => gamePage.findElementNow(`//h6[normalize-space()=${xpathString(title)}]`);
+  if (work.kind === "class") {
+    const youAre = Object.hasOwn(CLASS_TYPES, work.classType)
+      ? CLASS_TYPES[work.classType]?.youAreCurrently
+      : undefined;
+    if (youAre === undefined) return null;
+    if (titleShown(`You are currently ${youAre}`)) return "focused";
+    const header = gamePage.findElementNow(`//p[normalize-space()=${xpathString(`You are ${youAre}`)}]`);
+    return header === null ? null : "unfocused";
+  }
   if (work.kind === "crime") {
     const { crime } = work;
     const workName = Object.hasOwn(CRIMES, crime) ? CRIMES[crime]?.workName : undefined;
@@ -66,17 +87,40 @@ export async function convergeWorkOnPage(
   if (workShown(gamePage, work) === "unfocused") {
     return work.focus ? gamePage.refocusWork() : gamePage.returnToTerminal();
   }
-  const started =
-    work.kind === "faction"
-      ? await startFactionWork(gamePage, work)
-      : work.kind === "company"
-        ? await startCompanyWork(gamePage, work, jobs)
-        : await startCrimeWork(gamePage, work);
+  const started = await startWork(gamePage, work, jobs);
   if (started !== null) return stopped(started);
   // Started focused, on the Work page: done, or unfocused and back to the Terminal.
   if (work.focus) return null;
   const unfocused = await gamePage.unfocusWork();
   return unfocused.problem ?? (await gamePage.returnToTerminal());
+}
+
+/** The steps that start `work`, focused on the Work page: their problem, or null. */
+function startWork(gamePage: GamePage, work: Work, jobs: Record<string, string>): Promise<string | null> {
+  switch (work.kind) {
+    case "faction":
+      return startFactionWork(gamePage, work);
+    case "company":
+      return startCompanyWork(gamePage, work, jobs);
+    case "crime":
+      return startCrimeWork(gamePage, work);
+    case "class":
+      return startClassWork(gamePage, work);
+  }
+}
+
+/**
+ * Why a class (#158) isn't started for `player`, or null: core's `classStartProblem` (another city, or under 10 minutes
+ * of its cost), asked only while the page shows no class of its type under way, so one under way is left alone. With
+ * no page, null: the worker's page effect says so.
+ */
+export function classHeldBack(
+  gamePage: GamePage | null,
+  work: Extract<Work, { kind: "class" }>,
+  player: { money: number; city: string },
+): string | null {
+  if (gamePage === null || workShown(gamePage, work) !== null) return null;
+  return classStartProblem(work, player);
 }
 
 /** Faction work (#151): the sidebar's Factions, "Details" on the faction's row, then the work's button. */
@@ -149,5 +193,23 @@ async function startCrimeWork(gamePage: GamePage, { crime }: Extract<Work, { kin
       `//button[starts-with(normalize-space(), ${xpathString(`${crime} (`)})]`,
       `"${crime}" at the Slums`,
     ))
+  );
+}
+
+/**
+ * A class (#158): the university or gym in the City, only in its city (`Locations/ui/City.tsx`), then the class's
+ * button, "Take Networks course (… / sec)" (`Locations/ui/UniversityLocation.tsx:51-82`) or "Train Strength (… / sec)"
+ * (`GymLocation.tsx:42-53`), never disabled and never checking the money, which starts it focused.
+ */
+async function startClassWork(
+  gamePage: GamePage,
+  { location, classType }: Extract<Work, { kind: "class" }>,
+): Promise<string | null> {
+  const button = (Object.hasOwn(CLASS_TYPES, classType) ? CLASS_TYPES[classType]?.button : undefined) ?? classType;
+  const opened = await gamePage.openCityLocation(location);
+  if (opened !== null) return `${opened} (is the player in its city?)`;
+  return gamePage.clickWhenThere(
+    `//button[starts-with(normalize-space(), ${xpathString(button)})]`,
+    `"${button}…" at ${location}`,
   );
 }

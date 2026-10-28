@@ -90,6 +90,13 @@ describe("round trips", () => {
       intents: [],
       work: { kind: "crime", crime: "Grand Theft Auto", focus: true },
     },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: false, target: null, hosts: [] },
+      intents: [],
+      work: { kind: "class", location: "Powerhouse Gym", classType: "agi", focus: false },
+    },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
   });
@@ -197,6 +204,27 @@ describe("rejected, each with a reason", () => {
       { ...desiredState, work: { kind: "crime", crime: "toString", focus: true } },
     ],
     ["crime work naming no string", { ...desiredState, work: { kind: "crime", crime: 7, focus: true } }],
+    ["a class naming no location", { ...desiredState, work: { kind: "class", classType: "str", focus: false } }],
+    [
+      "a class at a location that teaches none",
+      { ...desiredState, work: { kind: "class", location: "The Slums", classType: "str", focus: false } },
+    ],
+    [
+      "a class at a location named by a prototype's key",
+      { ...desiredState, work: { kind: "class", location: "toString", classType: "str", focus: false } },
+    ],
+    [
+      "a class the game hasn't",
+      { ...desiredState, work: { kind: "class", location: "Iron Gym", classType: "Strength", focus: false } },
+    ],
+    [
+      "a course at a gym",
+      { ...desiredState, work: { kind: "class", location: "Iron Gym", classType: "Algorithms", focus: false } },
+    ],
+    [
+      "a gym stat at a university",
+      { ...desiredState, work: { kind: "class", location: "Rothman University", classType: "dex", focus: false } },
+    ],
     [
       "over 100 intents, each valid and different",
       withIntents(
