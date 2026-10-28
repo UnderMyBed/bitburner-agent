@@ -4,14 +4,24 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { AddedIntent } from "../desired-state.ts";
 import type { DashboardStatus } from "./status.ts";
 
 const LOOPBACK_ADDRESS = "127.0.0.1";
-/** The switch's body is `{"paused":true}`; anything much longer isn't one. */
+/** A switch's body is `{"paused":true}` and an intent's a few fields: anything much longer is neither. */
 const MAX_BODY_BYTES = 1024;
 /** What a browser says about a request's origin (Fetch Metadata): only these are the dashboard's own, or typed in. */
 const OWN_FETCH_SITES = new Set(["same-origin", "none"]);
 const PAGE = readFileSync(new URL("./page.html", import.meta.url), "utf8");
+/** The paths that take a POST only. */
+const WRITE_PATHS = [
+  "/api/supervision",
+  "/api/hack-loop",
+  "/api/programs",
+  "/api/home-ram",
+  "/api/intents",
+  "/api/intents/cancel",
+];
 
 export interface DashboardServerOptions {
   /** 0 picks a free port (tests). */
@@ -25,6 +35,10 @@ export interface DashboardServerOptions {
   setProgramsEnabled(enabled: boolean): void;
   /** Home RAM's switch (#138). */
   setHomeRamEnabled(enabled: boolean): void;
+  /** The manual intents queue (#141): adds `{ action, args }`. */
+  addIntent(request: unknown): AddedIntent;
+  /** Takes an intent off the manual queue by id; false if it isn't there. */
+  cancelIntent(id: string): boolean;
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
 }
@@ -90,10 +104,19 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "enabled", options.setProgramsEnabled);
       case "POST /api/home-ram":
         return handleSwitch(request, response, origin, "enabled", options.setHomeRamEnabled);
+      case "POST /api/intents": {
+        const added = options.addIntent(await readJsonWrite(request, origin));
+        if (!added.ok) throw new RequestError(400, added.reason);
+        return reply(response, 200, "application/json", JSON.stringify({ id: added.intent.id }));
+      }
+      case "POST /api/intents/cancel": {
+        const body = (await readJsonWrite(request, origin)) as { id?: unknown } | null;
+        if (typeof body?.id !== "string") throw new RequestError(400, 'the body must be {"id": "<intent id>"}');
+        if (!options.cancelIntent(body.id)) throw new RequestError(404, "no such intent in the manual queue");
+        return reply(response, 200, "application/json", JSON.stringify({ id: body.id }));
+      }
       default:
-        if (
-          ["/", "/api/status", "/api/supervision", "/api/hack-loop", "/api/programs", "/api/home-ram"].includes(path)
-        ) {
+        if (WRITE_PATHS.includes(path) || path === "/" || path === "/api/status") {
           throw new RequestError(405, "method not allowed");
         }
         throw new RequestError(404, "not found");
@@ -156,6 +179,18 @@ async function readBody(request: IncomingMessage): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/** A write's JSON body, from the dashboard's own page only. */
+async function readJsonWrite(request: IncomingMessage, origin: string | undefined): Promise<unknown> {
+  // A write must say it's from the dashboard's own page: a missing Origin isn't enough.
+  if (origin === undefined) throw new RequestError(403, "not this dashboard's page");
+  try {
+    return JSON.parse(await readBody(request));
+  } catch (error) {
+    if (error instanceof RequestError) throw error;
+    throw new RequestError(400, "the body isn't JSON");
+  }
 }
 
 /** A switch: `{ "<field>": true|false }` from the dashboard's own page, answered with the same. */

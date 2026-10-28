@@ -14,6 +14,8 @@ import type { NS } from "../ns.ts";
 const POLL_MS = 50;
 /** The end of the caller's time kept for the way back to the Terminal: a few renders. */
 const RETURN_RESERVE_MS = 300;
+/** The longest a closed dialog stays in the page while it fades out: MUI's `Fade`, 195 ms, and a render. */
+const DIALOG_FADE_MS = 400;
 /** Any modal open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). */
 const OPEN_DIALOG_XPATH = "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ')]";
 
@@ -57,15 +59,19 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     }
   }
 
-  /** Waits for the element, `what` (named for the problem), and clicks it as a player would, then lets it render. */
-  async function clickWhenThere(xpath: string, what: string, untilMs = stepsEndMs): Promise<string | null> {
-    const element = await waitForElement(xpath, untilMs);
-    if (!element) return `no ${what}`;
+  /** Clicks `element`, `what`, as a player would, then lets it render. */
+  async function click(element: Element, what: string): Promise<string | null> {
     const onClick = reactPropsOf(element)?.onClick;
     if (typeof onClick !== "function") return `can't click ${what}`;
     await onClick({ isTrusted: true, preventDefault: () => {}, stopPropagation: () => {} });
     await letRender();
     return null;
+  }
+
+  /** Waits for the element, `what` (named for the problem), and clicks it. */
+  async function clickWhenThere(xpath: string, what: string, untilMs = stepsEndMs): Promise<string | null> {
+    const element = await waitForElement(xpath, untilMs);
+    return element ? click(element, what) : `no ${what}`;
   }
 
   /**
@@ -83,9 +89,35 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   return {
     clickWhenThere,
 
-    /** Whether a dialog is open: the owner's to read and close, so nothing is done over it. */
-    dialogOpen(): boolean {
-      return findElement(OPEN_DIALOG_XPATH) !== null;
+    /**
+     * Clicks the element, `what`, if it's in the page now: for a step the game may skip, such as a confirmation the
+     * player's Options turn off. `problem` is null unless it was there and couldn't be clicked.
+     */
+    async clickIfThere(xpath: string, what: string): Promise<{ clicked: boolean; problem: string | null }> {
+      const element = findElement(xpath);
+      if (!element) return { clicked: false, problem: null };
+      const problem = await click(element, what);
+      return { clicked: problem === null, problem };
+    },
+
+    /** Lets the page render, without passing the steps' end: for a step that waits on the game. */
+    waitARender: () => ns.asleep(Math.max(0, Math.min(POLL_MS, timeLeftMs(stepsEndMs)))),
+
+    /** Whether the steps' time is up (the way back to the Terminal has its own). */
+    stepsTimeUp: () => timeLeftMs(stepsEndMs) <= 0,
+
+    /**
+     * Whether a dialog is open, and stays open: the owner's to read and close, so nothing is done over it. One that's
+     * just been closed stays in the page while it fades out (`ui/React/Modal.tsx`, `closeAfterTransition`), so it's
+     * given that long to go.
+     */
+    async dialogStaysOpen(): Promise<boolean> {
+      const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, stepsEndMs);
+      while (findElement(OPEN_DIALOG_XPATH) !== null) {
+        if (timeLeftMs(fadeEndsMs) <= 0) return true;
+        await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));
+      }
+      return false;
     },
 
     openSidebarPage: (pageName: string) => openSidebarPage(pageName, stepsEndMs),

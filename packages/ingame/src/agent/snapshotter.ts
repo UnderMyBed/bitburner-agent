@@ -12,6 +12,7 @@ import {
   deployedFilePath,
   type FastSnapshotData,
   type FastWorkerData,
+  type IntentOutcome,
   SNAPSHOT_TIER_PERIOD_MS,
   type SnapshotMessage,
   type SnapshotTier,
@@ -40,7 +41,14 @@ export function createSnapshotter(
     deploymentId,
     agentSessionId,
     workerRunner,
-  }: { deploymentId: string; agentSessionId: string; workerRunner: WorkerRunner },
+    intentOutcomes,
+  }: {
+    deploymentId: string;
+    agentSessionId: string;
+    workerRunner: WorkerRunner;
+    /** How the intents went (#141), for the fast snapshot. */
+    intentOutcomes: () => IntentOutcome[];
+  },
 ) {
   const lastSequenceNumbers: Record<SnapshotTier, number> = { static: 0, slow: 0, medium: 0, fast: 0 };
   /** 0: due this round. */
@@ -94,6 +102,7 @@ export function createSnapshotter(
         degradedTiers: [...degradedTiers],
         pageHeapUsedBytes: pageHeapUsedBytes(),
         game: fastReport ? (fastReport.data as FastWorkerData) : null,
+        intents: intentOutcomes(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 

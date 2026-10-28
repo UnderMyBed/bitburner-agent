@@ -2,14 +2,14 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), and [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)), and [intents](#intents) with [travel](#travel) ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js` and `upgrade-home-ram.js` |
-| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `page-buyer.ts` (the programs' and home RAM's buyers), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js` and `travel.js` |
+| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effector: `game-page.ts` |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
@@ -65,6 +65,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `hack-loop-deploy.js` | `exec` (1.3 GB), `scp` (0.6 GB), `kill` (0.5 GB), `scan`, `ps` (0.2 GB each), `getScriptRam` (0.1 GB), `hasRootAccess`, `getServerMaxRam`, `getServerUsedRam` (0.05 GB each) | 4.65 GB (4.65) |
 | `buy-program.js` | `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB); the page costs nothing | 1.75 GB (1.75) |
 | `upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB); the page costs nothing | 1.65 GB (1.65) |
+| `travel.js` | `getPlayer` (0.5 GB); the page costs nothing | 2.1 GB (2.1) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
 The workers write to a port (`writePort`, free). The Agent plus its largest home worker (`hack-loop-deploy.js`, 4.65 GB) is 7.35 GB, within a fresh save's 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
@@ -77,7 +78,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -105,8 +106,8 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 **Lifecycle:**
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
-3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, then buys [the next hacking program](#the-hacking-programs) when that's due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s.
-4. **`desiredState`:** it keeps the latest until it disconnects: the hack loop converges on it, and the program buyer buys what it names.
+3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, then runs the [intents](#intents) that are due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s.
+4. **`desiredState`:** it keeps the latest until it disconnects: the hack loop converges on it, and the intent runner does its intents.
 5. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 6. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
@@ -167,11 +168,30 @@ The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed
 
 The Agent logs what it does when that changes: the servers it rooted, and the loop's threads, servers and target. The brain's [hack loop suite](../brain/README.md#the-hack-loop) tests it in an 8 GB fresh start, and E2 checks n00dles runs it in the real game.
 
+## Intents
+
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
+- **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects, like the hack loop, and runs each through its effector:
+  - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
+  - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time ("travel to Aevum: not done: …; trying again in 30 s");
+  - one done ("travel to Aevum: done") is never run again while the brain keeps sending it; the brain sees it done in its next medium snapshot and stops sending it. One that leaves the list and comes back is new;
+  - a worker that doesn't run (home full, still running, no time left) is tried again next round, and isn't counted as a try.
+- **The Effector table** (`src/agent/effectors.ts`): for each action, the home worker that does it and its arguments. Every effector is the `ui` backend for now:
+
+  | Action | Worker | Arguments |
+  |---|---|---|
+  | `buyTor` | `buy-program.js` | "TOR router", the vendor |
+  | `buyProgram` | `buy-program.js` | the program, "" |
+  | `upgradeHomeRam` | `upgrade-home-ram.js` | `fromRam`, the vendor |
+  | `travel` | `travel.js` | the city |
+
+  Each worker also gets a deadline 200 ms before the round's end, checks the game first (an intent already done is done without touching the page), and reports `{ done, problem }` (`EffectorReport`).
+- **Outcomes:** the fast snapshot carries every intent the runner holds, as `{ id, done, tries, problem }`, for the brain's dashboard and its "intent stuck" alert.
+- **Tests:** `test/agent/intent-runner.test.ts` covers the schedule, the order, the time rule, the logs and forgetting. Its property tests (fast-check) run random intent lists, worker reports and disconnects to check that the runner is idempotent (an intent reported done never runs again while it stays sent) and that it converges (every intent sent long enough, whose worker can do it, ends done).
+
 ## The hacking programs
 
-M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It's the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/agent/page-buyer.ts`, `src/page/game-page.ts`, `src/entries/buy-program.ts`).
-- **What the brain sends:** `desiredState { programs: { enabled, next } }`, `next` being `{ item, vendor }` or null ([protocol](../../docs/bridge/protocol.md#brain--agent); [packages/brain](../brain/README.md#the-hacking-programs) picks it). The Agent keeps it until it disconnects, like the hack loop.
-- **When:** a new `next` is bought in the next round, after the snapshots and the hack loop, in what's left of the round; with under 1 s left, in the round after. Bought, it waits for the brain's next item, which the next medium snapshot shows owned. Not bought, it logs why, every try, and tries again every 15 rounds (30 s).
+M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It was the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/page/game-page.ts`, `src/entries/buy-program.ts`). Since #141 the brain asks for each as an [intent](#intents), `buyTor` or `buyProgram` ([packages/brain](../brain/README.md#the-hacking-programs) picks which).
 - **`buy-program.js`**, with the item, the vendor and a deadline, so it ends within the Agent's round like any other worker:
   1. **The game first:** the TOR router owned (`hasTorRouter`) or the program on home (`fileExists`) is done, without touching the page.
   2. **Never over an open dialog:** that's the owner's to read and close, so it does nothing and tries again later.
@@ -179,27 +199,38 @@ M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/1
   4. **A program:** the sidebar's Terminal, and `buy <program>` typed into it, unless the owner has a line typed there: that's left alone.
   5. **Back to the Terminal,** however it went, once it has moved the page.
 
-  It reports `{ item, done, problem }`. A problem is a page that isn't as expected: no page, a dialog open, a sidebar section collapsed (its items unmount), a button missing (each named: "no TOR router to buy (is the money there?)"), or a line typed in the terminal. A problem on the way back to the Terminal is reported even when the item was bought.
+  It reports `{ done, problem }`. A problem is a page that isn't as expected: no page, a dialog open, a sidebar section collapsed (its items unmount), a button missing (each named: "no TOR router to buy (is the money there?)"), or a line typed in the terminal. A problem on the way back to the Terminal is reported even when the item was bought.
 - **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. The Enter handler is read after the line is typed: the one from before would run the empty line. Every wait ends by the worker's deadline, and looks at least once. The steps end 300 ms before it, so the way back to the Terminal has its own time however long a step waited (`test/agent/game-page.test.ts`).
 - **What the owner sees:** a few times a session, the page switches to the City and back to the Terminal, or a `buy` is typed into the terminal. The dashboard's "Stop buying programs" switch stops it.
 
-E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/page-buyer.test.ts` checks when the Agent runs the worker and what it logs; `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
+E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
 
 ## Home RAM
 
-M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)): the Agent doubles home's RAM at a tech vendor, the second `ui` effector, through the same page code as the TOR router (`src/agent/page-buyer.ts`, `src/entries/upgrade-home-ram.ts`).
-- **What the brain sends:** `desiredState { homeRam: { enabled, next } }`, `next` being `{ fromRam, vendor }` or null ([packages/brain](../brain/README.md#home-ram) picks it, one purchase at a time with the programs, cheapest first). The Agent keeps it until it disconnects.
-- **When:** as for the programs, with its own buyer: a new `next` in the next round with 1 s of it left, after the program buyer; not bought, again every 30 s, logging why each time.
+M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)): the Agent doubles home's RAM at a tech vendor, the second `ui` effector, through the same page code as the TOR router (`src/entries/upgrade-home-ram.ts`). The brain asks for each doubling as an `upgradeHomeRam` [intent](#intents) ([packages/brain](../brain/README.md#home-ram) picks it, one purchase at a time with the programs, cheapest first).
 - **`upgrade-home-ram.js`**, with home's RAM when the brain asked (`fromRam`), the vendor and a deadline:
   1. **The game first:** home with more RAM than `fromRam` (`getServerMaxRam`) is done, without touching the page. So a repeat never buys a second doubling.
   2. **Never over an open dialog.**
   3. The sidebar's City, the vendor, and "Upgrade 'home' RAM" while it can be bought (it's disabled when the player can't afford it, or home is at its limit). A purchase opens no dialog.
   4. **Back to the Terminal,** however it went.
 
-  It reports `{ item: "home RAM", done, problem }`, as `buy-program.js` does ("no home RAM upgrade to buy (is the money there?)").
+  It reports `{ done, problem }`, as `buy-program.js` does ("no home RAM upgrade to buy (is the money there?)").
 - **What the owner sees:** once per upgrade, the page switches to the City and back to the Terminal. The dashboard's "Stop upgrading home RAM" switch stops it.
 
-E2 upgrades home from 8 GB to 16 GB on the real page and checks it goes no further, with no dialog left open. `test/agent/page-buyer.test.ts` checks the upgrader's worker, its arguments and its log, and that both buyers share a round.
+E2 upgrades home from 8 GB to 16 GB on the real page and checks it goes no further, with no dialog left open.
+
+## Travel
+
+The third `ui` effector ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): the `travel` intent flies the player to one of the six cities (`src/entries/travel.ts`). A ticket costs $200k.
+- **`travel.js`**, with the city and a deadline:
+  1. **The game first:** the player already in the city (`getPlayer`) is done.
+  2. **Never over an open dialog.**
+  3. The sidebar's Travel, then the city: on the ASCII map, its first letter (the six differ, `ui/React/WorldMap.tsx`), or with ASCII art off, a "Travel to <city>" button.
+  4. The confirmation's "Travel", then the "You are now in <city>!" alert closed with its own close button: each only if it's shown, since the player's Options can turn both off (`SuppressTravelConfirmation`). Without the ticket's money the game does nothing, and the worker reports it ("not in <city> after travelling (is the $200k ticket there?)").
+  5. **Back to the Terminal,** however it went.
+- **What the owner sees:** the page switches to the Travel Agency and back to the Terminal, once per travel queued.
+
+E2 queues a travel to Aevum on the dashboard and checks the Agent flies there, with the confirmation and the alert shown and handled, and ends on the Terminal with no dialog open.
 
 ## Hygiene and tests
 

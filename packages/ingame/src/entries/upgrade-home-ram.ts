@@ -8,7 +8,7 @@
 //   player can't afford it or home is at its limit). A purchase opens no dialog (`Server/ServerPurchases.ts:168`).
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `getServerMaxRam` 0.05 (ram-budget.json); the page costs nothing.
-import { HOME_RAM_ITEM, type PurchaseReport } from "@bitburner-agent/core";
+import type { EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { openGamePage } from "../page/game-page.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
@@ -19,12 +19,12 @@ export async function main(ns: NS): Promise<void> {
   const vendor = String(ns.args[1] ?? "");
   const deadlineMs = Number(ns.args[2] ?? 0);
   const upgraded = () => ns.getServerMaxRam("home") > fromRam;
-  const report: PurchaseReport = { item: HOME_RAM_ITEM, done: upgraded(), problem: null };
+  const report: EffectorReport = { done: upgraded(), problem: null };
   if (!report.done) {
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {
       report.problem = "no game page to buy it through";
-    } else if (gamePage.dialogOpen()) {
+    } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog is open: it's the owner's to close";
     } else {
       const problem =

@@ -8,6 +8,7 @@ import {
   parseAgentMessage,
   parseBrainMessage,
 } from "../src/control-protocol.ts";
+import { TECH_VENDORS } from "../src/locations.ts";
 
 const hello: AgentMessage = {
   protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -39,22 +40,34 @@ describe("round trips", () => {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",
       hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] },
-      programs: { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } },
-      homeRam: { enabled: true, next: null },
+      intents: [
+        { id: "buyTor(Alpha Enterprises)", action: "buyTor", args: { vendor: "Alpha Enterprises" } },
+        { id: "travel(Aevum)", action: "travel", args: { city: "Aevum" } },
+      ],
     },
     {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",
       hackLoop: { enabled: true, target: null, hosts: [] },
-      programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: null } },
-      homeRam: { enabled: false, next: null },
+      intents: [{ id: "buyProgram(BruteSSH.exe)", action: "buyProgram", args: { program: "BruteSSH.exe" } }],
     },
     {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
       type: "desiredState",
       hackLoop: { enabled: false, target: null, hosts: [] },
-      programs: { enabled: false, next: null },
-      homeRam: { enabled: true, next: { fromRam: 8, vendor: "Omega Software" } },
+      intents: [
+        {
+          id: "upgradeHomeRam(8, Omega Software)",
+          action: "upgradeHomeRam",
+          args: { fromRam: 8, vendor: "Omega Software" },
+        },
+      ],
+    },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: false, target: null, hosts: [] },
+      intents: [],
     },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
@@ -117,10 +130,9 @@ describe("rejected, each with a reason", () => {
   });
 
   const hackLoop = { enabled: true, target: "n00dles", hosts: ["foodnstuff"] };
-  const programs = { enabled: true, next: { item: "FTPCrack.exe", vendor: null } };
-  const homeRam = { enabled: true, next: { fromRam: 64, vendor: "CompuTek" } };
-  const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop, programs, homeRam };
-  const upgradeFrom = (next: unknown) => ({ ...desiredState, homeRam: { enabled: true, next } });
+  const travel = { id: "travel(Ishima)", action: "travel", args: { city: "Ishima" } };
+  const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop, intents: [travel] };
+  const withIntents = (...intents: unknown[]) => ({ ...desiredState, intents });
   test.each([
     ["no hack loop", { ...desiredState, hackLoop: undefined }],
     ["a hack loop that isn't an object", { ...desiredState, hackLoop: true }],
@@ -132,35 +144,20 @@ describe("rejected, each with a reason", () => {
     ["no hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: undefined } }],
     ["a host that isn't a hostname", { ...desiredState, hackLoop: { ...hackLoop, hosts: ["n00dles", 7] } }],
     ["too many hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: Array(1_001).fill("n00dles") } }],
-    ["no programs", { ...desiredState, programs: undefined }],
-    ["programs.enabled that isn't a boolean", { ...desiredState, programs: { ...programs, enabled: 1 } }],
-    ["no next", { ...desiredState, programs: { enabled: true } }],
+    ["no intents", { ...desiredState, intents: undefined }],
+    ["intents that aren't a list", { ...desiredState, intents: travel }],
+    ["an intent that isn't valid", withIntents({ ...travel, args: { city: "Atlantis" } })],
+    ["an intent whose id isn't its own", withIntents({ ...travel, id: "travel(Aevum)" })],
+    ["the same intent twice", withIntents(travel, travel)],
     [
-      "a next item that isn't one",
-      { ...desiredState, programs: { enabled: true, next: { item: "Formulas.exe", vendor: null } } },
+      "over 100 intents, each valid and different",
+      withIntents(
+        ...Array.from({ length: 101 }, (_, index) => {
+          const args = { fromRam: 2 ** (index % 30), vendor: Object.values(TECH_VENDORS)[Math.floor(index / 30)] };
+          return { id: `upgradeHomeRam(${args.fromRam}, ${args.vendor})`, action: "upgradeHomeRam", args };
+        }),
+      ),
     ],
-    [
-      "TOR without a vendor",
-      { ...desiredState, programs: { enabled: true, next: { item: "TOR router", vendor: null } } },
-    ],
-    [
-      "the TOR router at a vendor that doesn't sell it",
-      { ...desiredState, programs: { enabled: true, next: { item: "TOR router", vendor: "Noodle Bar" } } },
-    ],
-    [
-      "a program with a vendor",
-      { ...desiredState, programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: "Alpha Enterprises" } } },
-    ],
-    ["no home RAM", { ...desiredState, homeRam: undefined }],
-    ["homeRam.enabled that isn't a boolean", { ...desiredState, homeRam: { ...homeRam, enabled: "no" } }],
-    ["no home RAM next", { ...desiredState, homeRam: { enabled: true } }],
-    ["a home RAM next that isn't an object", upgradeFrom(8)],
-    ["home RAM that isn't a power of two", upgradeFrom({ fromRam: 24, vendor: "CompuTek" })],
-    ["home RAM below 1 GB", upgradeFrom({ fromRam: 0.5, vendor: "CompuTek" })],
-    ["home RAM at the game's limit, 2^30 GB", upgradeFrom({ fromRam: 2 ** 30, vendor: "CompuTek" })],
-    ["home RAM as a string", upgradeFrom({ fromRam: "8", vendor: "CompuTek" })],
-    ["a home RAM upgrade without a vendor", upgradeFrom({ fromRam: 8, vendor: null })],
-    ["a home RAM upgrade at a vendor that doesn't sell it", upgradeFrom({ fromRam: 8, vendor: "Noodle Bar" })],
   ])("a desired state with %s", (_description, message) => {
     const result = parseBrainMessage(JSON.stringify(message));
     expect(result.ok).toBe(false);
@@ -172,50 +169,33 @@ describe("rejected, each with a reason", () => {
       ...desiredState,
       extra: 1,
       hackLoop: { ...desiredState.hackLoop, extra: 2 },
-      programs: { ...programs, extra: 3, next: { ...programs.next, extra: 4 } },
-      homeRam: { ...homeRam, extra: 5, next: { ...homeRam.next, extra: 6 } },
+      intents: [{ ...travel, extra: 3, args: { ...travel.args, extra: 4 } }],
     });
     expect(parseBrainMessage(extras)).toEqual({ ok: true, message: desiredState });
   });
 });
 
-describe("while the brain holds (#136, #138)", () => {
+describe("while the brain holds (#136, #141)", () => {
   const hackLoopOff = { enabled: false, target: null, hosts: [] };
-  const buying = { enabled: true, next: { item: "BruteSSH.exe", vendor: null } };
-  const upgrading = { enabled: true, next: { fromRam: 8, vendor: "Alpha Enterprises" } };
-  const nothingBought = {
-    programs: { enabled: true, next: null },
-    homeRam: { enabled: true, next: null },
-  };
-
   const hackLoopOn = { enabled: true, target: "n00dles", hosts: ["foodnstuff"] };
+  const intents = [{ id: "travel(Aevum)", action: "travel" as const, args: { city: "Aevum" } }];
 
   test("with the hack loop on and nothing sent yet, nothing goes: it would start the loop", () => {
-    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: buying, homeRam: upgrading }, null)).toBeNull();
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, intents }, null)).toBeNull();
   });
 
-  test("with the hack loop on, it goes as last sent, buying nothing", () => {
-    const lastSent = { hackLoop: { ...hackLoopOn, target: "joesguns" }, programs: buying, homeRam: upgrading };
-    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, programs: buying, homeRam: upgrading }, lastSent)).toEqual({
+  test("with the hack loop on, it goes as last sent, with no intents", () => {
+    const lastSent = { hackLoop: { ...hackLoopOn, target: "joesguns" }, intents };
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOn, intents }, lastSent)).toEqual({
       hackLoop: lastSent.hackLoop,
-      ...nothingBought,
+      intents: [],
     });
   });
 
-  test("with the hack loop off, it goes, buying nothing", () => {
-    expect(desiredStateWhileHolding({ hackLoop: hackLoopOff, programs: buying, homeRam: upgrading }, null)).toEqual({
+  test("with the hack loop off, it goes, with no intents", () => {
+    expect(desiredStateWhileHolding({ hackLoop: hackLoopOff, intents }, null)).toEqual({
       hackLoop: hackLoopOff,
-      ...nothingBought,
+      intents: [],
     });
-  });
-
-  test("buying turned off goes too, so the Agent stops at once", () => {
-    const lastSent = { hackLoop: hackLoopOn, programs: buying, homeRam: upgrading };
-    const switchedOff = {
-      hackLoop: hackLoopOn,
-      programs: { enabled: false, next: null },
-      homeRam: { enabled: false, next: null },
-    };
-    expect(desiredStateWhileHolding(switchedOff, lastSent)).toEqual(switchedOff);
   });
 });

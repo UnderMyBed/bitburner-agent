@@ -42,10 +42,20 @@ export {
   type HackLoopRootReport,
   isHackLoopFile,
 } from "./hack-loop.ts";
-export { HOME_RAM_ITEM, HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
+export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { homeWorkerFileNames } from "./home-workers.ts";
+export {
+  type ActionName,
+  type EffectorReport,
+  type Intent,
+  type IntentOutcome,
+  type IntentRequest,
+  intentId,
+  MAX_INTENTS,
+  parseIntentRequest,
+} from "./intents.ts";
+export { CITIES, TECH_VENDORS, TRAVEL_COST, TRAVEL_WORKER_NAME } from "./locations.ts";
 export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
-export { type PurchaseReport, TECH_VENDORS } from "./purchases.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

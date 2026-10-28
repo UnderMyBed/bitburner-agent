@@ -4,9 +4,7 @@
  * so its names must not collide with NS function names (packages/ingame/README.md, "RAM").
  */
 import { isValidDeploymentId } from "./deploy-layout.ts";
-import { isUpgradableHomeRam } from "./home-ram.ts";
-import { PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
-import { TECH_VENDORS } from "./purchases.ts";
+import { type Intent, intentId, MAX_INTENTS, parseIntentRequest } from "./intents.ts";
 
 export const CONTROL_PROTOCOL_VERSION = 1;
 
@@ -55,8 +53,7 @@ export type AgentMessage = HelloMessage | SnapshotMessage;
 
 /**
  * What the brain wants running in the game (architecture D2), whole each time: the Agent converges on the last one it
- * got. M3 adds an activity per slice: the hack loop (#134), the hacking programs (#136), home's RAM (#138). The brain
- * asks for one purchase at a time, of the programs and home's RAM.
+ * got: the hack loop (#134), and the intents (#141), one-shot actions done at most once (architecture §5.3).
  */
 export interface DesiredState {
   /**
@@ -65,15 +62,10 @@ export interface DesiredState {
    */
   hackLoop: { enabled: boolean; target: string | null; hosts: string[] };
   /**
-   * The hacking programs: the next one to buy, or null for none now. `vendor` names the tech vendor in the player's
-   * city to buy the TOR router at, and is null for a program.
+   * What to do, in order, each until the game shows it done: buying the TOR router, a program or home RAM (the brain's
+   * purchase rules), and anything the owner queued (the dashboard). An intent that leaves the list isn't tried again.
    */
-  programs: { enabled: boolean; next: { item: string; vendor: string | null } | null };
-  /**
-   * Home's RAM: the next upgrade to buy, or null for none now. `fromRam` is home's RAM (GB) when the brain asked, so
-   * the upgrade is done once home has more; `vendor` names the tech vendor in the player's city to buy it at.
-   */
-  homeRam: { enabled: boolean; next: { fromRam: number; vendor: string } | null };
+  intents: Intent[];
 }
 
 /** The most hosts a desired state names: a whole network is well under it. */
@@ -82,17 +74,13 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
 /**
  * What may go to an Agent while the brain holds (on hold, after a failed deploy, or once the game has drifted), or to
  * an outdated one: only a state that starts nothing new, given `lastSent`, what that Agent was last sent (null for
- * nothing yet). Nothing is bought. The hack loop off goes as it is (stopping our own loops is always safe); on, it
- * stays as last sent, and with nothing sent yet, nothing goes. So "Stop buying programs" gets through a hold whatever
- * the hack loop does.
+ * nothing yet). No intents. The hack loop off goes as it is (stopping our own loops is always safe); on, it stays as
+ * last sent, and with nothing sent yet, nothing goes. So the intents' removal gets through a hold whatever the hack
+ * loop does.
  */
 export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
-  const purchases = {
-    programs: { enabled: state.programs.enabled, next: null },
-    homeRam: { enabled: state.homeRam.enabled, next: null },
-  };
-  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, ...purchases };
-  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, ...purchases };
+  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, intents: [] };
+  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, intents: [] };
 }
 
 export type BrainMessage =
@@ -225,46 +213,29 @@ export function parseAgentMessage(text: string): ParsedMessage<AgentMessage> {
   }
 }
 
-/** A desired state's `programs`: the next item is TOR, at a named vendor, or a port opener, at none. */
-function parsePrograms(programs: unknown): ParsedMessage<DesiredState["programs"]> {
-  if (typeof programs !== "object" || programs === null) return { ok: false, reason: "desiredState without programs" };
-  const { enabled, next } = programs as JsonObject;
-  if (typeof enabled !== "boolean") return { ok: false, reason: "desiredState's programs.enabled isn't a boolean" };
-  if (next === null) return { ok: true, message: { enabled, next: null } };
-  if (typeof next !== "object") return { ok: false, reason: `desiredState's programs.next is ${describeValue(next)}` };
-  const { item, vendor } = next as JsonObject;
-  const isTor = item === TOR_ROUTER;
-  if (!isTor && !PORT_OPENER_PROGRAMS.includes(item as string)) {
-    return { ok: false, reason: `desiredState's programs.next.item is ${describeValue(item)}` };
+/** A desired state's `intents`: each valid, with its own id, none twice, at most `MAX_INTENTS`. */
+function parseIntents(intents: unknown): ParsedMessage<Intent[]> {
+  if (!Array.isArray(intents) || intents.length > MAX_INTENTS) {
+    return { ok: false, reason: `desiredState's intents isn't a list of at most ${MAX_INTENTS}` };
   }
-  if (isTor ? !isTechVendor(vendor) : vendor !== null) {
-    return {
-      ok: false,
-      reason: "desiredState's programs.next.vendor must be a tech vendor for TOR, and null otherwise",
-    };
+  const parsedIntents: Intent[] = [];
+  for (const intent of intents) {
+    const parsed = parseIntentRequest(intent);
+    if (!parsed.ok) return { ok: false, reason: `desiredState's intent: ${parsed.reason}` };
+    // An id is its action and args, so the Agent can tell intents apart by id alone.
+    if ((intent as JsonObject).id !== intentId(parsed.message.action, parsed.message.args)) {
+      return {
+        ok: false,
+        reason: `desiredState's intent ${describeValue((intent as JsonObject).id)} isn't its own id`,
+      };
+    }
+    if (parsedIntents.some((each) => each.id === parsed.message.id)) {
+      return { ok: false, reason: `desiredState's intent ${parsed.message.id} is there twice` };
+    }
+    parsedIntents.push(parsed.message);
   }
-  return { ok: true, message: { enabled, next: { item: item as string, vendor: vendor as string | null } } };
+  return { ok: true, message: parsedIntents };
 }
-
-const isTechVendor = (vendor: unknown): vendor is string => Object.values(TECH_VENDORS).includes(vendor as string);
-
-/** A desired state's `homeRam`: the next upgrade is from a size home can be upgraded from, at a tech vendor. */
-function parseHomeRam(homeRam: unknown): ParsedMessage<DesiredState["homeRam"]> {
-  if (typeof homeRam !== "object" || homeRam === null) return { ok: false, reason: "desiredState without homeRam" };
-  const { enabled, next } = homeRam as JsonObject;
-  if (typeof enabled !== "boolean") return { ok: false, reason: "desiredState's homeRam.enabled isn't a boolean" };
-  if (next === null) return { ok: true, message: { enabled, next: null } };
-  if (typeof next !== "object") return { ok: false, reason: `desiredState's homeRam.next is ${describeValue(next)}` };
-  const { fromRam, vendor } = next as JsonObject;
-  if (!isUpgradableHomeRam(fromRam)) {
-    return { ok: false, reason: `desiredState's homeRam.next.fromRam is ${describeValue(fromRam)}` };
-  }
-  if (!isTechVendor(vendor)) {
-    return { ok: false, reason: `desiredState's homeRam.next.vendor is ${describeValue(vendor)}, not a tech vendor` };
-  }
-  return { ok: true, message: { enabled, next: { fromRam, vendor } } };
-}
-
 /** What the Agent accepts from the brain. */
 export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
   const envelope = parseEnvelope(text);
@@ -292,18 +263,15 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       if (!Array.isArray(hosts) || hosts.length > MAX_HACK_LOOP_HOSTS || !hosts.every(isShortNonEmptyString)) {
         return { ok: false, reason: "desiredState's hackLoop.hosts isn't a list of hostnames" };
       }
-      const programs = parsePrograms(fields.programs);
-      if (!programs.ok) return programs;
-      const homeRam = parseHomeRam(fields.homeRam);
-      if (!homeRam.ok) return homeRam;
+      const intents = parseIntents(fields.intents);
+      if (!intents.ok) return intents;
       return {
         ok: true,
         message: {
           protocolVersion: CONTROL_PROTOCOL_VERSION,
           type: "desiredState",
           hackLoop: { enabled, target, hosts: [...hosts] },
-          programs: programs.message,
-          homeRam: homeRam.message,
+          intents: intents.message,
         },
       };
     }

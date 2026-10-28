@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The game's page, driven as `buy-program.js` drives it (#136), on a stand-in page: the sidebar's items as the game
-// renders them, with React's props on them. E2 drives the real page (packages/e2/test/programs.e2.test.ts).
+// renders them, with React's props on them. E2 drives the real page (packages/e2/test/effectors.e2.test.ts).
 import { afterEach, expect, test } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import { openGamePage } from "../../src/page/game-page.ts";
@@ -66,9 +66,49 @@ test("a city location: the City, then the location; one that isn't there is name
   expect(clicks).toEqual(["City"]);
 });
 
+/** A dialog, as MUI's `Modal` renders its root. */
+const dialog = () => Object.assign(document.createElement("div"), { className: "MuiModal-root" });
+
+test("a dialog that's fading out after a close isn't one that stays open (#141)", async () => {
+  const fading = dialog();
+  document.body.append(fading);
+  setTimeout(() => fading.remove(), 200);
+  const gamePage = openGamePage(ns, Date.now() + 2_000);
+  expect(await gamePage?.dialogStaysOpen()).toBe(false);
+});
+
+test("a dialog that stays is open, after the time a fade takes", async () => {
+  document.body.append(dialog());
+  const gamePage = openGamePage(ns, Date.now() + 2_000);
+  const startedMs = Date.now();
+  expect(await gamePage?.dialogStaysOpen()).toBe(true);
+  expect(Date.now() - startedMs).toBeGreaterThanOrEqual(350);
+});
+
 test("past the deadline, a step still looks once: what's there is clicked", async () => {
   sidebarWith("Terminal");
   const gamePage = openGamePage(ns, Date.now() - 1);
   expect(await gamePage?.returnToTerminal()).toBeNull();
   expect(clicks).toEqual(["Terminal"]);
+});
+
+test("a step the game may skip (#141): clicked if it's there now, and no problem if it isn't", async () => {
+  sidebarWith("Terminal", "City");
+  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  if (!gamePage) throw new Error("no page");
+  expect(await gamePage.clickIfThere("//div[@role='button' and .//p[normalize-space()='Travel']]", "Travel")).toEqual({
+    clicked: false,
+    problem: null,
+  });
+  expect(await gamePage.clickIfThere("//div[@role='button' and .//p[normalize-space()='City']]", "City")).toEqual({
+    clicked: true,
+    problem: null,
+  });
+  expect(clicks).toEqual(["City"]);
+  expect(gamePage.stepsTimeUp()).toBe(false);
+});
+
+test("the steps' time is up 300 ms before the deadline, kept for the way back", () => {
+  const gamePage = openGamePage(ns, Date.now() + 200);
+  expect(gamePage?.stepsTimeUp()).toBe(true);
 });

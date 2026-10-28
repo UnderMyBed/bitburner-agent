@@ -9,7 +9,7 @@
 // - A program: the Terminal, and `buy <program>` in it (`Terminal/commands/buy.ts`).
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `hasTorRouter` 0.05 + `fileExists` 0.1 (ram-budget.json); the page costs nothing.
-import { type PurchaseReport, TOR_ROUTER } from "@bitburner-agent/core";
+import { type EffectorReport, TOR_ROUTER } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { type GamePage, openGamePage } from "../page/game-page.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
@@ -46,12 +46,12 @@ export async function main(ns: NS): Promise<void> {
   const item = String(ns.args[0] ?? "");
   const vendor = String(ns.args[1] ?? "");
   const deadlineMs = Number(ns.args[2] ?? 0);
-  const report: PurchaseReport = { item, done: owns(ns, item), problem: null };
+  const report: EffectorReport = { done: owns(ns, item), problem: null };
   if (!report.done) {
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {
       report.problem = "no game page to buy it through";
-    } else if (gamePage.dialogOpen()) {
+    } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog is open: it's the owner's to close";
     } else {
       report.problem = item === TOR_ROUTER ? await buyTorRouter(gamePage, vendor) : await buyProgram(gamePage, item);

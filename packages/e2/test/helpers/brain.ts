@@ -158,11 +158,18 @@ function waitForLine(child: ChildProcess, log: string[], pattern: RegExp, timeou
   });
 }
 
-/** Reads the brain's store, read-only, while it runs: the snapshots and events it has stored for E2. */
+/**
+ * Reads the brain's store, read-only, while it runs: the snapshots and events it has stored for E2, and the owner's
+ * manual intents queue (#141), as `{ action, args }`.
+ */
 export function readStore(dataDirectory: string) {
   const store = TelemetryStore.openReadOnly(path.join(dataDirectory, "telemetry.sqlite"));
   try {
-    return { snapshots: store.snapshots({ environment: "E2" }), events: store.events({ environment: "E2" }) };
+    return {
+      snapshots: store.snapshots({ environment: "E2" }),
+      events: store.events({ environment: "E2" }),
+      manualIntents: JSON.parse(store.getSetting("intents.manual") ?? "[]") as unknown[],
+    };
   } finally {
     store.close();
   }

@@ -1,10 +1,16 @@
-// Buying through the real page (#136, #138): the `ui` effectors, end to end. A save with money, a real brain, the built
-// Agent: the Agent buys the TOR router at Alpha Enterprises and every port opener through the terminal, and upgrades
-// home's RAM at Alpha Enterprises, as a player would, and leaves the page on the Terminal with no dialog open.
+// The `ui` effectors on the real page (#136, #138, #141), end to end. A save with money, a real brain, the built Agent:
+// the Agent buys the TOR router at Alpha Enterprises and every port opener through the terminal, upgrades home's RAM
+// at Alpha Enterprises, and travels where the owner's manual queue says, as a player would, and leaves the page on the
+// Terminal with no dialog open.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BOOT_SCRIPT, type MediumSnapshotData, PORT_OPENER_PROGRAMS } from "@bitburner-agent/core";
+import {
+  BOOT_SCRIPT,
+  type FastSnapshotData,
+  type MediumSnapshotData,
+  PORT_OPENER_PROGRAMS,
+} from "@bitburner-agent/core";
 import type { Page } from "playwright";
 import { afterAll, afterEach, expect, onTestFailed, test } from "vitest";
 import {
@@ -17,7 +23,7 @@ import {
 } from "../src/game.ts";
 import { freeBrainPorts, type RunningBrain, readStore, startBrain } from "./helpers/brain.ts";
 import { useE2 } from "./helpers/environment.ts";
-import { simulatorSave, withMoney } from "./helpers/saves.ts";
+import { simulatorSave, withGameSettings, withMoney } from "./helpers/saves.ts";
 
 const e2 = useE2();
 /** The game autosaves every 60 s; a deploy is in the save only after it (#91). */
@@ -78,27 +84,33 @@ async function moneyedGameWithAgent({
   keepOfflineAlert = false,
   beforeAgent = async () => {},
   brainSettings = {},
+  gameSettings = {},
 }: {
   money?: number;
   keepOfflineAlert?: boolean;
   beforeAgent?: (page: Page) => Promise<void>;
   brainSettings?: Record<string, string>;
+  /** The game's Options, changed in the save (`withGameSettings`). */
+  gameSettings?: Record<string, unknown>;
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
   const brain = await startBrain({ dataDirectory, ports, allowedOrigin: e2.server.origin, settings: brainSettings });
   started.brains.push(brain);
   onTestFailed(() => console.log(`The brain's log (${dataDirectory}):\n${brain.log.join("\n")}`));
-  const save = withMoney(
-    await simulatorSave({
-      gameSettings: {
-        RemoteFileApiAddress: "127.0.0.1",
-        RemoteFileApiPort: ports.remoteFileApiPort,
-        RemoteFileApiReconnectionDelay: 1,
-        AutoexecScript: BOOT_SCRIPT,
-      },
-    }),
-    money,
+  const save = withGameSettings(
+    withMoney(
+      await simulatorSave({
+        gameSettings: {
+          RemoteFileApiAddress: "127.0.0.1",
+          RemoteFileApiPort: ports.remoteFileApiPort,
+          RemoteFileApiReconnectionDelay: 1,
+          AutoexecScript: BOOT_SCRIPT,
+        },
+      }),
+      money,
+    ),
+    gameSettings,
   );
   const page = await gameFromSave(e2.browser, e2.server, save);
   started.pages.push(page);
@@ -114,7 +126,7 @@ async function moneyedGameWithAgent({
   if (!keepOfflineAlert) await closeOfflineAlert(page);
   await beforeAgent(page);
   await advanceUntil(page, async () => eventCount("agentConnected") === 1, { realTimeoutMs: STEP_REAL_TIMEOUT_MS });
-  return { dataDirectory, page };
+  return { dataDirectory, page, ports };
 }
 
 test("with money, the Agent buys the TOR router at Alpha Enterprises and every port opener, and leaves the page as it was", async () => {
@@ -200,6 +212,104 @@ test("home RAM (#138): with $1.1m and buying programs off, home goes from 8 GB t
   // Paid for (the hack loop earns some meanwhile), and nothing else bought.
   expect(medium?.player.money as number).toBeLessThan(600_000);
   expect(medium?.hasTorRouter).toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+/** Queues an intent on the brain's dashboard, as its page does: from its own origin, as JSON. */
+async function queueIntent(dashboardPort: number, request: { action: string; args: Record<string, unknown> }) {
+  const origin = `http://127.0.0.1:${dashboardPort}`;
+  const response = await fetch(`${origin}/api/intents`, {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  expect(response.status, await response.text()).toBe(200);
+}
+
+/** Counts the game's travel dialogs as they open, in the page, for a test to read back. */
+const countTravelDialogs = (page: Page) =>
+  page.evaluate(() => {
+    const seen = { confirmation: 0, alert: 0 };
+    new MutationObserver(() => {
+      const text = document.body.textContent ?? "";
+      if (text.includes("Would you like to travel to")) seen.confirmation = 1;
+      if (text.includes("You are now in")) seen.alert = 1;
+    }).observe(document.body, { childList: true, subtree: true });
+    (window as unknown as { travelDialogsSeen: typeof seen }).travelDialogsSeen = seen;
+  });
+const travelDialogsSeen = (page: Page) =>
+  page.evaluate(
+    () => (window as unknown as { travelDialogsSeen: { confirmation: number; alert: number } }).travelDialogsSeen,
+  );
+
+test("travel (#141): queued on the dashboard, the Agent flies to Aevum, confirming and closing the alert", async () => {
+  // Purchases off, so the travel is all the page does; the game's Options show the confirmation and the alert.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  await countTravelDialogs(page);
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Aevum", {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  await advanceGameTime(page, 2_000);
+  const medium = latestMedium(dataDirectory);
+  // The $200k ticket, and nothing else bought.
+  expect(medium?.player.money as number).toBeLessThan(1_000_000 - 150_000);
+  expect(medium?.hasTorRouter).toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // The game asked, and said so, and the Agent answered both.
+  await expect(travelDialogsSeen(page)).resolves.toEqual({ confirmation: 1, alert: 1 });
+  // Done, as the Agent reported, so the brain took it off the queue.
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+});
+
+test("travel with ASCII art off and the confirmation turned off in Options: the city's button, and no dialog", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+    gameSettings: { DisableASCIIArt: true, SuppressTravelConfirmation: true },
+  });
+  await countTravelDialogs(page);
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Volhaven" } });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Volhaven", {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  await advanceGameTime(page, 2_000);
+  await expect(travelDialogsSeen(page)).resolves.toEqual({ confirmation: 0, alert: 0 });
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("travel without the ticket's money: not done, the reason logged as the outcome, and the page left as it was", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 100_000,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
+  const outcome = () => {
+    const fast = readStore(dataDirectory)
+      .snapshots.filter((row) => row.tier === "fast")
+      .at(-1)?.data as FastSnapshotData | undefined;
+    return fast?.intents.find((each) => each.id === "travel(Aevum)");
+  };
+  await advanceUntil(page, async () => (outcome()?.tries ?? 0) >= 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(outcome()).toMatchObject({
+    done: false,
+    problem: "not in Aevum after travelling (is the $200k ticket there?)",
+  });
+  expect(latestMedium(dataDirectory)?.player.city).toBe("Sector-12");
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
