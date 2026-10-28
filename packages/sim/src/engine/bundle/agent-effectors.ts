@@ -147,10 +147,6 @@ function routeFromHome(hostname: string): string[] | null {
   return null;
 }
 
-/**
- * Each action's effector, as the page's handler does it. Not named like NS functions (`upgradeHomeRam`): the game
- * charges RAM for such names in the in-game code that calls these.
- */
 /** How often the destroy's timer looks for the BitVerse, and how long past the backdoor's end it looks (#175). */
 const BITVERSE_POLL_MS = 100;
 const BITVERSE_SLACK_MS = 10_000;
@@ -160,7 +156,9 @@ const BITVERSE_SLACK_MS = 10_000;
  * `BitNode/ui/PortalModal.tsx:117-131`): `enterBitNode(false, …)` with the modal's defaults, destroying the BitNode;
  * BitNode 6's cinematic left as its Continue does (`RedPill.tsx:88-89`); then `callbackScript` 500 ms later, as
  * Singularity's `destroyW0r1dD43m0n` starts it. A timer, as the `ui` worker's page timer is: the BitVerse has killed
- * the Agent that armed it. Polls until the game is at the BitVerse, for `limitMs` at most.
+ * the Agent that armed it. Polls until the game is at the BitVerse, for `limitMs` at most. No guard against a second
+ * one armed meanwhile, as the `ui` timer has: the Agent is dead within its backdoor's few seconds, so no second try
+ * comes while one waits.
  */
 function enterFromBitVerseOnceThere(nextBitNode: number, callbackScript: string, limitMs: number): void {
   const endsAtMs = Date.now() + limitMs;
@@ -176,6 +174,10 @@ function enterFromBitVerseOnceThere(nextBitNode: number, callbackScript: string,
   setTimeout(look, BITVERSE_POLL_MS);
 }
 
+/**
+ * Each action's effector, as the page's handler does it. Not named like NS functions (`upgradeHomeRam`): the game
+ * charges RAM for such names in the in-game code that calls these.
+ */
 const effectors = {
   /**
    * The TOR button (`Locations/ui/TorButton.tsx`), which the page disables without the money. The vendor is the page's:
@@ -559,7 +561,7 @@ const effectors = {
   },
   /**
    * Destroying the BitNode (#175) as the `ui` worker does it: w0r1d_d43m0n's preconditions first, in core's words
-   * (`worldDaemonProblem`, copied: this bundle can't import core; the effector-backends suite checks them), then the
+   * (`worldDaemonProblem`, copied: this bundle can't import core; the destroy suite checks them, `brain/test/destroy-restart.test.ts`), then the
    * terminal's own commands: `home`, `connect` along the way, `backdoor`. Its action (hacking time / 4) ends at the
    * BitVerse (`Terminal/Terminal.ts:373-388`), which kills every script, the Agent that called this too; a timer then
    * enters `nextBitNode` through the portal (`enterFromBitVerseOnceThere`). Already at the BitVerse after a destroy's

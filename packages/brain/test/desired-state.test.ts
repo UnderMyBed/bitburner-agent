@@ -769,6 +769,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
 
     test("its guard: what's queued before it goes first; what's queued after it waits for it", async () => {
       const { controller, connection, sentIds, medium, waitingFor, backupNow, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_000));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
       controller.addManualIntent({ action: "installAugmentations", args: {} });
       controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
@@ -882,10 +883,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     });
 
     /** Connected as above, with w0r1d_d43m0n in the static snapshot, and the game's last resets at 1,000. */
-    function readyToDestroy() {
+    function readyToDestroy({ withSlow = true } = {}) {
       const connected = connectedWithLoopOff();
       send(connected.connection, "static", staticWithDaemon());
-      send(connected.connection, "slow", slowAt(1_000, 1_000));
+      if (withSlow) send(connected.connection, "slow", slowAt(1_000, 1_000));
       /** A medium snapshot at `hacking`, with w0r1d_d43m0n reachable and rooted, unless said. */
       const daemonMedium = (hacking = 3000, { reachable = true, rooted = true } = {}) =>
         send(connected.connection, "medium", mediumData(hacking, reachable ? { [WD]: rooted } : {}));
@@ -926,6 +927,32 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       // Once out, still judged: the level short again (an augmentation's multiplier gone), it's withdrawn.
       daemonMedium(10);
       expect(sentIds()).toEqual([]);
+    });
+
+    test("no slow snapshot yet: past its gate, not sent until one says the game's last reset, so its done check can't miss", async () => {
+      const { controller, connection, sentIds, waitingFor, releaseDestroy } = readyToDestroy({ withSlow: false });
+      controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+      await releaseDestroy();
+      expect(sentIds()).toEqual([]);
+      expect(waitingFor(DESTROY.id)).toBe(
+        "waiting for the Agent's slow snapshot (the game's last reset), to see the reset when it comes",
+      );
+      // The reset can't come unseen: with none sent, the next BitNode's slow snapshot finds it still queued, unsent.
+      send(connection, "slow", slowAt(1_000, 1_000));
+      expect(sentIds()).toEqual([DESTROY.id]);
+      expect(waitingFor(DESTROY.id)).toBeNull();
+      // Sent now, with the reset noted: the next BitNode's takes it off.
+      send(connection, "slow", slowAt(90_000, 90_000));
+      expect(readManualIntents(store)).toEqual([]);
+    });
+
+    test("an install too waits for the slow snapshot before it goes", async () => {
+      const { controller, connection, sentIds, release } = connectedWithLoopOff();
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      await release();
+      expect(sentIds()).toEqual([]);
+      send(connection, "slow", slowData());
+      expect(sentIds()).toEqual(["installAugmentations()"]);
     });
 
     test("the level is the BitNode's: the static snapshot's required hacking, and fails closed without it", () => {

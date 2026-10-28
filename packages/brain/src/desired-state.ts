@@ -128,6 +128,7 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   the game sets them from the clock (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:122-126`, `:173`), which
  *   can be set back (#167: E2's page clock is). They move only with a reset or another save loaded; either way the
  *   intent is dropped, the safe direction for an irreversible one.
+ * - It goes out only once a slow snapshot has said the reset time (#175 review), so the note is always written.
  * - The note is kept in the store (#175): it outlives a disconnect (the reset kills the Agent) and a restart of the
  *   brain. A destroy can't be seen done in the game (another can follow): a brain that forgot it sent one would gate
  *   it again in the next BitNode, and destroy that too once its requirements were met.
@@ -283,7 +284,7 @@ export class DesiredStateController {
       waitingFor:
         view.source === "manual" && afterReset(manual, index)
           ? waitingForReset(manual.find(resetsTheGame) as Intent)
-          : this.#gates.waitingFor(view.id),
+          : (this.#gates.waitingFor(view.id) ?? this.#resetTimeAwaited(manual[index])),
     }));
   }
 
@@ -406,6 +407,18 @@ export class DesiredStateController {
     );
   }
 
+  /**
+   * Why `intent`, one that resets the game, isn't sent though its gate let it, or null (#175 review): its done check
+   * needs the connected Agent's reset time from before it, so it waits for a slow snapshot that says it. Sent without
+   * one, a reset seen first in the next game's snapshot would be no change: the intent would stay queued, and a destroy
+   * would wait in the next BitNode for its requirements, then destroy that one too.
+   */
+  #resetTimeAwaited(intent: Intent | undefined): string | null {
+    if (intent === undefined || !resetsTheGame(intent)) return null;
+    if (resetTimeOf(this.#slowData, resetFieldOf(intent)) !== null) return null;
+    return "waiting for the Agent's slow snapshot (the game's last reset), to see the reset when it comes";
+  }
+
   /** The note, here and in the store, written only when it changes. */
   #noteResetSent(note: ResetSentNote | null): void {
     if (JSON.stringify(note) === JSON.stringify(this.#resetSent)) return;
@@ -435,7 +448,10 @@ export class DesiredStateController {
     // An irreversible intent goes once its gate lets it, and nothing queued after a reset's intent before it's done.
     this.#gates.sync(manual);
     const intents = [
-      ...manual.filter((each, index) => !afterReset(manual, index) && this.#gates.isReleased(each.id)),
+      ...manual.filter(
+        (each, index) =>
+          !afterReset(manual, index) && this.#gates.isReleased(each.id) && this.#resetTimeAwaited(each) === null,
+      ),
       ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
     ];
     // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says

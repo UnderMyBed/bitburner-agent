@@ -76,7 +76,9 @@ const newGate = (): Gate => ({
  * - Destroying the BitNode, then: w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`), so it's held before any
  *   backup. Reachable: among the medium snapshot's servers, which `scan` finds from home only once The Red Pill is
  *   installed. Root, there too, and the hacking level against its required level, from the static snapshot: 3000 times
- *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode.
+ *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode. The game also
+ *   allows a destroy with every Black Op done (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count
+ *   that route, the conservative direction.
  */
 export function guardFailure(
   intent: Intent,
