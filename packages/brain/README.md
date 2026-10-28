@@ -385,7 +385,7 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/main.ts` | The brain's process |
 | `src/config.ts` | The data directory and `config.json` |
 | `src/telemetry-store.ts` | The store |
-| `src/record-channel-events.ts` | The control channel's, the deployer's and the save backups' events into the store |
+| `src/record-channel-events.ts` | The control channel's, the deployer's and the save backups' events into the store; and `brainChannel`, the control channel with its numbering seeded from the store (#119) |
 | `src/in-game-build.ts` | Reads the in-game build (checked against its manifest) and the pinned definitions |
 | `src/gap-report.ts`, `src/gaps-cli.ts` | The gap report and its command (`npm run gaps`) |
 | `src/simulated-game.ts` | The lockstep driver |

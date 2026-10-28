@@ -35,8 +35,8 @@ export type ControlChannelEvent =
   | { type: "agentConnected"; atMs: number; agentSessionId: string; deploymentId: string; game: GameInfo }
   | { type: "agentDisconnected"; atMs: number; agentSessionId: string }
   /**
-   * `missedBefore`: sequence numbers skipped since the last snapshot passed on for this session and tier, or, for the
-   * session's first in this channel, since the last the store has (`storedSequenceNumbers`).
+   * `missedBefore`: sequence numbers skipped since the last snapshot passed on for this session and tier, or, for a
+   * session the channel doesn't remember, since the last the store has (`storedSequenceNumbers`).
    */
   | { type: "snapshotReceived"; atMs: number; snapshot: SnapshotMessage; missedBefore: number }
   | { type: "connectionRejected"; atMs: number; reason: ConnectionRejectedReason; detail: string }
@@ -59,7 +59,7 @@ export interface ControlChannelOptions {
   token: string;
   clock: Clock;
   /**
-   * Where a listener's error goes, once the channel's state is settled, and `storedSequenceNumbers`'s. Default: raised
+   * Where a listener's error, or `storedSequenceNumbers`'s, goes once the channel's state is settled. Default: raised
    * as an uncaught exception (fail fast: the brain stops and is restarted, rather than carry on without its store).
    */
   onListenerError?: (error: unknown) => void;
@@ -67,7 +67,7 @@ export interface ControlChannelOptions {
    * The last sequence number the brain stored for each tier of an Agent session (#119), asked once, when a session the
    * channel doesn't remember says hello. So after a brain restart the same session's numbering carries on from the
    * store: what's stored is neither missed nor passed on again. Default: nothing stored. One that throws counts from
-   * scratch.
+   * scratch, its error going to `onListenerError` (in the brain, that fails fast).
    */
   storedSequenceNumbers?: (agentSessionId: string) => Partial<Record<SnapshotTier, number>>;
 }
