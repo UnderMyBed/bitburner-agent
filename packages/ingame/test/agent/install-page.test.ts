@@ -5,18 +5,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import { openGamePage } from "../../src/page/game-page.ts";
 import { armRestartAfterInstall, installOnPage, RESTART_STEP_LIMITS_MS } from "../../src/page/install-page.ts";
+import { clicks, element, optionsInSidebar, STARTED, terminal, withProps } from "./stand-in-page.ts";
 
 const BOOT = "agent/boot.js";
 /** The line the timer types: absolute, whatever directory the terminal is in. */
 const COMMAND = "run /agent/boot.js";
-const STARTED: string = "Running script with 1 thread, pid 1 and args: [].";
-/** Longer than the timer's poll (100 ms): the input renders a typed line only after it. */
-const RENDER_MS = 250;
-const clicks: string[] = [];
-const withProps = <T extends Element>(element: T, props: Record<string, unknown>): T =>
-  Object.assign(element, { __reactProps$test: props });
-const element = (tag: string, fields: Record<string, unknown> = {}) =>
-  Object.assign(document.createElement(tag), fields);
 
 /** The install's alert, as the AlertManager renders it: a dialog whose paper holds its X, then its text. */
 function installAlert(): Element {
@@ -34,65 +27,6 @@ function installAlert(): Element {
   dialog.append(paper);
   document.body.append(dialog);
   return dialog;
-}
-
-/**
- * The Terminal: its output and its controlled input, as `Terminal/ui/TerminalInput.tsx` renders it. Typing sets the
- * line, which the input renders `RENDER_MS` later, with its `value` prop and new handlers; Enter runs the line its last
- * render saw: the echo, then what `answer` prints for it, rendered `RENDER_MS` later too. `earlier` lines are in the output already.
- */
-function terminal({
-  answer = (_line: string) => STARTED,
-  typed = "",
-  enterDoesNothing = false,
-  neverRenders = false,
-  disabled = false,
-  earlier = [] as string[],
-} = {}) {
-  const output = element("ul", { id: "terminal" });
-  for (const line of ["Bitburner v3.0.1 (1da7316)", ...earlier]) output.append(element("li", { textContent: line }));
-  const input = element("input", { id: "terminal-input", value: typed, disabled }) as unknown as HTMLInputElement;
-  const ran: string[] = [];
-  const render = (line: string) => {
-    input.value = line;
-    withProps(input, {
-      value: line,
-      onChange: (event: { target: { value: string } }) => {
-        if (!neverRenders) setTimeout(() => render(event.target.value), RENDER_MS);
-      },
-      onKeyDown: (event: { key: string }) => {
-        if (event.key !== "Enter" || enterDoesNothing) return;
-        ran.push(line);
-        // The output renders a moment later, as the game's does: what's there before is what a look sees first.
-        setTimeout(() => {
-          output.append(element("li", { textContent: `[home /]> ${line}` }));
-          if (line !== "") output.append(element("li", { textContent: answer(line) }));
-        }, RENDER_MS);
-        render("");
-      },
-    });
-  };
-  render(typed);
-  document.body.append(output, input);
-  return { input, ran };
-}
-
-/** The sidebar's Options, which opens the Options page with its "Force kill all active scripts". */
-function optionsInSidebar({ withForceKill = true } = {}) {
-  const options = withProps(element("div"), {
-    onClick: () => {
-      clicks.push("Options");
-      if (!withForceKill) return;
-      document.body.append(
-        withProps(element("button", { textContent: "Force kill all active scripts" }), {
-          onClick: () => clicks.push("Force kill all active scripts"),
-        }),
-      );
-    },
-  });
-  options.setAttribute("role", "button");
-  options.append(element("p", { textContent: "Options" }));
-  document.body.append(options);
 }
 
 afterEach(() => {

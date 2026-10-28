@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  AGENT_SIM_EFFECTORS_GLOBAL,
   BOOT_SCRIPT,
   type FastSnapshotData,
   type MediumSnapshotData,
@@ -941,6 +942,201 @@ test("installing with nothing queued (#167): the Augmentations page's Install is
   await advanceGameTime(page, 2_000);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+/**
+ * A save at The Red Pill's requirements (#177), as the simulator sets it up: The Red Pill queued (a harness edit) and
+ * installed by the owner's script through the simulator's own install, which links w0r1d_d43m0n to The-Cave
+ * (`Prestige.ts:174-182`); hacking exp for level 3042 (w0r1d_d43m0n needs 3000 in BN1); the port openers bought through
+ * the simulator's own effectors, and run on it with NUKE.exe. Returns the way from home to w0r1d_d43m0n, as `scan`
+ * finds it, for an owner who types it.
+ */
+async function atTheRedPill(sim: Simulation): Promise<string[]> {
+  const ownerRuns = async (source: string) => {
+    await sim.writeFile("home", "owner-setup.js", source);
+    const run = await sim.run("home", "owner-setup.js");
+    expect(run.error).toBeUndefined();
+    await sim.advance(1_000);
+    return run.pid as number;
+  };
+  const effectors = `globalThis.${AGENT_SIM_EFFECTORS_GLOBAL}`;
+  await sim.diagnostics.queueAugmentation("The Red Pill");
+  await ownerRuns(`export async function main(ns) { ${effectors}.installQueuedAugmentations(""); }`);
+  await sim.diagnostics.setMoney(1e12);
+  await sim.diagnostics.gainHackingExp(1e44);
+  const pid = await ownerRuns(`export async function main(ns) {
+    ${effectors}.buyTorRouter();
+    for (const program of ${JSON.stringify(PORT_OPENER_PROGRAMS)}) ${effectors}.buyDarkwebProgram(program);
+    const daemon = "w0r1d_d43m0n";
+    ns.brutessh(daemon); ns.ftpcrack(daemon); ns.relaysmtp(daemon); ns.httpworm(daemon); ns.sqlinject(daemon);
+    ns.nuke(daemon);
+    const cameFrom = new Map([["home", null]]);
+    const queue = ["home"];
+    for (let index = 0; index < queue.length; index++) {
+      for (const next of ns.scan(queue[index])) {
+        if (!cameFrom.has(next)) {
+          cameFrom.set(next, queue[index]);
+          queue.push(next);
+        }
+      }
+    }
+    const route = [];
+    for (let step = daemon; step !== "home"; step = cameFrom.get(step)) route.unshift(step);
+    ns.print("route: " + route.join(" "));
+  }`);
+  // The install's script is gone with the reset (`Prestige.ts:194`), so only this one's log is read.
+  const route = ((await sim.logs(pid)).find((line) => line.startsWith("route: ")) ?? "")
+    .slice("route: ".length)
+    .split(" ");
+  expect(route.at(-2)).toBe("The-Cave");
+  return route;
+}
+
+/** The brain's settings for a destroy: nothing else moves the game or types into the terminal. */
+const ONLY_THE_DESTROY = { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" };
+
+/** Once the Agent that destroyed has died, game time until the next Agent connects, in steps (no reload). */
+async function untilTheNextAgent(page: Page, dataDirectory: string, sessions: number): Promise<number> {
+  await advanceUntil(page, async () => eventsOf(dataDirectory, "agentDisconnected").length >= sessions, {
+    realTimeoutMs: 3 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 90_000,
+  });
+  const { gameMs } = await advanceUntil(
+    page,
+    async () => eventsOf(dataDirectory, "agentConnected").length === sessions + 1,
+    { realTimeoutMs: 3 * STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 90_000 },
+  );
+  return gameMs;
+}
+
+/**
+ * The next BitNode, as the next Agent's slow snapshot shows it, the destroy off the brain's queue, and the dialogs the
+ * new BitNode raised closed by the next Agent's dialog watcher, which told the brain what they said.
+ */
+async function expectInBitNode(page: Page, dataDirectory: string, n: number, lastNodeResetBefore: number) {
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  const resetInfo = latestSlow(dataDirectory)?.resetInfo;
+  expect(resetInfo).toMatchObject({ currentNode: n, ownedSF: { 1: 1 }, ownedAugs: {} });
+  expect(resetInfo?.lastNodeReset).not.toBe(lastNodeResetBefore);
+  await advanceUntil(
+    page,
+    async () => gameDialogs(dataDirectory).some((dialog) => dialog.text.includes("You received a Source-File")),
+    { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 10_000 },
+  );
+  await advanceGameTime(page, 4_000);
+  expect(gameDialogs(dataDirectory).map((dialog) => dialog.text)).toContainEqual(
+    expect.stringContaining("Congratulations on destroying your first BitNode!"),
+  );
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+}
+
+/** The Agent's first slow snapshot's last BitNode reset: the game's, before the destroy. */
+async function firstLastNodeReset(page: Page, dataDirectory: string): Promise<number> {
+  await advanceUntil(page, async () => latestSlow(dataDirectory) !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  return latestSlow(dataDirectory)?.resetInfo.lastNodeReset as number;
+}
+
+test("destroying BN1 into BN2 through the page (#177): the terminal's backdoor, the BitVerse's portal, then `run /agent/boot.js`", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: async (sim) => {
+      await atTheRedPill(sim);
+    },
+    brainSettings: ONLY_THE_DESTROY,
+  });
+  const navigations: string[] = [];
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) navigations.push(frame.url());
+  });
+  const lastNodeResetBefore = await firstLastNodeReset(page, dataDirectory);
+  await queueIntent(ports.dashboardPort, { action: "destroyBitNode", args: { nextBitNode: 2 } });
+  await untilTheNextAgent(page, dataDirectory, 1);
+  // Through the terminal, with no reload: the backdoor typed, the timer's line run in BN2.
+  expect(navigations).toEqual([]);
+  expect(await terminalText(page)).toMatch(BOOT_STARTED);
+  await expectInBitNode(page, dataDirectory, 2, lastNodeResetBefore);
+  // A backup before the destroy, past its gate.
+  expect(
+    eventsOf(dataDirectory, "saveBackup").filter((event) => "file" in (event.detail as object)).length,
+  ).toBeGreaterThanOrEqual(1);
+});
+
+test("destroying with ASCII art off, into BN6 (#177): the portal's button by its name, then the Bladeburner cinematic's Continue", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: async (sim) => {
+      await atTheRedPill(sim);
+    },
+    gameSettings: { DisableASCIIArt: true },
+    brainSettings: ONLY_THE_DESTROY,
+  });
+  const lastNodeResetBefore = await firstLastNodeReset(page, dataDirectory);
+  await queueIntent(ports.dashboardPort, { action: "destroyBitNode", args: { nextBitNode: 6 } });
+  await untilTheNextAgent(page, dataDirectory, 1);
+  expect(await terminalText(page)).toMatch(BOOT_STARTED);
+  await expectInBitNode(page, dataDirectory, 6, lastNodeResetBefore);
+  // BN6's own dialog too, 200 ms after the Source-File's (`Prestige.ts:294-299`).
+  expect(gameDialogs(dataDirectory).map((dialog) => dialog.text)).toContainEqual(
+    expect.stringContaining("would like to have a word with you"),
+  );
+});
+
+test("a game that loads at the BitVerse (#177): w0r1d_d43m0n backdoored by the owner, saved there; autoexec's Agent, past the gate, straight to the portal", async () => {
+  let route: string[] = [];
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: async (sim) => {
+      route = await atTheRedPill(sim);
+    },
+    brainSettings: ONLY_THE_DESTROY,
+  });
+  // The owner's own backdoor on w0r1d_d43m0n, typed in one line: the BitVerse, every script dead, the Agent too.
+  await typeCommand(page, ["home", ...route.map((hop) => `connect ${hop}`), "backdoor"].join("; "));
+  await advanceUntil(page, async () => eventsOf(dataDirectory, "agentDisconnected").length === 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  const portal2 = page.locator("xpath=//button[starts-with(@aria-label, 'BitNode-2: ')]");
+  await advanceUntil(page, async () => (await portal2.count()) === 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  // Saved there by the autosave (every 60 s; its toast is hidden there, `ui/GameRoot.tsx:562`), then loaded: the
+  // BitVerse's map at once, and autoexec starts the Agent.
+  await advanceGameTime(page, AUTOSAVE_GAME_TIMEOUT_MS);
+  await page.reload();
+  await portal2.waitFor({ timeout: STEP_REAL_TIMEOUT_MS });
+  await advanceUntil(page, async () => eventsOf(dataDirectory, "agentConnected").length === 2, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  const lastNodeResetBefore = await firstLastNodeReset(page, dataDirectory);
+  // No terminal there to type into, nor a sidebar to reach one by (`ui/GameRoot.tsx:315-317`): only the portal.
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(0);
+  await queueIntent(ports.dashboardPort, { action: "destroyBitNode", args: { nextBitNode: 2 } });
+  await untilTheNextAgent(page, dataDirectory, 2);
+  expect(await terminalText(page)).toMatch(BOOT_STARTED);
+  await expectInBitNode(page, dataDirectory, 2, lastNodeResetBefore);
+});
+
+test("destroying before The Red Pill (#177): held by the brain's guard in core's words, with no backup and nothing typed", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ brainSettings: ONLY_THE_DESTROY });
+  const textBefore = await terminalText(page);
+  await queueIntent(ports.dashboardPort, { action: "destroyBitNode", args: { nextBitNode: 2 } });
+  await advanceGameTime(page, 30_000);
+  expect((await dashboardIntents(ports.dashboardPort)).find((each) => each.id === "destroyBitNode(2)")).toMatchObject({
+    waitingFor: "held: w0r1d_d43m0n isn't reachable: The Red Pill isn't installed",
+  });
+  // Never sent: no fast snapshot names it (the gate took no backup for it), and nothing typed.
+  const sent = readStore(dataDirectory)
+    .snapshots.filter((row) => row.tier === "fast")
+    .some((row) => ((row.data as FastSnapshotData).intents ?? []).some((each) => each.id === "destroyBitNode(2)"));
+  expect(sent).toBe(false);
+  expect(await terminalText(page)).toBe(textBefore);
 });
 
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
