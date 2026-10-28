@@ -10,6 +10,7 @@ export {
   SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_CLASS_WORK_WORKER_NAME,
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
@@ -20,6 +21,17 @@ export {
   singularityWorkerFileNames,
   singularityWorkerMostRamGb,
 } from "./backends.ts";
+export {
+  CLASS_LOCATION_NAMES,
+  CLASS_LOCATIONS,
+  CLASS_MONEY_GUARD_SECONDS,
+  CLASS_TYPE_NAMES,
+  CLASS_TYPES,
+  type ClassChoice,
+  classCostPerSecond,
+  classLabel,
+  classStartProblem,
+} from "./classes.ts";
 export {
   COMPANY_NAMES,
   holdsJobInField,
@@ -108,6 +120,7 @@ export {
   type WorkerReport,
 } from "./snapshots.ts";
 export {
+  CLASS_WORK_WORKER_NAME,
   COMPANY_WORK_WORKER_NAME,
   CRIME_WORK_WORKER_NAME,
   FACTION_WORK_TYPES,

@@ -1,8 +1,8 @@
 /**
  * Every worker the Agent runs on home beside itself, one at a time: the snapshot tiers', the hack loop's (#134), the
  * program buyer's (#136), the home RAM upgrader's (#138), the traveller's (#141), the Singularity backend's (#145), the
- * faction joiner's (#147), the augmentation buyer's (#149), and the faction, company and crime workers' (#151, #153,
- * #156). A fresh save's home must hold the Agent plus the largest of those it can run (`freshSaveHomeWorkerFileNames`),
+ * faction joiner's (#147), the augmentation buyer's (#149), and the faction, company, crime and class workers'
+ * (#151, #153, #156, #158). A fresh save's home must hold the Agent plus the largest of those it can run (`freshSaveHomeWorkerFileNames`),
  * so the RAM budget test and the simulator and E2 suites read these lists. Functions, not constants, so in-game bundles that don't use them leave them out.
  */
 import { BUY_AUGMENTATION_WORKER_NAME } from "./augmentations.ts";
@@ -14,7 +14,12 @@ import { UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 import { TRAVEL_WORKER_NAME } from "./locations.ts";
 import { BUY_PROGRAM_WORKER_NAME } from "./programs.ts";
 import { snapshotWorkerFileName } from "./snapshots.ts";
-import { COMPANY_WORK_WORKER_NAME, CRIME_WORK_WORKER_NAME, FACTION_WORK_WORKER_NAME } from "./work.ts";
+import {
+  CLASS_WORK_WORKER_NAME,
+  COMPANY_WORK_WORKER_NAME,
+  CRIME_WORK_WORKER_NAME,
+  FACTION_WORK_WORKER_NAME,
+} from "./work.ts";
 
 export function homeWorkerFileNames(): string[] {
   return [
@@ -29,6 +34,7 @@ export function homeWorkerFileNames(): string[] {
     FACTION_WORK_WORKER_NAME,
     COMPANY_WORK_WORKER_NAME,
     CRIME_WORK_WORKER_NAME,
+    CLASS_WORK_WORKER_NAME,
     ...singularityWorkerFileNames(),
   ];
 }
