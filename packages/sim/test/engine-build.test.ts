@@ -111,12 +111,14 @@ describe("collectTsconfigs", () => {
 
   test("takes the nearest tsconfig.json above the sources, as esbuild does, then each file it extends", () => {
     const files = {
-      // Comments, as the repository's have (one an old extends); an extends without its .json; then a list of them.
+      // Comments, as the repository's have (one an old extends); an extends without its .json (beside a directory of
+      // the same name); then a list of them, with a trailing comma; and a cycle back, followed once.
       "pkg/tsconfig.json":
         '{\n  // the package\'s, once "extends": "./gone.json"\n  "extends": "../node",\n  "include": ["src/**/*.ts"]\n}',
-      "node.json": '{ /* node */ "extends": ["./base.json", "./strict.json"] }',
+      "node.json": '{ /* node */ "extends": ["./base.json", "./strict.json", ] }',
+      "node/readme.txt": "a directory named like the extends, without its .json",
       "base.json": '{ "compilerOptions": { "target": "es2024" } }',
-      "strict.json": '{ "compilerOptions": { "strict": true } }',
+      "strict.json": '{ "extends": "./node.json", "compilerOptions": { "strict": true } }',
       // Not on the chain: another directory's, and a parent's beyond the nearest.
       "other/tsconfig.json": "{}",
       "tsconfig.json": "{}",
@@ -137,6 +139,11 @@ describe("collectTsconfigs", () => {
     );
     const missing = tree({ "tsconfig.json": '{ "extends": "./gone.json" }', "src/a.ts": "" });
     expect(() => collectTsconfigs(path.join(missing, "src"))).toThrow(/extends \.\/gone\.json, which isn't there/);
+  });
+
+  test("fails on a jsconfig.json esbuild would take before a tsconfig.json further up", () => {
+    const root = tree({ "pkg/jsconfig.json": "{}", "tsconfig.json": "{}", "pkg/src/a.ts": "" });
+    expect(() => collectTsconfigs(path.join(root, "pkg/src"))).toThrow(/jsconfig\.json.*fingerprint/);
   });
 });
 

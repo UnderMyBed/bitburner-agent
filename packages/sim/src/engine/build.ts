@@ -66,13 +66,17 @@ export function engineFingerprint(inputs: EngineInputs): string {
 
 /**
  * The tsconfig files esbuild applies to the sources in `dir`: the nearest tsconfig.json at or above it, as esbuild
- * finds it, then every file that one extends, in turn. Path (relative to `dir`, forward slashes) → content. Throws on
+ * finds it, then every file that one extends, in turn (each once, so a cycle ends). Path (relative to `dir`, forward slashes) → content. Throws on
  * an `extends` it can't follow (a package's config, a missing file), rather than leave that config out of the
  * fingerprint.
  */
 export function collectTsconfigs(dir: string): Record<string, string> {
   let nearest = path.resolve(dir);
   while (!existsSync(path.join(nearest, "tsconfig.json"))) {
+    // esbuild takes a jsconfig.json where a directory has no tsconfig.json: not followed here, so not allowed.
+    if (existsSync(path.join(nearest, "jsconfig.json"))) {
+      throw new Error(`${path.join(nearest, "jsconfig.json")} would apply to the bundle: add it to the fingerprint`);
+    }
     const parent = path.dirname(nearest);
     if (parent === nearest) return {};
     nearest = parent;
@@ -104,8 +108,9 @@ function resolveExtends(file: string, extended: string): string {
     throw new Error(`${file} extends ${extended}, a package's config: add it to the engine's fingerprint (build.ts)`);
   }
   const resolved = path.resolve(path.dirname(file), extended);
-  if (existsSync(resolved)) return resolved;
-  if (!resolved.endsWith(".json") && existsSync(`${resolved}.json`)) return `${resolved}.json`;
+  const isFile = (file: string) => existsSync(file) && statSync(file).isFile();
+  if (isFile(resolved)) return resolved;
+  if (!resolved.endsWith(".json") && isFile(`${resolved}.json`)) return `${resolved}.json`;
   throw new Error(`${file} extends ${extended}, which isn't there`);
 }
 
