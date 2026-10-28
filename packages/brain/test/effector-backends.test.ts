@@ -589,6 +589,12 @@ test("a class (sim, #158): Computer Science at Rothman, unfocused then focused; 
   const kept = await savedClass(fresh);
   expect(kept).toMatchObject({ classType: "Data Structures", location: "Rothman University", focus: false });
   expect(kept?.money).toBeLessThan(0);
+  // A gym told from another by its location, which the page can't do: Iron Gym's strength, then Powerhouse Gym's.
+  await fresh.simulation.diagnostics.setMoney(2_000_000);
+  await workedAt(fresh, aClass("Iron Gym", "str"));
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Iron Gym" });
+  await workedAt(fresh, aClass("Powerhouse Gym", "str"));
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym" });
 });
 
 test("a class (singularity, #158): with SF4.3, through its Singularity worker, a gym told from another by its location", async () => {
@@ -620,6 +626,10 @@ test("a class (singularity, #158): with SF4.3, through its Singularity worker, a
   await fresh.simulation.diagnostics.setMoney(2_000_000);
   await fresh.game.runUntil(() => fresh.latest<FastSnapshotData>("fast")?.work?.converged === true, 35_000);
   expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym" });
+  // Under way, it's left alone by the guard: with the money gone, its focus is still set.
+  await fresh.simulation.diagnostics.setMoney(0);
+  expect(await workedAt(fresh, aClass("Powerhouse Gym", "str", true))).toMatchObject({ converged: true });
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym", focus: true });
   expect(await workedAt(fresh, aClass("Crush Fitness Gym", "agi"), false)).toMatchObject({
     converged: false,
     problem: "Crush Fitness Gym is in Aevum, and the player is in Sector-12 (travel there first)",
