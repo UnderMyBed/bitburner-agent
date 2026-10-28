@@ -40,8 +40,8 @@ export interface AlertFacts {
   /** The newest deploy since the brain started: `deployed`, or `deployFailed` with its reason. */
   lastDeploy: { atMs: number; failed: boolean; detail: string } | null;
   /**
-   * When the supervisor gave up (#94), until resuming clears it, with the newest `supervisionGaveUp` event's detail
-   * (its cause, #127), or null if there's no such event.
+   * When the supervisor gave up (#94), until resuming clears it, with the detail of the `supervisionGaveUp` event recorded
+   * with this give-up (its cause, #127), or null if no event was recorded with it.
    */
   supervisionGaveUp: { atMs: number; detail: unknown } | null;
   /** The intents' outcomes in the newest fast snapshot (#141), or none. */
@@ -104,7 +104,8 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
 
 /**
  * The give-up's alert text, saying why from its event's detail (supervisor.ts `#giveUp`): a launch that would have been
- * one too many in the hour, or too many failed checks in a row. Text covering both where the detail says neither.
+ * one too many in the hour, or too many failed checks in a row. Where there's no such detail, it says the cause wasn't
+ * recorded, and where to look instead.
  */
 function gaveUpDetail(detail: unknown): string {
   const resume = "resume supervision to start it again";
@@ -116,5 +117,9 @@ function gaveUpDetail(detail: unknown): string {
   if (typeof fields.launchesInLastHour === "number") {
     return `the supervisor stopped after ${fields.launchesInLastHour} launches in an hour: ${resume}`;
   }
-  return `the supervisor stopped (too many launches, or its checks kept failing): see the supervisionGaveUp event; ${resume}`;
+  // No event recorded with this give-up (the store failed as it gave up): say so, and where its cause shows.
+  return (
+    "the supervisor stopped, but its cause wasn't recorded (too many launches, or checks that kept failing: see the " +
+    `brain's log and the supervisionFailed events): ${resume}`
+  );
 }

@@ -78,11 +78,11 @@ test("supervisionGaveUp after checks that kept failing (#127) says so, with the 
   ]);
 });
 
-test("supervisionGaveUp with no give-up event to say why covers both causes", () => {
+test("supervisionGaveUp with no event recorded with it says the cause wasn't recorded, and where to look", () => {
   for (const detail of [null, {}, { failedChecksInARow: "10" }]) {
     expect(activeAlerts({ ...quiet, supervisionGaveUp: { atMs: STARTED_AT_MS, detail } })[0]?.detail).toBe(
-      "the supervisor stopped (too many launches, or its checks kept failing): see the supervisionGaveUp event; " +
-        "resume supervision to start it again",
+      "the supervisor stopped, but its cause wasn't recorded (too many launches, or checks that kept failing: see " +
+        "the brain's log and the supervisionFailed events): resume supervision to start it again",
     );
   }
 });

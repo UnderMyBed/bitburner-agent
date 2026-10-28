@@ -1,7 +1,7 @@
 // The supervision switch (architecture §10.2; #93, #94), kept in the store's settings so it survives restarts of the
 // brain. The dashboard sets it; the supervisor (#94) reads it with `readSupervisionSwitch` before every launch, records
 // a give-up with `recordSupervisionGaveUp` after too many (or after checks that kept failing), and records each launch
-// as a `relaunch` event. While paused, nothing is launched; unpausing also clears a give-up.
+// as a `relaunch` event. While paused, nothing is launched; resuming also clears a give-up.
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
@@ -35,7 +35,7 @@ export function readSupervisionSwitch(store: TelemetryStore): SupervisionSwitch 
   return { paused, gaveUpAtMs: gaveUpAt === null ? null : Number(gaveUpAt) };
 }
 
-/** The dashboard's switch. Unpausing also clears a give-up, so the supervisor starts afresh. */
+/** The dashboard's switch. Resuming also clears a give-up, so the supervisor starts afresh. */
 export function setSupervisionPaused(store: TelemetryStore, paused: boolean): void {
   writeSwitch(store, PAUSED_SETTING, paused);
   if (!paused) store.deleteSetting(GAVE_UP_AT_SETTING);

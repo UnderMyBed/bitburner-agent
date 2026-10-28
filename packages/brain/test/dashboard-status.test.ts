@@ -284,8 +284,8 @@ test("a give-up whose own event is missing doesn't take an older give-up's cause
   });
   recordSupervisionGaveUp(store, STARTED_AT_MS + 2_000);
   expect(status(STARTED_AT_MS + 3_000).alerts.find((alert) => alert.name === "supervisionGaveUp")?.detail).toBe(
-    "the supervisor stopped (too many launches, or its checks kept failing): see the supervisionGaveUp event; " +
-      "resume supervision to start it again",
+    "the supervisor stopped, but its cause wasn't recorded (too many launches, or checks that kept failing: see " +
+      "the brain's log and the supervisionFailed events): resume supervision to start it again",
   );
 });
 
