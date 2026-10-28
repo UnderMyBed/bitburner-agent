@@ -5,6 +5,7 @@
  * `ns.getPlayer`).
  */
 import type { SnapshotTier } from "./control-protocol.ts";
+import type { IntentOutcome } from "./intents.ts";
 
 /**
  * The in-game port every home worker reports on (the snapshot workers, and the hack loop's, #134), and the Agent reads.
@@ -106,4 +107,6 @@ export interface FastSnapshotData {
   pageHeapUsedBytes: number | null;
   /** The fast worker's data; null when it couldn't run. */
   game: FastWorkerData | null;
+  /** Every intent the Agent holds, in order, and how it went (#141). */
+  intents: IntentOutcome[];
 }

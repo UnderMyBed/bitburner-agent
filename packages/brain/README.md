@@ -61,7 +61,7 @@ SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap r
 |---|---|
 | `snapshots` | Every snapshot the control channel passes on: `environment`, `release`, `agent_session_id`, `tier`, `sequence_number`, `game_time_ms`, `received_at_ms`, `missed_before`, `data` (JSON) |
 | `events` | Everything else the brain's parts report: the brain's own `brainStarted` (at each start); the channel's `agentConnected`, `agentDisconnected`, `connectionRejected`, `versionDrift`; the deployer's `deployed`, `deploymentCurrent`, `deployFailed`, `versionDrift`; the save backups' `saveBackup`, `saveBackupRotationFailed`; and the supervisor's `relaunch`, `supervisionGaveUp`, `supervisionFailed`. Columns: `environment`, `release`, `at_ms`, `kind`, `detail` (JSON) |
-| `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch), `supervision.gaveUpAtMs` (the supervisor's give-up, #94), `hackLoop.enabled` (the hack loop's switch, on when unset, #134), `programs.enabled` (buying the hacking programs, likewise, #136), and `homeRam.enabled` (upgrading home's RAM, likewise, #138) |
+| `settings` | Switches kept across restarts: `supervision.paused` (the dashboard's switch), `supervision.gaveUpAtMs` (the supervisor's give-up, #94), `hackLoop.enabled` (the hack loop's switch, on when unset, #134), `programs.enabled` (buying the hacking programs, likewise, #136), `homeRam.enabled` (upgrading home's RAM, likewise, #138), and `intents.manual` (the owner's manual intents queue, as `[{ action, args }]`, #141) |
 
 - **Every snapshot and event is tagged** with its environment and its release, so releases and environments can be compared directly (§7). The release is:
   - the brain's `git describe` ("unknown" without git, which the startup log shows);
@@ -123,6 +123,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - **Hack loop:** on or off; on, whether the brain is waiting for the Agent's snapshots, has no target yet (while servers are being rooted), or runs it against a target on so many servers; and its switch ([the hack loop](#the-hack-loop)).
   - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, travel, or a cheaper home RAM upgrade first); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
   - **Home RAM:** on or off; on, the size the upgrade being bought brings home to, or what it waits for (the Agent's snapshots, money for the next size, travel, a cheaper program first, or the BitNode's price), or that home is at its limit; home's RAM; and its switch ([home RAM](#home-ram)).
+  - **Intents:** each intent sent, in order, with its source (the manual queue or a purchase) and how it went in the game: not reported yet, done, or its tries and last problem. A manual one has a Cancel button, and a form queues a new one: an action and its arguments as JSON ([intents](#intents)).
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
 - **When it can't show the status,** it says why in place of the data, rather than showing stale numbers:
   - "Brain unreachable": the brain stopped, or crashed;
@@ -140,6 +141,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   | `versionDrift` | The brain went on hold since it started: the game isn't the pinned version (#91) | When the brain restarts (a hold lasts the brain's run) |
   | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or a connection finds the deployment already in place (`deploymentCurrent`), or the brain restarts |
   | `supervisionGaveUp` | The supervisor stopped after too many relaunches (#94) | When supervision is resumed |
+  | `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
 
   The stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
 - **Security** (owner decision 14, localhost only):
@@ -151,7 +153,8 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
 - **The API** (the page's; a script must follow the same rules):
   - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`).
   - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
-  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), and `POST /api/home-ram` home RAM's (#138).
+  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), `POST /api/home-ram` home RAM's (#138).
+  - `POST /api/intents` with `{"action": …, "args": {…}}` queues an intent (#141), answered with `{"id": …}`, or 400 with why it isn't valid. `POST /api/intents/cancel` with `{"id": …}` takes one off the queue, or 404 if it isn't there. Both the same way as the switches.
   - Refusals:
     - 403: not the dashboard's Host or Origin;
     - 400: a body that isn't exactly one of its switch's two, or a path that isn't valid;
@@ -168,7 +171,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - Among the game's rooted servers with money (not home, not the player's purchased or Hacknet servers) that need at most half the player's hacking level (at least 1), it takes the one with the highest maximum money times growth.
   - Growth counts because the loop hacks only once a server's money is back at 75% of its maximum, and servers start at 4%. Over an 8 GB fresh start's first virtual hour, n00dles (growth 3000) earned $15m. foodnstuff, joesguns and sigma-cosmetics, with more money but growth 5–20, earned nothing.
 - **The hosts** (`chooseHackHosts`): the game's rooted servers with RAM. Never home, which is the Agent's, and never the player's own purchased or Hacknet servers.
-- **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #136 it also sends [the hacking programs](#the-hacking-programs), and since #138 [home's RAM](#home-ram)) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
+- **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #141 it also sends [intents](#intents): [the hacking programs](#the-hacking-programs), [home's RAM](#home-ram) and the owner's manual queue) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
   - **Off** is sent at once, to each Agent as it connects too.
   - **On** waits for that Agent's own static and medium snapshots, which come in its first round, then sends the target (or none yet, while the servers get rooted) and the hosts. It never sends the last brain's or the last game's view:
     - a brain that restarts sends the running Agent the same state, which changes nothing;
@@ -199,7 +202,7 @@ M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/1
   - once the player's money covers its price: $200k, $500k, $1.5m, $5m, $30m, $250m (`Constants.ts:44`, `DarkWeb/DarkWebItems.ts`);
   - the TOR router needs a tech vendor in the player's city, one per city that has any (`TECH_VENDORS` in core): Sector-12 Alpha Enterprises, Aevum NetLink Technologies, Ishima Omega Software, Volhaven CompuTek. Chongqing and New Tokyo have none, and the dashboard says travel is needed.
 - **The dashboard** shows what's owned, what's being bought, or what it waits for (money for an item, or travel).
-- **One desired state:** `DesiredStateController` (`src/desired-state.ts`) sends the hack loop, the hacking programs and home's RAM together, whole each time, with the hack loop's rules: nothing new until the connected Agent's own snapshots; while the brain holds, only a state that starts nothing new (`desiredStateWhileHolding` in core: the hack loop off, or as last sent, and nothing bought).
+- **Sent as an intent** (#141): `buyTor { vendor }` or `buyProgram { program }`, in the one desired state, with the hack loop's rules: nothing new until the connected Agent's own snapshots; while the brain holds, only a state that starts nothing new (`desiredStateWhileHolding` in core: the hack loop off, or as last sent, and no intents).
 
 ## Home RAM
 
@@ -213,7 +216,17 @@ M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - at the tech vendor in the player's city (`TECH_VENDORS`, as for the TOR router). Chongqing and New Tokyo have none, and the dashboard says travel is needed.
 - **One purchase at a time, cheapest first:** of the next program and the next upgrade, both affordable, the controller sends the cheaper, and the other's view says it waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With both switches on, the order is TOR, BruteSSH.exe, 16 GB, FTPCrack.exe, 32 GB, relaySMTP.exe, 64 GB, HTTPWorm.exe, 128 GB, 256 GB, SQLInject.exe, then the rest of the doublings. A switch that's off takes its activity out of the comparison. With home RAM on, no program goes either until the slow snapshot says which BitNode, since until then the upgrade's price isn't known. And the cheaper purchase holds back the other while the page can't make it (a collapsed World section, say), even a program the terminal could buy; the dashboard says what each waits for.
 - **The dashboard** shows home's RAM, the upgrade being bought, or what it waits for (money, travel, the cheaper purchase, the BitNode).
+- **Sent as an intent** (#141): `upgradeHomeRam { fromRam, vendor }`, with the programs' purchase or instead of it.
 
+## Intents
+
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam` and `travel` so far. Core validates them (`parseIntentRequest`), and says from the medium snapshot when the game shows one done (`intentDone`).
+
+- **Where they come from,** in this order:
+  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the medium snapshot shows it done, or when it's cancelled. Queued twice, it's queued once, and one that isn't valid is refused with why.
+  2. **The purchase rules:** [the hacking programs](#the-hacking-programs) and [home RAM](#home-ram), one purchase at a time, the cheaper first. If the owner queued the same purchase, it goes once, as the owner's.
+- **When they go:** with the hack loop, in the one desired state. With the hack loop off, the manual queue goes before any snapshot: each intent checks the game first, so a stale one does nothing. While the brain holds, none go.
+- **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`.
 ## Supervision
 
 The brain keeps the game itself running, for unattended play ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); architecture §10.2, R9). It's process management only: nothing touches the game's code or its save.
@@ -343,7 +356,9 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/supervision.ts` | The supervision switch, in the store's settings |
 | `src/hack-loop.ts` | The hack loop's switch and rules (target and hosts) |
 | `src/programs.ts` | Buying the hacking programs: the switch, the next item, the prices and vendors |
-| `src/desired-state.ts` | The controller that sends the hack loop and the hacking programs as one desired state |
+| `src/desired-state.ts` | The controller that sends the hack loop and the intents (purchases, the manual queue) as one desired state |
+| `src/manual-intents.ts` | The owner's manual intents queue, in the store |
+| `src/home-ram.ts` | Upgrading home's RAM: the switch, the price, the next upgrade |
 | `src/switches.ts` | The dashboard's on/off switches, as settings in the store |
 | `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |
 | `src/release.ts` | The brain's release, from `git describe` |

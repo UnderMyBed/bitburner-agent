@@ -17,6 +17,8 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const hackLoopCalls: boolean[] = [];
   const programsCalls: boolean[] = [];
   const homeRamCalls: boolean[] = [];
+  const intentRequests: unknown[] = [];
+  const cancelledIds: string[] = [];
   const errors: unknown[] = [];
   server = await startDashboardServer({
     port: 0,
@@ -25,9 +27,29 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setHackLoopEnabled: (enabled) => hackLoopCalls.push(enabled),
     setProgramsEnabled: (enabled) => programsCalls.push(enabled),
     setHomeRamEnabled: (enabled) => homeRamCalls.push(enabled),
+    // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
+    addIntent: (request) => {
+      intentRequests.push(request);
+      return JSON.stringify(request) === '{"action":"travel","args":{"city":"Aevum"}}'
+        ? { ok: true, intent: { id: "travel(Aevum)", action: "travel", args: { city: "Aevum" } } }
+        : { ok: false, reason: "travel's city isn't one of the six" };
+    },
+    cancelIntent: (id) => {
+      cancelledIds.push(id);
+      return id === "travel(Aevum)";
+    },
     onError: (error) => errors.push(error),
   });
-  return { port: server.port, pausedCalls, hackLoopCalls, programsCalls, homeRamCalls, errors };
+  return {
+    port: server.port,
+    pausedCalls,
+    hackLoopCalls,
+    programsCalls,
+    homeRamCalls,
+    intentRequests,
+    cancelledIds,
+    errors,
+  };
 }
 
 interface Reply {
@@ -190,6 +212,56 @@ describe.each(SWITCHES)("the switch for %s", (_name, switchPath, own) => {
   });
 });
 
+describe("the manual intents queue (#141)", () => {
+  const post = (port: number, path: string, body: string, headers: Record<string, string> = sameOrigin(port)) =>
+    send(port, { method: "POST", path, headers, body });
+
+  test("queues an intent from the dashboard's own page, answered with its id", async () => {
+    const started = await start();
+    const reply = await post(started.port, "/api/intents", '{"action":"travel","args":{"city":"Aevum"}}');
+    expect(reply.status).toBe(200);
+    expect(JSON.parse(reply.body)).toEqual({ id: "travel(Aevum)" });
+    expect(started.intentRequests).toEqual([{ action: "travel", args: { city: "Aevum" } }]);
+  });
+
+  test("refuses one the controller refuses, 400 with its reason", async () => {
+    const started = await start();
+    const reply = await post(started.port, "/api/intents", '{"action":"travel","args":{"city":"Atlantis"}}');
+    expect(reply.status).toBe(400);
+    expect(reply.body).toBe("travel's city isn't one of the six");
+  });
+
+  test("cancels by id; one not in the queue is 404, and a body without an id 400", async () => {
+    const started = await start();
+    expect((await post(started.port, "/api/intents/cancel", '{"id":"travel(Aevum)"}')).status).toBe(200);
+    expect((await post(started.port, "/api/intents/cancel", '{"id":"travel(Ishima)"}')).status).toBe(404);
+    expect((await post(started.port, "/api/intents/cancel", '{"id":7}')).status).toBe(400);
+    expect(started.cancelledIds).toEqual(["travel(Aevum)", "travel(Ishima)"]);
+  });
+
+  test.each([
+    ["another origin", { origin: "https://attacker.example" }, 403],
+    ["no origin", { origin: "" }, 403],
+  ])("from %s is refused, and nothing is queued or cancelled", async (_description, override, expected) => {
+    const started = await start();
+    for (const [path, body] of [
+      ["/api/intents", '{"action":"travel","args":{"city":"Aevum"}}'],
+      ["/api/intents/cancel", '{"id":"travel(Aevum)"}'],
+    ] as const) {
+      const headers: Record<string, string> = { ...sameOrigin(started.port), ...override };
+      if (headers.origin === "") delete headers.origin;
+      expect((await post(started.port, path, body, headers)).status).toBe(expected);
+    }
+    expect(started.intentRequests).toEqual([]);
+    expect(started.cancelledIds).toEqual([]);
+  });
+
+  test("a body that isn't JSON is 400", async () => {
+    const started = await start();
+    expect((await post(started.port, "/api/intents", "{")).status).toBe(400);
+  });
+});
+
 test("a switch body streamed past 1 KiB, with no length declared, is refused, 413", async () => {
   const { port, pausedCalls, errors } = await start();
   // A valid switch, but padded past 1 KiB: refused for its length alone.
@@ -283,6 +355,8 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { method: "GET", path: "/api/hack-loop" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/programs" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/home-ram" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/intents" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/intents/cancel" })).status).toBe(405);
 });
 
 test("a status that fails is a 500, reported, and the server carries on", async () => {

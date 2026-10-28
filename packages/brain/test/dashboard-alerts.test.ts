@@ -11,6 +11,7 @@ const quiet: AlertFacts = {
   versionDrift: null,
   lastDeploy: null,
   supervisionGaveUpAtMs: null,
+  intentOutcomes: [],
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 

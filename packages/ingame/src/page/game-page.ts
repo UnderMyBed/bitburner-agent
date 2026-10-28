@@ -57,15 +57,19 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     }
   }
 
-  /** Waits for the element, `what` (named for the problem), and clicks it as a player would, then lets it render. */
-  async function clickWhenThere(xpath: string, what: string, untilMs = stepsEndMs): Promise<string | null> {
-    const element = await waitForElement(xpath, untilMs);
-    if (!element) return `no ${what}`;
+  /** Clicks `element`, `what`, as a player would, then lets it render. */
+  async function click(element: Element, what: string): Promise<string | null> {
     const onClick = reactPropsOf(element)?.onClick;
     if (typeof onClick !== "function") return `can't click ${what}`;
     await onClick({ isTrusted: true, preventDefault: () => {}, stopPropagation: () => {} });
     await letRender();
     return null;
+  }
+
+  /** Waits for the element, `what` (named for the problem), and clicks it. */
+  async function clickWhenThere(xpath: string, what: string, untilMs = stepsEndMs): Promise<string | null> {
+    const element = await waitForElement(xpath, untilMs);
+    return element ? click(element, what) : `no ${what}`;
   }
 
   /**
@@ -82,6 +86,23 @@ export function openGamePage(ns: NS, deadlineMs: number) {
 
   return {
     clickWhenThere,
+
+    /**
+     * Clicks the element, `what`, if it's in the page now: for a step the game may skip, such as a confirmation the
+     * player's Options turn off. Null if it wasn't there or was clicked; a problem if it couldn't be clicked.
+     */
+    async clickIfThere(xpath: string, what: string): Promise<{ clicked: boolean; problem: string | null }> {
+      const element = findElement(xpath);
+      if (!element) return { clicked: false, problem: null };
+      const problem = await click(element, what);
+      return { clicked: problem === null, problem };
+    },
+
+    /** Lets the page render, without passing the steps' end: for a step that waits on the game. */
+    waitARender: () => ns.asleep(Math.max(0, Math.min(POLL_MS, timeLeftMs(stepsEndMs)))),
+
+    /** Whether the steps' time is up (the way back to the Terminal has its own). */
+    stepsTimeUp: () => timeLeftMs(stepsEndMs) <= 0,
 
     /** Whether a dialog is open: the owner's to read and close, so nothing is done over it. */
     dialogOpen(): boolean {

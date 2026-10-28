@@ -6,7 +6,7 @@ import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
-import type { HackLoopView, HomeRamView, ProgramsView } from "../src/desired-state.ts";
+import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -28,6 +28,7 @@ const programs: ProgramsView = {
   waitingFor: null,
 };
 const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
+const intents: IntentView[] = [{ id: "travel(Aevum)", source: "manual", outcome: null }];
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
   brainStartedEventId = store.recordEvent(context, { atMs: STARTED_AT_MS, kind: BRAIN_STARTED_EVENT_KIND, detail: {} });
@@ -53,6 +54,7 @@ const status = (nowMs: number) =>
     hackLoop,
     programs,
     homeRam,
+    intents,
     nowMs,
   });
 
@@ -80,6 +82,7 @@ const fastData = (money: number): FastSnapshotData => ({
       { pid: 2, filename: "agent/abc123def456/snapshot-fast.js", threads: 1, args: [], temporary: true },
     ],
   },
+  intents: [],
 });
 
 test("a healthy skeleton: the Agent connected, every tier's last snapshot and its age, key values, no alerts", () => {
@@ -139,6 +142,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     hackLoop,
     programs,
     homeRam,
+    intents,
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
@@ -287,6 +291,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     hackLoop,
     programs,
     homeRam,
+    intents,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });
@@ -307,4 +312,24 @@ test("the recent events are the last 50", () => {
     kind: "connectionRejected",
     detail: { reason: "origin", detail: "o59" },
   });
+});
+
+test("an intent tried 5 times and still not done is an alert (#141); fewer tries, or done, isn't", () => {
+  const outcome = (id: string, tries: number, done = false) => ({
+    id,
+    done,
+    tries,
+    problem: "no Travel in the sidebar",
+  });
+  recordSnapshot("fast", STARTED_AT_MS + 2_000, {
+    ...fastData(1),
+    intents: [outcome("travel(Aevum)", 5), outcome("travel(Ishima)", 4), outcome("buyTor(CompuTek)", 9, true)],
+  });
+  expect(status(STARTED_AT_MS + 3_000).alerts).toEqual([
+    {
+      name: "intentStuck",
+      sinceMs: STARTED_AT_MS + 2_000,
+      detail: "travel(Aevum): 5 tries, not done: no Travel in the sidebar",
+    },
+  ]);
 });

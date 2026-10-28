@@ -8,7 +8,7 @@ import {
   SNAPSHOT_TIERS,
   type SnapshotTier,
 } from "@bitburner-agent/core";
-import type { HackLoopView, HomeRamView, ProgramsView } from "../desired-state.ts";
+import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
@@ -83,6 +83,8 @@ export interface DashboardStatus {
   programs: ProgramsView;
   /** Home's RAM (#138): its size, the upgrade being bought, or what it waits for. */
   homeRam: HomeRamView;
+  /** The intents sent (#141), in order, each with its source and how it went. */
+  intents: IntentView[];
 }
 
 export interface DashboardStatusOptions {
@@ -100,6 +102,8 @@ export interface DashboardStatusOptions {
   programs: ProgramsView;
   /** Home RAM's view (#138), likewise. */
   homeRam: HomeRamView;
+  /** The intents' view (#141), likewise. */
+  intents: IntentView[];
   nowMs: number;
 }
 
@@ -119,6 +123,7 @@ export function buildDashboardStatus({
   hackLoop,
   programs,
   homeRam,
+  intents,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -194,6 +199,10 @@ export function buildDashboardStatus({
           }
         : null,
       supervisionGaveUpAtMs: supervision.gaveUpAtMs,
+      // Only what's well formed: the snapshot is the Agent's word.
+      intentOutcomes: (Array.isArray(fast?.intents) ? fast.intents : []).filter(
+        (outcome) => typeof outcome?.id === "string" && typeof outcome.tries === "number",
+      ),
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -215,5 +224,6 @@ export function buildDashboardStatus({
     hackLoop,
     programs,
     homeRam,
+    intents,
   };
 }

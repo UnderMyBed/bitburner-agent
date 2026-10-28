@@ -1,10 +1,22 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
-// connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134), the hacking programs
-// (#136) and home's RAM (#138).
+// connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
+// the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue.
 import type { ControlChannel } from "@bitburner-agent/bridge";
-import type { DesiredState, MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import {
+  type DesiredState,
+  type FastSnapshotData,
+  type Intent,
+  type IntentOutcome,
+  intentDone,
+  intentId,
+  type MediumSnapshotData,
+  parseIntentRequest,
+  type SlowSnapshotData,
+  type StaticSnapshotData,
+} from "@bitburner-agent/core";
 import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
+import { readManualIntents, writeManualIntents } from "./manual-intents.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -44,6 +56,18 @@ export interface HomeRamView {
   waitingFor: string | null;
 }
 
+/** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
+export interface IntentView {
+  id: string;
+  /** The owner's manual queue, or the brain's purchase rules. */
+  source: "manual" | "purchase";
+  /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
+  outcome: IntentOutcome | null;
+}
+
+/** A manual intent added, or why it wasn't. */
+export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: string };
+
 /**
  * Keeps the channel's desired state in step with the switches and the connected Agent's snapshots.
  * - Every activity goes in one state, whole each time. With no snapshots from the connected Agent yet (it sends them
@@ -55,6 +79,9 @@ export interface HomeRamView {
  * - One purchase at a time, cheapest first: of the next program and the next RAM upgrade, both affordable, the cheaper
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
+ * - Intents go in order: the owner's manual queue first, as added, then the purchase. A manual intent leaves the queue
+ *   once the medium snapshot shows it done. Manual intents go out whatever the snapshots: each is done at most once,
+ *   with the game's own state checked first.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -63,7 +90,10 @@ export class DesiredStateController {
   #staticData: StaticSnapshotData | null = null;
   #mediumData: MediumSnapshotData | null = null;
   #slowData: SlowSnapshotData | null = null;
+  #fastData: FastSnapshotData | null = null;
   #desired: DesiredState | null = null;
+  /** The purchase the brain's rules ask for now, or null. */
+  #purchase: Intent | null = null;
   /** From the connected Agent's latest medium snapshot, or null. */
   #programsPlan: ProgramsPlan | null = null;
   /** From its latest medium and slow snapshots, or null. */
@@ -79,10 +109,16 @@ export class DesiredStateController {
         this.#staticData = null;
         this.#mediumData = null;
         this.#slowData = null;
+        this.#fastData = null;
+      } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
+        // Only the intents' outcomes, for the views: nothing to send.
+        this.#fastData = event.snapshot.data as FastSnapshotData;
+        return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
+        this.#pruneManualIntents(this.#mediumData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
       } else {
@@ -111,6 +147,38 @@ export class DesiredStateController {
     this.#update();
   }
 
+  /** Adds `request` (`{ action, args }`) to the manual queue, kept in the store, and sends it at once. */
+  addManualIntent(request: unknown): AddedIntent {
+    const parsed = parseIntentRequest(request);
+    if (!parsed.ok) return parsed;
+    const queue = readManualIntents(this.#store);
+    if (!queue.some((each) => each.id === parsed.message.id)) {
+      writeManualIntents(this.#store, [...queue, parsed.message]);
+      this.#update();
+    }
+    return { ok: true, intent: parsed.message };
+  }
+
+  /** Takes the intent `id` off the manual queue; false if it isn't there. */
+  cancelManualIntent(id: string): boolean {
+    const queue = readManualIntents(this.#store);
+    const kept = queue.filter((each) => each.id !== id);
+    if (kept.length === queue.length) return false;
+    writeManualIntents(this.#store, kept);
+    this.#update();
+    return true;
+  }
+
+  intentsView(): IntentView[] {
+    const outcomes = Array.isArray(this.#fastData?.intents) ? this.#fastData.intents : [];
+    const manualIds = new Set(readManualIntents(this.#store).map((each) => each.id));
+    return (this.#desired?.intents ?? []).map(({ id }) => ({
+      id,
+      source: manualIds.has(id) ? "manual" : "purchase",
+      outcome: outcomes.find((outcome) => outcome?.id === id) ?? null,
+    }));
+  }
+
   hackLoopView(): HackLoopView {
     const enabled = readHackLoopEnabled(this.#store);
     const hackLoop = this.#desired?.hackLoop;
@@ -125,32 +193,33 @@ export class DesiredStateController {
   programsView(): ProgramsView {
     const enabled = readProgramsEnabled(this.#store);
     // Read from what was sent and what it was worked out from: either missing is waiting, never "all bought".
-    const sent = this.#desired?.programs ?? null;
-    const waiting = enabled && (sent === null || this.#programsPlan === null);
+    const waiting = enabled && (this.#desired === null || this.#programsPlan === null);
+    const purchase = this.#desired === null ? null : this.#purchase;
     return {
       enabled,
       waiting,
       owned: this.#programsPlan?.owned ?? [],
-      buying: sent?.next?.item ?? null,
+      buying:
+        purchase?.action === "buyTor" ? "TOR router" : purchase?.action === "buyProgram" ? purchase.args.program : null,
       waitingFor: enabled && !waiting ? this.#waitingFor.programs : null,
     };
   }
 
   homeRamView(): HomeRamView {
     const enabled = readHomeRamEnabled(this.#store);
-    const sent = this.#desired?.homeRam ?? null;
-    const waiting = enabled && (sent === null || this.#homeRamPlan === null);
+    const waiting = enabled && (this.#desired === null || this.#homeRamPlan === null);
+    const purchase = this.#desired === null ? null : this.#purchase;
     return {
       enabled,
       waiting,
       ram: this.#homeRamPlan?.ram ?? null,
-      upgradingTo: sent?.next ? sent.next.fromRam * 2 : null,
+      upgradingTo: purchase?.action === "upgradeHomeRam" ? purchase.args.fromRam * 2 : null,
       waitingFor: enabled && !waiting ? this.#waitingFor.homeRam : null,
     };
   }
 
-  /** The purchases to ask for now: one at a time, cheapest first, among the activities switched on. */
-  #choosePurchases(): Pick<DesiredState, "programs" | "homeRam"> {
+  /** The purchase to ask for now, as an intent: one at a time, cheapest first, among the activities switched on. */
+  #choosePurchase(): Intent | null {
     const programsEnabled = readProgramsEnabled(this.#store);
     const homeRamEnabled = readHomeRamEnabled(this.#store);
     const programsPlan = this.#mediumData === null ? null : chooseNextPurchase(this.#mediumData);
@@ -175,17 +244,39 @@ export class DesiredStateController {
         homeRamNext = null;
       }
     }
-    return {
-      programs: { enabled: programsEnabled, next: programsNext },
-      homeRam: { enabled: homeRamEnabled, next: homeRamNext },
-    };
+    if (programsNext?.vendor) {
+      const args = { vendor: programsNext.vendor };
+      return { id: intentId("buyTor", args), action: "buyTor", args };
+    }
+    if (programsNext) {
+      const args = { program: programsNext.item };
+      return { id: intentId("buyProgram", args), action: "buyProgram", args };
+    }
+    if (homeRamNext) {
+      const args = { fromRam: homeRamNext.fromRam, vendor: homeRamNext.vendor };
+      return { id: intentId("upgradeHomeRam", args), action: "upgradeHomeRam", args };
+    }
+    return null;
+  }
+
+  /** Takes off the manual queue what the medium snapshot shows done. */
+  #pruneManualIntents(mediumData: MediumSnapshotData): void {
+    const queue = readManualIntents(this.#store);
+    const notDone = queue.filter((each) => !intentDone(each, mediumData));
+    if (notDone.length !== queue.length) writeManualIntents(this.#store, notDone);
   }
 
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
-    const purchases = this.#choosePurchases();
+    this.#purchase = this.#choosePurchase();
+    // The manual queue first; the purchase only if the owner hasn't queued the same.
+    const manual = readManualIntents(this.#store);
+    const intents = [
+      ...manual,
+      ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
+    ];
     if (!hackLoopEnabled) {
-      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, ...purchases };
+      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents };
     } else if (this.#staticData === null || this.#mediumData === null) {
       this.#desired = null;
     } else {
@@ -195,7 +286,7 @@ export class DesiredStateController {
           target: chooseHackTarget(this.#staticData, this.#mediumData),
           hosts: chooseHackHosts(this.#staticData, this.#mediumData),
         },
-        ...purchases,
+        intents,
       };
     }
     this.#channel.setDesiredState(this.#desired);

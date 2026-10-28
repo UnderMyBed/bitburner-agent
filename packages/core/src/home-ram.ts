@@ -9,9 +9,6 @@ export const HOME_RAM_LIMIT = 2 ** 30;
 /** Home worker: upgrades home's RAM once through the game's page. */
 export const UPGRADE_HOME_RAM_WORKER_NAME = "upgrade-home-ram.js";
 
-/** The item name an upgrade reports. */
-export const HOME_RAM_ITEM = "home RAM";
-
 /** A size home's RAM can be upgraded from: a power of two GB, from 1 up to below the limit. */
 export function isUpgradableHomeRam(ram: unknown): ram is number {
   return (

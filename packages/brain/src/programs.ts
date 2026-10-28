@@ -1,13 +1,7 @@
-// The brain's side of buying the hacking programs (#136, M3's second slice): the next item to buy, sent to the Agent in
-// the desired state (architecture D2). The dashboard's switch turns it on and off; on is the default, as for the hack
-// loop (owner decision 34's pattern).
-import {
-  type DesiredState,
-  type MediumSnapshotData,
-  PORT_OPENER_PROGRAMS,
-  TECH_VENDORS,
-  TOR_ROUTER,
-} from "@bitburner-agent/core";
+// The brain's side of buying the hacking programs (#136, M3's second slice): the next item to buy, sent to the Agent as
+// an intent (#141). The dashboard's switch turns it on and off; on is the default, as for the hack loop (owner decision
+// 34's pattern).
+import { type MediumSnapshotData, PORT_OPENER_PROGRAMS, TECH_VENDORS, TOR_ROUTER } from "@bitburner-agent/core";
 import { readSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
@@ -32,8 +26,8 @@ export function readProgramsEnabled(store: TelemetryStore): boolean {
 export interface ProgramsPlan {
   /** The TOR router and the port openers owned, in buying order. */
   owned: string[];
-  /** The next item to buy now, or null. */
-  next: DesiredState["programs"]["next"];
+  /** The next item to buy now, or null: `vendor` is the tech vendor for the TOR router, and null for a program. */
+  next: { item: string; vendor: string | null } | null;
   /** What the first item not owned costs, or null when everything is owned. */
   price: number | null;
   /** Why nothing is bought now, for the dashboard, or null when something is (or everything's owned). */

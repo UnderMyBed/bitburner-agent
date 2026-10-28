@@ -1,8 +1,8 @@
 // npm run brain [-- --data-dir <dir>]: the long-running brain process (architecture D1), run from the repo, with its
 // data in the repo's .data/ unless told otherwise. It runs the control channel and stores what the Agent reports,
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
-// to run (the hack loop, #134, the hacking programs, #136, and home's RAM, #138), serves the dashboard, and (for
-// Steam, on Windows) supervises the game itself.
+// to run (the hack loop, #134, and the intents, #141: the hacking programs, #136, home's RAM, #138, and the owner's
+// manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself.
 import path from "node:path";
 import process from "node:process";
 import {
@@ -132,6 +132,7 @@ try {
         hackLoop: desiredState.hackLoopView(),
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
+        intents: desiredState.intentsView(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -149,6 +150,16 @@ try {
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
       log(`upgrading home RAM turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    addIntent: (request) => {
+      const added = desiredState.addManualIntent(request);
+      if (added.ok) log(`intent ${added.intent.id} queued from the dashboard`);
+      return added;
+    },
+    cancelIntent: (id) => {
+      const cancelled = desiredState.cancelManualIntent(id);
+      if (cancelled) log(`intent ${id} cancelled from the dashboard`);
+      return cancelled;
     },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });

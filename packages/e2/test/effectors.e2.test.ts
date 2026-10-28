@@ -1,6 +1,7 @@
-// Buying through the real page (#136, #138): the `ui` effectors, end to end. A save with money, a real brain, the built
-// Agent: the Agent buys the TOR router at Alpha Enterprises and every port opener through the terminal, and upgrades
-// home's RAM at Alpha Enterprises, as a player would, and leaves the page on the Terminal with no dialog open.
+// The `ui` effectors on the real page (#136, #138, #141), end to end. A save with money, a real brain, the built Agent:
+// the Agent buys the TOR router at Alpha Enterprises and every port opener through the terminal, upgrades home's RAM
+// at Alpha Enterprises, and travels where the owner's manual queue says, as a player would, and leaves the page on the
+// Terminal with no dialog open.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -114,7 +115,7 @@ async function moneyedGameWithAgent({
   if (!keepOfflineAlert) await closeOfflineAlert(page);
   await beforeAgent(page);
   await advanceUntil(page, async () => eventCount("agentConnected") === 1, { realTimeoutMs: STEP_REAL_TIMEOUT_MS });
-  return { dataDirectory, page };
+  return { dataDirectory, page, ports };
 }
 
 test("with money, the Agent buys the TOR router at Alpha Enterprises and every port opener, and leaves the page as it was", async () => {
@@ -202,4 +203,40 @@ test("home RAM (#138): with $1.1m and buying programs off, home goes from 8 GB t
   expect(medium?.hasTorRouter).toBe(false);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+/** Queues an intent on the brain's dashboard, as its page does: from its own origin, as JSON. */
+async function queueIntent(dashboardPort: number, request: { action: string; args: Record<string, unknown> }) {
+  const origin = `http://127.0.0.1:${dashboardPort}`;
+  const response = await fetch(`${origin}/api/intents`, {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  expect(response.status, await response.text()).toBe(200);
+}
+
+test("travel (#141): queued on the dashboard, the Agent flies to Aevum, confirming and closing the alert", async () => {
+  // Purchases off, so the travel is all the page does; the game's Options show the confirmation and the alert.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Aevum", {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  await advanceGameTime(page, 2_000);
+  const medium = latestMedium(dataDirectory);
+  // The $200k ticket, and nothing else bought.
+  expect(medium?.player.money as number).toBeLessThan(1_000_000 - 150_000);
+  expect(medium?.hasTorRouter).toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // Done in the game, so the brain took it off the queue.
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
 });

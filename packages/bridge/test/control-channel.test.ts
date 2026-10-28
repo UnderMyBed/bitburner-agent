@@ -272,13 +272,9 @@ describe("restart, without loops", () => {
 describe("desired state (#134)", () => {
   const sentTypes = (connection: MemoryConnection) => connection.sentMessages().map((message) => message.type);
   const deployedA = { deployedId: "deployment-a", hold: false, deployFailed: false };
-  const noPurchase = { enabled: true, next: null };
-  const loopOn = {
-    hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] },
-    programs: noPurchase,
-    homeRam: noPurchase,
-  };
-  const loopOff = { hackLoop: { enabled: false, target: null, hosts: [] }, programs: noPurchase, homeRam: noPurchase };
+  const loopOn = { hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] }, intents: [] };
+  const loopOff = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [] };
+  const travel = { id: "travel(Aevum)", action: "travel" as const, args: { city: "Aevum" } };
 
   test("sent when set, to a welcomed Agent running the deployed deployment", () => {
     channel.setDeploymentState(deployedA);
@@ -394,30 +390,24 @@ describe("desired state (#134)", () => {
     ]);
   });
 
-  test("while holding, a purchase never goes out: off goes, buying nothing (#136, #138)", () => {
+  test("while holding, an intent never goes out: off goes, with none (#136, #141)", () => {
     channel.setDeploymentState({ ...deployedA, hold: true });
     const connection = connectAgent();
-    channel.setDesiredState({
-      ...loopOff,
-      programs: { enabled: true, next: { item: "BruteSSH.exe", vendor: null } },
-      homeRam: { enabled: true, next: { fromRam: 8, vendor: "Alpha Enterprises" } },
-    });
+    channel.setDesiredState({ ...loopOff, intents: [travel] });
     expect(connection.sentMessages().slice(1)).toEqual([{ protocolVersion: 1, type: "desiredState", ...loopOff }]);
   });
 
-  test("while holding with the hack loop on, buying off still goes, with the hack loop as last sent (#136)", () => {
+  test("while holding with the hack loop on, the intents' removal still goes, with the hack loop as last sent (#141)", () => {
     channel.setDeploymentState(deployedA);
     const connection = connectAgent();
-    channel.setDesiredState(loopOn);
+    channel.setDesiredState({ ...loopOn, intents: [travel] });
     channel.setDeploymentState({ ...deployedA, hold: true });
     // A new target isn't sent while holding: the loop stays as the Agent has it.
     const newTarget = { ...loopOn.hackLoop, target: "joesguns" };
-    channel.setDesiredState({ hackLoop: newTarget, programs: noPurchase, homeRam: noPurchase });
-    const buyingOff = { programs: { enabled: false, next: null }, homeRam: { enabled: false, next: null } };
-    channel.setDesiredState({ hackLoop: newTarget, ...buyingOff });
+    channel.setDesiredState({ hackLoop: newTarget, intents: [travel] });
     expect(connection.sentMessages().slice(1)).toEqual([
+      { protocolVersion: 1, type: "desiredState", ...loopOn, intents: [travel] },
       { protocolVersion: 1, type: "desiredState", ...loopOn },
-      { protocolVersion: 1, type: "desiredState", hackLoop: loopOn.hackLoop, ...buyingOff },
     ]);
   });
 

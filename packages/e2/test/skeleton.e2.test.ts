@@ -299,6 +299,8 @@ describe("the skeleton on E2", () => {
     await typeCommand(page, `run ${BOOT_SCRIPT}`);
     await untilEventCount(page, dataDirectory, "agentConnected", 1);
     await advanceGameTime(page, TWO_GAME_MINUTES_MS);
+    // Read now: the `mem` commands below take game time too, one per worker, so a later read counts more rounds.
+    const rows = storeContents(dataDirectory).snapshots;
 
     // The game's own RAM figures (`mem`) for the Agent, each home worker (the snapshots' and the hack loop's, #134),
     // and boot.js (beside the Agent at a handover).
@@ -317,7 +319,6 @@ describe("the skeleton on E2", () => {
     const agentPlusLargestWorkerGb = Math.round(((ramGbByScript[agentFile] as number) + largestWorkerGb) * 100) / 100;
     expect(agentPlusLargestWorkerGb).toBeLessThanOrEqual(8);
 
-    const rows = storeContents(dataDirectory).snapshots;
     const session = latestSession(rows);
     expectEveryTierInNumber(rows, session, TWO_GAME_MINUTES_MS);
     const medium = rowsOf(rows, session, "medium")[0]?.data as MediumSnapshotData;

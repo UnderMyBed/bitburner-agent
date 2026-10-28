@@ -47,6 +47,17 @@
     <h2>Home RAM</h2><div></div><button type="button">Stop upgrading home RAM</button>
     <div class="bad" id="home-ram-problem" hidden></div>
   </section>
+  <section id="intents">
+    <h2>Intents</h2><table></table>
+    <form>
+      <select name="action" aria-label="Action">
+        <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
+      </select>
+      <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
+      <button type="submit">Queue it</button>
+    </form>
+    <div class="bad" id="intents-problem" hidden></div>
+  </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -210,6 +221,28 @@ function render(status) {
   );
   document.querySelector("#home-ram button").textContent = homeRam.enabled ? "Stop upgrading home RAM" : "Start upgrading home RAM";
 
+  const outcomeText = (outcome) =>
+    outcome === null
+      ? "not reported yet"
+      : outcome.done
+        ? `done${outcome.problem === null ? "" : ` (${outcome.problem})`}`
+        : `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${outcome.problem === null ? "" : `: ${outcome.problem}`}`;
+  const intentRows = status.intents.map((intent) => {
+    const row = element("tr");
+    const cancel = element("td");
+    if (intent.source === "manual") {
+      const button = element("button", "Cancel");
+      button.type = "button";
+      button.addEventListener("click", () => sendWrite("/api/intents/cancel", { id: intent.id }, "#intents-problem"));
+      cancel.append(button);
+    }
+    row.append(element("td", intent.id), element("td", intent.source), element("td", outcomeText(intent.outcome)), cancel);
+    return row;
+  });
+  document.querySelector("#intents table").replaceChildren(
+    ...(intentRows.length === 0 ? [element("tr", "None.")] : intentRows),
+  );
+
   const events = document.querySelector("#events table");
   events.replaceChildren(
     ...status.events.map((event) => {
@@ -240,23 +273,27 @@ async function refresh() {
   }
 }
 
-/** Sends a switch's new value, says so if it didn't take, and shows the state afterwards. */
-async function sendSwitch(path, body, problemSelector) {
-  const switchProblem = document.querySelector(problemSelector);
-  switchProblem.hidden = true;
+/** Sends a write, says so if it didn't take (with the brain's reason, if any), and shows the state afterwards. */
+async function sendWrite(path, body, problemSelector, failure = "It didn't take") {
+  const writeProblem = document.querySelector(problemSelector);
+  writeProblem.hidden = true;
   try {
     const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const reason = typeof response.text === "function" ? await response.text() : "";
+      throw new Error(`HTTP ${response.status}${reason ? `: ${reason}` : ""}`);
+    }
   } catch (error) {
-    switchProblem.textContent = `The switch didn't change: ${error.message}`;
-    switchProblem.hidden = false;
+    writeProblem.textContent = `${failure}: ${error.message}`;
+    writeProblem.hidden = false;
   }
   await refresh();
 }
+const sendSwitch = (path, body, problemSelector) => sendWrite(path, body, problemSelector, "The switch didn't change");
 
 document.querySelector("#supervision button").addEventListener("click", () =>
   sendSwitch("/api/supervision", { paused: pauseNext }, "#supervision-problem"),
@@ -270,6 +307,20 @@ document.querySelector("#programs button").addEventListener("click", () =>
 document.querySelector("#home-ram button").addEventListener("click", () =>
   sendSwitch("/api/home-ram", { enabled: enableHomeRamNext }, "#home-ram-problem"),
 );
+document.querySelector("#intents form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  let args;
+  try {
+    args = JSON.parse(form.elements.args.value);
+  } catch {
+    const problem = document.querySelector("#intents-problem");
+    problem.textContent = "The arguments aren't JSON";
+    problem.hidden = false;
+    return;
+  }
+  sendWrite("/api/intents", { action: form.elements.action.value, args }, "#intents-problem", "Not queued");
+});
 
 refresh();
 setInterval(refresh, POLL_MS);

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FastSnapshotData } from "@bitburner-agent/core";
 import { JSDOM } from "jsdom";
-import { afterAll, afterEach, expect, test } from "vitest";
+import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -73,6 +73,14 @@ const BUSY_STATUS: DashboardStatus = {
     waitingFor: "money for FTPCrack.exe ($1,500,000)",
   },
   homeRam: { enabled: true, waiting: false, ram: 8, upgradingTo: null, waitingFor: "FTPCrack.exe first (cheaper)" },
+  intents: [
+    {
+      id: "travel(Aevum)",
+      source: "manual",
+      outcome: { id: "travel(Aevum)", done: false, tries: 2, problem: "no Travel" },
+    },
+    { id: "buyTor(Alpha Enterprises)", source: "purchase", outcome: null },
+  ],
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -100,6 +108,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     hackLoop: { enabled: true, waiting: true, target: null, hosts: [] },
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
+    intents: [],
     nowMs: NOW_MS,
   });
   store.close();
@@ -117,7 +126,7 @@ const healthyStatus = (): DashboardStatus => {
       kind: "agentConnected",
       detail: { agentSessionId: "s", deploymentId: "abc123def456", game: GAME },
     });
-    const fast: FastSnapshotData = { degradedTiers: [], pageHeapUsedBytes: null, game: null };
+    const fast: FastSnapshotData = { degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [] };
     for (let ageMs = 28_000; ageMs >= 0; ageMs -= 2_000) {
       store.recordSnapshot(context, {
         agentSessionId: "s",
@@ -153,7 +162,9 @@ afterEach(() => {
 });
 
 /** The page with `answer` as the brain's API; resolves once its first poll has rendered. */
-async function openPage(answer: (request: Request) => { status: number; body: unknown } | "unreachable") {
+async function openPage(
+  answer: (request: Request) => { status: number; body: unknown; text?: string } | "unreachable",
+) {
   const requests: Request[] = [];
   const page = new JSDOM(PAGE, {
     runScripts: "dangerously",
@@ -164,7 +175,12 @@ async function openPage(answer: (request: Request) => { status: number; body: un
         requests.push(request);
         const reply = answer(request);
         if (reply === "unreachable") throw new TypeError("Failed to fetch");
-        return { ok: reply.status < 400, status: reply.status, json: async () => reply.body };
+        return {
+          ok: reply.status < 400,
+          status: reply.status,
+          json: async () => reply.body,
+          text: async () => reply.text ?? "",
+        };
       }) as unknown as typeof fetch;
     },
   });
@@ -211,6 +227,10 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#home-ram")).toContain("Home RAM: waiting for FTPCrack.exe first (cheaper)");
   expect(textOf(document, "#home-ram")).toContain("Home: 8 GB");
   expect(textOf(document, "#home-ram button")).toBe("Stop upgrading home RAM");
+  expect([...document.querySelectorAll("#intents tr")].map((row) => row.textContent)).toEqual([
+    "travel(Aevum)manual2 tries: no TravelCancel",
+    "buyTor(Alpha Enterprises)purchasenot reported yet",
+  ]);
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
 });
 
@@ -431,4 +451,70 @@ test.each([
   const homeRam = { ...BUSY_STATUS.homeRam, ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, homeRam } }));
   expect(textOf(document, "#home-ram")).toContain(`Home RAM: ${text}`);
+});
+
+describe("the intents (#141)", () => {
+  /** The page with a brain that takes every write, and answers the status as it was. */
+  const openAcceptingPage = () =>
+    openPage((request) => (request.method === "POST" ? { status: 200, body: {} } : { status: 200, body: BUSY_STATUS }));
+  const posts = (requests: Request[]) =>
+    requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body]);
+
+  test("the form queues an intent: its action and JSON arguments", async () => {
+    const { document, requests } = await openAcceptingPage();
+    const form = document.querySelector("#intents form") as HTMLFormElement;
+    (form.elements.namedItem("action") as HTMLSelectElement).value = "travel";
+    (form.elements.namedItem("args") as HTMLInputElement).value = '{"city": "Volhaven"}';
+    form.requestSubmit();
+    await settle();
+    expect(posts(requests)).toEqual([["/api/intents", '{"action":"travel","args":{"city":"Volhaven"}}']]);
+  });
+
+  test("arguments that aren't JSON are refused on the page, and nothing is sent", async () => {
+    const { document, requests } = await openAcceptingPage();
+    const form = document.querySelector("#intents form") as HTMLFormElement;
+    (form.elements.namedItem("args") as HTMLInputElement).value = "{city: Volhaven";
+    form.requestSubmit();
+    await settle();
+    expect(posts(requests)).toEqual([]);
+    expect(textOf(document, "#intents-problem")).toBe("The arguments aren't JSON");
+  });
+
+  test("a manual intent's Cancel sends its id; a purchase has no Cancel", async () => {
+    const { document, requests } = await openAcceptingPage();
+    expect(document.querySelectorAll("#intents button")).toHaveLength(2);
+    (document.querySelector("#intents tr button") as HTMLButtonElement).click();
+    await settle();
+    expect(posts(requests)).toEqual([["/api/intents/cancel", '{"id":"travel(Aevum)"}']]);
+  });
+
+  test("one the brain refuses says why, under the form", async () => {
+    const { document } = await openPage((request) =>
+      request.method === "POST"
+        ? { status: 400, body: null, text: "travel's city isn't one of the six" }
+        : { status: 200, body: BUSY_STATUS },
+    );
+    (document.querySelector("#intents form") as HTMLFormElement).requestSubmit();
+    await settle();
+    expect(textOf(document, "#intents-problem")).toBe("Not queued: HTTP 400: travel's city isn't one of the six");
+  });
+
+  test.each([
+    ["done", { id: "x", done: true, tries: 1, problem: null }, "done"],
+    [
+      "done, with a problem on the way",
+      { id: "x", done: true, tries: 1, problem: "no Terminal" },
+      "done (no Terminal)",
+    ],
+    ["tried once", { id: "x", done: false, tries: 1, problem: null }, "1 try"],
+  ])("an outcome %s reads plainly", async (_description, outcome, text) => {
+    const intents = [{ id: "x", source: "manual", outcome }];
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents } }));
+    expect(textOf(document, "#intents td:nth-child(3)")).toBe(text);
+  });
+
+  test("none sent says so", async () => {
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents: [] } }));
+    expect(textOf(document, "#intents table")).toBe("None.");
+  });
 });

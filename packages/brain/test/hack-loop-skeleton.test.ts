@@ -279,8 +279,7 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   const desire = (hackLoop: DesiredState["hackLoop"]) =>
     brain.channel.setDesiredState({
       hackLoop,
-      programs: { enabled: false, next: null },
-      homeRam: { enabled: false, next: null },
+      intents: [],
     });
   expect((await loop.loopsRunning()).map((each) => each.filename)).toEqual(["agent/0123456789ab/hack-loop.js"]);
   // Every no-port server but joesguns: one convergence roots them all, then runs the loop on the hosts.
@@ -306,19 +305,18 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
-test("a purchase the page can't make (#136): the Agent logs why and when it tries again, and never runs two workers at once", async () => {
+test("a purchase the page can't make (#136, #141): the Agent logs why and when it tries again, and never runs two workers at once", async () => {
   const loop = await freshStart({ withDesiredState: false });
   const { simulation, game, brain } = loop;
   brain.channel.setDesiredState({
     hackLoop: { enabled: false, target: null, hosts: [] },
-    programs: { enabled: true, next: { item: "TOR router", vendor: "Alpha Enterprises" } },
-    homeRam: { enabled: false, next: null },
+    intents: [{ id: "buyTor(Alpha Enterprises)", action: "buyTor", args: { vendor: "Alpha Enterprises" } }],
   });
   // Long enough for three tries 30 s apart, not for a fourth.
   await game.run(2 * CONVERGE_EVERY_MS + 3 * SNAPSHOT_ROUND_MS);
   const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
-  const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("couldn't buy TOR router"));
+  const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("buy the TOR router: not done"));
   // The simulator's page has no sidebar: each try waits for it until its deadline, logs why, and isn't bought.
   expect(tries).toHaveLength(3);
   for (const line of tries) expect(line).toContain('no "City" in the sidebar (is its section collapsed?)');
@@ -336,15 +334,20 @@ test("a home RAM upgrade already made (#138): done from the game alone, without 
   // medium snapshot shows the last one.
   brain.channel.setDesiredState({
     hackLoop: { enabled: false, target: null, hosts: [] },
-    programs: { enabled: false, next: null },
-    homeRam: { enabled: true, next: { fromRam: 4, vendor: "Alpha Enterprises" } },
+    intents: [
+      {
+        id: "upgradeHomeRam(4, Alpha Enterprises)",
+        action: "upgradeHomeRam",
+        args: { fromRam: 4, vendor: "Alpha Enterprises" },
+      },
+    ],
   });
   await game.run(3 * SNAPSHOT_ROUND_MS);
   const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
   // The simulator's page has no sidebar: had the worker touched it, the line would name the missing City.
   const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("home RAM"));
-  expect(lines).toEqual([expect.stringMatching(/agent: home RAM: bought 8 GB of home RAM$/)]);
+  expect(lines).toEqual([expect.stringMatching(/agent: upgrade home RAM to 8 GB: done$/)]);
 });
 
 test("home too full for the deploy worker: it never piles up, and runs within two rounds of there being room", async () => {
@@ -358,8 +361,7 @@ test("home too full for the deploy worker: it never piles up, and runs within tw
   const { simulation, game, brain } = loop;
   brain.channel.setDesiredState({
     hackLoop: { enabled: true, target: "n00dles", hosts: NO_PORT_SERVERS },
-    programs: { enabled: false, next: null },
-    homeRam: { enabled: false, next: null },
+    intents: [],
   });
   await game.run(CONVERGE_EVERY_MS);
   expect(await loop.loopsRunning()).toEqual([]);

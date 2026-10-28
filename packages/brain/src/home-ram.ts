@@ -1,9 +1,7 @@
-// The brain's side of upgrading home's RAM (#138, M3's third slice): the next upgrade, sent to the Agent in the desired
-// state (architecture D2). The dashboard's switch turns it on and off; on is the default, as for the other activities
-// (owner decision 34's pattern). Which purchase goes first, of this and the programs, is the controller's
-// (desired-state.ts).
+// The brain's side of upgrading home's RAM (#138, M3's third slice): the next upgrade, sent to the Agent as an intent
+// (#141). The dashboard's switch turns it on and off; on is the default, as for the other activities (owner decision
+// 34's pattern). Which purchase goes first, of this and the programs, is the controller's (desired-state.ts).
 import {
-  type DesiredState,
   HOME_RAM_LIMIT,
   isUpgradableHomeRam,
   type MediumSnapshotData,
@@ -36,8 +34,8 @@ export function homeRamUpgradePrice(ram: number): number {
 export interface HomeRamPlan {
   /** Home's RAM (GB), or null if the snapshot doesn't say. */
   ram: number | null;
-  /** The upgrade to buy now, or null. */
-  next: DesiredState["homeRam"]["next"];
+  /** The upgrade to buy now, from `fromRam` GB at the tech vendor `vendor`, or null. */
+  next: { fromRam: number; vendor: string } | null;
   /** What the next upgrade costs, or null where there's none (the limit) or its price isn't known. */
   price: number | null;
   /** Why nothing is bought now, for the dashboard, or null when something is (or home is at its limit). */
