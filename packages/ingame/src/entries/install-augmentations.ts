@@ -19,6 +19,7 @@ export async function main(ns: NS): Promise<void> {
     isDone: () => nothingToInstall.seen,
     doing: "install through",
     steps: (gamePage) => installOnPage(gamePage, bootScript, nothingToInstall),
-    notDoneAfter: "augmentations are still queued after installing them",
+    // Never reported: the steps return null only once the page shows nothing left to install, which is done.
+    notDoneAfter: "the page showed nothing left to install, yet it isn't done",
   });
 }

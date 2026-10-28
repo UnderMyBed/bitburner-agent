@@ -92,10 +92,9 @@ export function reactText(node: unknown): string {
 }
 
 /**
- * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
- * Each step returns its problem, or null once it's done.
+ * The game's page document, or null where there's none (the simulator's page has no `evaluate`). It needs no `ns`, so
+ * the install's page timer can use it after its script has died (./install-page.ts, #167).
  */
-/** The game's page, or null where there's none (the simulator's page has no `evaluate`). No `ns`: see above. */
 export function pageDocument(): Document | null {
   let page: Document | undefined;
   try {
@@ -113,9 +112,21 @@ export function pageDocument(): Document | null {
 export const findOnPage = (page: Document, xpath: string): Element | null =>
   page.evaluate(xpath, page, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
 
-/** The sidebar's item for one of the game's pages: a list button labelled with its name (`Sidebar/ui/SidebarItem.tsx`). */
+/** The sidebar's item for one of the game's pages: a list button with its name (`Sidebar/ui/SidebarItem.tsx`). */
 export const sidebarItemXpath = (pageName: string) => `//div[@role='button' and .//p[normalize-space()='${pageName}']]`;
 
+/** A React handler's event, as a player's would be: trusted, with the methods handlers call, and any `fields`. */
+export const playerEvent = (fields: Record<string, unknown> = {}) => ({
+  isTrusted: true,
+  preventDefault: () => {},
+  stopPropagation: () => {},
+  ...fields,
+});
+
+/**
+ * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
+ * Each step returns its problem, or null once it's done.
+ */
 export function openGamePage(ns: NS, deadlineMs: number) {
   const gamePage = pageDocument();
   if (gamePage === null) return null;
@@ -141,7 +152,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   async function click(element: Element, what: string): Promise<string | null> {
     const onClick = reactPropsOf(element)?.onClick;
     if (typeof onClick !== "function") return `can't click ${what}`;
-    await onClick({ isTrusted: true, preventDefault: () => {}, stopPropagation: () => {} });
+    await onClick(playerEvent());
     await letRender();
     return null;
   }
@@ -279,7 +290,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
       // so the one from before the line was typed would run an empty line.
       const onKeyDown = reactPropsOf(terminalInput)?.onKeyDown;
       if (typeof onKeyDown !== "function") return "the terminal can't be typed into";
-      await onKeyDown({ key: "Enter", preventDefault: () => {}, stopPropagation: () => {} });
+      await onKeyDown(playerEvent({ key: "Enter" }));
       await letRender();
       return null;
     },

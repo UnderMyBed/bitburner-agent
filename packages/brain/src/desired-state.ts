@@ -115,10 +115,11 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   queued for the game after the reset. Its own guard is that nothing queued before it is undone.
  * - An install's done check: the connected Agent's `lastAugReset` (the slow snapshot) is noted when the install is
  *   sent, and another one shows the game reset: it leaves the queue at once, not gated and backed up again for the new
- *   game. Another, not a later one: the game sets it from the clock (`PlayerObjectGeneralMethods.ts:122-125`), which
- *   can be set back (#167: E2's page clock is). It moves only with a reset or another save loaded; either way the
- *   install is dropped, the safe direction for an irreversible intent. The note outlives a disconnect (the install kills the Agent), not a restart of the brain: then the Agent's own
- *   check, nothing left to install, says it's done.
+ *   game. Another, not a later one: the game sets it from the clock
+ *   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:122-126`), which can be set back (#167: E2's page clock is).
+ *   It moves only with a reset or another save loaded; either way the install is dropped, the safe direction for an
+ *   irreversible intent. The note outlives a disconnect (the install kills the Agent), not a restart of the brain:
+ *   then the Agent's own check, nothing left to install, says it's done.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -410,7 +411,7 @@ export class DesiredStateController {
     this.#purchase = this.#choosePurchase();
     // The manual queue first; the purchase only if the owner hasn't queued the same.
     const manual = readManualIntents(this.#store);
-    // An irreversible intent goes only once its gate lets it, and nothing queued after an install goes before it's done.
+    // An irreversible intent goes only once its gate lets it, and nothing queued after an install before it's done.
     this.#gates.sync(manual);
     const intents = [
       ...manual.filter((each, index) => !afterInstall(manual, index) && this.#gates.isReleased(each.id)),

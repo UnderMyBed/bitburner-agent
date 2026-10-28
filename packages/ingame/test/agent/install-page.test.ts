@@ -7,7 +7,11 @@ import { openGamePage } from "../../src/page/game-page.ts";
 import { armRestartAfterInstall, installOnPage, RESTART_STEP_LIMITS_MS } from "../../src/page/install-page.ts";
 
 const BOOT = "agent/boot.js";
+/** The line the timer types: absolute, whatever directory the terminal is in. */
+const COMMAND = "run /agent/boot.js";
 const STARTED: string = "Running script with 1 thread, pid 1 and args: [].";
+/** Longer than the timer's poll (100 ms): the input renders a typed line only after it. */
+const RENDER_MS = 250;
 const clicks: string[] = [];
 const withProps = <T extends Element>(element: T, props: Record<string, unknown>): T =>
   Object.assign(element, { __reactProps$test: props });
@@ -33,18 +37,29 @@ function installAlert(): Element {
 }
 
 /**
- * The Terminal: its output and its controlled input. Typing sets the line, and the input renders it a moment later
- * with new handlers; Enter runs the line its last render saw: the echo, then what `answer` prints for it.
+ * The Terminal: its output and its controlled input, as `Terminal/ui/TerminalInput.tsx` renders it. Typing sets the
+ * line, which the input renders `RENDER_MS` later, with its `value` prop and new handlers; Enter runs the line its last
+ * render saw: the echo, then what `answer` prints for it. `earlier` lines are in the output already.
  */
-function terminal({ answer = (_line: string) => STARTED, typed = "", enterDoesNothing = false } = {}) {
+function terminal({
+  answer = (_line: string) => STARTED,
+  typed = "",
+  enterDoesNothing = false,
+  neverRenders = false,
+  disabled = false,
+  earlier = [] as string[],
+} = {}) {
   const output = element("ul", { id: "terminal" });
-  output.append(element("li", { textContent: "Bitburner v3.0.1 (1da7316)" }));
-  const input = element("input", { id: "terminal-input", value: typed }) as unknown as HTMLInputElement;
+  for (const line of ["Bitburner v3.0.1 (1da7316)", ...earlier]) output.append(element("li", { textContent: line }));
+  const input = element("input", { id: "terminal-input", value: typed, disabled }) as unknown as HTMLInputElement;
   const ran: string[] = [];
   const render = (line: string) => {
     input.value = line;
     withProps(input, {
-      onChange: (event: { target: { value: string } }) => setTimeout(() => render(event.target.value), 10),
+      value: line,
+      onChange: (event: { target: { value: string } }) => {
+        if (!neverRenders) setTimeout(() => render(event.target.value), RENDER_MS);
+      },
       onKeyDown: (event: { key: string }) => {
         if (event.key !== "Enter" || enterDoesNothing) return;
         ran.push(line);
@@ -85,19 +100,40 @@ afterEach(() => {
 });
 
 describe("the restart timer", () => {
-  test("after the install: the alert closed, `run agent/boot.js` typed and run, its line read: started", async () => {
+  test("after the install: the alert closed, `run /agent/boot.js` typed, Enter once rendered, its line read: started", async () => {
     vi.useFakeTimers();
     optionsInSidebar();
     const restart = armRestartAfterInstall(document, BOOT);
     // The install happens as the worker clicks: the alert shows, and the Terminal comes back.
     installAlert();
     const { ran } = terminal();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(restart.state()).toEqual({ outcome: "started", fallbackReason: null });
-    expect(ran).toEqual(["run agent/boot.js"]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(restart.state()).toEqual({ outcome: "started", fallbackReason: null, alertSeen: true });
+    // The line typed, absolute: an install leaves the terminal in the owner's last `cd`.
+    expect(ran).toEqual([COMMAND]);
     expect(clicks).toEqual(["the alert's X"]);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(ran).toHaveLength(1);
+  });
+
+  test("an earlier run of the same line in the output isn't this one's: it waits for its own echo", async () => {
+    vi.useFakeTimers();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    terminal({ earlier: [`[home /]> ${COMMAND}`, "Script agent/boot.js does not exist on home."] });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(restart.state()).toMatchObject({ outcome: "started", fallbackReason: null });
+  });
+
+  test("no install's alert in time (an earlier alert in front of it): the worker's death is the install, and on it goes", async () => {
+    vi.useFakeTimers();
+    optionsInSidebar();
+    const { ran } = terminal();
+    const restart = armRestartAfterInstall(document, BOOT);
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.install + 1_500);
+    expect(restart.state()).toEqual({ outcome: "started", fallbackReason: null, alertSeen: false });
+    expect(ran).toEqual([COMMAND]);
+    expect(clicks).toEqual([]);
   });
 
   test("the run refused (the terminal says why): Options, then Force kill, the unload prompt cleared", async () => {
@@ -108,7 +144,7 @@ describe("the restart timer", () => {
     installAlert();
     terminal({ answer: () => "Script agent/boot.js does not exist on home." });
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(restart.state()).toEqual({
+    expect(restart.state()).toMatchObject({
       outcome: "reloading",
       fallbackReason: "the terminal said: Script agent/boot.js does not exist on home.",
     });
@@ -126,8 +162,34 @@ describe("the restart timer", () => {
     expect(restart.state().outcome).toBe("waiting");
     expect(input.value).toBe("ls");
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(restart.state()).toEqual({ outcome: "reloading", fallbackReason: "the terminal didn't take the line" });
+    expect(restart.state()).toMatchObject({
+      outcome: "reloading",
+      fallbackReason: "the terminal didn't take the line",
+    });
     expect(ran).toEqual([]);
+  });
+
+  test.each([
+    ["a disabled terminal (an action running)", { disabled: true }, "the terminal didn't take the line"],
+    ["a line never rendered: Enter is never sent", { neverRenders: true }, "the terminal didn't take the line"],
+  ])("%s: the fallback, with why", async (_description, options, reason) => {
+    vi.useFakeTimers();
+    optionsInSidebar();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    const { ran } = terminal(options);
+    await vi.advanceTimersByTimeAsync(2 * RESTART_STEP_LIMITS_MS.terminal + 2_000);
+    expect(restart.state()).toMatchObject({ outcome: "reloading", fallbackReason: reason });
+    expect(ran).toEqual([]);
+  });
+
+  test("no terminal on the page: the fallback, saying so", async () => {
+    vi.useFakeTimers();
+    optionsInSidebar();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.terminal + 2_000);
+    expect(restart.state()).toMatchObject({ outcome: "reloading", fallbackReason: "no terminal" });
   });
 
   test("the run never confirmed: the fallback once its time is up", async () => {
@@ -137,19 +199,38 @@ describe("the restart timer", () => {
     installAlert();
     terminal({ enterDoesNothing: true });
     await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.started + 2_000);
-    expect(restart.state()).toEqual({ outcome: "reloading", fallbackReason: "the terminal didn't say it ran" });
+    expect(restart.state()).toMatchObject({ outcome: "reloading", fallbackReason: "the terminal didn't say it ran" });
   });
 
-  test("no install's alert in time: nothing was installed, so it stops, touching nothing", async () => {
+  test("a handler that throws: the fallback, with what it threw; one that throws in the fallback ends it", async () => {
     vi.useFakeTimers();
     optionsInSidebar();
-    terminal();
     const restart = armRestartAfterInstall(document, BOOT);
-    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.install + 500);
-    expect(restart.state().outcome).toBe("noInstall");
     installAlert();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(clicks).toEqual([]);
+    const { input } = terminal();
+    withProps(input, {
+      onChange: () => {
+        throw new Error("not the game's terminal");
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(restart.state()).toMatchObject({
+      outcome: "reloading",
+      fallbackReason: "the page threw: not the game's terminal",
+    });
+    document.body.replaceChildren();
+    const again = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    const options = withProps(element("div"), {
+      onClick: () => {
+        throw new Error("no Options page");
+      },
+    });
+    options.setAttribute("role", "button");
+    options.append(element("p", { textContent: "Options" }));
+    document.body.append(options);
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.terminal + 2_000);
+    expect(again.state()).toMatchObject({ outcome: "gaveUp", fallbackReason: "no terminal" });
   });
 
   test("disarmed (the worker is alive after its click): it stops", async () => {
@@ -157,10 +238,11 @@ describe("the restart timer", () => {
     const restart = armRestartAfterInstall(document, BOOT);
     restart.disarm();
     installAlert();
-    terminal();
+    const { ran } = terminal();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(restart.state().outcome).toBe("disarmed");
     expect(clicks).toEqual([]);
+    expect(ran).toEqual([]);
   });
 
   test("no Force kill to be found: it gives up once the fallback's time is up", async () => {
@@ -170,7 +252,10 @@ describe("the restart timer", () => {
     installAlert();
     terminal({ answer: () => "Failed to start script" });
     await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.fallback + 2_000);
-    expect(restart.state()).toEqual({ outcome: "gaveUp", fallbackReason: "the terminal said: Failed to start script" });
+    expect(restart.state()).toMatchObject({
+      outcome: "gaveUp",
+      fallbackReason: "the terminal said: Failed to start script",
+    });
     expect(clicks).toEqual(["the alert's X", "Options"]);
   });
 });
@@ -231,6 +316,9 @@ describe("the install's steps", () => {
     document.body.append(install);
   }
 
+  /** The output's lines now. */
+  const terminalOutput = () => [...document.querySelectorAll("#terminal > li")].map((line) => line.textContent);
+
   test("nothing queued: Install disabled, so nothing to install, and nothing clicked", async () => {
     sidebarItem("Stats");
     sidebarItem("Augmentations", () => augmentationsPage({ enabled: false }));
@@ -276,9 +364,8 @@ describe("the install's steps", () => {
     if (!gamePage) throw new Error("no page");
     await expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
     // The timer, armed before the click, takes over.
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await vi.waitFor(() => expect(terminalOutput()).toContain(STARTED), { timeout: 3_000 });
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "Confirm", "the alert's X"]);
-    expect([...document.querySelectorAll("#terminal > li")].map((line) => line.textContent)).toContain(STARTED);
   });
 
   test("with the confirmation turned off, Install itself installs: the timer was armed before it", async () => {
@@ -298,7 +385,7 @@ describe("the install's steps", () => {
     const gamePage = openGamePage(ns, Date.now() + 1_500);
     if (!gamePage) throw new Error("no page");
     await expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await vi.waitFor(() => expect(terminalOutput()).toContain(STARTED), { timeout: 3_000 });
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "the alert's X"]);
   });
 
@@ -309,9 +396,11 @@ describe("the install's steps", () => {
     const gamePage = openGamePage(workerNs().ns, Date.now() + 1_500);
     if (!gamePage) throw new Error("no page");
     expect(await installOnPage(gamePage, BOOT, { seen: false })).toBe("the game didn't install after its confirmation");
-    // An alert that shows now isn't the install's restart to make.
+    // An alert that shows now isn't the install's restart to make, and nothing is typed, however long.
     installAlert();
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.install + RESTART_STEP_LIMITS_MS.terminal);
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "Confirm"]);
+    expect(terminalOutput()).not.toContain(STARTED);
   });
 });

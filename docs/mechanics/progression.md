@@ -399,7 +399,7 @@ Fields: `sourceFileOverrides: Map<bn,lvl>`, `intelligenceOverride?: int`, and th
 - **Terminal injection.** The input has a stable hook, `id="terminal-input"`, commented "for players to hook in" (`src/Terminal/ui/TerminalInput.tsx:449-450`). Calling its React `onChange` and then `onKeyDown({key:"Enter", preventDefault(){}})` runs `Terminal.executeCommands` (`:238-252`). That gives `connect`, `backdoor`, `buy`, `run b1t_flume.exe`, and `run <script>` (to restart automation).
 - **Restarting after a UI install or BN entry.** Every script is killed and no callback exists without SF4.
   - Autoexec (`Settings.AutoexecScript`) only fires on **game load** (`src/NetscriptWorker.ts:185-212,251-256`).
-  - Options: (a) save, then reload the page so autoexec relaunches; (b) a `window.setTimeout` registered by the dying script, which *should* survive because `prestigeWorkerScripts` kills NS workers, not page timers (unverified), and then injects `run boot.js` into the terminal.
+  - Options: (a) save, then reload the page so autoexec relaunches; (b) a `window.setTimeout` registered by the dying script, which survives because `prestigeWorkerScripts` kills NS workers, not page timers, and then injects `run /agent/boot.js` into the terminal. E2 verified it on the browser build (#167, Q5): the agent uses (b), with (a) as its fallback; Steam (Electron) is still to be confirmed.
   - Note `spawn` is suppressed while on the BitVerse page (`src/NetscriptFunctions.ts:659-663`).
 - **What the fork automates through the DOM:** only `casino.js` (blackjack with save-scumming). `scripts/autopilot.js:173-185` prints a manual checklist when SF4 is missing, and refuses to auto-destroy without SF4 (`:482-486`). `scripts/stats.js` and `scripts/scan.js` use `eval("document")` for HUDs.
 - **Total game access (out of bounds, decision needed).** `scripts/dev-console.js` hooks `webpackChunkbitburner` to obtain `webpack_require`, then routes to the Dev page. That page can grant SFs and gives the SF-1 "YoureNotMeantToAccessThis" (`src/DevMenu.tsx:43-44`). `ns.openDevMenu()` itself only shows an April-Fools popup (`Extra.ts:19`; `src/ui/Apr1.tsx:41-61`).
@@ -473,7 +473,7 @@ Fields: `sourceFileOverrides: Map<bn,lvl>`, `intelligenceOverride?: int`, and th
 ### 13.5 Open questions to test in-game (Steam 3.0.1)
 
 - Does a negative SF12 override work end-to-end, and does the UI accept it? (The API path should.)
-- Do `window.setTimeout` callbacks survive `prestigeWorkerScripts` reliably enough to restart automation after UI installs? Is a page reload safe under Electron (Steam) the same way?
+- ~~Do `window.setTimeout` callbacks survive `prestigeWorkerScripts` reliably enough to restart automation after UI installs?~~ Yes on the browser build: E2 (#167, Q5). Still open: the same, and a page reload, under Electron (Steam).
 - Does `DisableASCIIArt` plus the `aria-label` selectors survive the BitVerse cinematic timing? How long does the auto cinematic take?
 - Black Ops page "Destroy" button: it uses `CorruptibleText`, so locate it structurally rather than by text.
 - Is DOM clicking of faction "Join" and aug "Purchase" reliable when dialogs (`dialogBoxCreate`) pop up after every purchase? `Settings.SuppressBuyAugmentationConfirmation` / `SuppressFactionInvites` exist (`FactionHelpers.tsx:30,122`).

@@ -8,7 +8,7 @@
 // and worked, then worked again from the Job page in another city; crime (#156) at the Slums; classes (#158) at a
 // university, unfocused, and held back by the city and the money guard. Buying a cloud server (#159) needs no page:
 // the NS API's `cloud.purchaseServer`, from a worker that fits a fresh save beside the Agent. Installing augmentations
-// (#167): through the page, then the page timer's `run agent/boot.js` in the terminal, or its save-and-reload, cycle
+// (#167): through the page, then the page timer's `run /agent/boot.js` in the terminal, or its save-and-reload, cycle
 // after cycle, which answers Q5 (#36).
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -761,8 +761,8 @@ test("a class held back (#158): a gym in Aevum from Sector-12, and a paid course
   expect(latestMedium(dataDirectory)?.player.money).toBe(1_000);
 });
 
-/** What the terminal shows once the page timer's `run agent/boot.js` has started it (`Terminal/commands/runScript.ts`). */
-const BOOT_STARTED = /> run agent\/boot\.js\s+Running script with 1 thread, pid \d+ and args: \[\]\./;
+/** What the terminal shows once the page timer's `run /agent/boot.js` has started it (`Terminal/commands/runScript.ts`). */
+const BOOT_STARTED = /> run \/agent\/boot\.js\s+Running script with 1 thread, pid \d+ and args: \[\]\./;
 const eventsOf = (dataDirectory: string, kind: string) =>
   readStore(dataDirectory).events.filter((event) => event.kind === kind);
 /** The newest slow snapshot the brain has stored, or null: the installed augmentations and the last reset. */
@@ -797,11 +797,14 @@ async function installedThroughThePage({
   queued,
   gameSettings = {},
   ownerLine = "",
+  ownerCommand = "",
 }: {
   installed: string[];
   queued: string;
   gameSettings?: Record<string, unknown>;
   ownerLine?: string;
+  /** A command the owner ran in the terminal before the install, as `cd agent`. */
+  ownerCommand?: string;
 }) {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     prepareSave: async (sim) => {
@@ -822,6 +825,7 @@ async function installedThroughThePage({
     browserDialogs.push(dialog.type());
     void dialog.dismiss().catch(() => {});
   });
+  if (ownerCommand !== "") await typeCommand(page, ownerCommand);
   if (ownerLine !== "") {
     // Typed as a player types: the page then has the user's activation, so its unload prompt would really ask.
     await page.locator(TERMINAL_INPUT).focus();
@@ -845,7 +849,9 @@ async function installedThroughThePage({
       await advanceGameTime(page, 200);
       agentBackGameMs += 200;
     } catch (error) {
-      // A reload under way: the game's clock is back once it has loaded.
+      // A reload under way: the game's clock is back once it has loaded. The clock can fail a moment before the
+      // navigation is reported, so that gets a moment too.
+      if (navigations.length === 0) await page.waitForEvent("framenavigated", { timeout: 5_000 }).catch(() => {});
       if (navigations.length === 0) throw error;
       await waitForTerminal(page);
     }
@@ -870,15 +876,18 @@ async function expectInstalled(page: Page, dataDirectory: string, augmentations:
 /** The augmentations the install cycles queue, one each, the ones before it installed in its save. */
 const CYCLE_AUGMENTATIONS = ["Neurotrainer I", "BitWire", "Synaptic Enhancement Implant", "Neurotrainer II"];
 
-test("installing through the page (#167, Q5): cycle after cycle, the page timer's `run agent/boot.js` brings the Agent back, with no reload", async () => {
+test("installing through the page (#167, Q5): cycle after cycle, the page timer's `run /agent/boot.js` brings the Agent back, with no reload", async () => {
   for (const [index, queued] of CYCLE_AUGMENTATIONS.entries()) {
     const installed = CYCLE_AUGMENTATIONS.slice(0, index);
     // Every other cycle with the install's confirmation turned off in Options: Install itself installs.
     const gameSettings = index % 2 === 1 ? { SuppressBuyAugmentationConfirmation: true } : {};
-    const cycle = await installedThroughThePage({ installed, queued, gameSettings });
+    // The last two with the owner's `cd agent` first: an install leaves the terminal there, so the line is absolute.
+    const ownerCommand = index >= 2 ? "cd agent" : "";
+    const cycle = await installedThroughThePage({ installed, queued, gameSettings, ownerCommand });
     const { dataDirectory, page, navigations } = cycle;
     expect(navigations, `cycle ${index + 1}`).toEqual([]);
     expect(await terminalText(page)).toMatch(BOOT_STARTED);
+    if (ownerCommand !== "") expect(await terminalText(page)).toMatch(/\[home \/agent\/\]> run \/agent\/boot\.js/);
     await expectInstalled(page, dataDirectory, [...installed, queued], cycle.lastAugResetBefore);
     // The install's alert was closed by the page timer, before the next Agent's dialog watcher ever saw it.
     expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.includes("You slowly drift"))).toEqual([]);
