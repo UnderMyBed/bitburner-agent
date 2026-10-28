@@ -171,6 +171,15 @@ test("at most 10 a round: the rest wait for the next", async () => {
   expect(watcher.takeReport().handled).toHaveLength(10);
 });
 
+test("with no fast snapshot for a while (safe mode, #160), the latest 100 are kept for the next", async () => {
+  alertQueue(Array.from({ length: 105 }, (_, index) => `alert ${index}`));
+  const watcher = createDialogWatcher(ns);
+  for (let round = 0; round < 11; round += 1) await watcher.handle(Date.now() + ROUND_MS);
+  const handled = watcher.takeReport().handled.map((dialog) => dialog.text);
+  expect(handled).toHaveLength(100);
+  expect([handled[0], handled.at(-1)]).toEqual(["alert 5", "alert 104"]);
+});
+
 test("a script's ns.alert (the one alert made from HTML) is the owner's: left open, and reported as blocking", async () => {
   const scriptAlert = modal("<div>Your script says hello</div>", {
     ownerState: [

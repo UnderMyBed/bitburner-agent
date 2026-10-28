@@ -5,6 +5,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   desiredStateWhileHolding,
   encodeControlMessage,
+  MAX_SAFE_MODE_TTL_MS,
   parseAgentMessage,
   parseBrainMessage,
 } from "../src/control-protocol.ts";
@@ -89,6 +90,14 @@ describe("round trips", () => {
       hackLoop: { enabled: false, target: null, hosts: [] },
       intents: [],
       work: { kind: "crime", crime: "Grand Theft Auto", focus: true },
+    },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles"] },
+      intents: [],
+      work: { kind: "crime", crime: "Shoplift", focus: true },
+      ttlMs: 43_200_000,
     },
     {
       protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -303,5 +312,49 @@ describe("work (#151)", () => {
     // The hack loop on, with a last state that had work: the loop as last sent, still no work.
     const loopOn = { ...desired, hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles"] } };
     expect(desiredStateWhileHolding(loopOn, loopOn)).toEqual({ hackLoop: loopOn.hackLoop, intents: [] });
+  });
+});
+
+describe("safe mode's ttlMs (#160)", () => {
+  const state = {
+    protocolVersion: 1,
+    type: "desiredState",
+    hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles"] },
+    intents: [],
+  };
+  const ttlOf = (text: string) => {
+    const parsed = parseBrainMessage(text);
+    if (!parsed.ok || parsed.message.type !== "desiredState") throw new Error(`not a desired state: ${text}`);
+    return parsed.message.ttlMs;
+  };
+
+  test("carried as sent; absent or 0, the message carries none: the state isn't kept past the brain", () => {
+    expect(ttlOf(JSON.stringify({ ...state, ttlMs: 43_200_000 }))).toBe(43_200_000);
+    expect(ttlOf(JSON.stringify(state))).toBeUndefined();
+    expect(ttlOf(JSON.stringify({ ...state, ttlMs: 0 }))).toBeUndefined();
+    expect(ttlOf(JSON.stringify({ ...state, ttlMs: MAX_SAFE_MODE_TTL_MS }))).toBe(7 * 24 * 60 * 60_000);
+  });
+
+  test.each([
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["a string", "600000"],
+    ["null", null],
+    ["unsafe", 2 ** 53],
+    ["over 7 days, so a time it makes can't be shown as a date", 604_800_001],
+  ])("one that's %s is refused, with a reason", (_description, ttlMs) => {
+    const result = parseBrainMessage(JSON.stringify({ ...state, ttlMs }));
+    expect(result).toEqual({ ok: false, reason: expect.stringContaining("ttlMs") });
+  });
+
+  test("while the brain holds, it goes as the brain set it: a held state starts nothing new, kept or not", () => {
+    const loopOn = { hackLoop: state.hackLoop, intents: [], ttlMs: 600_000 };
+    expect(desiredStateWhileHolding(loopOn, loopOn)).toEqual({ hackLoop: state.hackLoop, intents: [], ttlMs: 600_000 });
+    const loopOff = { ...loopOn, hackLoop: { enabled: false, target: null, hosts: [] } };
+    expect(desiredStateWhileHolding(loopOff, null)).toEqual({ ...loopOff, intents: [] });
+    expect(desiredStateWhileHolding({ hackLoop: state.hackLoop, intents: [] }, loopOn)).toEqual({
+      hackLoop: state.hackLoop,
+      intents: [],
+    });
   });
 });
