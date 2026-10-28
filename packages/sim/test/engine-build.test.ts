@@ -111,8 +111,9 @@ describe("collectTsconfigs", () => {
 
   test("takes the nearest tsconfig.json above the sources, as esbuild does, then each file it extends", () => {
     const files = {
-      // Comments, as the repository's have; an extends without its .json; then a list of them.
-      "pkg/tsconfig.json": '{\n  // the package\'s\n  "extends": "../node",\n  "include": ["src/**/*.ts"]\n}',
+      // Comments, as the repository's have (one an old extends); an extends without its .json; then a list of them.
+      "pkg/tsconfig.json":
+        '{\n  // the package\'s, once "extends": "./gone.json"\n  "extends": "../node",\n  "include": ["src/**/*.ts"]\n}',
       "node.json": '{ /* node */ "extends": ["./base.json", "./strict.json"] }',
       "base.json": '{ "compilerOptions": { "target": "es2024" } }',
       "strict.json": '{ "compilerOptions": { "strict": true } }',

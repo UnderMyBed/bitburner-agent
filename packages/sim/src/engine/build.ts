@@ -66,8 +66,9 @@ export function engineFingerprint(inputs: EngineInputs): string {
 
 /**
  * The tsconfig files esbuild applies to the sources in `dir`: the nearest tsconfig.json at or above it, as esbuild
- * finds it, then every file that one extends, in turn. Path (relative to `dir`, forward slashes) → content. Throws on an
- * `extends` it can't follow (a package's config, a missing file), rather than leave that config out of the fingerprint.
+ * finds it, then every file that one extends, in turn. Path (relative to `dir`, forward slashes) → content. Throws on
+ * an `extends` it can't follow (a package's config, a missing file), rather than leave that config out of the
+ * fingerprint.
  */
 export function collectTsconfigs(dir: string): Record<string, string> {
   let nearest = path.resolve(dir);
