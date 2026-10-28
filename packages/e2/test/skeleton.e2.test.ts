@@ -9,8 +9,8 @@ import {
   BOOT_SCRIPT,
   deployedFilePath,
   type FastSnapshotData,
+  freshSaveHomeWorkerFileNames,
   HACK_LOOP_SCRIPT_NAME,
-  homeWorkerFileNames,
   type MediumSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
@@ -305,7 +305,10 @@ describe("the skeleton on E2", () => {
     // The game's own RAM figures (`mem`) for the Agent, each home worker (the snapshots' and the hack loop's, #134),
     // and boot.js (beside the Agent at a handover).
     const agentFile = deployedFilePath(brain.deploymentId, AGENT_SCRIPT_NAME);
-    const workerFiles = homeWorkerFileNames().map((fileName) => deployedFilePath(brain.deploymentId, fileName));
+    // Not the Singularity workers (#145): without SF4 the game charges them 16×, and they run only with Singularity.
+    const workerFiles = freshSaveHomeWorkerFileNames().map((fileName) =>
+      deployedFilePath(brain.deploymentId, fileName),
+    );
     const ramGbByScript: Record<string, number> = {};
     for (const file of [agentFile, ...workerFiles, BOOT_SCRIPT]) {
       const terminalLengthBeforeCommand = (await terminalText(page)).length;

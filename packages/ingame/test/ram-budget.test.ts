@@ -1,7 +1,7 @@
 // Every in-game script's static RAM, measured with the game's own calculator, is within its budget (architecture R4).
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { homeWorkerFileNames } from "@bitburner-agent/core";
+import { homeWorkerFileNames, singularityWorkerFileNames } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { NEW_GAME, useInGameBuild, useSimulations } from "./helpers/simulation.ts";
 
@@ -14,14 +14,18 @@ const budgets = JSON.parse(readFileSync(path.join(import.meta.dirname, "../ram-b
   number
 >;
 
-test("every bundle has a budget, every budget a bundle, and each bundle's RAM is within it", async () => {
+test("every bundle has a budget, every budget a bundle, and each bundle's RAM is within it (Singularity's in BN4)", async () => {
   const { manifest, source } = await build();
   const bundleNames = Object.keys(manifest.files).sort();
   expect(Object.keys(budgets).sort(), "ram-budget.json lists exactly the bundles").toEqual(bundleNames);
 
-  const simulation = await start(NEW_GAME);
+  // The Singularity workers run only with Singularity, so they're measured where it costs what SF4.3 makes it: BN4.
+  const newGame = await start(NEW_GAME);
+  const inBitNode4 = await start({ ...NEW_GAME, fixture: { kind: "bitnode", n: 4, sourceFiles: {} } });
+  const singularityWorkers = new Set(singularityWorkerFileNames());
   const measured: Record<string, number> = {};
   for (const fileName of bundleNames) {
+    const simulation = singularityWorkers.has(fileName) ? inBitNode4 : newGame;
     await simulation.writeFile("home", fileName, source(fileName));
     measured[fileName] = await simulation.staticRamUsage("home", fileName);
   }

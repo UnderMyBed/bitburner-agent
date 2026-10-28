@@ -1,47 +1,81 @@
-// The Effectors (#141, architecture §5.6): for each action an intent can name, the home worker that does it and its
-// arguments. Every one is the `ui` backend for now, driving the game's page: there's no API for them before
-// Singularity. The brain never knows which backend does an intent.
+// The Effectors (#141, #145, architecture §5.6): for each action an intent can name, how each backend does it.
+// - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
+//   no page. They're on the page's global object there, and absent in a browser.
+// - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
+// - `ui`: a home worker that drives the game's page, before Singularity.
+// The brain never knows which backend does an intent. The simulator's effectors aren't named like NS functions: the
+// game charges RAM for such names in in-game code.
 import {
+  AGENT_SIM_EFFECTORS_GLOBAL,
   BUY_PROGRAM_WORKER_NAME,
+  type EffectorReport,
   type Intent,
+  SINGULARITY_BUY_PROGRAM_WORKER_NAME,
+  SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_TRAVEL_WORKER_NAME,
+  SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
   TOR_ROUTER,
   TRAVEL_WORKER_NAME,
   UPGRADE_HOME_RAM_WORKER_NAME,
 } from "@bitburner-agent/core";
 
-export interface Effector {
+/** The simulator's effectors, as it puts them on the page's global object. */
+export interface SimEffectors {
+  buyTorRouter(): EffectorReport;
+  buyDarkwebProgram(program: string): EffectorReport;
+  buyHomeRam(fromRam: number): EffectorReport;
+  travelTo(city: string): EffectorReport;
+}
+
+/** A home worker and its arguments, before the deadline it's given. */
+export interface WorkerEffector {
   workerName: string;
-  /** The worker's arguments, before the deadline it's given. */
   workerArguments: (string | number)[];
+}
+
+export interface Effector {
   /** What it does, for the log: "travel to Aevum". */
   description: string;
+  ui: WorkerEffector;
+  singularity: WorkerEffector;
+  sim(effectors: SimEffectors): EffectorReport;
+}
+
+/** The simulator's effectors, if the page has them. */
+export function simEffectors(): SimEffectors | null {
+  const found = (globalThis as unknown as Record<string, unknown>)[AGENT_SIM_EFFECTORS_GLOBAL];
+  return typeof found === "object" && found !== null ? (found as SimEffectors) : null;
 }
 
 export function effectorFor(intent: Intent): Effector {
   switch (intent.action) {
     case "buyTor":
       return {
-        workerName: BUY_PROGRAM_WORKER_NAME,
-        workerArguments: [TOR_ROUTER, intent.args.vendor],
         description: "buy the TOR router",
+        ui: { workerName: BUY_PROGRAM_WORKER_NAME, workerArguments: [TOR_ROUTER, intent.args.vendor] },
+        singularity: { workerName: SINGULARITY_BUY_TOR_WORKER_NAME, workerArguments: [] },
+        sim: (effectors) => effectors.buyTorRouter(),
       };
     case "buyProgram":
       return {
-        workerName: BUY_PROGRAM_WORKER_NAME,
-        workerArguments: [intent.args.program, ""],
         description: `buy ${intent.args.program}`,
+        ui: { workerName: BUY_PROGRAM_WORKER_NAME, workerArguments: [intent.args.program, ""] },
+        singularity: { workerName: SINGULARITY_BUY_PROGRAM_WORKER_NAME, workerArguments: [intent.args.program] },
+        sim: (effectors) => effectors.buyDarkwebProgram(intent.args.program),
       };
     case "upgradeHomeRam":
       return {
-        workerName: UPGRADE_HOME_RAM_WORKER_NAME,
-        workerArguments: [intent.args.fromRam, intent.args.vendor],
         description: `upgrade home RAM to ${intent.args.fromRam * 2} GB`,
+        ui: { workerName: UPGRADE_HOME_RAM_WORKER_NAME, workerArguments: [intent.args.fromRam, intent.args.vendor] },
+        singularity: { workerName: SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME, workerArguments: [intent.args.fromRam] },
+        sim: (effectors) => effectors.buyHomeRam(intent.args.fromRam),
       };
     case "travel":
       return {
-        workerName: TRAVEL_WORKER_NAME,
-        workerArguments: [intent.args.city],
         description: `travel to ${intent.args.city}`,
+        ui: { workerName: TRAVEL_WORKER_NAME, workerArguments: [intent.args.city] },
+        singularity: { workerName: SINGULARITY_TRAVEL_WORKER_NAME, workerArguments: [intent.args.city] },
+        sim: (effectors) => effectors.travelTo(intent.args.city),
       };
   }
 }

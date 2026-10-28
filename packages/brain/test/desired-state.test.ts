@@ -375,7 +375,7 @@ describe("the manual queue (#141, owner decision 36)", () => {
     game: null,
     intents,
   });
-  const doneOutcome = (id: string): IntentOutcome => ({ id, done: true, tries: 1, problem: null });
+  const doneOutcome = (id: string): IntentOutcome => ({ id, done: true, tries: 1, problem: null, backend: "ui" });
 
   test("reported done by the Agent, it leaves the queue; cancelled, it leaves at once", () => {
     const controller = new DesiredStateController({ channel, store });
@@ -428,6 +428,23 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
   });
 
+  test("an Agent from before backends (#145) sends outcomes without one: kept, with the backend unknown", () => {
+    const controller = new DesiredStateController({ channel, store });
+    controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+    const connection = connectAgent();
+    send(connection, "fast", {
+      ...fastWith(),
+      intents: [{ id: AEVUM.id, done: false, tries: 1, problem: "no Travel" }],
+    });
+    expect(controller.intentsView()).toEqual([
+      {
+        id: AEVUM.id,
+        source: "manual",
+        outcome: { id: AEVUM.id, done: false, tries: 1, problem: "no Travel", backend: null },
+      },
+    ]);
+  });
+
   test("with the hack loop off, the queue goes before any snapshot: each intent checks the game first", () => {
     store.setSetting("hackLoop.enabled", "false");
     const controller = new DesiredStateController({ channel, store });
@@ -443,7 +460,13 @@ describe("the manual queue (#141, owner decision 36)", () => {
     send(connection, "medium", mediumData(1, { n00dles: true }));
     controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
-    const outcome = { id: AEVUM.id, done: false, tries: 2, problem: "no Travel in the sidebar" };
+    const outcome: IntentOutcome = {
+      id: AEVUM.id,
+      done: false,
+      tries: 2,
+      problem: "no Travel in the sidebar",
+      backend: "ui",
+    };
     send(connection, "fast", fastWith(outcome));
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome }]);
     connection.dropFromGameSide();

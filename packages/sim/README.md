@@ -50,7 +50,7 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`, `stubs/strong-refs.ts`) are bundled with the game's source, and most import it. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`, `agent-effectors.ts`, `stubs/strong-refs.ts`) are bundled with the game's source, and most import it. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
 - with the game's own TypeScript (`vendor/bitburner-src/node_modules`, installed by `npm run setup:engine`);
 - against the game's types, through [`tsconfig.bundle.json`](tsconfig.bundle.json), which extends the game's tsconfig and resolves its path aliases and packages;
 - run by `scripts/typecheck-bundle.ts`.
@@ -101,6 +101,7 @@ await sim.close();
   - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios use `runUntil`'s `onBitVerse`.
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
+  - `setMoney(money)`: sets the player's money (finite, 0 or more). A harness edit, for test scenarios (#145).
   - `heap()`: the process's V8 heap in use, in bytes, after a full garbage collection. The collector is reached privately, so `gc` never appears where scripts could see it. Measuring doesn't change the game ([Determinism](#determinism)).
   - `heapLimit()`: the process's V8 heap limit, in bytes: `maxHeapMb` plus room for the young generation, or Node's default
   - `profile("start" | "stop")`: a CPU profile of the process, through the inspector. Stopping returns it (the `.cpuprofile` format). One at a time.
@@ -381,6 +382,7 @@ Besides the Router ([Pages](#pages-and-the-bitverse)) and the UI's events, the b
 Deliberate differences:
 
 - **No rendered UI.** Nothing is drawn, so scripts that read the game's page (its DOM: HUD values, buttons) fail headless. That covers parts of the legacy fork and our own `ui` effectors. They're tested on a real browser build instead (environment E2, architecture §9.4).
+- **The Agent's `sim` effectors** (#145, `src/engine/bundle/agent-effectors.ts`): in their place, the page's global object gets `__bitburnerAgentSim` at boot, with `buyTorRouter`, `buyDarkwebProgram`, `buyHomeRam` and `travelTo`. Each does what the page's own handler does (the TOR and RAM buttons' functions, the terminal's `buy`, the Travel Agency's `travel` with its alert and route) and reports `{ done, problem }`. They never grant Source-Files. A test that wants the Agent's page or Singularity workers instead deletes the global from a script before the Agent starts.
 - **TS/JSX player scripts** aren't supported (the swc stub throws). Our in-game code is plain JS.
 - **No windows, and sockets only to the parent.** Tail windows don't exist: `getRunningScript().tailProperties` is always `null`, and `ns.ui`'s tail calls do nothing. `ns.ui.windowSize()` is a fixed 1024×768. The simulation is offline, except for WebSockets to the parent, which cross in lockstep with the virtual clock, not in real time ([Network](#network)).
 - **A simulated player at the UI.** Prompt rules answer at once, and error popups are closed at once ([Prompts](#prompts), [Events](#events)).
@@ -403,7 +405,7 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | Path | What |
 |---|---|
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
-| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), and module stubs |
+| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), the Agent's `sim` effectors (`agent-effectors.ts`, #145), and module stubs |
 | `src/scenario/` | Scenario specs and the CLIs' option parsers (`spec.ts`), the runner and pool (`run.ts`), the CLIs' table and progress line (`report.ts`), the `npm run sim` CLI (`cli.ts`) |
 | `src/bench/` | Benchmark results as `benchmarks.md` rows and the regression check (`report.ts`), profile summaries (`profile.ts`) |
 | `scenarios/` | Workload scenarios (lean, batch, churn, copies) and their scripts |

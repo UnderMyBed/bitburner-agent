@@ -11,8 +11,8 @@
 //   acts on them.
 // - It keeps no state at module level (architecture R10): the game may or may not reuse a module.
 //
-// RAM: `run` (1.0 GB) and `isRunning` (0.1 GB) are the functions referenced that cost anything; the rest are free
-// (ram-budget.json).
+// RAM: `run` (1.0 GB), `isRunning` (0.1 GB), `getScriptRam` (0.1 GB) and `getServerMaxRam` (0.05 GB) are the functions
+// referenced that cost anything; the rest are free (ram-budget.json).
 import {
   AGENT_CONFIG_FILE_NAME,
   BOOT_SCRIPT,
@@ -87,7 +87,13 @@ export async function main(ns: NS): Promise<void> {
   const game = ns.ui.getGameInfo();
   // One runner for every home worker, so they run one at a time, and never two copies of one.
   const workerRunner = createWorkerRunner(ns);
-  const intentRunner = createIntentRunner(ns, { deploymentId, workerRunner });
+  // Created first, as the snapshotter reports how its intents went; it asks the snapshotter whether Singularity is in.
+  let singularityAvailable = () => false;
+  const intentRunner = createIntentRunner(ns, {
+    deploymentId,
+    workerRunner,
+    singularityAvailable: () => singularityAvailable(),
+  });
   const dialogWatcher = createDialogWatcher(ns);
   const snapshotter = createSnapshotter(ns, {
     deploymentId,
@@ -96,6 +102,7 @@ export async function main(ns: NS): Promise<void> {
     intentOutcomes: () => intentRunner.outcomes(),
     dialogReport: () => dialogWatcher.takeReport(),
   });
+  singularityAvailable = () => snapshotter.singularityAvailable();
   const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });
 
   /**

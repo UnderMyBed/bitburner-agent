@@ -32,6 +32,9 @@ export interface EffectorReport {
   problem: string | null;
 }
 
+/** The ways the Agent can carry out an intent (#145, architecture §5.6). */
+export const INTENT_BACKENDS = ["sim", "singularity", "ui"] as const;
+
 /** What the Agent reports of each intent it holds, in the fast snapshot: the brain's view of how it went (R2). */
 export interface IntentOutcome {
   id: string;
@@ -41,6 +44,8 @@ export interface IntentOutcome {
   tries: number;
   /** The last problem: the worker's, or why it didn't run. Null for none. */
   problem: string | null;
+  /** The backend of the last try (#145), or null before the first. */
+  backend: (typeof INTENT_BACKENDS)[number] | null;
 }
 
 /** An intent's id: its action and its arguments' values, in their fixed order ("upgradeHomeRam(8, CompuTek)"). */

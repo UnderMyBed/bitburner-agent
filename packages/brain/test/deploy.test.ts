@@ -109,11 +109,11 @@ test("the game connects, the brain deploys, and a one-time run of boot.js brings
 
 test("a brain with a new build replaces the running Agent through restart and boot.js, with no human step", async () => {
   const { simulation, deployerEvents, agentsConnected, startBrain, runUntil } = await gameWithAgent();
-  // Its agent.js also references getServerMaxRam (0.05 GB), which the game measures at the new path: 2.75 GB.
-  const newDeployer = startBrain({ build: withAgentLine("function measured(ns) { return ns.getServerMaxRam; }") });
+  // Its agent.js also references getServerUsedRam (0.05 GB), which the game measures at the new path: 2.9 GB.
+  const newDeployer = startBrain({ build: withAgentLine("function measured(ns) { return ns.getServerUsedRam; }") });
   await runUntil(() => agentsConnected().at(-1)?.deploymentId === newDeployer.deploymentId, AFTER_A_BRAIN_RESTART_MS);
   expect(deployerEvents().at(-1)).toMatchObject({ type: "deployed", deploymentId: newDeployer.deploymentId });
-  expect(await simulation.staticRamUsage("home", deployedFilePath(newDeployer.deploymentId, "agent.js"))).toBe(2.75);
+  expect(await simulation.staticRamUsage("home", deployedFilePath(newDeployer.deploymentId, "agent.js"))).toBe(2.9);
   expect(await runningFiles(simulation)).toEqual([deployedFilePath(newDeployer.deploymentId, "agent.js")]);
 });
 
@@ -129,12 +129,12 @@ test("a brain with a new token: the old Agent is refused (4003), finds the new d
 
 test("a build the game measures over its RAM budget isn't switched to, and the running Agent stays", async () => {
   const { simulation, game, deployerEvents, agentsConnected, deployer, startBrain, runUntil } = await gameWithAgent();
-  // getServer costs 2.0 GB: agent.js would need 4.7 GB, over its 3.0 GB budget.
+  // getServer costs 2.0 GB: agent.js would need 4.85 GB, over its 3.0 GB budget.
   startBrain({ build: withAgentLine("function tooCostly(ns) { return ns.getServer; }") });
   await runUntil(() => deployerEvents().length === 2, AFTER_A_BRAIN_RESTART_MS);
   expect(deployerEvents()[1]).toMatchObject({
     type: "deployFailed",
-    reason: "agent.js needs 4.7 GB, over its budget of 3 GB",
+    reason: "agent.js needs 4.85 GB, over its budget of 3 GB",
   });
   await game.run(5_000);
   expect(await readOnHome(simulation, game, CURRENT_DEPLOYMENT_FILE)).toBe(deployer.deploymentId);

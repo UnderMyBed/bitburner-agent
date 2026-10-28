@@ -55,6 +55,7 @@ describe("collectEngineInputs", () => {
   test("collects every bundled source recursively, with forward-slash keys, and nothing else", () => {
     const sources = collectBundleSources(enginePaths.bundleSourceDir);
     expect(Object.keys(sources).sort()).toEqual([
+      "agent-effectors.ts",
       "entry.ts",
       "page.ts",
       "router.ts",

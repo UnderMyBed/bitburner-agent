@@ -426,6 +426,8 @@ export interface HostMethods {
    * harness edit, not something a player can do.
    */
   "diagnostics.setHomeRam"(params: { gb: number }): void;
+  /** Sets the player's money (finite, 0 or more), for test scenarios. A harness edit, not something a player can do. */
+  "diagnostics.setMoney"(params: { money: number }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */

@@ -5,6 +5,7 @@ import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
   type FastSnapshotData,
+  INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,
   intentId,
@@ -190,7 +191,10 @@ export class DesiredStateController {
     ].map((view) => ({ ...view, outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null }));
   }
 
-  /** The connected Agent's intent outcomes, from its latest fast snapshot: only the well-formed, as it's its word. */
+  /**
+   * The connected Agent's intent outcomes, from its latest fast snapshot: only the well-formed, as it's its word. An
+   * Agent from before backends (#145) names none: its backend is unknown (null).
+   */
   #reportedOutcomes(): IntentOutcome[] {
     const outcomes: unknown[] = Array.isArray(this.#fastData?.intents) ? this.#fastData.intents : [];
     return outcomes
@@ -200,10 +204,13 @@ export class DesiredStateController {
           typeof fields?.id === "string" &&
           typeof fields.done === "boolean" &&
           typeof fields.tries === "number" &&
-          (fields.problem === null || typeof fields.problem === "string")
+          (fields.problem === null || typeof fields.problem === "string") &&
+          (fields.backend === undefined ||
+            fields.backend === null ||
+            (INTENT_BACKENDS as readonly string[]).includes(fields.backend))
         );
       })
-      .map(({ id, done, tries, problem }) => ({ id, done, tries, problem }));
+      .map(({ id, done, tries, problem, backend }) => ({ id, done, tries, problem, backend: backend ?? null }));
   }
 
   hackLoopView(): HackLoopView {

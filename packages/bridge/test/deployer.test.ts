@@ -176,6 +176,27 @@ describe("over a RAM budget", () => {
     ]);
     expect(channel.states.at(-1)).toEqual({ deployedId: "old-deployment", hold: false, deployFailed: true });
   });
+
+  test("a Singularity worker (#145) may cost its functions 16 times over, as without SF4.3; more fails", async () => {
+    const build = {
+      scripts: { ...BUILD.scripts, "singularity-travel.js": "export async function main(ns) {}" },
+      ramBudgets: { ...BUILD.ramBudgets, "singularity-travel.js": 4.1 },
+    };
+    // 1.6 + 0.5 + 16 × 2: what the game charges with no SF4 (`getPlayer`, then `travelToCity`).
+    const withoutSf4 = newGame();
+    withoutSf4.ramOf = (filename) => (filename.endsWith("/singularity-travel.js") ? 34.1 : 1.6);
+    await createDeployer({ build }).accept(withoutSf4);
+    expect(events.at(-1)).toMatchObject({ type: "deployed" });
+    const overEvenThat = newGame();
+    // The most it could be, 1.6 + 16 × 2.5, if `getPlayer` were Singularity's too; over that fails.
+    overEvenThat.ramOf = (filename) => (filename.endsWith("/singularity-travel.js") ? 41.7 : 1.6);
+    await createDeployer({ build }).accept(overEvenThat);
+    expect(events.at(-1)).toMatchObject({
+      type: "deployFailed",
+      reason:
+        "singularity-travel.js needs 41.7 GB, over its budget of 41.6 GB (4.1 GB at SF4.3, its functions × 16 without)",
+    });
+  });
 });
 
 describe("the version check", () => {
