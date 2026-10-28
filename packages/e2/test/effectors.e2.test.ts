@@ -406,8 +406,11 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
 });
 
-/** Sets the work the brain manages (#151), as the dashboard's Work form does. */
-async function setWork(dashboardPort: number, work: { faction: string; workType: string } | null) {
+/** Sets the work the brain manages (#151, #153), as the dashboard's Work forms do. */
+async function setWork(
+  dashboardPort: number,
+  work: { faction: string; workType: string } | { kind: "company"; company: string; field: string } | null,
+) {
   const origin = `http://127.0.0.1:${dashboardPort}`;
   const response = await fetch(`${origin}/api/work`, {
     method: "POST",
@@ -496,6 +499,61 @@ test("faction work a faction doesn't offer (#151): not converged, with the page'
   expect(latestFast(dataDirectory)?.work).toEqual({
     converged: false,
     problem: 'no "Field Work" on CyberSec\'s page (does it offer field work?)',
+    backend: "ui",
+  });
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
+/** The Work page's title for a waiter at Noodle Bar: shown while the player is focused on the job. */
+const waiterPageShown = (page: Page) => async () =>
+  (await page.locator("h6", { hasText: "You are currently working as a Waiter at Noodle Bar" }).count()) > 0;
+const NOODLE_BAR_WAITER = { kind: "company", company: "Noodle Bar", field: "Waiter" } as const;
+
+test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the alert closed, worked focused; refocused, not restarted; restarted, not reapplied", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    city: "New Tokyo",
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, NOODLE_BAR_WAITER);
+  await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  const hired = () => JSON.stringify(latestMedium(dataDirectory)?.player.jobs) === '{"Noodle Bar":"Waiter"}';
+  await advanceUntil(page, async () => hired(), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 12_000 });
+
+  // The owner does something else: within the activity's 30 s, the Agent focuses again, without starting the work
+  // again (which would end it first: "You finished working for Noodle Bar", `Work/CompanyWork.tsx`), or applying again.
+  await page.getByRole("button", { name: "Do something else simultaneously" }).click();
+  await expect(waiterPageShown(page)()).resolves.toBe(false);
+  await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You finished working for"))).toEqual([]);
+
+  // The owner stops working: the job is still held (`getPlayer().jobs`), so within 30 s the Agent goes straight to
+  // "Work", without applying again (the game would say "You are already Waiter! No promotion available.").
+  await page.getByRole("button", { name: "Stop working" }).click();
+  await expect(waiterPageShown(page)()).resolves.toBe(false);
+  await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  await advanceGameTime(page, 4_000);
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You are already"))).toEqual([]);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("company work in another city (#153): not converged, saying where the player is, and the page left on the Terminal", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, NOODLE_BAR_WAITER);
+  await advanceUntil(page, async () => (latestFast(dataDirectory)?.work?.backend ?? null) !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({
+    converged: false,
+    problem: "no Noodle Bar in the city (is the player in its city?)",
     backend: "ui",
   });
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);

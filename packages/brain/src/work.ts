@@ -12,8 +12,11 @@ import type { TelemetryStore } from "./telemetry-store.ts";
 
 export const WORK_SETTING = "work.desired";
 
+/** `Omit` over each member of a union, not over their common fields. */
+type OmitEach<Union, Key extends PropertyKey> = Union extends unknown ? Omit<Union, Key> : never;
+
 /** The work as the owner sets it: what, not the focus, which the brain works out (`workFocus`). */
-export type OwnersWork = Omit<Work, "focus">;
+export type OwnersWork = OmitEach<Work, "focus">;
 
 /** What the dashboard shows of the work. */
 export interface WorkView {
@@ -26,7 +29,10 @@ export interface WorkView {
   outcome: WorkOutcome | null;
 }
 
-/** `request` (`{ faction, workType }`, or null to stop managing work) as the owner's work, or why it isn't valid. */
+/**
+ * `request` (`{ faction, workType }`, `{ kind: "company", company, field }`, or null to stop managing work) as the
+ * owner's work, or why it isn't valid.
+ */
 export function parseOwnersWork(
   request: unknown,
 ): { ok: true; work: OwnersWork | null } | { ok: false; reason: string } {

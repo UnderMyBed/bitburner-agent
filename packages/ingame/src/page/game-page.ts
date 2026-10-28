@@ -233,7 +233,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
       return (
         (await openSidebarPage("City", stepsEndMs)) ??
         (await clickWhenThere(
-          `//span[@aria-label='${location}'] | //button[normalize-space()='${location}']`,
+          `//span[@aria-label=${xpathString(location)}] | //button[normalize-space()=${xpathString(location)}]`,
           `${location} in the city`,
         ))
       );

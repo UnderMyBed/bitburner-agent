@@ -7,6 +7,7 @@
  */
 import { BUY_AUGMENTATION_WORKER_NAME } from "./augmentations.ts";
 import { singularityWorkerFileNames } from "./backends.ts";
+import { COMPANY_WORK_WORKER_NAME } from "./companies.ts";
 import { SNAPSHOT_TIERS } from "./control-protocol.ts";
 import { JOIN_FACTION_WORKER_NAME } from "./factions.ts";
 import { HACK_LOOP_DEPLOY_WORKER_NAME, HACK_LOOP_ROOT_WORKER_NAME } from "./hack-loop.ts";
@@ -27,6 +28,7 @@ export function homeWorkerFileNames(): string[] {
     JOIN_FACTION_WORKER_NAME,
     BUY_AUGMENTATION_WORKER_NAME,
     FACTION_WORK_WORKER_NAME,
+    COMPANY_WORK_WORKER_NAME,
     ...singularityWorkerFileNames(),
   ];
 }

@@ -773,6 +773,15 @@ describe("work (#151, owner decision 37)", () => {
     expect(again.workView().desired).toEqual(work);
   });
 
+  test("company work (#153): set, kept and sent, its field checked", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    expect(controller.setWork({ kind: "company", company: "Noodle Bar", field: "Waiter" })).toEqual({ ok: true });
+    expect(sentWork(connection)).toEqual({ kind: "company", company: "Noodle Bar", field: "Waiter", focus: true });
+    expect(controller.setWork({ kind: "company", company: "Noodle Bar", field: "Juggler" })).toMatchObject({
+      ok: false,
+    });
+  });
+
   test("unfocused once the Neuroreceptor Management Implant is installed, as the slow snapshot says", () => {
     const { controller, connection } = connectedWithLoopOff();
     controller.setWork(HACKING_FOR_CYBERSEC);

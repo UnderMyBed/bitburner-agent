@@ -69,6 +69,13 @@
       <button type="submit">Work at it</button>
       <button type="button" id="stop-work">Stop managing work</button>
     </form>
+    <form id="company-work">
+      <input name="company" aria-label="Company" value="Noodle Bar">
+      <select name="field" aria-label="Job field">
+        <option>Software</option><option>Software Consultant</option><option>IT</option><option>Security Engineer</option><option>Network Engineer</option><option>Business</option><option>Business Consultant</option><option>Security</option><option>Agent</option><option>Employee</option><option>Part-time Employee</option><option>Waiter</option><option>Part-time Waiter</option>
+      </select>
+      <button type="submit">Work there</button>
+    </form>
     <div class="bad" id="work-problem" hidden></div>
   </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
@@ -265,7 +272,7 @@ function render(status) {
   const workText =
     desired === null
       ? "Not managed: the game's work is left as it is."
-      : `${desired.workType} work for ${desired.faction}, ${desired.focus ? "focused" : "unfocused"}: ` +
+      : `${desired.kind === "company" ? `${desired.field} work at ${desired.company}` : `${desired.workType} work for ${desired.faction}`}, ${desired.focus ? "focused" : "unfocused"}: ` +
         (workOutcome === null
           ? "not reported yet"
           : `${workOutcome.converged ? "converged" : "not converged"}${via(workOutcome)}` +
@@ -351,10 +358,16 @@ document.querySelector("#intents form").addEventListener("submit", (event) => {
   sendWrite("/api/intents", { action: form.elements.action.value, args }, "#intents-problem", "Not queued");
 });
 
-document.querySelector("#work form").addEventListener("submit", (event) => {
+document.querySelector("#work form:not(#company-work)").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const work = { faction: form.elements.faction.value, workType: form.elements.workType.value };
+  sendWrite("/api/work", { work }, "#work-problem", "Not set");
+});
+document.querySelector("#company-work").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const work = { kind: "company", company: form.elements.company.value, field: form.elements.field.value };
   sendWrite("/api/work", { work }, "#work-problem", "Not set");
 });
 document.querySelector("#stop-work").addEventListener("click", () =>

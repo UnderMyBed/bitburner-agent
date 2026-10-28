@@ -1,8 +1,9 @@
 /**
  * Work as an activity (#151, architecture D2's player focus, owner decision 37): what the player works at, as the brain
- * wants it, converged on by the Agent when it changes and every 30 s. Faction work first; company work, crime and
- * classes follow. Shared by the in-game code and the brain; plain literals, as in factions.ts.
+ * wants it, converged on by the Agent when it changes and every 30 s. Faction work, and company work (#153); crime
+ * and classes follow. Shared by the in-game code and the brain; plain literals, as in factions.ts.
  */
+import { COMPANY_NAMES, JOB_FIELDS } from "./companies.ts";
 import { FACTION_NAMES } from "./factions.ts";
 import type { EffectorBackend } from "./intents.ts";
 
@@ -10,8 +11,13 @@ import type { EffectorBackend } from "./intents.ts";
 export const FACTION_WORK_TYPES = ["hacking", "field", "security"] as const;
 export type FactionWorkType = (typeof FACTION_WORK_TYPES)[number];
 
-/** The work the brain wants: `focus` false leaves the player free (the game gains less unless the implant says not). */
-export type Work = { kind: "faction"; faction: string; workType: FactionWorkType; focus: boolean };
+/**
+ * The work the brain wants: faction work (#151), or company work in a job field (#153), the job got first if need be.
+ * `focus` false leaves the player free (the game gains less unless the implant says not).
+ */
+export type Work =
+  | { kind: "faction"; faction: string; workType: FactionWorkType; focus: boolean }
+  | { kind: "company"; company: string; field: string; focus: boolean };
 
 /** What the Agent reports of the work, in the fast snapshot: converged or not, and why not. */
 export interface WorkOutcome {
@@ -35,16 +41,23 @@ type Parsed<Value> = { ok: true; message: Value } | { ok: false; reason: string 
 export function parseWork(value: unknown): Parsed<Work | null> {
   if (value === null || value === undefined) return { ok: true, message: null };
   if (typeof value !== "object") return { ok: false, reason: "work isn't an object" };
-  const { kind, faction, workType, focus } = value as Record<string, unknown>;
-  if (kind !== "faction") return { ok: false, reason: "work's kind isn't faction" };
-  if (!FACTION_NAMES.includes(faction as string))
+  const { kind, faction, workType, company, field, focus } = value as Record<string, unknown>;
+  if (typeof focus !== "boolean") return { ok: false, reason: "work's focus isn't a boolean" };
+  if (kind === "company") {
+    if (!COMPANY_NAMES.includes(company as string)) {
+      return { ok: false, reason: "work's company isn't one of the game's" };
+    }
+    if (typeof field !== "string" || !Object.hasOwn(JOB_FIELDS, field)) {
+      return { ok: false, reason: "work's field isn't one of the game's job fields" };
+    }
+    return { ok: true, message: { kind, company: company as string, field, focus } };
+  }
+  if (kind !== "faction") return { ok: false, reason: "work's kind isn't faction or company" };
+  if (!FACTION_NAMES.includes(faction as string)) {
     return { ok: false, reason: "work's faction isn't one of the game's" };
+  }
   if (!FACTION_WORK_TYPES.includes(workType as FactionWorkType)) {
     return { ok: false, reason: `work's workType isn't one of ${FACTION_WORK_TYPES.join(", ")}` };
   }
-  if (typeof focus !== "boolean") return { ok: false, reason: "work's focus isn't a boolean" };
-  return {
-    ok: true,
-    message: { kind, faction: faction as string, workType: workType as FactionWorkType, focus },
-  };
+  return { ok: true, message: { kind, faction: faction as string, workType: workType as FactionWorkType, focus } };
 }

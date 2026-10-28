@@ -2,7 +2,8 @@
 // them through the simulator's own effectors, or, in a game with SF4.3, through its Singularity workers. The `ui`
 // backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
-// Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time.
+// Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work
+// (#151, #153): faction work, and company work, the job applied for first.
 import { gunzipSync } from "node:zlib";
 import {
   type DesiredState,
@@ -334,7 +335,7 @@ async function workedAt(fresh: Awaited<ReturnType<typeof inSectorTwelve>>, work:
 
 const isFastSnapshot = (event: { type: string; snapshot?: { tier: string } }) =>
   event.type === "snapshotReceived" && event.snapshot?.tier === "fast";
-const sectorWork = (workType: Work["workType"], focus: boolean): Work => ({
+const sectorWork = (workType: Extract<Work, { kind: "faction" }>["workType"], focus: boolean): Work => ({
   kind: "faction",
   faction: "Sector-12",
   workType,
@@ -385,4 +386,74 @@ test("work (singularity, #151): with SF4.3, started focused and unfocused throug
   // Another type, focused: `workForFaction` switches it.
   await workedAt(fresh, sectorWork("field", true));
   expect(await savedWork(fresh)).toEqual({ faction: "Sector-12", workType: "field", focus: true });
+});
+
+/** The player's company work, its job there, and focus, as the game saves them: `null` for none. */
+async function savedCompanyWork(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
+  const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
+  const player = JSON.parse(saveObject.data.PlayerSave).data;
+  const work = player.currentWork;
+  if (work?.ctor !== "CompanyWork") return null;
+  const company = work.data.companyName;
+  return { company, job: player.jobs[company], focus: player.focus };
+}
+
+/** A fresh start in Sector-12 with money for a ticket, the hack loop off. */
+function withTicketMoney(options: { singularity: boolean } = { singularity: false }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(1e10);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+
+const noodleBar = (focus: boolean): Work => ({ kind: "company", company: "Noodle Bar", field: "Waiter", focus });
+
+test("company work (sim, #153): in New Tokyo, a Waiter at Noodle Bar, focused, then unfocused", async () => {
+  const fresh = await withTicketMoney();
+  fresh.brain.channel.setDesiredState({
+    hackLoop: HACK_LOOP_OFF,
+    intents: [intent({ action: "travel", args: { city: "New Tokyo" } })],
+  });
+  await fresh.game.runUntil(() => fresh.medium()?.player.city === "New Tokyo", 30_000);
+  expect(await workedAt(fresh, noodleBar(true))).toEqual({ converged: true, problem: null, backend: "sim" });
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: true });
+  expect((await fresh.simulation.diagnostics.game()).page).toBe("Work");
+  await workedAt(fresh, noodleBar(false));
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: false });
+  expect((await fresh.simulation.diagnostics.game()).page).not.toBe("Work");
+});
+
+test("company work (sim, #153): not in the company's city, or not qualified, isn't converged, with the reason", async () => {
+  const fresh = await withTicketMoney();
+  expect(await workedAt(fresh, noodleBar(true), false)).toMatchObject({
+    converged: false,
+    problem: "no Noodle Bar in the city (is the player in its city?)",
+  });
+  // MegaCorp is in Sector-12, but its first software job wants more hacking than a new game has.
+  const software: Work = { kind: "company", company: "MegaCorp", field: "Software", focus: true };
+  expect(await workedAt(fresh, software, false)).toMatchObject({
+    converged: false,
+    problem: "not qualified for a Software job at MegaCorp yet",
+  });
+  expect(await savedCompanyWork(fresh)).toBeNull();
+});
+
+test("company work (singularity, #153): with SF4.3, through its Singularity worker, from any city", async () => {
+  const fresh = await withTicketMoney({ singularity: true });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  // Singularity's `applyToCompany` and `workForCompany` don't ask where the player is: Noodle Bar from Sector-12,
+  // started unfocused, then focused.
+  expect(await workedAt(fresh, noodleBar(false))).toMatchObject({ converged: true, backend: "singularity" });
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: false });
+  await workedAt(fresh, noodleBar(true));
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Noodle Bar", job: "Waiter", focus: true });
+  const software: Work = { kind: "company", company: "MegaCorp", field: "Software", focus: true };
+  expect(await workedAt(fresh, software, false)).toMatchObject({
+    converged: false,
+    problem: "not qualified for a Software job at MegaCorp yet",
+  });
 });

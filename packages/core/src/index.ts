@@ -10,6 +10,7 @@ export {
   SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
   SINGULARITY_MOST_RAM_MULTIPLIER,
@@ -18,6 +19,7 @@ export {
   singularityWorkerFileNames,
   singularityWorkerMostRamGb,
 } from "./backends.ts";
+export { COMPANY_NAMES, COMPANY_WORK_WORKER_NAME, JOB_FIELDS, type Job } from "./companies.ts";
 export {
   type AgentMessage,
   type BrainMessage,
