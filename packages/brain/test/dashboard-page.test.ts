@@ -126,7 +126,13 @@ const healthyStatus = (): DashboardStatus => {
       kind: "agentConnected",
       detail: { agentSessionId: "s", deploymentId: "abc123def456", game: GAME },
     });
-    const fast: FastSnapshotData = { degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [] };
+    const fast: FastSnapshotData = {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [],
+      dialogs: { handled: [], blocking: null },
+    };
     for (let ageMs = 28_000; ageMs >= 0; ageMs -= 2_000) {
       store.recordSnapshot(context, {
         agentSessionId: "s",

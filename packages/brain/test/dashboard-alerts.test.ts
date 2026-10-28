@@ -12,6 +12,7 @@ const quiet: AlertFacts = {
   lastDeploy: null,
   supervisionGaveUpAtMs: null,
   intentOutcomes: [],
+  blockingDialog: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 
@@ -73,4 +74,12 @@ test("several at once, in a fixed order", () => {
       supervisionGaveUpAtMs: STARTED_AT_MS,
     }),
   ).toEqual(["agentSilent", "versionDrift", "deployFailed", "supervisionGaveUp"]);
+});
+
+test("a dialog the Agent leaves open (#143) is an alert, quoting its first 200 characters", () => {
+  const alerts = activeAlerts({ ...quiet, blockingDialog: `Buy the server?${"x".repeat(500)}` });
+  expect(alerts.map((alert) => alert.name)).toEqual(["dialogBlocking"]);
+  expect(alerts[0]?.detail).toBe(
+    `a dialog the Agent leaves for you is open, so it does nothing on the page: "Buy the server?${"x".repeat(185)}"`,
+  );
 });

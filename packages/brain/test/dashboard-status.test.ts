@@ -83,6 +83,7 @@ const fastData = (money: number): FastSnapshotData => ({
     ],
   },
   intents: [],
+  dialogs: { handled: [], blocking: null },
 });
 
 test("a healthy skeleton: the Agent connected, every tier's last snapshot and its age, key values, no alerts", () => {
@@ -331,5 +332,15 @@ test("an intent tried 5 times and still not done is an alert (#141); fewer tries
       sinceMs: STARTED_AT_MS + 2_000,
       detail: "travel(Aevum): 5 tries, not done: no Travel in the sidebar",
     },
+  ]);
+});
+
+test("a dialog left open in the newest fast snapshot (#143) is the dialogBlocking alert", () => {
+  recordSnapshot("fast", STARTED_AT_MS + 2_000, {
+    ...fastData(1),
+    dialogs: { handled: [], blocking: "Would you like to travel to Aevum?" },
+  });
+  expect(status(STARTED_AT_MS + 3_000).alerts).toMatchObject([
+    { name: "dialogBlocking", sinceMs: STARTED_AT_MS + 2_000, detail: expect.stringContaining("travel to Aevum") },
   ]);
 });

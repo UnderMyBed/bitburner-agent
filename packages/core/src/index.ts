@@ -59,6 +59,8 @@ export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./pro
 export {
   type FastSnapshotData,
   type FastWorkerData,
+  type HandledDialog,
+  MAX_DIALOG_TEXT_LENGTH,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,

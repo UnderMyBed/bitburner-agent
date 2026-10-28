@@ -109,4 +109,17 @@ export interface FastSnapshotData {
   game: FastWorkerData | null;
   /** Every intent the Agent holds, in order, and how it went (#141). */
   intents: IntentOutcome[];
+  /** The game's dialogs (#143): those handled since the last fast snapshot, and the text of one left open, or null. */
+  dialogs: { handled: HandledDialog[]; blocking: string | null };
 }
+
+/** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */
+export interface HandledDialog {
+  /** A game alert, closed; or a faction invitation, answered "Decide later". */
+  kind: "alert" | "factionInvitation";
+  /** Its text, cut to `MAX_DIALOG_TEXT_LENGTH`. */
+  text: string;
+}
+
+/** How much of a dialog's text the Agent reports. */
+export const MAX_DIALOG_TEXT_LENGTH = 1_000;

@@ -1,10 +1,26 @@
 import type { ControlChannel } from "@bitburner-agent/bridge";
+import { type FastSnapshotData, type HandledDialog, MAX_DIALOG_TEXT_LENGTH } from "@bitburner-agent/core";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
 /**
- * Stores everything the control channel reports: snapshots in their table, the rest as events. Each record's release is
- * the brain's own plus the deployment of the Agent connected when it arrived, or `none` while no Agent is
- * (architecture §7).
+ * The game's dialogs a fast snapshot says the Agent handled (#143), as events: only the well-formed, with their text
+ * cut short, as the snapshot is the Agent's word.
+ */
+function handledDialogsIn(data: unknown): HandledDialog[] {
+  const handled: unknown = (data as Partial<FastSnapshotData> | null)?.dialogs?.handled;
+  if (!Array.isArray(handled)) return [];
+  return handled
+    .filter(
+      (dialog): dialog is HandledDialog =>
+        (dialog?.kind === "alert" || dialog?.kind === "factionInvitation") && typeof dialog.text === "string",
+    )
+    .map(({ kind, text }) => ({ kind, text: text.slice(0, MAX_DIALOG_TEXT_LENGTH) }));
+}
+
+/**
+ * Stores everything the control channel reports: snapshots in their table, the rest as events, and each of the game's
+ * dialogs a fast snapshot says the Agent handled as a `gameDialog` event (#143). Each record's release is the brain's
+ * own plus the deployment of the Agent connected when it arrived, or `none` while no Agent is (architecture §7).
  */
 export function recordChannelEvents(
   channel: ControlChannel,
@@ -26,6 +42,10 @@ export function recordChannelEvents(
         missedBefore: event.missedBefore,
         data,
       });
+      if (tier === "fast") {
+        for (const detail of handledDialogsIn(data))
+          store.recordEvent(context, { atMs: event.atMs, kind: "gameDialog", detail });
+      }
       return;
     }
     const { type, atMs, ...detail } = event;

@@ -200,6 +200,7 @@ export function buildDashboardStatus({
         : null,
       supervisionGaveUpAtMs: supervision.gaveUpAtMs,
       // Only what's well formed: the snapshot is the Agent's word.
+      blockingDialog: typeof fast?.dialogs?.blocking === "string" ? fast.dialogs.blocking : null,
       intentOutcomes: (Array.isArray(fast?.intents) ? fast.intents : []).filter(
         (outcome) => typeof outcome?.id === "string" && typeof outcome.tries === "number",
       ),

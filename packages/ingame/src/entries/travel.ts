@@ -2,7 +2,7 @@
 // there's no API for it before Singularity. Arguments: the city, and when to give up (the game's `Date.now()`), so it
 // ends within its Agent's round.
 // - The game first: the player already in the city is done, without touching the page.
-// - Never over an open dialog: that's the owner's to read and close.
+// - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The sidebar's Travel, then the city (`Locations/ui/TravelAgencyRoot.tsx`): on the ASCII map, the city's first letter
 //   (`ui/React/WorldMap.tsx`; the six differ), or with ASCII art off, a "Travel to <city>" button.
 // - The confirmation's "Travel", and then the "You are now in <city>!" alert closed with its own close button: each
@@ -53,7 +53,7 @@ export async function main(ns: NS): Promise<void> {
     if (gamePage === null) {
       report.problem = "no game page to travel through";
     } else if (await gamePage.dialogStaysOpen()) {
-      report.problem = "a dialog is open: it's the owner's to close";
+      report.problem = "a dialog the Agent leaves for the owner is open";
     } else {
       const problem = await travelTo(ns, gamePage, city);
       // Back to the Terminal, however it went, in the time kept for it: the page was moved.

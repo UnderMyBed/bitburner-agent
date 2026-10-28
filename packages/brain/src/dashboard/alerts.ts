@@ -8,13 +8,22 @@ export const AGENT_SILENT_AFTER_MS = 60_000;
 /** An intent tried this many times and still not done is `intentStuck` (#141): 5 tries are 2 minutes. */
 export const INTENT_STUCK_AFTER_TRIES = 5;
 
-export type AlertName = "agentSilent" | "versionDrift" | "deployFailed" | "supervisionGaveUp" | "intentStuck";
+/** How much of a blocking dialog's text the alert quotes. */
+const BLOCKING_DIALOG_QUOTE_LENGTH = 200;
+
+export type AlertName =
+  | "agentSilent"
+  | "versionDrift"
+  | "deployFailed"
+  | "supervisionGaveUp"
+  | "dialogBlocking"
+  | "intentStuck";
 
 export interface Alert {
   name: AlertName;
   /**
-   * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck`, the
-   * newest fast snapshot that shows it stuck; for the others, the event or give-up that raised it.
+   * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
+   * `dialogBlocking`, the newest fast snapshot that shows it; for the others, the event or give-up that raised it.
    */
   sinceMs: number;
   detail: string;
@@ -34,11 +43,13 @@ export interface AlertFacts {
   supervisionGaveUpAtMs: number | null;
   /** The intents' outcomes in the newest fast snapshot (#141), or none. */
   intentOutcomes: IntentOutcome[];
+  /** The text of a dialog the Agent left open, in the newest fast snapshot (#143), or null. */
+  blockingDialog: string | null;
 }
 
 /**
- * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp, then one
- * intentStuck per stuck intent.
+ * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
+ * dialogBlocking, then one intentStuck per stuck intent.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -67,6 +78,14 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       name: "supervisionGaveUp",
       sinceMs: facts.supervisionGaveUpAtMs,
       detail: "the supervisor stopped after too many relaunches: unpause supervision to start it again",
+    });
+  }
+  if (facts.blockingDialog !== null) {
+    const quote = facts.blockingDialog.slice(0, BLOCKING_DIALOG_QUOTE_LENGTH);
+    alerts.push({
+      name: "dialogBlocking",
+      sinceMs: facts.lastFastSnapshotAtMs ?? facts.nowMs,
+      detail: `a dialog the Agent leaves for you is open, so it does nothing on the page: "${quote}"`,
     });
   }
   for (const outcome of facts.intentOutcomes) {

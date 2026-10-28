@@ -3,7 +3,7 @@
 // brain asked, the tech vendor in the player's city, and when to give up (the game's `Date.now()`), so it ends within
 // its Agent's round.
 // - The game first: home with more RAM than that is done, without touching the page. So a repeat buys nothing more.
-// - Never over an open dialog: that's the owner's to read and close.
+// - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The City, the vendor, "Upgrade 'home' RAM" while it can be bought (`Locations/ui/RamButton.tsx`: disabled when the
 //   player can't afford it or home is at its limit). A purchase opens no dialog (`Server/ServerPurchases.ts:168`).
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
@@ -25,7 +25,7 @@ export async function main(ns: NS): Promise<void> {
     if (gamePage === null) {
       report.problem = "no game page to buy it through";
     } else if (await gamePage.dialogStaysOpen()) {
-      report.problem = "a dialog is open: it's the owner's to close";
+      report.problem = "a dialog the Agent leaves for the owner is open";
     } else {
       const problem =
         (await gamePage.openCityLocation(vendor)) ??

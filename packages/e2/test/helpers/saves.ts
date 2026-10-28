@@ -45,7 +45,10 @@ export async function simulatorSave({
 type SaveObject = { data: { PlayerSave: string } };
 
 /** A save's outer object and its player, parsed. */
-function readPlayerSave(save: Uint8Array): { saveObject: SaveObject; player: { data: { money: number } } } {
+function readPlayerSave(save: Uint8Array): {
+  saveObject: SaveObject;
+  player: { data: { money: number; city: string } };
+} {
   const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as SaveObject;
   return { saveObject, player: JSON.parse(saveObject.data.PlayerSave) };
 }
@@ -69,6 +72,31 @@ export function withGameSettings(save: Uint8Array, changes: Record<string, unkno
   const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { SettingsSave?: string } };
   const settings = saveObject.data.SettingsSave ? (JSON.parse(saveObject.data.SettingsSave) as object) : {};
   saveObject.data.SettingsSave = JSON.stringify({ ...settings, ...changes });
+  return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
+}
+
+/** `save` with the player in `city` (one of the game's six), as for `withMoney`. */
+export function withCity(save: Uint8Array, city: string): Uint8Array {
+  const { saveObject, player } = readPlayerSave(save);
+  player.data.city = city;
+  saveObject.data.PlayerSave = JSON.stringify(player);
+  return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
+}
+
+/**
+ * `save` with a script on home, as the owner's own: a test environment's save, as for `withMoney`. Home's scripts are
+ * a `JSONMap` of `Script`s in the save (`Types/Jsonable.ts`, `Script/Script.ts` `savedKeys`).
+ */
+export function withHomeScript(save: Uint8Array, filename: string, code: string): Uint8Array {
+  const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { AllServersSave: string } };
+  const servers = JSON.parse(saveObject.data.AllServersSave) as Record<
+    string,
+    { data: { hostname: string; scripts: { data: unknown[] } } }
+  >;
+  const home = Object.values(servers).find((server) => server.data.hostname === "home");
+  if (!home) throw new Error("the save has no home");
+  home.data.scripts.data.push([filename, { ctor: "Script", data: { code, filename, server: "home" } }]);
+  saveObject.data.AllServersSave = JSON.stringify(servers);
   return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
 }
 

@@ -1,7 +1,7 @@
 // The game's own page, driven from in-game code (#136): the `ui` effector's means (architecture §5.6), for what has no
 // API before Singularity. The rules of engagement allow the page's DOM and React state from in-game scripts.
-// - The page is reached with `eval("document")`. The game charges 25 GB for the identifiers `document` and `window`,
-//   so neither appears anywhere in this code.
+// - The page is reached with `globalThis.eval("document")`: an indirect eval, run in the global scope. The game charges
+//   25 GB for the identifiers `document` and `window`, so neither appears anywhere in this code.
 // - A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own
 //   `onChange` and `onKeyDown`, as the legacy fork does. So a hidden element (a collapsed menu) still works, as long as
 //   it's in the page.
@@ -16,13 +16,29 @@ const POLL_MS = 50;
 const RETURN_RESERVE_MS = 300;
 /** The longest a closed dialog stays in the page while it fades out: MUI's `Fade`, 195 ms, and a render. */
 const DIALOG_FADE_MS = 400;
-/** Any modal open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). */
-const OPEN_DIALOG_XPATH = "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ')]";
+/**
+ * Any dialog open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). Not an open dropdown (a
+ * select or a menu): MUI makes those of a `Popover`, whose root is a `Modal`'s too.
+ */
+const OPEN_DIALOG_XPATH =
+  "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ') and not(contains(concat(' ', @class, ' '), ' MuiPopover-root '))]";
 
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
 function reactPropsOf(element: Element): Record<string, unknown> | null {
   const key = Object.keys(element).find((each) => each.startsWith("__reactProps"));
   return key ? ((element as unknown as Record<string, Record<string, unknown>>)[key] ?? null) : null;
+}
+
+/** A React fiber, as far as this code reads one: its hooks' state, and the fiber above it. */
+export interface ReactFiber {
+  memoizedState: unknown;
+  return: ReactFiber | null;
+}
+
+/** React's fiber for a rendered element: the key React gives it starts with `__reactFiber`. */
+export function reactFiberOf(element: Element): ReactFiber | null {
+  const key = Object.keys(element).find((each) => each.startsWith("__reactFiber"));
+  return key ? ((element as unknown as Record<string, ReactFiber>)[key] ?? null) : null;
 }
 
 /**
@@ -32,8 +48,10 @@ function reactPropsOf(element: Element): Record<string, unknown> | null {
 export function openGamePage(ns: NS, deadlineMs: number) {
   let page: Document | undefined;
   try {
+    // Indirect, not a bare `eval`: the bundler then keeps its freedom to rename. A direct `eval` could see every name in
+    // reach, so esbuild keeps those and renames other modules' instead (`main(ns)` became `main(ns2)`).
     // biome-ignore lint/security/noGlobalEval: the only way to the page that the game doesn't charge 25 GB for (see above).
-    page = eval("document") as Document | undefined;
+    page = globalThis.eval("document") as Document | undefined;
   } catch {
     return null;
   }
@@ -88,6 +106,32 @@ export function openGamePage(ns: NS, deadlineMs: number) {
 
   return {
     clickWhenThere,
+
+    /** Every dialog open now, in the page's order (MUI's `Modal` roots, `ui/React/Modal.tsx`). */
+    openDialogs(): Element[] {
+      const found = gamePage.evaluate(OPEN_DIALOG_XPATH, gamePage, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      return Array.from({ length: found.snapshotLength }, (_, index) => found.snapshotItem(index) as Element);
+    },
+
+    /** Clicks `element`, `what`, as a player would. */
+    clickElement: click,
+
+    /**
+     * Waits until `element` has left the page, or what `currentText` reads of it is no longer `textBefore`, up to the
+     * time a dialog's fade takes: true once either happens. A dialog closed stays in the page while it fades out; one
+     * with more queued shows the next in place.
+     */
+    async waitUntilGoneOrChanged(element: Element, currentText: () => string, textBefore: string): Promise<boolean> {
+      const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, deadlineMs);
+      while (element.isConnected && currentText() === textBefore) {
+        if (timeLeftMs(fadeEndsMs) <= 0) return false;
+        await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));
+      }
+      return true;
+    },
+
+    /** Whether the caller's time is up. */
+    timeUp: () => timeLeftMs(deadlineMs) <= 0,
 
     /**
      * Clicks the element, `what`, if it's in the page now: for a step the game may skip, such as a confirmation the
