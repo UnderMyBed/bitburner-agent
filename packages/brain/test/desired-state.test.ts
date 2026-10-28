@@ -17,7 +17,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { DesiredStateController } from "../src/desired-state.ts";
+import { DesiredStateController, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
 import { readManualIntents } from "../src/manual-intents.ts";
@@ -102,6 +102,19 @@ test("on: nothing until the connected Agent's own static and medium snapshots, t
     { hackLoop: loopOn, intents: [] },
   ]);
   expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: false, target: "n00dles", hosts: ["n00dles"] });
+});
+
+test("every state sent carries safe mode's ttlMs (#160): 12 hours, kept by the Agent that long with the brain gone", () => {
+  expect(SAFE_MODE_TTL_MS).toBe(12 * 60 * 60_000);
+  const controller = new DesiredStateController({ channel, store });
+  const connection = connectAgent();
+  controller.setHackLoopEnabled(false);
+  send(connection, "static", network);
+  send(connection, "medium", mediumData(1, { n00dles: true }));
+  controller.setHackLoopEnabled(true);
+  const sent = connection.sentMessages().filter((message) => message.type === "desiredState");
+  expect(sent.length).toBeGreaterThanOrEqual(2);
+  for (const message of sent) expect(message).toMatchObject({ ttlMs: SAFE_MODE_TTL_MS });
 });
 
 test("an Agent that connects again is sent nothing until its own snapshots, then the same state", () => {

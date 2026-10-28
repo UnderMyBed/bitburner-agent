@@ -18,6 +18,8 @@ import { type GamePage, openGamePage, type ReactFiber, reactFiberOf } from "../p
 
 /** The most dialogs handled in one round, so a flood of alerts can't take every round. */
 const MOST_DIALOGS_A_ROUND = 10;
+/** The most kept for the next fast snapshot, the latest: with no brain (safe mode, #160) there's none for hours. */
+const MOST_DIALOGS_KEPT = 100;
 /** How far up the fibers the component that opened a dialog is looked for: MUI's layers are about 7. */
 const MOST_FIBERS_UP = 40;
 /** How many of a component's hooks are looked at: the AlertManager keeps its alerts in its first. */
@@ -100,6 +102,7 @@ export function createDialogWatcher(ns: NS) {
           break;
         }
         handled.push({ kind: action.kind, text });
+        if (handled.length > MOST_DIALOGS_KEPT) handled.shift();
         // The next in the game's queue takes its place, or it fades out: either way, it isn't seen again.
         await gamePage.waitUntilGoneOrChanged(dialog, () => (isClosing(dialog) ? "" : textOf(dialog)), text);
       }

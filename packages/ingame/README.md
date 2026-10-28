@@ -9,7 +9,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 | Path | What |
 |---|---|
 | `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js` and `crime-work.js`, and the Singularity workers `singularity-*.js` (#145) |
-| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), `work.ts` (#151, #153, #156), and what they share: `effector-runner.ts`, which picks each try's backend and runs its effector, `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
+| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), `work.ts` (#151, #153, #156), `safe-mode.ts` (#160), and what they share: `effector-runner.ts`, which picks each try's backend and runs its effector, `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts`, `work-page.ts` (the work workers' reading and steps, #151, #153, #156), and `page-effect.ts`, what every `ui` worker does around its own steps (the game first, never over a dialog left for the owner, the player's focus on work kept, back to the Terminal) |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
@@ -56,7 +56,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | Script | Calls | RAM (budget) |
 |---|---|---|
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (2.7) |
-| `agent.js` | `run` (1.0 GB), `isRunning`, `getScriptRam` (0.1 GB each), `getServerMaxRam` (0.05 GB, with `getScriptRam`, for whether a Singularity worker fits home beside the Agent); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.85 GB (3.0) |
+| `agent.js` | `run` (1.0 GB), `isRunning`, `getScriptRam` (0.1 GB each), `getServerMaxRam` (0.05 GB, with `getScriptRam`, for whether a Singularity worker fits home beside the Agent); `read`, `write`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.85 GB (3.0) |
 | `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
 | `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB), `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB) | 4.45 GB (4.45) |
@@ -94,6 +94,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
+| `agent/desired-state.json` | The last desired state, kept for [safe mode](#safe-mode) (#160): `{ hackLoop, work, ttlMs, heardAtMs, lastAugReset }` (core's `SafeModeState`), never intents; empty when none is kept. Outside every deployment's folder, so the deployer's tidying never touches it |
 | `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, `company-work.js`, `crime-work.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
@@ -123,12 +124,12 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
 3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, then runs the [intents](#intents) that are due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s. Last in the round, the [work activity](#work) converges the work when that's due.
-4. **`desiredState`:** it keeps the latest until it disconnects: the hack loop converges on it, the intent runner does its intents, and the [work activity](#work) converges the work last. Every round, before them, the [dialog watcher](#dialogs) handles the game's dialogs.
+4. **`desiredState`:** it keeps the latest: the hack loop converges on it, the intent runner does its intents, and the [work activity](#work) converges the work last. Every round, before them, the [dialog watcher](#dialogs) handles the game's dialogs. It also keeps it for [safe mode](#safe-mode), in `agent/desired-state.json`. At a `welcome`, it stops converging on any state a brain sent before: from then on, only this brain's count.
 5. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 6. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
    - otherwise, if `agent/current.txt` holds a valid id of another deployment, it runs `boot.js` and exits. An empty or invalid `current.txt` doesn't count: `boot.js` would refuse it, leaving no Agent;
-   - otherwise it waits and reconnects: 1 s, doubling to 30 s.
+   - otherwise it waits and reconnects: 1 s, doubling to 30 s. It forgets the intents. With a state kept for [safe mode](#safe-mode), its rounds go on while it waits and connects, without snapshots: the dialogs, the hack loop and the work, on that state.
 
    **If `boot.js` can't start** (home is too full), the Agent carries on instead of exiting, so one is always running: it stays connected after a `restart`, or reconnects. It tries again at its next disconnect. The game's reason is in the Agent's log.
 7. **Exiting or killed:** an `atExit` callback closes the socket, since a socket outlives its script. The game runs it on every exit (`src/NetscriptWorker.ts:147-148`, `src/Netscript/killWorkerScript.ts:72-83`). The brain sees `agentDisconnected` at once.
@@ -164,7 +165,7 @@ The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed
 - **What the brain sends:** `desiredState { hackLoop: { enabled, target, hosts } }` ([protocol](../../docs/bridge/protocol.md#brain--agent)).
   - It's on unless the owner turns it off on the dashboard.
   - `target` and `hosts` come from the brain's starter rules ([packages/brain](../brain/README.md#the-hack-loop)). The hosts are the game's rooted servers, never home and never the player's own purchased or Hacknet servers.
-- **Only from the brain it's connected to.** The Agent keeps the desired state until it disconnects, then forgets it: the next brain sends its own. Without one (after a start, or with a brain that holds), it does nothing, and loops already running keep running.
+- **Only from the brain it's connected to, or with none, [safe mode](#safe-mode).** While connected, the Agent acts only on what that brain sent. Without a state from it (just welcomed, or a brain that holds), it does nothing, and loops already running keep running. With no brain, it converges on the last state a brain sent, until its `ttlMs` passes.
 - **When it acts:**
   - On a change, at once.
   - While on, every 15 rounds (30 s) after that, so servers that become rootable and loops the game lost are picked up.
@@ -187,7 +188,7 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 ## Intents
 
 M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
-- **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects, like the hack loop, and runs each through its effector:
+- **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects (never into [safe mode](#safe-mode): one-shot actions need the brain), and runs each through its effector:
   - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
   - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time, with the backend ("travel to Aevum (ui): not done: …; trying again in 30 s");
   - one done ("travel to Aevum (ui): done") is never run again while the brain keeps sending it; the brain sees it done in its next medium snapshot and stops sending it. One that leaves the list and comes back is new;
@@ -309,6 +310,24 @@ The Agent's second activity ([#151](https://github.com/UnderMyBed/bitburner-agen
 - **What the owner sees:** the Work page while focused; a page action in between leaves it and comes back. Doing something else yourself is undone within 30 s while the brain manages work.
 
 E2 starts CyberSec's hacking contracts on the real page, unfocuses as the owner would and sees the Agent focus again without restarting the work, travels while focused (unfocused for the sidebar, then focused again), stops managing work and sees it left alone; with the implant installed (a harness edit), it leaves the work unfocused and keeps seeing it so; and it asks for work a faction doesn't offer. For company work it starts from a save in New Tokyo, applies to be a waiter at Noodle Bar, closes the hiring alert and works focused, then is focused again after the owner unfocuses, neither restarted nor applied again; after a travel to Aevum and the owner stopping work there, it works the job held again from the Job page; from Sector-12 it says the player isn't in the company's city. For crime it shoplifts focused at the Slums and is focused again after the owner unfocuses, through the overview's "Focus" (never back to the Slums, which would start it again); with the implant it shoplifts unfocused on the Terminal. Tests: `test/agent/work.test.ts` (the activity's schedule and backends), `test/agent/game-page.test.ts` (`reactPropsAbove`, `reactText`), `test/agent/page-effect.test.ts` (the focus kept around the steps, and given back when the work can't start; company work's steps: hired (Apply, the hiring's alert closed whatever its wording, Work, unfocused), a disabled "Apply" never clicked, a job held worked from the Job page, a name with an apostrophe; a crime started at the Slums and unfocused, and how the page shows a crime), `packages/core/test/companies.test.ts` and `crimes.test.ts` (the companies, fields, titles, "Apply" texts, part-time fields, crimes and their wording against the game's).
+
+## Safe mode
+
+M3's twelfth slice ([#160](https://github.com/UnderMyBed/bitburner-agent/issues/160), architecture §5.4): with the brain gone, a missing brain costs optimality, not progress. The Agent keeps converging on the last desired state a brain sent (`src/agent/safe-mode.ts`), until its `ttlMs` passes (12 hours, the brain's `SAFE_MODE_TTL_MS`).
+- **What converges:** the [hack loop](#the-hack-loop) and the [work](#work), at their own cadence (a change at once, then every 30 s), and the [dialog watcher](#dialogs) runs first, so a reload's "Offline for…" alert doesn't stall the page's work effector. **Never the intents:** one-shot actions need the brain, so they're forgotten at the disconnect. No snapshots are taken, as nobody reads them, but the slow worker runs once, unsent, if the Agent has no slow snapshot yet: for the reset check below, and for whether Singularity can do the work. The dialogs handled meanwhile (the latest 100) reach the brain in the first fast snapshot after it's back.
+- **When:** in rounds, every 2 s, while the Agent connects and while it waits to reconnect. A connected brain's word comes first: once welcomed, the Agent acts only on what that brain sends, as before. A brain that sends nothing (one that holds) leaves loops running untended; if it then goes, safe mode picks up again, the clock still running from the last brain that sent the state. A brain back sends a fresh state, which replaces the kept one.
+- **The clock** runs from when the Agent was last connected to the brain that sent the state, not from when it was sent: a state sent once stands for as long as its brain is there.
+- **Kept on home** in `agent/desired-state.json`, so the next Agent has it: after a reload, an install's restart, or a new deployment. Written when a state arrives, every 30 rounds (60 s) while connected to the brain that sent it, and at the disconnect, with its time. `ns.write` and `ns.read` cost no RAM, and one `write` replaces the whole text. The save holds what was there at its autosave, so a reload can lose the last minute of writes: the clock then starts up to a minute early, never late. A state heard before the Agent knows the game's last reset (no slow snapshot yet) empties the file until it can be stamped, so the file never holds an older state than the last heard. A file that doesn't parse is ignored, and the log says why.
+- **Dropped,** logged, and the file emptied (`rm` would cost 0.6 GB):
+  - `ttlMs` after that clock's last moment;
+  - after a reset: a state from the file waits until the Agent has the game's `lastAugReset` from a slow worker, and is dropped if it's not the one it was kept with. An install or a new BitNode may have made its target unhackable, its work gone. A reset always means a new Agent, so a state the running Agent heard itself is never checked.
+  - when the brain's latest has no `ttlMs` (a brain from before #160).
+
+  Once dropped, the loops and the work carry on as the game has them, untended, as after any disconnect before #160.
+- **The owner taking over by hand** with the brain stopped: the Agent keeps re-converging the work for up to 12 hours. `kill` the Agent, or empty the state first (`rm agent/desired-state.json`) and kill it; autoexec brings it back on the next load, with nothing kept ([setup](../../docs/setup.md)).
+- **RAM:** none; the Agent stays at 2.85 GB.
+
+Tests: `test/agent/safe-mode.test.ts` covers what's kept and written and when, the clock, expiry, the reset check and a file that doesn't parse; its property tests (fast-check) run random states, rounds, disconnects, reconnects, time, restarts and resets, and check safe mode never converges on a state past its `ttlMs`, from before a reset, other than the last one a brain sent, or with intents, and that it does converge while none of those applies. The brain's [safe mode suite](../brain/README.md#safe-mode) runs the chaos tests in the simulator, and E2 refocuses the work on the real page with the brain stopped, before and after a reload.
 
 ## Hygiene and tests
 

@@ -1,6 +1,7 @@
 // The Agent's work activity (#151, owner decision 37): it keeps the work the brain it's connected to wants, and
 // converges the game on it through the work effector (./effectors.ts, `workEffectorFor`): that work, at that focus.
-// Like the hack loop, it forgets on a disconnect, and the brain wanting no work (null) leaves the game's work alone.
+// Like the hack loop, it forgets without a brain's word (safe mode's kept state stands in for one, #160), and the brain
+// wanting no work (null) leaves the game's work alone.
 // - Due when the work wanted changes, then every 15 rounds (30 s): the owner, or a page effector, may have moved it.
 //   Page effectors keep the focus themselves (../page/page-effect.ts); this catches what they can't.
 // - Last in the round, after the intents, only with a second of the round left; short, it waits a round.
@@ -32,7 +33,7 @@ export function createWorkActivity(ns: NS, { effectorRunner }: { effectorRunner:
       schedule.dueNow();
     },
 
-    /** Disconnected: no instructions until the next brain sends some. */
+    /** No instructions (a brain connected that hasn't sent any, or none kept for safe mode) until the next. */
     forget(): void {
       desired = null;
       outcome = null;
