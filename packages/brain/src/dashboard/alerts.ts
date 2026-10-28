@@ -40,8 +40,8 @@ export interface AlertFacts {
   /** The newest deploy since the brain started: `deployed`, or `deployFailed` with its reason. */
   lastDeploy: { atMs: number; failed: boolean; detail: string } | null;
   /**
-   * When the supervisor gave up (#94), until resuming clears it, with the detail of the `supervisionGaveUp` event recorded
-   * with this give-up (its cause, #127), or null if no event was recorded with it.
+   * When the supervisor gave up (#94), until resuming clears it, with the detail of the `supervisionGaveUp` event
+   * recorded with this give-up (its cause, #127), or null if no event was recorded with it.
    */
   supervisionGaveUp: { atMs: number; detail: unknown } | null;
   /** The intents' outcomes in the newest fast snapshot (#141), or none. */
