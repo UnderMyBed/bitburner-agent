@@ -1,6 +1,7 @@
 // The Effectors' `sim` and `singularity` backends in the simulator (#145): the brain sends intents, and the Agent does
 // them through the simulator's own effectors, or, in a game with SF4.3, through its Singularity workers. The `ui`
-// backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page.
+// backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
+// through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
 import {
   type DesiredState,
   type FastSnapshotData,
@@ -78,4 +79,95 @@ test("singularity backend: in BN1 with SF1.1 and SF4.3, the simulator's effector
   await fresh.game.runUntil(() => allFourDone(fresh.medium(), homeRam), 30_000);
   const outcomes = fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
   expect(outcomes.map(({ done, backend }) => [done, backend])).toEqual(Array(4).fill([true, "singularity"]));
+});
+
+/**
+ * A fresh start with the brain's desired state and $20m: a new game is in Sector-12, so the game invites the player to
+ * Sector-12 within its 2 s check. Purchases off, so only the owner's queue moves the game.
+ */
+async function withTwentyMillion(options: { singularity: boolean }) {
+  const fresh = await freshStart({
+    withDesiredState: true,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(2e7);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+  fresh.controller().setProgramsEnabled(false);
+  fresh.controller().setHomeRamEnabled(false);
+  return fresh;
+}
+
+/** The factions joined, as the latest medium snapshot says. */
+const joined = (fresh: Awaited<ReturnType<typeof withTwentyMillion>>) =>
+  (fresh.medium()?.player.factions as string[] | undefined) ?? [];
+
+/** The Agent's log lines naming `text`. */
+async function agentLogLines(fresh: Awaited<ReturnType<typeof withTwentyMillion>>, text: string) {
+  const [agent] = (await fresh.simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  if (!agent) throw new Error("no Agent on home");
+  return (await fresh.simulation.logs(agent.pid)).filter((line) => line.includes(text));
+}
+
+/** Queues joining `faction`, and runs until it's sent: when, and the medium snapshots and backups before that. */
+async function joinedThroughTheGate(fresh: Awaited<ReturnType<typeof withTwentyMillion>>, faction: string) {
+  const queuedAtMs = fresh.game.clock.now();
+  expect(fresh.controller().addManualIntent({ action: "joinFaction", args: { faction } })).toMatchObject({ ok: true });
+  const view = () =>
+    fresh
+      .controller()
+      .intentsView()
+      .find((each) => each.id === `joinFaction(${faction})`);
+  expect(view()?.waitingFor).toMatch(/^the guard to hold on 2 consecutive medium snapshots/);
+  await fresh.game.runUntil(() => view()?.waitingFor === null, 60_000);
+  const sentAtMs = fresh.game.clock.now();
+  return { queuedAtMs, sentAtMs };
+}
+
+test("joining Sector-12 (sim): sent only after two medium snapshots and a save backup, then done; its enemies are held", async () => {
+  const fresh = await withTwentyMillion({ singularity: false });
+  const { queuedAtMs, sentAtMs } = await joinedThroughTheGate(fresh, "Sector-12");
+  // A medium snapshot every 10 s: two after the queueing, then the backup.
+  expect(sentAtMs - queuedAtMs).toBeGreaterThanOrEqual(10_000);
+  const backups = fresh.brain.saveBackupEvents.filter((event) => "file" in event && event.atMs >= queuedAtMs);
+  expect(backups.length).toBeGreaterThanOrEqual(1);
+  expect(backups[0]?.atMs).toBeLessThanOrEqual(sentAtMs);
+  await fresh.game.runUntil(() => joined(fresh).includes("Sector-12"), 15_000);
+  // Done, and reported so: the queue drops it.
+  expect(await agentLogLines(fresh, "join Sector-12")).toEqual(["agent: join Sector-12 (sim): done"]);
+  await fresh.game.runUntil(() => fresh.controller().intentsView().length === 0, 5_000);
+  // Sector-12 bans Chongqing: joining it now is held by the guard, saying why.
+  fresh.controller().addManualIntent({ action: "joinFaction", args: { faction: "Chongqing" } });
+  await fresh.game.run(11_000);
+  expect(
+    fresh
+      .controller()
+      .intentsView()
+      .find((each) => each.id === "joinFaction(Chongqing)")?.waitingFor,
+  ).toBe("Chongqing's enemy Sector-12 is joined");
+});
+
+test("joining without an invitation (sim): not done, with the reason; a faction with no enemies goes out at once", async () => {
+  const fresh = await withTwentyMillion({ singularity: false });
+  fresh.controller().addManualIntent({ action: "joinFaction", args: { faction: "CyberSec" } });
+  expect(fresh.controller().intentsView()[0]?.waitingFor).toBeNull();
+  await fresh.game.runUntil(() => (fresh.latest<FastSnapshotData>("fast")?.intents?.[0]?.tries ?? 0) >= 1, 10_000);
+  expect(fresh.latest<FastSnapshotData>("fast")?.intents).toEqual([
+    {
+      id: "joinFaction(CyberSec)",
+      done: false,
+      tries: 1,
+      problem: "not a member of CyberSec after joining (is there an invitation?)",
+      backend: "sim",
+    },
+  ]);
+  expect(joined(fresh)).toEqual([]);
+});
+
+test("joining Sector-12 (singularity): with SF4.3, through its Singularity worker, past the same gate", async () => {
+  const fresh = await withTwentyMillion({ singularity: true });
+  await joinedThroughTheGate(fresh, "Sector-12");
+  await fresh.game.runUntil(() => joined(fresh).includes("Sector-12"), 15_000);
+  expect(await agentLogLines(fresh, "join Sector-12")).toEqual(["agent: join Sector-12 (singularity): done"]);
 });

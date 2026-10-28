@@ -236,6 +236,35 @@ test("a faction invitation (#143): $20m in Sector-12 earns one, the Agent answer
   await expect(page.getByRole("button", { name: "Join!" }).count()).resolves.toBe(1);
 });
 
+test("joining Sector-12 (#147): past the brain's guard and a save backup, the Agent clicks Join! on the Factions page", async () => {
+  // As above: the travel to Sector-12 earns the invitation, which the Agent answers "Decide later".
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 20_000_000,
+    city: "Aevum",
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Sector-12" } });
+  await advanceUntil(
+    page,
+    async () => gameDialogs(dataDirectory).some((dialog) => dialog.kind === "factionInvitation"),
+    { realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 90_000 },
+  );
+  const backupsBefore = readStore(dataDirectory).events.filter((event) => event.kind === "saveBackup").length;
+  await queueIntent(ports.dashboardPort, { action: "joinFaction", args: { faction: "Sector-12" } });
+  // Two medium snapshots (10 s apart), the backup, then the next round's try.
+  await advanceUntil(
+    page,
+    async () => ((latestMedium(dataDirectory)?.player.factions ?? []) as string[]).includes("Sector-12"),
+    { realTimeoutMs: 3 * STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 90_000 },
+  );
+  const backups = readStore(dataDirectory).events.filter((event) => event.kind === "saveBackup");
+  expect(backups.length).toBeGreaterThan(backupsBefore);
+  expect(backups.at(-1)?.detail).toMatchObject({ file: expect.any(String) });
+  await advanceGameTime(page, 2_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
 async function dashboardAlerts(dashboardPort: number): Promise<{ name: string; detail: string }[]> {
   const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);

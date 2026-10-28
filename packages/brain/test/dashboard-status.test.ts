@@ -28,7 +28,7 @@ const programs: ProgramsView = {
   waitingFor: null,
 };
 const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
-const intents: IntentView[] = [{ id: "travel(Aevum)", source: "manual", outcome: null }];
+const intents: IntentView[] = [{ id: "travel(Aevum)", source: "manual", outcome: null, waitingFor: null }];
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
   brainStartedEventId = store.recordEvent(context, { atMs: STARTED_AT_MS, kind: BRAIN_STARTED_EVENT_KIND, detail: {} });

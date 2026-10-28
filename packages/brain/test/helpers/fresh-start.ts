@@ -19,7 +19,7 @@ import { readInGameBuild } from "../../src/in-game-build.ts";
 import { SimulatedGame } from "../../src/simulated-game.ts";
 import { TelemetryStore } from "../../src/telemetry-store.ts";
 import { CONTROL_URL, EPOCH_MS } from "./agent-in-simulation.ts";
-import { BRAIN_RFA_SETTINGS, RFA_URL, startBrainInSimulation } from "./brain-in-simulation.ts";
+import { BRAIN_RFA_SETTINGS, DEPLOY_WITHIN_MS, RFA_URL, startBrainInSimulation } from "./brain-in-simulation.ts";
 
 const STEP_MS = 200;
 
@@ -88,8 +88,7 @@ export function useFreshStarts() {
     openStores.push(store);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
     const brain = startBrainInSimulation(game, { build, data, withDesiredState });
-    // A request and its reply cross one step each way, so the deploy's requests take longer at this step size.
-    await game.runUntil(() => brain.deployerEvents.length > 0, 30_000);
+    await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });
     expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();

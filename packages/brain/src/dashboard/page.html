@@ -238,7 +238,9 @@ function render(status) {
       button.addEventListener("click", () => sendWrite("/api/intents/cancel", { id: intent.id }, "#intents-problem"));
       cancel.append(button);
     }
-    row.append(element("td", intent.id), element("td", intent.source), element("td", outcomeText(intent.outcome)), cancel);
+    // An irreversible intent not yet sent says what it waits for (#147).
+    const state = intent.waitingFor ? `not sent: waiting for ${intent.waitingFor}` : outcomeText(intent.outcome);
+    row.append(element("td", intent.id), element("td", intent.source), element("td", state), cancel);
     return row;
   });
   document.querySelector("#intents table").replaceChildren(

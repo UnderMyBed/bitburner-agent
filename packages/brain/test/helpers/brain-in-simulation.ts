@@ -18,6 +18,11 @@ import type { SimulatedGame } from "../../src/simulated-game.ts";
 import type { TelemetryStore } from "../../src/telemetry-store.ts";
 import { CONTROL_PORT, CONTROL_URL, TOKEN } from "./agent-in-simulation.ts";
 
+/**
+ * How long a first deploy may take, in virtual time. Its requests and replies cross one step each way, several per
+ * bundle, so it takes longer with each bundle the build adds: at a 100 ms step, 20 bundles were past 10 s (#147).
+ */
+export const DEPLOY_WITHIN_MS = 30_000;
 export const RFA_PORT = 12525;
 export const RFA_URL = `ws://127.0.0.1:${RFA_PORT}`;
 /** The game retries a dropped RFA connection after this many seconds (its own setting). */
@@ -82,10 +87,19 @@ export function startBrainInSimulation(
 ): BrainInSimulation {
   const channel = new ControlChannel({ token, clock: game.clock });
   if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
+  const saveBackups =
+    data &&
+    new SaveBackups({
+      dataDirectory: data.dataDirectory,
+      environment: "E1",
+      backupIntervalMs: SAVE_BACKUP_INTERVAL_MS,
+      backupsKept: SAVE_BACKUPS_KEPT,
+      clock: game.clock,
+    });
   let desiredStateController: DesiredStateController | null = null;
   if (withDesiredState) {
     if (!data) throw new Error("the desired state keeps its switches in the store: give the brain its data");
-    desiredStateController = new DesiredStateController({ channel, store: data.store });
+    desiredStateController = new DesiredStateController({ channel, store: data.store, saveBackups });
   }
   const deployer = new Deployer({
     build,
@@ -100,15 +114,6 @@ export function startBrainInSimulation(
     release: `${data?.brainRelease}+${deployer.deploymentId}`,
   } as const;
   if (data) recordEvents(deployer, data.store, deployerReleaseContext);
-  const saveBackups =
-    data &&
-    new SaveBackups({
-      dataDirectory: data.dataDirectory,
-      environment: "E1",
-      backupIntervalMs: SAVE_BACKUP_INTERVAL_MS,
-      backupsKept: SAVE_BACKUPS_KEPT,
-      clock: game.clock,
-    });
   if (data && saveBackups) recordEvents(saveBackups, data.store, deployerReleaseContext);
   const openConnections: Connection[] = [];
   const brain: BrainInSimulation = {

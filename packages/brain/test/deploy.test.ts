@@ -16,6 +16,7 @@ import { CONTROL_URL, EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import {
   BRAIN_RFA_SETTINGS,
   type BrainInSimulation,
+  DEPLOY_WITHIN_MS,
   RFA_RECONNECT_SECONDS,
   RFA_URL,
   startBrainInSimulation,
@@ -85,7 +86,7 @@ const AFTER_A_BRAIN_RESTART_MS = RFA_RECONNECT_SECONDS * 1_000 + 30_000;
 async function gameWithAgent() {
   const brainOnGame = await brainAndGame();
   const deployer = brainOnGame.startBrain();
-  await brainOnGame.runUntil(() => brainOnGame.deployerEvents().length === 1, 10_000);
+  await brainOnGame.runUntil(() => brainOnGame.deployerEvents().length === 1, DEPLOY_WITHIN_MS);
   expect((await brainOnGame.simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
   await brainOnGame.runUntil(() => brainOnGame.agentsConnected().length === 1, 10_000);
   return { ...brainOnGame, deployer };
@@ -145,7 +146,7 @@ test("a build the game measures over its RAM budget isn't switched to, and the r
 test("a game whose definition file isn't the brain's pinned one holds it: nothing is deployed", async () => {
   const { simulation, game, deployerEvents, startBrain, runUntil } = await brainAndGame();
   startBrain({ pinnedDefinitions: `${readPinnedDefinitions()}\n// a line the game doesn't have\n` });
-  await runUntil(() => deployerEvents().length > 0, 10_000);
+  await runUntil(() => deployerEvents().length > 0, DEPLOY_WITHIN_MS);
   expect(deployerEvents()).toEqual([expect.objectContaining({ type: "versionDrift" })]);
   expect(await readOnHome(simulation, game, CURRENT_DEPLOYMENT_FILE)).toBeNull();
 });

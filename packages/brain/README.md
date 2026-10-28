@@ -107,7 +107,7 @@ The brain backs up the game's save over the Remote File API (`getSaveFile`; arch
   - **Only `E0` backups may ever go into Steam.** Saves flow one way: nothing from the simulator or a source build goes back (architecture §9.4).
   - Backups are personal data. They live in the data directory, by default the repo's gitignored `.data/`; never commit one, and keep `.data/` ignored.
 - **In the simulator:** a backup loads as a save fixture as it is (`{ kind: "save", path }`), to the same state as the game's own save at that moment (`test/save-backup-round-trip.test.ts`).
-- **Backups before irreversible intents** (R8) come with intents, in M3 (#11).
+- **A backup before an irreversible intent** (R8, #147): `backupNow()` takes one at once and resolves with its own event, saved or failed. Asked while one is under way, it waits for the next, so the event is never from a backup that began before the asking. The desired state's gate asks for it ([intents](#intents)).
 
 ## The dashboard
 
@@ -222,12 +222,16 @@ M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/13
 
 ## Intents
 
-M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam` and `travel` so far. Core validates them (`parseIntentRequest`), and says from the medium snapshot when the game shows one done (`intentDone`).
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam`, `travel` and `joinFaction` (#147) so far. Core validates them (`parseIntentRequest`) and says which are irreversible (`isIrreversibleIntent`).
 
 - **Where they come from,** in this order:
   1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result: that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 99 at most, leaving room in the protocol's 100 for the purchase. The dashboard lists the queue even with no Agent connected, so it can be cancelled.
   2. **The purchase rules:** [the hacking programs](#the-hacking-programs) and [home RAM](#home-ram), one purchase at a time, the cheaper first. If the owner queued the same purchase, it goes once, as the owner's.
 - **When they go:** with the hack loop, in the one desired state. With the hack loop off, the manual queue goes before any snapshot: each intent checks the game first, so a stale one does nothing. While the brain holds, none go.
+- **Irreversible ones** (R8, #147; so far, joining one of the six city factions, which bans its enemies) go only past a gate (`src/desired-state.ts`):
+  1. the guard (none of the faction's enemies joined) holds on two consecutive medium snapshots from the connected Agent, received after it was queued;
+  2. then a save backup is asked for ([`backupNow`](#save-backups)), and the intent goes out once that backup succeeds.
+  A failed guard or backup starts the count again; a disconnect, a new Agent or a restarted brain forgets it. Once out, it stays out until it's done. Each intent's view says what it waits for (`waitingFor`), and the dashboard shows it ("not sent: waiting for a save backup first"). A brain without save backups never sends one.
 - **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`: a worker that didn't run counts as a try. The outcome also names the backend the Agent used (`sim`, `singularity` or `ui`, #145), which the dashboard shows ("2 tries via ui: …"): the brain never chooses it.
 
 ## Supervision
@@ -367,6 +371,6 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the intents |
-| `test/effector-backends.test.ts` | The simulator suite for the Effectors' `sim` and `singularity` backends (#145): each action with money and without, and in BN1 with SF4.3 |
+| `test/effector-backends.test.ts` | The simulator suite for the Effectors' `sim` and `singularity` backends (#145): each action with money and without, and in BN1 with SF4.3. Joining Sector-12 (#147) through each, past the gate: sent only after two medium snapshots and a save backup, and Chongqing then held by the guard |
 | `test/helpers/fresh-start.ts` | A game in the simulator with the brain and the built Agent in it, and the owner's setup before the Agent starts: the start of the suites above |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the desired-state controller only when a test asks (`withDesiredState`), so the M2 suites see the observe-only skeleton they test |

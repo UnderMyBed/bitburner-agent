@@ -29,6 +29,7 @@ import { TelemetryStore } from "../src/telemetry-store.ts";
 import { CONTROL_URL, EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import {
   BRAIN_RFA_SETTINGS,
+  DEPLOY_WITHIN_MS,
   RFA_RECONNECT_SECONDS,
   RFA_URL,
   startBrainInSimulation,
@@ -81,7 +82,7 @@ async function freshStartWithBrain({ deliveredCopies }: Pick<SimulatedGameOption
   const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
   openStores.push(store);
   const brain = startBrainInSimulation(game, { build, data: { store, brainRelease: BRAIN_RELEASE, dataDirectory } });
-  await game.runUntil(() => brain.deployerEvents.length > 0, 10_000);
+  await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
   expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
   expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
   const agentsConnected = () => brain.channelEvents.filter((event) => event.type === "agentConnected");

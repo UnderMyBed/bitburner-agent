@@ -12,6 +12,7 @@ const intent = (request: IntentRequest): Intent => ({ ...request, id: intentId(r
 const TOR = intent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } });
 const AEVUM = intent({ action: "travel", args: { city: "Aevum" } });
 const RAM_FROM_8 = intent({ action: "upgradeHomeRam", args: { fromRam: 8, vendor: "Alpha Enterprises" } });
+const JOIN_SECTOR_12 = intent({ action: "joinFaction", args: { faction: "Sector-12" } });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -58,7 +59,13 @@ const reportsInTurn =
 
 test("each action's worker, with its arguments and a deadline 200 ms before the round's end", async () => {
   const { runner, runWorker, round } = runnerWith(() => DONE);
-  runner.desire([TOR, intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }), RAM_FROM_8, AEVUM]);
+  runner.desire([
+    TOR,
+    intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }),
+    RAM_FROM_8,
+    AEVUM,
+    JOIN_SECTOR_12,
+  ]);
   await round(10 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
   expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
@@ -66,6 +73,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/buy-program.js", ["BruteSSH.exe", ""]],
     ["agent/abcdef123456/upgrade-home-ram.js", [8, "Alpha Enterprises"]],
     ["agent/abcdef123456/travel.js", ["Aevum"]],
+    ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -180,23 +188,44 @@ describe("backends (#145)", () => {
       buyDarkwebProgram: (program: string) => effector(DONE)(`buyDarkwebProgram ${program}`),
       buyHomeRam: (fromRam: number) => effector(notDone("the money?"))(`buyHomeRam ${fromRam}`),
       travelTo: (city: string) => effector(DONE)(`travelTo ${city}`),
+      acceptFactionInvitation: (faction: string) => effector(DONE)(`acceptFactionInvitation ${faction}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
-    runner.desire([TOR, intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }), RAM_FROM_8, AEVUM]);
+    runner.desire([
+      TOR,
+      intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }),
+      RAM_FROM_8,
+      AEVUM,
+      JOIN_SECTOR_12,
+    ]);
     await round();
     expect(runWorker).not.toHaveBeenCalled();
-    expect(calls).toEqual(["buyTorRouter", "buyDarkwebProgram BruteSSH.exe", "buyHomeRam 8", "travelTo Aevum"]);
+    expect(calls).toEqual([
+      "buyTorRouter",
+      "buyDarkwebProgram BruteSSH.exe",
+      "buyHomeRam 8",
+      "travelTo Aevum",
+      "acceptFactionInvitation Sector-12",
+    ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
       [true, "sim"],
       [false, "sim"],
       [true, "sim"],
+      [true, "sim"],
     ]);
   });
 
   test("Singularity, once the game has it: each action's Singularity worker, with its arguments", async () => {
-    const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
-    runner.desire([TOR, intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }), RAM_FROM_8, AEVUM]);
+    // Home big enough for each, beside the Agent.
+    const { runner, runWorker, round } = runnerWith(() => DONE, { available: true }, { maxRam: 16 });
+    runner.desire([
+      TOR,
+      intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }),
+      RAM_FROM_8,
+      AEVUM,
+      JOIN_SECTOR_12,
+    ]);
     await round(10 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
     expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
@@ -204,6 +233,7 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-buy-program.js", ["BruteSSH.exe"]],
       ["agent/abcdef123456/singularity-upgrade-home-ram.js", [8]],
       ["agent/abcdef123456/singularity-travel.js", ["Aevum"]],
+      ["agent/abcdef123456/singularity-join-faction.js", ["Sector-12"]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });

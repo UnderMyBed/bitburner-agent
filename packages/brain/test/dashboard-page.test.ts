@@ -78,8 +78,9 @@ const BUSY_STATUS: DashboardStatus = {
       id: "travel(Aevum)",
       source: "manual",
       outcome: { id: "travel(Aevum)", done: false, tries: 2, problem: "no Travel", backend: "ui" },
+      waitingFor: null,
     },
-    { id: "buyTor(Alpha Enterprises)", source: "purchase", outcome: null },
+    { id: "buyTor(Alpha Enterprises)", source: "purchase", outcome: null, waitingFor: null },
   ],
 };
 
@@ -519,9 +520,15 @@ describe("the intents (#141)", () => {
       "1 try",
     ],
   ])("an outcome %s reads plainly", async (_description, outcome, text) => {
-    const intents = [{ id: "x", source: "manual", outcome }];
+    const intents = [{ id: "x", source: "manual", outcome, waitingFor: null }];
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents } }));
     expect(textOf(document, "#intents td:nth-child(3)")).toBe(text);
+  });
+
+  test("an irreversible intent not yet sent (#147) says what it waits for", async () => {
+    const intents = [{ id: "x", source: "manual", outcome: null, waitingFor: "a save backup first" }];
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents } }));
+    expect(textOf(document, "#intents td:nth-child(3)")).toBe("not sent: waiting for a save backup first");
   });
 
   test("none sent says so", async () => {

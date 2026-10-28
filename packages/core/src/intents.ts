@@ -6,6 +6,7 @@
  * In-game code bundles this, and the game charges RAM for identifiers named like NS functions (packages/ingame/README.md,
  * "RAM"), so the actions are only ever strings here, never identifiers: `upgradeHomeRam` is a Singularity function.
  */
+import { FACTION_ENEMIES, FACTION_NAMES } from "./factions.ts";
 import { isUpgradableHomeRam } from "./home-ram.ts";
 import { CITIES, TECH_VENDORS } from "./locations.ts";
 import { PORT_OPENER_PROGRAMS } from "./programs.ts";
@@ -15,7 +16,8 @@ export type IntentRequest =
   | { action: "buyTor"; args: { vendor: string } }
   | { action: "buyProgram"; args: { program: string } }
   | { action: "upgradeHomeRam"; args: { fromRam: number; vendor: string } }
-  | { action: "travel"; args: { city: string } };
+  | { action: "travel"; args: { city: string } }
+  | { action: "joinFaction"; args: { faction: string } };
 
 /** An intent: an action, its arguments, and the id made from them (`intentId`). */
 export type Intent = IntentRequest & { id: string };
@@ -78,6 +80,11 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
     case "travel":
       if (!CITIES.includes(args.city as string)) return { ok: false, reason: "travel's city isn't one of the six" };
       return { ok: true, message: { action, args: { city: args.city as string } } };
+    case "joinFaction":
+      if (!FACTION_NAMES.includes(args.faction as string)) {
+        return { ok: false, reason: "joinFaction's faction isn't one of the game's" };
+      }
+      return { ok: true, message: { action, args: { faction: args.faction as string } } };
     default:
       return null;
   }
@@ -104,4 +111,13 @@ export function parseIntentRequest(value: unknown): Parsed<Intent> {
     ok: true,
     message: { ...parsed.message, id: intentId(parsed.message.action, parsed.message.args) } as Intent,
   };
+}
+
+/**
+ * Whether doing `intent` can't be undone (R2, R8; #147): the brain then sends it only once its guard has held on two
+ * consecutive snapshots and a save backup has been taken. So far: joining a faction with enemies, which bans them.
+ * Installs and BitNode changes come with their slices.
+ */
+export function isIrreversibleIntent(intent: Intent): boolean {
+  return intent.action === "joinFaction" && FACTION_ENEMIES[intent.args.faction] !== undefined;
 }

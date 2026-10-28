@@ -60,8 +60,17 @@ try {
   channel.subscribe((event) => {
     if (event.type !== "snapshotReceived") log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`);
   });
+  // Each environment's backups in their own folder, so only Steam's (E0) are ever beside each other (§9.4). Made before
+  // the desired state, which asks for one before each irreversible intent (#147); their first is on a connection.
+  const saveBackups = new SaveBackups({
+    dataDirectory,
+    environment: config.environment,
+    backupIntervalMs: config.saveBackupIntervalMinutes * 60_000,
+    backupsKept: config.saveBackupsKept,
+    clock: systemClock,
+  });
   // What the brain wants running in the game (#134): set before the channel listens, so the first Agent is given it.
-  const desiredState = new DesiredStateController({ channel, store });
+  const desiredState = new DesiredStateController({ channel, store, saveBackups });
   const controlServer = await startWebSocketServer({
     port: config.controlPort,
     allowedOrigins: config.allowedOrigins,
@@ -83,14 +92,6 @@ try {
   const stopLoggingDeploys = deployer.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
-  // Each environment's backups in their own folder, so only Steam's (E0) are ever beside each other (§9.4).
-  const saveBackups = new SaveBackups({
-    dataDirectory,
-    environment: config.environment,
-    backupIntervalMs: config.saveBackupIntervalMinutes * 60_000,
-    backupsKept: config.saveBackupsKept,
-    clock: systemClock,
-  });
   const stopRecordingBackups = recordEvents(saveBackups, store, deployerReleaseContext);
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
