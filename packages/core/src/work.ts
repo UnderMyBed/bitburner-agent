@@ -80,7 +80,7 @@ export function parseWork(value: unknown): Parsed<Work | null> {
     if (!CLASS_TYPE_NAMES.includes(classType as string)) {
       return { ok: false, reason: "work's classType isn't one of the game's courses or gym stats" };
     }
-    // A course only at a university, a stat only at a gym (`Locations/ui/UniversityLocation.tsx`, `GymLocation.tsx`).
+    // A course only at a university, a stat only at a gym (`Locations/ui/UniversityLocation.tsx:51-82`, `GymLocation.tsx:42-53`).
     if (CLASS_TYPES[classType as string]?.at !== CLASS_LOCATIONS[location as string]?.kind) {
       return { ok: false, reason: `work's classType isn't taught at ${location as string}` };
     }

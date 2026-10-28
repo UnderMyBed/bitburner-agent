@@ -53,6 +53,16 @@ import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/
  */
 const AGENT_SIM_EFFECTORS_GLOBAL = "__bitburnerAgentSim";
 
+/**
+ * How long the money must last before a paid class is started (#158): core's `CLASS_MONEY_GUARD_SECONDS`, the guard
+ * every backend applies. The bundle can't import core (above); the effector-backends suite builds its expected
+ * problems with core's `classStartProblem`, so it fails if the two drift.
+ */
+const CLASS_MONEY_GUARD_SECONDS = 600;
+
+/** "$72,000", "-$3,721", as core's class problems word money. */
+const dollars = (amount: number) => `${amount < 0 ? "-" : ""}$${Math.abs(amount).toLocaleString("en-US")}`;
+
 /** What an effector reports: done afterwards, by the game's own state, and why not if not. */
 type EffectorResult = { done: boolean; problem: string | null };
 
@@ -279,10 +289,10 @@ const effectors = {
   },
   /**
    * The work activity's effector for a class (#158), as a university's or gym's page does it
-   * (`Locations/ui/UniversityLocation.tsx`, `GymLocation.tsx`: the class started, focused, on the Work page), reached
+   * (`Locations/ui/UniversityLocation.tsx:27-37`, `GymLocation.tsx:26-36`: the class started, focused, on the Work page), reached
    * from the City only in its city; then the focus as the focus buttons set it (the Work page's "Do something else
    * simultaneously" goes to the location, `ui/WorkInProgressRoot.tsx:266-268`). Before starting one, the guard every
-   * backend applies (core's `classStartProblem`, the same words): the city, then 10 minutes of the class's cost (base ×
+   * backend applies (core's `classStartProblem`, the same words): the city, then `CLASS_MONEY_GUARD_SECONDS` of its cost (base ×
    * the location's `costMult`, the backdoor's discount left out). The location is checked exactly, as the page can't.
    * Already so: nothing touched. Not named `universityCourse` or `gymWorkout`, NS functions.
    */
@@ -312,12 +322,12 @@ const effectors = {
         );
       }
       const perSecond = -classs.earnings.money * location.costMult;
-      const guard = perSecond * 600;
+      const guard = perSecond * CLASS_MONEY_GUARD_SECONDS;
       if (perSecond !== 0 && Player.money < guard) {
-        const dollars = (amount: number) => `$${amount.toLocaleString("en-US")}`;
         return result(
           false,
-          `${label} costs ${dollars(perSecond)} a second: the Agent starts it with 10 minutes of that ` +
+          `${label} costs ${dollars(perSecond)} a second: the Agent starts it with ` +
+            `${CLASS_MONEY_GUARD_SECONDS / 60} minutes of that ` +
             `(${dollars(guard)}) or more, and the player has ${dollars(Math.floor(Player.money))}`,
         );
       }

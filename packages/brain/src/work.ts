@@ -68,7 +68,7 @@ export function writeOwnersWork(store: TelemetryStore, work: OwnersWork | null):
  * Whether work goes focused (decision 37): yes, for full gains, unless they come unfocused too: the Neuroreceptor
  * Management Implant installed, a part-time job (#153), or a class (#158: `ClassWork` and `calculateClassEarnings`
  * have no focus penalty, `Work/Formulas.ts:108-121`). No work is sent before the slow snapshot says; the view shows
- * focused.
+ * focused before it, unless it's part-time or a class.
  */
 export function workFocus(work: OwnersWork, slowData: SlowSnapshotData | null): boolean {
   if (work.kind === "class") return false;

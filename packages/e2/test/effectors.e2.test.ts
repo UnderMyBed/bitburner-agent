@@ -709,6 +709,13 @@ test("a class held back (#158): a gym in Aevum from Sector-12, and a paid course
   ).resolves.toBe(0);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // From a medium snapshot taken after the effector ran.
+  const mediums = () => readStore(dataDirectory).snapshots.filter((row) => row.tier === "medium").length;
+  const mediumsNow = mediums();
+  await advanceUntil(page, async () => mediums() > mediumsNow, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
   expect(latestMedium(dataDirectory)?.player.money).toBe(1_000);
 });
 

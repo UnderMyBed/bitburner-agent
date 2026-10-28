@@ -214,11 +214,12 @@ test("a class (#158): the university in the City, then the course's button, whic
         document.body.replaceChildren(clickable("Terminal", "sidebar")),
       ),
     );
-  // Not the first button: the course's is picked by its text, "Networks", not "Network".
+  // Not the first button: the course's is picked by its text. A paid class's cost shows as negative, as the game's
+  // `Money` formats `calculateCost` (`Work/Formulas.ts:100-105`).
   const university = [
     clickable("Study Computer Science (free)", "button"),
-    clickable("Take Networks course ($240.000 / sec)", "button", workPage),
-    clickable("Take Algorithms course ($960.000 / sec)", "button"),
+    clickable("Take Networks course ($-240.000 / sec)", "button", workPage),
+    clickable("Take Algorithms course ($-960.000 / sec)", "button"),
   ];
   const gamePage = inTheCity("Rothman University", ...university);
   const networks = { kind: "class", location: "Rothman University", classType: "Networks", focus: false } as const;
@@ -226,7 +227,7 @@ test("a class (#158): the university in the City, then the course's button, whic
   expect(clicks).toEqual([
     "City",
     "Rothman University",
-    "Take Networks course ($240.000 / sec)",
+    "Take Networks course ($-240.000 / sec)",
     "Do something else simultaneously",
     "Terminal",
   ]);
@@ -234,13 +235,32 @@ test("a class (#158): the university in the City, then the course's button, whic
 
 test('a gym\'s stat (#158): its button, "Train Dexterity (…)"', async () => {
   const gym = [
-    clickable("Train Strength ($120.000 / sec)", "button"),
-    clickable("Train Dexterity ($120.000 / sec)", "button"),
+    clickable("Train Strength ($-120.000 / sec)", "button"),
+    clickable("Train Dexterity ($-120.000 / sec)", "button"),
   ];
   const gamePage = inTheCity("Iron Gym", ...gym);
   const dexterity = { kind: "class", location: "Iron Gym", classType: "dex", focus: true } as const;
   expect(await convergeWorkOnPage(gamePage, dexterity, { wasFocused: false })).toBeNull();
-  expect(clicks).toEqual(["City", "Iron Gym", "Train Dexterity ($120.000 / sec)"]);
+  expect(clicks).toEqual(["City", "Iron Gym", "Train Dexterity ($-120.000 / sec)"]);
+});
+
+test("a class the owner focused on, wanted unfocused (#158): not started again, just back to the Terminal", async () => {
+  // `reportPageEffect` has unfocused the player already (`wasFocused`), so the overview shows the class.
+  document.body.replaceChildren(
+    clickable("City", "sidebar"),
+    clickable("Terminal", "sidebar"),
+    Object.assign(document.createElement("p"), { textContent: "You are studying Computer Science" }),
+  );
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
+  const computerScience = {
+    kind: "class",
+    location: "Rothman University",
+    classType: "Computer Science",
+    focus: false,
+  } as const;
+  expect(await convergeWorkOnPage(gamePage, computerScience, { wasFocused: true })).toBeNull();
+  expect(clicks).toEqual(["Terminal"]);
 });
 
 test("a class as the page shows it (#158): the Work page's title focused, the overview's unfocused, by type only", () => {

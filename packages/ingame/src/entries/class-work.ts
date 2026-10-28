@@ -11,10 +11,10 @@
 //   (the owner queues a travel), or a paid class with less money than 10 minutes of it costs. The game would start it
 //   anyway and let the money go negative.
 // - Otherwise: the City, then the university or gym, only in its city, then the class's button ("Take Networks
-//   course (… / sec)", `Locations/ui/UniversityLocation.tsx`; "Train Strength (… / sec)", `GymLocation.tsx`), which
+//   course (… / sec)", `Locations/ui/UniversityLocation.tsx:51-82`; "Train Strength (… / sec)", `GymLocation.tsx:42-53`), which
 //   starts it focused; unfocused after if focus is false ("Do something else simultaneously" goes to the location,
 //   `ui/WorkInProgressRoot.tsx:266-268`), then the Terminal. A class the page started and other work replaces shows an
-//   "After … you spent …" alert (`Work/ClassWork.tsx`, `finish`), which the dialog watcher closes.
+//   "After … you spent …" alert (`Work/ClassWork.tsx:113-133`, `finish`), which the dialog watcher closes.
 // - Stopped on the way, it leaves the player as found: focused again on their own work, or on the Terminal.
 // - The focus is this worker's to set, so `reportPageEffect` leaves the page where the steps do.
 // RAM: `getPlayer` 0.5 (ram-budget.json); the page costs nothing.

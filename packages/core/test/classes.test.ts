@@ -101,6 +101,10 @@ describe("the money guard and the city (#158)", () => {
         "($72,000) or more, and the player has $71,999",
     );
     expect(classStartProblem(dataStructures, { money: 72_000, city: "Sector-12" })).toBeNull();
+    // Money run negative (the game allows it) reads with its sign first.
+    expect(classStartProblem(dataStructures, { money: -3_720.5, city: "Sector-12" })).toMatch(
+      /, and the player has -\$3,721$/,
+    );
     const computerScience = { location: "Rothman University", classType: "Computer Science" };
     expect(classStartProblem(computerScience, { money: -5, city: "Sector-12" })).toBeNull();
   });

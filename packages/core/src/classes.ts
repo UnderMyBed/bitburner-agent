@@ -26,8 +26,8 @@ export const CLASS_LOCATION_NAMES = Object.keys(CLASS_LOCATIONS);
 /**
  * Each class type, by the game's name (`UniversityClassType`, `GymType`: "str" for strength, as Singularity's
  * `gymWorkout` takes it; `Work/Enums.ts`), in the game's order: where it's taught, a plain name, how the Work page and
- * the overview word it (`youAreCurrently`, `Work/ClassWork.tsx`), the start of its button's text
- * (`Locations/ui/UniversityLocation.tsx`, `GymLocation.tsx`) and its base money a second.
+ * the overview word it (`youAreCurrently`, `Work/ClassWork.tsx:22-73`), the start of its button's text
+ * (`Locations/ui/UniversityLocation.tsx:51-82`, `GymLocation.tsx:42-53`) and its base money a second.
  */
 export const CLASS_TYPES: Record<
   string,
@@ -136,7 +136,8 @@ export function classLabel({ location, classType }: ClassChoice): string {
   return `${type?.name ?? classType}${type?.at === "gym" ? " training" : ""} at ${location}`;
 }
 
-const dollars = (amount: number) => `$${amount.toLocaleString("en-US")}`;
+/** "$72,000", "-$3,721". */
+const dollars = (amount: number) => `${amount < 0 ? "-" : ""}$${Math.abs(amount).toLocaleString("en-US")}`;
 
 /**
  * Why the class isn't started for a player with `money` in `city`, or null: its location is in another city (the

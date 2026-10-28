@@ -198,8 +198,8 @@ async function startCrimeWork(gamePage: GamePage, { crime }: Extract<Work, { kin
 
 /**
  * A class (#158): the university or gym in the City, only in its city (`Locations/ui/City.tsx`), then the class's
- * button, "Take Networks course (… / sec)" (`Locations/ui/UniversityLocation.tsx`) or "Train Strength (… / sec)"
- * (`GymLocation.tsx`), never disabled and never checking the money, which starts it focused.
+ * button, "Take Networks course (… / sec)" (`Locations/ui/UniversityLocation.tsx:51-82`) or "Train Strength (… / sec)"
+ * (`GymLocation.tsx:42-53`), never disabled and never checking the money, which starts it focused.
  */
 async function startClassWork(
   gamePage: GamePage,

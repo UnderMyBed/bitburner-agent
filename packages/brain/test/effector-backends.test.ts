@@ -6,6 +6,7 @@
 // (#151, #153, #156, #158): faction work, company work, the job applied for first, crime, and classes.
 import { gunzipSync } from "node:zlib";
 import {
+  classStartProblem,
   type DesiredState,
   type FastSnapshotData,
   type Intent,
@@ -531,15 +532,34 @@ test("crime (singularity, #156): with SF4.3, through its Singularity worker, lar
   await larcenyKeptAcrossRounds(fresh, false, "Homicide");
 });
 
-/** The player's class, where, its focus and how long it's run (ms), as the game saves them: `null` for no class. */
-async function savedClass(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
+/**
+ * The player's class, where, its focus, the game cycles it's run (200 ms each) and the money, as the game saves them,
+ * with the game time of the save: `null` for no class.
+ */
+async function savedClass(fresh: { simulation: { save(): Promise<Uint8Array> }; game: { clock: { now(): number } } }) {
   const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
   const player = JSON.parse(saveObject.data.PlayerSave).data;
   const work = player.currentWork;
   if (work?.ctor !== "ClassWork") return null;
   const { classType, location, cyclesWorked } = work.data;
-  return { classType, location, focus: player.focus, cyclesWorked, money: player.money };
+  return { classType, location, focus: player.focus, cyclesWorked, money: player.money, atMs: fresh.game.clock.now() };
 }
+
+/**
+ * Whether the class ran on from `before` to `after`, not started again: its cycles grew by the game time between the
+ * two saves (a cycle is 200 ms, `Constants.ts`, `MilliPerCycle`), less a second's slack. One started again in between
+ * would have lost the cycles before it.
+ */
+function ranOn(before: Awaited<ReturnType<typeof savedClass>>, after: Awaited<ReturnType<typeof savedClass>>) {
+  if (before === null || after === null) throw new Error("no class saved");
+  expect(after.cyclesWorked - before.cyclesWorked).toBeGreaterThanOrEqual((after.atMs - before.atMs) / 200 - 5);
+}
+
+/** The guard's problems, in core's words: the simulator's effector can't import them, so drift fails here. */
+const crushFromSector12 = classStartProblem(
+  { location: "Crush Fitness Gym", classType: "str" },
+  { money: 0, city: "Sector-12" },
+);
 
 const aClass = (location: string, classType: string, focus = false): Work => ({
   kind: "class",
@@ -564,19 +584,17 @@ test("a class (sim, #158): Computer Science at Rothman, unfocused then focused; 
   await workedAt(fresh, aClass("Rothman University", "Computer Science", true));
   const focused = await savedClass(fresh);
   expect(focused).toMatchObject({ classType: "Computer Science", focus: true });
-  // Not started again: it ran on.
-  expect(focused?.cyclesWorked).toBeGreaterThan(started?.cyclesWorked ?? Number.POSITIVE_INFINITY);
+  ranOn(started, focused);
   expect((await fresh.simulation.diagnostics.game()).page).toBe("Work");
   // A gym in Aevum from Sector-12, and a paid course without 10 minutes of its cost: neither started.
   expect(await workedAt(fresh, aClass("Crush Fitness Gym", "str"), false)).toMatchObject({
     converged: false,
-    problem: "Crush Fitness Gym is in Aevum, and the player is in Sector-12 (travel there first)",
+    problem: crushFromSector12,
   });
+  const dataStructures = { location: "Rothman University", classType: "Data Structures" };
   expect(await workedAt(fresh, aClass("Rothman University", "Data Structures"), false)).toMatchObject({
     converged: false,
-    problem:
-      "Data Structures at Rothman University costs $120 a second: the Agent starts it with 10 minutes of that " +
-      "($72,000) or more, and the player has $1,000",
+    problem: classStartProblem(dataStructures, { money: 1_000, city: "Sector-12" }),
   });
   expect(await savedClass(fresh)).toMatchObject({ classType: "Computer Science" });
   // With the money it's started at the activity's next look (the work wanted is unchanged, so within 30 s); once under
@@ -611,27 +629,36 @@ test("a class (singularity, #158): with SF4.3, through its Singularity worker, a
     converged: true,
     backend: "singularity",
   });
-  expect(await savedClass(fresh)).toMatchObject({ classType: "Computer Science", focus: false });
+  const unfocused = await savedClass(fresh);
+  expect(unfocused).toMatchObject({ classType: "Computer Science", focus: false });
+  // The focus set (`setFocus`), the class not started again.
   await workedAt(fresh, aClass("Rothman University", "Computer Science", true));
-  expect(await savedClass(fresh)).toMatchObject({ classType: "Computer Science", focus: true });
+  const focused = await savedClass(fresh);
+  expect(focused).toMatchObject({ classType: "Computer Science", focus: true });
+  ranOn(unfocused, focused);
   expect(await workedAt(fresh, aClass("Iron Gym", "str"))).toMatchObject({ converged: true });
   expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Iron Gym", focus: false });
   // Powerhouse Gym's strength training reads as Iron Gym's on the page, not to Singularity; $1m is under its guard.
+  const powerhouseWithNothing = classStartProblem(
+    { location: "Powerhouse Gym", classType: "str" },
+    { money: 0, city: "Sector-12" },
+  ) as string;
   expect(await workedAt(fresh, aClass("Powerhouse Gym", "str"), false)).toMatchObject({
     converged: false,
-    problem: expect.stringMatching(
-      /^Strength training at Powerhouse Gym costs \$2,400 a second: .* \(\$1,440,000\) or more/,
-    ),
+    problem: expect.stringContaining(powerhouseWithNothing.replace(/\$0$/, "")),
   });
   await fresh.simulation.diagnostics.setMoney(2_000_000);
   await fresh.game.runUntil(() => fresh.latest<FastSnapshotData>("fast")?.work?.converged === true, 35_000);
   expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym" });
   // Under way, it's left alone by the guard: with the money gone, its focus is still set.
+  const beforeFocus = await savedClass(fresh);
   await fresh.simulation.diagnostics.setMoney(0);
   expect(await workedAt(fresh, aClass("Powerhouse Gym", "str", true))).toMatchObject({ converged: true });
-  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym", focus: true });
-  expect(await workedAt(fresh, aClass("Crush Fitness Gym", "agi"), false)).toMatchObject({
+  const afterFocus = await savedClass(fresh);
+  expect(afterFocus).toMatchObject({ classType: "str", location: "Powerhouse Gym", focus: true });
+  ranOn(beforeFocus, afterFocus);
+  expect(await workedAt(fresh, aClass("Crush Fitness Gym", "str"), false)).toMatchObject({
     converged: false,
-    problem: "Crush Fitness Gym is in Aevum, and the player is in Sector-12 (travel there first)",
+    problem: crushFromSector12,
   });
 });
