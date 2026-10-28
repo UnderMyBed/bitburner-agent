@@ -162,11 +162,16 @@ describe("backends (#145)", () => {
 
   test("the simulator's own effectors, where the page has them: called directly, with no worker", async () => {
     const calls: string[] = [];
+    /** A stand-in effector: records its call, then reports `report`. */
+    const effector = (report: EffectorReport) => (call: string) => {
+      calls.push(call);
+      return report;
+    };
     (globalThis as Record<string, unknown>).__bitburnerAgentSim = {
-      buyTorRouter: () => (calls.push("buyTorRouter"), DONE),
-      buyDarkwebProgram: (program: string) => (calls.push(`buyDarkwebProgram ${program}`), DONE),
-      buyHomeRam: (fromRam: number) => (calls.push(`buyHomeRam ${fromRam}`), notDone("the money?")),
-      travelTo: (city: string) => (calls.push(`travelTo ${city}`), DONE),
+      buyTorRouter: () => effector(DONE)("buyTorRouter"),
+      buyDarkwebProgram: (program: string) => effector(DONE)(`buyDarkwebProgram ${program}`),
+      buyHomeRam: (fromRam: number) => effector(notDone("the money?"))(`buyHomeRam ${fromRam}`),
+      travelTo: (city: string) => effector(DONE)(`travelTo ${city}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
     runner.desire([TOR, intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }), RAM_FROM_8, AEVUM]);
