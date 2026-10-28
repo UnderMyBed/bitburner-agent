@@ -321,7 +321,7 @@ test("buying augmentations (#149): Neurotrainer I and NeuroFlux level 1 from Cyb
     money: 100_000_000,
     prepareSave: inCyberSec,
     // Nothing else moves the money: purchases and the hack loop off.
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   const moneyBefore = latestMedium(dataDirectory)?.player.money as number;
   await queueIntent(ports.dashboardPort, {
@@ -372,7 +372,7 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     money: 1_000_000,
     prepareSave: inCyberSec,
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   // Every dialog that opens, counted in the page: a click on a disabled Buy would open one saying why not.
   await page.evaluate(() => {
@@ -408,7 +408,10 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
 });
 
-/** Sets the work the brain manages (#151, #153), as the dashboard's Work forms do. */
+/** The brain's switches for a test of work alone: no purchases, and the hack loop off. */
+const ONLY_WORK = { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" };
+
+/** Sets the work the brain manages (#151, #153, #156), as the dashboard's Work forms do. */
 async function setWork(
   dashboardPort: number,
   work:
@@ -435,7 +438,7 @@ test("faction work (#151): started focused on the real page, refocused after the
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     money: 1_000_000,
     prepareSave: inCyberSec,
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
   await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
@@ -475,7 +478,7 @@ test("faction work unfocused (#151): with the Neuroreceptor Management Implant i
       await inCyberSec(sim);
       await sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant");
     },
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
   await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
@@ -495,7 +498,7 @@ test("faction work unfocused (#151): with the Neuroreceptor Management Implant i
 test("faction work a faction doesn't offer (#151): not converged, with the page's reason, and the page left on the Terminal", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     prepareSave: inCyberSec,
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "field" });
   await advanceUntil(page, async () => (latestFast(dataDirectory)?.work?.backend ?? null) !== null, {
@@ -518,7 +521,7 @@ const NOODLE_BAR_WAITER = { kind: "company", company: "Noodle Bar", field: "Wait
 test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the alert closed, worked focused; refocused, not restarted; after a travel, its Job page", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     city: "New Tokyo",
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   await setWork(ports.dashboardPort, NOODLE_BAR_WAITER);
   await advanceUntil(page, waiterPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
@@ -559,7 +562,7 @@ test("company work (#153): in New Tokyo, hired as a Waiter at Noodle Bar, the al
 
 test("company work in another city (#153): not converged, saying where the player is, and the page left on the Terminal", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    brainSettings: ONLY_WORK,
   });
   await setWork(ports.dashboardPort, NOODLE_BAR_WAITER);
   await advanceUntil(page, async () => (latestFast(dataDirectory)?.work?.backend ?? null) !== null, {
@@ -579,10 +582,9 @@ const shopliftingPageShown = (page: Page) => async () =>
   (await page.locator("h6", { hasText: /^You are attempting to shoplift$/ }).count()) > 0;
 const shopliftingOverviewShown = (page: Page) => async () =>
   (await page.locator("p", { hasText: /^You are attempting to Shoplift$/ }).count()) > 0;
-const NO_PURCHASES = { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" };
 
 test("crime (#156): shoplifting started focused at the Slums on the real page, and focused again after the owner unfocuses", async () => {
-  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ brainSettings: NO_PURCHASES });
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ brainSettings: ONLY_WORK });
   await setWork(ports.dashboardPort, { kind: "crime", crime: "Shoplift" });
   await advanceUntil(page, shopliftingPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
   await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
@@ -590,18 +592,29 @@ test("crime (#156): shoplifting started focused at the Slums on the real page, a
     gameTimeoutMs: 10_000,
   });
   expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
-  // The owner does something else (the game goes to the City): within the activity's 30 s, the Agent focuses again.
+  // The owner does something else (the game goes to the City): within the activity's 30 s, the Agent focuses again
+  // with the overview's "Focus", never going back to the Slums, which would start the crime again, losing its progress.
   await page.getByRole("button", { name: "Do something else simultaneously" }).click();
   await expect(shopliftingPageShown(page)()).resolves.toBe(false);
   await expect(shopliftingOverviewShown(page)()).resolves.toBe(true);
+  await page.evaluate(() => {
+    const seen = { slums: 0 };
+    new MutationObserver(() => {
+      if ((document.body.textContent ?? "").includes("chance of success")) seen.slums = 1;
+    }).observe(document.body, { childList: true, subtree: true });
+    (window as unknown as { slumsSeen: typeof seen }).slumsSeen = seen;
+  });
   await advanceUntil(page, shopliftingPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  await expect(
+    page.evaluate(() => (window as unknown as { slumsSeen: { slums: number } }).slumsSeen.slums),
+  ).resolves.toBe(0);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
 
 test("crime unfocused (#156): with the Neuroreceptor Management Implant installed, started then left unfocused on the Terminal", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     prepareSave: (sim) => sim.diagnostics.giveInstalledAugmentation("Neuroreceptor Management Implant"),
-    brainSettings: NO_PURCHASES,
+    brainSettings: ONLY_WORK,
   });
   await setWork(ports.dashboardPort, { kind: "crime", crime: "Shoplift" });
   await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {

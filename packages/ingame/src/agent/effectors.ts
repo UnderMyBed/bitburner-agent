@@ -1,5 +1,5 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #156, architecture §5.6): for each action an intent can name, and for the
-// work activity's work, how each backend does it.
+// The Effectors (#141, #145, #147, #149, #151, #153, #156, architecture §5.6): for each action an intent can name,
+// and for the work activity's work, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -115,7 +115,9 @@ export function effectorFor(intent: Intent): Effector {
   }
 }
 
-/** The work activity's effector (#151, #153, #156): converges the game on `work`, starting it, or setting its focus. */
+/**
+ * The work activity's effector (#151, #153, #156): converges the game on `work`, starting it, or setting its focus.
+ */
 export function workEffectorFor(work: Work): Effector {
   if (work.kind === "crime") {
     const { crime, focus } = work;

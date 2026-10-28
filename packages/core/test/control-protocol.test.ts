@@ -193,6 +193,11 @@ describe("rejected, each with a reason", () => {
       { ...desiredState, work: { kind: "crime", crime: "shoplift", focus: true } },
     ],
     [
+      "crime work naming a prototype's key",
+      { ...desiredState, work: { kind: "crime", crime: "toString", focus: true } },
+    ],
+    ["crime work naming no string", { ...desiredState, work: { kind: "crime", crime: 7, focus: true } }],
+    [
       "over 100 intents, each valid and different",
       withIntents(
         ...Array.from({ length: 101 }, (_, index) => {

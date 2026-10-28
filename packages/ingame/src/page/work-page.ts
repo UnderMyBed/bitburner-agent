@@ -28,7 +28,8 @@ export function workShown(gamePage: GamePage, work: Work): "focused" | "unfocuse
   const titleShown = (title: string) => gamePage.findElementNow(`//h6[normalize-space()=${xpathString(title)}]`);
   if (work.kind === "crime") {
     const { crime } = work;
-    if (titleShown(`You are attempting ${CRIMES[crime]?.workName}`)) return "focused";
+    const workName = Object.hasOwn(CRIMES, crime) ? CRIMES[crime]?.workName : undefined;
+    if (workName !== undefined && titleShown(`You are attempting ${workName}`)) return "focused";
     const header = gamePage.findElementNow(`//p[normalize-space()=${xpathString(`You are attempting to ${crime}`)}]`);
     return header === null ? null : "unfocused";
   }

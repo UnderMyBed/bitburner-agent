@@ -6,8 +6,9 @@
 //   to Shoplift" (`ui/React/CharacterOverview.tsx:303`). Already so: done, nothing touched. The right crime at the
 //   wrong focus: the focus set, the crime not started again.
 // - Otherwise: the City, then The Slums, in every city, then the crime's button ("Shoplift (45.20% chance of
-//   success)", `Locations/ui/SlumsLocation.tsx`), which starts it focused; unfocused after if focus is false. A crime
-//   is committed again and again until other work replaces it (`Work/CrimeWork.ts`).
+//   success)", `Locations/ui/SlumsLocation.tsx:24-39`), which starts it focused; unfocused after if focus is false. A
+//   crime is committed again and again until other work replaces it (`Work/CrimeWork.ts:35-50`); started again, it
+//   loses its progress, so one under way is never started again.
 // - Stopped on the way, it leaves the player as found: focused again on their own work, or on the Terminal.
 // - The focus is this worker's to set, so `reportPageEffect` leaves the page where the steps do.
 // RAM: nothing beyond the base (ram-budget.json); the page costs nothing.

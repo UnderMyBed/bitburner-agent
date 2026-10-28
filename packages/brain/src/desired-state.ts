@@ -198,7 +198,8 @@ export class DesiredStateController {
 
   /**
    * The work the owner wants (#151, #153, #156): `{ faction, workType }`, `{ kind: "company", company, field }` or
-   * `{ kind: "crime", crime }`, kept in the store and sent at once, or null to stop managing work (the game's work is then left as it is).
+   * `{ kind: "crime", crime }`, kept in the store and sent at once, or null to stop managing work (the game's work
+   * is then left as it is).
    */
   setWork(request: unknown): { ok: true } | { ok: false; reason: string } {
     const parsed = parseOwnersWork(request);

@@ -476,32 +476,51 @@ test("company work (singularity, #153): with SF4.3, through its Singularity work
   });
 });
 
-/** The player's crime and focus, as the game saves them: `null` for no crime. */
+/**
+ * The player's crime, focus and progress on it (ms), and their karma, as the game saves them: `null` for no crime. A
+ * crime started again loses its progress (`Work/CrimeWork.ts`, `unitCompleted`).
+ */
 async function savedCrime(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
   const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
   const player = JSON.parse(saveObject.data.PlayerSave).data;
   const work = player.currentWork;
-  return work?.ctor === "CrimeWork" ? { crime: work.data.crimeType, focus: player.focus } : null;
+  if (work?.ctor !== "CrimeWork") return null;
+  return { crime: work.data.crimeType, focus: player.focus, progressMs: work.data.unitCompleted, karma: player.karma };
 }
 
 const crime = (name: string, focus: boolean): Work => ({ kind: "crime", crime: name, focus });
 
-test("crime (sim, #156): shoplifting focused, then unfocused, then a switch to mugging, which repeats", async () => {
+/**
+ * Larceny, 90 s a time, wanted at `first` focus, then the other, kept across rounds for 100 s, then a switch to `next`:
+ * the focus changed without starting it again (its progress kept), and committed (karma lost) though the Agent
+ * converges every 30 s, then committed again.
+ */
+async function larcenyKeptAcrossRounds(fresh: Awaited<ReturnType<typeof freshStart>>, first: boolean, next: string) {
+  await workedAt(fresh, crime("Larceny", first));
+  const started = await savedCrime(fresh);
+  expect(started).toMatchObject({ crime: "Larceny", focus: first });
+  await workedAt(fresh, crime("Larceny", !first));
+  const toggled = await savedCrime(fresh);
+  expect(toggled).toMatchObject({ crime: "Larceny", focus: !first });
+  expect(toggled?.progressMs).toBeGreaterThan(started?.progressMs ?? Number.POSITIVE_INFINITY);
+  await fresh.game.run(100_000);
+  const committed = await savedCrime(fresh);
+  expect(committed).toMatchObject({ crime: "Larceny", focus: !first });
+  expect(committed?.karma).toBeLessThan(started?.karma ?? Number.NEGATIVE_INFINITY);
+  await workedAt(fresh, crime(next, !first));
+  expect(await savedCrime(fresh)).toMatchObject({ crime: next, focus: !first });
+}
+
+test("crime (sim, #156): larceny focused, then unfocused without starting it again, committed and again, then mugging", async () => {
   const fresh = await freshStart({ withDesiredState: false });
   expect(await workedAt(fresh, crime("Shoplift", true))).toEqual({ converged: true, problem: null, backend: "sim" });
-  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: true });
   expect((await fresh.simulation.diagnostics.game()).page).toBe("Work");
-  await workedAt(fresh, crime("Shoplift", false));
-  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: false });
+  await larcenyKeptAcrossRounds(fresh, true, "Mug");
   expect((await fresh.simulation.diagnostics.game()).page).not.toBe("Work");
-  await workedAt(fresh, crime("Mug", false));
-  // Mugging takes 4 s: after 20 s it's still the work, committed again and again.
-  await fresh.game.run(20_000);
-  expect(await savedCrime(fresh)).toEqual({ crime: "Mug", focus: false });
   expect(fresh.latest<FastSnapshotData>("fast")?.work).toEqual({ converged: true, problem: null, backend: "sim" });
 });
 
-test("crime (singularity, #156): with SF4.3, through its Singularity worker, unfocused, then focused, then switched", async () => {
+test("crime (singularity, #156): with SF4.3, through its Singularity worker, larceny unfocused, then focused, then homicide", async () => {
   const fresh = await freshStart({
     withDesiredState: false,
     fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } },
@@ -509,9 +528,5 @@ test("crime (singularity, #156): with SF4.3, through its Singularity worker, unf
   });
   await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
   expect(await workedAt(fresh, crime("Shoplift", false))).toMatchObject({ converged: true, backend: "singularity" });
-  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: false });
-  await workedAt(fresh, crime("Shoplift", true));
-  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: true });
-  await workedAt(fresh, crime("Homicide", true));
-  expect(await savedCrime(fresh)).toEqual({ crime: "Homicide", focus: true });
+  await larcenyKeptAcrossRounds(fresh, false, "Homicide");
 });
