@@ -1,7 +1,7 @@
 // The supervision switch (architecture §10.2; #93, #94), kept in the store's settings so it survives restarts of the
 // brain. The dashboard sets it; the supervisor (#94) reads it with `readSupervisionSwitch` before every launch, records
-// a give-up with `recordSupervisionGaveUp` after too many (or after checks that kept failing), and records each launch as a `relaunch` event. While paused,
-// nothing is launched; unpausing also clears a give-up.
+// a give-up with `recordSupervisionGaveUp` after too many (or after checks that kept failing), and records each launch
+// as a `relaunch` event. While paused, nothing is launched; unpausing also clears a give-up.
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
