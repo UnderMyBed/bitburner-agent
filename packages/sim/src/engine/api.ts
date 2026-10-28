@@ -60,6 +60,8 @@ export interface EngineApi {
   setHomeRam(gb: number): void;
   /** Sets the player's money. A harness edit, for test scenarios. */
   setMoney(money: number): void;
+  /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
+  setFactionReputation(faction: string, reputation: number): void;
   /** The page the game's Router is on. */
   page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
@@ -137,6 +139,7 @@ const API_FUNCTIONS = {
   page: true,
   setHomeRam: true,
   setMoney: true,
+  setFactionReputation: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

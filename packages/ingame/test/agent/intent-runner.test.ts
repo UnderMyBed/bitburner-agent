@@ -13,6 +13,10 @@ const TOR = intent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } });
 const AEVUM = intent({ action: "travel", args: { city: "Aevum" } });
 const RAM_FROM_8 = intent({ action: "upgradeHomeRam", args: { fromRam: 8, vendor: "Alpha Enterprises" } });
 const JOIN_SECTOR_12 = intent({ action: "joinFaction", args: { faction: "Sector-12" } });
+const NEUROFLUX_3 = intent({
+  action: "purchaseAugmentation",
+  args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 },
+});
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -65,6 +69,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     RAM_FROM_8,
     AEVUM,
     JOIN_SECTOR_12,
+    NEUROFLUX_3,
   ]);
   await round(10 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
@@ -74,6 +79,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/upgrade-home-ram.js", [8, "Alpha Enterprises"]],
     ["agent/abcdef123456/travel.js", ["Aevum"]],
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
+    ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -189,6 +195,8 @@ describe("backends (#145)", () => {
       buyHomeRam: (fromRam: number) => effector(notDone("the money?"))(`buyHomeRam ${fromRam}`),
       travelTo: (city: string) => effector(DONE)(`travelTo ${city}`),
       acceptFactionInvitation: (faction: string) => effector(DONE)(`acceptFactionInvitation ${faction}`),
+      buyAugmentationFrom: (faction: string, augmentation: string, level: number) =>
+        effector(DONE)(`buyAugmentationFrom ${faction} ${augmentation} ${level}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
     runner.desire([
@@ -197,6 +205,7 @@ describe("backends (#145)", () => {
       RAM_FROM_8,
       AEVUM,
       JOIN_SECTOR_12,
+      NEUROFLUX_3,
     ]);
     await round();
     expect(runWorker).not.toHaveBeenCalled();
@@ -206,11 +215,13 @@ describe("backends (#145)", () => {
       "buyHomeRam 8",
       "travelTo Aevum",
       "acceptFactionInvitation Sector-12",
+      "buyAugmentationFrom Sector-12 NeuroFlux Governor 3",
     ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
       [true, "sim"],
       [false, "sim"],
+      [true, "sim"],
       [true, "sim"],
       [true, "sim"],
     ]);
@@ -225,6 +236,7 @@ describe("backends (#145)", () => {
       RAM_FROM_8,
       AEVUM,
       JOIN_SECTOR_12,
+      NEUROFLUX_3,
     ]);
     await round(10 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
@@ -234,6 +246,7 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-upgrade-home-ram.js", [8]],
       ["agent/abcdef123456/singularity-travel.js", ["Aevum"]],
       ["agent/abcdef123456/singularity-join-faction.js", ["Sector-12"]],
+      ["agent/abcdef123456/singularity-buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });

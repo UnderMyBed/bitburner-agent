@@ -1,5 +1,6 @@
 // Intents (#141): each action's args, the id made from them, and which are irreversible (#147).
 import { describe, expect, test } from "vitest";
+import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "../src/augmentations.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
 import {
   INTENT_ACTIONS,
@@ -16,6 +17,9 @@ describe("parseIntentRequest", () => {
     ["upgradeHomeRam", { fromRam: 8, vendor: "CompuTek" }],
     ["travel", { city: "New Tokyo" }],
     ["joinFaction", { faction: "Bachman & Associates" }],
+    ["purchaseAugmentation", { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 }],
+    ["purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 7 }],
+    ["purchaseAugmentation", { faction: "Blade Industries", augmentation: "The Blade's Simulacrum", level: 1 }],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -38,6 +42,29 @@ describe("parseIntentRequest", () => {
     ["a city that isn't one", { action: "travel", args: { city: "Atlantis" } }],
     ["a faction that isn't one", { action: "joinFaction", args: { faction: "The Gibson" } }],
     ["a faction named in another case", { action: "joinFaction", args: { faction: "cybersec" } }],
+    [
+      "an augmentation that isn't one",
+      { action: "purchaseAugmentation", args: { faction: "CyberSec", augmentation: "Gibson Implant", level: 1 } },
+    ],
+    [
+      "an augmentation from a faction that isn't one",
+      { action: "purchaseAugmentation", args: { faction: "The Gibson", augmentation: "Neurotrainer I", level: 1 } },
+    ],
+    [
+      "a level past 1 for an augmentation that has none",
+      { action: "purchaseAugmentation", args: { faction: "CyberSec", augmentation: "Neurotrainer I", level: 2 } },
+    ],
+    [
+      "a NeuroFlux level that isn't a whole number from 1",
+      { action: "purchaseAugmentation", args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 0 } },
+    ],
+    [
+      "a level as text",
+      {
+        action: "purchaseAugmentation",
+        args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: "3" },
+      },
+    ],
   ])("refuses %s, with a reason", (_description, request) => {
     const parsed = parseIntentRequest(request);
     expect(parsed.ok).toBe(false);
@@ -54,6 +81,10 @@ test("INTENT_ACTIONS names every action the parser knows, and only those", () =>
 test("an intent's id is its action and args, in the args' fixed order", () => {
   expect(intentId("travel", { city: "Aevum" })).toBe("travel(Aevum)");
   expect(intentId("upgradeHomeRam", { fromRam: 8, vendor: "CompuTek" })).toBe("upgradeHomeRam(8, CompuTek)");
+  // NeuroFlux Governor keyed by level (#149): each level is its own intent.
+  expect(intentId("purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 })).toBe(
+    "purchaseAugmentation(Sector-12, NeuroFlux Governor, 3)",
+  );
   const reordered = parseIntentRequest({ action: "upgradeHomeRam", args: { vendor: "CompuTek", fromRam: 8 } });
   expect(reordered.ok && reordered.message.id).toBe("upgradeHomeRam(8, CompuTek)");
 });
@@ -80,5 +111,13 @@ describe("isIrreversibleIntent", () => {
     expect(isIrreversibleIntent(intent({ action: "joinFaction", args: { faction: "CyberSec" } }))).toBe(false);
     expect(isIrreversibleIntent(intent({ action: "travel", args: { city: "Aevum" } }))).toBe(false);
     expect(isIrreversibleIntent(intent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } }))).toBe(false);
+    const augmentation = { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 };
+    expect(isIrreversibleIntent(intent({ action: "purchaseAugmentation", args: augmentation }))).toBe(false);
   });
+});
+
+test("AUGMENTATION_NAMES has the game's 137, each once, NeuroFlux Governor among them", () => {
+  expect(AUGMENTATION_NAMES).toHaveLength(137);
+  expect(new Set(AUGMENTATION_NAMES).size).toBe(137);
+  expect(AUGMENTATION_NAMES).toContain(NEUROFLUX_GOVERNOR);
 });

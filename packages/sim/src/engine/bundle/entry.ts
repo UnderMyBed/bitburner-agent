@@ -10,6 +10,9 @@ import {
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { save as saveToIndexedDb } from "../../../../../vendor/bitburner-src/src/db";
 import { Engine } from "../../../../../vendor/bitburner-src/src/engine";
+import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
+import { joinFaction } from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
+import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
 import { ITutorial, iTutorialEnd } from "../../../../../vendor/bitburner-src/src/InteractiveTutorial";
 import { killWorkerScriptByPid } from "../../../../../vendor/bitburner-src/src/Netscript/killWorkerScript";
 import { recentScripts } from "../../../../../vendor/bitburner-src/src/Netscript/RecentScripts";
@@ -194,6 +197,16 @@ export function setHomeRam(gb: number) {
 /** Sets the player's money: a harness edit for test scenarios, not something a player can do. */
 export function setMoney(money: number) {
   Player.money = money;
+}
+
+/**
+ * Makes the player a member of `faction` (the game's own `joinFaction`, which bans its enemies) with this reputation: a
+ * harness edit for test scenarios, not something a player can do. An unknown faction throws.
+ */
+export function setFactionReputation(faction: string, reputation: number) {
+  if (!Object.values(FactionName).includes(faction as FactionName)) throw new RangeError(`no faction ${faction}`);
+  joinFaction(Factions[faction as FactionName]);
+  Factions[faction as FactionName].playerReputation = reputation;
 }
 
 /** The page the game's Router is on. */

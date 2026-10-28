@@ -3,7 +3,7 @@
 // terminal, upgrades home's RAM at Alpha Enterprises, and travels where the owner's manual queue says, as a player
 // would, and leaves the page on the Terminal with no dialog open. It closes the game's alerts and answers faction
 // invitations, and leaves the owner's and scripts' dialogs alone. Joining a faction (#147) clicks "Join!" past the
-// brain's gate for irreversible intents.
+// brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
 } from "@bitburner-agent/core";
+import type { Simulation } from "@bitburner-agent/sim";
 import type { Page } from "playwright";
 import { afterAll, afterEach, expect, onTestFailed, test } from "vitest";
 import {
@@ -98,6 +99,7 @@ async function moneyedGameWithAgent({
   gameSettings = {},
   city = "Sector-12",
   homeScripts = {},
+  prepareSave = async () => {},
 }: {
   money?: number;
   keepOfflineAlert?: boolean;
@@ -109,6 +111,8 @@ async function moneyedGameWithAgent({
   city?: string;
   /** Scripts of the owner's on home, by file name (`withHomeScript`). */
   homeScripts?: Record<string, string>;
+  /** The simulator's setup of the save, before it's saved (`simulatorSave`'s `prepare`). */
+  prepareSave?: (sim: Simulation) => Promise<void>;
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
@@ -125,6 +129,7 @@ async function moneyedGameWithAgent({
             RemoteFileApiReconnectionDelay: 1,
             AutoexecScript: BOOT_SCRIPT,
           },
+          prepare: prepareSave,
         }),
         money,
       ),
@@ -306,6 +311,83 @@ test("joining Sector-12 (#147): past the brain's guard and a save backup, the Ag
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
+/** A save in CyberSec with plenty of reputation, as the simulator sets it up: augmentations to buy (#149). */
+const inCyberSec = (sim: Simulation) => sim.diagnostics.setFactionReputation("CyberSec", 1e6);
+
+test("buying augmentations (#149): Neurotrainer I and NeuroFlux level 1 from CyberSec, confirmed, alerts closed", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 100_000_000,
+    prepareSave: inCyberSec,
+    // Nothing else moves the money: purchases and the hack loop off.
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  const moneyBefore = latestMedium(dataDirectory)?.player.money as number;
+  await queueIntent(ports.dashboardPort, {
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 },
+  });
+  await queueIntent(ports.dashboardPort, {
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "NeuroFlux Governor", level: 1 },
+  });
+  // Each leaves the queue once the Agent reports it done.
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: 3 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  // Paid for: $4m for Neurotrainer I, then NeuroFlux's $750k at the second purchase's 1.9x, about $1.43m.
+  // A medium snapshot comes every 10 s, so the money may show a little after the queue empties.
+  const spent = () => moneyBefore - (latestMedium(dataDirectory)?.player.money as number);
+  await advanceUntil(page, async () => spent() > 5_000_000, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
+  expect(spent()).toBeLessThan(6_000_000);
+  await advanceGameTime(page, 2_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("an augmentation the money doesn't cover (#149): its disabled Buy is never clicked, and the reason is the outcome", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    prepareSave: inCyberSec,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  // Every dialog that opens, counted in the page: a click on a disabled Buy would open one saying why not.
+  await page.evaluate(() => {
+    const counts = { opened: 0 };
+    (window as unknown as { dialogsOpened: typeof counts }).dialogsOpened = counts;
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node instanceof Element && node.matches(".MuiModal-root")) counts.opened += 1;
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await queueIntent(ports.dashboardPort, {
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 },
+  });
+  const outcome = () =>
+    latestFast(dataDirectory)?.intents.find((each) => each.id === "purchaseAugmentation(CyberSec, Neurotrainer I, 1)");
+  await advanceUntil(page, async () => (outcome()?.tries ?? 0) >= 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(outcome()).toMatchObject({
+    done: false,
+    problem: "can't buy Neurotrainer I from CyberSec yet (the money, the reputation or a prerequisite?)",
+    backend: "ui",
+  });
+  expect(
+    await page.evaluate(() => (window as unknown as { dialogsOpened: { opened: number } }).dialogsOpened.opened),
+  ).toBe(0);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(1_000_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
 async function dashboardAlerts(dashboardPort: number): Promise<{ name: string; detail: string }[]> {
   const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);

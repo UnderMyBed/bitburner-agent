@@ -234,6 +234,9 @@ export class Simulation {
     setHomeRam: (gb: number) => this.rpc.call("diagnostics.setHomeRam", { gb }),
     /** Sets the player's money. A harness edit, for test scenarios. */
     setMoney: (money: number) => this.rpc.call("diagnostics.setMoney", { money }),
+    /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
+    setFactionReputation: (faction: string, reputation: number) =>
+      this.rpc.call("diagnostics.setFactionReputation", { faction, reputation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     /** The host's V8 heap in use, in bytes, after a full garbage collection. */

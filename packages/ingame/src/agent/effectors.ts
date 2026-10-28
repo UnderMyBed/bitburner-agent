@@ -1,4 +1,4 @@
-// The Effectors (#141, #145, #147, architecture §5.6): for each action an intent can name, how each backend does it.
+// The Effectors (#141, #145, #147, #149, architecture §5.6): for each action an intent can name, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -7,10 +7,12 @@
 // game charges RAM for such names in in-game code.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  BUY_AUGMENTATION_WORKER_NAME,
   BUY_PROGRAM_WORKER_NAME,
   type EffectorReport,
   type Intent,
   JOIN_FACTION_WORKER_NAME,
+  SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
@@ -28,6 +30,7 @@ export interface SimEffectors {
   buyHomeRam(fromRam: number): EffectorReport;
   travelTo(city: string): EffectorReport;
   acceptFactionInvitation(faction: string): EffectorReport;
+  buyAugmentationFrom(faction: string, augmentation: string, level: number): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -87,5 +90,15 @@ export function effectorFor(intent: Intent): Effector {
         singularity: { workerName: SINGULARITY_JOIN_FACTION_WORKER_NAME, workerArguments: [intent.args.faction] },
         sim: (effectors) => effectors.acceptFactionInvitation(intent.args.faction),
       };
+    case "purchaseAugmentation": {
+      const { faction, augmentation, level } = intent.args;
+      const workerArguments = [faction, augmentation, level];
+      return {
+        description: `buy ${augmentation}${level > 1 ? ` level ${level}` : ""} from ${faction}`,
+        ui: { workerName: BUY_AUGMENTATION_WORKER_NAME, workerArguments },
+        singularity: { workerName: SINGULARITY_BUY_AUGMENTATION_WORKER_NAME, workerArguments },
+        sim: (effectors) => effectors.buyAugmentationFrom(faction, augmentation, level),
+      };
+    }
   }
 }
