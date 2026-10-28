@@ -200,10 +200,11 @@ export class DesiredStateController {
           typeof fields?.id === "string" &&
           typeof fields.done === "boolean" &&
           typeof fields.tries === "number" &&
-          (fields.problem === null || typeof fields.problem === "string")
+          (fields.problem === null || typeof fields.problem === "string") &&
+          [null, "sim", "singularity", "ui"].includes(fields.backend as string | null)
         );
       })
-      .map(({ id, done, tries, problem }) => ({ id, done, tries, problem }));
+      .map(({ id, done, tries, problem, backend }) => ({ id, done, tries, problem, backend }));
   }
 
   hackLoopView(): HackLoopView {

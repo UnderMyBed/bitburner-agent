@@ -13,6 +13,7 @@ import {
   type FastSnapshotData,
   type FastWorkerData,
   type IntentOutcome,
+  type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   type SnapshotMessage,
   type SnapshotTier,
@@ -58,6 +59,8 @@ export function createSnapshotter(
   const roundsUntilDue = { medium: 0, slow: 0 };
   const degradedTiers = new Set<SnapshotTier>();
   let staticReport: WorkerReport | null = null;
+  /** The latest slow snapshot's data, for what the Agent decides from it (Singularity, #145). */
+  let lastSlowData: SlowSnapshotData | null = null;
   let staticToSend = false;
 
   const snapshot = (tier: SnapshotTier, gameTimeMs: number, data: unknown): SnapshotMessage => {
@@ -89,6 +92,15 @@ export function createSnapshotter(
   }
 
   return {
+    /**
+     * Whether the game has Singularity (#145): in BN4, or with SF4 at any level, as the latest slow snapshot says. No
+     * slow snapshot yet is no Singularity: the page works either way.
+     */
+    singularityAvailable(): boolean {
+      const resetInfo = lastSlowData?.resetInfo;
+      return resetInfo?.currentNode === 4 || (resetInfo?.ownedSF?.["4"] ?? 0) >= 1;
+    },
+
     /** After every welcome, the next round sends all four tiers, so the brain starts from a full picture. */
     welcomed(): void {
       roundsUntilDue.medium = 0;
@@ -118,6 +130,7 @@ export function createSnapshotter(
         // A tier that fails stays due, so it's tried again next round.
         const report = await runTierWorker(tier, roundEndsAtMs);
         if (report === null) continue;
+        if (tier === "slow") lastSlowData = report.data as SlowSnapshotData;
         send(snapshot(tier, report.gameTimeMs, report.data));
         roundsUntilDue[tier] = ROUNDS_BETWEEN[tier] - 1;
       }

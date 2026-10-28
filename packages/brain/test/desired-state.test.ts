@@ -375,7 +375,7 @@ describe("the manual queue (#141, owner decision 36)", () => {
     game: null,
     intents,
   });
-  const doneOutcome = (id: string): IntentOutcome => ({ id, done: true, tries: 1, problem: null });
+  const doneOutcome = (id: string): IntentOutcome => ({ id, done: true, tries: 1, problem: null, backend: "ui" });
 
   test("reported done by the Agent, it leaves the queue; cancelled, it leaves at once", () => {
     const controller = new DesiredStateController({ channel, store });
@@ -443,7 +443,13 @@ describe("the manual queue (#141, owner decision 36)", () => {
     send(connection, "medium", mediumData(1, { n00dles: true }));
     controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
-    const outcome = { id: AEVUM.id, done: false, tries: 2, problem: "no Travel in the sidebar" };
+    const outcome: IntentOutcome = {
+      id: AEVUM.id,
+      done: false,
+      tries: 2,
+      problem: "no Travel in the sidebar",
+      backend: "ui",
+    };
     send(connection, "fast", fastWith(outcome));
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome }]);
     connection.dropFromGameSide();

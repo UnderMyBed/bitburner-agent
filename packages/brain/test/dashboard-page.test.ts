@@ -77,7 +77,7 @@ const BUSY_STATUS: DashboardStatus = {
     {
       id: "travel(Aevum)",
       source: "manual",
-      outcome: { id: "travel(Aevum)", done: false, tries: 2, problem: "no Travel" },
+      outcome: { id: "travel(Aevum)", done: false, tries: 2, problem: "no Travel", backend: "ui" },
     },
     { id: "buyTor(Alpha Enterprises)", source: "purchase", outcome: null },
   ],

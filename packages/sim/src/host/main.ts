@@ -182,6 +182,12 @@ async function start(options: HostOptions): Promise<Host> {
       validateHomeRam(gb);
       engine.setHomeRam(gb);
     },
+    "diagnostics.setMoney": ({ money }) => {
+      booted();
+      if (!Number.isFinite(money) || money < 0)
+        throw new RangeError(`money must be finite and 0 or more, not ${money}`);
+      engine.setMoney(money);
+    },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
     "diagnostics.heap": () => heapUsed(),
     "diagnostics.heapLimit": () => heapLimit(),

@@ -7,10 +7,13 @@
 //   and stops sending it. One that leaves the list and comes back is new.
 // - A worker that doesn't run (home full, still running, no time left) is tried again next round. It counts as a try.
 // - What happened to each is in the fast snapshot (`outcomes`), for the brain and the dashboard.
+// - Each try picks its backend (#145): the simulator's own effectors where the page has them; else Singularity once the
+//   game has it (SF4, or BN4), unless that action's Singularity worker couldn't run (too big for home at this SF4
+//   level), which leaves it to the page for the rest of this Agent's run; else the page.
 import { deployedFilePath, type EffectorReport, type Intent, type IntentOutcome } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { createChangeLog, createRoundSchedule } from "./activity.ts";
-import { effectorFor } from "./effectors.ts";
+import { effectorFor, simEffectors, type WorkerEffector } from "./effectors.ts";
 import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 import { SNAPSHOT_ROUND_MS } from "./snapshotter.ts";
 
@@ -30,27 +33,60 @@ interface HeldIntent {
 
 export function createIntentRunner(
   ns: NS,
-  { deploymentId, workerRunner }: { deploymentId: string; workerRunner: WorkerRunner },
+  {
+    deploymentId,
+    workerRunner,
+    singularityAvailable,
+  }: {
+    deploymentId: string;
+    workerRunner: WorkerRunner;
+    /** Whether the game has Singularity now: SF4, or BN4, as the Agent's slow snapshot says. */
+    singularityAvailable: () => boolean;
+  },
 ) {
   let held: HeldIntent[] = [];
+  /** Singularity workers that couldn't run: their actions go through the page for the rest of this Agent's run. */
+  const singularityTooBig = new Set<string>();
 
-  async function run(entry: HeldIntent, deadlineMs: number): Promise<void> {
-    const { workerName, workerArguments, description } = effectorFor(entry.intent);
-    const workerFile = deployedFilePath(deploymentId, workerName);
+  /** Runs `effector`'s worker: its report, or null (with the outcome's problem set) if it gave none. */
+  async function runWorker(entry: HeldIntent, effector: WorkerEffector, deadlineMs: number) {
+    const workerFile = deployedFilePath(deploymentId, effector.workerName);
     // The worker gives up a little before the round ends, so its report is in before the Agent stops waiting.
     const workerRun = await workerRunner.runWorker(
       workerFile,
-      [...workerArguments, deadlineMs - WORKER_MARGIN_MS],
+      [...effector.workerArguments, deadlineMs - WORKER_MARGIN_MS],
       deadlineMs,
     );
-    // Every run is a try, reported or not, so an intent whose worker never runs still shows as stuck.
+    if (workerRun.outcome === "reported") return { report: workerRun.report.data as EffectorReport, workerRun };
+    entry.outcome.problem = whyNoReport(workerRun, workerFile);
+    return { report: null, workerRun };
+  }
+
+  async function run(entry: HeldIntent, deadlineMs: number): Promise<void> {
+    const effector = effectorFor(entry.intent);
+    const { description } = effector;
+    const sim = simEffectors();
+    const useSingularity =
+      sim === null && singularityAvailable() && !singularityTooBig.has(effector.singularity.workerName);
+    entry.outcome.backend = sim !== null ? "sim" : useSingularity ? "singularity" : "ui";
+    // Every try counts, reported or not, so an intent whose worker never runs still shows as stuck.
     entry.outcome.tries += 1;
-    if (workerRun.outcome !== "reported") {
-      entry.outcome.problem = whyNoReport(workerRun, workerFile);
+    let report: EffectorReport | null;
+    if (sim !== null) {
+      report = effector.sim(sim);
+    } else {
+      const tried = await runWorker(entry, useSingularity ? effector.singularity : effector.ui, deadlineMs);
+      report = tried.report;
+      if (useSingularity && (tried.workerRun.outcome === "couldNotStart" || tried.workerRun.outcome === "noReport")) {
+        // Too big for home at this SF4 level, or refused by the game: the page does this action from now on.
+        singularityTooBig.add(effector.singularity.workerName);
+        ns.print(`agent: ${description}: the Singularity backend can't (${entry.outcome.problem}); using the page`);
+      }
+    }
+    if (report === null) {
       entry.logChange(`${entry.outcome.problem}; trying again next round`);
       return;
     }
-    const report = workerRun.report.data as EffectorReport;
     entry.outcome.problem = report.problem;
     // A problem after it's done is still worth knowing: the page may not be back on the Terminal.
     const problem = report.problem === null ? "" : `: ${report.problem}`;
@@ -77,7 +113,7 @@ export function createIntentRunner(
           intent: structuredClone(intent),
           schedule: createRoundSchedule(),
           logChange: createChangeLog(ns, effectorFor(intent).description),
-          outcome: { id: intent.id, done: false, tries: 0, problem: null },
+          outcome: { id: intent.id, done: false, tries: 0, problem: null, backend: null },
         };
       });
     },

@@ -2,53 +2,26 @@
 // Agent roots the servers and runs the loop on them through its workers, and the money grows. The switch stops it, an
 // owner's own script is never touched, a brain restart leaves the loops alone, and the Agent converges on whatever the
 // brain wants: another target, other hosts, another deployment's loops gone.
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import type { InGameBuild } from "@bitburner-agent/bridge";
 import {
-  BOOT_SCRIPT,
   type DesiredState,
   deployedFilePath,
-  type FastSnapshotData,
   HACK_LOOP_SCRIPT_NAME,
   homeWorkerFileNames,
   isHackLoopFile,
   type MediumSnapshotData,
   type StaticSnapshotData,
+  singularityWorkerFileNames,
 } from "@bitburner-agent/core";
-import { buildInGameBundles } from "@bitburner-agent/ingame/build";
-import type { Simulation } from "@bitburner-agent/sim";
-import { useSimulations } from "@bitburner-agent/sim/test-helpers";
-import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
-import type { DesiredStateController } from "../src/desired-state.ts";
+import { expect, test } from "vitest";
 import { chooseHackTarget } from "../src/hack-loop.ts";
-import { readInGameBuild } from "../src/in-game-build.ts";
-import { SimulatedGame } from "../src/simulated-game.ts";
-import { TelemetryStore } from "../src/telemetry-store.ts";
-import { CONTROL_URL, EPOCH_MS } from "./helpers/agent-in-simulation.ts";
-import { BRAIN_RFA_SETTINGS, RFA_URL, startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
+import { startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
+import { type FreshGame, ownerRunsOnHome, useFreshStarts } from "./helpers/fresh-start.ts";
 import { expectHomeWithinTheAgentPlusOneWorker } from "./helpers/home-peak.ts";
 
-const start = useSimulations();
-const STEP_MS = 200;
+const freshStartOf = useFreshStarts();
 const SNAPSHOT_ROUND_MS = 2_000;
 /** The Agent converges every 15 rounds while on and nothing changes. */
 const CONVERGE_EVERY_MS = 15 * SNAPSHOT_ROUND_MS;
-
-const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "hack-loop-"));
-afterAll(() => rmSync(temporaryDirectory, { recursive: true, force: true }));
-let build: InGameBuild;
-beforeAll(async () => {
-  await buildInGameBundles({ outputDirectory: path.join(temporaryDirectory, "build") });
-  build = readInGameBuild(path.join(temporaryDirectory, "build"));
-});
-const openStores: TelemetryStore[] = [];
-afterEach(() => {
-  for (const store of openStores.splice(0)) store.close();
-});
-let storeCount = 0;
-
 /** A fresh start's servers that need no open ports: the loop's hosts there. */
 const NO_PORT_SERVERS = [
   "foodnstuff",
@@ -60,29 +33,14 @@ const NO_PORT_SERVERS = [
   "sigma-cosmetics",
 ];
 
-interface FreshGame {
-  simulation: Simulation;
-  game: SimulatedGame;
-}
-
 /** A script of the owner's: it does nothing, and holds 1.6 GB a thread. */
 const IDLE_SCRIPT_SOURCE = "export async function main(ns) { for (;;) await ns.sleep(60000); }";
 const OWNER_SCRIPT = "owner.js";
 const OWNER_THREADS = 2;
 
 /**
- * Runs `source` once on home: the owner's own setup, as they'd type it. Steps a second, so it has run and exited.
- * `nuke` and `exec` cost RAM, so it runs before the Agent starts.
- */
-async function ownerRunsOnHome(fresh: FreshGame, source: string) {
-  await fresh.simulation.writeFile("home", "owner-setup.js", source);
-  expect((await fresh.simulation.run("home", "owner-setup.js")).error).toBeUndefined();
-  await fresh.game.run(1_000);
-}
-
-/**
- * An 8 GB fresh start with the brain, deployed, and `beforeAgent` run (the owner's own setup), then the Agent. With
- * `withDesiredState`, the brain has its desired state controller, as `main.ts` does.
+ * An 8 GB fresh start (helpers/fresh-start.ts), with the owner's idle script on home, and what the hack loop's tests
+ * look at: the no-port servers, the loops on them, and the brain's target.
  */
 async function freshStart({
   withDesiredState,
@@ -91,30 +49,14 @@ async function freshStart({
   withDesiredState: boolean;
   beforeAgent?: (fresh: FreshGame) => Promise<void>;
 }) {
-  const simulation = await start({
-    seed: 1,
-    epochMs: EPOCH_MS,
-    fixture: { kind: "new", tutorial: "skipped" },
-    network: { listenUrls: [CONTROL_URL, RFA_URL] },
-    gameSettings: { ...BRAIN_RFA_SETTINGS, AutoexecScript: BOOT_SCRIPT },
+  const fresh = await freshStartOf({
+    withDesiredState,
+    beforeAgent: async (game) => {
+      await game.simulation.writeFile("home", OWNER_SCRIPT, IDLE_SCRIPT_SOURCE);
+      await beforeAgent(game);
+    },
   });
-  const game = await SimulatedGame.create({ simulation, stepMs: STEP_MS });
-  const dataDirectory = path.join(temporaryDirectory, `data-${++storeCount}`);
-  mkdirSync(dataDirectory);
-  const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
-  openStores.push(store);
-  const data = { store, brainRelease: "hack-loop-test", dataDirectory };
-  const brain = startBrainInSimulation(game, { build, data, withDesiredState });
-  // A request and its reply cross one step each way, so the deploy's requests take longer at this step size.
-  await game.runUntil(() => brain.deployerEvents.length > 0, 30_000);
-  expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
-  await simulation.writeFile("home", OWNER_SCRIPT, IDLE_SCRIPT_SOURCE);
-  await beforeAgent({ simulation, game });
-  expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
-  await game.runUntil(() => brain.channelEvents.some((event) => event.type === "agentConnected"), 10_000);
-  const deploymentId = brain.deployer.deploymentId;
-  const latest = <Data>(tier: string) =>
-    (store.latestSnapshot({ environment: "E1", tier })?.data as Data | undefined) ?? null;
+  const { simulation, deploymentId, latest } = fresh;
   /** The servers the loop is for: every one but home and purchased ones, needing no open ports. */
   const noPortServers = () =>
     (latest<StaticSnapshotData>("static")?.servers ?? [])
@@ -135,26 +77,14 @@ async function freshStart({
       )
     ).flat();
   return {
-    simulation,
-    game,
-    brain,
-    data,
-    deploymentId,
+    ...fresh,
     loopFile: deployedFilePath(deploymentId, HACK_LOOP_SCRIPT_NAME),
     noPortServers,
     loopsRunning,
     hostsOf: async () => (await loopsRunning()).map((each) => each.hostname).sort(),
-    money: () => latest<FastSnapshotData>("fast")?.game?.money ?? null,
-    medium: () => latest<MediumSnapshotData>("medium"),
     brainsTarget: () => chooseHackTarget(latest<StaticSnapshotData>("static"), latest<MediumSnapshotData>("medium")),
-    /** The brain's hack loop controller; fails at once if the brain has none. */
-    controller: (): DesiredStateController => {
-      if (!brain.desiredState) throw new Error("this brain has no desired state controller");
-      return brain.desiredState;
-    },
   };
 }
-
 /** The owner roots foodnstuff and runs their own script there, 2 threads, before the Agent starts. */
 const ownerScriptOnFoodnstuff = (fresh: FreshGame) =>
   ownerRunsOnHome(
@@ -188,7 +118,9 @@ test("on by default: the Agent roots the no-port servers, runs the loop on them 
   expect(running.find((each) => each.hostname === "foodnstuff")?.threads).toBe(5);
   // In the measured runs n00dles had earned over $1m by 10 virtual minutes; anything like that shows the loop pays.
   expect((loop.money() as number) - startingMoney).toBeGreaterThan(500_000);
-  await expectHomeWithinTheAgentPlusOneWorker(simulation, loop.deploymentId, homeWorkerFileNames());
+  // Not the Singularity workers (#145): they run only with Singularity, where they cost what their budgets say.
+  const workers = homeWorkerFileNames().filter((fileName) => !singularityWorkerFileNames().includes(fileName));
+  await expectHomeWithinTheAgentPlusOneWorker(simulation, loop.deploymentId, workers);
 });
 
 test("a loop that stops, with nothing changed, is started again within one convergence and a round", async () => {
@@ -233,7 +165,7 @@ test("a brain restart leaves the loops alone: the new brain sends the same state
   expect(before.length).toBe(NO_PORT_SERVERS.length);
 
   brain.closeConnections();
-  const restarted = startBrainInSimulation(game, { build, data: loop.data, withDesiredState: true });
+  const restarted = startBrainInSimulation(game, { build: loop.build, data: loop.data, withDesiredState: true });
   await game.runUntil(() => restarted.channelEvents.some((event) => event.type === "agentConnected"), 30_000);
   // Its first round's snapshots, the desired state, and a convergence after it, and then some.
   await game.run(CONVERGE_EVERY_MS + 2 * SNAPSHOT_ROUND_MS);
@@ -249,7 +181,7 @@ test("after a disconnect the Agent acts only on the next brain's instructions: f
   await game.run(CONVERGE_EVERY_MS);
   // A brain that sends no desired state (as one that holds sends no "on"): the loops keep running, untended.
   brain.closeConnections();
-  const silent = startBrainInSimulation(game, { build, data: loop.data });
+  const silent = startBrainInSimulation(game, { build: loop.build, data: loop.data });
   await game.runUntil(() => silent.channelEvents.some((event) => event.type === "agentConnected"), 30_000);
   expect((await loop.hostsOf()).length).toBe(NO_PORT_SERVERS.length);
   const [joesgunsLoop] = (await loop.loopsRunning()).filter((each) => each.hostname === "joesguns");
@@ -305,8 +237,15 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
+/**
+ * The owner's setup that takes the simulator's own effectors away (#145), so the Agent uses the page's (`ui`) workers,
+ * as in a browser: for the tests of those workers' own checks.
+ */
+const withoutSimEffectors = (fresh: FreshGame) =>
+  ownerRunsOnHome(fresh, "export async function main(ns) { delete globalThis.__bitburnerAgentSim; }");
+
 test("a purchase the page can't make (#136, #141): the Agent logs why and when it tries again, and never runs two workers at once", async () => {
-  const loop = await freshStart({ withDesiredState: false });
+  const loop = await freshStart({ withDesiredState: false, beforeAgent: withoutSimEffectors });
   const { simulation, game, brain } = loop;
   brain.channel.setDesiredState({
     hackLoop: { enabled: false, target: null, hosts: [] },
@@ -328,7 +267,7 @@ test("a purchase the page can't make (#136, #141): the Agent logs why and when i
 });
 
 test("a home RAM upgrade already made (#138): done from the game alone, without touching the page", async () => {
-  const loop = await freshStart({ withDesiredState: false });
+  const loop = await freshStart({ withDesiredState: false, beforeAgent: withoutSimEffectors });
   const { simulation, game, brain } = loop;
   // A fresh start's home has 8 GB: an upgrade from 4 GB is made already, as when the brain asks again before its next
   // medium snapshot shows the last one.

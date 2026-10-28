@@ -191,6 +191,11 @@ export function setHomeRam(gb: number) {
   Player.getHomeComputer().maxRam = gb;
 }
 
+/** Sets the player's money: a harness edit for test scenarios, not something a player can do. */
+export function setMoney(money: number) {
+  Player.money = money;
+}
+
 /** The page the game's Router is on. */
 export function page(): string {
   return Router.page();

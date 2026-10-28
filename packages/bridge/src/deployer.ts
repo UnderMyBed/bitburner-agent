@@ -14,6 +14,8 @@ import {
   deploymentIdOfPath,
   isGeneratedDeploymentId,
   isValidDeploymentId,
+  SINGULARITY_MOST_RAM_MULTIPLIER,
+  singularityWorkerFileNames,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import type { Clock } from "./clock.ts";
@@ -156,9 +158,12 @@ export class Deployer {
     }
     for (const name of Object.keys(scripts)) {
       const ramGb = await client.calculateRam(deployedFilePath(this.deploymentId, name));
-      const budgetGb = ramBudgets[name] as number;
+      // A Singularity worker's budget is at SF4.3; with less of SF4 the game charges up to 16 times (#145).
+      const singularity = singularityWorkerFileNames().includes(name);
+      const budgetGb = (ramBudgets[name] as number) * (singularity ? SINGULARITY_MOST_RAM_MULTIPLIER : 1);
       if (ramGb > budgetGb + RAM_TOLERANCE_GB) {
-        throw new OverBudgetError(`${name} needs ${ramGb} GB, over its budget of ${budgetGb} GB`);
+        const why = singularity ? ` (${ramBudgets[name]} GB × ${SINGULARITY_MOST_RAM_MULTIPLIER} without SF4.3)` : "";
+        throw new OverBudgetError(`${name} needs ${ramGb} GB, over its budget of ${budgetGb} GB${why}`);
       }
     }
     // Checked again before anything shared changes: an Agent's hello may have reported another game version since.

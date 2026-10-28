@@ -13,6 +13,7 @@ import { AlertEvents } from "../../../../../vendor/bitburner-src/src/ui/React/Al
 import { PromptEvent } from "../../../../../vendor/bitburner-src/src/ui/React/PromptManager";
 import { SnackbarEvents } from "../../../../../vendor/bitburner-src/src/ui/React/Snackbar";
 import type { GameEvent, PromptRequest } from "../../protocol.ts";
+import { installAgentSimEffectors } from "./agent-effectors.ts";
 
 /** The messages of index.tsx's `print`/`prompt` traps (test/page.test.ts checks them against the game's source). */
 export const PRINT_TRAP = "You accidentally called window.print instead of ns.print";
@@ -44,6 +45,8 @@ export function installPageGlobals(): void {
       throw new Error(PROMPT_TRAP);
     },
   };
+  // The Agent's `sim` effectors (#145): not the page's, but put where the page's globals are.
+  installAgentSimEffectors();
   const scope = globalThis as unknown as Record<string, unknown>;
   for (const [name, value] of Object.entries(globals)) {
     scope[name] = value;

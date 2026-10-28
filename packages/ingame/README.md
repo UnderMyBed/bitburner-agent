@@ -8,7 +8,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js` and `travel.js` |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js` and `travel.js`, and the Singularity workers `sing-*.js` (#145) |
 | `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts` |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
@@ -66,6 +66,12 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `buy-program.js` | `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB); the page costs nothing | 1.75 GB (1.75) |
 | `upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB); the page costs nothing | 1.65 GB (1.65) |
 | `travel.js` | `getPlayer` (0.5 GB); the page costs nothing | 2.1 GB (2.1) |
+| `sing-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
+| `sing-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |
+| `sing-buy-program.js` | `fileExists` (0.1 GB), `singularity.purchaseProgram` (2 GB) | 3.7 GB (3.7) |
+| `sing-upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB), `singularity.upgradeHomeRam` (3 GB) | 4.65 GB (4.65) |
+
+The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation): with less of SF4 the game charges their Singularity calls 4× or 16×, which the deployer allows for (16× the budget), and the Agent then uses the page's workers, the Singularity one not fitting home.
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
 The workers write to a port (`writePort`, free). The Agent plus its largest home worker (`hack-loop-deploy.js`, 4.65 GB) is 7.35 GB, within a fresh save's 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
@@ -176,16 +182,17 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time ("travel to Aevum: not done: …; trying again in 30 s");
   - one done ("travel to Aevum: done") is never run again while the brain keeps sending it; the brain sees it done in its next medium snapshot and stops sending it. One that leaves the list and comes back is new;
   - a worker that doesn't run (home full, still running, no time left) is tried again next round; it counts as a try, so one that never runs shows as stuck.
-- **The Effector table** (`src/agent/effectors.ts`): for each action, the home worker that does it and its arguments. Every effector is the `ui` backend for now:
+- **The Effector table** (`src/agent/effectors.ts`): for each action, how each of the three backends does it (architecture §5.6, #145):
 
-  | Action | Worker | Arguments |
-  |---|---|---|
-  | `buyTor` | `buy-program.js` | "TOR router", the vendor |
-  | `buyProgram` | `buy-program.js` | the program, "" |
-  | `upgradeHomeRam` | `upgrade-home-ram.js` | `fromRam`, the vendor |
-  | `travel` | `travel.js` | the city |
+  | Action | `ui` worker (arguments) | `singularity` worker (arguments) | `sim` |
+  |---|---|---|---|
+  | `buyTor` | `buy-program.js` ("TOR router", the vendor) | `sing-buy-tor.js` () | `buyTorRouter()` |
+  | `buyProgram` | `buy-program.js` (the program, "") | `sing-buy-program.js` (the program) | `buyDarkwebProgram(program)` |
+  | `upgradeHomeRam` | `upgrade-home-ram.js` (`fromRam`, the vendor) | `sing-upgrade-home-ram.js` (`fromRam`) | `buyHomeRam(fromRam)` |
+  | `travel` | `travel.js` (the city) | `sing-travel.js` (the city) | `travelTo(city)` |
 
-  Each worker also gets a deadline 200 ms before the round's end, checks the game first (an intent already done is done without touching the page), and reports `{ done, problem }` (`EffectorReport`).
+  Each worker also gets a deadline 200 ms before the round's end, checks the game first (an intent already done is done without touching the page or calling anything), and reports `{ done, problem }` (`EffectorReport`).
+- **The backend** is picked per try: the simulator's own effectors where the page's global object has them (`__bitburnerAgentSim`, packages/sim: the simulator renders no page; absent in a browser), called directly; else Singularity, once the Agent's own slow snapshot shows SF4 at any level or BN4, unless that action's Singularity worker couldn't run (too big for home at that SF4 level: the game charges 4× at SF4.2 and 16× below), which leaves the action to the page for the rest of the Agent's run, logged once; else the page. The outcome names the backend of the last try.
 - **Outcomes:** the fast snapshot carries every intent the runner holds, as `{ id, done, tries, problem }`, for the brain's dashboard and its "intent stuck" alert.
 - **Tests:** `test/agent/intent-runner.test.ts` covers the schedule, the order, the time rule, the logs and forgetting. Its property tests (fast-check) run random intent lists, worker reports and disconnects to check that the runner is idempotent (an intent reported done never runs again while it stays sent) and that it converges (every intent sent long enough, whose worker can do it, ends done).
 

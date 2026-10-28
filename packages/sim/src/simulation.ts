@@ -232,6 +232,8 @@ export class Simulation {
     destroyBitNode: (n: number) => this.rpc.call("diagnostics.destroyBitNode", { n }),
     /** Sets home's RAM, in GB (a power of 2). A harness edit, for test and benchmark scenarios. */
     setHomeRam: (gb: number) => this.rpc.call("diagnostics.setHomeRam", { gb }),
+    /** Sets the player's money. A harness edit, for test scenarios. */
+    setMoney: (money: number) => this.rpc.call("diagnostics.setMoney", { money }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
     /** The host's V8 heap in use, in bytes, after a full garbage collection. */

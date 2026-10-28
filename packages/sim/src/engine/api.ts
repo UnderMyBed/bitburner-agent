@@ -58,6 +58,8 @@ export interface EngineApi {
   scriptState(filename: string): "running" | "finished" | "unknown";
   /** Sets home's RAM, in GB. A harness edit, for test and benchmark scenarios. */
   setHomeRam(gb: number): void;
+  /** Sets the player's money. A harness edit, for test scenarios. */
+  setMoney(money: number): void;
   /** The page the game's Router is on. */
   page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
@@ -134,6 +136,7 @@ const API_FUNCTIONS = {
   scriptState: true,
   page: true,
   setHomeRam: true,
+  setMoney: true,
   bitNodeMultipliers: true,
   saveBytes: true,
   gameSummary: true,

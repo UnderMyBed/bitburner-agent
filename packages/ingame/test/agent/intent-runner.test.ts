@@ -1,8 +1,8 @@
-// The intent runner's schedule (#141): when it runs each intent's worker, in what order, and what it logs and reports.
+// The intent runner's schedule (#141): when it runs each intent's worker, in what order, and what it logs and reports;
 // The workers themselves are stand-ins here; E2 drives the real ones on the real page (packages/e2/test/*.e2.test.ts).
 import { type EffectorReport, type Intent, type IntentRequest, intentId } from "@bitburner-agent/core";
 import fc from "fast-check";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createIntentRunner } from "../../src/agent/intent-runner.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
 import type { NS } from "../../src/ns.ts";
@@ -15,8 +15,14 @@ const RAM_FROM_8 = intent({ action: "upgradeHomeRam", args: { fromRam: 8, vendor
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
-/** A runner whose stand-in workers report what `answer` gives for each run, and its log. */
-function runnerWith(answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report") {
+/**
+ * A runner whose stand-in workers report what `answer` gives for each run, and its log. `singularity` says whether the
+ * game has Singularity; a stand-in for a worker that "can't start" is `"no report"`.
+ */
+function runnerWith(
+  answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report",
+  singularity = { available: false },
+) {
   const lines: string[] = [];
   const ns = { print: (line: string) => lines.push(line) } as unknown as NS;
   const runWorker = vi.fn(async (workerFile: string, workerArguments: unknown[]): Promise<WorkerRun> => {
@@ -27,6 +33,7 @@ function runnerWith(answer: (workerFile: string, workerArguments: unknown[]) => 
   const runner = createIntentRunner(ns, {
     deploymentId: "abcdef123456",
     workerRunner: { runWorker } as unknown as WorkerRunner,
+    singularityAvailable: () => singularity.available,
   });
   /** One round, with `leftMs` of it left when the runner's turn comes. */
   const round = (leftMs = ROUND_MS) => runner.runDue(Date.now() + leftMs);
@@ -75,7 +82,7 @@ test("not done: each try logs why, the next is 15 rounds (30 s) later, and the o
     `agent: buy the TOR router: not done: ${problem}; trying again in 30 s`,
     `agent: buy the TOR router: not done: ${problem}; trying again in 30 s`,
   ]);
-  expect(runner.outcomes()).toEqual([{ id: TOR.id, done: false, tries: 2, problem }]);
+  expect(runner.outcomes()).toEqual([{ id: TOR.id, done: false, tries: 2, problem, backend: "ui" }]);
 });
 
 test("short rounds count toward the 30 s between tries: only the try itself waits for a round with time", async () => {
@@ -99,7 +106,7 @@ test("done: never run again while it stays, and a problem on the way is still lo
   await round();
   expect(runWorker).toHaveBeenCalledTimes(1);
   expect(lines).toEqual([`agent: travel to Aevum: done: ${backProblem}`]);
-  expect(runner.outcomes()).toEqual([{ id: AEVUM.id, done: true, tries: 1, problem: backProblem }]);
+  expect(runner.outcomes()).toEqual([{ id: AEVUM.id, done: true, tries: 1, problem: backProblem, backend: "ui" }]);
 });
 
 test("a worker that doesn't run is tried again next round, logged on a change, and counted as a try", async () => {
@@ -146,6 +153,68 @@ test("forgotten on a disconnect: nothing runs until the next brain sends intents
   await round();
   expect(runWorker).not.toHaveBeenCalled();
   expect(runner.outcomes()).toEqual([]);
+});
+
+describe("backends (#145)", () => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__bitburnerAgentSim;
+  });
+
+  test("the simulator's own effectors, where the page has them: called directly, with no worker", async () => {
+    const calls: string[] = [];
+    (globalThis as Record<string, unknown>).__bitburnerAgentSim = {
+      buyTorRouter: () => (calls.push("buyTorRouter"), DONE),
+      buyDarkwebProgram: (program: string) => (calls.push(`buyDarkwebProgram ${program}`), DONE),
+      buyHomeRam: (fromRam: number) => (calls.push(`buyHomeRam ${fromRam}`), notDone("the money?")),
+      travelTo: (city: string) => (calls.push(`travelTo ${city}`), DONE),
+    };
+    const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
+    runner.desire([TOR, intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }), RAM_FROM_8, AEVUM]);
+    await round();
+    expect(runWorker).not.toHaveBeenCalled();
+    expect(calls).toEqual(["buyTorRouter", "buyDarkwebProgram BruteSSH.exe", "buyHomeRam 8", "travelTo Aevum"]);
+    expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
+      [true, "sim"],
+      [true, "sim"],
+      [false, "sim"],
+      [true, "sim"],
+    ]);
+  });
+
+  test("Singularity, once the game has it: each action's Singularity worker, with its arguments", async () => {
+    const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
+    runner.desire([TOR, intent({ action: "buyProgram", args: { program: "BruteSSH.exe" } }), RAM_FROM_8, AEVUM]);
+    await round(10 * ROUND_MS);
+    const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
+    expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
+      ["agent/abcdef123456/sing-buy-tor.js", []],
+      ["agent/abcdef123456/sing-buy-program.js", ["BruteSSH.exe"]],
+      ["agent/abcdef123456/sing-upgrade-home-ram.js", [8]],
+      ["agent/abcdef123456/sing-travel.js", ["Aevum"]],
+    ]);
+    expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
+  });
+
+  test("a Singularity worker that can't run (too big for home): that action goes through the page from then on", async () => {
+    const { runner, lines, workerFiles, round } = runnerWith(
+      (workerFile) => (workerFile.includes("/sing-") ? "no report" : DONE),
+      { available: true },
+    );
+    runner.desire([AEVUM]);
+    await round();
+    await round();
+    expect(workerFiles()).toEqual(["agent/abcdef123456/sing-travel.js", "agent/abcdef123456/travel.js"]);
+    expect(runner.outcomes()).toMatchObject([{ done: true, backend: "ui" }]);
+    expect(lines.filter((line) => line.includes("the Singularity backend can't"))).toHaveLength(1);
+  });
+
+  test("without Singularity, and without the simulator's effectors: the page", async () => {
+    const { runner, workerFiles, round } = runnerWith(() => DONE);
+    runner.desire([AEVUM]);
+    await round();
+    expect(workerFiles()).toEqual(["agent/abcdef123456/travel.js"]);
+    expect(runner.outcomes()).toMatchObject([{ backend: "ui" }]);
+  });
 });
 
 describe("properties (§9.3)", () => {

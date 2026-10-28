@@ -41,6 +41,8 @@ export interface IntentOutcome {
   tries: number;
   /** The last problem: the worker's, or why it didn't run. Null for none. */
   problem: string | null;
+  /** The backend of the last try (#145), or null before the first. */
+  backend: "sim" | "singularity" | "ui" | null;
 }
 
 /** An intent's id: its action and its arguments' values, in their fixed order ("upgradeHomeRam(8, CompuTek)"). */
