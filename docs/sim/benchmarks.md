@@ -100,7 +100,7 @@ Reading the fourth row (58f0c4d, M2's run, the reference rig, [#100](https://git
 - **The heap still doesn't grow.** It starts and ends 1.6 MB higher than the third row's.
 
 Reading the fifth row (fa9c5dc, M3's run, the reference rig, [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140#issuecomment-6469333597)):
-- Every workload is within 3.5% of the fourth row (lean −0.2%, batch −0.7%, churn −3.5%, copies +1.4%), and the benchmark found no regression. So M3's changes to the simulator (its effectors, and the install and destroy cycles) cost nothing measurable.
+- Every workload is within 3.5% of the fourth row (lean −0.2%, batch −0.7%, churn −3.5%, copies +1.4%), and the benchmark found no regression. So M3's changes to the simulator's bundle cost the workloads nothing measurable.
 - **The heap still doesn't grow.** It starts 1.2 MB and ends 1.3 MB higher than the fourth row's.
 
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
