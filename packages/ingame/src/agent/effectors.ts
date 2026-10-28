@@ -1,5 +1,5 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #156, #158, #159, #162, #164, architecture §5.6): for each action
-// an intent can name, and for the work activity's work, how each backend does it.
+// The Effectors (#141, #145, #147, #149, #151, #153, #156, #158, #159, #162, #164, #175, architecture §5.6): for each
+// action an intent can name, and for the work activity's work, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -18,6 +18,7 @@ import {
   COMPANY_WORK_WORKER_NAME,
   CRIME_WORK_WORKER_NAME,
   classLabel,
+  DESTROY_BITNODE_WORKER_NAME,
   type EffectorReport,
   FACTION_WORK_WORKER_NAME,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
@@ -31,6 +32,7 @@ import {
   SINGULARITY_CLASS_WORK_WORKER_NAME,
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
+  SINGULARITY_DESTROY_BITNODE_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
@@ -57,6 +59,7 @@ export interface SimEffectors {
   convergeCrimeWork(crime: string, focus: boolean): EffectorReport;
   convergeClassWork(location: string, classType: string, focus: boolean): EffectorReport;
   installQueuedAugmentations(callbackScript: string): EffectorReport;
+  destroyWorldDaemon(nextBitNode: number, callbackScript: string): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -153,6 +156,18 @@ export function effectorFor(intent: Intent): Effector {
         singularity: { workerName: SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME, workerArguments: [BOOT_SCRIPT] },
         sim: (effectors) => effectors.installQueuedAugmentations(BOOT_SCRIPT),
       };
+    // Destroying kills every script, the Agent too, and enters the next BitNode; `boot.js`, started after it, starts
+    // the next Agent (#175, architecture §5.7). The game can't show one done: the brain's reset check takes it off.
+    case "destroyBitNode": {
+      const { nextBitNode } = intent.args;
+      const workerArguments = [nextBitNode, BOOT_SCRIPT];
+      return {
+        description: `destroy the BitNode, into BitNode ${nextBitNode}`,
+        ui: { workerName: DESTROY_BITNODE_WORKER_NAME, workerArguments },
+        singularity: { workerName: SINGULARITY_DESTROY_BITNODE_WORKER_NAME, workerArguments },
+        sim: (effectors) => effectors.destroyWorldDaemon(nextBitNode, BOOT_SCRIPT),
+      };
+    }
   }
 }
 

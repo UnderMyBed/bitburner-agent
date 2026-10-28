@@ -1,7 +1,8 @@
 // The Agent's `sim` effector backend (#145, architecture §5.6, §9.1): the simulator renders no page, so the `ui`
 // effectors can't run here. These do what the page's own handlers do, with the same checks and side effects (dialogs,
 // which the simulator captures as events, and routes), so the simulator can play past what its page can show. They
-// never grant Source-Files. The Agent finds them on the page's global object; in a browser they're absent.
+// never grant Source-Files, but for a destroy's own, as the BitVerse's portal does (#175). The Agent finds them on the
+// page's global object; in a browser they're absent.
 
 import {
   getAugCost,
@@ -9,6 +10,7 @@ import {
 } from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
 import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
+import { getDefaultBitNodeOptions } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
 import { CompanyPositions } from "../../../../../vendor/bitburner-src/src/Company/CompanyPositions";
 import { JobTracks } from "../../../../../vendor/bitburner-src/src/Company/data/JobTracks";
@@ -40,6 +42,7 @@ import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locat
 import { startWorkerScript } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
 import type { ScriptFilePath } from "../../../../../vendor/bitburner-src/src/Paths/ScriptFilePath";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
+import { enterBitNode } from "../../../../../vendor/bitburner-src/src/RedPill";
 import { RunningScript } from "../../../../../vendor/bitburner-src/src/Script/RunningScript";
 import {
   AddToAllServers,
@@ -48,6 +51,7 @@ import {
 } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
 import { DarknetServer } from "../../../../../vendor/bitburner-src/src/Server/DarknetServer";
 import { ServerConstants } from "../../../../../vendor/bitburner-src/src/Server/data/Constants";
+import { SpecialServers } from "../../../../../vendor/bitburner-src/src/Server/data/SpecialServers";
 import { safelyCreateUniqueServer } from "../../../../../vendor/bitburner-src/src/Server/ServerHelpers";
 import {
   getCloudServerCost,
@@ -63,6 +67,7 @@ import { Classes, ClassWork, isClassWork } from "../../../../../vendor/bitburner
 import { CompanyWork, isCompanyWork } from "../../../../../vendor/bitburner-src/src/Work/CompanyWork";
 import { isCrimeWork } from "../../../../../vendor/bitburner-src/src/Work/CrimeWork";
 import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/src/Work/FactionWork";
+import { bitVerseFlume } from "./router.ts";
 
 /**
  * The global the Agent looks for: core's `AGENT_SIM_EFFECTORS_GLOBAL`. This bundle is typechecked and built as the
@@ -140,6 +145,33 @@ function routeFromHome(hostname: string): string[] | null {
     }
   }
   return null;
+}
+
+/** How often the destroy's timer looks for the BitVerse, and how long past the backdoor's end it looks (#175). */
+const BITVERSE_POLL_MS = 100;
+const BITVERSE_SLACK_MS = 10_000;
+
+/**
+ * What the BitVerse's portal does once a backdoor on w0r1d_d43m0n has reached it (#175;
+ * `BitNode/ui/PortalModal.tsx:117-131`): `enterBitNode(false, …)` with the modal's defaults, destroying the BitNode;
+ * BitNode 6's cinematic left as its Continue does (`RedPill.tsx:88-89`); then `callbackScript` 500 ms later, as
+ * Singularity's `destroyW0r1dD43m0n` starts it. A timer, as the `ui` worker's page timer is: the BitVerse has killed
+ * the Agent that armed it. Polls until the game is at the BitVerse, for `limitMs` at most. No guard against a second
+ * one armed meanwhile, as the `ui` timer has: the Agent is dead within its backdoor's few seconds, so no second try
+ * comes while one waits.
+ */
+function enterFromBitVerseOnceThere(nextBitNode: number, callbackScript: string, limitMs: number): void {
+  const endsAtMs = Date.now() + limitMs;
+  const look = () => {
+    if (bitVerseFlume() !== false) {
+      if (Date.now() < endsAtMs) setTimeout(look, BITVERSE_POLL_MS);
+      return;
+    }
+    enterBitNode(false, Player.bitNodeN, nextBitNode, getDefaultBitNodeOptions());
+    if (Router.page() === Page.BladeburnerCinematic) Router.toPage(Page.Terminal);
+    setTimeout(() => runAfterReset(callbackScript), CALLBACK_AFTER_RESET_MS);
+  };
+  setTimeout(look, BITVERSE_POLL_MS);
 }
 
 /**
@@ -526,6 +558,50 @@ const effectors = {
       false,
       `installing the backdoor on ${hostname}: about ${Math.max(1, Math.ceil(running.timeLeft))} s left`,
     );
+  },
+  /**
+   * Destroying the BitNode (#175) as the `ui` worker does it: w0r1d_d43m0n's preconditions first, in core's words
+   * (`worldDaemonProblem`, copied: this bundle can't import core; the destroy suite checks them, `brain/test/destroy-restart.test.ts`), then the
+   * terminal's own commands: `home`, `connect` along the way, `backdoor`. Its action (hacking time / 4) ends at the
+   * BitVerse (`Terminal/Terminal.ts:373-388`), which kills every script, the Agent that called this too; a timer then
+   * enters `nextBitNode` through the portal (`enterFromBitVerseOnceThere`). Already at the BitVerse after a destroy's
+   * backdoor (a save that starts there: `ui/GameRoot.tsx:160-164`), only the portal. Never done: the brain's reset
+   * check says it is. Not named `destroyW0r1dD43m0n`, which is an NS function.
+   */
+  destroyWorldDaemon(nextBitNode: number, callbackScript: string): EffectorResult {
+    const hostname = SpecialServers.WorldDaemon;
+    const daemon = GetServer(hostname);
+    // Not reachable before The Red Pill's install links it (`Prestige.ts:174-182`): the `ui` worker's `serverExists`.
+    if (daemon === null || daemon.serversOnNetwork.length === 0) {
+      return result(false, `${hostname} isn't reachable: The Red Pill isn't installed`);
+    }
+    const entering = `entering BitNode ${nextBitNode} from the BitVerse`;
+    if (daemon.backdoorInstalled) {
+      if (bitVerseFlume() !== false)
+        return result(false, `${hostname} is backdoored, but the game isn't at the BitVerse`);
+      enterFromBitVerseOnceThere(nextBitNode, callbackScript, BITVERSE_SLACK_MS);
+      return result(false, entering);
+    }
+    if (!daemon.hasAdminRights) return result(false, `no root access on ${hostname} (NUKE.exe first)`);
+    const required = "requiredHackingSkill" in daemon ? (daemon.requiredHackingSkill as number) : 0;
+    if (required > Player.skills.hacking) {
+      return result(false, `hacking level ${Player.skills.hacking}: ${hostname} needs ${required}`);
+    }
+    // Read afresh each time: the terminal's commands start and end its action.
+    const action = (): { timeLeft: number } | null => Terminal.action;
+    const route = routeFromHome(hostname);
+    if (route === null) return result(false, `no way from home to ${hostname}`);
+    if (action() !== null) return result(false, TERMINAL_BUSY);
+    if (Player.currentServer !== "home") Terminal.executeCommands("home");
+    for (const hop of route) {
+      Terminal.executeCommands(`connect ${hop}`);
+      if (Player.currentServer !== hop) return result(false, `couldn't connect to ${hop} on the way to ${hostname}`);
+    }
+    Terminal.executeCommands("backdoor");
+    const running = action();
+    if (running === null) return result(false, `the terminal didn't start the backdoor on ${hostname}`);
+    enterFromBitVerseOnceThere(nextBitNode, callbackScript, running.timeLeft * 1000 + BITVERSE_SLACK_MS);
+    return result(false, `backdooring ${hostname}, then ${entering}`);
   },
 };
 

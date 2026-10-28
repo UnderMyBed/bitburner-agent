@@ -8,6 +8,7 @@
  */
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
 import { isServerHostname } from "./backdoors.ts";
+import { BITNODE_COUNT, isBitNodeNumber } from "./bitnodes.ts";
 import {
   CLOUD_SERVER_MAX_RAM,
   isCloudServerHostname,
@@ -34,7 +35,12 @@ export type IntentRequest =
   /** A backdoor on `hostname`, through the terminal (#162): done once it's installed, the terminal not left on it. */
   | { action: "backdoor"; args: { hostname: string } }
   /** Installs every augmentation queued (#164): irreversible, and done once nothing is left to install. */
-  | { action: "installAugmentations"; args: Record<string, never> };
+  | { action: "installAugmentations"; args: Record<string, never> }
+  /**
+   * Destroys the BitNode through w0r1d_d43m0n, then enters `nextBitNode` (#175): irreversible. The game can't show one
+   * done (another can follow), so the brain's reset check takes it off its queue.
+   */
+  | { action: "destroyBitNode"; args: { nextBitNode: number } };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -47,6 +53,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   buyServer: true,
   backdoor: true,
   installAugmentations: true,
+  destroyBitNode: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -171,6 +178,11 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
       return { ok: true, message: { action, args: { hostname: args.hostname } } };
     case "installAugmentations":
       return { ok: true, message: { action, args: {} } };
+    case "destroyBitNode":
+      if (!isBitNodeNumber(args.nextBitNode)) {
+        return { ok: false, reason: `destroyBitNode's nextBitNode isn't a whole number from 1 to ${BITNODE_COUNT}` };
+      }
+      return { ok: true, message: { action, args: { nextBitNode: args.nextBitNode } } };
     default:
       return null;
   }
@@ -201,10 +213,18 @@ export function parseIntentRequest(value: unknown): Parsed<Intent> {
 
 /**
  * Whether doing `intent` can't be undone (R2, R8; #147): the brain then sends it only once its guard has held on two
- * consecutive snapshots and a save backup has been taken. So far: joining a faction with enemies, which bans them, and
- * installing augmentations, which resets the game (#164). BitNode changes come with their slice.
+ * consecutive snapshots and a save backup has been taken: joining a faction with enemies, which bans them, and the
+ * intents that reset the game (`resetsTheGame`).
  */
 export function isIrreversibleIntent(intent: Intent): boolean {
-  if (intent.action === "installAugmentations") return true;
+  if (resetsTheGame(intent)) return true;
   return intent.action === "joinFaction" && FACTION_ENEMIES[intent.args.faction] !== undefined;
+}
+
+/**
+ * Whether `intent` resets the game, killing every script, the Agent too: installing augmentations (#164), and
+ * destroying the BitNode (#175). What's queued after one waits for it, and the brain sees it done by the reset.
+ */
+export function resetsTheGame(intent: Intent): boolean {
+  return intent.action === "installAugmentations" || intent.action === "destroyBitNode";
 }

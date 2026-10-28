@@ -21,6 +21,7 @@ const NEUROFLUX_3 = intent({
 const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
 const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
 const INSTALL = intent({ action: "installAugmentations", args: {} });
+const DESTROY_INTO_2 = intent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -80,6 +81,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     PSERV_0,
     BACKDOOR_CSEC,
     INSTALL,
+    DESTROY_INTO_2,
   ]);
   await round(10 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
@@ -93,6 +95,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
     ["agent/abcdef123456/backdoor.js", ["CSEC"]],
     ["agent/abcdef123456/install-augmentations.js", ["agent/boot.js"]],
+    ["agent/abcdef123456/destroy-bitnode.js", [2, "agent/boot.js"]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -242,6 +245,8 @@ describe("backends (#145)", () => {
       backdoorServer: (hostname: string) => effector(DONE)(`backdoorServer ${hostname}`),
       installQueuedAugmentations: (callbackScript: string) =>
         effector(DONE)(`installQueuedAugmentations ${callbackScript}`),
+      destroyWorldDaemon: (nextBitNode: number, callbackScript: string) =>
+        effector(notDone("destroying"))(`destroyWorldDaemon ${nextBitNode} ${callbackScript}`),
     };
     const { runner, runWorker, round } = runnerWith(() => DONE, { available: true });
     runner.desire([
@@ -254,6 +259,7 @@ describe("backends (#145)", () => {
       PSERV_0,
       BACKDOOR_CSEC,
       INSTALL,
+      DESTROY_INTO_2,
     ]);
     await round();
     expect(runWorker).not.toHaveBeenCalled();
@@ -267,6 +273,7 @@ describe("backends (#145)", () => {
       "buyCloudServer pserv-0 8",
       "backdoorServer CSEC",
       "installQueuedAugmentations agent/boot.js",
+      "destroyWorldDaemon 2 agent/boot.js",
     ]);
     expect(runner.outcomes().map(({ done, backend }) => [done, backend])).toEqual([
       [true, "sim"],
@@ -278,6 +285,7 @@ describe("backends (#145)", () => {
       [true, "sim"],
       [true, "sim"],
       [true, "sim"],
+      [false, "sim"],
     ]);
   });
 
@@ -293,6 +301,7 @@ describe("backends (#145)", () => {
       NEUROFLUX_3,
       BACKDOOR_CSEC,
       INSTALL,
+      DESTROY_INTO_2,
     ]);
     await round(10 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
@@ -306,6 +315,8 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-backdoor.js", ["CSEC"]],
       // Installing, with the script the game starts after the reset (#164).
       ["agent/abcdef123456/singularity-install-augmentations.js", ["agent/boot.js"]],
+      // Destroying, into the next BitNode, with the script the game starts after it (#175).
+      ["agent/abcdef123456/singularity-destroy-bitnode.js", [2, "agent/boot.js"]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });

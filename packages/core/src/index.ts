@@ -16,6 +16,7 @@ export {
   SINGULARITY_CLASS_WORK_WORKER_NAME,
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
+  SINGULARITY_DESTROY_BITNODE_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
@@ -25,6 +26,14 @@ export {
   singularityWorkerFileNames,
   singularityWorkerMostRamGb,
 } from "./backends.ts";
+export {
+  BITNODE_COUNT,
+  DESTROY_BITNODE_WORKER_NAME,
+  isBitNodeNumber,
+  THE_RED_PILL,
+  type WorldDaemonStanding,
+  worldDaemonProblem,
+} from "./bitnodes.ts";
 export {
   CLASS_LOCATION_NAMES,
   CLASS_LOCATIONS,
@@ -118,6 +127,7 @@ export {
   isIrreversibleIntent,
   MAX_INTENTS,
   parseIntentRequest,
+  resetsTheGame,
 } from "./intents.ts";
 export { CITIES, TECH_VENDORS, TRAVEL_COST, TRAVEL_WORKER_NAME } from "./locations.ts";
 export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";

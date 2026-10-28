@@ -165,7 +165,7 @@ test.each([
   );
 });
 
-test("the brain down mid-install: safe mode drops the kept state from before the reset; a new brain gates the install again, and the game's check says done", async () => {
+test("the brain down mid-install: safe mode drops the kept state from before the reset; a new brain, the note in its store (#175), drops the install on the reset", async () => {
   const fresh = await withAugmentationQueued();
   const { lastAugResetBefore } = await installed(fresh);
   // The brain goes down as the old Agent dies: the next one, and the game's Remote File API, can't connect.
@@ -179,7 +179,7 @@ test("the brain down mid-install: safe mode drops the kept state from before the
     expect.stringContaining("agent: safe mode: dropped the last desired state: it's from before the game's last reset"),
   );
   expect(await fresh.simulation.ps("n00dles")).toEqual([]);
-  // A new brain, with the same store (the queue in it), knows nothing of the install it didn't send.
+  // A new brain, with the same store: the queue, and the note of the install sent and the reset then.
   const restarted = startBrainInSimulation(fresh.game, {
     build: fresh.build,
     data: fresh.data,
@@ -188,10 +188,15 @@ test("the brain down mid-install: safe mode drops the kept state from before the
   const controller = restarted.desiredState;
   if (!controller) throw new Error("no controller");
   await fresh.game.runUntil(() => agentSessions(fresh, restarted).length === 1, 60_000);
-  expect(view(controller.intentsView(), INSTALL_ID)?.waitingFor).toMatch(/^waiting for the guard/);
-  // Gated again: two medium snapshots and a backup of the reset game; then the Agent finds nothing left to install.
-  await fresh.game.runUntil(() => controller.intentsView().length === 0, 60_000);
-  expect(restarted.saveBackupEvents.filter((event) => "file" in event).length).toBeGreaterThanOrEqual(1);
+  // The next Agent's first slow snapshot shows the reset: dropped, never sent to it.
+  await fresh.game.runUntil(() => controller.intentsView().length === 0, 10_000);
+  const sentAgain = restarted.channelEvents.some(
+    (event) =>
+      event.type === "snapshotReceived" &&
+      event.snapshot.tier === "fast" &&
+      ((event.snapshot.data as FastSnapshotData).intents ?? []).some((each) => each.id === INSTALL_ID),
+  );
+  expect(sentAgain).toBe(false);
   const resetAt = expectResetWithItInstalled(fresh, lastAugResetBefore);
   await expectInstalledOnce(fresh, resetAt, 1, restarted);
 });
