@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
-// Keeping the player's focus around a page effector's steps (#151), and company work's and crime's steps (#153,
-// #156), on a stand-in page: the Work page's unfocus button, the overview's "Focus", the sidebar, the City's locations
-// and their buttons (a company's, the Slums' crimes), each a React `onClick` that records its click. E2 drives the
-// real page.
+// Keeping the player's focus around a page effector's steps (#151), and company work's, crime's and classes' steps
+// (#153, #156, #158), on a stand-in page: the Work page's unfocus button, the overview's "Focus", the sidebar, the
+// City's locations and their buttons (a company's, the Slums' crimes, a university's courses), each a React `onClick`
+// that records its click. E2 drives the real page.
 import { afterEach, expect, test } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import { openGamePage } from "../../src/page/game-page.ts";
 import { reportPageEffect } from "../../src/page/page-effect.ts";
-import { convergeWorkOnPage, workShown } from "../../src/page/work-page.ts";
+import { classHeldBack, convergeWorkOnPage, workShown } from "../../src/page/work-page.ts";
 
 const clicks: string[] = [];
 const reports: unknown[] = [];
@@ -205,4 +205,101 @@ test("a crime as the page shows it (#156): the Work page's wording focused, the 
   );
   expect(workShown(gamePage, heist)).toBe("unfocused");
   expect(workShown(gamePage, { ...heist, crime: "Mug" })).toBeNull();
+});
+
+test("a class (#158): the university in the City, then the course's button, which starts it focused; then unfocused", async () => {
+  const workPage = () =>
+    document.body.replaceChildren(
+      clickable("Do something else simultaneously", "button", () =>
+        document.body.replaceChildren(clickable("Terminal", "sidebar")),
+      ),
+    );
+  // Not the first button: the course's is picked by its text. A paid class's cost shows as negative, as the game's
+  // `Money` formats `calculateCost` (`Work/Formulas.ts:100-105`).
+  const university = [
+    clickable("Study Computer Science (free)", "button"),
+    clickable("Take Networks course ($-240.000 / sec)", "button", workPage),
+    clickable("Take Algorithms course ($-960.000 / sec)", "button"),
+  ];
+  const gamePage = inTheCity("Rothman University", ...university);
+  const networks = { kind: "class", location: "Rothman University", classType: "Networks", focus: false } as const;
+  expect(await convergeWorkOnPage(gamePage, networks, { wasFocused: false })).toBeNull();
+  expect(clicks).toEqual([
+    "City",
+    "Rothman University",
+    "Take Networks course ($-240.000 / sec)",
+    "Do something else simultaneously",
+    "Terminal",
+  ]);
+});
+
+test('a gym\'s stat (#158): its button, "Train Dexterity (…)"', async () => {
+  const gym = [
+    clickable("Train Strength ($-120.000 / sec)", "button"),
+    clickable("Train Dexterity ($-120.000 / sec)", "button"),
+  ];
+  const gamePage = inTheCity("Iron Gym", ...gym);
+  const dexterity = { kind: "class", location: "Iron Gym", classType: "dex", focus: true } as const;
+  expect(await convergeWorkOnPage(gamePage, dexterity, { wasFocused: false })).toBeNull();
+  expect(clicks).toEqual(["City", "Iron Gym", "Train Dexterity ($-120.000 / sec)"]);
+});
+
+test("a class the owner focused on, wanted unfocused (#158): not started again, just back to the Terminal", async () => {
+  // `reportPageEffect` has unfocused the player already (`wasFocused`), so the overview shows the class.
+  document.body.replaceChildren(
+    clickable("City", "sidebar"),
+    clickable("Terminal", "sidebar"),
+    Object.assign(document.createElement("p"), { textContent: "You are studying Computer Science" }),
+  );
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
+  const computerScience = {
+    kind: "class",
+    location: "Rothman University",
+    classType: "Computer Science",
+    focus: false,
+  } as const;
+  expect(await convergeWorkOnPage(gamePage, computerScience, { wasFocused: true })).toBeNull();
+  expect(clicks).toEqual(["Terminal"]);
+});
+
+test("a class as the page shows it (#158): the Work page's title focused, the overview's unfocused, by type only", () => {
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
+  const strength = { kind: "class", location: "Iron Gym", classType: "str", focus: false } as const;
+  const title = document.createElement("h6");
+  title.append(
+    "You are currently ",
+    Object.assign(document.createElement("b"), { textContent: "training your strength at a gym" }),
+  );
+  document.body.replaceChildren(title);
+  expect(workShown(gamePage, strength)).toBe("focused");
+  document.body.replaceChildren(
+    Object.assign(document.createElement("p"), { textContent: "You are training your strength at a gym" }),
+  );
+  expect(workShown(gamePage, strength)).toBe("unfocused");
+  // The page names no gym: Powerhouse Gym's strength training reads the same.
+  expect(workShown(gamePage, { ...strength, location: "Powerhouse Gym" })).toBe("unfocused");
+  expect(workShown(gamePage, { ...strength, classType: "def" })).toBeNull();
+  expect(workShown(gamePage, { ...strength, classType: "toString" })).toBeNull();
+});
+
+test("a class held back (#158): another city or too little money, unless a class of its type is under way", () => {
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
+  const algorithms = { kind: "class", location: "Rothman University", classType: "Algorithms", focus: false } as const;
+  const sector12 = { money: 1_000, city: "Sector-12" };
+  expect(classHeldBack(gamePage, algorithms, { money: 1e9, city: "Aevum" })).toBe(
+    "Rothman University is in Sector-12, and the player is in Aevum (travel there first)",
+  );
+  expect(classHeldBack(gamePage, algorithms, sector12)).toMatch(
+    /^Algorithms at Rothman University costs \$960 a second/,
+  );
+  expect(classHeldBack(gamePage, algorithms, { money: 576_000, city: "Sector-12" })).toBeNull();
+  // Under way already (unfocused, on the overview): left alone, whatever the money.
+  document.body.replaceChildren(
+    Object.assign(document.createElement("p"), { textContent: "You are taking an Algorithms course" }),
+  );
+  expect(classHeldBack(gamePage, algorithms, sector12)).toBeNull();
+  expect(classHeldBack(null, algorithms, sector12)).toBeNull();
 });

@@ -52,7 +52,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>buyServer</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -81,6 +81,15 @@
         <option>Shoplift</option><option>Rob Store</option><option>Mug</option><option>Larceny</option><option>Deal Drugs</option><option>Bond Forgery</option><option>Traffick Arms</option><option>Homicide</option><option>Grand Theft Auto</option><option>Kidnap</option><option>Assassination</option><option>Heist</option>
       </select>
       <button type="submit">Commit it</button>
+    </form>
+    <form id="class-work">
+      <select name="location" aria-label="University or gym">
+        <option value="Summit University">Summit University (Aevum)</option><option value="Rothman University" selected>Rothman University (Sector-12)</option><option value="ZB Institute of Technology">ZB Institute of Technology (Volhaven)</option><option value="Crush Fitness Gym">Crush Fitness Gym (Aevum)</option><option value="Snap Fitness Gym">Snap Fitness Gym (Aevum)</option><option value="Iron Gym">Iron Gym (Sector-12)</option><option value="Powerhouse Gym">Powerhouse Gym (Sector-12)</option><option value="Millenium Fitness Gym">Millenium Fitness Gym (Volhaven)</option>
+      </select>
+      <select name="classType" aria-label="Course or stat">
+        <option>Computer Science</option><option>Data Structures</option><option>Networks</option><option>Algorithms</option><option>Management</option><option>Leadership</option><option value="str">Strength</option><option value="def">Defense</option><option value="dex">Dexterity</option><option value="agi">Agility</option>
+      </select>
+      <button type="submit">Take it</button>
     </form>
     <div class="bad" id="work-problem" hidden></div>
   </section>
@@ -273,14 +282,21 @@ function render(status) {
     ...(intentRows.length === 0 ? [element("tr", "None.")] : intentRows),
   );
 
-  // The work the brain manages (#151, #153, #156), and how the Agent last reported it.
+  // The work the brain manages (#151, #153, #156, #158), and how the Agent last reported it. A gym's stat by name.
   const { desired, outcome: workOutcome } = status.work;
+  const gymStats = { str: "Strength", def: "Defense", dex: "Dexterity", agi: "Agility" };
+  const className = (work) =>
+    Object.hasOwn(gymStats, work.classType)
+      ? `${gymStats[work.classType]} training at ${work.location}`
+      : `${work.classType} at ${work.location}`;
   const workName = (work) =>
     work.kind === "company"
       ? `${work.field} work at ${work.company}`
       : work.kind === "crime"
         ? work.crime
-        : `${work.workType} work for ${work.faction}`;
+        : work.kind === "class"
+          ? className(work)
+          : `${work.workType} work for ${work.faction}`;
   const workText =
     desired === null
       ? "Not managed: the game's work is left as it is."
@@ -385,6 +401,12 @@ document.querySelector("#company-work").addEventListener("submit", (event) => {
 document.querySelector("#crime-work").addEventListener("submit", (event) => {
   event.preventDefault();
   const work = { kind: "crime", crime: event.currentTarget.elements.crime.value };
+  sendWrite("/api/work", { work }, "#work-problem", "Not set");
+});
+document.querySelector("#class-work").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const { location, classType } = event.currentTarget.elements;
+  const work = { kind: "class", location: location.value, classType: classType.value };
   sendWrite("/api/work", { work }, "#work-problem", "Not set");
 });
 document.querySelector("#stop-work").addEventListener("click", () =>

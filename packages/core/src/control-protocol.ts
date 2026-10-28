@@ -72,7 +72,16 @@ export interface DesiredState {
    * manage work, and the Agent leaves whatever work there is alone.
    */
   work?: Work | null;
+  /**
+   * Safe mode (#160, architecture §5.4): with the brain gone, the Agent keeps converging on this state, minus its
+   * intents, for this long after it was last connected to the brain that sent it, at most `MAX_SAFE_MODE_TTL_MS`. Absent
+   * (an older brain) or 0: it isn't kept past the brain.
+   */
+  ttlMs?: number;
 }
+
+/** The longest `ttlMs` taken: 7 days, so a time it makes is always one a date can show (#160). */
+export const MAX_SAFE_MODE_TTL_MS = 604_800_000;
 
 /** The most hosts a desired state names: a whole network is well under it. */
 export const MAX_HACK_LOOP_HOSTS = 1_000;
@@ -82,11 +91,13 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * an outdated one: only a state that starts nothing new, given `lastSent`, what that Agent was last sent (null for
  * nothing yet). No intents. The hack loop off goes as it is (stopping our own loops is always safe); on, it stays as
  * last sent, and with nothing sent yet, nothing goes. So the intents' removal gets through a hold whatever the hack
- * loop does. No work either: the Agent leaves the work as it is (#151).
+ * loop does. No work either: the Agent leaves the work as it is (#151). `ttlMs` goes as the brain set it (#160): a held
+ * state starts nothing new, so safe mode keeping it starts nothing new either.
  */
 export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
-  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, intents: [] };
-  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, intents: [] };
+  const kept = state.ttlMs === undefined ? {} : { ttlMs: state.ttlMs };
+  if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, intents: [], ...kept };
+  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, intents: [], ...kept };
 }
 
 export type BrainMessage =
@@ -128,7 +139,7 @@ function describeValue(value: unknown): string {
 }
 const isShortNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value !== "" && value.length <= MAX_FIELD_LENGTH;
-const isSafeIntegerAtLeast = (value: unknown, minimum: number): value is number =>
+export const isSafeIntegerAtLeast = (value: unknown, minimum: number): value is number =>
   Number.isSafeInteger(value) && (value as number) >= minimum;
 const isDeploymentId = (value: unknown): value is string => isShortNonEmptyString(value) && isValidDeploymentId(value);
 
@@ -242,6 +253,20 @@ function parseIntents(intents: unknown): ParsedMessage<Intent[]> {
   }
   return { ok: true, message: parsedIntents };
 }
+/** A desired state's `hackLoop`: its known fields only, or why it isn't valid. Safe mode's file uses it too (#160). */
+export function parseHackLoop(hackLoop: unknown): ParsedMessage<DesiredState["hackLoop"]> {
+  if (typeof hackLoop !== "object" || hackLoop === null) return { ok: false, reason: "hackLoop isn't an object" };
+  const { enabled, target, hosts } = hackLoop as JsonObject;
+  if (typeof enabled !== "boolean") return { ok: false, reason: "hackLoop.enabled isn't a boolean" };
+  if (target !== null && !isShortNonEmptyString(target)) {
+    return { ok: false, reason: `hackLoop.target is ${describeValue(target)}` };
+  }
+  if (!Array.isArray(hosts) || hosts.length > MAX_HACK_LOOP_HOSTS || !hosts.every(isShortNonEmptyString)) {
+    return { ok: false, reason: "hackLoop.hosts isn't a list of hostnames" };
+  }
+  return { ok: true, message: { enabled, target, hosts: [...hosts] } };
+}
+
 /** What the Agent accepts from the brain. */
 export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
   const envelope = parseEnvelope(text);
@@ -257,31 +282,27 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
         message: { protocolVersion: CONTROL_PROTOCOL_VERSION, type: "restart", deploymentId: fields.deploymentId },
       };
     case "desiredState": {
-      const hackLoop = fields.hackLoop;
-      if (typeof hackLoop !== "object" || hackLoop === null) {
-        return { ok: false, reason: "desiredState without a hackLoop" };
-      }
-      const { enabled, target, hosts } = hackLoop as JsonObject;
-      if (typeof enabled !== "boolean") return { ok: false, reason: "desiredState's hackLoop.enabled isn't a boolean" };
-      if (target !== null && !isShortNonEmptyString(target)) {
-        return { ok: false, reason: `desiredState's hackLoop.target is ${describeValue(target)}` };
-      }
-      if (!Array.isArray(hosts) || hosts.length > MAX_HACK_LOOP_HOSTS || !hosts.every(isShortNonEmptyString)) {
-        return { ok: false, reason: "desiredState's hackLoop.hosts isn't a list of hostnames" };
-      }
+      const hackLoop = parseHackLoop(fields.hackLoop);
+      if (!hackLoop.ok) return { ok: false, reason: `desiredState's ${hackLoop.reason}` };
       const intents = parseIntents(fields.intents);
       if (!intents.ok) return intents;
       const work = parseWork(fields.work);
       if (!work.ok) return { ok: false, reason: `desiredState's ${work.reason}` };
+      const { ttlMs } = fields;
+      if (ttlMs !== undefined && (!isSafeIntegerAtLeast(ttlMs, 0) || ttlMs > MAX_SAFE_MODE_TTL_MS)) {
+        return { ok: false, reason: `desiredState's ttlMs is ${describeValue(ttlMs)}` };
+      }
       return {
         ok: true,
         message: {
           protocolVersion: CONTROL_PROTOCOL_VERSION,
           type: "desiredState",
-          hackLoop: { enabled, target, hosts: [...hosts] },
+          hackLoop: hackLoop.message,
           intents: intents.message,
           // Absent and null are the same: no work managed. Only a work to do is carried.
           ...(work.message === null ? {} : { work: work.message }),
+          // Absent and 0 are the same: not kept past the brain (#160).
+          ...(ttlMs === undefined || ttlMs === 0 ? {} : { ttlMs }),
         },
       };
     }

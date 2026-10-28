@@ -55,6 +55,11 @@ export interface BrainInSimulation {
   remoteFileApiConnections: Connection[];
   /** Closes every connection the game opened to this brain, as a brain stopping does, so the game reconnects. */
   closeConnections(): void;
+  /**
+   * The brain gone (#160): its connections closed, and every new one closed as it's made (a real one would be refused,
+   * 1006, a moment sooner), until another brain starts on the game and takes over the listening.
+   */
+  stop(): void;
 }
 
 /**
@@ -118,6 +123,7 @@ export function startBrainInSimulation(
   if (data) recordEvents(deployer, data.store, deployerReleaseContext);
   if (data && saveBackups) recordEvents(saveBackups, data.store, deployerReleaseContext);
   const openConnections: Connection[] = [];
+  let stopped = false;
   const brain: BrainInSimulation = {
     channel,
     deployer,
@@ -130,16 +136,27 @@ export function startBrainInSimulation(
     closeConnections: () => {
       for (const connection of openConnections.splice(0)) connection.close(1001, "brain restarting");
     },
+    stop: () => {
+      stopped = true;
+      brain.closeConnections();
+    },
   };
   channel.subscribe((event) => brain.channelEvents.push(event));
   deployer.subscribe((event) => brain.deployerEvents.push(event));
   saveBackups?.subscribe((event) => brain.saveBackupEvents.push(event));
+  /** Stopped, a connection is closed as it's made; reports whether it was. */
+  const closedIfStopped = (connection: Connection): boolean => {
+    if (stopped) connection.close(1011, "no brain");
+    return stopped;
+  };
   game.listen(CONTROL_URL, (connection) => {
+    if (closedIfStopped(connection)) return;
     openConnections.push(connection);
     brain.controlConnections.push(connection);
     channel.accept(connection);
   });
   game.listen(RFA_URL, (connection) => {
+    if (closedIfStopped(connection)) return;
     openConnections.push(connection);
     brain.remoteFileApiConnections.push(connection);
     void deployer.accept(connection);

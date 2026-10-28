@@ -5,7 +5,9 @@
 // invitations, and leaves the owner's and scripts' dialogs alone. Joining a faction (#147) clicks "Join!" past the
 // brain's gate for irreversible intents; buying an augmentation (#149) clicks "Buy", never a disabled one. Work (#151,
 // #153): faction work started and kept focused on the real page; company work applied for, the hiring's alert closed,
-// and worked, then worked again from the Job page in another city; crime (#156) at the Slums.
+// and worked, then worked again from the Job page in another city; crime (#156) at the Slums; classes (#158) at a
+// university, unfocused, and held back by the city and the money guard. Buying a cloud server (#159) needs no page:
+// the NS API's `cloud.purchaseServer`, from a worker that fits a fresh save beside the Agent.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -411,13 +413,14 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
 /** The brain's switches for a test of work alone: no purchases, and the hack loop off. */
 const ONLY_WORK = { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" };
 
-/** Sets the work the brain manages (#151, #153, #156), as the dashboard's Work forms do. */
+/** Sets the work the brain manages (#151, #153, #156, #158), as the dashboard's Work forms do. */
 async function setWork(
   dashboardPort: number,
   work:
     | { faction: string; workType: string }
     | { kind: "company"; company: string; field: string }
     | { kind: "crime"; crime: string }
+    | { kind: "class"; location: string; classType: string }
     | null,
 ) {
   const origin = `http://127.0.0.1:${dashboardPort}`;
@@ -470,6 +473,43 @@ test("faction work (#151): started focused on the real page, refocused after the
   await setWork(ports.dashboardPort, null);
   await advanceGameTime(page, 35_000);
   await expect(workPageShown(page)()).resolves.toBe(true);
+});
+
+test("safe mode (#160): with the brain stopped, the Agent refocuses the work on the real page; after a reload too, the 'Offline for…' alert closed", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    prepareSave: inCyberSec,
+    brainSettings: ONLY_WORK,
+  });
+  await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  // The brain gone for good: the Agent keeps the last desired state (agent/desired-state.json).
+  for (const brain of started.brains) await brain.stop();
+  /** The owner does something else: within the work's 30 s, the Agent focuses again, with no brain to say so. */
+  const refocusedAfterTheOwner = async () => {
+    await page.getByRole("button", { name: "Do something else simultaneously" }).click();
+    await expect(workPageShown(page)()).resolves.toBe(false);
+    await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  };
+  await refocusedAfterTheOwner();
+
+  // Past an autosave, a reload: the work loads focused (`ui/GameRoot.tsx:169-171`), autoexec starts the Agent, and it
+  // has only the file. It closes the load's "Offline for…" alert, brain or not.
+  await advanceUntil(page, async () => (await page.getByText("Game Saved!").count()) > 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: AUTOSAVE_GAME_TIMEOUT_MS,
+  });
+  await page.reload();
+  await page.locator("h6", { hasText: HACKING_FOR_CYBERSEC_TITLE }).waitFor({ timeout: STEP_REAL_TIMEOUT_MS });
+  await advanceUntil(page, offlineAlertShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 2_000 });
+  await advanceUntil(page, async () => (await page.locator(OPEN_DIALOG).count()) === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  await refocusedAfterTheOwner();
 });
 
 test("faction work unfocused (#151): with the Neuroreceptor Management Implant installed, started then left unfocused, not restarted", async () => {
@@ -629,6 +669,94 @@ test("crime unfocused (#156): with the Neuroreceptor Management Implant installe
   await expect(shopliftingOverviewShown(page)()).resolves.toBe(true);
 });
 
+/** Whether the overview's header says `text` exactly: the player's work, unfocused. */
+const overviewSays = (page: Page, text: string) => async () =>
+  (await page
+    .locator("p")
+    .filter({ hasText: new RegExp(`^${text}$`) })
+    .count()) > 0;
+/** Whether the Work page's title starts "You are currently": the player focused on any work. */
+const focusedOnWork = (page: Page) => async () =>
+  (await page
+    .locator("h6")
+    .filter({ hasText: /^You are currently / })
+    .count()) > 0;
+
+test("a class (#158): Computer Science at Rothman University started and left unfocused on the Terminal; then a paid course in its place", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ money: 1_000_000, brainSettings: ONLY_WORK });
+  await setWork(ports.dashboardPort, { kind: "class", location: "Rothman University", classType: "Computer Science" });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  // Unfocused (focus gains a class nothing), on the Terminal: the overview says what it is.
+  await expect(overviewSays(page, "You are studying Computer Science")()).resolves.toBe(true);
+  await expect(focusedOnWork(page)()).resolves.toBe(false);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await advanceGameTime(page, 35_000);
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+  await expect(overviewSays(page, "You are studying Computer Science")()).resolves.toBe(true);
+  // A paid course in its place ($1m covers 10 minutes of $120 a second): the class the page started ends with the
+  // game's "After studying Computer Science for …" alert, which the dialog watcher closes.
+  await setWork(ports.dashboardPort, { kind: "class", location: "Rothman University", classType: "Data Structures" });
+  await advanceUntil(page, overviewSays(page, "You are taking a Data Structures course"), {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceUntil(
+    page,
+    async () => gameDialogs(dataDirectory).some((dialog) => dialog.text.startsWith("After studying Computer Science")),
+    { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 10_000 },
+  );
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
+test("a class held back (#158): a gym in Aevum from Sector-12, and a paid course without 10 minutes of its cost; nothing started", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({ money: 1_000, brainSettings: ONLY_WORK });
+  const problemNow = () => latestFast(dataDirectory)?.work?.problem ?? null;
+  await setWork(ports.dashboardPort, { kind: "class", location: "Crush Fitness Gym", classType: "str" });
+  await advanceUntil(page, async () => problemNow() !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({
+    converged: false,
+    problem: "Crush Fitness Gym is in Aevum, and the player is in Sector-12 (travel there first)",
+    backend: "ui",
+  });
+  await setWork(ports.dashboardPort, { kind: "class", location: "Rothman University", classType: "Data Structures" });
+  await advanceUntil(page, async () => problemNow()?.startsWith("Data Structures") === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(problemNow()).toBe(
+    "Data Structures at Rothman University costs $120 a second: the Agent starts it with 10 minutes of that " +
+      "($72,000) or more, and the player has $1,000",
+  );
+  // The page untouched: no class under way, the Terminal, and the money as it was.
+  await expect(
+    page
+      .locator("p")
+      .filter({ hasText: /^You are (studying|taking|training)/ })
+      .count(),
+  ).resolves.toBe(0);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // From a medium snapshot taken after the effector ran.
+  const mediums = () => readStore(dataDirectory).snapshots.filter((row) => row.tier === "medium").length;
+  const mediumsNow = mediums();
+  await advanceUntil(page, async () => mediums() > mediumsNow, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
+  expect(latestMedium(dataDirectory)?.player.money).toBe(1_000);
+});
+
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
 async function dashboardAlerts(dashboardPort: number): Promise<{ name: string; detail: string }[]> {
   const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);
@@ -715,6 +843,39 @@ test("home RAM (#138): with $1.1m and buying programs off, home goes from 8 GB t
   expect(medium?.hasTorRouter).toBe(false);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+});
+
+test("buying a server (#159): queued on the dashboard, pserv-0 bought through the NS API; queued again, nothing paid", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    // Nothing else moves the money: purchases and the hack loop off.
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  const moneyBefore = latestMedium(dataDirectory)?.player.money as number;
+  await queueIntent(ports.dashboardPort, { action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  const pserv0 = () => latestMedium(dataDirectory)?.servers.find((server) => server.hostname === "pserv-0");
+  await advanceUntil(page, async () => pserv0() !== undefined, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
+  // The player's, with root, at 8 GB, for 8 × $55k; the worker didn't touch the page.
+  expect(pserv0()).toMatchObject({ maxRam: 8, hasAdminRights: true });
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // Queued again: done from the game alone, and no second server (the game would have named it pserv-0-0).
+  await queueIntent(ports.dashboardPort, { action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceGameTime(page, 11_000);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000);
+  expect(latestMedium(dataDirectory)?.servers.map((server) => server.hostname)).not.toContain("pserv-0-0");
 });
 
 /** Queues an intent on the brain's dashboard, as its page does: from its own origin, as JSON. */

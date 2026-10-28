@@ -3,6 +3,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR, neuroFluxLevel } from "../src/augmentations.ts";
+import {
+  CLOUD_SERVER_MAX_RAM,
+  isCloudServerHostname,
+  RESERVED_HOSTNAME_PREFIXES,
+  WORLD_DAEMON,
+} from "../src/cloud-servers.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
 import {
   INTENT_ACTIONS,
@@ -22,6 +28,9 @@ describe("parseIntentRequest", () => {
     ["purchaseAugmentation", { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 }],
     ["purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 7 }],
     ["purchaseAugmentation", { faction: "Blade Industries", augmentation: "The Blade's Simulacrum", level: 1 }],
+    ["buyServer", { hostname: "pserv-0", ram: 8 }],
+    ["buyServer", { hostname: "a", ram: 1 }],
+    ["buyServer", { hostname: `Big_Box.${"x".repeat(56)}`, ram: 2 ** 20 }],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -67,6 +76,25 @@ describe("parseIntentRequest", () => {
         args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: "3" },
       },
     ],
+    ["a server named with a space", { action: "buyServer", args: { hostname: "my server", ram: 8 } }],
+    ["a server named ''", { action: "buyServer", args: { hostname: "", ram: 8 } }],
+    ["a server named from a '-'", { action: "buyServer", args: { hostname: "-pserv", ram: 8 } }],
+    ["a server named as an IP address", { action: "buyServer", args: { hostname: "10.0.0.1", ram: 8 } }],
+    ["a server named as a Hacknet node", { action: "buyServer", args: { hostname: "hacknet-node-3", ram: 8 } }],
+    ["a server named as a Hacknet server", { action: "buyServer", args: { hostname: "hacknet-server-0", ram: 8 } }],
+    ["a server name of 65 characters", { action: "buyServer", args: { hostname: "x".repeat(65), ram: 8 } }],
+    ["a server name that isn't text", { action: "buyServer", args: { hostname: 7, ram: 8 } }],
+    ["server RAM that isn't a power of two", { action: "buyServer", args: { hostname: "pserv-0", ram: 24 } }],
+    ["server RAM over 2^20 GB", { action: "buyServer", args: { hostname: "pserv-0", ram: 2 ** 21 } }],
+    ["server RAM below 1 GB", { action: "buyServer", args: { hostname: "pserv-0", ram: 0.5 } }],
+    ["server RAM as text", { action: "buyServer", args: { hostname: "pserv-0", ram: "8" } }],
+    ["server RAM of 0", { action: "buyServer", args: { hostname: "pserv-0", ram: 0 } }],
+    ["negative server RAM", { action: "buyServer", args: { hostname: "pserv-0", ram: -8 } }],
+    ["server RAM that's NaN", { action: "buyServer", args: { hostname: "pserv-0", ram: Number.NaN } }],
+    [
+      "a server named w0r1d_d43m0n, which the game would buy as w0r1d_d43m0n-0, every try",
+      { action: "buyServer", args: { hostname: "w0r1d_d43m0n", ram: 8 } },
+    ],
   ])("refuses %s, with a reason", (_description, request) => {
     const parsed = parseIntentRequest(request);
     expect(parsed.ok).toBe(false);
@@ -87,6 +115,7 @@ test("an intent's id is its action and args, in the args' fixed order", () => {
   expect(intentId("purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 })).toBe(
     "purchaseAugmentation(Sector-12, NeuroFlux Governor, 3)",
   );
+  expect(intentId("buyServer", { hostname: "pserv-0", ram: 8 })).toBe("buyServer(pserv-0, 8)");
   const reordered = parseIntentRequest({ action: "upgradeHomeRam", args: { vendor: "CompuTek", fromRam: 8 } });
   expect(reordered.ok && reordered.message.id).toBe("upgradeHomeRam(8, CompuTek)");
 });
@@ -115,6 +144,7 @@ describe("isIrreversibleIntent", () => {
     expect(isIrreversibleIntent(intent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } }))).toBe(false);
     const augmentation = { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 };
     expect(isIrreversibleIntent(intent({ action: "purchaseAugmentation", args: augmentation }))).toBe(false);
+    expect(isIrreversibleIntent(intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } }))).toBe(false);
   });
 });
 
@@ -130,6 +160,22 @@ test("AUGMENTATION_NAMES and FACTION_NAMES are the pinned game's, exactly", () =
   expect(AUGMENTATION_NAMES).toEqual(gameEnumValues("Augmentation/Enums.ts", "AugmentationName"));
   expect(AUGMENTATION_NAMES).toContain(NEUROFLUX_GOVERNOR);
   expect(FACTION_NAMES).toEqual(gameEnumValues("Faction/Enums.ts", "FactionName"));
+});
+
+test("cloud servers: the most RAM, the reserved prefixes and the IP address pattern are the pinned game's", () => {
+  const source = (file: string) =>
+    readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
+  expect(source("Server/data/Constants.ts")).toContain(`CloudServerMaxRam: ${CLOUD_SERVER_MAX_RAM}, // 2^20`);
+  expect(source("Server/data/SpecialServers.ts")).toContain(`WorldDaemon: "${WORLD_DAEMON}"`);
+  const cloud = source("NetscriptFunctions/Cloud.ts");
+  for (const prefix of RESERVED_HOSTNAME_PREFIXES) expect(cloud).toContain(`hostname.startsWith("${prefix}")`);
+  // The game's own test of an IP address, character for character.
+  const ipAddress = /const regex =\s+(\/\^.*\$\/);/.exec(source("Types/strings.ts"))?.[1];
+  expect(ipAddress).toBeDefined();
+  const gameIsIpAddress = new RegExp((ipAddress as string).slice(1, -1));
+  for (const hostname of ["10.0.0.1", "255.255.255.255", "1.2.3", "999.1.1.1", "pserv-0", "1.2.3.4.5"]) {
+    expect(isCloudServerHostname(hostname), hostname).toBe(!gameIsIpAddress.test(hostname));
+  }
 });
 
 test.each([

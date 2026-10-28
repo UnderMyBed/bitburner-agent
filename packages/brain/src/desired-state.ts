@@ -1,7 +1,8 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue. Irreversible
-// intents wait for their guard and a save backup first (#147).
+// intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
+// brain gone (`ttlMs`, safe mode, #160).
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
@@ -31,6 +32,14 @@ import {
   workFocus,
   writeOwnersWork,
 } from "./work.ts";
+
+/**
+ * Safe mode (#160, architecture §5.4): how long the Agent keeps converging on the last state, minus its intents, after
+ * it was last connected to this brain. Nothing in a state turns harmful with time alone (a reset, which does, drops it
+ * at once), and the loops and the work carry on after it anyway: it bounds how long a stopped brain's choices outlive
+ * it. 12 hours covers a night or a working day with the brain stopped or crashed for good.
+ */
+export const SAFE_MODE_TTL_MS = 12 * 60 * 60_000;
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -197,9 +206,9 @@ export class DesiredStateController {
   }
 
   /**
-   * The work the owner wants (#151, #153, #156): `{ faction, workType }`, `{ kind: "company", company, field }` or
-   * `{ kind: "crime", crime }`, kept in the store and sent at once, or null to stop managing work (the game's work
-   * is then left as it is).
+   * The work the owner wants (#151, #153, #156, #158): `{ faction, workType }`, `{ kind: "company", company, field }`,
+   * `{ kind: "crime", crime }` or `{ kind: "class", location, classType }`, kept in the store and sent at once, or null
+   * to stop managing work (the game's work is then left as it is).
    */
   setWork(request: unknown): { ok: true } | { ok: false; reason: string } {
     const parsed = parseOwnersWork(request);
@@ -380,9 +389,10 @@ export class DesiredStateController {
     // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says
     // whether the implant is in, so the focus never flips on a connect. None set: not managed.
     const work = this.#slowData === null ? null : this.workView().desired;
-    const withWork = work === null ? {} : { work };
+    // Every state, so the Agent's safe mode keeps it (#160).
+    const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };
     if (!hackLoopEnabled) {
-      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...withWork };
+      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...workAndTtl };
     } else if (this.#staticData === null || this.#mediumData === null) {
       this.#desired = null;
     } else {
@@ -393,7 +403,7 @@ export class DesiredStateController {
           hosts: chooseHackHosts(this.#staticData, this.#mediumData),
         },
         intents,
-        ...withWork,
+        ...workAndTtl,
       };
     }
     this.#channel.setDesiredState(this.#desired);

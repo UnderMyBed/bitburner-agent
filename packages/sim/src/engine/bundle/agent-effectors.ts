@@ -14,7 +14,16 @@ import { companyNameAsLocationName } from "../../../../../vendor/bitburner-src/s
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { Crimes } from "../../../../../vendor/bitburner-src/src/Crime/Crimes";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
-import { CityName, CrimeType, FactionWorkType, type JobField } from "../../../../../vendor/bitburner-src/src/Enums";
+import {
+  CityName,
+  ClassType,
+  CrimeType,
+  FactionWorkType,
+  GymType,
+  type JobField,
+  LocationName,
+  LocationType,
+} from "../../../../../vendor/bitburner-src/src/Enums";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
 import {
   getFactionAugmentationsFiltered,
@@ -26,12 +35,24 @@ import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factio
 import { Locations } from "../../../../../vendor/bitburner-src/src/Locations/Locations";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { Player } from "../../../../../vendor/bitburner-src/src/Player";
+import {
+  AddToAllServers,
+  createUniqueRandomIp,
+  GetServer,
+} from "../../../../../vendor/bitburner-src/src/Server/AllServers";
+import { DarknetServer } from "../../../../../vendor/bitburner-src/src/Server/DarknetServer";
 import { ServerConstants } from "../../../../../vendor/bitburner-src/src/Server/data/Constants";
-import { purchaseRamForHomeComputer } from "../../../../../vendor/bitburner-src/src/Server/ServerPurchases";
+import { safelyCreateUniqueServer } from "../../../../../vendor/bitburner-src/src/Server/ServerHelpers";
+import {
+  getCloudServerCost,
+  getCloudServerLimit,
+  purchaseRamForHomeComputer,
+} from "../../../../../vendor/bitburner-src/src/Server/ServerPurchases";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
 import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { dialogBoxCreate } from "../../../../../vendor/bitburner-src/src/ui/React/DialogBox";
 import { Page } from "../../../../../vendor/bitburner-src/src/ui/Router";
+import { Classes, ClassWork, isClassWork } from "../../../../../vendor/bitburner-src/src/Work/ClassWork";
 import { CompanyWork, isCompanyWork } from "../../../../../vendor/bitburner-src/src/Work/CompanyWork";
 import { isCrimeWork } from "../../../../../vendor/bitburner-src/src/Work/CrimeWork";
 import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/src/Work/FactionWork";
@@ -42,6 +63,16 @@ import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/
  * it can't import core; the effector-backends suite fails if the two drift.
  */
 const AGENT_SIM_EFFECTORS_GLOBAL = "__bitburnerAgentSim";
+
+/**
+ * How long the money must last before a paid class is started (#158): core's `CLASS_MONEY_GUARD_SECONDS`, the guard
+ * every backend applies. The bundle can't import core (above); the effector-backends suite builds its expected
+ * problems with core's `classStartProblem`, so it fails if the two drift.
+ */
+const CLASS_MONEY_GUARD_SECONDS = 600;
+
+/** "$72,000", "-$3,721", as core's class problems word money. */
+const dollars = (amount: number) => `${amount < 0 ? "-" : ""}$${Math.abs(amount).toLocaleString("en-US")}`;
 
 /** What an effector reports: done afterwards, by the game's own state, and why not if not. */
 type EffectorResult = { done: boolean; problem: string | null };
@@ -241,6 +272,46 @@ const effectors = {
     return result(isThisWork() && Player.focus === focus, notConverged);
   },
   /**
+   * A cloud server (#159), as `ns.cloud.purchaseServer` buys it (`NetscriptFunctions/Cloud.ts:35-93`), with the `ui`
+   * worker's checks first: the player's already, done; the name taken by another server, refused (the game would buy
+   * `<name>-0`); then the price, the money and the limit. The name is looked up as the worker's `ns.serverExists` does
+   * (`NetscriptFunctions.ts:1051-1055`: a server off the network isn't seen), so a purchase the game renames all the
+   * same is done, saying so, as the worker's. Not named `purchaseServer`, an NS function. The problems read as the
+   * worker's.
+   */
+  buyCloudServer(hostname: string, ram: number): EffectorResult {
+    const isPlayers = () => Player.purchasedServers.includes(hostname);
+    const existing = GetServer(hostname);
+    if (existing !== null && (existing.serversOnNetwork.length > 0 || existing instanceof DarknetServer)) {
+      return result(isPlayers(), `${hostname} is the name of a server that isn't one of the player's cloud servers`);
+    }
+    const cost = getCloudServerCost(ram);
+    if (cost === Number.POSITIVE_INFINITY) return result(false, `the game sells no ${ram} GB server in this BitNode`);
+    if (Player.money < cost) return result(false, `not enough money: the ${ram} GB server costs $${Math.ceil(cost)}`);
+    if (Player.purchasedServers.length >= getCloudServerLimit()) {
+      return result(false, `the game's limit of ${getCloudServerLimit()} cloud servers is reached`);
+    }
+    const server = safelyCreateUniqueServer({
+      ip: createUniqueRandomIp(),
+      hostname,
+      organizationName: "",
+      isConnectedTo: false,
+      adminRights: true,
+      purchasedByPlayer: true,
+      maxRam: ram,
+    });
+    AddToAllServers(server);
+    Player.purchasedServers.push(server.hostname);
+    const homeComputer = Player.getHomeComputer();
+    homeComputer.serversOnNetwork.push(server.hostname);
+    server.serversOnNetwork.push(homeComputer.hostname);
+    Player.loseMoney(cost, "servers");
+    if (server.hostname !== hostname) {
+      return { done: true, problem: `bought as ${server.hostname}: a server off the network held ${hostname}` };
+    }
+    return result(isPlayers(), `${hostname} isn't the player's after buying it`);
+  },
+  /**
    * The work activity's effector for crime (#156), as the Slums page does it (`Locations/ui/SlumsLocation.tsx:24-29`:
    * the crime committed, focused, on the Work page), from any city, as the Slums is in each; then the focus as the
    * focus buttons set it (the Work page's "Do something else simultaneously" goes to the City for a crime,
@@ -266,6 +337,67 @@ const effectors = {
       }
     }
     return result(isThisWork() && Player.focus === focus, `not ${focus ? "focused on" : "doing"} ${crimeName}`);
+  },
+  /**
+   * The work activity's effector for a class (#158), as a university's or gym's page does it
+   * (`Locations/ui/UniversityLocation.tsx:27-37`, `GymLocation.tsx:26-36`: the class started, focused, on the Work page), reached
+   * from the City only in its city; then the focus as the focus buttons set it (the Work page's "Do something else
+   * simultaneously" goes to the location, `ui/WorkInProgressRoot.tsx:266-268`). Before starting one, the guard every
+   * backend applies (core's `classStartProblem`, the same words): the city, then `CLASS_MONEY_GUARD_SECONDS` of its cost (base ×
+   * the location's `costMult`, the backdoor's discount left out). The location is checked exactly, as the page can't.
+   * Already so: nothing touched. Not named `universityCourse` or `gymWorkout`, NS functions.
+   */
+  convergeClassWork(locationName: string, classType: string, focus: boolean): EffectorResult {
+    const location = Object.values(LocationName).includes(locationName as LocationName)
+      ? Locations[locationName as LocationName]
+      : undefined;
+    const classs = Object.values(ClassType).includes(classType as ClassType)
+      ? Classes[classType as ClassType]
+      : undefined;
+    const isGym = Object.values(GymType).includes(classType as GymType);
+    const gymStat = Object.entries(GymType).find(([, value]) => value === classType)?.[0] ?? "";
+    const label = `${isGym ? `${gymStat.charAt(0).toUpperCase()}${gymStat.slice(1)} training` : classType} at ${locationName}`;
+    const isThisWork = () =>
+      isClassWork(Player.currentWork) &&
+      Player.currentWork.classType === classType &&
+      Player.currentWork.location === locationName;
+    const notConverged = `not ${focus ? "focused on" : "doing"} ${label}`;
+    if (location === undefined || classs === undefined) return result(false, notConverged);
+    if (!location.types.includes(isGym ? LocationType.Gym : LocationType.University))
+      return result(false, notConverged);
+    if (!isThisWork()) {
+      if (location.city !== Player.city) {
+        return result(
+          false,
+          `${locationName} is in ${location.city}, and the player is in ${Player.city} (travel there first)`,
+        );
+      }
+      const perSecond = -classs.earnings.money * location.costMult;
+      const guard = perSecond * CLASS_MONEY_GUARD_SECONDS;
+      if (perSecond !== 0 && Player.money < guard) {
+        return result(
+          false,
+          `${label} costs ${dollars(perSecond)} a second: the Agent starts it with ` +
+            `${CLASS_MONEY_GUARD_SECONDS / 60} minutes of that ` +
+            `(${dollars(guard)}) or more, and the player has ${dollars(Math.floor(Player.money))}`,
+        );
+      }
+      Player.startWork(
+        new ClassWork({ classType: classType as ClassType, location: location.name, singularity: false }),
+      );
+      Player.startFocusing();
+      Router.toPage(Page.Work);
+    }
+    if (isThisWork() && Player.focus !== focus) {
+      if (focus) {
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      } else {
+        // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
+        Router.toPage(Page.Location, { location });
+      }
+    }
+    return result(isThisWork() && Player.focus === focus, notConverged);
   },
 };
 

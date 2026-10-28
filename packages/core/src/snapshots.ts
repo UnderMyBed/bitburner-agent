@@ -110,7 +110,10 @@ export interface FastSnapshotData {
   game: FastWorkerData | null;
   /** Every intent the Agent holds, in order, and how it went (#141). */
   intents: IntentOutcome[];
-  /** The game's dialogs (#143): those handled since the last fast snapshot, and the text of one left open, or null. */
+  /**
+   * The game's dialogs (#143): those handled since the last fast snapshot (the latest 100, #160), and the text of one
+   * left open, or null.
+   */
   dialogs: { handled: HandledDialog[]; blocking: string | null };
   /** How the work the brain wants went (#151): null while it wants none, or absent from an older Agent. */
   work?: WorkOutcome | null;

@@ -1,7 +1,8 @@
 // The Agent's side of the hack loop (#134, M3's first slice of the reconciler, architecture §5.3). It keeps the desired
 // state the brain it's connected to sent, and converges the game on it with two home workers, one after the other:
 // `hack-loop-root.js` (root what it can) then `hack-loop-deploy.js` (start and stop the loops). It acts on instructions
-// only from the brain it's connected to: on a disconnect it forgets them, and loops already running keep running.
+// only from the brain it's connected to, or with no brain on safe mode's kept state (./safe-mode.ts, #160); without
+// either it forgets them, and loops already running keep running.
 // - On: it converges when the state changes, then every 15 rounds (30 s), so servers that become rootable and loops
 //   the game lost are picked up. A worker that doesn't run is tried again next round, without rooting again.
 // - Off: it stops every loop once, then does nothing until the state changes.
@@ -52,7 +53,7 @@ export function createHackLoop(
       rootedThisTime = false;
     },
 
-    /** Disconnected: no instructions until the next brain sends some. */
+    /** No instructions (a brain connected that hasn't sent any, or none kept for safe mode) until the next. */
     forget(): void {
       desired = null;
     },

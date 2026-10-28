@@ -3,9 +3,11 @@
 // backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
 // Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work
-// (#151, #153, #156): faction work, company work, the job applied for first, and crime.
+// (#151, #153, #156, #158): faction work, company work, the job applied for first, crime, and classes. Buying a cloud
+// server (#159): one NS worker for the page's backend and Singularity's alike.
 import { gunzipSync } from "node:zlib";
 import {
+  classStartProblem,
   type DesiredState,
   type FastSnapshotData,
   type Intent,
@@ -15,7 +17,7 @@ import {
   type Work,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
+import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
 const freshStart = useFreshStarts();
 const intent = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
@@ -476,6 +478,134 @@ test("company work (singularity, #153): with SF4.3, through its Singularity work
   });
 });
 
+const server = (hostname: string, ram = 8) => intent({ action: "buyServer", args: { hostname, ram } });
+/** An 8 GB server's price in BN1: 55,000 a GB (`Server/data/Constants.ts:4`). */
+const EIGHT_GB_PRICE = 8 * 55_000;
+
+/** The owner's script that buys 1 GB servers until the game refuses: the BitNode's limit, 25. */
+const BUY_TO_THE_LIMIT = 'export async function main(ns) { while (ns.cloud.purchaseServer("owners", 1) !== "") {} }';
+
+/**
+ * A fresh start with `money`, the simulator's effectors taken away unless `sim`, in a game with SF4.3 if `singularity`,
+ * and the owner's servers bought to the limit first if `atTheLimit`.
+ */
+function forServers(
+  money: number,
+  { sim, singularity, atTheLimit = false }: { sim: boolean; singularity: boolean; atTheLimit?: boolean },
+) {
+  return freshStart({
+    withDesiredState: false,
+    ...(singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(money);
+      if (atTheLimit) await ownerRunsOnHome(game, BUY_TO_THE_LIMIT);
+      if (!sim) await withoutSimEffectors(game);
+    },
+  });
+}
+type ForServers = Awaited<ReturnType<typeof forServers>>;
+
+/** The medium snapshot's RAM for `hostname`, once a snapshot shows it; undefined until then. */
+async function serverRamSeen(fresh: ForServers, hostname: string) {
+  const ramOf = () => fresh.medium()?.servers.find((each) => each.hostname === hostname)?.maxRam;
+  await fresh.game.runUntil(() => ramOf() !== undefined, 15_000);
+  return ramOf();
+}
+
+/** `pserv-0` bought once, paid for once; sent again, done with nothing paid; and the two refusals before any purchase. */
+async function boughtOnceAndRefused(fresh: ForServers, backend: "sim" | "ui") {
+  await fresh.game.runUntil(() => fresh.money() !== null, 10_000);
+  const moneyBefore = fresh.money() as number;
+  const outcomes = await boughtEach(fresh, [server("pserv-0")]);
+  expect(outcomes).toEqual([{ id: "buyServer(pserv-0, 8)", done: true, tries: 1, problem: null, backend }]);
+  expect(await serverRamSeen(fresh, "pserv-0")).toBe(8);
+  await fresh.game.runUntil(() => fresh.money() === moneyBefore - EIGHT_GB_PRICE, 5_000);
+  // Sent again as a new intent, and at another RAM: the player's server of that name, done, nothing more paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  const again = await boughtEach(fresh, [server("pserv-0"), server("pserv-0", 64)]);
+  expect(again.map(({ done, problem }) => [done, problem])).toEqual([
+    [true, null],
+    [true, null],
+  ]);
+  await fresh.game.run(2_000);
+  expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE);
+  // A name the game's servers have: nothing bought (the game would have named it n00dles-0), nothing paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("n00dles")] });
+  expect(await triedOnce(fresh, "buyServer(n00dles, 8)")).toMatchObject({
+    done: false,
+    problem: "n00dles is the name of a server that isn't one of the player's cloud servers",
+    backend,
+  });
+  await fresh.game.run(2_500);
+  expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE);
+  // Without the money, the price says why.
+  await fresh.simulation.diagnostics.setMoney(EIGHT_GB_PRICE - 1);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-1")] });
+  expect(await triedOnce(fresh, "buyServer(pserv-1, 8)")).toMatchObject({
+    done: false,
+    problem: "not enough money: the 8 GB server costs $440000",
+    backend,
+  });
+  // Neither bought, as a medium snapshot taken after both tries shows (one comes every 10 s).
+  const mediumSnapshots = () =>
+    fresh.brain.channelEvents.filter((event) => event.type === "snapshotReceived" && event.snapshot.tier === "medium")
+      .length;
+  const mediumsBefore = mediumSnapshots();
+  await fresh.game.runUntil(() => mediumSnapshots() > mediumsBefore, 12_000);
+  const servers = fresh.medium()?.servers.map((each) => each.hostname) ?? [];
+  expect(servers.filter((hostname) => /^(n00dles-|pserv-1)/.test(hostname))).toEqual([]);
+  expect(fresh.money()).toBe(EIGHT_GB_PRICE - 1);
+}
+
+test("buying a server (sim, #159): bought once; again, done with nothing paid; a game server's name and the money refused", async () => {
+  await boughtOnceAndRefused(await forServers(1e10, { sim: true, singularity: false }), "sim");
+});
+
+test("buying a server (its worker, #159): on a fresh save's 8 GB home beside the Agent, through the NS API alone", async () => {
+  await boughtOnceAndRefused(await forServers(1e10, { sim: false, singularity: false }), "ui");
+});
+
+test("buying a server (its worker, #159): with SF4.3 still the same worker, reported as ui; at the limit of 25, refused", async () => {
+  // The owner has bought up to the limit (the BitNode's 25) before the Agent starts; the next is refused, saying so.
+  const fresh = await forServers(1e10, { sim: false, singularity: true, atTheLimit: true });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-1")] });
+  expect(await triedOnce(fresh, "buyServer(pserv-1, 8)")).toMatchObject({
+    done: false,
+    problem: "the game's limit of 25 cloud servers is reached",
+    backend: "ui",
+  });
+});
+
+test("buying a server (sim, #159): a name only a server off the network has is bought renamed, done, as the worker says", async () => {
+  // Core refuses w0r1d_d43m0n (#161's review), so the owner's script calls the effector itself: before The Red Pill
+  // the daemon has no links, so the worker's `serverExists` doesn't see it, and the game names the purchase -0.
+  const fresh = await forServers(1e10, { sim: true, singularity: false });
+  await fresh.simulation.writeFile(
+    "home",
+    "owner-buys.js",
+    'export async function main(ns) { ns.print(JSON.stringify(globalThis.__bitburnerAgentSim.buyCloudServer("w0r1d_d43m0n", 8))); }',
+  );
+  const { pid } = await fresh.simulation.run("home", "owner-buys.js");
+  await fresh.game.run(1_000);
+  // The script's own line, before the game's "Script finished running".
+  const logged = (await fresh.simulation.logs(pid as number)).filter((line) => line.startsWith("{"));
+  expect(logged.map((line) => JSON.parse(line))).toEqual([
+    { done: true, problem: "bought as w0r1d_d43m0n-0: a server off the network held w0r1d_d43m0n" },
+  ]);
+});
+
+test("buying a server (sim, #159): at the limit of 25, refused as the worker refuses it", async () => {
+  const fresh = await forServers(1e10, { sim: true, singularity: false, atTheLimit: true });
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-0")] });
+  expect(await triedOnce(fresh, "buyServer(pserv-0, 8)")).toMatchObject({
+    done: false,
+    problem: "the game's limit of 25 cloud servers is reached",
+    backend: "sim",
+  });
+});
+
 /**
  * The player's crime, focus and progress on it (ms), and their karma, as the game saves them: `null` for no crime. A
  * crime started again loses its progress (`Work/CrimeWork.ts`, `unitCompleted`).
@@ -529,4 +659,135 @@ test("crime (singularity, #156): with SF4.3, through its Singularity worker, lar
   await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
   expect(await workedAt(fresh, crime("Shoplift", false))).toMatchObject({ converged: true, backend: "singularity" });
   await larcenyKeptAcrossRounds(fresh, false, "Homicide");
+});
+
+/**
+ * The player's class, where, its focus, the game cycles it's run (200 ms each) and the money, as the game saves them,
+ * with the game time of the save: `null` for no class.
+ */
+async function savedClass(fresh: { simulation: { save(): Promise<Uint8Array> }; game: { clock: { now(): number } } }) {
+  const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
+  const player = JSON.parse(saveObject.data.PlayerSave).data;
+  const work = player.currentWork;
+  if (work?.ctor !== "ClassWork") return null;
+  const { classType, location, cyclesWorked } = work.data;
+  return { classType, location, focus: player.focus, cyclesWorked, money: player.money, atMs: fresh.game.clock.now() };
+}
+
+/**
+ * Whether the class ran on from `before` to `after`, not started again: its cycles grew by the game time between the
+ * two saves (a cycle is 200 ms, `Constants.ts`, `MilliPerCycle`), less a second's slack. One started again in between
+ * would have lost the cycles before it.
+ */
+function ranOn(before: Awaited<ReturnType<typeof savedClass>>, after: Awaited<ReturnType<typeof savedClass>>) {
+  if (before === null || after === null) throw new Error("no class saved");
+  expect(after.cyclesWorked - before.cyclesWorked).toBeGreaterThanOrEqual((after.atMs - before.atMs) / 200 - 5);
+}
+
+/** The guard's problems, in core's words: the simulator's effector can't import them, so drift fails here. */
+const crushFromSector12 = classStartProblem(
+  { location: "Crush Fitness Gym", classType: "str" },
+  { money: 0, city: "Sector-12" },
+);
+
+const aClass = (location: string, classType: string, focus = false): Work => ({
+  kind: "class",
+  location,
+  classType,
+  focus,
+});
+
+test("a class (sim, #158): Computer Science at Rothman, unfocused then focused; the guard; a course under way kept", async () => {
+  const fresh = await freshStart({
+    withDesiredState: false,
+    beforeAgent: async ({ simulation }) => simulation.diagnostics.setMoney(1_000),
+  });
+  expect(await workedAt(fresh, aClass("Rothman University", "Computer Science"))).toEqual({
+    converged: true,
+    problem: null,
+    backend: "sim",
+  });
+  const started = await savedClass(fresh);
+  expect(started).toMatchObject({ classType: "Computer Science", location: "Rothman University", focus: false });
+  expect((await fresh.simulation.diagnostics.game()).page).toBe("Location");
+  await workedAt(fresh, aClass("Rothman University", "Computer Science", true));
+  const focused = await savedClass(fresh);
+  expect(focused).toMatchObject({ classType: "Computer Science", focus: true });
+  ranOn(started, focused);
+  expect((await fresh.simulation.diagnostics.game()).page).toBe("Work");
+  // A gym in Aevum from Sector-12, and a paid course without 10 minutes of its cost: neither started.
+  expect(await workedAt(fresh, aClass("Crush Fitness Gym", "str"), false)).toMatchObject({
+    converged: false,
+    problem: crushFromSector12,
+  });
+  const dataStructures = { location: "Rothman University", classType: "Data Structures" };
+  expect(await workedAt(fresh, aClass("Rothman University", "Data Structures"), false)).toMatchObject({
+    converged: false,
+    problem: classStartProblem(dataStructures, { money: 1_000, city: "Sector-12" }),
+  });
+  expect(await savedClass(fresh)).toMatchObject({ classType: "Computer Science" });
+  // With the money it's started at the activity's next look (the work wanted is unchanged, so within 30 s); once under
+  // way, it's kept though the money runs out.
+  await fresh.simulation.diagnostics.setMoney(72_000);
+  await fresh.game.runUntil(() => fresh.latest<FastSnapshotData>("fast")?.work?.converged === true, 35_000);
+  await fresh.simulation.diagnostics.setMoney(0);
+  await fresh.game.run(31_000);
+  expect(fresh.latest<FastSnapshotData>("fast")?.work).toEqual({ converged: true, problem: null, backend: "sim" });
+  const kept = await savedClass(fresh);
+  expect(kept).toMatchObject({ classType: "Data Structures", location: "Rothman University", focus: false });
+  expect(kept?.money).toBeLessThan(0);
+  // A gym told from another by its location, which the page can't do: Iron Gym's strength, then Powerhouse Gym's.
+  await fresh.simulation.diagnostics.setMoney(2_000_000);
+  await workedAt(fresh, aClass("Iron Gym", "str"));
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Iron Gym" });
+  await workedAt(fresh, aClass("Powerhouse Gym", "str"));
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym" });
+});
+
+test("a class (singularity, #158): with SF4.3, through its Singularity worker, a gym told from another by its location", async () => {
+  const fresh = await freshStart({
+    withDesiredState: false,
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } },
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(1_000_000);
+      await withoutSimEffectors(game);
+    },
+  });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  expect(await workedAt(fresh, aClass("Rothman University", "Computer Science"))).toMatchObject({
+    converged: true,
+    backend: "singularity",
+  });
+  const unfocused = await savedClass(fresh);
+  expect(unfocused).toMatchObject({ classType: "Computer Science", focus: false });
+  // The focus set (`setFocus`), the class not started again.
+  await workedAt(fresh, aClass("Rothman University", "Computer Science", true));
+  const focused = await savedClass(fresh);
+  expect(focused).toMatchObject({ classType: "Computer Science", focus: true });
+  ranOn(unfocused, focused);
+  expect(await workedAt(fresh, aClass("Iron Gym", "str"))).toMatchObject({ converged: true });
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Iron Gym", focus: false });
+  // Powerhouse Gym's strength training reads as Iron Gym's on the page, not to Singularity; $1m is under its guard.
+  const powerhouseWithNothing = classStartProblem(
+    { location: "Powerhouse Gym", classType: "str" },
+    { money: 0, city: "Sector-12" },
+  ) as string;
+  expect(await workedAt(fresh, aClass("Powerhouse Gym", "str"), false)).toMatchObject({
+    converged: false,
+    problem: expect.stringContaining(powerhouseWithNothing.replace(/\$0$/, "")),
+  });
+  await fresh.simulation.diagnostics.setMoney(2_000_000);
+  await fresh.game.runUntil(() => fresh.latest<FastSnapshotData>("fast")?.work?.converged === true, 35_000);
+  expect(await savedClass(fresh)).toMatchObject({ classType: "str", location: "Powerhouse Gym" });
+  // Under way, it's left alone by the guard: with the money gone, its focus is still set.
+  const beforeFocus = await savedClass(fresh);
+  await fresh.simulation.diagnostics.setMoney(0);
+  expect(await workedAt(fresh, aClass("Powerhouse Gym", "str", true))).toMatchObject({ converged: true });
+  const afterFocus = await savedClass(fresh);
+  expect(afterFocus).toMatchObject({ classType: "str", location: "Powerhouse Gym", focus: true });
+  ranOn(beforeFocus, afterFocus);
+  expect(await workedAt(fresh, aClass("Crush Fitness Gym", "str"), false)).toMatchObject({
+    converged: false,
+    problem: crushFromSector12,
+  });
 });
