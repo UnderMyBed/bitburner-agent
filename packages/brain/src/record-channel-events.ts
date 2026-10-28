@@ -18,8 +18,8 @@ function handledDialogsIn(data: unknown): HandledDialog[] {
 }
 
 /**
- * The brain's control channel, its numbering seeded from `store` (#119): after a brain restart, the same Agent session's
- * next snapshots carry on from those stored, so none stored counts as missed, and none is stored twice.
+ * The brain's control channel, its numbering seeded from `store` (#119): after a brain restart, the same Agent
+ * session's next snapshots carry on from those stored, so none stored counts as missed, and none is stored twice.
  */
 export function brainChannel({
   token,

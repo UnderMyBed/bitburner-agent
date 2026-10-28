@@ -301,7 +301,6 @@ export class ControlChannel {
           if (sequenceNumber !== undefined) tiers.set(tier, sequenceNumber);
         }
       } catch (error) {
-        tiers.clear();
         lookupError = { error };
       }
     }
