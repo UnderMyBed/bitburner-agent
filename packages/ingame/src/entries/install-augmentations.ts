@@ -1,15 +1,24 @@
-// agent/<deploymentId>/install-augmentations.js: the `ui` backend's install (#164). Installing through the page needs
-// the restart after it: a page-level timer that outlives the scripts the install kills, to start `agent/boot.js` again
-// (architecture §5.7, Q5). That's M3's slice 10b; until then this worker installs nothing, and says so, so the Agent
-// never kills itself with no way back. Arguments: when to give up (unused).
-// RAM: nothing beyond the base (ram-budget.json).
+// agent/<deploymentId>/install-augmentations.js: a home worker that installs the queued augmentations through the
+// game's page (#167), the `ui` backend's install, and arms the restart after it (architecture §5.7). Arguments: the
+// script to start after the reset (`agent/boot.js`), and when to give up (the game's `Date.now()`).
+// - The steps and the restart timer are in ../page/install-page.ts: the game first (nothing left to install is done),
+//   the timer armed, then Install and its confirmation. The install kills this script; the timer starts `boot.js`.
+// - Around those steps, `reportPageEffect` (../page/page-effect.ts): never over an owner's dialog, back to the
+//   Terminal.
+// RAM: nothing beyond the base (ram-budget.json); the page costs nothing.
 import type { NS } from "../ns.ts";
-import { reportToAgent } from "../workers/report-to-agent.ts";
+import { installOnPage } from "../page/install-page.ts";
+import { reportPageEffect } from "../page/page-effect.ts";
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
-  reportToAgent(ns, {
-    done: false,
-    problem: "installing through the page, and the restart after it, aren't built yet (M3 slice 10b)",
+  const bootScript = String(ns.args[0] ?? "");
+  const deadlineMs = Number(ns.args[1] ?? 0);
+  const nothingToInstall = { seen: false };
+  await reportPageEffect(ns, deadlineMs, {
+    isDone: () => nothingToInstall.seen,
+    doing: "install through",
+    steps: (gamePage) => installOnPage(gamePage, bootScript, nothingToInstall),
+    notDoneAfter: "augmentations are still queued after installing them",
   });
 }

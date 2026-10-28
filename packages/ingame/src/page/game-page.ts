@@ -48,7 +48,7 @@ export const factionRowButtonXpath = (section: string, faction: string, label: s
 const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
 
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
-function reactPropsOf(element: Element): Record<string, unknown> | null {
+export function reactPropsOf(element: Element): Record<string, unknown> | null {
   const key = Object.keys(element).find((each) => each.startsWith("__reactProps"));
   return key ? ((element as unknown as Record<string, Record<string, unknown>>)[key] ?? null) : null;
 }
@@ -95,7 +95,8 @@ export function reactText(node: unknown): string {
  * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
  * Each step returns its problem, or null once it's done.
  */
-export function openGamePage(ns: NS, deadlineMs: number) {
+/** The game's page, or null where there's none (the simulator's page has no `evaluate`). No `ns`: see above. */
+export function pageDocument(): Document | null {
   let page: Document | undefined;
   try {
     // Indirect, not a bare `eval`: the bundler then keeps its freedom to rename. A direct `eval` could see every name in
@@ -105,12 +106,21 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   } catch {
     return null;
   }
-  if (!page?.evaluate) return null;
-  const gamePage = page;
+  return page?.evaluate ? page : null;
+}
 
-  const findElement = (xpath: string): Element | null =>
-    gamePage.evaluate(xpath, gamePage, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
-      .singleNodeValue as Element | null;
+/** The first element `xpath` finds in `page`, or null. */
+export const findOnPage = (page: Document, xpath: string): Element | null =>
+  page.evaluate(xpath, page, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
+
+/** The sidebar's item for one of the game's pages: a list button labelled with its name (`Sidebar/ui/SidebarItem.tsx`). */
+export const sidebarItemXpath = (pageName: string) => `//div[@role='button' and .//p[normalize-space()='${pageName}']]`;
+
+export function openGamePage(ns: NS, deadlineMs: number) {
+  const gamePage = pageDocument();
+  if (gamePage === null) return null;
+
+  const findElement = (xpath: string): Element | null => findOnPage(gamePage, xpath);
   /** When the steps end; the way back to the Terminal has until `deadlineMs`. */
   const stepsEndMs = deadlineMs - RETURN_RESERVE_MS;
   const timeLeftMs = (untilMs: number) => untilMs - Date.now();
@@ -156,7 +166,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
    */
   function openSidebarPage(pageName: string, untilMs: number): Promise<string | null> {
     return clickWhenThere(
-      `//div[@role='button' and .//p[normalize-space()='${pageName}']]`,
+      sidebarItemXpath(pageName),
       `"${pageName}" in the sidebar (is its section collapsed?)`,
       untilMs,
     );

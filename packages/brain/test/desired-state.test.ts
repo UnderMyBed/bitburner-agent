@@ -783,9 +783,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
       await release();
       expect(sentIds()).toEqual([INSTALL.id]);
-      // A slow snapshot of the same game changes nothing, nor one from before that reset (a save that old, reloaded).
+      // A slow snapshot of the same game changes nothing.
       send(connection, "slow", slowAt(1_000));
-      send(connection, "slow", slowAt(500));
       expect(sentIds()).toEqual([INSTALL.id]);
       // The install kills the Agent; the next one connects to the reset game.
       connection.dropFromGameSide();
@@ -801,6 +800,17 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       ).toEqual([VOLHAVEN.id]);
       // Not gated and backed up again for the new game.
       expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("a reset with the clock set back (#167): an earlier lastAugReset is another reset all the same, and takes it off", async () => {
+      const { controller, connection, sentIds, release } = connectedWithLoopOff();
+      send(connection, "slow", slowAt(1_767_225_600_000));
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      await release();
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // The game sets it from the clock (E2's page clock starts near 0, the save's from 2026).
+      send(connection, "slow", slowAt(82_500));
+      expect(readManualIntents(store)).toEqual([]);
     });
 
     test("a brain restarted mid-install doesn't know it was sent: gated again, it's done on the Agent's word", async () => {

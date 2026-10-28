@@ -87,7 +87,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
-    ["agent/abcdef123456/install-augmentations.js", []],
+    ["agent/abcdef123456/install-augmentations.js", ["agent/boot.js"]],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
