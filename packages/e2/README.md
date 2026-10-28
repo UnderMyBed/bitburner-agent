@@ -15,7 +15,7 @@ npm run e2:install     # once: Playwright's Chromium headless shell
 npm run e2             # all E2 tests; npm run e2 -- clock runs the files whose names match
 ```
 
-- The whole suite takes several minutes on the reference rig (36 tests; the skeleton's five and the effectors' twenty-three start a brain each, which builds the in-game code; `test/effectors.e2.test.ts` alone takes about 4 min). The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
+- The whole suite takes several minutes on the reference rig (42 tests; the skeleton's five and the effectors' twenty-three start a brain each, which builds the in-game code; `test/effectors.e2.test.ts` alone takes about 4 min). The first `npm run e2` also builds the simulator's engine bundle, through the simulator's global setup, so it takes longer.
 - On Linux, Chromium may need system libraries: `npx playwright install-deps chromium`.
 - E2 builds and downloads go under the repository's gitignored `.cache/e2/`, so deleting that folder undoes `e2:build` and `e2:install`. The exception is babel's cache, which the game's webpack config keeps in the submodule's gitignored `node_modules/.cache/`. Builds of earlier commits stay there, about 117 MB each, until you delete them.
 
@@ -45,9 +45,9 @@ It downloads Playwright's Chromium headless shell into `.cache/e2/browsers/`, no
 
 ### `npm run e2`
 
-It runs `test/**/*.e2.test.ts` under `vitest.config.ts`, from the repository root: one file at a time, one browser, with the simulator's global setup, since the simulator makes the saves the tests load. The root Vitest config excludes `*.e2.test.ts`.
+It runs `test/**/*.e2.test.ts` under `vitest.config.ts`, from the repository root: one file at a time, one browser. Its global setup (`test/global-setup.ts`) runs the simulator's, since the simulator makes the saves the tests load, and counts the run's retried loads (#120, below). The root Vitest config excludes `*.e2.test.ts`.
 
-The package's other tests (`test/*.test.ts`: the static server, the build's checks, the webpack config) need no browser and run with `npm test` in CI.
+The package's other tests (`test/*.test.ts`: the static server, the build's checks, the webpack config, the load diagnosis and the count of retried loads) need no browser and run with `npm test` in CI.
 
 ## Fixtures
 
@@ -57,11 +57,11 @@ The package's other tests (`test/*.test.ts`: the static server, the build's chec
 |---|---|
 | `launchBrowser()` | Playwright's Chromium headless shell. On any launch failure, its error suggests `npm run e2:install` |
 | `serveGame(root)` (`src/server.ts`) | The built game on `http://127.0.0.1:<random port>`, GET only. It also serves a blank page on the same origin (`BLANK_PAGE_PATH`), for writing a save before the game loads |
-| `gameFromSave(browser, server, save, { offlineMs, clockDuringLoad })` | A page in a new browser context with the save in its IndexedDB, loaded to the Terminal. `save` is the gzip bytes, exactly what Steam writes to disk; it goes into `bitburnerSave` v2, store `savestring`, key `save` (`vendor/bitburner-src/src/db.ts`). Game time starts at the save's own `lastUpdate` plus `offlineMs` (default 0: no offline progress), as the simulator's save fixture does |
-| `freshGame(browser, server, { startTimeMs })` | A brand-new game: an empty context, 8 GB of home RAM, and the tutorial running |
+| `gameFromSave(browser, server, save, { offlineMs, clockDuringLoad, load })` | A page in a new browser context with the save in its IndexedDB, loaded to the Terminal. `save` is the gzip bytes, exactly what Steam writes to disk; it goes into `bitburnerSave` v2, store `savestring`, key `save` (`vendor/bitburner-src/src/db.ts`). Game time starts at the save's own `lastUpdate` plus `offlineMs` (default 0: no offline progress), as the simulator's save fixture does. `load` is `untilGameLoaded`'s options |
+| `freshGame(browser, server, { startTimeMs, load })` | A brand-new game: an empty context, 8 GB of home RAM, and the tutorial running |
 | `exitTutorial(page)` | Clicks "Exit Tutorial" and waits for the tutorial to close |
 | `waitForTerminal(page)`, `TERMINAL_INPUT` | The game loaded: its terminal input is on the page |
-| `untilGameLoaded(page, { firstTimeoutMs, retryTimeoutMs, warn })` | `gameFromSave`'s and `freshGame`'s wait: `waitForTerminal`, and if the terminal hasn't shown within 20 s, one reload and a 60 s wait (#120), below |
+| `untilGameLoaded(page, { firstTimeoutMs, retryTimeoutMs, onRetry })` | `gameFromSave`'s and `freshGame`'s wait: `waitForTerminal`, and if the load is still under way after 20 s, one reload and a 60 s wait (#120), below. `onRetry` defaults to a warning, counted for the run |
 | `advanceGameTime(page, ms)`, `advanceUntil(page, condition, { realTimeoutMs, gameTimeoutMs })` | Game time, below |
 | `typeCommand(page, command)`, `terminalText(page)` | Types a command into the terminal (focusing the input, not clicking it) and presses Enter; the terminal's output so far |
 | `closeGame(page)` | Closes the page's browser context |
@@ -71,11 +71,15 @@ The package's other tests (`test/*.test.ts`: the static server, the build's chec
 - **The game's settings live in the save**, so a test sets the RFA port or autoexec by making the save with them.
 - **Reloads aren't blocked.** A production build over `http` asks before unloading (`vendor/bitburner-src/src/index.tsx:53-58`), and the browser shows that prompt once the page has been used (typed in, clicked). With no dialog listener, Playwright's own navigations go through it. `test/game.e2.test.ts` checks the prompt is armed, then reloads. A test that adds a `dialog` listener must accept that prompt itself.
 - **A load that fails says why.** If the game doesn't load (in `gameFromSave`, `freshGame`, or `waitForTerminal` after a reload), the error adds:
-  - the page's visible text, up to 1,500 characters, or why it couldn't be read (a timeout means a hung page);
+  - the page's visible text, up to 1,500 characters, or why it couldn't be read (a timeout means a hung page, anything else a crashed or closed one);
   - what the page went through: navigations, page and console errors, failed requests and a crash (the first 5 and last 20);
   - the requests still pending, since a load stuck on a fetch logs nothing else;
-  - a "Looks like:" line from the visible text (`src/load-diagnosis.ts`): stuck on the loading screen before or after its 2 s hint, recovery mode, a crashed or closed page, an empty page, or something else.
-- **A fixture's load is tried twice (#120).** Once, in about 15 full suite runs, a first load from a save never showed the terminal, and its cause isn't known: hundreds of loads in a row (474 loads and reloads) didn't do it again. So `gameFromSave` and `freshGame` give a load 20 s (loads take under 1 s), then reload the page once and give it 60 s. The first try's report goes to the run's output as a warning starting `E2: the game didn't load within`, so a retried load is still seen; search a run's output for it. A load that fails twice throws with both reports. A test's own reload isn't retried: it's what the test checks.
+  - a "Looks like:" line from the visible text (`src/load-diagnosis.ts`): stuck on the loading screen before or after its 2 s hint, recovery mode, a hung page, a crashed or closed one, an empty page, or something else.
+- **A fixture's stuck load is tried twice (#120).** Once, in about 15 full suite runs, a first load from a save never showed the terminal, and its cause isn't known: hundreds of loads in a row (474 loads and reloads) didn't do it again. So `gameFromSave` and `freshGame` give a load 20 s (loads take under 1 s), then reload the page once and give it 60 s.
+  - **Only a load still under way is retried:** the loading screen, or an empty page. Recovery mode, a hung page or a crashed one fails at once, so a real fault isn't reduced to a warning.
+  - **A retry is seen, and counted.** The first try's report goes to the run's output as a warning starting `E2: the game didn't load within`. The global setup counts the run's retries across its files (`src/retried-loads.ts`). At the end, one retry prints a summary starting `E2: 1 fixture load needed a retry this run`; more than one fails the run, with each listed. Either way, report it on #120.
+  - A load that fails twice throws with both reports. A test's own reload isn't retried: it's what the test checks.
+  - With `clockDuringLoad: "running"`, the retried load's game time has run on through the first try's 20 s (about 20 s of offline progress), and the first try may already have opened its Remote File API connection.
 - **The page's origin is `http://127.0.0.1:<port>`**, not Steam's `file://`. A brain under test allows it in its config (#87).
 
 ## Game time
@@ -119,7 +123,7 @@ Results on the reference rig:
 
 | Test | What |
 |---|---|
-| `test/game.e2.test.ts` | Seven checks: <ul><li>a page that isn't the game makes `waitForTerminal` fail with what it showed and its page error;</li><li>a load held on the game's wasm request is retried once by `untilGameLoaded`, its first try reported as stuck on the loading screen with the wasm pending (#120);</li><li>a load held twice fails, with both tries' reports;</li><li>a simulator-made save, with money earned by hacking, loads to the Terminal, and the overview shows the save's money;</li><li>with the unload prompt armed, a reload gets through and loads the game again;</li><li>a brand-new game starts in the tutorial, `exitTutorial` closes it, and `free` shows 8.00GB;</li><li>a script autoexec starts on load imports another, sleeps 1 s and prints, all within 5 s of game time: it finished after 1,200 ms.</li></ul> |
+| `test/game.e2.test.ts` | Eleven checks: <ul><li>a page that isn't the game makes `waitForTerminal` fail with what it showed and its page error;</li><li>a load held on the game's wasm request is retried once by `untilGameLoaded`, its first try reported as stuck on the loading screen with the wasm pending (#120);</li><li>a load held twice fails, with both tries' reports;</li><li>a load in recovery mode (a save of the wrong type) fails at once, with no retry;</li><li>`freshGame` and `gameFromSave` wait through `untilGameLoaded`: through a proxy holding each first wasm request, each is retried once;</li><li>the global setup names the run's file of retried loads, and by default a retry is warned of and counted there;</li><li>a simulator-made save, with money earned by hacking, loads to the Terminal, and the overview shows the save's money;</li><li>with the unload prompt armed, a reload gets through and loads the game again;</li><li>a brand-new game starts in the tutorial, `exitTutorial` closes it, and `free` shows 8.00GB;</li><li>a script autoexec starts on load imports another, sleeps 1 s and prints, all within 5 s of game time: it finished after 1,200 ms.</li></ul> |
 | `test/pacing.e2.test.ts` | A WebSocket reply 100 ms late in real time arrives within 5 s of game time: after 1,400 ms. Unpaced, it would have taken over 12 s |
 | `test/remote-api.e2.test.ts` | The game's Remote File API client connects to a local WebSocket server named in the save's settings, in 10 loads of 10. Game time runs in real time during each load, so the game's 2 s connection timer (`vendor/bitburner-src/src/index.tsx:37`) races the load. Every load connected 1,600–1,800 ms of game time after the clock was paused, a cycle after the Terminal appeared (200 ms steps): the timer starts when the main bundle runs, late in a load of about 0.7 s, so the settings were always in first. A load in this mode leaves game time still afterwards |
 | `test/skeleton.e2.test.ts` | Five tests: <ul><li>**deploy and start:** a save naming the brain's RFA and autoexec `agent/boot.js`; the game connects, the brain deploys and backs up the save; past an autosave and a reload, autoexec starts the Agent, it's welcomed (running the deployed code, not told to restart), and the next RFA connection finds the deploy current;</li><li>**snapshots:** over 2 game minutes every tier in the right number (static exactly once), numbered 1, 2, 3… with none missed, at its cadence in game time; no failed deploy, refused connection, version drift or failed backup rotation. The most an interval was off its period, over five runs: fast 0–40 ms, medium 60–80 ms, slow 80–120 ms;</li><li>**reload:** a reload brings the Agent back through autoexec, in a new session, with a full snapshot;</li><li>**reconnect:** the brain killed (no clean shutdown) and started again on the same ports; the game's RFA client and the Agent reconnected about 3 s of game time after; welcomed again, the Agent sent a full snapshot, its session and every tier's numbering carrying on, and none of its rows after the restart counting a stored snapshot as missed (#119).</li><li>**8 GB fresh start:** a new game, the tutorial exited, the Remote API and autoexec set through the Options UI and the first `run agent/boot.js` typed, as the owner does. Over 2 game minutes (counted before the mem commands, which take game time too), home stays 8 GB, every tier arrives in the right number with none ever skipped for RAM, and each fast snapshot sees the Agent and its own worker, at most 4.85 GB in use. The game's `mem` gives the Agent 2.85 GB, the snapshot workers 2.0–4.45 GB, the hack loop's home workers 2.35 and 4.65 GB, `buy-program.js` 1.75 GB, `upgrade-home-ram.js` 1.65 GB, `travel.js` 2.1 GB, `join-faction.js` 2.1 GB, `buy-augmentation.js` 2.6 GB, `faction-work.js` 1.6 GB, `company-work.js` 2.1 GB, `crime-work.js` 1.6 GB, `class-work.js` 2.1 GB, `buy-server.js` 4.5 GB (the Singularity workers aren't counted: they run only with Singularity, #145), and `boot.js` 2.7 GB, so the peak, computed, is 7.5 GB (Q1, #34, #134, #145); only the simulator's suites see the peak as it happens (`homePeak`). The hack loop, on by default, has rooted n00dles and runs there in the real game (`ps` on n00dles, #134).</li></ul> |
@@ -136,7 +140,10 @@ Results on the reference rig:
 | `scripts/install-browser.ts` | `e2:install` |
 | `src/server.ts` | The static server |
 | `src/game.ts` | The fixtures and game time |
+| `src/load-diagnosis.ts` | What a load that failed looks like, from the page's text, and which are retried (#120) |
+| `src/retried-loads.ts` | The run's count of retried loads, and its verdict (#120) |
 | `vitest.config.ts` | `npm run e2` |
+| `test/global-setup.ts` | `npm run e2`'s global setup: the simulator's, and the count of retried loads |
 | `tsconfig.json` | Node plus the DOM: code passed to `page.evaluate` runs in the page |
 | `test/*.e2.test.ts` | E2 tests (browser) |
 | `test/helpers/environment.ts` | `useE2()`: the server and browser for a test file |

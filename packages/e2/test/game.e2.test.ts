@@ -1,6 +1,11 @@
 // The fixtures, on the built game (#96): a simulator-made save loads, a reload gets through the unload prompt, a
 // brand-new game's tutorial can be exited, and a script started by the save runs on the stepped clock. A load that
 // fails says why, and a fixture's load stuck on the loading screen is tried once more (#120).
+import { mkdtempSync } from "node:fs";
+import { createServer, request as httpRequest } from "node:http";
+import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import type { Page } from "playwright";
 import { describe, expect, test } from "vitest";
 import {
@@ -15,7 +20,8 @@ import {
   untilGameLoaded,
   waitForTerminal,
 } from "../src/game.ts";
-import { BLANK_PAGE_PATH } from "../src/server.ts";
+import { RETRIED_LOADS_FILE_VARIABLE, readRetriedLoads } from "../src/retried-loads.ts";
+import { BLANK_PAGE_PATH, type GameServer } from "../src/server.ts";
 import { useE2 } from "./helpers/environment.ts";
 import { moneyInSave, simulatorSave } from "./helpers/saves.ts";
 
@@ -103,6 +109,33 @@ describe("the game in Playwright", () => {
     }
   });
 
+  /**
+   * `server`'s game through a proxy that never answers every other wasm request (initSwc's, LoadingScreen.tsx:37),
+   * starting with the first: each load sticks on its screen, and the reload after it doesn't. For a fixture's own load,
+   * whose page a test can't route before it loads.
+   */
+  async function holdingEveryOtherWasm(server: GameServer): Promise<GameServer> {
+    let wasmRequests = 0;
+    const proxy = createServer((request, response) => {
+      if (request.url?.split("?")[0]?.endsWith(".wasm") && wasmRequests++ % 2 === 0) return; // never answered
+      const upstream = httpRequest(`${server.origin}${request.url}`, { headers: request.headers }, (reply) => {
+        response.writeHead(reply.statusCode ?? 502, reply.headers);
+        reply.pipe(response);
+      });
+      upstream.on("error", () => response.destroy());
+      request.pipe(upstream);
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    return {
+      origin: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`,
+      close: () =>
+        new Promise((resolve) => {
+          proxy.closeAllConnections();
+          proxy.close(() => resolve());
+        }),
+    };
+  }
+
   /** Holds the game's wasm request (initSwc's, LoadingScreen.tsx:37) `times` times, so a load sticks on its screen. */
   async function holdWasm(page: Page, times: number): Promise<void> {
     let held = 0;
@@ -118,7 +151,7 @@ describe("the game in Playwright", () => {
       await holdWasm(page, 1);
       await page.reload();
       const warnings: string[] = [];
-      await untilGameLoaded(page, { firstTimeoutMs: 2_000, warn: (message) => warnings.push(message) });
+      await untilGameLoaded(page, { firstTimeoutMs: 2_000, onRetry: (message) => warnings.push(message) });
       await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toMatch(/^E2: the game didn't load within 2000 ms, so the page is reloaded once \(#120\)/);
@@ -137,7 +170,7 @@ describe("the game in Playwright", () => {
       const failure = await untilGameLoaded(page, {
         firstTimeoutMs: 1_000,
         retryTimeoutMs: 1_000,
-        warn: () => {},
+        onRetry: () => {},
       }).then(
         () => null,
         (error: Error) => error.message,
@@ -145,6 +178,76 @@ describe("the game in Playwright", () => {
       expect(failure).toMatch(/^The game didn't load, twice \(#120\)/);
       expect(failure?.match(/Looks like: stuck on the loading screen/g)).toHaveLength(2);
     } finally {
+      await closeGame(page);
+    }
+  });
+
+  test("a load in recovery mode fails at once, with no retry: a fault isn't retried past (#120)", async () => {
+    const page = await freshGame(e2.browser, e2.server);
+    try {
+      // A save of the wrong type in the game's IndexedDB: load() rejects it (db.ts:84-88), so recovery mode.
+      await page.evaluate(async () => {
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("bitburnerSave", 2);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction("savestring", "readwrite");
+          transaction.objectStore("savestring").put(42, "save");
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+        });
+        database.close();
+      });
+      await page.reload();
+      const retries: string[] = [];
+      const failure = await untilGameLoaded(page, {
+        firstTimeoutMs: 3_000,
+        onRetry: (message) => retries.push(message),
+      }).then(
+        () => null,
+        (error: Error) => error.message,
+      );
+      expect(failure).toContain("Looks like: recovery mode: the load threw");
+      expect(retries).toEqual([]);
+    } finally {
+      await closeGame(page);
+    }
+  });
+
+  test("the fixtures wait through untilGameLoaded: a load they start that sticks is retried (#120)", async () => {
+    const holding = await holdingEveryOtherWasm(e2.server);
+    try {
+      const retries: string[] = [];
+      const load = { firstTimeoutMs: 2_000, onRetry: (message: string) => retries.push(message) };
+      await closeGame(await freshGame(e2.browser, holding, { load }));
+      expect(retries).toHaveLength(1);
+      await closeGame(await gameFromSave(e2.browser, holding, await simulatorSave(), { load }));
+      expect(retries).toHaveLength(2);
+      expect(retries.every((retry) => retry.includes("Looks like: stuck on the loading screen"))).toBe(true);
+    } finally {
+      await holding.close();
+    }
+  });
+
+  test("the run counts retried loads: its global setup names the file they're recorded in (#120)", () => {
+    expect(process.env[RETRIED_LOADS_FILE_VARIABLE]).toMatch(/retried-loads\.jsonl$/);
+  });
+
+  test("by default a retry is printed as a warning and counted for the run (#120)", async () => {
+    const page = await freshGame(e2.browser, e2.server);
+    const runFile = process.env[RETRIED_LOADS_FILE_VARIABLE];
+    // This test's own file, so its deliberate retry doesn't count against the run.
+    const file = path.join(mkdtempSync(path.join(os.tmpdir(), "e2-retried-")), "retried-loads.jsonl");
+    process.env[RETRIED_LOADS_FILE_VARIABLE] = file;
+    try {
+      await holdWasm(page, 1);
+      await page.reload();
+      await untilGameLoaded(page, { firstTimeoutMs: 2_000 });
+      expect(readRetriedLoads(file)).toEqual([expect.stringMatching(/^E2: the game didn't load within 2000 ms/)]);
+    } finally {
+      process.env[RETRIED_LOADS_FILE_VARIABLE] = runFile;
       await closeGame(page);
     }
   });
