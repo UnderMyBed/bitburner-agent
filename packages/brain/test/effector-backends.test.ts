@@ -529,13 +529,15 @@ async function boughtOnceAndRefused(fresh: ForServers, backend: "sim" | "ui") {
   ]);
   await fresh.game.run(2_000);
   expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE);
-  // A name the game's servers have: nothing bought (the game would have named it n00dles-0).
+  // A name the game's servers have: nothing bought (the game would have named it n00dles-0), nothing paid.
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("n00dles")] });
   expect(await triedOnce(fresh, "buyServer(n00dles, 8)")).toMatchObject({
     done: false,
-    problem: "n00dles is the name of a server that isn't the player's",
+    problem: "n00dles is the name of a server that isn't one of the player's cloud servers",
     backend,
   });
+  await fresh.game.run(2_500);
+  expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE);
   // Without the money, the price says why.
   await fresh.simulation.diagnostics.setMoney(EIGHT_GB_PRICE - 1);
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-1")] });
@@ -544,8 +546,15 @@ async function boughtOnceAndRefused(fresh: ForServers, backend: "sim" | "ui") {
     problem: "not enough money: the 8 GB server costs $440000",
     backend,
   });
+  // Neither bought, as a medium snapshot taken after both tries shows (one comes every 10 s).
+  const mediumSnapshots = () =>
+    fresh.brain.channelEvents.filter((event) => event.type === "snapshotReceived" && event.snapshot.tier === "medium")
+      .length;
+  const mediumsBefore = mediumSnapshots();
+  await fresh.game.runUntil(() => mediumSnapshots() > mediumsBefore, 12_000);
   const servers = fresh.medium()?.servers.map((each) => each.hostname) ?? [];
   expect(servers.filter((hostname) => /^(n00dles-|pserv-1)/.test(hostname))).toEqual([]);
+  expect(fresh.money()).toBe(EIGHT_GB_PRICE - 1);
 }
 
 test("buying a server (sim, #159): bought once; again, done with nothing paid; a game server's name and the money refused", async () => {
@@ -557,17 +566,33 @@ test("buying a server (its worker, #159): on a fresh save's 8 GB home beside the
 });
 
 test("buying a server (its worker, #159): with SF4.3 still the same worker, reported as ui; at the limit of 25, refused", async () => {
-  const fresh = await forServers(1e10, { sim: false, singularity: true });
+  // The owner has bought up to the limit (the BitNode's 25) before the Agent starts; the next is refused, saying so.
+  const fresh = await forServers(1e10, { sim: false, singularity: true, atTheLimit: true });
   await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
-  expect(await boughtEach(fresh, [server("pserv-0")])).toMatchObject([{ done: true, backend: "ui" }]);
-  // The owner buys up to the limit (the BitNode's 25; home has room beside the Agent); the next is refused, saying so.
-  await ownerRunsOnHome(fresh, BUY_TO_THE_LIMIT);
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-1")] });
   expect(await triedOnce(fresh, "buyServer(pserv-1, 8)")).toMatchObject({
     done: false,
     problem: "the game's limit of 25 cloud servers is reached",
     backend: "ui",
   });
+});
+
+test("buying a server (sim, #159): a name only a server off the network has is bought renamed, done, as the worker says", async () => {
+  // Core refuses w0r1d_d43m0n (#161's review), so the owner's script calls the effector itself: before The Red Pill
+  // the daemon has no links, so the worker's `serverExists` doesn't see it, and the game names the purchase -0.
+  const fresh = await forServers(1e10, { sim: true, singularity: false });
+  await fresh.simulation.writeFile(
+    "home",
+    "owner-buys.js",
+    'export async function main(ns) { ns.print(JSON.stringify(globalThis.__bitburnerAgentSim.buyCloudServer("w0r1d_d43m0n", 8))); }',
+  );
+  const { pid } = await fresh.simulation.run("home", "owner-buys.js");
+  await fresh.game.run(1_000);
+  // The script's own line, before the game's "Script finished running".
+  const logged = (await fresh.simulation.logs(pid as number)).filter((line) => line.startsWith("{"));
+  expect(logged.map((line) => JSON.parse(line))).toEqual([
+    { done: true, problem: "bought as w0r1d_d43m0n-0: a server off the network held w0r1d_d43m0n" },
+  ]);
 });
 
 test("buying a server (sim, #159): at the limit of 25, refused as the worker refuses it", async () => {

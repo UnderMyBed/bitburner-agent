@@ -30,6 +30,7 @@ import {
   createUniqueRandomIp,
   GetServer,
 } from "../../../../../vendor/bitburner-src/src/Server/AllServers";
+import { DarknetServer } from "../../../../../vendor/bitburner-src/src/Server/DarknetServer";
 import { ServerConstants } from "../../../../../vendor/bitburner-src/src/Server/data/Constants";
 import { safelyCreateUniqueServer } from "../../../../../vendor/bitburner-src/src/Server/ServerHelpers";
 import {
@@ -249,20 +250,21 @@ const effectors = {
     return result(isThisWork() && Player.focus === focus, notConverged);
   },
   /**
-   * A cloud server (#159), as `ns.cloud.purchaseServer` buys it (`NetscriptFunctions/Cloud.ts:35-97`), with the `ui`
+   * A cloud server (#159), as `ns.cloud.purchaseServer` buys it (`NetscriptFunctions/Cloud.ts:35-93`), with the `ui`
    * worker's checks first: the player's already, done; the name taken by another server, refused (the game would buy
-   * `<name>-0`); then the price, the money and the limit. Not named `purchaseServer`, which is an NS function. The
-   * problems read as the worker's.
+   * `<name>-0`); then the price, the money and the limit. The name is looked up as the worker's `ns.serverExists` does
+   * (`NetscriptFunctions.ts:1051-1055`: a server off the network isn't seen), so a purchase the game renames all the
+   * same is done, saying so, as the worker's. Not named `purchaseServer`, an NS function. The problems read as the
+   * worker's.
    */
   buyCloudServer(hostname: string, ram: number): EffectorResult {
     const isPlayers = () => Player.purchasedServers.includes(hostname);
-    if (GetServer(hostname) !== null) {
-      return result(isPlayers(), `${hostname} is the name of a server that isn't the player's`);
+    const existing = GetServer(hostname);
+    if (existing !== null && (existing.serversOnNetwork.length > 0 || existing instanceof DarknetServer)) {
+      return result(isPlayers(), `${hostname} is the name of a server that isn't one of the player's cloud servers`);
     }
     const cost = getCloudServerCost(ram);
-    if (cost === Number.POSITIVE_INFINITY) {
-      return result(false, `the game sells no ${ram} GB server in this BitNode (over its most)`);
-    }
+    if (cost === Number.POSITIVE_INFINITY) return result(false, `the game sells no ${ram} GB server in this BitNode`);
     if (Player.money < cost) return result(false, `not enough money: the ${ram} GB server costs $${Math.ceil(cost)}`);
     if (Player.purchasedServers.length >= getCloudServerLimit()) {
       return result(false, `the game's limit of ${getCloudServerLimit()} cloud servers is reached`);
@@ -282,6 +284,9 @@ const effectors = {
     homeComputer.serversOnNetwork.push(server.hostname);
     server.serversOnNetwork.push(homeComputer.hostname);
     Player.loseMoney(cost, "servers");
+    if (server.hostname !== hostname) {
+      return { done: true, problem: `bought as ${server.hostname}: a server off the network held ${hostname}` };
+    }
     return result(isPlayers(), `${hostname} isn't the player's after buying it`);
   },
 };

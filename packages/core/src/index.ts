@@ -26,6 +26,7 @@ export {
   isCloudServerRam,
   MAX_CLOUD_SERVER_HOSTNAME_LENGTH,
   RESERVED_HOSTNAME_PREFIXES,
+  WORLD_DAEMON,
 } from "./cloud-servers.ts";
 export {
   COMPANY_NAMES,

@@ -3,7 +3,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR, neuroFluxLevel } from "../src/augmentations.ts";
-import { CLOUD_SERVER_MAX_RAM, isCloudServerHostname, RESERVED_HOSTNAME_PREFIXES } from "../src/cloud-servers.ts";
+import {
+  CLOUD_SERVER_MAX_RAM,
+  isCloudServerHostname,
+  RESERVED_HOSTNAME_PREFIXES,
+  WORLD_DAEMON,
+} from "../src/cloud-servers.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
 import {
   INTENT_ACTIONS,
@@ -83,6 +88,13 @@ describe("parseIntentRequest", () => {
     ["server RAM over 2^20 GB", { action: "buyServer", args: { hostname: "pserv-0", ram: 2 ** 21 } }],
     ["server RAM below 1 GB", { action: "buyServer", args: { hostname: "pserv-0", ram: 0.5 } }],
     ["server RAM as text", { action: "buyServer", args: { hostname: "pserv-0", ram: "8" } }],
+    ["server RAM of 0", { action: "buyServer", args: { hostname: "pserv-0", ram: 0 } }],
+    ["negative server RAM", { action: "buyServer", args: { hostname: "pserv-0", ram: -8 } }],
+    ["server RAM that's NaN", { action: "buyServer", args: { hostname: "pserv-0", ram: Number.NaN } }],
+    [
+      "a server named w0r1d_d43m0n, which the game would buy as w0r1d_d43m0n-0, every try",
+      { action: "buyServer", args: { hostname: "w0r1d_d43m0n", ram: 8 } },
+    ],
   ])("refuses %s, with a reason", (_description, request) => {
     const parsed = parseIntentRequest(request);
     expect(parsed.ok).toBe(false);
@@ -154,6 +166,7 @@ test("cloud servers: the most RAM, the reserved prefixes and the IP address patt
   const source = (file: string) =>
     readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
   expect(source("Server/data/Constants.ts")).toContain(`CloudServerMaxRam: ${CLOUD_SERVER_MAX_RAM}, // 2^20`);
+  expect(source("Server/data/SpecialServers.ts")).toContain(`WorldDaemon: "${WORLD_DAEMON}"`);
   const cloud = source("NetscriptFunctions/Cloud.ts");
   for (const prefix of RESERVED_HOSTNAME_PREFIXES) expect(cloud).toContain(`hostname.startsWith("${prefix}")`);
   // The game's own test of an IP address, character for character.

@@ -7,7 +7,13 @@
  * "RAM"), so the actions are only ever strings here, never identifiers: `upgradeHomeRam` is a Singularity function.
  */
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
-import { isCloudServerHostname, isCloudServerRam } from "./cloud-servers.ts";
+import {
+  CLOUD_SERVER_MAX_RAM,
+  isCloudServerHostname,
+  isCloudServerRam,
+  MAX_CLOUD_SERVER_HOSTNAME_LENGTH,
+  WORLD_DAEMON,
+} from "./cloud-servers.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "./factions.ts";
 import { isUpgradableHomeRam } from "./home-ram.ts";
 import { CITIES, TECH_VENDORS } from "./locations.ts";
@@ -135,11 +141,12 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         return {
           ok: false,
           reason:
-            "buyServer's hostname isn't 1 to 64 letters, digits, '.', '_' or '-' (not an IP address, nor hacknet-…)",
+            `buyServer's hostname isn't 1 to ${MAX_CLOUD_SERVER_HOSTNAME_LENGTH} letters, digits, '.', '_' or '-' ` +
+            `(not an IP address, hacknet-…, nor ${WORLD_DAEMON})`,
         };
       }
       if (!isCloudServerRam(args.ram)) {
-        return { ok: false, reason: "buyServer's ram isn't a power of two GB from 1 to 1048576" };
+        return { ok: false, reason: `buyServer's ram isn't a power of two GB from 1 to ${CLOUD_SERVER_MAX_RAM}` };
       }
       return { ok: true, message: { action, args: { hostname: args.hostname, ram: args.ram } } };
     default:
