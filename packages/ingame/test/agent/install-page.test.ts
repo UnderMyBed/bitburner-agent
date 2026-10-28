@@ -39,7 +39,7 @@ function installAlert(): Element {
 /**
  * The Terminal: its output and its controlled input, as `Terminal/ui/TerminalInput.tsx` renders it. Typing sets the
  * line, which the input renders `RENDER_MS` later, with its `value` prop and new handlers; Enter runs the line its last
- * render saw: the echo, then what `answer` prints for it. `earlier` lines are in the output already.
+ * render saw: the echo, then what `answer` prints for it, rendered `RENDER_MS` later too. `earlier` lines are in the output already.
  */
 function terminal({
   answer = (_line: string) => STARTED,
@@ -63,8 +63,11 @@ function terminal({
       onKeyDown: (event: { key: string }) => {
         if (event.key !== "Enter" || enterDoesNothing) return;
         ran.push(line);
-        output.append(element("li", { textContent: `[home /]> ${line}` }));
-        if (line !== "") output.append(element("li", { textContent: answer(line) }));
+        // The output renders a moment later, as the game's does: what's there before is what a look sees first.
+        setTimeout(() => {
+          output.append(element("li", { textContent: `[home /]> ${line}` }));
+          if (line !== "") output.append(element("li", { textContent: answer(line) }));
+        }, RENDER_MS);
         render("");
       },
     });
@@ -390,15 +393,17 @@ describe("the install's steps", () => {
   });
 
   test("alive after Confirm: nothing was installed, the timer is disarmed, and it says so", async () => {
+    vi.useFakeTimers();
     sidebarItem("Stats");
     sidebarItem("Augmentations", () => augmentationsPage({ enabled: true }));
     terminal();
     const gamePage = openGamePage(workerNs().ns, Date.now() + 1_500);
     if (!gamePage) throw new Error("no page");
-    expect(await installOnPage(gamePage, BOOT, { seen: false })).toBe("the game didn't install after its confirmation");
-    // An alert that shows now isn't the install's restart to make, and nothing is typed, however long.
+    const problem = installOnPage(gamePage, BOOT, { seen: false });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await problem).toBe("the game didn't install after its confirmation");
+    // An alert that shows now isn't the install's restart to make: not closed, and nothing typed, however long.
     installAlert();
-    vi.useFakeTimers();
     await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.install + RESTART_STEP_LIMITS_MS.terminal);
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "Confirm"]);
     expect(terminalOutput()).not.toContain(STARTED);
