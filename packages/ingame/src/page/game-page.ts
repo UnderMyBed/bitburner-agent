@@ -48,7 +48,7 @@ export const factionRowButtonXpath = (section: string, faction: string, label: s
 const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
 
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
-function reactPropsOf(element: Element): Record<string, unknown> | null {
+export function reactPropsOf(element: Element): Record<string, unknown> | null {
   const key = Object.keys(element).find((each) => each.startsWith("__reactProps"));
   return key ? ((element as unknown as Record<string, Record<string, unknown>>)[key] ?? null) : null;
 }
@@ -92,10 +92,10 @@ export function reactText(node: unknown): string {
 }
 
 /**
- * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
- * Each step returns its problem, or null once it's done.
+ * The game's page document, or null where there's none (the simulator's page has no `evaluate`). It needs no `ns`, so
+ * the install's page timer can use it after its script has died (./install-page.ts, #167).
  */
-export function openGamePage(ns: NS, deadlineMs: number) {
+export function pageDocument(): Document | null {
   let page: Document | undefined;
   try {
     // Indirect, not a bare `eval`: the bundler then keeps its freedom to rename. A direct `eval` could see every name in
@@ -105,12 +105,33 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   } catch {
     return null;
   }
-  if (!page?.evaluate) return null;
-  const gamePage = page;
+  return page?.evaluate ? page : null;
+}
 
-  const findElement = (xpath: string): Element | null =>
-    gamePage.evaluate(xpath, gamePage, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
-      .singleNodeValue as Element | null;
+/** The first element `xpath` finds in `page`, or null. */
+export const findOnPage = (page: Document, xpath: string): Element | null =>
+  page.evaluate(xpath, page, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
+
+/** The sidebar's item for one of the game's pages: a list button with its name (`Sidebar/ui/SidebarItem.tsx`). */
+export const sidebarItemXpath = (pageName: string) => `//div[@role='button' and .//p[normalize-space()='${pageName}']]`;
+
+/** A React handler's event, as a player's would be: trusted, with the methods handlers call, and any `fields`. */
+export const playerEvent = (fields: Record<string, unknown> = {}) => ({
+  isTrusted: true,
+  preventDefault: () => {},
+  stopPropagation: () => {},
+  ...fields,
+});
+
+/**
+ * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
+ * Each step returns its problem, or null once it's done.
+ */
+export function openGamePage(ns: NS, deadlineMs: number) {
+  const gamePage = pageDocument();
+  if (gamePage === null) return null;
+
+  const findElement = (xpath: string): Element | null => findOnPage(gamePage, xpath);
   /** When the steps end; the way back to the Terminal has until `deadlineMs`. */
   const stepsEndMs = deadlineMs - RETURN_RESERVE_MS;
   const timeLeftMs = (untilMs: number) => untilMs - Date.now();
@@ -131,7 +152,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   async function click(element: Element, what: string): Promise<string | null> {
     const onClick = reactPropsOf(element)?.onClick;
     if (typeof onClick !== "function") return `can't click ${what}`;
-    await onClick({ isTrusted: true, preventDefault: () => {}, stopPropagation: () => {} });
+    await onClick(playerEvent());
     await letRender();
     return null;
   }
@@ -156,7 +177,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
    */
   function openSidebarPage(pageName: string, untilMs: number): Promise<string | null> {
     return clickWhenThere(
-      `//div[@role='button' and .//p[normalize-space()='${pageName}']]`,
+      sidebarItemXpath(pageName),
       `"${pageName}" in the sidebar (is its section collapsed?)`,
       untilMs,
     );
@@ -269,7 +290,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
       // so the one from before the line was typed would run an empty line.
       const onKeyDown = reactPropsOf(terminalInput)?.onKeyDown;
       if (typeof onKeyDown !== "function") return "the terminal can't be typed into";
-      await onKeyDown({ key: "Enter", preventDefault: () => {}, stopPropagation: () => {} });
+      await onKeyDown(playerEvent({ key: "Enter" }));
       await letRender();
       return null;
     },

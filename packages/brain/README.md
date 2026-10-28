@@ -244,7 +244,7 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   - A disconnect, a new Agent or a restarted brain starts every gate again.
   - A held intent doesn't hold up those queued after it, but for an install (#164): what's queued after it waits until it's done, as it was queued for the game after the reset.
   - Each intent's view says why it isn't sent (`waitingFor`), and the dashboard shows it ("not sent: held: Sector-12's enemy Chongqing is joined", "not sent: waiting for installAugmentations() first: queued after an install, it's for the game after the reset"). A brain without save backups never sends one.
-- **An install's done check** (#164): the install kills the Agent, so the one that sent it never reports it done. When the brain sends it, it notes the connected Agent's `lastAugReset` (the slow snapshot); a slow snapshot with a later one, from the next Agent, takes the install off the queue, so it isn't gated and backed up again for the new game. The note is in memory: a brain restarted meanwhile gates it again, and the Agent's check of the game (nothing left to install) says it's done.
+- **An install's done check** (#164): the install kills the Agent, so the one that sent it never reports it done. When the brain sends it, it notes the connected Agent's `lastAugReset` (the slow snapshot); a slow snapshot with another one, from the next Agent, takes the install off the queue (another, not only a later one: the game takes it from the clock, which can be set back, #167), so it isn't gated and backed up again for the new game. The note is in memory: a brain restarted meanwhile gates it again, and the Agent's check of the game (nothing left to install) says it's done.
 - **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`: a worker that didn't run counts as a try. The outcome also names the backend the Agent used (`sim`, `singularity` or `ui`, #145), which the dashboard shows ("2 tries via ui: …"): the brain never chooses it.
 
 ## Work
@@ -372,7 +372,7 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | A save-then-reload just after the install | Before `boot.js`'s 500 ms, the game reloads from a save taken then, as Options' "Force kill all active scripts" does: autoexec brings the Agent back, the brain sees the reset and takes the install off its queue, installed once |
 | A reload of the last save from before the install | A plain reload loads the last save, from before the install (nothing saves on install). The next Agent's slow snapshot shows the same reset and the augmentation still queued, so the install stays queued: gated again, a new backup, installed. Three sessions, three backups (two installs' and the reloaded game's Remote File API connection's), installed once |
 
-The `ui` backend's restart (the page timer, the terminal, save-and-reload) is E2's, in slice 10b.
+The `ui` backend's restart (the page timer, the terminal, save-and-reload) is E2's (#167, [`packages/e2`](../e2/README.md#what-the-tests-show)).
 
 ## The skeleton suite
 

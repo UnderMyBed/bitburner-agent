@@ -114,9 +114,12 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - An install of augmentations (#164) is the exception: what's queued after it waits until it's done, since it was
  *   queued for the game after the reset. Its own guard is that nothing queued before it is undone.
  * - An install's done check: the connected Agent's `lastAugReset` (the slow snapshot) is noted when the install is
- *   sent, and a later one shows the game reset: it leaves the queue at once, not gated and backed up again for the new
- *   game. The note outlives a disconnect (the install kills the Agent), not a restart of the brain: then the Agent's own
- *   check, nothing left to install, says it's done.
+ *   sent, and another one shows the game reset: it leaves the queue at once, not gated and backed up again for the new
+ *   game. Another, not a later one: the game sets it from the clock
+ *   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:122-126`), which can be set back (#167: E2's page clock is).
+ *   It moves only with a reset or another save loaded; either way the install is dropped, the safe direction for an
+ *   irreversible intent. The note outlives a disconnect (the install kills the Agent), not a restart of the brain:
+ *   then the Agent's own check, nothing left to install, says it's done.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -376,11 +379,12 @@ export class DesiredStateController {
 
   /**
    * A slow snapshot showing the game reset since the install was sent (#164): the install is done, and leaves the
-   * queue. `lastAugReset` moves only with a reset, which empties the game's queue of augmentations.
+   * queue. `lastAugReset` moves only with a reset, which empties the game's queue of augmentations, or another save
+   * loaded. Any other value counts, not just a later one: it comes from the clock, which can be set back (#167).
    */
   #dropInstallOnceReset(): void {
     const lastAugReset = lastAugResetOf(this.#slowData);
-    if (this.#installSentAtReset === null || lastAugReset === null || lastAugReset <= this.#installSentAtReset) return;
+    if (this.#installSentAtReset === null || lastAugReset === null || lastAugReset === this.#installSentAtReset) return;
     this.#installSentAtReset = null;
     writeManualIntents(
       this.#store,
@@ -407,7 +411,7 @@ export class DesiredStateController {
     this.#purchase = this.#choosePurchase();
     // The manual queue first; the purchase only if the owner hasn't queued the same.
     const manual = readManualIntents(this.#store);
-    // An irreversible intent goes only once its gate lets it, and nothing queued after an install goes before it's done.
+    // An irreversible intent goes only once its gate lets it, and nothing queued after an install before it's done.
     this.#gates.sync(manual);
     const intents = [
       ...manual.filter((each, index) => !afterInstall(manual, index) && this.#gates.isReleased(each.id)),
