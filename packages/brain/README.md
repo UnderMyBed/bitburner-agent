@@ -389,7 +389,7 @@ The `ui` backend's restart (the page timer, the terminal, save-and-reload) is E2
 | Into BN6 | The portal's effect for BitNode 6, its Bladeburner cinematic left as its Continue does: the next Agent starts on the Terminal, in BN6 |
 | A save that starts at the BitVerse | The owner's backdoor on w0r1d_d43m0n reaches the BitVerse; the game saved there loads there (no cinematic), and autoexec starts the Agent; the destroy goes out past its gate, and the effector goes straight to the portal: BN2, a third session, destroyed once |
 
-The `ui` backend (the terminal, the BitVerse page, the restart) is slice 11b-2's.
+The `ui` backend's destroy (the terminal, the BitVerse page, the restart) is E2's (#177, [`packages/e2`](../e2/README.md#what-the-tests-show)).
 
 ## The skeleton suite
 

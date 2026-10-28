@@ -601,7 +601,11 @@ const effectors = {
     const running = action();
     if (running === null) return result(false, `the terminal didn't start the backdoor on ${hostname}`);
     enterFromBitVerseOnceThere(nextBitNode, callbackScript, running.timeLeft * 1000 + BITVERSE_SLACK_MS);
-    return result(false, `backdooring ${hostname}, then ${entering}`);
+    // The `ui` worker's wording (`ingame/src/entries/destroy-bitnode.ts`); `timeLeft` is in s.
+    return result(
+      false,
+      `backdooring ${hostname}: about ${Math.max(1, Math.ceil(running.timeLeft))} s left, then ${entering}`,
+    );
   },
 };
 
