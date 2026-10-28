@@ -1,12 +1,12 @@
-// Work on the game's page (#151, #153): what the page shows of the player's work, and the steps that converge it, for
-// `faction-work.js` and `company-work.js` (../entries/), which document them. A module of its own so its jsdom tests
-// can import them: an entry's bundle exports only `main`.
+// Work on the game's page (#151, #153, #156): what the page shows of the player's work, and the steps that converge
+// it, for `faction-work.js`, `company-work.js` and `crime-work.js` (../entries/), which document them. A module of its
+// own so its jsdom tests can import them: an entry's bundle exports only `main`.
 // - Focused, the Work page's title (`ui/WorkInProgressRoot.tsx`): "You are currently carrying out hacking contracts for
-//   CyberSec", "You are currently working as a Waiter at Noodle Bar".
-// - Unfocused, the overview's header (`ui/React/CharacterOverview.tsx:332-365`): "Working for CyberSec", "Working at
-//   Noodle Bar". What work it is ("Doing hacking work", the job title) is the header's tooltip, rendered only on hover,
-//   so it's read from the overview's React props.
-import { type FactionWorkType, holdsJobInField, JOB_FIELDS, jobTitles, type Work } from "@bitburner-agent/core";
+//   CyberSec", "You are currently working as a Waiter at Noodle Bar", "You are attempting to shoplift".
+// - Unfocused, the overview's header (`ui/React/CharacterOverview.tsx:300-365`): "Working for CyberSec", "Working at
+//   Noodle Bar", "You are attempting to Shoplift". What faction or company work it is ("Doing hacking work", the job
+//   title) is the header's tooltip, rendered only on hover, so it's read from the overview's React props.
+import { CRIMES, type FactionWorkType, holdsJobInField, JOB_FIELDS, jobTitles, type Work } from "@bitburner-agent/core";
 import { factionRowButtonXpath, type GamePage, reactPropsAbove, reactText, xpathString } from "./game-page.ts";
 
 /** How the Work page words each faction work type, and the faction page's button that starts it. */
@@ -26,6 +26,12 @@ function overviewWork(gamePage: GamePage, header: string): string | null {
 /** What the page shows of `work`: this work focused, this work unfocused, or neither. */
 export function workShown(gamePage: GamePage, work: Work): "focused" | "unfocused" | null {
   const titleShown = (title: string) => gamePage.findElementNow(`//h6[normalize-space()=${xpathString(title)}]`);
+  if (work.kind === "crime") {
+    const { crime } = work;
+    if (titleShown(`You are attempting ${CRIMES[crime]?.workName}`)) return "focused";
+    const header = gamePage.findElementNow(`//p[normalize-space()=${xpathString(`You are attempting to ${crime}`)}]`);
+    return header === null ? null : "unfocused";
+  }
   if (work.kind === "faction") {
     const { faction, workType } = work;
     if (titleShown(`You are currently ${FACTION_WORK_ON_PAGE[workType].doing} for ${faction}`)) return "focused";
@@ -60,7 +66,11 @@ export async function convergeWorkOnPage(
     return work.focus ? gamePage.refocusWork() : gamePage.returnToTerminal();
   }
   const started =
-    work.kind === "faction" ? await startFactionWork(gamePage, work) : await startCompanyWork(gamePage, work, jobs);
+    work.kind === "faction"
+      ? await startFactionWork(gamePage, work)
+      : work.kind === "company"
+        ? await startCompanyWork(gamePage, work, jobs)
+        : await startCrimeWork(gamePage, work);
   if (started !== null) return stopped(started);
   // Started focused, on the Work page: done, or unfocused and back to the Terminal.
   if (work.focus) return null;
@@ -124,5 +134,19 @@ async function startCompanyWork(
   return gamePage.clickWhenThere(
     "//button[normalize-space()='Work']",
     `"Work" at ${company} (is the player employed?)`,
+  );
+}
+
+/**
+ * A crime (#156): The Slums, in every city (`Locations/data/LocationsMetadata.ts:431-435`), then the crime's button,
+ * "Shoplift (45.20% chance of success)" (`Locations/ui/SlumsLocation.tsx`), never disabled, which starts it focused.
+ */
+async function startCrimeWork(gamePage: GamePage, { crime }: Extract<Work, { kind: "crime" }>): Promise<string | null> {
+  return (
+    (await gamePage.openCityLocation("The Slums")) ??
+    (await gamePage.clickWhenThere(
+      `//button[starts-with(normalize-space(), ${xpathString(`${crime} (`)})]`,
+      `"${crime}" at the Slums`,
+    ))
   );
 }

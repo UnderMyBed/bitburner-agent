@@ -3,7 +3,7 @@
 // backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
 // Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work
-// (#151, #153): faction work, and company work, the job applied for first.
+// (#151, #153, #156): faction work, company work, the job applied for first, and crime.
 import { gunzipSync } from "node:zlib";
 import {
   type DesiredState,
@@ -474,4 +474,44 @@ test("company work (singularity, #153): with SF4.3, through its Singularity work
     converged: false,
     problem: "MegaCorp didn't hire for a Software job (not qualified yet, or not offered to applyToCompany)",
   });
+});
+
+/** The player's crime and focus, as the game saves them: `null` for no crime. */
+async function savedCrime(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
+  const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
+  const player = JSON.parse(saveObject.data.PlayerSave).data;
+  const work = player.currentWork;
+  return work?.ctor === "CrimeWork" ? { crime: work.data.crimeType, focus: player.focus } : null;
+}
+
+const crime = (name: string, focus: boolean): Work => ({ kind: "crime", crime: name, focus });
+
+test("crime (sim, #156): shoplifting focused, then unfocused, then a switch to mugging, which repeats", async () => {
+  const fresh = await freshStart({ withDesiredState: false });
+  expect(await workedAt(fresh, crime("Shoplift", true))).toEqual({ converged: true, problem: null, backend: "sim" });
+  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: true });
+  expect((await fresh.simulation.diagnostics.game()).page).toBe("Work");
+  await workedAt(fresh, crime("Shoplift", false));
+  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: false });
+  expect((await fresh.simulation.diagnostics.game()).page).not.toBe("Work");
+  await workedAt(fresh, crime("Mug", false));
+  // Mugging takes 4 s: after 20 s it's still the work, committed again and again.
+  await fresh.game.run(20_000);
+  expect(await savedCrime(fresh)).toEqual({ crime: "Mug", focus: false });
+  expect(fresh.latest<FastSnapshotData>("fast")?.work).toEqual({ converged: true, problem: null, backend: "sim" });
+});
+
+test("crime (singularity, #156): with SF4.3, through its Singularity worker, unfocused, then focused, then switched", async () => {
+  const fresh = await freshStart({
+    withDesiredState: false,
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } },
+    beforeAgent: withoutSimEffectors,
+  });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  expect(await workedAt(fresh, crime("Shoplift", false))).toMatchObject({ converged: true, backend: "singularity" });
+  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: false });
+  await workedAt(fresh, crime("Shoplift", true));
+  expect(await savedCrime(fresh)).toEqual({ crime: "Shoplift", focus: true });
+  await workedAt(fresh, crime("Homicide", true));
+  expect(await savedCrime(fresh)).toEqual({ crime: "Homicide", focus: true });
 });
