@@ -234,7 +234,7 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#home-ram")).toContain("Home: 8 GB");
   expect(textOf(document, "#home-ram button")).toBe("Stop upgrading home RAM");
   expect([...document.querySelectorAll("#intents tr")].map((row) => row.textContent)).toEqual([
-    "travel(Aevum)manual2 tries: no TravelCancel",
+    "travel(Aevum)manual2 tries via ui: no TravelCancel",
     "buyTor(Alpha Enterprises)purchasenot reported yet",
   ]);
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
@@ -506,13 +506,18 @@ describe("the intents (#141)", () => {
   });
 
   test.each([
-    ["done", { id: "x", done: true, tries: 1, problem: null }, "done"],
+    ["done", { id: "x", done: true, tries: 1, problem: null, backend: "singularity" }, "done via singularity"],
     [
       "done, with a problem on the way",
-      { id: "x", done: true, tries: 1, problem: "no Terminal" },
-      "done (no Terminal)",
+      { id: "x", done: true, tries: 1, problem: "no Terminal", backend: "ui" },
+      "done via ui (no Terminal)",
     ],
-    ["tried once", { id: "x", done: false, tries: 1, problem: null }, "1 try"],
+    ["tried once", { id: "x", done: false, tries: 1, problem: null, backend: "sim" }, "1 try via sim"],
+    [
+      "from an Agent that doesn't name its backend",
+      { id: "x", done: false, tries: 1, problem: null, backend: null },
+      "1 try",
+    ],
   ])("an outcome %s reads plainly", async (_description, outcome, text) => {
     const intents = [{ id: "x", source: "manual", outcome }];
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents } }));

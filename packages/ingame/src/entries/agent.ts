@@ -11,8 +11,8 @@
 //   acts on them.
 // - It keeps no state at module level (architecture R10): the game may or may not reuse a module.
 //
-// RAM: `run` (1.0 GB) and `isRunning` (0.1 GB) are the functions referenced that cost anything; the rest are free
-// (ram-budget.json).
+// RAM: `run` (1.0 GB), `isRunning` (0.1 GB), `getScriptRam` (0.1 GB) and `getServerMaxRam` (0.05 GB) are the functions
+// referenced that cost anything; the rest are free (ram-budget.json).
 import {
   AGENT_CONFIG_FILE_NAME,
   BOOT_SCRIPT,

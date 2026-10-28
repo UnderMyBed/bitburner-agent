@@ -17,17 +17,25 @@ const DONE: EffectorReport = { done: true, problem: null };
 
 /**
  * A runner whose stand-in workers report what `answer` gives for each run, and its log. `singularity` says whether the
- * game has Singularity; a stand-in for a worker that "can't start" is `"no report"`.
+ * game has Singularity; a stand-in for a worker that "can't start" is `"no report"`, and one that "didn't report" is
+ * `"silent"`. Home has `home.maxRam` GB; the Agent takes 3 and each worker 4.65.
  */
 function runnerWith(
-  answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report",
+  answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report" | "silent",
   singularity = { available: false },
+  home = { maxRam: 8 },
 ) {
   const lines: string[] = [];
-  const ns = { print: (line: string) => lines.push(line) } as unknown as NS;
+  const ns = {
+    print: (line: string) => lines.push(line),
+    getScriptName: () => "agent/abcdef123456/agent.js",
+    getScriptRam: (script: string) => (script.endsWith("/agent.js") ? 3 : 4.65),
+    getServerMaxRam: () => home.maxRam,
+  } as unknown as NS;
   const runWorker = vi.fn(async (workerFile: string, workerArguments: unknown[]): Promise<WorkerRun> => {
     const report = answer(workerFile, workerArguments);
     if (report === "no report") return { outcome: "couldNotStart" };
+    if (report === "silent") return { outcome: "noReport" };
     return { outcome: "reported", report: { workerPid: 1, data: report } as never };
   });
   const runner = createIntentRunner(ns, {
@@ -79,8 +87,8 @@ test("not done: each try logs why, the next is 15 rounds (30 s) later, and the o
   for (let each = 0; each < 16; each += 1) await round();
   expect(runWorker).toHaveBeenCalledTimes(2);
   expect(lines).toEqual([
-    `agent: buy the TOR router: not done: ${problem}; trying again in 30 s`,
-    `agent: buy the TOR router: not done: ${problem}; trying again in 30 s`,
+    `agent: buy the TOR router (ui): not done: ${problem}; trying again in 30 s`,
+    `agent: buy the TOR router (ui): not done: ${problem}; trying again in 30 s`,
   ]);
   expect(runner.outcomes()).toEqual([{ id: TOR.id, done: false, tries: 2, problem, backend: "ui" }]);
 });
@@ -105,7 +113,7 @@ test("done: never run again while it stays, and a problem on the way is still lo
   runner.desire([AEVUM]);
   await round();
   expect(runWorker).toHaveBeenCalledTimes(1);
-  expect(lines).toEqual([`agent: travel to Aevum: done: ${backProblem}`]);
+  expect(lines).toEqual([`agent: travel to Aevum (ui): done: ${backProblem}`]);
   expect(runner.outcomes()).toEqual([{ id: AEVUM.id, done: true, tries: 1, problem: backProblem, backend: "ui" }]);
 });
 
@@ -192,25 +200,40 @@ describe("backends (#145)", () => {
     await round(10 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
     expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
-      ["agent/abcdef123456/sing-buy-tor.js", []],
-      ["agent/abcdef123456/sing-buy-program.js", ["BruteSSH.exe"]],
-      ["agent/abcdef123456/sing-upgrade-home-ram.js", [8]],
-      ["agent/abcdef123456/sing-travel.js", ["Aevum"]],
+      ["agent/abcdef123456/singularity-buy-tor.js", []],
+      ["agent/abcdef123456/singularity-buy-program.js", ["BruteSSH.exe"]],
+      ["agent/abcdef123456/singularity-upgrade-home-ram.js", [8]],
+      ["agent/abcdef123456/singularity-travel.js", ["Aevum"]],
     ]);
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });
 
-  test("a Singularity worker that can't run (too big for home): that action goes through the page from then on", async () => {
-    const { runner, lines, workerFiles, round } = runnerWith(
-      (workerFile) => (workerFile.includes("/sing-") ? "no report" : DONE),
-      { available: true },
-    );
+  test("a Singularity worker that doesn't fit home beside the Agent: the page, logged once, until home grows", async () => {
+    // 3 GB for the Agent and 4.65 for the worker don't fit in 7 GB, however empty home is.
+    const home = { maxRam: 7 };
+    const { runner, lines, workerFiles, round } = runnerWith(() => notDone("not yet"), { available: true }, home);
+    runner.desire([AEVUM, intent({ action: "travel", args: { city: "Volhaven" } })]);
+    await round(10 * ROUND_MS);
+    expect(workerFiles()).toEqual(["agent/abcdef123456/travel.js", "agent/abcdef123456/travel.js"]);
+    expect(runner.outcomes().map((outcome) => outcome.backend)).toEqual(["ui", "ui"]);
+    expect(lines.filter((line) => line.includes("doesn't fit home"))).toEqual([
+      "agent: travel to Aevum: singularity-travel.js doesn't fit home beside the Agent at this SF4 level; using the page",
+    ]);
+    home.maxRam = 16;
+    for (let each = 0; each < 15; each += 1) await round(10 * ROUND_MS);
+    expect(workerFiles().slice(2)).toEqual(Array(2).fill("agent/abcdef123456/singularity-travel.js"));
+  });
+
+  test("a Singularity worker that can't start but would fit an emptier home, or doesn't report: tried again, still Singularity", async () => {
+    const answers: ("no report" | "silent" | EffectorReport)[] = ["no report", "silent", DONE];
+    const { runner, lines, workerFiles, round } = runnerWith(() => answers.shift() ?? DONE, { available: true });
     runner.desire([AEVUM]);
     await round();
     await round();
-    expect(workerFiles()).toEqual(["agent/abcdef123456/sing-travel.js", "agent/abcdef123456/travel.js"]);
-    expect(runner.outcomes()).toMatchObject([{ done: true, backend: "ui" }]);
-    expect(lines.filter((line) => line.includes("the Singularity backend can't"))).toHaveLength(1);
+    await round();
+    expect(workerFiles()).toEqual(Array(3).fill("agent/abcdef123456/singularity-travel.js"));
+    expect(runner.outcomes()).toMatchObject([{ done: true, tries: 3, backend: "singularity" }]);
+    expect(lines.filter((line) => line.includes("doesn't fit home"))).toEqual([]);
   });
 
   test("without Singularity, and without the simulator's effectors: the page", async () => {

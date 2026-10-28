@@ -50,7 +50,7 @@ The entry imports the game's `engine` module, so the bundle contains the whole g
 
 ## Typecheck boundary
 
-The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`, `stubs/strong-refs.ts`) are bundled with the game's source, and most import it. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
+The files in `src/engine/bundle/` (`entry.ts`, `router.ts`, `page.ts`, `agent-effectors.ts`, `stubs/strong-refs.ts`) are bundled with the game's source, and most import it. That source builds under the game's own TypeScript setup (path aliases, JSX, DOM types), so the repo's `tsc` excludes this folder. Instead, `npm run typecheck` checks it separately, in a second step:
 - with the game's own TypeScript (`vendor/bitburner-src/node_modules`, installed by `npm run setup:engine`);
 - against the game's types, through [`tsconfig.bundle.json`](tsconfig.bundle.json), which extends the game's tsconfig and resolves its path aliases and packages;
 - run by `scripts/typecheck-bundle.ts`.
@@ -405,7 +405,7 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | Path | What |
 |---|---|
 | `src/engine/` | Build tooling (`build.ts`, `paths.ts`, `vendor.ts`) and `EngineApi` (`api.ts`) |
-| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), and module stubs |
+| `src/engine/bundle/` | Our sources that get bundled with the game: `entry.ts`, the headless router (`router.ts`), the page's globals and UI capture (`page.ts`), the Agent's `sim` effectors (`agent-effectors.ts`, #145), and module stubs |
 | `src/scenario/` | Scenario specs and the CLIs' option parsers (`spec.ts`), the runner and pool (`run.ts`), the CLIs' table and progress line (`report.ts`), the `npm run sim` CLI (`cli.ts`) |
 | `src/bench/` | Benchmark results as `benchmarks.md` rows and the regression check (`report.ts`), profile summaries (`profile.ts`) |
 | `scenarios/` | Workload scenarios (lean, batch, churn, copies) and their scripts |

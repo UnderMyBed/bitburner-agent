@@ -9,12 +9,11 @@ import {
   BOOT_SCRIPT,
   deployedFilePath,
   type FastSnapshotData,
+  freshSaveHomeWorkerFileNames,
   HACK_LOOP_SCRIPT_NAME,
-  homeWorkerFileNames,
   type MediumSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
-  singularityWorkerFileNames,
   snapshotWorkerFileName,
 } from "@bitburner-agent/core";
 import type { Page } from "playwright";
@@ -307,9 +306,9 @@ describe("the skeleton on E2", () => {
     // and boot.js (beside the Agent at a handover).
     const agentFile = deployedFilePath(brain.deploymentId, AGENT_SCRIPT_NAME);
     // Not the Singularity workers (#145): without SF4 the game charges them 16×, and they run only with Singularity.
-    const workerFiles = homeWorkerFileNames()
-      .filter((fileName) => !singularityWorkerFileNames().includes(fileName))
-      .map((fileName) => deployedFilePath(brain.deploymentId, fileName));
+    const workerFiles = freshSaveHomeWorkerFileNames().map((fileName) =>
+      deployedFilePath(brain.deploymentId, fileName),
+    );
     const ramGbByScript: Record<string, number> = {};
     for (const file of [agentFile, ...workerFiles, BOOT_SCRIPT]) {
       const terminalLengthBeforeCommand = (await terminalText(page)).length;

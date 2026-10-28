@@ -428,6 +428,23 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
   });
 
+  test("an Agent from before backends (#145) sends outcomes without one: kept, with the backend unknown", () => {
+    const controller = new DesiredStateController({ channel, store });
+    controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+    const connection = connectAgent();
+    send(connection, "fast", {
+      ...fastWith(),
+      intents: [{ id: AEVUM.id, done: false, tries: 1, problem: "no Travel" }],
+    });
+    expect(controller.intentsView()).toEqual([
+      {
+        id: AEVUM.id,
+        source: "manual",
+        outcome: { id: AEVUM.id, done: false, tries: 1, problem: "no Travel", backend: null },
+      },
+    ]);
+  });
+
   test("with the hack loop off, the queue goes before any snapshot: each intent checks the game first", () => {
     store.setSetting("hackLoop.enabled", "false");
     const controller = new DesiredStateController({ channel, store });

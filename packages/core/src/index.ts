@@ -6,6 +6,7 @@ export {
   SINGULARITY_TRAVEL_WORKER_NAME,
   SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
   singularityWorkerFileNames,
+  singularityWorkerMostRamGb,
 } from "./backends.ts";
 export {
   type AgentMessage,
@@ -52,10 +53,11 @@ export {
   isHackLoopFile,
 } from "./hack-loop.ts";
 export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
-export { homeWorkerFileNames } from "./home-workers.ts";
+export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
   type ActionName,
   type EffectorReport,
+  INTENT_BACKENDS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,

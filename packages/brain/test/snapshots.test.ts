@@ -153,8 +153,8 @@ test("each tier's contents: the servers, the reset info, the player, and home", 
   expect(fast).toMatchObject({
     degradedTiers: [],
     pageHeapUsedBytes: null,
-    // The Agent (2.7 GB) and the fast worker (2.0 GB).
-    game: { money: expect.any(Number), homeRamUsed: 4.7, homeMaxRam: 8 },
+    // The Agent (2.85 GB) and the fast worker (2.0 GB).
+    game: { money: expect.any(Number), homeRamUsed: 4.85, homeMaxRam: 8 },
   });
   // The Agent, and the fast worker itself: both temporary, so a reload brings back neither (only autoexec does).
   expect(fast.game?.homeProcesses).toMatchObject([
@@ -187,7 +187,7 @@ test("on a full home the heartbeat goes on for 10 virtual minutes, naming the sk
   const brain = await gameWithAgent();
   const { simulation, game, events } = brain;
   await untilFullSnapshot(brain, 0, 10_000);
-  // 4.8 GB taken: with the Agent's 2.7, 0.5 GB stay free, too little for any worker.
+  // 4.8 GB taken: with the Agent's 2.85, 0.35 GB stay free, too little for any worker.
   await simulation.writeFile("home", "hold-ram.js", "export async function main(ns) { await ns.sleep(1e9); }");
   const { pid: holderPid } = await simulation.run("home", "hold-ram.js", { threads: 3 });
   const filledAtMs = game.clock.now();

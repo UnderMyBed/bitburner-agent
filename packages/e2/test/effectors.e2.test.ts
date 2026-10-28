@@ -416,6 +416,8 @@ test("travel without the ticket's money: not done, the reason logged as the outc
   expect(outcome()).toMatchObject({
     done: false,
     problem: "not in Aevum after travelling (is the $200k ticket there?)",
+    // The page: a browser has no simulator effectors, and E2's game has no Singularity (#145).
+    backend: "ui",
   });
   expect(latestMedium(dataDirectory)?.player.city).toBe("Sector-12");
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);

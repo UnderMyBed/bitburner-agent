@@ -5,17 +5,16 @@
 import {
   type DesiredState,
   deployedFilePath,
+  freshSaveHomeWorkerFileNames,
   HACK_LOOP_SCRIPT_NAME,
-  homeWorkerFileNames,
   isHackLoopFile,
   type MediumSnapshotData,
   type StaticSnapshotData,
-  singularityWorkerFileNames,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { chooseHackTarget } from "../src/hack-loop.ts";
 import { startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
-import { type FreshGame, ownerRunsOnHome, useFreshStarts } from "./helpers/fresh-start.ts";
+import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 import { expectHomeWithinTheAgentPlusOneWorker } from "./helpers/home-peak.ts";
 
 const freshStartOf = useFreshStarts();
@@ -119,8 +118,7 @@ test("on by default: the Agent roots the no-port servers, runs the loop on them 
   // In the measured runs n00dles had earned over $1m by 10 virtual minutes; anything like that shows the loop pays.
   expect((loop.money() as number) - startingMoney).toBeGreaterThan(500_000);
   // Not the Singularity workers (#145): they run only with Singularity, where they cost what their budgets say.
-  const workers = homeWorkerFileNames().filter((fileName) => !singularityWorkerFileNames().includes(fileName));
-  await expectHomeWithinTheAgentPlusOneWorker(simulation, loop.deploymentId, workers);
+  await expectHomeWithinTheAgentPlusOneWorker(simulation, loop.deploymentId, freshSaveHomeWorkerFileNames());
 });
 
 test("a loop that stops, with nothing changed, is started again within one convergence and a round", async () => {
@@ -237,13 +235,6 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
-/**
- * The owner's setup that takes the simulator's own effectors away (#145), so the Agent uses the page's (`ui`) workers,
- * as in a browser: for the tests of those workers' own checks.
- */
-const withoutSimEffectors = (fresh: FreshGame) =>
-  ownerRunsOnHome(fresh, "export async function main(ns) { delete globalThis.__bitburnerAgentSim; }");
-
 test("a purchase the page can't make (#136, #141): the Agent logs why and when it tries again, and never runs two workers at once", async () => {
   const loop = await freshStart({ withDesiredState: false, beforeAgent: withoutSimEffectors });
   const { simulation, game, brain } = loop;
@@ -255,7 +246,7 @@ test("a purchase the page can't make (#136, #141): the Agent logs why and when i
   await game.run(2 * CONVERGE_EVERY_MS + 3 * SNAPSHOT_ROUND_MS);
   const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
-  const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("buy the TOR router: not done"));
+  const tries = (await simulation.logs(agent.pid)).filter((line) => line.includes("buy the TOR router (ui): not done"));
   // The simulator's page has no sidebar: each try waits for it until its deadline, logs why, and isn't bought.
   expect(tries).toHaveLength(3);
   for (const line of tries) expect(line).toContain('no "City" in the sidebar (is its section collapsed?)');
@@ -286,14 +277,14 @@ test("a home RAM upgrade already made (#138): done from the game alone, without 
   if (!agent) throw new Error("no Agent on home");
   // The simulator's page has no sidebar: had the worker touched it, the line would name the missing City.
   const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("home RAM"));
-  expect(lines).toEqual([expect.stringMatching(/agent: upgrade home RAM to 8 GB: done$/)]);
+  expect(lines).toEqual([expect.stringMatching(/agent: upgrade home RAM to 8 GB \(ui\): done$/)]);
 });
 
 test("home too full for the deploy worker: it never piles up, and runs within two rounds of there being room", async () => {
   const loop = await freshStart({
     // A brain with no controller: with home this full, the Agent's medium snapshots can't run either.
     withDesiredState: false,
-    // The owner's own script on home: 2.7 + 1.6 leaves room for the root worker (2.35) but not the deploy one (4.65).
+    // The owner's own script on home: 2.85 + 1.6 leaves room for the root worker (2.35) but not the deploy one (4.65).
     beforeAgent: (fresh) =>
       ownerRunsOnHome(fresh, `export async function main(ns) { ns.exec("${OWNER_SCRIPT}", "home", 1); }`),
   });

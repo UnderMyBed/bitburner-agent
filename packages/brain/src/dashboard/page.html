@@ -221,12 +221,14 @@ function render(status) {
   );
   document.querySelector("#home-ram button").textContent = homeRam.enabled ? "Stop upgrading home RAM" : "Start upgrading home RAM";
 
+  // With the backend of the last try (#145), unless an older Agent didn't say.
+  const via = (outcome) => (outcome.backend === null || outcome.backend === undefined ? "" : ` via ${outcome.backend}`);
   const outcomeText = (outcome) =>
     outcome === null
       ? "not reported yet"
       : outcome.done
-        ? `done${outcome.problem === null ? "" : ` (${outcome.problem})`}`
-        : `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${outcome.problem === null ? "" : `: ${outcome.problem}`}`;
+        ? `done${via(outcome)}${outcome.problem === null ? "" : ` (${outcome.problem})`}`
+        : `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${via(outcome)}${outcome.problem === null ? "" : `: ${outcome.problem}`}`;
   const intentRows = status.intents.map((intent) => {
     const row = element("tr");
     const cancel = element("td");

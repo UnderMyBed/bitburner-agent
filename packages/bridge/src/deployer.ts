@@ -14,8 +14,8 @@ import {
   deploymentIdOfPath,
   isGeneratedDeploymentId,
   isValidDeploymentId,
-  SINGULARITY_MOST_RAM_MULTIPLIER,
   singularityWorkerFileNames,
+  singularityWorkerMostRamGb,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import type { Clock } from "./clock.ts";
@@ -158,11 +158,13 @@ export class Deployer {
     }
     for (const name of Object.keys(scripts)) {
       const ramGb = await client.calculateRam(deployedFilePath(this.deploymentId, name));
-      // A Singularity worker's budget is at SF4.3; with less of SF4 the game charges up to 16 times (#145).
+      // A Singularity worker's budget is at SF4.3; with less of SF4 the game charges its functions up to 16 times (#145).
       const singularity = singularityWorkerFileNames().includes(name);
-      const budgetGb = (ramBudgets[name] as number) * (singularity ? SINGULARITY_MOST_RAM_MULTIPLIER : 1);
+      const budgetGb = singularity
+        ? Number(singularityWorkerMostRamGb(ramBudgets[name] as number).toFixed(2))
+        : (ramBudgets[name] as number);
       if (ramGb > budgetGb + RAM_TOLERANCE_GB) {
-        const why = singularity ? ` (${ramBudgets[name]} GB × ${SINGULARITY_MOST_RAM_MULTIPLIER} without SF4.3)` : "";
+        const why = singularity ? ` (${ramBudgets[name]} GB at SF4.3, its functions × 16 without)` : "";
         throw new OverBudgetError(`${name} needs ${ramGb} GB, over its budget of ${budgetGb} GB${why}`);
       }
     }

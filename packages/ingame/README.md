@@ -8,7 +8,7 @@ The code that runs inside the game: `boot.js`, the Agent and its workers (archit
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js` and `travel.js`, and the Singularity workers `sing-*.js` (#145) |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js` and `travel.js`, and the Singularity workers `singularity-*.js` (#145) |
 | `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
 | `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts` |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
@@ -56,7 +56,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | Script | Calls | RAM (budget) |
 |---|---|---|
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (2.7) |
-| `agent.js` | `run` (1.0 GB), `isRunning` (0.1 GB); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (3.0) |
+| `agent.js` | `run` (1.0 GB), `isRunning`, `getScriptRam` (0.1 GB each), `getServerMaxRam` (0.05 GB, with `getScriptRam`, for whether a Singularity worker fits home beside the Agent); `read`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.85 GB (3.0) |
 | `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
 | `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB), `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB) | 4.45 GB (4.45) |
@@ -66,15 +66,15 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `buy-program.js` | `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB); the page costs nothing | 1.75 GB (1.75) |
 | `upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB); the page costs nothing | 1.65 GB (1.65) |
 | `travel.js` | `getPlayer` (0.5 GB); the page costs nothing | 2.1 GB (2.1) |
-| `sing-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
-| `sing-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |
-| `sing-buy-program.js` | `fileExists` (0.1 GB), `singularity.purchaseProgram` (2 GB) | 3.7 GB (3.7) |
-| `sing-upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB), `singularity.upgradeHomeRam` (3 GB) | 4.65 GB (4.65) |
-
-The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation): with less of SF4 the game charges their Singularity calls 4× or 16×, which the deployer allows for (16× the budget), and the Agent then uses the page's workers, the Singularity one not fitting home.
+| `singularity-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
+| `singularity-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |
+| `singularity-buy-program.js` | `fileExists` (0.1 GB), `singularity.purchaseProgram` (2 GB) | 3.7 GB (3.7) |
+| `singularity-upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB), `singularity.upgradeHomeRam` (3 GB) | 4.65 GB (4.65) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
-The workers write to a port (`writePort`, free). The Agent plus its largest home worker (`hack-loop-deploy.js`, 4.65 GB) is 7.35 GB, within a fresh save's 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
+The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it.
+
+The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.5 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker. The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
 ## Deploy layout
 
@@ -97,7 +97,7 @@ It starts the deployed Agent if it isn't running, and does nothing else (archite
 2. given an Agent's pid (an Agent handing over passes its own), waits until that Agent has exited;
 3. if `agent/<deploymentId>/agent.js` isn't running on home, runs it as a **temporary** script.
 
-Why it waits: the game starts `boot.js` while the Agent that ran it is still running. Until that Agent exits, its 2.7 GB isn't free, and old Agent, `boot.js` and new Agent together need 8.1 GB, more than an 8 GB home has, so the new one couldn't start. And if the deployed Agent is the one handing over, `boot.js` would see it still running and start nothing.
+Why it waits: the game starts `boot.js` while the Agent that ran it is still running. Until that Agent exits, its 2.85 GB isn't free, and old Agent, `boot.js` and new Agent together need 8.4 GB, more than an 8 GB home has, so the new one couldn't start. And if the deployed Agent is the one handing over, `boot.js` would see it still running and start nothing.
 
 It's safe to run any number of times. When nothing is deployed, `current.txt` doesn't hold a deployment id, or the Agent can't start, it says so in the terminal and in its log; for a failed start, the game's own reason (a missing file, too little RAM, a script it can't parse) is in the log too.
 
@@ -136,7 +136,7 @@ Each round (every 2 s while welcomed) the Agent runs the tiers that are due, one
 2. **medium** every 5th round (10 s) and **slow** every 30th (60 s), both in the first round after each welcome. Cadence counts rounds, not clock time, so a clock that steps doesn't skew it;
 3. **static**, until it has it once. It keeps it for its life and resends it after each welcome, with the time it was read. Its server list is as of the Agent's start; servers that appear later (purchased ones, darkweb) are in medium, which also carries each server's RAM and cores, since those change.
 
-**Workers** (`agent/<deploymentId>/snapshot-<tier>.js`) are short-lived and hold the costly NS calls, so the Agent stays at 2.7 GB:
+**Workers** (`agent/<deploymentId>/snapshot-<tier>.js`) are short-lived and hold the costly NS calls, so the Agent stays at 2.85 GB:
 - The Agent runs each as a **temporary** script (`ns.run(file, { temporary: true })`), with no arguments, so a save never holds one.
 - The worker reads the game and writes `{ workerPid, gameTimeMs, data }` to port 89001 (`WORKER_REPORT_PORT`), then exits.
 - The Agent takes the report carrying that worker's pid, skipping anything else on the port (such as a report that came too late), and waits for the worker to exit, so its RAM is free for the next one. It checks `ns.isRunning` every 20 ms, so a worker that exits without a report costs no more than that.
@@ -179,22 +179,22 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
 - **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects, like the hack loop, and runs each through its effector:
   - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
-  - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time ("travel to Aevum: not done: …; trying again in 30 s");
-  - one done ("travel to Aevum: done") is never run again while the brain keeps sending it; the brain sees it done in its next medium snapshot and stops sending it. One that leaves the list and comes back is new;
+  - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time, with the backend ("travel to Aevum (ui): not done: …; trying again in 30 s");
+  - one done ("travel to Aevum (ui): done") is never run again while the brain keeps sending it; the brain sees it done in its next medium snapshot and stops sending it. One that leaves the list and comes back is new;
   - a worker that doesn't run (home full, still running, no time left) is tried again next round; it counts as a try, so one that never runs shows as stuck.
 - **The Effector table** (`src/agent/effectors.ts`): for each action, how each of the three backends does it (architecture §5.6, #145):
 
   | Action | `ui` worker (arguments) | `singularity` worker (arguments) | `sim` |
   |---|---|---|---|
-  | `buyTor` | `buy-program.js` ("TOR router", the vendor) | `sing-buy-tor.js` () | `buyTorRouter()` |
-  | `buyProgram` | `buy-program.js` (the program, "") | `sing-buy-program.js` (the program) | `buyDarkwebProgram(program)` |
-  | `upgradeHomeRam` | `upgrade-home-ram.js` (`fromRam`, the vendor) | `sing-upgrade-home-ram.js` (`fromRam`) | `buyHomeRam(fromRam)` |
-  | `travel` | `travel.js` (the city) | `sing-travel.js` (the city) | `travelTo(city)` |
+  | `buyTor` | `buy-program.js` ("TOR router", the vendor) | `singularity-buy-tor.js` () | `buyTorRouter()` |
+  | `buyProgram` | `buy-program.js` (the program, "") | `singularity-buy-program.js` (the program) | `buyDarkwebProgram(program)` |
+  | `upgradeHomeRam` | `upgrade-home-ram.js` (`fromRam`, the vendor) | `singularity-upgrade-home-ram.js` (`fromRam`) | `buyHomeRam(fromRam)` |
+  | `travel` | `travel.js` (the city) | `singularity-travel.js` (the city) | `travelTo(city)` |
 
   Each worker also gets a deadline 200 ms before the round's end, checks the game first (an intent already done is done without touching the page or calling anything), and reports `{ done, problem }` (`EffectorReport`).
-- **The backend** is picked per try: the simulator's own effectors where the page's global object has them (`__bitburnerAgentSim`, packages/sim: the simulator renders no page; absent in a browser), called directly; else Singularity, once the Agent's own slow snapshot shows SF4 at any level or BN4, unless that action's Singularity worker couldn't run (too big for home at that SF4 level: the game charges 4× at SF4.2 and 16× below), which leaves the action to the page for the rest of the Agent's run, logged once; else the page. The outcome names the backend of the last try.
-- **Outcomes:** the fast snapshot carries every intent the runner holds, as `{ id, done, tries, problem }`, for the brain's dashboard and its "intent stuck" alert.
-- **Tests:** `test/agent/intent-runner.test.ts` covers the schedule, the order, the time rule, the logs and forgetting. Its property tests (fast-check) run random intent lists, worker reports and disconnects to check that the runner is idempotent (an intent reported done never runs again while it stays sent) and that it converges (every intent sent long enough, whose worker can do it, ends done).
+- **The backend** is picked per try: the simulator's own effectors where the page's global object has them (`__bitburnerAgentSim`, packages/sim: the simulator renders no page; absent in a browser), called directly; else Singularity, once the Agent's own slow snapshot shows SF4 at any level or BN4, when that action's Singularity worker fits home beside the Agent, however empty home is (`getScriptRam` against home's RAM: the game charges it 4× at SF4.2 and 16× below); else the page, logged the first time. The fit is checked every try, so a home upgrade brings Singularity back. A Singularity worker that can't start for now (home full) or doesn't report is tried again, like any worker. The outcome and the done or not-done log line name the backend of the last try.
+- **Outcomes:** the fast snapshot carries every intent the runner holds, as `{ id, done, tries, problem, backend }`, for the brain's dashboard and its "intent stuck" alert.
+- **Tests:** `test/agent/intent-runner.test.ts` covers the schedule, the order, the time rule, the logs, forgetting and the backend choice; `test/agent/singularity-available.test.ts` covers when the game has Singularity. Its property tests (fast-check) run random intent lists, worker reports and disconnects to check that the runner is idempotent (an intent reported done never runs again while it stays sent) and that it converges (every intent sent long enough, whose worker can do it, ends done).
 
 ## Dialogs
 

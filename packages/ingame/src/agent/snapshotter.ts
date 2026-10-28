@@ -36,6 +36,16 @@ function pageHeapUsedBytes(): number | null {
   return memory ? memory.usedJSHeapSize : null;
 }
 
+/**
+ * Whether the game has Singularity (#145): in BN4, or with SF4 at any level, as the slow snapshot `slowData` says. The
+ * game's `ownedSF` holds only levels above 0, after any `sourceFileOverrides` (`NetscriptFunctions.ts:1491`), as its own
+ * access check does. No slow snapshot yet is no Singularity: the page works either way.
+ */
+export function singularityAvailableIn(slowData: SlowSnapshotData | null): boolean {
+  const resetInfo = slowData?.resetInfo;
+  return resetInfo?.currentNode === 4 || (resetInfo?.ownedSF?.["4"] ?? 0) >= 1;
+}
+
 export function createSnapshotter(
   ns: NS,
   {
@@ -96,10 +106,8 @@ export function createSnapshotter(
      * Whether the game has Singularity (#145): in BN4, or with SF4 at any level, as the latest slow snapshot says. No
      * slow snapshot yet is no Singularity: the page works either way.
      */
-    singularityAvailable(): boolean {
-      const resetInfo = lastSlowData?.resetInfo;
-      return resetInfo?.currentNode === 4 || (resetInfo?.ownedSF?.["4"] ?? 0) >= 1;
-    },
+    /** Whether the game has Singularity, as the latest slow snapshot says (`singularityAvailableIn`). */
+    singularityAvailable: () => singularityAvailableIn(lastSlowData),
 
     /** After every welcome, the next round sends all four tiers, so the brain starts from a full picture. */
     welcomed(): void {

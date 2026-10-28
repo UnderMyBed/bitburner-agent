@@ -4,7 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { InGameBuild } from "@bitburner-agent/bridge";
-import { BOOT_SCRIPT, type FastSnapshotData, type MediumSnapshotData } from "@bitburner-agent/core";
+import {
+  AGENT_SIM_EFFECTORS_GLOBAL,
+  BOOT_SCRIPT,
+  type FastSnapshotData,
+  type MediumSnapshotData,
+} from "@bitburner-agent/core";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import type { Simulation, SimulationOptions } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
@@ -32,6 +37,13 @@ export async function ownerRunsOnHome(fresh: FreshGame, source: string) {
   expect((await fresh.simulation.run("home", "owner-setup.js")).error).toBeUndefined();
   await fresh.game.run(1_000);
 }
+
+/**
+ * The owner's setup that takes the simulator's own effectors away (#145), so the Agent uses its workers as in a
+ * browser: the page's (`ui`), or Singularity's where the game has it.
+ */
+export const withoutSimEffectors = (fresh: FreshGame) =>
+  ownerRunsOnHome(fresh, `export async function main(ns) { delete globalThis.${AGENT_SIM_EFFECTORS_GLOBAL}; }`);
 
 /**
  * Registers the test file's hooks (the build, once; a temporary directory; the stores, closed after each test) and
