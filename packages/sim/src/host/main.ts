@@ -194,6 +194,12 @@ async function start(options: HostOptions): Promise<Host> {
         throw new RangeError(`reputation must be finite and 0 or more, not ${reputation}`);
       engine.joinFactionWithReputation(faction, reputation);
     },
+    "diagnostics.employWithReputation": ({ company, job, reputation }) => {
+      booted();
+      if (!Number.isFinite(reputation) || reputation < 0)
+        throw new RangeError(`reputation must be finite and 0 or more, not ${reputation}`);
+      engine.employWithReputation(company, job, reputation);
+    },
     "diagnostics.giveInstalledAugmentation": ({ augmentation }) => {
       booted();
       engine.giveInstalledAugmentation(augmentation);

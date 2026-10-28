@@ -17,6 +17,8 @@ export async function reportPageEffect(
     steps,
     notDoneAfter,
     ending = "restore",
+    stepsWhenDone = false,
+    reportAlso = () => ({}),
   }: {
     /** Whether the game shows it done: checked first, and again after the steps. */
     isDone: () => boolean;
@@ -34,9 +36,16 @@ export async function reportPageEffect(
      * (`"steps"`: the work worker, which sets the focus itself).
      */
     ending?: "restore" | "steps";
+    /**
+     * The steps go ahead even if the game shows it done: a promotion check (#155), which only the page can make. Then
+     * it's done only once they have.
+     */
+    stepsWhenDone?: boolean;
+    /** More for the report, read as it's sent: a promotion taken (#155). */
+    reportAlso?: () => Record<string, unknown>;
   },
 ): Promise<void> {
-  const report: EffectorReport = { done: isDone(), problem: null };
+  const report: EffectorReport = { done: !stepsWhenDone && isDone(), problem: null };
   if (!report.done) {
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {
@@ -58,5 +67,5 @@ export async function reportPageEffect(
       if (!report.done) report.problem ??= notDoneAfter;
     }
   }
-  reportToAgent(ns, report);
+  reportToAgent(ns, { ...report, ...reportAlso() });
 }

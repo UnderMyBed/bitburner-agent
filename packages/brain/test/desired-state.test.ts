@@ -1099,6 +1099,18 @@ describe("work (#151, owner decision 37)", () => {
     });
   });
 
+  test("a promotion the Agent reports (#155) is in the work's view: a well-formed one, its known fields only", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    controller.setWork({ kind: "company", company: "Carmichael Security", field: "IT" });
+    const promotion = { company: "Carmichael Security", from: "IT Intern", to: "IT Analyst", gameTimeMs: 5_000 };
+    const reported = (work: unknown) =>
+      send(connection, "fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [], work });
+    reported({ converged: true, problem: null, backend: "ui", promotion: { ...promotion, extra: "dropped" } });
+    expect(controller.workView().outcome).toEqual({ converged: true, problem: null, backend: "ui", promotion });
+    reported({ converged: true, problem: null, backend: "ui", promotion: { ...promotion, gameTimeMs: "soon" } });
+    expect(controller.workView().outcome).toEqual({ converged: true, problem: null, backend: "ui" });
+  });
+
   test("crime (#156): set, kept and sent, focused; an unknown crime refused", () => {
     const { controller, connection } = connectedWithLoopOff();
     expect(controller.setWork({ kind: "crime", crime: "Mug" })).toEqual({ ok: true });

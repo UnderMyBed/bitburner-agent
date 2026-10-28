@@ -163,6 +163,180 @@ test("company work with a job in the field already (#153): that job's Work on th
   expect(clicks).toEqual(["Job", "Work", "Joe's Guns'"]);
 });
 
+/** A job listing's "Apply" (`Company/ui/ApplyToJobButton.tsx`): disabled until the player qualifies. */
+function apply(text: string, { disabled = false, onClick = () => {} } = {}) {
+  const button = clickable(text, "button", onClick) as HTMLButtonElement;
+  button.disabled = disabled;
+  return button;
+}
+
+/**
+ * The sidebar's Job page as the stand-in shows it (`Locations/ui/JobRoot.tsx`): for each job held, in order, a block
+ * with its company's name as its `h4`, then its company page, here its "Work" and its job listing's buttons.
+ */
+function jobPage(...blocks: [company: string, ...listing: HTMLElement[]][]) {
+  return blocks.map(([company, ...listing]) => {
+    const block = document.createElement("div");
+    const companyPage = document.createElement("div");
+    companyPage.append(
+      clickable("Work", "button", () => clicks.push(`${company}'s`)),
+      ...listing,
+    );
+    block.append(Object.assign(document.createElement("h4"), { textContent: company }), companyPage);
+    return block;
+  });
+}
+
+/** The page after `reportPageEffect` unfocused a player working at `company`: the sidebar, and the overview's work. */
+function unfocusedAt(company: string, title: string, page: () => HTMLElement[]) {
+  const header = Object.assign(document.createElement("p"), { textContent: `Working at ${company}` });
+  const overview = { memoizedState: null, memoizedProps: { tooltip: title, children: [] }, return: null };
+  Object.assign(header, { __reactFiber$test: { memoizedState: null, memoizedProps: {}, return: overview } });
+  const sidebar = () => [clickable("Job", "sidebar", () => show()), clickable("Terminal", "sidebar"), header];
+  const show = () => document.body.replaceChildren(...sidebar(), clickable("Focus", "button"), ...page());
+  document.body.replaceChildren(...sidebar(), clickable("Focus", "button"));
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
+  return gamePage;
+}
+
+const IT_AT_CARMICHAEL = { kind: "company", company: "Carmichael Security", field: "IT", focus: true } as const;
+
+test("a promotion (#155): the company's next Apply on the Job page, its alert closed, then focused again, not restarted", async () => {
+  const alert = document.createElement("div");
+  alert.append(
+    "Congratulations, you are now employed as a IT Analyst at Carmichael Security!",
+    clickable("Close", "button", () => alert.remove()),
+  );
+  const gamePage = unfocusedAt("Carmichael Security", "IT Intern", () =>
+    jobPage([
+      "Carmichael Security",
+      apply("Apply for Business Intern Job"),
+      apply("Apply for IT Analyst Job", { onClick: () => document.body.append(alert) }),
+    ]),
+  );
+  const problem = await convergeWorkOnPage(gamePage, IT_AT_CARMICHAEL, {
+    wasFocused: true,
+    jobs: { "Carmichael Security": "IT Intern" },
+    checkPromotion: true,
+  });
+  expect(problem).toBeNull();
+  expect(clicks).toEqual(["Job", "Apply for IT Analyst Job", "Close", "Focus"]);
+});
+
+test("a promotion not qualified for (#155): the next title's Apply is disabled, so nothing is clicked but the focus", async () => {
+  const gamePage = unfocusedAt("Carmichael Security", "IT Intern", () =>
+    jobPage(["Carmichael Security", apply("Apply for IT Analyst Job", { disabled: true })]),
+  );
+  const problem = await convergeWorkOnPage(gamePage, IT_AT_CARMICHAEL, {
+    wasFocused: true,
+    jobs: { "Carmichael Security": "IT Intern" },
+    checkPromotion: true,
+  });
+  expect(problem).toBeNull();
+  expect(clicks).toEqual(["Job", "Focus"]);
+});
+
+test("a promotion check scoped to the company (#155): another job's enabled Apply above it on the Job page is left", async () => {
+  const gamePage = unfocusedAt("Omega Software", "IT Intern", () =>
+    jobPage(
+      ["Carmichael Security", apply("Apply for IT Analyst Job")],
+      ["Omega Software", apply("Apply for IT Analyst Job", { disabled: true })],
+    ),
+  );
+  const problem = await convergeWorkOnPage(
+    gamePage,
+    { ...IT_AT_CARMICHAEL, company: "Omega Software" },
+    {
+      wasFocused: true,
+      jobs: { "Carmichael Security": "IT Intern", "Omega Software": "IT Intern" },
+      checkPromotion: true,
+    },
+  );
+  expect(problem).toBeNull();
+  expect(clicks).toEqual(["Job", "Focus"]);
+});
+
+test("a promotion's title (#155): only a later one of the field; the consultants' shared text; at the top, no visit", async () => {
+  // An IT Analyst: IT Intern's Apply, earlier in the field, and Business Intern's, in another, are left.
+  const analyst = unfocusedAt("Carmichael Security", "IT Analyst", () =>
+    jobPage([
+      "Carmichael Security",
+      apply("Apply for IT Intern Job"),
+      apply("Apply for Business Intern Job"),
+      apply("Apply for IT Manager Job", { disabled: true }),
+    ]),
+  );
+  expect(
+    await convergeWorkOnPage(analyst, IT_AT_CARMICHAEL, {
+      wasFocused: true,
+      jobs: { "Carmichael Security": "IT Analyst" },
+      checkPromotion: true,
+    }),
+  ).toBeNull();
+  expect(clicks).toEqual(["Job", "Focus"]);
+  clicks.length = 0;
+  // A Software Consultant: the next title's button has the same text as theirs, which the page never shows them.
+  const consultant = { kind: "company", company: "Omega Software", field: "Software Consultant", focus: true } as const;
+  const gamePage = unfocusedAt("Omega Software", "Software Consultant", () =>
+    jobPage(["Omega Software", apply("Apply for IT Intern Job"), apply("Pitch a Software Consulting contract")]),
+  );
+  expect(
+    await convergeWorkOnPage(gamePage, consultant, {
+      wasFocused: true,
+      jobs: { "Omega Software": "Software Consultant" },
+      checkPromotion: true,
+    }),
+  ).toBeNull();
+  expect(clicks).toEqual(["Job", "Pitch a Software Consulting contract", "Focus"]);
+  clicks.length = 0;
+  const atTheTop = unfocusedAt("Omega Software", "Senior Software Consultant", () => jobPage(["Omega Software"]));
+  expect(
+    await convergeWorkOnPage(atTheTop, consultant, {
+      wasFocused: true,
+      jobs: { "Omega Software": "Senior Software Consultant" },
+      checkPromotion: true,
+    }),
+  ).toBeNull();
+  expect(clicks).toEqual(["Focus"]);
+});
+
+test("a promotion check stopped on the way (#155): no Work for the company on the Job page, so focused again as found", async () => {
+  const gamePage = unfocusedAt("Carmichael Security", "IT Intern", () => jobPage());
+  const problem = await convergeWorkOnPage(gamePage, IT_AT_CARMICHAEL, {
+    wasFocused: true,
+    jobs: { "Carmichael Security": "IT Intern" },
+    checkPromotion: true,
+  });
+  expect(problem).toBe('no "Work" for Carmichael Security on the Job page');
+  expect(clicks).toEqual(["Job", "Focus"]);
+});
+
+test("reportPageEffect's stepsWhenDone (#155): the steps go ahead though done, and the report takes reportAlso's", async () => {
+  document.body.replaceChildren(clickable("Job", "sidebar"), clickable("Terminal", "sidebar"));
+  await reportPageEffect(ns, Date.now() + 1_500, {
+    isDone: () => true,
+    doing: "test through",
+    steps: async (gamePage) => gamePage.openSidebarPage("Job"),
+    notDoneAfter: "not done",
+    stepsWhenDone: true,
+    reportAlso: () => ({ promoted: { from: "IT Intern", to: "IT Analyst" } }),
+  });
+  expect(clicks).toEqual(["Job", "Terminal"]);
+  expect(reports).toEqual([{ done: true, problem: null, promoted: { from: "IT Intern", to: "IT Analyst" } }]);
+  // Without it, done is done: nothing touched.
+  clicks.length = 0;
+  reports.length = 0;
+  await reportPageEffect(ns, Date.now() + 1_500, {
+    isDone: () => true,
+    doing: "test through",
+    steps: async (gamePage) => gamePage.openSidebarPage("Job"),
+    notDoneAfter: "not done",
+  });
+  expect(clicks).toEqual([]);
+  expect(reports).toEqual([{ done: true, problem: null }]);
+});
+
 test("a crime (#156): The Slums, then the crime's button, which starts it focused; then unfocused if wanted", async () => {
   const workPage = () =>
     document.body.replaceChildren(

@@ -62,6 +62,8 @@ export interface EngineApi {
   setMoney(money: number): void;
   /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
   joinFactionWithReputation(faction: string, reputation: number): void;
+  /** Makes the player `job` at `company`, with this reputation there. A harness edit, for test scenarios (#155). */
+  employWithReputation(company: string, job: string, reputation: number): void;
   /** Gives the player `augmentation`, installed, unpaid. A harness edit, for test scenarios (#151). */
   giveInstalledAugmentation(augmentation: string): void;
   /** Gives the player hacking experience, through the game's own gain. A harness edit, for test scenarios (#162). */
@@ -146,6 +148,7 @@ const API_FUNCTIONS = {
   setHomeRam: true,
   setMoney: true,
   joinFactionWithReputation: true,
+  employWithReputation: true,
   giveInstalledAugmentation: true,
   gainHackingExp: true,
   queueAugmentation: true,

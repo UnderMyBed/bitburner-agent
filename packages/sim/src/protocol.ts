@@ -434,6 +434,12 @@ export interface HostMethods {
    */
   "diagnostics.joinFactionWithReputation"(params: { faction: string; reputation: number }): void;
   /**
+   * Makes the player `job` (one of the game's titles, offered by `company`) at `company` (one of the game's names), as
+   * an application does, with this reputation there (finite, 0 or more), for test scenarios (#155). A harness edit,
+   * not something a player can do.
+   */
+  "diagnostics.employWithReputation"(params: { company: string; job: string; reputation: number }): void;
+  /**
    * Gives the player an augmentation (one of the game's names, not already installed), installed and unpaid, for test
    * scenarios (#151). A harness edit, not something a player can do.
    */

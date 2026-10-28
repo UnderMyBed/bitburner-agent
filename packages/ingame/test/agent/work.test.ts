@@ -1,6 +1,6 @@
 // The Agent's work activity (#151): when it converges the work the brain wants, through which effector, and what it
 // reports. The workers are stand-ins; the simulator and E2 run the real ones.
-import type { EffectorReport, Work } from "@bitburner-agent/core";
+import type { EffectorReport, Work, WorkEffectorReport } from "@bitburner-agent/core";
 import { afterEach, expect, test, vi } from "vitest";
 import { createEffectorRunner } from "../../src/agent/effector-runner.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
@@ -11,7 +11,7 @@ const ROUND_MS = 2_000;
 const HACKING: Work = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
 const CONVERGED: EffectorReport = { done: true, problem: null };
 
-function activityWith(answer: () => EffectorReport | "no report", singularity = { available: false }) {
+function activityWith(answer: () => WorkEffectorReport | "no report", singularity = { available: false }) {
   const lines: string[] = [];
   const ns = {
     print: (line: string) => lines.push(line),
@@ -128,17 +128,17 @@ test("each backend: the simulator's effector, or the Singularity worker once the
   ]);
 });
 
-test("company work (#153): each backend's worker and arguments, and the simulator's effector", async () => {
+test("company work (#153, #155): each backend's worker and arguments, a promotion check first, and the simulator's", async () => {
   const waiter: Work = { kind: "company", company: "Noodle Bar", field: "Waiter", focus: false };
   const viaPage = activityWith(() => CONVERGED);
   viaPage.work.desire(waiter);
   await viaPage.round();
-  expect(viaPage.calls()).toEqual([["agent/abcdef123456/company-work.js", ["Noodle Bar", "Waiter", "false"]]]);
+  expect(viaPage.calls()).toEqual([["agent/abcdef123456/company-work.js", ["Noodle Bar", "Waiter", "false", "true"]]]);
   const viaSingularity = activityWith(() => CONVERGED, { available: true });
   viaSingularity.work.desire(waiter);
   await viaSingularity.round();
   expect(viaSingularity.calls()).toEqual([
-    ["agent/abcdef123456/singularity-company-work.js", ["Noodle Bar", "Waiter", "false"]],
+    ["agent/abcdef123456/singularity-company-work.js", ["Noodle Bar", "Waiter", "false", "true"]],
   ]);
   const simCalls: unknown[][] = [];
   (globalThis as Record<string, unknown>).__bitburnerAgentSim = {
@@ -150,7 +150,7 @@ test("company work (#153): each backend's worker and arguments, and the simulato
   const viaSim = activityWith(() => CONVERGED);
   viaSim.work.desire(waiter);
   await viaSim.round();
-  expect(simCalls).toEqual([["Noodle Bar", "Waiter", false]]);
+  expect(simCalls).toEqual([["Noodle Bar", "Waiter", false, true]]);
 });
 
 test("crime (#156): each backend's worker and arguments, and the simulator's effector", async () => {
@@ -199,4 +199,61 @@ test("a class (#158): each backend's worker and arguments, and the simulator's e
   viaSim.work.desire(agility);
   await viaSim.round();
   expect(simCalls).toEqual([["Powerhouse Gym", "agi", false]]);
+});
+
+const IT: Work = { kind: "company", company: "Carmichael Security", field: "IT", focus: true };
+/** Whether each worker call so far checked for a promotion (its fourth argument). */
+const checks = (calls: unknown[][]) => calls.map(([, args]) => (args as string[])[3]);
+
+test("a promotion check (#155): with the work's first convergence, then every 10 minutes (300 rounds), no more often", async () => {
+  const { work, round, calls } = activityWith(() => CONVERGED);
+  work.desire(IT);
+  await round();
+  expect(checks(calls())).toEqual(["true"]);
+  // 299 rounds: a convergence every 15, none of them a check.
+  for (let each = 0; each < 299; each += 1) await round();
+  expect(checks(calls())).toEqual(["true", ...Array(19).fill("false")]);
+  await round();
+  expect(checks(calls()).at(-1)).toBe("true");
+  // A change of the work is a start: checked at once.
+  work.desire({ ...IT, focus: false });
+  await round();
+  expect(checks(calls()).at(-1)).toBe("true");
+  // Not company work: never a check.
+  const faction = activityWith(() => CONVERGED);
+  faction.work.desire(HACKING);
+  await faction.round();
+  expect(checks(faction.calls())).toEqual([undefined]);
+});
+
+test("a promotion check not converged (#155): checked again with the next convergence, 30 s on", async () => {
+  const answers: EffectorReport[] = [{ done: false, problem: "no Job in the sidebar" }, CONVERGED];
+  const { work, round, calls } = activityWith(() => answers.shift() ?? CONVERGED);
+  work.desire(IT);
+  await round();
+  for (let each = 0; each < 15; each += 1) await round();
+  expect(checks(calls())).toEqual(["true", "true"]);
+  // Converged with it: the next is 10 minutes on.
+  for (let each = 0; each < 15; each += 1) await round();
+  expect(checks(calls())).toEqual(["true", "true", "false"]);
+});
+
+test("a promotion taken (#155): in the outcome, with the company and when, and logged; kept until the work changes", async () => {
+  const answers: WorkEffectorReport[] = [{ ...CONVERGED, promoted: { from: "IT Intern", to: "IT Analyst" } }];
+  const { work, lines, round } = activityWith(() => answers.shift() ?? { ...CONVERGED, promoted: null });
+  work.desire(IT);
+  const before = Date.now();
+  await round();
+  expect(work.outcome()).toEqual({
+    converged: true,
+    problem: null,
+    backend: "ui",
+    promotion: { company: "Carmichael Security", from: "IT Intern", to: "IT Analyst", gameTimeMs: expect.any(Number) },
+  });
+  expect(work.outcome()?.promotion?.gameTimeMs).toBeGreaterThanOrEqual(before);
+  expect(lines).toContain("agent: work: promoted at Carmichael Security, from IT Intern to IT Analyst");
+  for (let each = 0; each < 15; each += 1) await round();
+  expect(work.outcome()?.promotion?.to).toBe("IT Analyst");
+  work.desire({ ...IT, field: "Software" });
+  expect(work.outcome()).toEqual({ converged: false, problem: null, backend: null });
 });

@@ -1,6 +1,6 @@
-// The diagnostics' harness edits (#145, #149, #151, #162, #164): state a test sets up that no player could, checked in
-// the game's own save. `setMoney`, `joinFactionWithReputation`, `giveInstalledAugmentation`, `gainHackingExp` and
-// `queueAugmentation`.
+// The diagnostics' harness edits (#145, #149, #151, #155, #162, #164): state a test sets up that no player could,
+// checked in the game's own save. `setMoney`, `joinFactionWithReputation`, `employWithReputation`,
+// `giveInstalledAugmentation`, `gainHackingExp` and `queueAugmentation`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -9,12 +9,20 @@ import { useSimulations } from "./helpers/sim.ts";
 const start = useSimulations();
 const newGame = () => start({ seed: 1, epochMs: Date.UTC(2026, 0, 1), fixture: { kind: "new", tutorial: "skipped" } });
 
-/** The player, and each faction's reputation, favor and discovery, as the game saves them (`Faction/Factions.ts`). */
+/**
+ * The player, each faction's reputation, favor and discovery, and each company's reputation, as the game saves them
+ * (`Faction/Factions.ts`, `Company/Companies.ts`).
+ */
 async function saved(sim: Simulation) {
   // biome-ignore lint/suspicious/noExplicitAny: a decoded save is untyped JSON.
   const save: Record<string, any> = decodeSave(await sim.save());
   const factions = typeof save.FactionsSave === "string" ? JSON.parse(save.FactionsSave) : save.FactionsSave;
-  return { player: save.PlayerSave.data, factions: factions as Record<string, { playerReputation?: number }> };
+  const companies = typeof save.CompaniesSave === "string" ? JSON.parse(save.CompaniesSave) : save.CompaniesSave;
+  return {
+    player: save.PlayerSave.data,
+    factions: factions as Record<string, { playerReputation?: number }>,
+    companies: companies as Record<string, { playerReputation?: number }>,
+  };
 }
 
 test("joinFactionWithReputation: a member with that reputation, through the game's own join", async () => {
@@ -73,4 +81,16 @@ test("queueAugmentation: queued, not installed, as the game saves it, without it
   expect(player.money).toBe(moneyBefore);
   await expect(sim.diagnostics.queueAugmentation("Gibson Implant")).rejects.toThrow(/no augmentation/);
   await expect(sim.diagnostics.queueAugmentation("Neurotrainer I")).rejects.toThrow(/owned already/);
+});
+
+test("employWithReputation (#155): the job held and the company's reputation, as the game saves them; what isn't refused", async () => {
+  const sim = await newGame();
+  await sim.diagnostics.employWithReputation("Carmichael Security", "IT Intern", 6_800);
+  const { player, companies } = await saved(sim);
+  expect(player.jobs).toEqual({ "Carmichael Security": "IT Intern" });
+  expect(companies["Carmichael Security"]?.playerReputation).toBe(6_800);
+  await expect(sim.diagnostics.employWithReputation("Gibson Corp", "IT Intern", 0)).rejects.toThrow(/no company/);
+  await expect(sim.diagnostics.employWithReputation("Noodle Bar", "IT Intern", 0)).rejects.toThrow(/offers no job/);
+  await expect(sim.diagnostics.employWithReputation("Noodle Bar", "Waiter", -1)).rejects.toThrow(/reputation/);
+  expect((await saved(sim)).player.jobs).toEqual({ "Carmichael Security": "IT Intern" });
 });

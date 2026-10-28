@@ -26,6 +26,7 @@ import {
   FactionWorkType,
   GymType,
   type JobField,
+  type JobName,
   LocationName,
   LocationType,
 } from "../../../../../vendor/bitburner-src/src/Enums";
@@ -322,51 +323,87 @@ const effectors = {
    * player qualifies for (applying climbs to the highest, `applyForJob`), or else the field's first, disabled; neither,
    * nothing to apply for. Then "Work", focused on the Work page; then the focus as the focus buttons set it. Already so:
    * nothing touched. Not named `workForCompany`, which is an NS function. The problems read as the `ui` worker's.
+   * With `checkPromotion` (#155, owner decision 44) and a job in the field held, first what the Job page's listing of
+   * that company offers, from any city (`Company/ui/JobListings.tsx`): a later title of the field the player qualifies
+   * for, shown only if they don't qualify for its next, so applying climbs no further (`applyForJob`), and its alert.
+   * The work under way goes on. `promoted`: the title before and after, as the `ui` worker reports it.
    */
-  convergeCompanyWork(companyName: string, field: string, focus: boolean): EffectorResult {
+  convergeCompanyWork(
+    companyName: string,
+    field: string,
+    focus: boolean,
+    checkPromotion = false,
+  ): EffectorResult & { promoted: { from: string; to: string } | null } {
     const company = Object.values(CompanyName).includes(companyName as CompanyName)
       ? Companies[companyName as CompanyName]
       : undefined;
     const track = JobTracks[field as JobField] ?? [];
-    const hasJobInField = () => track.some((job) => Player.jobs[companyName as CompanyName] === job);
+    const held = () => Player.jobs[companyName as CompanyName];
+    const hasJobInField = () => track.some((job) => held() === job);
     const isThisWork = () =>
       isCompanyWork(Player.currentWork) && Player.currentWork.companyName === companyName && hasJobInField();
     const notConverged = `not ${focus ? "focused on" : "doing"} ${field} work at ${companyName}`;
-    if (company === undefined || track.length === 0) return result(false, notConverged);
-    if (!isThisWork()) {
-      if (!hasJobInField()) {
-        if (Locations[companyNameAsLocationName(company.name)]?.city !== Player.city) {
-          return result(false, `no ${companyName} in the city (is the player in its city?)`);
-        }
-        const offered = track.filter((job) => company.companyPositions.has(job)).map((job) => CompanyPositions[job]);
-        const position = offered.find((job) => Player.isQualified(company, job));
-        if (position === undefined) {
-          return result(
-            false,
-            offered.some((job) => job.isStartingJob)
-              ? `not qualified for a ${field} job at ${companyName} yet`
-              : `no ${field} job open to the player at ${companyName} (none offered, or not qualified yet)`,
-          );
-        }
-        const applied = Player.applyForJob(company, position);
+    if (company === undefined || track.length === 0) return { ...result(false, notConverged), promoted: null };
+    const before = held();
+    if (checkPromotion && before !== undefined && hasJobInField()) {
+      const qualified = (job: JobName | null) =>
+        job !== null && company.companyPositions.has(job) && Player.isQualified(company, CompanyPositions[job]);
+      const offered = track
+        .slice(track.indexOf(before) + 1)
+        .find((job) => qualified(job) && !qualified(CompanyPositions[job].nextPosition));
+      if (offered !== undefined) {
+        const applied = Player.applyForJob(company, CompanyPositions[offered]);
         if (applied.message) dialogBoxCreate(applied.message);
       }
-      if (hasJobInField()) {
-        Player.startWork(new CompanyWork({ singularity: false, companyName: company.name }));
-        Player.startFocusing();
-        Router.toPage(Page.Work);
-      }
     }
-    if (isThisWork() && Player.focus !== focus) {
-      if (focus) {
-        Player.startFocusing();
-        Router.toPage(Page.Work);
-      } else {
-        // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
-        Router.toPage(Page.Job);
+    /** The work and its focus, as the page sets them (#153). */
+    const converge = (): EffectorResult => {
+      if (!isThisWork()) {
+        if (!hasJobInField()) {
+          if (Locations[companyNameAsLocationName(company.name)]?.city !== Player.city) {
+            return result(false, `no ${companyName} in the city (is the player in its city?)`);
+          }
+          const offered = track.filter((job) => company.companyPositions.has(job)).map((job) => CompanyPositions[job]);
+          const position = offered.find((job) => Player.isQualified(company, job));
+          if (position === undefined) {
+            return result(
+              false,
+              offered.some((job) => job.isStartingJob)
+                ? `not qualified for a ${field} job at ${companyName} yet`
+                : `no ${field} job open to the player at ${companyName} (none offered, or not qualified yet)`,
+            );
+          }
+          const applied = Player.applyForJob(company, position);
+          if (applied.message) dialogBoxCreate(applied.message);
+        }
+        if (hasJobInField()) {
+          Player.startWork(new CompanyWork({ singularity: false, companyName: company.name }));
+          Player.startFocusing();
+          Router.toPage(Page.Work);
+        }
       }
-    }
-    return result(isThisWork() && Player.focus === focus, notConverged);
+      if (isThisWork() && Player.focus !== focus) {
+        if (focus) {
+          Player.startFocusing();
+          Router.toPage(Page.Work);
+        } else {
+          // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
+          Router.toPage(Page.Job);
+        }
+      }
+      return result(isThisWork() && Player.focus === focus, notConverged);
+    };
+    const converged = converge();
+    const after = held();
+    // A later title of the field than before's, as core's `promotionBetween` says: not a hire, nor another field.
+    const promoted =
+      before !== undefined &&
+      after !== undefined &&
+      track.includes(before) &&
+      track.indexOf(after) > track.indexOf(before)
+        ? { from: before, to: after }
+        : null;
+    return { ...converged, promoted };
   },
   /**
    * A cloud server (#159), as `ns.cloud.purchaseServer` buys it (`NetscriptFunctions/Cloud.ts:35-93`), with the `ui`

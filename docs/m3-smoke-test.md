@@ -13,7 +13,7 @@ One run-through of M3's effectors on your own game on Steam, in an order an earl
 - **The code:** M3's candidate commit, `fa9c5dc` (recorded on [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140)), or `main`. Follow [setup](setup.md) steps 1 to 5, or [upgrade](setup.md#upgrading-to-a-new-release) a clone you already have. On a brand-new save, step 0 below happens inside setup step 4.
 - **Your save.** Never reset or edit your real save for this.
   - **Export it first** (Options → Export), and know that the brain's own backups are in `.data/saves/E0/` ([restoring one](../packages/brain/README.md#save-backups)).
-  - **Step 15 installs every augmentation you've bought, and resets the run.** That wipes your money, your faction and company reputation (some of it becomes favor), your jobs, TOR and the programs, and every server but home, `pserv-0` included (`Prestige.ts:69-80`). On a save mid-run, do step 15 only when you'd install anyway.
+  - **Step 16 installs every augmentation you've bought, and resets the run.** That wipes your money, your faction and company reputation (some of it becomes favor), your jobs, TOR and the programs, and every server but home, `pserv-0` included (`Prestige.ts:69-80`). On a save mid-run, do step 16 only when you'd install anyway.
 - **A fresh or early save works best.** The class's money guard needs under $72k (a new game starts with $1,000). Later steps need more: $200k for each travel, $1.01m for home RAM, $4m for the augmentation. The hack loop earns it. On a later save, a step whose purchase you already own shows on the dashboard as done or skipped; check what it says, and move on.
 - **Keep the sidebar's Hacking, Character, World and Help sections open.** They hold the Terminal, Factions, Augmentations, the City, the Job page and Options.
 - **Intents** are queued in the dashboard's Intents section (http://127.0.0.1:12527/): pick the action, give its arguments as JSON, then "Queue it". **Work** is set in the dashboard's Work section.
@@ -95,7 +95,7 @@ Leave the work on for now. Close #151 after step 10's "Stop managing work".
 
 ## 9. A cheap augmentation
 
-[#149](https://github.com/UnderMyBed/bitburner-agent/issues/149). Needs 1,000 CyberSec reputation and $4m. It's also what step 15 installs.
+[#149](https://github.com/UnderMyBed/bitburner-agent/issues/149). Needs 1,000 CyberSec reputation and $4m. It's also what step 16 installs.
 
 1. Queue `purchaseAugmentation` with `{"faction": "CyberSec", "augmentation": "Neurotrainer I", "level": 1}`.
 2. The game switches to Factions, then CyberSec's augmentations, clicks Buy, confirms with Purchase, closes the "You purchased" alert, and returns to the Terminal (or the Work page, focused). The intent leaves the queue, and the Augmentations page lists it as purchased.
@@ -114,7 +114,7 @@ Close #149 if that holds.
 5. Optional: travel back to New Tokyo and set **Part-time Waiter**. It replaces Waiter, as the game does. The Agent applies and works it unfocused (no Work page), since focus gains nothing there. From another city it would say "no Noodle Bar in the city (is the player in its city?)".
 6. Click "Stop managing work": the work is left as it is.
 
-Close #153 if that holds; close #151 too (step 8). Promotions are [#155](https://github.com/UnderMyBed/bitburner-agent/issues/155).
+Close #153 if that holds; close #151 too (step 8). Promotions are step 15.
 
 ## 11. Crime
 
@@ -161,7 +161,19 @@ Close #160 if that holds. Its four choices are decided ([below](#decisions)).
 
 Close #175 and #177 if that holds. A real destroy isn't part of this smoke test, since it can't be undone (above).
 
-## 15. Installing the augmentation, and the restart (last: it resets the game)
+## 15. A promotion (it takes a few hours: set it up and leave it)
+
+[#155](https://github.com/UnderMyBed/bitburner-agent/issues/155). The Agent takes any promotion the game offers in the field it works (owner decision 44, [below](#decisions)). Noodle Bar's and Joe's Guns' jobs have one title each, so there's nothing to be promoted to there. The quickest is IT at **Carmichael Security**, in Sector-12: IT Intern wants hacking 75, and IT Analyst hacking 100 and 7,000 reputation with the company (`Company/data/CompanyPositionsMetadata.ts`, plus the company's offset of 74). Focused IT work earns that reputation at about your hacking level ÷ 240 a second, so 2½ hours at hacking 200, 5 hours at 100. Needs hacking 75 or more to start, and 100 for the promotion.
+
+1. In Sector-12 (queue `travel` with `{"city": "Sector-12"}` if you're elsewhere), set **Carmichael Security / IT** in the Work section's company form, then "Work there". Within about 30 s the Agent clicks "Apply for IT Intern Job", closes the "Congratulations" alert, and works it focused: "You are currently working as a IT Intern at Carmichael Security". The Work page shows "Current Company Reputation" and how fast it grows.
+2. Queue `travel` with `{"city": "Aevum"}`: the promotion needs no travel back. (Optional; it costs $200k.)
+3. Every 10 minutes, the Agent opens the sidebar's **Job** page for a moment, where "Apply for IT Analyst Job" is greyed out until you qualify, and goes back to the Work page, focused, without restarting the work.
+4. Leave it. Within 10 minutes of reaching 7,000 reputation, the Agent opens the Job page, clicks "Apply for IT Analyst Job", closes "Congratulations, you are now employed as a IT Analyst at Carmichael Security!", and is back on the Work page: "You are currently working as a IT Analyst at Carmichael Security", with no "You finished working for Carmichael Security" alert. The dashboard's Work row ends "; promoted from IT Intern to IT Analyst", Recent events has a `workPromotion` event, and the brain's terminal says "the Agent took a promotion at Carmichael Security: IT Intern to IT Analyst".
+5. Click "Stop managing work": the work is left as it is.
+
+Close #155 if that holds.
+
+## 16. Installing the augmentation, and the restart (last: it resets the game)
 
 [#167](https://github.com/UnderMyBed/bitburner-agent/issues/167) and [#164](https://github.com/UnderMyBed/bitburner-agent/issues/164); this also settles Q5, [#36](https://github.com/UnderMyBed/bitburner-agent/issues/36), on Steam. Needs step 9's Neurotrainer I bought and not yet installed, and the brain running.
 
@@ -186,4 +198,5 @@ The owner answered these on 2026-10-28, keeping each as built ([owner decisions]
   4. a holding brain's state passes `ttlMs` on, so the Agent keeps it in safe mode too.
 - **[#168](https://github.com/UnderMyBed/bitburner-agent/issues/168), no tutorial page check** (decision 40, [PR #170](https://github.com/UnderMyBed/bitburner-agent/pull/170)): the tutorial stays your one click on a new game, and the Agent doesn't check the page for it. It can only run during the tutorial after your own Options → "Reset tutorial".
 - **[#153](https://github.com/UnderMyBed/bitburner-agent/issues/153), part-time work unfocused** (decision 41, [PR #154](https://github.com/UnderMyBed/bitburner-agent/pull/154)): part-time jobs are worked unfocused, as classes are, since focus gains them nothing (`Work/CompanyWork.tsx:36`). It's the exception to decision 37.
+- **[#155](https://github.com/UnderMyBed/bitburner-agent/issues/155), promotions** (decision 44, given before it was built, on Claude's recommendation): the Agent takes any promotion the game offers in the field of the company work, and the planner will choose the company and field, not the title. No travel: the Job page works from any city (step 15).
 - **[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162), the backdoor** (decision 42, [PR #171](https://github.com/UnderMyBed/bitburner-agent/pull/171)): the terminal is sent `home` after a backdoor, even if you'd connected elsewhere first. A backdoor longer than about 2 minutes raises the "intent stuck" alert until it's done, as would a purchase held behind it.

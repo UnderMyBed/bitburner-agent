@@ -10,6 +10,8 @@ import {
   getBitNodeLevel,
   getDefaultBitNodeOptions,
 } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
+import { CompanyName } from "../../../../../vendor/bitburner-src/src/Company/Enums";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
 import { save as saveToIndexedDb } from "../../../../../vendor/bitburner-src/src/db";
 import { Engine } from "../../../../../vendor/bitburner-src/src/engine";
@@ -210,6 +212,21 @@ export function joinFactionWithReputation(faction: string, reputation: number) {
   if (!Object.values(FactionName).includes(faction as FactionName)) throw new RangeError(`no faction ${faction}`);
   joinFaction(Factions[faction as FactionName]);
   Factions[faction as FactionName].playerReputation = reputation;
+}
+
+/**
+ * Makes the player `job` at `company`, as an application sets it (`Player.jobs`, `applyForJob`), with this reputation
+ * there: a harness edit for test scenarios (#155), not something a player can do. A company the game doesn't have, or
+ * a job it doesn't offer, throws.
+ */
+export function employWithReputation(company: string, job: string, reputation: number) {
+  if (!Object.values(CompanyName).includes(company as CompanyName)) throw new RangeError(`no company ${company}`);
+  const employer = Companies[company as CompanyName];
+  if (![...employer.companyPositions].some((offered) => offered === job)) {
+    throw new RangeError(`${company} offers no job ${job}`);
+  }
+  Player.jobs[company as CompanyName] = job as (typeof Player.jobs)[CompanyName];
+  employer.playerReputation = reputation;
 }
 
 /**
