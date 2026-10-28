@@ -59,11 +59,14 @@ export {
   encodeControlMessage,
   type GameInfo,
   type HelloMessage,
+  isSafeIntegerAtLeast,
   MAX_FIELD_LENGTH,
   MAX_HACK_LOOP_HOSTS,
+  MAX_SAFE_MODE_TTL_MS,
   type ParsedMessage,
   parseAgentMessage,
   parseBrainMessage,
+  parseHackLoop,
   SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
   type SnapshotMessage,
@@ -77,6 +80,7 @@ export {
   BOOT_SCRIPT,
   CURRENT_DEPLOYMENT_FILE,
   DEPLOYMENT_ROOT,
+  DESIRED_STATE_FILE,
   deployedFilePath,
   deploymentFolder,
   deploymentIdOfPath,
@@ -113,6 +117,7 @@ export {
 } from "./intents.ts";
 export { CITIES, TECH_VENDORS, TRAVEL_COST, TRAVEL_WORKER_NAME } from "./locations.ts";
 export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
+export { encodeSafeModeState, parseSafeModeState, type SafeModeState } from "./safe-mode.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

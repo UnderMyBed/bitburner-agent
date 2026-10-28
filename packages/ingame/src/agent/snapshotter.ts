@@ -1,5 +1,6 @@
-// The Agent's snapshotter (#89, architecture §5.2): runs one round of snapshots every 2 s while welcomed. Each tier's
-// data comes from a short-lived worker script, so the Agent itself stays small:
+// The Agent's snapshotter (#89, architecture §5.2): runs one round of snapshots every 2 s while welcomed (with no
+// brain, in safe mode, only the slow worker, once, unsent: #160). Each tier's data comes from a short-lived worker
+// script, so the Agent itself stays small:
 // - fast, every round, always sent (the heartbeat), even when its worker can't run;
 // - medium every 5th round (10 s), slow every 30th (60 s), both in the first round after each welcome;
 // - static, once per Agent start, resent from memory after each welcome.
@@ -112,6 +113,19 @@ export function createSnapshotter(
      */
     /** Whether the game has Singularity, as the latest slow snapshot says (`singularityAvailableIn`). */
     singularityAvailable: () => singularityAvailableIn(lastSlowData),
+
+    /** The game's `lastAugReset`, from the latest slow snapshot, or null before the first (safe mode's check, #160). */
+    lastAugReset: (): number | null => lastSlowData?.resetInfo.lastAugReset ?? null,
+
+    /**
+     * With no brain (safe mode, #160): the slow worker's data, unsent, if the Agent has none yet, for the reset check
+     * and Singularity's availability. Neither changes without a reset, which means a new Agent, so once is enough.
+     */
+    async readSlowTierIfNone(deadlineMs: number): Promise<void> {
+      if (lastSlowData !== null) return;
+      const report = await runTierWorker("slow", deadlineMs);
+      if (report !== null) lastSlowData = report.data as SlowSnapshotData;
+    },
 
     /** After every welcome, the next round sends all four tiers, so the brain starts from a full picture. */
     welcomed(): void {

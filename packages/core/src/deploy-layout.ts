@@ -12,6 +12,11 @@
 export const DEPLOYMENT_ROOT = "agent";
 /** Holds the id of the deployment in use, and nothing else. */
 export const CURRENT_DEPLOYMENT_FILE = "agent/current.txt";
+/**
+ * The last desired state, kept for safe mode (#160, `SafeModeState`): outside every deployment's folder, so a reload,
+ * an install's restart and a new deployment's Agent all read it, and the deployer's tidying never touches it.
+ */
+export const DESIRED_STATE_FILE = "agent/desired-state.json";
 /** The one fixed-path script: autoexec runs it on every load of a save. */
 export const BOOT_SCRIPT = "agent/boot.js";
 /** The Agent's file name inside a deployment folder. */

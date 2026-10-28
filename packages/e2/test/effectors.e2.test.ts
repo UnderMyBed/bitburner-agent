@@ -475,6 +475,43 @@ test("faction work (#151): started focused on the real page, refocused after the
   await expect(workPageShown(page)()).resolves.toBe(true);
 });
 
+test("safe mode (#160): with the brain stopped, the Agent refocuses the work on the real page; after a reload too, the 'Offline for…' alert closed", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    prepareSave: inCyberSec,
+    brainSettings: ONLY_WORK,
+  });
+  await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  // The brain gone for good: the Agent keeps the last desired state (agent/desired-state.json).
+  for (const brain of started.brains) await brain.stop();
+  /** The owner does something else: within the work's 30 s, the Agent focuses again, with no brain to say so. */
+  const refocusedAfterTheOwner = async () => {
+    await page.getByRole("button", { name: "Do something else simultaneously" }).click();
+    await expect(workPageShown(page)()).resolves.toBe(false);
+    await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+  };
+  await refocusedAfterTheOwner();
+
+  // Past an autosave, a reload: the work loads focused (`ui/GameRoot.tsx:169-171`), autoexec starts the Agent, and it
+  // has only the file. It closes the load's "Offline for…" alert, brain or not.
+  await advanceUntil(page, async () => (await page.getByText("Game Saved!").count()) > 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: AUTOSAVE_GAME_TIMEOUT_MS,
+  });
+  await page.reload();
+  await page.locator("h6", { hasText: HACKING_FOR_CYBERSEC_TITLE }).waitFor({ timeout: STEP_REAL_TIMEOUT_MS });
+  await advanceUntil(page, offlineAlertShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 2_000 });
+  await advanceUntil(page, async () => (await page.locator(OPEN_DIALOG).count()) === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  await refocusedAfterTheOwner();
+});
+
 test("faction work unfocused (#151): with the Neuroreceptor Management Implant installed, started then left unfocused, not restarted", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     prepareSave: async (sim) => {
