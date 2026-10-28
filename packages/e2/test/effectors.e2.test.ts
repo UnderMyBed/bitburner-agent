@@ -858,6 +858,8 @@ test("a backdoor (#162): typed into the real terminal, home and connect by conne
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     prepareSave: nectarNetReady,
     brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+    // The owner has left the terminal on n00dles: the way to nectar-net starts from home, so `home` comes first.
+    beforeAgent: (page) => typeCommand(page, "connect n00dles"),
   });
   await queueIntent(ports.dashboardPort, { action: "backdoor", args: { hostname: "nectar-net" } });
   await queueIntent(ports.dashboardPort, { action: "buyTor", args: { vendor: "Alpha Enterprises" } });
@@ -881,13 +883,14 @@ test("a backdoor (#162): typed into the real terminal, home and connect by conne
   const medium = latestMedium(dataDirectory);
   expect(medium?.servers.find((server) => server.hostname === "nectar-net")?.backdoorInstalled).toBe(true);
   expect(medium?.programs).toContain("BruteSSH.exe");
-  // The terminal's own words, in order: two connects, the backdoor, home again.
+  // The terminal's own words, in order: the owner's connect, home, two connects, the backdoor, home again.
   const text = await terminalText(page);
   const at = (words: string) => text.indexOf(words);
-  expect(at("Connected to nectar-net")).toBeGreaterThan(-1);
+  expect(at("Connected to home")).toBeGreaterThan(at("Connected to n00dles"));
+  expect(at("Connected to nectar-net")).toBeGreaterThan(at("Connected to home"));
   expect(at("Backdoor on 'nectar-net' successful!")).toBeGreaterThan(at("Connected to nectar-net"));
   expect(text.lastIndexOf("Connected to home")).toBeGreaterThan(at("Backdoor on 'nectar-net' successful!"));
-  expect((text.match(/Connected to /g) ?? []).length).toBeGreaterThanOrEqual(3);
+  expect((text.match(/Connected to /g) ?? []).length).toBeGreaterThanOrEqual(5);
   // Left home (the input's prompt, `Terminal/ui/TerminalInput.tsx:453-455`), the input free, no dialog.
   await expect(page.locator(TERMINAL_INPUT).locator("xpath=preceding-sibling::p").innerText()).resolves.toMatch(
     /^\[home\s\/\]>/,
