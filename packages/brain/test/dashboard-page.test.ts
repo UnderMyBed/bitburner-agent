@@ -4,7 +4,16 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CRIME_NAMES, type FastSnapshotData, INTENT_ACTIONS, JOB_FIELDS } from "@bitburner-agent/core";
+import {
+  CLASS_LOCATION_NAMES,
+  CLASS_LOCATIONS,
+  CLASS_TYPE_NAMES,
+  CLASS_TYPES,
+  CRIME_NAMES,
+  type FastSnapshotData,
+  INTENT_ACTIONS,
+  JOB_FIELDS,
+} from "@bitburner-agent/core";
 import { JSDOM } from "jsdom";
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
@@ -594,7 +603,34 @@ describe("work (#151)", () => {
     expect([...crime.options].map((option) => option.textContent)).toEqual(CRIME_NAMES);
   });
 
-  test("the forms set faction, company or crime work, and the stop button stops managing it", async () => {
+  test("a class reads plainly, and its form offers the game's universities and gyms, and its classes (#158)", async () => {
+    const work = (classType: string) => ({
+      desired: { kind: "class", location: "Iron Gym", classType, focus: false },
+      outcome: { converged: true, problem: null, backend: "ui" },
+    });
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work: work("dex") } }));
+    expect(textOf(document, "#work div")).toBe("Dexterity training at Iron Gym, unfocused: converged via ui");
+    const location = document.querySelector("#class-work select[name=location]") as HTMLSelectElement;
+    expect([...location.options].map((option) => option.value)).toEqual(CLASS_LOCATION_NAMES);
+    expect([...location.options].map((option) => option.textContent)).toEqual(
+      CLASS_LOCATION_NAMES.map((name) => `${name} (${CLASS_LOCATIONS[name]?.city})`),
+    );
+    expect(location.value).toBe("Rothman University");
+    const classType = document.querySelector("#class-work select[name=classType]") as HTMLSelectElement;
+    expect([...classType.options].map((option) => [option.value, option.textContent])).toEqual(
+      CLASS_TYPE_NAMES.map((name) => [name, CLASS_TYPES[name]?.name]),
+    );
+    const { document: course } = await openPage(() => ({
+      status: 200,
+      body: {
+        ...BUSY_STATUS,
+        work: { ...work("Networks"), desired: { ...work("Networks").desired, location: "Rothman University" } },
+      },
+    }));
+    expect(textOf(course, "#work div")).toBe("Networks at Rothman University, unfocused: converged via ui");
+  });
+
+  test("the forms set faction, company, crime or class work, and the stop button stops managing it", async () => {
     const { document, requests } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
     const form = document.querySelector("#faction-work") as HTMLFormElement;
     (form.elements.namedItem("faction") as HTMLInputElement).value = "NiteSec";
@@ -612,12 +648,18 @@ describe("work (#151)", () => {
     (crimeForm.elements.namedItem("crime") as HTMLSelectElement).value = "Heist";
     crimeForm.requestSubmit();
     await settle();
+    const classForm = document.querySelector("#class-work") as HTMLFormElement;
+    (classForm.elements.namedItem("location") as HTMLSelectElement).value = "Powerhouse Gym";
+    (classForm.elements.namedItem("classType") as HTMLSelectElement).value = "agi";
+    classForm.requestSubmit();
+    await settle();
     const posts = requests.filter((request) => request.method === "POST");
     expect(posts.map((request) => [request.url, JSON.parse(String(request.body))])).toEqual([
       ["/api/work", { work: { faction: "NiteSec", workType: "field" } }],
       ["/api/work", { work: null }],
       ["/api/work", { work: { kind: "company", company: "Joe's Guns", field: "Employee" } }],
       ["/api/work", { work: { kind: "crime", crime: "Heist" } }],
+      ["/api/work", { work: { kind: "class", location: "Powerhouse Gym", classType: "agi" } }],
     ]);
   });
 });

@@ -2,8 +2,8 @@
  * The Singularity backend's home workers (#145, architecture §5.6): one per action, so each costs only its own call.
  * They never run on a fresh save, so the fresh-save check (the Agent's budget plus its largest worker within 8 GB) leaves
  * them out: at SF4.3 or in BN4 the first four are within today's largest fresh-save worker, the faction join is 5.1 GB,
- * the augmentation purchase 12.6 GB, faction work 5.3 GB (#151), company work 8.8 GB (#153), crime 7.3 GB (#156) and
- * the install 6.6 GB (#164). With less of SF4 the game charges their calls 4× or 16×
+ * the augmentation purchase 12.6 GB, faction work 5.3 GB (#151), company work 8.8 GB (#153), crime 7.3 GB (#156),
+ * classes 6.8 GB (#158) and the install 6.6 GB (#164). With less of SF4 the game charges their calls 4× or 16×
  * (`Netscript/RamCostGenerator.ts:82-95`). One that doesn't fit home beside the Agent leaves its action to the page.
  * Used by the in-game code and the bridge's deployer.
  */
@@ -21,6 +21,8 @@ export const SINGULARITY_FACTION_WORK_WORKER_NAME = "singularity-faction-work.js
 export const SINGULARITY_COMPANY_WORK_WORKER_NAME = "singularity-company-work.js";
 /** 7.3 GB: `getCurrentWork`, `isFocused`, `commitCrime` and `setFocus` (#156). */
 export const SINGULARITY_CRIME_WORK_WORKER_NAME = "singularity-crime-work.js";
+/** 6.8 GB: `getPlayer`, `getCurrentWork`, `isFocused`, `universityCourse`, `gymWorkout` and `setFocus` (#158). */
+export const SINGULARITY_CLASS_WORK_WORKER_NAME = "singularity-class-work.js";
 /** 6.6 GB: `installAugmentations`, with `agent/boot.js` to start after the reset (#164). */
 export const SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME = "singularity-install-augmentations.js";
 
@@ -49,6 +51,7 @@ export function singularityWorkerFileNames(): string[] {
     SINGULARITY_FACTION_WORK_WORKER_NAME,
     SINGULARITY_COMPANY_WORK_WORKER_NAME,
     SINGULARITY_CRIME_WORK_WORKER_NAME,
+    SINGULARITY_CLASS_WORK_WORKER_NAME,
     SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME,
   ];
 }

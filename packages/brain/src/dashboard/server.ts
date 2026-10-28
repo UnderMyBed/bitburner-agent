@@ -40,7 +40,7 @@ export interface DashboardServerOptions {
   addIntent(request: unknown): AddedIntent;
   /** Takes an intent off the manual queue by id; false if it isn't there. */
   cancelIntent(id: string): boolean;
-  /** The work the owner wants (#151, #153, #156): faction, company or crime work (`parseOwnersWork`), or null. */
+  /** The work the owner wants (#151, #153, #156, #158): faction, company, crime or class (`parseOwnersWork`), or null. */
   setWork(request: unknown): { ok: true } | { ok: false; reason: string };
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
@@ -123,7 +123,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         if (body === null || typeof body !== "object" || !("work" in body)) {
           throw new RequestError(
             400,
-            'the body must be {"work": {"faction": …, "workType": …}}, {"work": {"kind": "company", "company": …, "field": …}}, {"work": {"kind": "crime", "crime": …}} or {"work": null}',
+            'the body must be {"work": {"faction": …, "workType": …}}, {"work": {"kind": "company", "company": …, "field": …}}, {"work": {"kind": "crime", "crime": …}}, {"work": {"kind": "class", "location": …, "classType": …}} or {"work": null}',
           );
         }
         const set = options.setWork(body.work);

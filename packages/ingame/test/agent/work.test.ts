@@ -174,3 +174,28 @@ test("crime (#156): each backend's worker and arguments, and the simulator's eff
   await viaSim.round();
   expect(simCalls).toEqual([["Shoplift", true]]);
 });
+
+test("a class (#158): each backend's worker and arguments, and the simulator's effector", async () => {
+  const agility: Work = { kind: "class", location: "Powerhouse Gym", classType: "agi", focus: false };
+  const viaPage = activityWith(() => CONVERGED);
+  viaPage.work.desire(agility);
+  await viaPage.round();
+  expect(viaPage.calls()).toEqual([["agent/abcdef123456/class-work.js", ["Powerhouse Gym", "agi", "false"]]]);
+  const viaSingularity = activityWith(() => CONVERGED, { available: true });
+  viaSingularity.work.desire(agility);
+  await viaSingularity.round();
+  expect(viaSingularity.calls()).toEqual([
+    ["agent/abcdef123456/singularity-class-work.js", ["Powerhouse Gym", "agi", "false"]],
+  ]);
+  const simCalls: unknown[][] = [];
+  (globalThis as Record<string, unknown>).__bitburnerAgentSim = {
+    convergeClassWork: (...args: unknown[]) => {
+      simCalls.push(args);
+      return CONVERGED;
+    },
+  };
+  const viaSim = activityWith(() => CONVERGED);
+  viaSim.work.desire(agility);
+  await viaSim.round();
+  expect(simCalls).toEqual([["Powerhouse Gym", "agi", false]]);
+});

@@ -7,6 +7,13 @@
  * "RAM"), so the actions are only ever strings here, never identifiers: `upgradeHomeRam` is a Singularity function.
  */
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
+import {
+  CLOUD_SERVER_MAX_RAM,
+  isCloudServerHostname,
+  isCloudServerRam,
+  MAX_CLOUD_SERVER_HOSTNAME_LENGTH,
+  WORLD_DAEMON,
+} from "./cloud-servers.ts";
 import { FACTION_ENEMIES, FACTION_NAMES } from "./factions.ts";
 import { isUpgradableHomeRam } from "./home-ram.ts";
 import { CITIES, TECH_VENDORS } from "./locations.ts";
@@ -21,6 +28,8 @@ export type IntentRequest =
   | { action: "joinFaction"; args: { faction: string } }
   /** `level` is 1 but for NeuroFlux Governor, where it's the level bought: each level its own intent (#149). */
   | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } }
+  /** A cloud server named `hostname` with `ram` GB (#159): done once the player has one of that name. */
+  | { action: "buyServer"; args: { hostname: string; ram: number } }
   /** Installs every augmentation queued (#164): irreversible, and done once nothing is left to install. */
   | { action: "installAugmentations"; args: Record<string, never> };
 
@@ -32,6 +41,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   upgradeHomeRam: true,
   joinFaction: true,
   purchaseAugmentation: true,
+  buyServer: true,
   installAugmentations: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
@@ -52,7 +62,10 @@ export interface EffectorReport {
   problem: string | null;
 }
 
-/** The ways the Agent can carry out an intent or converge the work (#145, #151, architecture §5.6). */
+/**
+ * The ways the Agent can carry out an intent or converge the work (#145, #151, architecture §5.6). `ui` is a home
+ * worker without Singularity: the page's, or NS calls alone where the API needs no Singularity (`buyServer`, #159).
+ */
 export const EFFECTOR_BACKENDS = ["sim", "singularity", "ui"] as const;
 export type EffectorBackend = (typeof EFFECTOR_BACKENDS)[number];
 
@@ -126,6 +139,19 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         },
       };
     }
+    case "buyServer":
+      if (!isCloudServerHostname(args.hostname)) {
+        return {
+          ok: false,
+          reason:
+            `buyServer's hostname isn't 1 to ${MAX_CLOUD_SERVER_HOSTNAME_LENGTH} letters, digits, '.', '_' or '-' ` +
+            `(not an IP address, hacknet-…, nor ${WORLD_DAEMON})`,
+        };
+      }
+      if (!isCloudServerRam(args.ram)) {
+        return { ok: false, reason: `buyServer's ram isn't a power of two GB from 1 to ${CLOUD_SERVER_MAX_RAM}` };
+      }
+      return { ok: true, message: { action, args: { hostname: args.hostname, ram: args.ram } } };
     case "installAugmentations":
       return { ok: true, message: { action, args: {} } };
     default:
