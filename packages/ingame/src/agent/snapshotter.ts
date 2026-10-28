@@ -19,6 +19,7 @@ import {
   type SnapshotTier,
   snapshotWorkerFileName,
   type WorkerReport,
+  type WorkOutcome,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
@@ -53,6 +54,7 @@ export function createSnapshotter(
     agentSessionId,
     workerRunner,
     intentOutcomes,
+    workOutcome = () => null,
     dialogReport,
   }: {
     deploymentId: string;
@@ -60,6 +62,8 @@ export function createSnapshotter(
     workerRunner: WorkerRunner;
     /** How the intents went (#141), for the fast snapshot. */
     intentOutcomes: () => IntentOutcome[];
+    /** How the work went (#151), for the fast snapshot: null while the brain wants none. */
+    workOutcome?: () => WorkOutcome | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
   },
@@ -127,6 +131,7 @@ export function createSnapshotter(
         game: fastReport ? (fastReport.data as FastWorkerData) : null,
         intents: intentOutcomes(),
         dialogs: dialogReport(),
+        work: workOutcome(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 

@@ -211,6 +211,13 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     returnToTerminal: () => openSidebarPage("Terminal", deadlineMs),
 
     /**
+     * Focused on the current work again, with the time kept for it: the overview's "Focus"
+     * (`ui/React/CharacterOverview.tsx:248-281`), which opens the Work page.
+     */
+    refocusWork: () =>
+      clickWhenThere("//button[normalize-space()='Focus']", '"Focus" on the overview\'s work', deadlineMs),
+
+    /**
      * Types `command` into the terminal and runs it, as a player would. The Terminal page must be open. A line the
      * owner has started typing is theirs: then nothing is typed.
      */

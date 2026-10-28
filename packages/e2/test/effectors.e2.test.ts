@@ -406,6 +406,75 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
 });
 
+/** Sets the work the brain manages (#151), as the dashboard's Work form does. */
+async function setWork(dashboardPort: number, work: { faction: string; workType: string } | null) {
+  const origin = `http://127.0.0.1:${dashboardPort}`;
+  const response = await fetch(`${origin}/api/work`, {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ work }),
+  });
+  expect(response.status, await response.text()).toBe(200);
+}
+
+/** The Work page's title for CyberSec's hacking contracts: shown while the player is focused on them. */
+const HACKING_FOR_CYBERSEC_TITLE = "You are currently carrying out hacking contracts for CyberSec";
+const workPageShown = (page: Page) => async () =>
+  (await page.locator("h6", { hasText: HACKING_FOR_CYBERSEC_TITLE }).count()) > 0;
+
+test("faction work (#151): started focused on the real page, refocused after the owner unfocuses, and kept through a travel", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    prepareSave: inCyberSec,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
+  await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
+  await advanceUntil(page, async () => latestFast(dataDirectory)?.work?.converged === true, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({ converged: true, problem: null, backend: "ui" });
+
+  // The owner does something else: within the activity's 30 s, the Agent focuses again.
+  await page.getByRole("button", { name: "Do something else simultaneously" }).click();
+  await expect(workPageShown(page)()).resolves.toBe(false);
+  await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 40_000 });
+
+  // A travel while focused: the Work page hides the sidebar, so the travel unfocuses, flies, and focuses again.
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Aevum" } });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.player.city === "Aevum", {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  await advanceGameTime(page, 2_000);
+  await expect(workPageShown(page)()).resolves.toBe(true);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+
+  // No longer managed: the work is left as it is.
+  await setWork(ports.dashboardPort, null);
+  await advanceGameTime(page, 35_000);
+  await expect(workPageShown(page)()).resolves.toBe(true);
+});
+
+test("faction work a faction doesn't offer (#151): not converged, with the page's reason, and the page left on the Terminal", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    prepareSave: inCyberSec,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" },
+  });
+  await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "field" });
+  await advanceUntil(page, async () => (latestFast(dataDirectory)?.work?.backend ?? null) !== null, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  expect(latestFast(dataDirectory)?.work).toEqual({
+    converged: false,
+    problem: 'no "Field Work" on CyberSec\'s page (does it offer field work?)',
+    backend: "ui",
+  });
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
 /** The dashboard's alerts now, as its page reads them (`GET /api/status`). */
 async function dashboardAlerts(dashboardPort: number): Promise<{ name: string; detail: string }[]> {
   const response = await fetch(`http://127.0.0.1:${dashboardPort}/api/status`);

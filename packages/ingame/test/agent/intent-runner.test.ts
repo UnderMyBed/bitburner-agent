@@ -3,6 +3,7 @@
 import { type EffectorReport, type Intent, type IntentRequest, intentId } from "@bitburner-agent/core";
 import fc from "fast-check";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { createEffectorRunner } from "../../src/agent/effector-runner.ts";
 import { createIntentRunner } from "../../src/agent/intent-runner.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
 import type { NS } from "../../src/ns.ts";
@@ -43,11 +44,12 @@ function runnerWith(
     if (report === "silent") return { outcome: "noReport" };
     return { outcome: "reported", report: { workerPid: 1, data: report } as never };
   });
-  const runner = createIntentRunner(ns, {
+  const effectorRunner = createEffectorRunner(ns, {
     deploymentId: "abcdef123456",
     workerRunner: { runWorker } as unknown as WorkerRunner,
     singularityAvailable: () => singularity.available,
   });
+  const runner = createIntentRunner(ns, { effectorRunner });
   /** One round, with `leftMs` of it left when the runner's turn comes. */
   const round = (leftMs = ROUND_MS) => runner.runDue(Date.now() + leftMs);
   const workerFiles = () => runWorker.mock.calls.map(([workerFile]) => workerFile);

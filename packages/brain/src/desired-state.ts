@@ -23,6 +23,14 @@ import { readManualIntents, writeManualIntents } from "./manual-intents.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
+import {
+  parseOwnersWork,
+  readOwnersWork,
+  reportedWorkOutcome,
+  type WorkView,
+  workFocus,
+  writeOwnersWork,
+} from "./work.ts";
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -135,7 +143,8 @@ export class DesiredStateController {
         // Counted on the last Agent's snapshots: every gate starts again.
         this.#gates.forget();
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
-        // The intents' outcomes: for the views, and the manual intents done. Anything else changes nothing to send.
+        // The intents' and the work's outcomes: for the views, and the manual intents done. Anything else changes
+        // nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
         if (!this.#dropDoneManualIntents()) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
@@ -185,6 +194,27 @@ export class DesiredStateController {
       this.#update();
     }
     return { ok: true, intent: parsed.message };
+  }
+
+  /**
+   * The work the owner wants (#151): `{ faction, workType }`, kept in the store and sent at once, or null to stop
+   * managing work (the game's work is then left as it is).
+   */
+  setWork(request: unknown): { ok: true } | { ok: false; reason: string } {
+    const parsed = parseOwnersWork(request);
+    if (!parsed.ok) return parsed;
+    writeOwnersWork(this.#store, parsed.work);
+    this.#update();
+    return { ok: true };
+  }
+
+  /** What the brain sends of the work, and how the connected Agent last reported it. */
+  workView(): WorkView {
+    const owners = readOwnersWork(this.#store);
+    return {
+      desired: owners === null ? null : { ...owners, focus: workFocus(this.#slowData) },
+      outcome: owners === null ? null : reportedWorkOutcome(this.#fastData?.work),
+    };
   }
 
   /** Takes the intent `id` off the manual queue; false if it isn't there. */
@@ -346,8 +376,11 @@ export class DesiredStateController {
       ...manual.filter((each) => this.#gates.isReleased(each.id)),
       ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
     ];
+    // The owner's work, its focus from the latest slow snapshot (decision 37); none: not managed.
+    const work = this.workView().desired;
+    const withWork = work === null ? {} : { work };
     if (!hackLoopEnabled) {
-      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents };
+      this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...withWork };
     } else if (this.#staticData === null || this.#mediumData === null) {
       this.#desired = null;
     } else {
@@ -358,6 +391,7 @@ export class DesiredStateController {
           hosts: chooseHackHosts(this.#staticData, this.#mediumData),
         },
         intents,
+        ...withWork,
       };
     }
     this.#channel.setDesiredState(this.#desired);

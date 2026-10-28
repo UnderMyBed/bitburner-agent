@@ -11,18 +11,21 @@ import {
   BUY_AUGMENTATION_WORKER_NAME,
   BUY_PROGRAM_WORKER_NAME,
   type EffectorReport,
+  FACTION_WORK_WORKER_NAME,
   type Intent,
   JOIN_FACTION_WORKER_NAME,
   NEUROFLUX_GOVERNOR,
   SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
   SINGULARITY_BUY_PROGRAM_WORKER_NAME,
   SINGULARITY_BUY_TOR_WORKER_NAME,
+  SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
   SINGULARITY_TRAVEL_WORKER_NAME,
   SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
   TOR_ROUTER,
   TRAVEL_WORKER_NAME,
   UPGRADE_HOME_RAM_WORKER_NAME,
+  type Work,
 } from "@bitburner-agent/core";
 
 /** The simulator's effectors, as it puts them on the page's global object. */
@@ -33,6 +36,7 @@ export interface SimEffectors {
   travelTo(city: string): EffectorReport;
   acceptFactionInvitation(faction: string): EffectorReport;
   buyAugmentationFrom(faction: string, augmentation: string, level: number): EffectorReport;
+  convergeFactionWork(faction: string, workType: string, focus: boolean): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -103,4 +107,16 @@ export function effectorFor(intent: Intent): Effector {
       };
     }
   }
+}
+
+/** The work activity's effector (#151): converges the game on `work`, starting it, or setting its focus. */
+export function workEffectorFor(work: Work): Effector {
+  const { faction, workType, focus } = work;
+  const workerArguments = [faction, workType, String(focus)];
+  return {
+    description: `${workType} work for ${faction}${focus ? ", focused" : ""}`,
+    ui: { workerName: FACTION_WORK_WORKER_NAME, workerArguments },
+    singularity: { workerName: SINGULARITY_FACTION_WORK_WORKER_NAME, workerArguments },
+    sim: (effectors) => effectors.convergeFactionWork(faction, workType, focus),
+  };
 }

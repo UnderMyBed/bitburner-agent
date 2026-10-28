@@ -125,6 +125,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, travel, or a cheaper home RAM upgrade first); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
   - **Home RAM:** on or off; on, the size the upgrade being bought brings home to, or what it waits for (the Agent's snapshots, money for the next size, travel, a cheaper program first, or the BitNode's price), or that home is at its limit; home's RAM; and its switch ([home RAM](#home-ram)).
   - **Intents:** each intent sent, in order, with its source (the manual queue or a purchase) and how it went in the game: not reported yet, done, or its tries and last problem. An irreversible one the gate holds says why instead ("not sent: waiting for a save backup", #147). A manual one has a Cancel button, and a form queues a new one: an action and its arguments as JSON ([intents](#intents)).
+  - **Work** (#151): the work the brain manages, focused or not, and how the Agent last reported it, or "Not managed"; a form sets it (a faction and a work type) and **Stop managing work** clears it.
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
 - **When it can't show the status,** it says why in place of the data, rather than showing stale numbers:
   - "Brain unreachable": the brain stopped, or crashed;
@@ -157,6 +158,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
   - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), and `POST /api/home-ram` home RAM's (#138).
   - `POST /api/intents` with `{"action": …, "args": {…}}` queues an intent (#141), answered with `{"id": …}`, or 400 with why it isn't valid. `POST /api/intents/cancel` with `{"id": …}` takes one off the queue, or 404 if it isn't there. Both the same way as the switches.
+  - `POST /api/work` with `{"work": {"faction": …, "workType": …}}` sets the work (#151), or with `{"work": null}` stops managing it; 400 with why for one that isn't valid.
   - Refusals:
     - 403: not the dashboard's Host or Origin;
     - 400: a body that isn't JSON, a switch's body that isn't exactly one of its two, an intent that isn't valid (or a full queue), or a path that isn't valid;
@@ -243,6 +245,12 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   - A held intent doesn't hold up those queued after it.
   - Each intent's view says why it isn't sent (`waitingFor`), and the dashboard shows it ("not sent: held: Sector-12's enemy Chongqing is joined"). A brain without save backups never sends one.- **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`: a worker that didn't run counts as a try. The outcome also names the backend the Agent used (`sim`, `singularity` or `ui`, #145), which the dashboard shows ("2 tries via ui: …"): the brain never chooses it.
 
+## Work
+
+M3's eighth slice ([#151](https://github.com/UnderMyBed/bitburner-agent/issues/151), owner decision 37): the brain's second activity for the Agent, the work the player does (`src/work.ts`, `src/desired-state.ts`).
+- **What:** faction work so far, `{ faction, workType }` (hacking, field or security), set on the dashboard (or `POST /api/work`) and kept in the store (`work.desired`), so it survives restarts of the brain. None set: no `work` goes, and the Agent leaves the game's work alone. Choosing work is M4's planner.
+- **Focus:** worked out by the brain, not set by the owner: focused for full gains, unless the Neuroreceptor Management Implant is installed, as the connected Agent's slow snapshot says (it gives full gains unfocused); before that snapshot, focused.
+- **How it went:** the Agent's `work` outcome in the fast snapshot (converged, the problem, the backend), shown on the dashboard.
 ## Supervision
 
 The brain keeps the game itself running, for unattended play ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); architecture §10.2, R9). It's process management only: nothing touches the game's code or its save.
@@ -373,6 +381,7 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/hack-loop.ts` | The hack loop's switch and rules (target and hosts) |
 | `src/programs.ts` | Buying the hacking programs: the switch, the next item, the prices and vendors |
 | `src/desired-state.ts` | The controller that sends the hack loop and the intents (purchases, the manual queue) as one desired state |
+| `src/work.ts` | The work the owner sets (#151): kept in the store, its focus, and the Agent's outcome read |
 | `src/irreversible-gate.ts` | The gate before an irreversible intent (#147): its guard on medium snapshots, then a save backup |
 | `src/manual-intents.ts` | The owner's manual intents queue, in the store |
 | `src/home-ram.ts` | Upgrading home's RAM: the switch, the price, the next upgrade |
@@ -381,6 +390,6 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the intents |
-| `test/effector-backends.test.ts` | The simulator suite for the Effectors' `sim` and `singularity` backends (#145): each action with money and without, and in BN1 with SF4.3. Buying augmentations (#149) from CyberSec, set up with reputation: through each backend, NeuroFlux a level at a time, nothing paid twice, and a level out of turn or no money not done. Joining Sector-12 (#147) through each, past the gate: sent only after two medium snapshots and a save backup; then, with `sim`, Chongqing held by the guard, and CyberSec (no enemies) sent at once but not done without an invitation |
+| `test/effector-backends.test.ts` | The simulator suite for the Effectors' `sim` and `singularity` backends (#145): each action with money and without, and in BN1 with SF4.3. Faction work (#151) in Sector-12 through each backend: started focused, unfocused, switched, left alone with none wanted, and not converged where the faction doesn't offer it. Buying augmentations (#149) from CyberSec, set up with reputation: through each backend, NeuroFlux a level at a time, nothing paid twice, and a level out of turn or no money not done. Joining Sector-12 (#147) through each, past the gate: sent only after two medium snapshots and a save backup; then, with `sim`, Chongqing held by the guard, and CyberSec (no enemies) sent at once but not done without an invitation |
 | `test/helpers/fresh-start.ts` | A game in the simulator with the brain and the built Agent in it, and the owner's setup before the Agent starts: the start of the suites above |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the desired-state controller only when a test asks (`withDesiredState`), so the M2 suites see the observe-only skeleton they test |

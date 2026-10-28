@@ -1,7 +1,7 @@
 /**
  * Every worker the Agent runs on home beside itself, one at a time: the snapshot tiers', the hack loop's (#134), the
  * program buyer's (#136), the home RAM upgrader's (#138), the traveller's (#141), the Singularity backend's (#145), the
- * faction joiner's (#147), and the augmentation buyer's (#149). A fresh save's home must hold the Agent plus the
+ * faction joiner's (#147), the augmentation buyer's (#149), and the faction worker's (#151). A fresh save's home must hold the Agent plus the
  * largest of those it can run (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2 suites
  * read these lists. Functions, not constants, so in-game bundles that don't use them leave them out.
  */
@@ -14,6 +14,7 @@ import { UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 import { TRAVEL_WORKER_NAME } from "./locations.ts";
 import { BUY_PROGRAM_WORKER_NAME } from "./programs.ts";
 import { snapshotWorkerFileName } from "./snapshots.ts";
+import { FACTION_WORK_WORKER_NAME } from "./work.ts";
 
 export function homeWorkerFileNames(): string[] {
   return [
@@ -25,6 +26,7 @@ export function homeWorkerFileNames(): string[] {
     TRAVEL_WORKER_NAME,
     JOIN_FACTION_WORKER_NAME,
     BUY_AUGMENTATION_WORKER_NAME,
+    FACTION_WORK_WORKER_NAME,
     ...singularityWorkerFileNames(),
   ];
 }

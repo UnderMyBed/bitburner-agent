@@ -1,10 +1,15 @@
-// What every `ui` effector's worker does around its own steps (#136, #138, #141, #147, #149): the game first, then the
-// page, never over a dialog the dialog watcher leaves for the owner (#143), back to the Terminal however the steps
-// went, and the game again, reported to the Agent.
+// What every `ui` effector's worker does around its own steps (#136, #138, #141, #147, #149, #151): the game first,
+// then the page, never over a dialog the dialog watcher leaves for the owner (#143), and the game again, reported to the
+// Agent. The page is left as it was found: back to the Terminal, or, if the player was focused on work, focused again
+// (owner decision 37). The Work page hides the sidebar (`ui/GameRoot.tsx:330-332`), so a focused player is unfocused
+// first ("Do something else simultaneously"), and refocused after with the overview's "Focus".
 import type { EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
 import { type GamePage, openGamePage } from "./game-page.ts";
+
+/** The Work page's button that unfocuses the player (`ui/WorkInProgressRoot.tsx:533-534`). */
+export const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
 
 export async function reportPageEffect(
   ns: NS,
@@ -14,6 +19,7 @@ export async function reportPageEffect(
     doing,
     steps,
     notDoneAfter,
+    ending = "restore",
   }: {
     /** Whether the game shows it done: checked first, and again after the steps. */
     isDone: () => boolean;
@@ -23,6 +29,11 @@ export async function reportPageEffect(
     steps: (gamePage: GamePage) => Promise<string | null>;
     /** The problem when the steps went through but the game doesn't show it done. */
     notDoneAfter: string;
+    /**
+     * Where the page is left: as found (`"restore"`: the Terminal, or focused again), or where the steps left it
+     * (`"steps"`: the work worker, which sets the focus itself).
+     */
+    ending?: "restore" | "steps";
   },
 ): Promise<void> {
   const report: EffectorReport = { done: isDone(), problem: null };
@@ -33,9 +44,16 @@ export async function reportPageEffect(
     } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog the Agent leaves for the owner is open";
     } else {
-      const problem = await steps(gamePage);
-      // Back to the Terminal, however it went, in the time kept for it: the page was moved.
-      const backProblem = await gamePage.returnToTerminal();
+      const unfocused = await gamePage.clickIfThere(
+        UNFOCUS_XPATH,
+        'the Work page\'s "Do something else simultaneously"',
+      );
+      const problem = unfocused.problem ?? (await steps(gamePage));
+      // As found, however it went, in the time kept for it: the page was moved.
+      let backProblem: string | null = null;
+      if (ending === "restore") {
+        backProblem = unfocused.clicked ? await gamePage.refocusWork() : await gamePage.returnToTerminal();
+      }
       report.problem = problem ?? backProblem;
       report.done = isDone();
       if (!report.done) report.problem ??= notDoneAfter;

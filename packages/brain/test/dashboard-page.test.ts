@@ -82,6 +82,10 @@ const BUSY_STATUS: DashboardStatus = {
     },
     { id: "buyTor(Alpha Enterprises)", source: "purchase", outcome: null, waitingFor: null },
   ],
+  work: {
+    desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
+    outcome: { converged: false, problem: "no CyberSec among the factions joined", backend: "ui" },
+  },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -110,6 +114,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
     intents: [],
+    work: { desired: null, outcome: null },
     nowMs: NOW_MS,
   });
   store.close();
@@ -544,5 +549,35 @@ describe("the intents (#141)", () => {
   test("none sent says so", async () => {
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, intents: [] } }));
     expect(textOf(document, "#intents table")).toBe("None.");
+  });
+});
+
+describe("work (#151)", () => {
+  test("the work managed reads plainly, with the Agent's outcome; none says the game's work is left alone", async () => {
+    const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
+    expect(textOf(document, "#work div")).toBe(
+      "hacking work for CyberSec, focused: not converged via ui (no CyberSec among the factions joined)",
+    );
+    const unmanaged = await openPage(() => ({
+      status: 200,
+      body: { ...BUSY_STATUS, work: { desired: null, outcome: null } },
+    }));
+    expect(textOf(unmanaged.document, "#work div")).toBe("Not managed: the game's work is left as it is.");
+  });
+
+  test("the form sets the work, and the stop button stops managing it", async () => {
+    const { document, requests } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
+    const form = document.querySelector("#work form") as HTMLFormElement;
+    (form.elements.namedItem("faction") as HTMLInputElement).value = "NiteSec";
+    (form.elements.namedItem("workType") as HTMLSelectElement).value = "field";
+    form.requestSubmit();
+    await settle();
+    (document.querySelector("#stop-work") as HTMLButtonElement).click();
+    await settle();
+    const posts = requests.filter((request) => request.method === "POST");
+    expect(posts.map((request) => [request.url, JSON.parse(String(request.body))])).toEqual([
+      ["/api/work", { work: { faction: "NiteSec", workType: "field" } }],
+      ["/api/work", { work: null }],
+    ]);
   });
 });

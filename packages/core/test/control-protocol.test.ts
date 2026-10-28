@@ -69,6 +69,13 @@ describe("round trips", () => {
       hackLoop: { enabled: false, target: null, hosts: [] },
       intents: [],
     },
+    {
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "desiredState",
+      hackLoop: { enabled: false, target: null, hosts: [] },
+      intents: [],
+      work: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
+    },
   ])("brain message %#", (message) => {
     expect(parseBrainMessage(encodeControlMessage(message))).toEqual({ ok: true, message });
   });
@@ -133,6 +140,7 @@ describe("rejected, each with a reason", () => {
   const travel = { id: "travel(Ishima)", action: "travel", args: { city: "Ishima" } };
   const desiredState = { protocolVersion: 1, type: "desiredState", hackLoop, intents: [travel] };
   const withIntents = (...intents: unknown[]) => ({ ...desiredState, intents });
+  const factionWork = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
   test.each([
     ["no hack loop", { ...desiredState, hackLoop: undefined }],
     ["a hack loop that isn't an object", { ...desiredState, hackLoop: true }],
@@ -149,6 +157,11 @@ describe("rejected, each with a reason", () => {
     ["an intent that isn't valid", withIntents({ ...travel, args: { city: "Atlantis" } })],
     ["an intent whose id isn't its own", withIntents({ ...travel, id: "travel(Aevum)" })],
     ["the same intent twice", withIntents(travel, travel)],
+    ["work that isn't an object", { ...desiredState, work: "hacking" }],
+    ["work of an unknown kind", { ...desiredState, work: { ...factionWork, kind: "crime" } }],
+    ["work for a faction that isn't one", { ...desiredState, work: { ...factionWork, faction: "The Gibson" } }],
+    ["work of a type the game hasn't", { ...desiredState, work: { ...factionWork, workType: "espionage" } }],
+    ["work whose focus isn't a boolean", { ...desiredState, work: { ...factionWork, focus: "yes" } }],
     [
       "over 100 intents, each valid and different",
       withIntents(
@@ -197,5 +210,32 @@ describe("while the brain holds (#136, #141)", () => {
       hackLoop: hackLoopOff,
       intents: [],
     });
+  });
+});
+
+describe("work (#151)", () => {
+  const state = { protocolVersion: 1, type: "desiredState", hackLoop: { enabled: false, target: null, hosts: [] } };
+  test("absent or null, the brain doesn't manage work: the message carries none", () => {
+    for (const work of [undefined, null]) {
+      const parsed = parseBrainMessage(JSON.stringify({ ...state, intents: [], work }));
+      expect(parsed.ok && parsed.message.type === "desiredState" && parsed.message.work).toBeUndefined();
+    }
+  });
+
+  test("only its known fields come through", () => {
+    const work = { kind: "faction", faction: "CyberSec", workType: "field", focus: false, extra: 1 };
+    const parsed = parseBrainMessage(JSON.stringify({ ...state, intents: [], work }));
+    expect(parsed.ok && parsed.message.type === "desiredState" && parsed.message.work).toEqual({
+      kind: "faction",
+      faction: "CyberSec",
+      workType: "field",
+      focus: false,
+    });
+  });
+
+  test("while the brain holds, work isn't managed: none goes", () => {
+    const work = { kind: "faction" as const, faction: "CyberSec", workType: "hacking" as const, focus: true };
+    const desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [], work };
+    expect(desiredStateWhileHolding(desired, null)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
   });
 });

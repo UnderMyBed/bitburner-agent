@@ -2,15 +2,15 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)), [intents](#intents) with [travel](#travel) ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)), the game's [dialogs](#dialogs) ([#143](https://github.com/UnderMyBed/bitburner-agent/issues/143)), the Singularity and simulator backends ([#145](https://github.com/UnderMyBed/bitburner-agent/issues/145)), [joining a faction](#joining-a-faction) ([#147](https://github.com/UnderMyBed/bitburner-agent/issues/147)), and [buying augmentations](#buying-augmentations) ([#149](https://github.com/UnderMyBed/bitburner-agent/issues/149)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)), [intents](#intents) with [travel](#travel) ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)), the game's [dialogs](#dialogs) ([#143](https://github.com/UnderMyBed/bitburner-agent/issues/143)), the Singularity and simulator backends ([#145](https://github.com/UnderMyBed/bitburner-agent/issues/145)), [joining a faction](#joining-a-faction) ([#147](https://github.com/UnderMyBed/bitburner-agent/issues/147)), [buying augmentations](#buying-augmentations) ([#149](https://github.com/UnderMyBed/bitburner-agent/issues/149)), and [work](#work) ([#151](https://github.com/UnderMyBed/bitburner-agent/issues/151)).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js` and `buy-augmentation.js`, and the Singularity workers `singularity-*.js` (#145) |
-| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), and what they share: `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
-| `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts`, and `page-effect.ts`, what every `ui` worker does around its own steps (the game first, never over a dialog left for the owner, back to the Terminal) |
+| `src/entries/<name>.ts` | One in-game script each, built to `dist/<name>.js`: `boot.js`, `agent.js`, `snapshot-<tier>.js`, the hack loop's `hack-loop.js`, `hack-loop-root.js` and `hack-loop-deploy.js`, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js` and `faction-work.js`, and the Singularity workers `singularity-*.js` (#145) |
+| `src/agent/` | The Agent's modules: `snapshotter.ts`, `hack-loop.ts`, `intent-runner.ts` and `effectors.ts` (the intents, #141), `dialog-watcher.ts` (#143), `work.ts` (#151), and what they share: `effector-runner.ts`, which picks each try's backend and runs its effector, `run-worker.ts`, the runner for their home workers, and `activity.ts`, the round schedule and the log of changes |
+| `src/page/` | The game's page, for the `ui` effectors and the dialog watcher: `game-page.ts`, and `page-effect.ts`, what every `ui` worker does around its own steps (the game first, never over a dialog left for the owner, the player's focus on work kept, back to the Terminal) |
 | `src/workers/` | What the home workers share: the network scan, the report to the Agent |
 | `src/ns.ts` | The `NS` type, from `@nsdefs`, for entries to import |
 | `src/` | In-game code, typechecked as the game's page sees it: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` (`src/tsconfig.json`) |
@@ -68,12 +68,14 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `travel.js` | `getPlayer` (0.5 GB); the page costs nothing | 2.1 GB (2.1) |
 | `join-faction.js` | `getPlayer` (0.5 GB); the page costs nothing | 2.1 GB (2.1) |
 | `buy-augmentation.js` | `getResetInfo` (1.0 GB); the page costs nothing | 2.6 GB (2.6) |
+| `faction-work.js` | nothing beyond the base; the page costs nothing | 1.6 GB (1.6) |
 | `singularity-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
 | `singularity-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |
 | `singularity-buy-program.js` | `fileExists` (0.1 GB), `singularity.purchaseProgram` (2 GB) | 3.7 GB (3.7) |
 | `singularity-upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB), `singularity.upgradeHomeRam` (3 GB) | 4.65 GB (4.65) |
 | `singularity-join-faction.js` | `getPlayer` (0.5 GB), `singularity.joinFaction` (3 GB) | 5.1 GB (5.1) |
 | `singularity-buy-augmentation.js` | `getResetInfo` (1.0 GB), `singularity.getOwnedAugmentations`, `singularity.purchaseAugmentation` (5 GB each) | 12.6 GB (12.6) |
+| `singularity-faction-work.js` | `singularity.getCurrentWork` (0.5 GB), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.workForFaction` (3 GB) | 5.3 GB (5.3) |
 | `hack-loop.js` | `grow`, `weaken` (0.15 GB each), `hack`, `getServerMinSecurityLevel`, `getServerMaxMoney`, `getServerSecurityLevel`, `getServerMoneyAvailable` (0.1 GB each). It runs on the other servers, never home | 2.4 GB (2.4) |
 
 The Singularity workers' figures are at SF4.3 or in BN4, where the test measures them (a BN4 simulation). With less of SF4 the game charges their Singularity calls 4× or 16×; the deployer allows for that (1.6 GB plus 16× the rest of the budget, as if every call were Singularity's), and the Agent then uses the page's worker for an action whose Singularity worker can never fit home beside it. No Singularity worker runs on a fresh save, so the fresh-save check (the Agent's budget plus the largest worker within 8 GB) leaves them out: the faction join's is 5.1 GB (#147), and the augmentation purchase's 12.6 GB (#149). The join's fits beside today's 2.85 GB Agent in an 8 GB home (were the Agent to grow past 2.9 GB, the fit check would leave joins to the page there); the purchase's needs a home of 16 GB or more.
@@ -88,7 +90,7 @@ Where the in-game code lives on home (`@bitburner-agent/core`, `deploy-layout.ts
 |---|---|
 | `agent/boot.js` | The one fixed-path script; autoexec runs it on every load of a save |
 | `agent/current.txt` | The id of the deployment in use |
-| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
+| `agent/<deploymentId>/<name>.js` | A deployment's scripts: `agent.js`, its `snapshot-<tier>.js` workers, the hack loop's scripts, `buy-program.js`, `upgrade-home-ram.js`, `travel.js`, `join-faction.js`, `buy-augmentation.js`, `faction-work.js`, the Singularity workers (`singularity-*.js`), and a copy of `boot.js`, whose RAM the deployer checks there before it changes `agent/boot.js`. `hack-loop.js` is also copied, at the same path, to each server that runs it |
 | `agent/<deploymentId>/config.json` | Its configuration for the Agent: `{ "deploymentId": …, "controlPort": … }` (`AgentConfig`, read with `parseAgentConfig`) |
 | `agent/<deploymentId>/token.txt` | The control channel's token |
 
@@ -283,6 +285,18 @@ The fifth `ui` effector ([#149](https://github.com/UnderMyBed/bitburner-agent/is
 
 E2 buys Neurotrainer I and NeuroFlux level 1 from CyberSec (a save the simulator sets up with the reputation), with the confirmation and alert handled, and checks a purchase the money doesn't cover opens no dialog: its disabled "Buy" is never clicked.
 
+## Work
+
+The Agent's second activity ([#151](https://github.com/UnderMyBed/bitburner-agent/issues/151), owner decision 37), beside the hack loop: the work the player does, as the brain wants it (`src/agent/work.ts`). The brain sends `work` (faction work so far: the faction, hacking, field or security, and whether focused), or none, which leaves the game's work alone.
+- **When:** when the work wanted changes, then every 15 rounds (30 s), last in the round after the intents, with a second of the round left. The outcome (`{ converged, problem, backend }`) is in the fast snapshot.
+- **The effector** (`workEffectorFor`), through the same backends as intents (`src/agent/effector-runner.ts`):
+  - `ui`, **`faction-work.js`**: without Singularity the page is the only witness. Focused, the Work page's title ("You are currently carrying out hacking contracts for CyberSec"); unfocused, the overview's "Working for CyberSec" and "Doing hacking work". Already so: done, nothing touched. The right work at the wrong focus: the overview's "Focus", or "Do something else simultaneously" and back to the Terminal. Otherwise the sidebar's Factions, "Details" on the faction's row, and the work's button ("Hacking Contracts", "Field Work", "Security Work"), which starts it focused; then unfocused if it shouldn't be. A faction that doesn't offer the work says so.
+  - `singularity`, `singularity-faction-work.js`: `getCurrentWork` and `isFocused`, then `workForFaction` or `setFocus`.
+  - `sim`: `convergeFactionWork`, as the faction's page and the focus buttons do it.
+- **Every page effector keeps the focus** (`src/page/page-effect.ts`): the Work page hides the sidebar, so a player focused on work is unfocused before the steps ("Do something else simultaneously") and focused again after (the overview's "Focus"), instead of returning to the Terminal. The work worker sets the focus itself.
+- **What the owner sees:** the Work page while focused; a page action in between leaves it and comes back. Doing something else yourself is undone within 30 s while the brain manages work.
+
+E2 starts CyberSec's hacking contracts on the real page, unfocuses as the owner would and sees the Agent focus again, travels while focused (unfocused for the sidebar, then focused again), stops managing work and sees it left alone, and asks for work a faction doesn't offer.
 ## Hygiene and tests
 
 **Hygiene:** no state at module level, since the game may or may not reuse a module (architecture R10); time from `Date.now()` and randomness from `Math.random()` only, both virtual in the simulator (R11).

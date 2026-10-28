@@ -55,6 +55,7 @@ const status = (nowMs: number) =>
     programs,
     homeRam,
     intents,
+    work: { desired: null, outcome: null },
     nowMs,
   });
 
@@ -144,6 +145,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     programs,
     homeRam,
     intents,
+    work: { desired: null, outcome: null },
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
@@ -293,6 +295,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     programs,
     homeRam,
     intents,
+    work: { desired: null, outcome: null },
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

@@ -725,3 +725,69 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     expect(controller.intentsView()[0]?.waitingFor).toBe("waiting for a save backup, which this brain doesn't take");
   });
 });
+
+describe("work (#151, owner decision 37)", () => {
+  const HACKING_FOR_CYBERSEC = { faction: "CyberSec", workType: "hacking" };
+  const sentWork = (connection: MemoryConnection) =>
+    (
+      connection
+        .sentMessages()
+        .filter((message) => message.type === "desiredState")
+        .at(-1) as unknown as DesiredState
+    )?.work;
+
+  function connectedWithLoopOff() {
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    return { controller, connection };
+  }
+
+  test("none set: none sent, so the Agent leaves the game's work alone", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    expect(sentWork(connection)).toBeUndefined();
+    expect(controller.workView()).toEqual({ desired: null, outcome: null });
+  });
+
+  test("set on the dashboard: kept in the store, sent at once, focused by default", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    expect(controller.setWork(HACKING_FOR_CYBERSEC)).toEqual({ ok: true });
+    const work = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
+    expect(sentWork(connection)).toEqual(work);
+    expect(store.getSetting("work.desired")).toBe('{"kind":"faction","faction":"CyberSec","workType":"hacking"}');
+    // A restarted brain sends the same.
+    const again = new DesiredStateController({ channel, store });
+    expect(again.workView().desired).toEqual(work);
+  });
+
+  test("unfocused once the Neuroreceptor Management Implant is installed, as the slow snapshot says", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    controller.setWork(HACKING_FOR_CYBERSEC);
+    send(connection, "slow", {
+      ...slowData(1),
+      resetInfo: { ...slowData(1).resetInfo, ownedAugs: { "Neuroreceptor Management Implant": 1 } },
+    });
+    expect(sentWork(connection)).toMatchObject({ focus: false });
+  });
+
+  test("stopped: none sent; a request that isn't valid is refused, with why, and changes nothing", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    controller.setWork(HACKING_FOR_CYBERSEC);
+    expect(controller.setWork({ faction: "The Gibson", workType: "hacking" })).toMatchObject({ ok: false });
+    expect(controller.setWork({ faction: "CyberSec", workType: "espionage" })).toMatchObject({ ok: false });
+    expect(sentWork(connection)).toMatchObject({ faction: "CyberSec" });
+    expect(controller.setWork(null)).toEqual({ ok: true });
+    expect(sentWork(connection)).toBeUndefined();
+  });
+
+  test("the view shows the connected Agent's outcome, if well formed", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    controller.setWork(HACKING_FOR_CYBERSEC);
+    const fast = (work: unknown) => ({ degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [], work });
+    send(connection, "fast", fast({ converged: true, problem: null, backend: "ui" }));
+    expect(controller.workView().outcome).toEqual({ converged: true, problem: null, backend: "ui" });
+    send(connection, "fast", fast({ converged: "yes" }));
+    expect(controller.workView().outcome).toBeNull();
+  });
+});

@@ -14,6 +14,8 @@ export const SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME = "singularity-upgrade-hom
 export const SINGULARITY_JOIN_FACTION_WORKER_NAME = "singularity-join-faction.js";
 /** 12.6 GB: `getResetInfo`, `getOwnedAugmentations` and `purchaseAugmentation` (#149). */
 export const SINGULARITY_BUY_AUGMENTATION_WORKER_NAME = "singularity-buy-augmentation.js";
+/** `getCurrentWork`, `isFocused`, `workForFaction` and `setFocus` (#151). */
+export const SINGULARITY_FACTION_WORK_WORKER_NAME = "singularity-faction-work.js";
 
 /** The most the game multiplies a Singularity function's RAM by: 16, with no SF4 or SF4.1 outside BN4. */
 export const SINGULARITY_MOST_RAM_MULTIPLIER = 16;
@@ -37,6 +39,7 @@ export function singularityWorkerFileNames(): string[] {
     SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
     SINGULARITY_JOIN_FACTION_WORKER_NAME,
     SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
+    SINGULARITY_FACTION_WORK_WORKER_NAME,
   ];
 }
 

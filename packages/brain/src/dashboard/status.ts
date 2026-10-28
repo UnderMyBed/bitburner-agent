@@ -12,6 +12,7 @@ import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../des
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
+import type { WorkView } from "../work.ts";
 import { type Alert, activeAlerts } from "./alerts.ts";
 
 /** The gap report's window on the dashboard: the last 24 h. */
@@ -85,6 +86,8 @@ export interface DashboardStatus {
   homeRam: HomeRamView;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
+  /** The work the brain manages (#151), and how the Agent last reported it. */
+  work: WorkView;
 }
 
 export interface DashboardStatusOptions {
@@ -104,6 +107,8 @@ export interface DashboardStatusOptions {
   homeRam: HomeRamView;
   /** The intents' view (#141), likewise. */
   intents: IntentView[];
+  /** The work's view (#151), likewise. */
+  work: WorkView;
   nowMs: number;
 }
 
@@ -124,6 +129,7 @@ export function buildDashboardStatus({
   programs,
   homeRam,
   intents,
+  work,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -226,5 +232,6 @@ export function buildDashboardStatus({
     programs,
     homeRam,
     intents,
+    work,
   };
 }
