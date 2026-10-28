@@ -583,6 +583,18 @@ describe("work (#151)", () => {
     expect(textOf(document, "#work div")).toBe("Waiter work at Noodle Bar, unfocused: converged via ui");
   });
 
+  test("company work with a promotion taken reads it too (#155)", async () => {
+    const promotion = { company: "Carmichael Security", from: "IT Intern", to: "IT Analyst", gameTimeMs: 5_000 };
+    const work = {
+      desired: { kind: "company", company: "Carmichael Security", field: "IT", focus: true },
+      outcome: { converged: true, problem: null, backend: "ui", promotion },
+    };
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work } }));
+    expect(textOf(document, "#work div")).toBe(
+      "IT work at Carmichael Security, focused: converged via ui; promoted from IT Intern to IT Analyst",
+    );
+  });
+
   test("the company form offers the game's job fields, in order, Waiter first chosen as Noodle Bar's (#153)", async () => {
     const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
     const field = document.querySelector("#company-work select[name=field]") as HTMLSelectElement;

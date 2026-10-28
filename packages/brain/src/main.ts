@@ -51,7 +51,8 @@ try {
   );
   // Its numbering seeded from the store, so an Agent reconnecting after a restart carries on (#119).
   const channel = brainChannel({ token: config.token, clock: systemClock, store, environment: config.environment });
-  recordChannelEvents(channel, store, { environment: config.environment, brainRelease: release });
+  // A promotion the Agent took (#155) is logged as well as stored.
+  recordChannelEvents(channel, store, { environment: config.environment, brainRelease: release, log });
   channel.subscribe((event) => {
     if (event.type !== "snapshotReceived") log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`);
   });

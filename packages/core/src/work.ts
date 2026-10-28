@@ -1,13 +1,13 @@
 /**
  * Work as an activity (#151, architecture D2's player focus, owner decision 37): what the player works at, as the brain
- * wants it, converged on by the Agent when it changes and every 30 s. Faction work, company work (#153), crime (#156)
- * and classes (#158). Shared by the in-game code and the brain; plain literals, as in factions.ts.
+ * wants it, converged on by the Agent when it changes and every 30 s. Faction work, company work (#153; its promotions,
+ * #155), crime (#156) and classes (#158). Shared by the in-game code and the brain; plain literals, as in factions.ts.
  */
 import { CLASS_LOCATION_NAMES, CLASS_LOCATIONS, CLASS_TYPE_NAMES, CLASS_TYPES } from "./classes.ts";
-import { COMPANY_NAMES, JOB_FIELDS } from "./companies.ts";
+import { COMPANY_NAMES, JOB_FIELDS, type Promotion } from "./companies.ts";
 import { CRIME_NAMES } from "./crimes.ts";
 import { FACTION_NAMES } from "./factions.ts";
-import type { EffectorBackend } from "./intents.ts";
+import type { EffectorBackend, EffectorReport } from "./intents.ts";
 
 /** A faction's kinds of work, as the game names them (`Enums.ts`, `FactionWorkType`). */
 export const FACTION_WORK_TYPES = ["hacking", "field", "security"] as const;
@@ -32,7 +32,26 @@ export interface WorkOutcome {
   problem: string | null;
   /** The backend of the last look (#145), or null before the first. */
   backend: EffectorBackend | null;
+  /** The latest promotion the Agent took while this work was wanted (#155); absent before one. */
+  promotion?: WorkPromotion;
 }
+
+/** A promotion the work activity took (#155, owner decision 44): at `company`, and when, by the game's clock. */
+export interface WorkPromotion extends Promotion {
+  company: string;
+  gameTimeMs: number;
+}
+
+/** What a work effector reports (#155): an effector's report, and the promotion it took, if any. */
+export interface WorkEffectorReport extends EffectorReport {
+  promoted?: Promotion | null;
+}
+
+/**
+ * How often company work is checked for a promotion (#155, owner decision 44), besides once when the work starts: 10
+ * minutes. Through the page, a check leaves the work for a moment, for the sidebar's Job page.
+ */
+export const PROMOTION_CHECK_INTERVAL_MS = 10 * 60_000;
 
 /** The augmentation that makes focus irrelevant (decision 37): installed, work goes unfocused. */
 export const NEURORECEPTOR_MANAGEMENT_IMPLANT = "Neuroreceptor Management Implant";

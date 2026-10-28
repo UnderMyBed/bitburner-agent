@@ -479,6 +479,119 @@ test("company work (singularity, #153): with SF4.3, through its Singularity work
   });
 });
 
+/**
+ * A fresh start where the player is an IT Intern at Carmichael Security, in Sector-12, with `reputation` there, at
+ * hacking level 168 (`gainHackingExp`), and money for a ticket: IT Analyst wants hacking 100 there and 7,000
+ * reputation (`CompanyPositionsMetadata.ts`, the company's `jobStatReqOffset` of 74).
+ */
+function anItIntern(reputation: number, options: { singularity: boolean } = { singularity: false }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(1e10);
+      await game.simulation.diagnostics.gainHackingExp(1e5);
+      await game.simulation.diagnostics.employWithReputation("Carmichael Security", "IT Intern", reputation);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+
+const itAtCarmichael = (focus: boolean): Work => ({
+  kind: "company",
+  company: "Carmichael Security",
+  field: "IT",
+  focus,
+});
+
+/** The company work's game cycles, as the game saves them: they'd start again from 0 were the work restarted. */
+async function companyWorkCycles(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
+  const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
+  const work = JSON.parse(saveObject.data.PlayerSave).data.currentWork;
+  return work?.ctor === "CompanyWork" ? (work.data.cyclesWorked as number) : null;
+}
+
+test("a promotion (sim, #155): not qualified, nothing; then qualified, taken at the next check, 10 minutes on, from Aevum", async () => {
+  const fresh = await anItIntern(0);
+  await travelledTo(fresh, "Aevum");
+  // The work's start checks: the player doesn't qualify for IT Analyst, so the job is as it was.
+  expect(await workedAt(fresh, itAtCarmichael(true))).toEqual({ converged: true, problem: null, backend: "sim" });
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Carmichael Security", job: "IT Intern", focus: true });
+  // Qualified now: the convergences every 30 s don't check, the one 10 minutes after the first does.
+  await fresh.simulation.diagnostics.employWithReputation("Carmichael Security", "IT Intern", 7_000);
+  const promotion = () => fresh.latest<FastSnapshotData>("fast")?.work?.promotion;
+  await fresh.game.run(8 * 60_000);
+  expect(promotion()).toBeUndefined();
+  const cyclesBefore = (await companyWorkCycles(fresh)) as number;
+  await fresh.game.runUntil(() => promotion() !== undefined, 3 * 60_000);
+  expect(promotion()).toEqual({
+    company: "Carmichael Security",
+    from: "IT Intern",
+    to: "IT Analyst",
+    gameTimeMs: expect.any(Number),
+  });
+  expect(fresh.latest<FastSnapshotData>("fast")?.work).toMatchObject({ converged: true, problem: null });
+  // Still the same work, focused, under the new title: not restarted, its cycles carry on.
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Carmichael Security", job: "IT Analyst", focus: true });
+  expect(await companyWorkCycles(fresh)).toBeGreaterThan(cyclesBefore);
+  expect(fresh.medium()?.player.city).toBe("Aevum");
+});
+
+test("a promotion (singularity, #155): with SF4.3, `applyToCompany` at the work's start; nothing new, no problem", async () => {
+  const fresh = await anItIntern(0, { singularity: true });
+  await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+  expect(await workedAt(fresh, itAtCarmichael(false))).toEqual({
+    converged: true,
+    problem: null,
+    backend: "singularity",
+  });
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Carmichael Security", job: "IT Intern", focus: false });
+  // Qualified, and the work changed (focused now): a start, so a check.
+  await fresh.simulation.diagnostics.employWithReputation("Carmichael Security", "IT Intern", 7_000);
+  expect(await workedAt(fresh, itAtCarmichael(true))).toMatchObject({
+    converged: true,
+    problem: null,
+    promotion: { company: "Carmichael Security", from: "IT Intern", to: "IT Analyst" },
+  });
+  expect(await savedCompanyWork(fresh)).toEqual({ company: "Carmichael Security", job: "IT Analyst", focus: true });
+});
+
+/**
+ * A Systems Administrator at Carmichael Security, the last of IT, who qualifies for Software's Head of Engineering,
+ * its `nextPosition` (`CompanyPositionsMetadata.ts:151`): 800,000 reputation, and hacking and charisma of about 600
+ * (`gainHackingExp`, `gainCharismaExp`; it wants 575 and 325 there).
+ */
+function aSystemsAdministrator(options: { singularity: boolean }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.gainHackingExp(1e11);
+      await game.simulation.diagnostics.gainCharismaExp(1e11);
+      await game.simulation.diagnostics.employWithReputation("Carmichael Security", "Systems Administrator", 800_000);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+
+test("a promotion stays in the field (#155): a Systems Administrator qualified for Head of Engineering keeps the title", async () => {
+  for (const singularity of [false, true]) {
+    const fresh = await aSystemsAdministrator({ singularity });
+    if (singularity) await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+    // The work's start checks, through each backend: at the top of IT, nothing is applied for.
+    expect(await workedAt(fresh, itAtCarmichael(true))).toEqual({
+      converged: true,
+      problem: null,
+      backend: singularity ? "singularity" : "sim",
+    });
+    expect(await savedCompanyWork(fresh)).toEqual({
+      company: "Carmichael Security",
+      job: "Systems Administrator",
+      focus: true,
+    });
+  }
+});
+
 const server = (hostname: string, ram = 8) => intent({ action: "buyServer", args: { hostname, ram } });
 /** An 8 GB server's price in BN1: 55,000 a GB (`Server/data/Constants.ts:4`). */
 const EIGHT_GB_PRICE = 8 * 55_000;

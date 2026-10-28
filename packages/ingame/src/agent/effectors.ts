@@ -1,5 +1,5 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #156, #158, #159, #162, #164, #175, architecture §5.6): for each
-// action an intent can name, and for the work activity's work, how each backend does it.
+// The Effectors (#141, #145, #147, #149, #151, #153, #155, #156, #158, #159, #162, #164, #175, architecture §5.6): for
+// each action an intent can name, and for the work activity's work, how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -42,6 +42,7 @@ import {
   TRAVEL_WORKER_NAME,
   UPGRADE_HOME_RAM_WORKER_NAME,
   type Work,
+  type WorkEffectorReport,
 } from "@bitburner-agent/core";
 
 /** The simulator's effectors, as it puts them on the page's global object. */
@@ -53,7 +54,7 @@ export interface SimEffectors {
   acceptFactionInvitation(faction: string): EffectorReport;
   buyAugmentationFrom(faction: string, augmentation: string, level: number): EffectorReport;
   convergeFactionWork(faction: string, workType: string, focus: boolean): EffectorReport;
-  convergeCompanyWork(company: string, field: string, focus: boolean): EffectorReport;
+  convergeCompanyWork(company: string, field: string, focus: boolean, checkPromotion: boolean): WorkEffectorReport;
   buyCloudServer(hostname: string, ram: number): EffectorReport;
   backdoorServer(hostname: string): EffectorReport;
   convergeCrimeWork(crime: string, focus: boolean): EffectorReport;
@@ -173,9 +174,9 @@ export function effectorFor(intent: Intent): Effector {
 
 /**
  * The work activity's effector (#151, #153, #156, #158): converges the game on `work`, starting it, or setting its
- * focus.
+ * focus. With `checkPromotion`, company work also takes any later title of its field the game offers (#155).
  */
-export function workEffectorFor(work: Work): Effector {
+export function workEffectorFor(work: Work, { checkPromotion = false } = {}): Effector {
   if (work.kind === "class") {
     const { location, classType, focus } = work;
     const workerArguments = [location, classType, String(focus)];
@@ -198,12 +199,12 @@ export function workEffectorFor(work: Work): Effector {
   }
   if (work.kind === "company") {
     const { company, field, focus } = work;
-    const workerArguments = [company, field, String(focus)];
+    const workerArguments = [company, field, String(focus), String(checkPromotion)];
     return {
       description: `${field} work at ${company}${focus ? ", focused" : ""}`,
       ui: { workerName: COMPANY_WORK_WORKER_NAME, workerArguments },
       singularity: { workerName: SINGULARITY_COMPANY_WORK_WORKER_NAME, workerArguments },
-      sim: (effectors) => effectors.convergeCompanyWork(company, field, focus),
+      sim: (effectors) => effectors.convergeCompanyWork(company, field, focus, checkPromotion),
     };
   }
   const { faction, workType, focus } = work;

@@ -1,6 +1,7 @@
-// Work on the game's page (#151, #153, #156, #158): what the page shows of the player's work, and the steps that
-// converge it, for `faction-work.js`, `company-work.js`, `crime-work.js` and `class-work.js` (../entries/), which
-// document them. A module of its own so its jsdom tests can import them: an entry's bundle exports only `main`.
+// Work on the game's page (#151, #153, #155, #156, #158): what the page shows of the player's work, and the steps
+// that converge it, a promotion included, for `faction-work.js`, `company-work.js`, `crime-work.js` and
+// `class-work.js` (../entries/), which document them. A module of its own so its jsdom tests can import them: an
+// entry's bundle exports only `main`.
 // - Focused, the Work page's title (`ui/WorkInProgressRoot.tsx`): "You are currently carrying out hacking contracts for
 //   CyberSec", "You are currently working as a Waiter at Noodle Bar", "You are attempting to shoplift", "You are
 //   currently taking a Networks course".
@@ -17,6 +18,7 @@ import {
   holdsJobInField,
   JOB_FIELDS,
   jobTitles,
+  laterJobs,
   type Work,
 } from "@bitburner-agent/core";
 import { factionRowButtonXpath, type GamePage, reactPropsAbove, reactText, xpathString } from "./game-page.ts";
@@ -67,14 +69,19 @@ export function workShown(gamePage: GamePage, work: Work): "focused" | "unfocuse
 }
 
 /**
- * The steps on the page, after `reportPageEffect` has unfocused a focused player (`wasFocused`): the work started if it
- * isn't the work shown, then left at the focus wanted. `jobs`: for company work, the title held at each company
+ * The steps on the page, after `reportPageEffect` has unfocused a focused player (`wasFocused`): for company work with
+ * `checkPromotion`, a promotion taken if the page offers one (#155, `promoteOnPage`); then the work started if it isn't
+ * the work shown, and left at the focus wanted. `jobs`: for company work, the title held at each company
  * (`getPlayer().jobs`), in the game's order.
  */
 export async function convergeWorkOnPage(
   gamePage: GamePage,
   work: Work,
-  { wasFocused, jobs = {} }: { wasFocused: boolean; jobs?: Record<string, string> },
+  {
+    wasFocused,
+    jobs = {},
+    checkPromotion = false,
+  }: { wasFocused: boolean; jobs?: Record<string, string>; checkPromotion?: boolean },
 ): Promise<string | null> {
   /** Stopped on the way: the problem, and the player left as found, focused again on their work, or the Terminal. */
   const stopped = async (problem: string) => {
@@ -82,6 +89,10 @@ export async function convergeWorkOnPage(
     await gamePage.returnToTerminal();
     return problem;
   };
+  if (work.kind === "company" && checkPromotion) {
+    const promoted = await promoteOnPage(gamePage, work, jobs);
+    if (promoted !== null) return stopped(promoted);
+  }
   // A focused player has been unfocused already, so the right work shows on the overview now: left as the focus
   // wants it, the Work page or the Terminal. The work isn't started again.
   if (workShown(gamePage, work) === "unfocused") {
@@ -155,10 +166,7 @@ async function startCompanyWork(
   if (holdsJobInField(jobs, company, field)) {
     return (
       (await gamePage.openSidebarPage("Job")) ??
-      (await gamePage.clickWhenThere(
-        `(//button[normalize-space()='Work'])[${Object.keys(jobs).indexOf(company) + 1}]`,
-        `"Work" for ${company} on the Job page`,
-      ))
+      (await gamePage.clickWhenThere(jobPageWorkXpath(company, jobs), jobPageWorkName(company)))
     );
   }
   const opened = await gamePage.openCityLocation(company);
@@ -179,6 +187,57 @@ async function startCompanyWork(
   return gamePage.clickWhenThere(
     "//button[normalize-space()='Work']",
     `"Work" at ${company} (is the player employed?)`,
+  );
+}
+
+/**
+ * The sidebar's Job page's "Work" for the job held at `company`: one per job held, in `jobs`' order (`JobRoot.tsx`).
+ */
+const jobPageWorkXpath = (company: string, jobs: Record<string, string>) =>
+  `(//button[normalize-space()='Work'])[${Object.keys(jobs).indexOf(company) + 1}]`;
+
+/**
+ * The Job page's "Work" for `company`, as the steps name it: what's clicked to work the job held, and what's missing
+ * ("no …") when a promotion check or that click finds no block for the company.
+ */
+const jobPageWorkName = (company: string) => `"Work" for ${company} on the Job page`;
+
+/**
+ * A promotion check (#155, owner decision 44), with a job in the field held at the company: the sidebar's Job page,
+ * from any city, and that company's own block there. The page shows each job held's whole company page, in `jobs`'
+ * order (`Locations/ui/JobRoot.tsx`, `GenericLocation.tsx:47-51`, `CompanyLocation.tsx:146`): a `div` with the
+ * company's name as its `h4`, which a backdoor's corruptible text can scramble, so it's found from its "Work". Its job
+ * listing (`Company/ui/JobListings.tsx`) shows the next title, disabled until the player qualifies, or a later one
+ * they qualify for. Only a later title of the field counts (`laterJobs`: the consultants' two share one text, and the
+ * one held is never shown); none, or disabled: nothing to do. Enabled: clicked, which climbs no further than it
+ * (`applyForJob`: the job shown is one whose next the player doesn't qualify for), and the "Congratulations, you …"
+ * alert closed (`pos.hiredText`). The work under way isn't touched: the game reads the title each cycle
+ * (`Work/CompanyWork.tsx:44`).
+ */
+async function promoteOnPage(
+  gamePage: GamePage,
+  { company, field }: Extract<Work, { kind: "company" }>,
+  jobs: Record<string, string>,
+): Promise<string | null> {
+  const later = laterJobs(field, Object.hasOwn(jobs, company) ? jobs[company] : undefined);
+  if (!holdsJobInField(jobs, company, field) || later.length === 0) return null;
+  const opened = await gamePage.openSidebarPage("Job");
+  if (opened !== null) return opened;
+  const work = jobPageWorkXpath(company, jobs);
+  if ((await gamePage.findWhenThere(work)) === null) return `no ${jobPageWorkName(company)}`;
+  const texts = [...new Set(later.map((job) => job.applyText))];
+  const apply = gamePage.findElementNow(
+    `${work}/ancestor::div[h4][1]//button[${texts.map((text) => `normalize-space()=${xpathString(text)}`).join(" or ")}]`,
+  );
+  if (apply === null || (apply as HTMLButtonElement).disabled) return null;
+  return (
+    (await gamePage.clickElement(apply, `${field}'s promotion at ${company}`)) ??
+    (
+      await gamePage.clickIfThere(
+        "//div[button and contains(., 'Congratulations, you ')]/button",
+        "the close button on the promotion's alert",
+      )
+    ).problem
   );
 }
 

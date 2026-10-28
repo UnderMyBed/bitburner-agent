@@ -1,8 +1,16 @@
 // The game's companies and jobs (#153), checked against the pinned game's source: the names, the job fields, each
-// field's positions in order, the button texts that apply for them, and the part-time fields.
+// field's positions in order, the button texts that apply for them, the part-time fields, and promotions (#155).
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import { COMPANY_NAMES, holdsJobInField, JOB_FIELDS, jobTitles, PART_TIME_JOB_FIELDS } from "../src/companies.ts";
+import {
+  COMPANY_NAMES,
+  holdsJobInField,
+  JOB_FIELDS,
+  jobTitles,
+  laterJobs,
+  PART_TIME_JOB_FIELDS,
+  promotionBetween,
+} from "../src/companies.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -63,4 +71,53 @@ test("jobTitles and holdsJobInField: a title of the field, at that company only"
   expect(holdsJobInField(jobs, "ECorp", "IT")).toBe(false);
   expect(holdsJobInField({}, "Noodle Bar", "Waiter")).toBe(false);
   expect(holdsJobInField(jobs, "constructor", "Waiter")).toBe(false);
+});
+
+test("laterJobs (#155): the game's `nextPosition` within the field; three tracks' last leads out of it", () => {
+  const jobNames = gameEnum("Work/Enums.ts", "JobName");
+  const metadata = gameSource("Company/data/CompanyPositionsMetadata.ts");
+  const outOfTheField: string[] = [];
+  for (const [field, jobs] of Object.entries(JOB_FIELDS)) {
+    for (const { title } of jobs) {
+      const jobKey = Object.keys(jobNames).find((key) => jobNames[key] === title) as string;
+      const position = new RegExp(`\\[JobName\\.${jobKey}\\]: \\{([^}]*)\\}`, "s").exec(metadata)?.[1] ?? "";
+      const nextKey = /nextPosition: JobName\.(\w+)/.exec(position)?.[1];
+      const next = nextKey === undefined ? undefined : jobNames[nextKey];
+      if (next !== undefined && !jobTitles(field).includes(next)) outOfTheField.push(`${title} → ${next}`);
+      else expect(laterJobs(field, title)[0]?.title, title).toBe(next);
+    }
+  }
+  // The game's climb goes on from these into Software's Head of Engineering; a promotion here stays in the field.
+  expect(outOfTheField).toEqual([
+    "Systems Administrator → Head of Engineering",
+    "Security Engineer → Head of Engineering",
+    "Network Administrator → Head of Engineering",
+  ]);
+  expect(laterJobs("IT", "Systems Administrator")).toEqual([]);
+  expect(laterJobs("IT", "IT Analyst").map((job) => job.title)).toEqual(["IT Manager", "Systems Administrator"]);
+  // Not one of the field's titles, none held, no such field: nothing.
+  expect(laterJobs("IT", "Junior Software Engineer")).toEqual([]);
+  expect(laterJobs("IT", undefined)).toEqual([]);
+  expect(laterJobs("constructor", "IT Intern")).toEqual([]);
+});
+
+test("promotionBetween (#155): a later title of the field at that company; not a hire, a step down, or another field", () => {
+  const before = { "Noodle Bar": "Waiter", "Carmichael Security": "IT Intern" };
+  const promoted = { ...before, "Carmichael Security": "IT Manager" };
+  expect(promotionBetween(before, promoted, "Carmichael Security", "IT")).toEqual({
+    from: "IT Intern",
+    to: "IT Manager",
+  });
+  expect(promotionBetween(before, before, "Carmichael Security", "IT")).toBeNull();
+  expect(promotionBetween(promoted, before, "Carmichael Security", "IT")).toBeNull();
+  expect(promotionBetween({}, before, "Carmichael Security", "IT")).toBeNull();
+  expect(promotionBetween(before, promoted, "Carmichael Security", "Software")).toBeNull();
+  expect(promotionBetween(before, promoted, "Noodle Bar", "Waiter")).toBeNull();
+  // The consultants' two titles share one button text, and are still told apart.
+  const consultant = { "Omega Software": "Software Consultant" };
+  const senior = { "Omega Software": "Senior Software Consultant" };
+  expect(promotionBetween(consultant, senior, "Omega Software", "Software Consultant")).toEqual({
+    from: "Software Consultant",
+    to: "Senior Software Consultant",
+  });
 });
