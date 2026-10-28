@@ -2,7 +2,8 @@
 // the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff. While
 // welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), converges the hack loop on the brain's
 // desired state when that's due (../agent/hack-loop.ts, #134), does the brain's intents through their effectors
-// (../agent/intent-runner.ts, #141), and sleeps in between.
+// (../agent/intent-runner.ts, #141), and sleeps in between. Before the hack loop and the intents, it handles the game's
+// routine dialogs (../agent/dialog-watcher.ts, #143).
 //
 // Two rules make it safe:
 // - Socket handlers never call `ns`. While the script awaits `ns.sleep` (between rounds), the game kills it for any
@@ -27,6 +28,7 @@ import {
   parseBrainMessage,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
+import { createDialogWatcher } from "../agent/dialog-watcher.ts";
 import { createHackLoop } from "../agent/hack-loop.ts";
 import { createIntentRunner } from "../agent/intent-runner.ts";
 import { createWorkerRunner } from "../agent/run-worker.ts";
@@ -86,11 +88,13 @@ export async function main(ns: NS): Promise<void> {
   // One runner for every home worker, so they run one at a time, and never two copies of one.
   const workerRunner = createWorkerRunner(ns);
   const intentRunner = createIntentRunner(ns, { deploymentId, workerRunner });
+  const dialogWatcher = createDialogWatcher(ns);
   const snapshotter = createSnapshotter(ns, {
     deploymentId,
     agentSessionId,
     workerRunner,
     intentOutcomes: () => intentRunner.outcomes(),
+    dialogReport: () => dialogWatcher.takeReport(),
   });
   const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });
 
@@ -134,7 +138,9 @@ export async function main(ns: NS): Promise<void> {
         // meanwhile.
         const roundStartedAtMs = Date.now();
         await snapshotter.takeRound((message) => connection.send(encodeControlMessage(message)));
-        // In what's left of the round, after the snapshots, so the heartbeat is never late for it.
+        // In what's left of the round, after the snapshots, so the heartbeat is never late for it. The game's
+        // dialogs first, so the intents' page work finds none of them in the way.
+        await dialogWatcher.handle(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         await hackLoop.convergeIfDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         await intentRunner.runDue(roundStartedAtMs + SNAPSHOT_ROUND_MS);
         // Clamped, so a clock that steps back can't stretch the sleep.

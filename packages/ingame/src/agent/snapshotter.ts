@@ -42,12 +42,15 @@ export function createSnapshotter(
     agentSessionId,
     workerRunner,
     intentOutcomes,
+    dialogReport,
   }: {
     deploymentId: string;
     agentSessionId: string;
     workerRunner: WorkerRunner;
     /** How the intents went (#141), for the fast snapshot. */
     intentOutcomes: () => IntentOutcome[];
+    /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
+    dialogReport: () => FastSnapshotData["dialogs"];
   },
 ) {
   const lastSequenceNumbers: Record<SnapshotTier, number> = { static: 0, slow: 0, medium: 0, fast: 0 };
@@ -103,6 +106,7 @@ export function createSnapshotter(
         pageHeapUsedBytes: pageHeapUsedBytes(),
         game: fastReport ? (fastReport.data as FastWorkerData) : null,
         intents: intentOutcomes(),
+        dialogs: dialogReport(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 

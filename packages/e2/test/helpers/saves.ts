@@ -45,7 +45,10 @@ export async function simulatorSave({
 type SaveObject = { data: { PlayerSave: string } };
 
 /** A save's outer object and its player, parsed. */
-function readPlayerSave(save: Uint8Array): { saveObject: SaveObject; player: { data: { money: number } } } {
+function readPlayerSave(save: Uint8Array): {
+  saveObject: SaveObject;
+  player: { data: { money: number; city: string } };
+} {
   const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as SaveObject;
   return { saveObject, player: JSON.parse(saveObject.data.PlayerSave) };
 }
@@ -69,6 +72,14 @@ export function withGameSettings(save: Uint8Array, changes: Record<string, unkno
   const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { SettingsSave?: string } };
   const settings = saveObject.data.SettingsSave ? (JSON.parse(saveObject.data.SettingsSave) as object) : {};
   saveObject.data.SettingsSave = JSON.stringify({ ...settings, ...changes });
+  return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
+}
+
+/** `save` with the player in `city` (one of the game's six), as for `withMoney`. */
+export function withCity(save: Uint8Array, city: string): Uint8Array {
+  const { saveObject, player } = readPlayerSave(save);
+  player.data.city = city;
+  saveObject.data.PlayerSave = JSON.stringify(player);
   return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
 }
 

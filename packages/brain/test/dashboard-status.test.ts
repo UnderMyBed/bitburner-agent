@@ -83,6 +83,7 @@ const fastData = (money: number): FastSnapshotData => ({
     ],
   },
   intents: [],
+  dialogs: { handled: [], blocking: null },
 });
 
 test("a healthy skeleton: the Agent connected, every tier's last snapshot and its age, key values, no alerts", () => {

@@ -23,7 +23,7 @@ import {
 } from "../src/game.ts";
 import { freeBrainPorts, type RunningBrain, readStore, startBrain } from "./helpers/brain.ts";
 import { useE2 } from "./helpers/environment.ts";
-import { simulatorSave, withGameSettings, withMoney } from "./helpers/saves.ts";
+import { simulatorSave, withCity, withGameSettings, withMoney } from "./helpers/saves.ts";
 
 const e2 = useE2();
 /** The game autosaves every 60 s; a deploy is in the save only after it (#91). */
@@ -85,6 +85,7 @@ async function moneyedGameWithAgent({
   beforeAgent = async () => {},
   brainSettings = {},
   gameSettings = {},
+  city = "Sector-12",
 }: {
   money?: number;
   keepOfflineAlert?: boolean;
@@ -92,6 +93,8 @@ async function moneyedGameWithAgent({
   brainSettings?: Record<string, string>;
   /** The game's Options, changed in the save (`withGameSettings`). */
   gameSettings?: Record<string, unknown>;
+  /** Where the player starts: Sector-12, as in a new game, unless said. */
+  city?: string;
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
@@ -99,16 +102,19 @@ async function moneyedGameWithAgent({
   started.brains.push(brain);
   onTestFailed(() => console.log(`The brain's log (${dataDirectory}):\n${brain.log.join("\n")}`));
   const save = withGameSettings(
-    withMoney(
-      await simulatorSave({
-        gameSettings: {
-          RemoteFileApiAddress: "127.0.0.1",
-          RemoteFileApiPort: ports.remoteFileApiPort,
-          RemoteFileApiReconnectionDelay: 1,
-          AutoexecScript: BOOT_SCRIPT,
-        },
-      }),
-      money,
+    withCity(
+      withMoney(
+        await simulatorSave({
+          gameSettings: {
+            RemoteFileApiAddress: "127.0.0.1",
+            RemoteFileApiPort: ports.remoteFileApiPort,
+            RemoteFileApiReconnectionDelay: 1,
+            AutoexecScript: BOOT_SCRIPT,
+          },
+        }),
+        money,
+      ),
+      city,
     ),
     gameSettings,
   );
@@ -178,14 +184,64 @@ test("with the sidebar's World section collapsed, City can't be reached: nothing
   });
 });
 
-test("with a dialog open, nothing is bought until the owner closes it", async () => {
-  const { dataDirectory, page } = await moneyedGameWithAgent({ keepOfflineAlert: true });
-  await advanceUntil(page, offlineAlertShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 2_000 });
+/** The brain's `gameDialog` events (#143): the game's dialogs the Agent handled. */
+const gameDialogs = (dataDirectory: string) =>
+  readStore(dataDirectory)
+    .events.filter((event) => event.kind === "gameDialog")
+    .map((event) => event.detail as { kind: string; text: string });
+
+test("the 'Offline for…' alert left open after a load (#143): the Agent closes it, tells the brain, and buys", async () => {
+  const { dataDirectory, page } = await moneyedGameWithAgent({ money: 300_000, keepOfflineAlert: true });
+  await advanceUntil(page, async () => latestMedium(dataDirectory)?.hasTorRouter === true, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  expect(gameDialogs(dataDirectory)).toContainEqual({ kind: "alert", text: expect.stringMatching(/^Offline for/) });
+});
+
+test("a faction invitation (#143): $20m in Sector-12 earns one, the Agent answers 'Decide later', and it stays open to join", async () => {
+  // In Aevum, where $20m earns nothing (its faction wants $40m); the travel to Sector-12 earns Sector-12's ($15m).
+  // Earned before the Agent ran, an invitation's dialog would have come and gone with the setup's reload.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 20_000_000,
+    city: "Aevum",
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Sector-12" } });
+  // The game checks for invitations every 10 cycles, 2 s (`engine.tsx`, `checkFactionInvitations`).
+  await advanceUntil(
+    page,
+    async () => gameDialogs(dataDirectory).some((dialog) => dialog.kind === "factionInvitation"),
+    {
+      realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+      gameTimeoutMs: 90_000,
+    },
+  );
+  expect(gameDialogs(dataDirectory).find((dialog) => dialog.kind === "factionInvitation")?.text).toContain("Sector-12");
+  await advanceGameTime(page, 12_000);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // Not joined: that's the brain's call. The invitation waits on the Factions page.
+  expect(latestMedium(dataDirectory)?.player.factions).toEqual([]);
+  await page.locator("xpath=//div[@role='button' and .//p[normalize-space()='Factions']]").first().click();
+  await expect(page.getByRole("button", { name: "Join!" }).count()).resolves.toBe(1);
+});
+
+test("a dialog the Agent doesn't know (#143): left for the owner, nothing is bought under it, and the brain's alert says so", async () => {
+  const { dataDirectory, page } = await moneyedGameWithAgent({ money: 300_000 });
+  // The owner asks to travel, and leaves the confirmation open.
+  await page.locator("xpath=//div[@role='button' and .//p[normalize-space()='Travel']]").first().click();
+  await page.locator("xpath=//h4[normalize-space()='Travel Agency']/following::p/span[normalize-space()='A']").click();
+  await expect(page.getByText(/^Would you like to travel to Aevum/).count()).resolves.toBe(1);
   await advanceGameTime(page, 60_000);
-  // The alert is as the game left it, and the page wasn't touched under it.
-  await expect(page.getByText(/^Offline for/).count()).resolves.toBe(1);
+  await expect(page.getByText(/^Would you like to travel to Aevum/).count()).resolves.toBe(1);
   expect(latestMedium(dataDirectory)?.hasTorRouter).toBe(false);
-  await page.keyboard.press("Escape");
+  const fast = readStore(dataDirectory)
+    .snapshots.filter((row) => row.tier === "fast")
+    .at(-1)?.data as FastSnapshotData;
+  expect(fast.dialogs.blocking).toMatch(/^Would you like to travel to Aevum/);
+  // The owner cancels: the TOR router follows.
+  await page.getByRole("button", { name: "Cancel" }).click();
   await advanceUntil(page, async () => latestMedium(dataDirectory)?.hasTorRouter === true, {
     realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 60_000,

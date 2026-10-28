@@ -66,6 +66,44 @@ test("each row's release is the brain's plus the connected Agent's deployment, o
   store.close();
 });
 
+test("the game's dialogs the Agent handled (#143) are stored as gameDialog events, well-formed ones only", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const channel = new ControlChannel({ token: TOKEN, clock: fixedClock });
+  recordChannelEvents(channel, store, { environment: "E2", brainRelease: "v0.2.0" });
+  const page = connectionFromTest();
+  channel.accept(page.connection);
+  const message = (type: string, fields: object) =>
+    page.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, type, ...fields } as never));
+  message("hello", {
+    token: TOKEN,
+    deploymentId: "deployment-a",
+    agentSessionId: "session-1",
+    game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+  });
+  const handled = [
+    { kind: "alert", text: "Offline for 5 minutes." },
+    { kind: "factionInvitation", text: "You received a faction invitation." },
+    { kind: "rm -rf", text: "not a kind the Agent reports" },
+    { kind: "alert", text: "x".repeat(5_000) },
+  ];
+  message("snapshot", {
+    agentSessionId: "session-1",
+    tier: "fast",
+    sequenceNumber: 1,
+    gameTimeMs: 1_000,
+    data: { degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [], dialogs: { handled, blocking: null } },
+  });
+  const dialogs = store.events({ environment: "E2" }).filter((event) => event.kind === "gameDialog");
+  expect(dialogs.map((event) => event.detail)).toEqual([
+    { kind: "alert", text: "Offline for 5 minutes." },
+    { kind: "factionInvitation", text: "You received a faction invitation." },
+    { kind: "alert", text: "x".repeat(1_000) },
+  ]);
+  store.close();
+});
+
 test("a part's events are stored with their time, kind and the rest as detail, until stopped", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
   directories.push(directory);

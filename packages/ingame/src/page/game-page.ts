@@ -1,6 +1,6 @@
 // The game's own page, driven from in-game code (#136): the `ui` effector's means (architecture §5.6), for what has no
 // API before Singularity. The rules of engagement allow the page's DOM and React state from in-game scripts.
-// - The page is reached with `eval("document")`. The game charges 25 GB for the identifiers `document` and `window`,
+// - The page is reached with `globalThis.eval("document")`. The game charges 25 GB for the identifiers `document` and `window`,
 //   so neither appears anywhere in this code.
 // - A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own
 //   `onChange` and `onKeyDown`, as the legacy fork does. So a hidden element (a collapsed menu) still works, as long as
@@ -25,6 +25,18 @@ function reactPropsOf(element: Element): Record<string, unknown> | null {
   return key ? ((element as unknown as Record<string, Record<string, unknown>>)[key] ?? null) : null;
 }
 
+/** A React fiber, as far as this code reads one: its hooks' state, and the fiber above it. */
+export interface ReactFiber {
+  memoizedState: unknown;
+  return: ReactFiber | null;
+}
+
+/** React's fiber for a rendered element: the key React gives it starts with `__reactFiber`. */
+export function reactFiberOf(element: Element): ReactFiber | null {
+  const key = Object.keys(element).find((each) => each.startsWith("__reactFiber"));
+  return key ? ((element as unknown as Record<string, ReactFiber>)[key] ?? null) : null;
+}
+
 /**
  * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
  * Each step returns its problem, or null once it's done.
@@ -32,8 +44,10 @@ function reactPropsOf(element: Element): Record<string, unknown> | null {
 export function openGamePage(ns: NS, deadlineMs: number) {
   let page: Document | undefined;
   try {
+    // Indirect (not a bare `eval`), so it runs in the global scope, where `document` is, and the bundler can still rename this module's
+    // names (a direct `eval` could see them, so esbuild keeps them, and renames other modules' instead).
     // biome-ignore lint/security/noGlobalEval: the only way to the page that the game doesn't charge 25 GB for (see above).
-    page = eval("document") as Document | undefined;
+    page = globalThis.eval("document") as Document | undefined;
   } catch {
     return null;
   }
@@ -88,6 +102,31 @@ export function openGamePage(ns: NS, deadlineMs: number) {
 
   return {
     clickWhenThere,
+
+    /** Every dialog open now, in the page's order (MUI's `Modal` roots, `ui/React/Modal.tsx`). */
+    openDialogs(): Element[] {
+      const found = gamePage.evaluate(OPEN_DIALOG_XPATH, gamePage, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      return Array.from({ length: found.snapshotLength }, (_, index) => found.snapshotItem(index) as Element);
+    },
+
+    /** Clicks `element`, `what`, as a player would. */
+    clickElement: click,
+
+    /**
+     * Waits until `element` has left the page, up to the time a dialog's fade takes: true once it has. A dialog closed
+     * stays in the page while it fades out.
+     */
+    async waitUntilGone(element: Element): Promise<boolean> {
+      const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, deadlineMs);
+      while (element.isConnected) {
+        if (timeLeftMs(fadeEndsMs) <= 0) return false;
+        await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));
+      }
+      return true;
+    },
+
+    /** Whether the caller's time is up. */
+    timeUp: () => timeLeftMs(deadlineMs) <= 0,
 
     /**
      * Clicks the element, `what`, if it's in the page now: for a step the game may skip, such as a confirmation the

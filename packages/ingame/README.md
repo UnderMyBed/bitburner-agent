@@ -2,7 +2,7 @@
 
 The code that runs inside the game: `boot.js`, the Agent and its workers (architecture §5). Each script is a self-contained bundle held to a RAM budget, measured with the game's own calculator in CI.
 
-> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)), and [intents](#intents) with [travel](#travel) ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): `boot.js` ([#85](https://github.com/UnderMyBed/bitburner-agent/issues/85)), the Agent's connection and lifecycle ([#88](https://github.com/UnderMyBed/bitburner-agent/issues/88)), and its snapshots ([#89](https://github.com/UnderMyBed/bitburner-agent/issues/89)). M3 adds the Agent's first actions: [the hack loop](#the-hack-loop) ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134)), [buying the hacking programs](#the-hacking-programs) ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)), [upgrading home's RAM](#home-ram) ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/138)), [intents](#intents) with [travel](#travel) ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)), and the game's [dialogs](#dialogs) ([#143](https://github.com/UnderMyBed/bitburner-agent/issues/143)).
 
 ## Layout
 
@@ -107,7 +107,7 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
 3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, then runs the [intents](#intents) that are due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s.
-4. **`desiredState`:** it keeps the latest until it disconnects: the hack loop converges on it, and the intent runner does its intents.
+4. **`desiredState`:** it keeps the latest until it disconnects: the hack loop converges on it, and the intent runner does its intents. Every round, before them, the [dialog watcher](#dialogs) handles the game's dialogs.
 5. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 6. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
@@ -189,12 +189,20 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
 - **Outcomes:** the fast snapshot carries every intent the runner holds, as `{ id, done, tries, problem }`, for the brain's dashboard and its "intent stuck" alert.
 - **Tests:** `test/agent/intent-runner.test.ts` covers the schedule, the order, the time rule, the logs and forgetting. Its property tests (fast-check) run random intent lists, worker reports and disconnects to check that the runner is idempotent (an intent reported done never runs again while it stays sent) and that it converges (every intent sent long enough, whose worker can do it, ends done).
 
+## Dialogs
+
+M3's fifth slice ([#143](https://github.com/UnderMyBed/bitburner-agent/issues/143), owner decision 35): the Agent handles the game's routine dialogs, so unattended play doesn't stall on them. The **dialog watcher** (`src/agent/dialog-watcher.ts`) runs every round, after the snapshots and before the hack loop and the intents, so their page work finds none of these in the way. It reaches the page itself (`eval("document")` costs nothing), with no worker, and handles up to 10 dialogs a round, waiting for each to fade out:
+- **A game alert** (`ui/React/AlertManager.tsx`: "Offline for…" after a load, purchase, travel and install notices, the Source-File and BitNode congratulations, a script's `ns.alert`) is closed with its own close button. It's recognized by the AlertManager's own React state up the dialog's fibers, a list of `{ text, hash, canBeDismissedEasily }`, never by a component's name, which a production build minifies.
+- **A faction invitation** ("You received a faction invitation.", `Faction/ui/FactionInvitationManager.tsx`) gets "Decide later": the invitation stays on the Factions page, and joining is the brain's call.
+- **Anything else** (a script's `ns.prompt`, a dialog the owner opened) is left alone.
+
+What it did goes up in the next fast snapshot, as `dialogs: { handled: [{ kind, text }], blocking }`: each handled dialog's text without its buttons (up to 1,000 characters), and the text of one left open, or null. The brain stores the handled ones as `gameDialog` events and raises `dialogBlocking` for one left open. `test/agent/dialog-watcher.test.ts` covers each kind on a stand-in page in jsdom; E2 covers the real ones ([`packages/e2`](../e2/README.md)).
 ## The hacking programs
 
 M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the Agent buys the TOR router and the five port openers, so the [hack loop](#the-hack-loop) can root more servers. It was the first **`ui` effector** (architecture §5.6): BN1.1 has no Singularity API, so it buys through the game's own page (`src/page/game-page.ts`, `src/entries/buy-program.ts`). Since #141 the brain asks for each as an [intent](#intents), `buyTor` or `buyProgram` ([packages/brain](../brain/README.md#the-hacking-programs) picks which).
 - **`buy-program.js`**, with the item, the vendor and a deadline, so it ends within the Agent's round like any other worker:
   1. **The game first:** the TOR router owned (`hasTorRouter`) or the program on home (`fileExists`) is done, without touching the page.
-  2. **Never over an open dialog:** that's the owner's to read and close, so it does nothing and tries again later.
+  2. **Never over an open dialog** the [dialog watcher](#dialogs) leaves alone (a script's prompt, one the owner opened): that's the owner's, so it does nothing and tries again later. A dialog that's just been closed is given the time its fade takes (400 ms) to go.
   3. **The TOR router:** the sidebar's City, the vendor (`span[aria-label]` on the ASCII map, or a button with ASCII art off; the page's `openCityLocation`), "Purchase TOR router" while it can be bought (not disabled), then the purchase's dialog closed with its own close button (never Escape, which closes every dialog). No dialog is left open (E2 checks).
   4. **A program:** the sidebar's Terminal, and `buy <program>` typed into it, unless the owner has a line typed there: that's left alone.
   5. **Back to the Terminal,** however it went, once it has moved the page.
@@ -203,7 +211,7 @@ M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/1
 - **The page** (`src/page/game-page.ts`): reached with `eval("document")`, never the identifiers `document` or `window`, which cost 25 GB each. A click calls the element's React `onClick` with `{ isTrusted: true }`, and the terminal takes React's own `onChange` and `onKeyDown`, as the legacy fork does. The Enter handler is read after the line is typed: the one from before would run the empty line. Every wait ends by the worker's deadline, and looks at least once. The steps end 300 ms before it, so the way back to the Terminal has its own time however long a step waited (`test/agent/game-page.test.ts`).
 - **What the owner sees:** a few times a session, the page switches to the City and back to the Terminal, or a `buy` is typed into the terminal. The dashboard's "Stop buying programs" switch stops it.
 
-E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or an open dialog, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
+E2 buys all six on the real page, each at its first try, and checks that a collapsed World section, or a dialog the Agent leaves alone, stops it until it's open again, or closed ([`packages/e2`](../e2/README.md)). `test/agent/game-page.test.ts` drives a stand-in page in jsdom.
 
 ## Home RAM
 
