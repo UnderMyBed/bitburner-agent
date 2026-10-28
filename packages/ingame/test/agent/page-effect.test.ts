@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-// Keeping the player's focus around a page effector's steps (#151), and company work's steps (#153), on a stand-in
-// page: the Work page's unfocus button, the overview's "Focus", the sidebar, the City's companies and a company's
-// buttons, each a React `onClick` that records its click. E2 drives the real page.
+// Keeping the player's focus around a page effector's steps (#151), and company work's and crime's steps (#153,
+// #156), on a stand-in page: the Work page's unfocus button, the overview's "Focus", the sidebar, the City's locations
+// and their buttons (a company's, the Slums' crimes), each a React `onClick` that records its click. E2 drives the
+// real page.
 import { afterEach, expect, test } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import { openGamePage } from "../../src/page/game-page.ts";
 import { reportPageEffect } from "../../src/page/page-effect.ts";
-import { convergeWorkOnPage } from "../../src/page/work-page.ts";
+import { convergeWorkOnPage, workShown } from "../../src/page/work-page.ts";
 
 const clicks: string[] = [];
 const reports: unknown[] = [];
@@ -82,12 +83,15 @@ test("faction work that can't start, for a player focused on their own work: foc
   expect(clicks).toEqual(["Factions", "Details", "Focus"]);
 });
 
-/** The City page with ASCII art off, as the stand-in shows it: the sidebar's City and Terminal, and `company`'s button. */
-function inTheCity(company: string, ...companyPage: HTMLElement[]) {
-  const companyButton = clickable(company, "button", () =>
-    document.body.replaceChildren(clickable("Terminal", "sidebar"), ...companyPage),
+/**
+ * The City page with ASCII art off, as the stand-in shows it: the sidebar's City and Terminal, and the button of
+ * `location`, which opens `locationPage`.
+ */
+function inTheCity(location: string, ...locationPage: HTMLElement[]) {
+  const locationButton = clickable(location, "button", () =>
+    document.body.replaceChildren(clickable("Terminal", "sidebar"), ...locationPage),
   );
-  document.body.replaceChildren(clickable("City", "sidebar"), clickable("Terminal", "sidebar"), companyButton);
+  document.body.replaceChildren(clickable("City", "sidebar"), clickable("Terminal", "sidebar"), locationButton);
   const gamePage = openGamePage(ns, Date.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   return gamePage;
@@ -157,4 +161,48 @@ test("company work with a job in the field already (#153): that job's Work on th
   );
   expect(problem).toBeNull();
   expect(clicks).toEqual(["Job", "Work", "Joe's Guns'"]);
+});
+
+test("a crime (#156): The Slums, then the crime's button, which starts it focused; then unfocused if wanted", async () => {
+  const workPage = () =>
+    document.body.replaceChildren(
+      clickable("Do something else simultaneously", "button", () =>
+        document.body.replaceChildren(clickable("Terminal", "sidebar")),
+      ),
+    );
+  // Not the first button: the crime's is picked by its name.
+  const slums = [
+    clickable("Heist (0.10% chance of success)", "button"),
+    clickable("Shoplift (45.20% chance of success)", "button", workPage),
+    clickable("Rob Store (12.00% chance of success)", "button"),
+  ];
+  const gamePage = inTheCity("The Slums", ...slums);
+  const problem = await convergeWorkOnPage(
+    gamePage,
+    { kind: "crime", crime: "Shoplift", focus: false },
+    { wasFocused: false },
+  );
+  expect(problem).toBeNull();
+  expect(clicks).toEqual([
+    "City",
+    "The Slums",
+    "Shoplift (45.20% chance of success)",
+    "Do something else simultaneously",
+    "Terminal",
+  ]);
+});
+
+test("a crime as the page shows it (#156): the Work page's wording focused, the overview's unfocused", () => {
+  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  if (!gamePage) throw new Error("no page");
+  const heist = { kind: "crime", crime: "Heist", focus: true } as const;
+  document.body.replaceChildren(
+    Object.assign(document.createElement("h6"), { textContent: "You are attempting a heist" }),
+  );
+  expect(workShown(gamePage, heist)).toBe("focused");
+  document.body.replaceChildren(
+    Object.assign(document.createElement("p"), { textContent: "You are attempting to Heist" }),
+  );
+  expect(workShown(gamePage, heist)).toBe("unfocused");
+  expect(workShown(gamePage, { ...heist, crime: "Mug" })).toBeNull();
 });

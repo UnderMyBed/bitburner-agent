@@ -12,8 +12,9 @@ import { JobTracks } from "../../../../../vendor/bitburner-src/src/Company/data/
 import { CompanyName } from "../../../../../vendor/bitburner-src/src/Company/Enums";
 import { companyNameAsLocationName } from "../../../../../vendor/bitburner-src/src/Company/utils";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
+import { Crimes } from "../../../../../vendor/bitburner-src/src/Crime/Crimes";
 import { buyDarkwebItem } from "../../../../../vendor/bitburner-src/src/DarkWeb/DarkWeb";
-import { CityName, FactionWorkType, type JobField } from "../../../../../vendor/bitburner-src/src/Enums";
+import { CityName, CrimeType, FactionWorkType, type JobField } from "../../../../../vendor/bitburner-src/src/Enums";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
 import {
   getFactionAugmentationsFiltered,
@@ -43,6 +44,7 @@ import { Router } from "../../../../../vendor/bitburner-src/src/ui/GameRoot";
 import { dialogBoxCreate } from "../../../../../vendor/bitburner-src/src/ui/React/DialogBox";
 import { Page } from "../../../../../vendor/bitburner-src/src/ui/Router";
 import { CompanyWork, isCompanyWork } from "../../../../../vendor/bitburner-src/src/Work/CompanyWork";
+import { isCrimeWork } from "../../../../../vendor/bitburner-src/src/Work/CrimeWork";
 import { FactionWork, isFactionWork } from "../../../../../vendor/bitburner-src/src/Work/FactionWork";
 
 /**
@@ -288,6 +290,33 @@ const effectors = {
       return { done: true, problem: `bought as ${server.hostname}: a server off the network held ${hostname}` };
     }
     return result(isPlayers(), `${hostname} isn't the player's after buying it`);
+  },
+  /**
+   * The work activity's effector for crime (#156), as the Slums page does it (`Locations/ui/SlumsLocation.tsx:24-29`:
+   * the crime committed, focused, on the Work page), from any city, as the Slums is in each; then the focus as the
+   * focus buttons set it (the Work page's "Do something else simultaneously" goes to the City for a crime,
+   * `ui/WorkInProgressRoot.tsx:220-222`). Already so: nothing touched. Not named `commitCrime`, an NS function.
+   */
+  convergeCrimeWork(crimeName: string, focus: boolean): EffectorResult {
+    const crime = Object.values(CrimeType).includes(crimeName as CrimeType)
+      ? Crimes[crimeName as CrimeType]
+      : undefined;
+    const isThisWork = () => isCrimeWork(Player.currentWork) && Player.currentWork.crimeType === crimeName;
+    if (crime !== undefined && !isThisWork()) {
+      crime.commit();
+      Router.toPage(Page.Work);
+      Player.focus = true;
+    }
+    if (isThisWork() && Player.focus !== focus) {
+      if (focus) {
+        Player.startFocusing();
+        Router.toPage(Page.Work);
+      } else {
+        // Leaving the Work page ends the focus (the router, as `ui/GameRoot.tsx:269-275`).
+        Router.toPage(Page.City);
+      }
+    }
+    return result(isThisWork() && Player.focus === focus, `not ${focus ? "focused on" : "doing"} ${crimeName}`);
   },
 };
 

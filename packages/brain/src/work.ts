@@ -31,8 +31,8 @@ export interface WorkView {
 }
 
 /**
- * `request` (`{ faction, workType }`, `{ kind: "company", company, field }`, or null to stop managing work) as the
- * owner's work, or why it isn't valid.
+ * `request` (`{ faction, workType }`, `{ kind: "company", company, field }`, `{ kind: "crime", crime }`, or null to
+ * stop managing work) as the owner's work, or why it isn't valid.
  */
 export function parseOwnersWork(
   request: unknown,

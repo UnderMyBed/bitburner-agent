@@ -782,6 +782,14 @@ describe("work (#151, owner decision 37)", () => {
     });
   });
 
+  test("crime (#156): set, kept and sent, focused; an unknown crime refused", () => {
+    const { controller, connection } = connectedWithLoopOff();
+    expect(controller.setWork({ kind: "crime", crime: "Mug" })).toEqual({ ok: true });
+    expect(sentWork(connection)).toEqual({ kind: "crime", crime: "Mug", focus: true });
+    expect(controller.setWork({ kind: "crime", crime: "Jaywalk" })).toMatchObject({ ok: false });
+    expect(sentWork(connection)).toMatchObject({ crime: "Mug" });
+  });
+
   test("part-time company work (#153) goes unfocused: the game gives it full gains either way", () => {
     const { controller, connection } = connectedWithLoopOff();
     controller.setWork({ kind: "company", company: "Noodle Bar", field: "Part-time Waiter" });
