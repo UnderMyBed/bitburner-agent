@@ -51,7 +51,7 @@ export async function main(ns: NS): Promise<void> {
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {
       report.problem = "no game page to buy it through";
-    } else if (gamePage.dialogOpen()) {
+    } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog is open: it's the owner's to close";
     } else {
       report.problem = item === TOR_ROUTER ? await buyTorRouter(gamePage, vendor) : await buyProgram(gamePage, item);

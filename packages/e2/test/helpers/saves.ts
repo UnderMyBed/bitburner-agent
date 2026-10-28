@@ -61,6 +61,17 @@ export function withMoney(save: Uint8Array, money: number): Uint8Array {
   return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
 }
 
+/**
+ * `save` with these game settings (Options) changed, the rest kept: a test environment's save, as for `withMoney`.
+ * The settings are the game's own names (`Settings/Settings.ts`), e.g. `DisableASCIIArt`.
+ */
+export function withGameSettings(save: Uint8Array, changes: Record<string, unknown>): Uint8Array {
+  const saveObject = JSON.parse(gunzipSync(save).toString("utf8")) as { data: { SettingsSave?: string } };
+  const settings = saveObject.data.SettingsSave ? (JSON.parse(saveObject.data.SettingsSave) as object) : {};
+  saveObject.data.SettingsSave = JSON.stringify({ ...settings, ...changes });
+  return new Uint8Array(gzipSync(JSON.stringify(saveObject)));
+}
+
 /** The player's money, as the save holds it. */
 export function moneyInSave(save: Uint8Array): number {
   return readPlayerSave(save).player.data.money;

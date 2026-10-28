@@ -1,4 +1,4 @@
-// How the Agent runs a home worker (#89, #134, #136), for the snapshotter, the hack loop and the program buyer alike:
+// How the Agent runs a home worker (#89, #134, #141), for the snapshotter, the hack loop and the intent runner alike:
 // never a second copy of one still running, nothing once the deadline has passed, then the worker as a temporary
 // script, waiting for its report on the worker port and for it to exit, so its RAM is free for the next one, never past
 // the deadline.

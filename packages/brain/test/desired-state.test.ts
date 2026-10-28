@@ -10,6 +10,7 @@ import {
   type DesiredState,
   encodeControlMessage,
   type Intent,
+  type IntentOutcome,
   type IntentRequest,
   intentId,
   type SnapshotTier,
@@ -368,13 +369,22 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView()).toMatchObject([{ id: buyTor().id, source: "manual" }]);
   });
 
-  test("done in the game, it leaves the queue; cancelled, it leaves at once", () => {
+  const fastWith = (...intents: IntentOutcome[]) => ({
+    degradedTiers: [],
+    pageHeapUsedBytes: null,
+    game: null,
+    intents,
+  });
+  const doneOutcome = (id: string): IntentOutcome => ({ id, done: true, tries: 1, problem: null });
+
+  test("reported done by the Agent, it leaves the queue; cancelled, it leaves at once", () => {
     const controller = new DesiredStateController({ channel, store });
     const connection = connectAgent();
     send(connection, "static", network);
+    send(connection, "medium", mediumData(1, { n00dles: true }));
     controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
     controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
-    send(connection, "medium", mediumData(1, { n00dles: true }, { city: "Aevum" }));
+    send(connection, "fast", fastWith(doneOutcome("travel(Aevum)")));
     expect(
       desiredStates(connection)
         .at(-1)
@@ -383,6 +393,39 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.cancelManualIntent("travel(Volhaven)")).toBe(true);
     expect(controller.cancelManualIntent("travel(Volhaven)")).toBe(false);
     expect(desiredStates(connection).at(-1)?.intents).toEqual([]);
+  });
+
+  test("a round trip keeps both legs: a snapshot showing the player in the second leg's city takes nothing off", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+    controller.addManualIntent({ action: "travel", args: { city: "Sector-12" } });
+    send(connection, "medium", mediumData(1, { n00dles: true }, { city: "Sector-12" }));
+    expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
+  });
+
+  test("full at 99, leaving room for the purchase in the protocol's 100: the 100th is refused, with a reason", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
+    for (let index = 0; index < 99; index += 1) {
+      const args = { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] };
+      expect(controller.addManualIntent({ action: "upgradeHomeRam", args })).toMatchObject({ ok: true });
+    }
+    expect(controller.addManualIntent({ action: "travel", args: { city: "Aevum" } })).toEqual({
+      ok: false,
+      reason: "the manual queue is full: 99 intents at most",
+    });
+    expect(readManualIntents(store)).toHaveLength(99);
+  });
+
+  test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
+    const controller = new DesiredStateController({ channel, store });
+    controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
+    const connection = connectAgent();
+    send(connection, "fast", { ...fastWith(), intents: [{ id: AEVUM.id, done: "yes", tries: 1, problem: null }] });
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
   });
 
   test("with the hack loop off, the queue goes before any snapshot: each intent checks the game first", () => {
@@ -401,10 +444,10 @@ describe("the manual queue (#141, owner decision 36)", () => {
     controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
     const outcome = { id: AEVUM.id, done: false, tries: 2, problem: "no Travel in the sidebar" };
-    send(connection, "fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [outcome] });
+    send(connection, "fast", fastWith(outcome));
     expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome }]);
     connection.dropFromGameSide();
-    expect(controller.intentsView()).toEqual([]);
+    expect(controller.intentsView()).toEqual([{ id: AEVUM.id, source: "manual", outcome: null }]);
     // A new Agent holds no intents yet: the last one's outcomes aren't its own.
     const again = connectAgent("session-2");
     send(again, "static", network, "session-2");

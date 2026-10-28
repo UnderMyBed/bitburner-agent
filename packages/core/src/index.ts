@@ -45,13 +45,11 @@ export {
 export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { homeWorkerFileNames } from "./home-workers.ts";
 export {
-  ACTION_NAMES,
   type ActionName,
   type EffectorReport,
   type Intent,
   type IntentOutcome,
   type IntentRequest,
-  intentDone,
   intentId,
   MAX_INTENTS,
   parseIntentRequest,

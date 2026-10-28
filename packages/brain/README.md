@@ -153,13 +153,14 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
 - **The API** (the page's; a script must follow the same rules):
   - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`).
   - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
-  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), `POST /api/home-ram` home RAM's (#138).
+  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), and `POST /api/home-ram` home RAM's (#138).
   - `POST /api/intents` with `{"action": …, "args": {…}}` queues an intent (#141), answered with `{"id": …}`, or 400 with why it isn't valid. `POST /api/intents/cancel` with `{"id": …}` takes one off the queue, or 404 if it isn't there. Both the same way as the switches.
   - Refusals:
     - 403: not the dashboard's Host or Origin;
-    - 400: a body that isn't exactly one of its switch's two, or a path that isn't valid;
+    - 400: a body that isn't JSON, a switch's body that isn't exactly one of its two, an intent that isn't valid (or a full queue), or a path that isn't valid;
     - 413: a body over 1 KiB;
-    - 404 or 405: another path or method;
+    - 404: another path, or cancelling an intent that isn't in the queue;
+    - 405: another method;
     - 500: the brain failed, and logs why. The server carries on.
 
 ## The hack loop
@@ -176,7 +177,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - **On** waits for that Agent's own static and medium snapshots, which come in its first round, then sends the target (or none yet, while the servers get rooted) and the hosts. It never sends the last brain's or the last game's view:
     - a brain that restarts sends the running Agent the same state, which changes nothing;
     - an Agent after a reset is never given a target its game can't hack.
-  - The channel sends each connection a state once, then again on a change. It sends only to a welcomed Agent running the deployed code. While the brain holds, it sends only what starts nothing new: the hack loop off, or as last sent, and nothing bought ([protocol](../../docs/bridge/protocol.md#rules)).
+  - The channel sends each connection a state once, then again on a change. It sends only to a welcomed Agent running the deployed code. While the brain holds, it sends only what starts nothing new: the hack loop off, or as last sent, and no intents ([protocol](../../docs/bridge/protocol.md#rules)).
   - The dashboard shows the controller's own view: on or off, waiting for the snapshots, the target and the number of hosts.
 - **Wiring:** `main.ts` makes the controller before the control channel listens. The simulator suite wires it the same way through `test/helpers/brain-in-simulation.ts` (`withDesiredState`). `brain-process.test.ts` doesn't cover it.
 - **The suite** (`test/hack-loop-skeleton.test.ts`), in an 8 GB fresh start in the simulator:
@@ -223,10 +224,11 @@ M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/13
 M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam` and `travel` so far. Core validates them (`parseIntentRequest`), and says from the medium snapshot when the game shows one done (`intentDone`).
 
 - **Where they come from,** in this order:
-  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the medium snapshot shows it done, or when it's cancelled. Queued twice, it's queued once, and one that isn't valid is refused with why.
+  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result: that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 99 at most, leaving room in the protocol's 100 for the purchase. The dashboard lists the queue even with no Agent connected, so it can be cancelled.
   2. **The purchase rules:** [the hacking programs](#the-hacking-programs) and [home RAM](#home-ram), one purchase at a time, the cheaper first. If the owner queued the same purchase, it goes once, as the owner's.
 - **When they go:** with the hack loop, in the one desired state. With the hack loop off, the manual queue goes before any snapshot: each intent checks the game first, so a stale one does nothing. While the brain holds, none go.
-- **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`.
+- **How they went:** the Agent reports each intent it holds in the fast snapshot (done, tries, the last problem). The dashboard shows it beside each intent, and an intent tried 5 times without being done raises `intentStuck`: a worker that didn't run counts as a try.
+
 ## Supervision
 
 The brain keeps the game itself running, for unattended play ([#94](https://github.com/UnderMyBed/bitburner-agent/issues/94); architecture §10.2, R9). It's process management only: nothing touches the game's code or its save.
@@ -363,5 +365,5 @@ await game.runUntil(() => channel.connectedAgent() !== null, 10_000);   // or fa
 | `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
-| `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the program buyer |
+| `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the intents |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the desired-state controller only when a test asks (`withDesiredState`), so the M2 suites see the observe-only skeleton they test |

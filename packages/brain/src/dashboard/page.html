@@ -284,7 +284,7 @@ async function sendWrite(path, body, problemSelector, failure = "It didn't take"
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      const reason = typeof response.text === "function" ? await response.text() : "";
+      const reason = await response.text();
       throw new Error(`HTTP ${response.status}${reason ? `: ${reason}` : ""}`);
     }
   } catch (error) {

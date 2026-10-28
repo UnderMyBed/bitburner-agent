@@ -66,6 +66,25 @@ test("a city location: the City, then the location; one that isn't there is name
   expect(clicks).toEqual(["City"]);
 });
 
+/** A dialog, as MUI's `Modal` renders its root. */
+const dialog = () => Object.assign(document.createElement("div"), { className: "MuiModal-root" });
+
+test("a dialog that's fading out after a close isn't one that stays open (#141)", async () => {
+  const fading = dialog();
+  document.body.append(fading);
+  setTimeout(() => fading.remove(), 200);
+  const gamePage = openGamePage(ns, Date.now() + 2_000);
+  expect(await gamePage?.dialogStaysOpen()).toBe(false);
+});
+
+test("a dialog that stays is open, after the time a fade takes", async () => {
+  document.body.append(dialog());
+  const gamePage = openGamePage(ns, Date.now() + 2_000);
+  const startedMs = Date.now();
+  expect(await gamePage?.dialogStaysOpen()).toBe(true);
+  expect(Date.now() - startedMs).toBeGreaterThanOrEqual(350);
+});
+
 test("past the deadline, a step still looks once: what's there is clicked", async () => {
   sidebarWith("Terminal");
   const gamePage = openGamePage(ns, Date.now() - 1);

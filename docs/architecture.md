@@ -111,9 +111,9 @@ Example desired state:
     "stocks": { "enabled": false },
     "gang":   { "enabled": true, "mode": "respect", "warfare": "auto" }
   },
-  "intents": [   // one-shot, each with an idempotency key
-    { "id": "buy-aug:CyberSec:BitWire", "action": "purchaseAugmentation", "args": ["CyberSec","BitWire"] },
-    { "id": "install:cycle-7", "action": "installAugmentations", "guard": { "queuedAugsAtLeast": 6 } }
+  "intents": [   // one-shot, in order; the id is the action and its args' values (#141)
+    { "id": "purchaseAugmentation(CyberSec, BitWire)", "action": "purchaseAugmentation", "args": { "faction": "CyberSec", "augmentation": "BitWire" } },
+    { "id": "installAugmentations(7)", "action": "installAugmentations", "args": { "cycle": 7 }, "guard": { "queuedAugsAtLeast": 6 } }
   ]
 }
 ```
@@ -385,7 +385,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
   - **Built in M2** ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); [`packages/brain`](../packages/brain/README.md#the-dashboard)): skeleton health (the Agent, the last snapshot per tier, key game values, gaps over 24 h), alerts, recent events, and the supervision switch (§10.2).
   - **Later (M4 on):** the current route and ETA, the allocation, activity rates (expected against actual), fast-model divergence, and a timeline of BitNodes and installs.
 - **Alerts** appear **on the dashboard only**: no push notifications. They're rules over the store, evaluated whenever the dashboard reads status.
-  - **Built in M2:** the Agent silent (no heartbeat for 60 s with the brain up), a version hold, a failed deploy, and the supervisor giving up (#94). A brain that's down shows as "brain unreachable".
+  - **Built in M2:** the Agent silent (no heartbeat for 60 s with the brain up), a version hold, a failed deploy, and the supervisor giving up (#94). A brain that's down shows as "brain unreachable". **M3:** an intent stuck, tried 5 times without being done (#141).
   - **Later:** a stall (no progress on the route's critical path for X minutes) needs a route, so it comes with the planner (M4). A reflex crash loop comes with reflexes (M4), and estimate error above a threshold with the fast model (M4).
 - **Campaign report:** generated from telemetry: clear time, cycles and installs per BitNode, per release. It's our benchmark in place of community numbers.
 

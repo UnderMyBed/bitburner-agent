@@ -5,7 +5,7 @@
 // - A new intent is due at once. One not done is tried again every 15 rounds (30 s), logging why each time.
 // - One done is never run again while the brain keeps sending it: the brain sees it done in its next medium snapshot,
 //   and stops sending it. One that leaves the list and comes back is new.
-// - A worker that doesn't run (home full, still running, no time left) is tried again next round.
+// - A worker that doesn't run (home full, still running, no time left) is tried again next round. It counts as a try.
 // - What happened to each is in the fast snapshot (`outcomes`), for the brain and the dashboard.
 import { deployedFilePath, type EffectorReport, type Intent, type IntentOutcome } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
@@ -43,13 +43,14 @@ export function createIntentRunner(
       [...workerArguments, deadlineMs - WORKER_MARGIN_MS],
       deadlineMs,
     );
+    // Every run is a try, reported or not, so an intent whose worker never runs still shows as stuck.
+    entry.outcome.tries += 1;
     if (workerRun.outcome !== "reported") {
       entry.outcome.problem = whyNoReport(workerRun, workerFile);
       entry.logChange(`${entry.outcome.problem}; trying again next round`);
       return;
     }
     const report = workerRun.report.data as EffectorReport;
-    entry.outcome.tries += 1;
     entry.outcome.problem = report.problem;
     // A problem after it's done is still worth knowing: the page may not be back on the Terminal.
     const problem = report.problem === null ? "" : `: ${report.problem}`;

@@ -7,8 +7,8 @@ import {
   type FastSnapshotData,
   type Intent,
   type IntentOutcome,
-  intentDone,
   intentId,
+  MAX_INTENTS,
   type MediumSnapshotData,
   parseIntentRequest,
   type SlowSnapshotData,
@@ -71,8 +71,8 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
 /**
  * Keeps the channel's desired state in step with the switches and the connected Agent's snapshots.
  * - Every activity goes in one state, whole each time. With no snapshots from the connected Agent yet (it sends them
- *   in its first round), only a state that starts nothing goes out: the hack loop off, nothing bought. If the hack
- *   loop is on, nothing goes out until then. So a stale target or the last brain's view is never sent: a brain that
+ *   in its first round), only the hack loop off goes out, with the owner's manual queue (each intent checks the game
+ *   first, so a stale one does nothing). If the hack loop is on, nothing goes out until then. So a stale target or the last brain's view is never sent: a brain that
  *   restarts sends the running Agent the same state, which changes nothing, and an Agent after a reset is never given
  *   a target its game can't hack.
  * - The channel sends each connection a state once, then again on a change.
@@ -80,8 +80,8 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
  * - Intents go in order: the owner's manual queue first, as added, then the purchase. A manual intent leaves the queue
- *   once the medium snapshot shows it done. Manual intents go out whatever the snapshots: each is done at most once,
- *   with the game's own state checked first.
+ *   once the connected Agent reports it done: the game's state can change again (a travel there and back), so a
+ *   snapshot can't say it was done.
  */
 export class DesiredStateController {
   readonly #channel: ControlChannel;
@@ -111,14 +111,13 @@ export class DesiredStateController {
         this.#slowData = null;
         this.#fastData = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
-        // Only the intents' outcomes, for the views: nothing to send.
+        // The intents' outcomes: for the views, and the manual intents done. Anything else changes nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
-        return;
+        if (!this.#dropDoneManualIntents()) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
-        this.#pruneManualIntents(this.#mediumData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
       } else {
@@ -152,7 +151,11 @@ export class DesiredStateController {
     const parsed = parseIntentRequest(request);
     if (!parsed.ok) return parsed;
     const queue = readManualIntents(this.#store);
+    // Room for the purchase too: a desired state over the protocol's limit would be refused by the Agent.
     if (!queue.some((each) => each.id === parsed.message.id)) {
+      if (queue.length >= MAX_INTENTS - 1) {
+        return { ok: false, reason: `the manual queue is full: ${MAX_INTENTS - 1} intents at most` };
+      }
       writeManualIntents(this.#store, [...queue, parsed.message]);
       this.#update();
     }
@@ -169,14 +172,38 @@ export class DesiredStateController {
     return true;
   }
 
+  /**
+   * The intents the brain wants done, in order: the manual queue (shown even before the Agent's snapshots, or without
+   * an Agent, so it can be cancelled), then the purchase. Each with the connected Agent's outcome, if it has reported
+   * one. While the brain holds, none of them goes out (the alerts say why).
+   */
   intentsView(): IntentView[] {
-    const outcomes = Array.isArray(this.#fastData?.intents) ? this.#fastData.intents : [];
-    const manualIds = new Set(readManualIntents(this.#store).map((each) => each.id));
-    return (this.#desired?.intents ?? []).map(({ id }) => ({
-      id,
-      source: manualIds.has(id) ? "manual" : "purchase",
-      outcome: outcomes.find((outcome) => outcome?.id === id) ?? null,
-    }));
+    const outcomes = this.#reportedOutcomes();
+    const manual = readManualIntents(this.#store);
+    const purchase =
+      this.#desired !== null && this.#purchase && !manual.some((each) => each.id === this.#purchase?.id)
+        ? [this.#purchase]
+        : [];
+    return [
+      ...manual.map(({ id }) => ({ id, source: "manual" as const })),
+      ...purchase.map(({ id }) => ({ id, source: "purchase" as const })),
+    ].map((view) => ({ ...view, outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null }));
+  }
+
+  /** The connected Agent's intent outcomes, from its latest fast snapshot: only the well-formed, as it's its word. */
+  #reportedOutcomes(): IntentOutcome[] {
+    const outcomes: unknown[] = Array.isArray(this.#fastData?.intents) ? this.#fastData.intents : [];
+    return outcomes
+      .filter((outcome): outcome is IntentOutcome => {
+        const fields = outcome as Partial<IntentOutcome> | null;
+        return (
+          typeof fields?.id === "string" &&
+          typeof fields.done === "boolean" &&
+          typeof fields.tries === "number" &&
+          (fields.problem === null || typeof fields.problem === "string")
+        );
+      })
+      .map(({ id, done, tries, problem }) => ({ id, done, tries, problem }));
   }
 
   hackLoopView(): HackLoopView {
@@ -259,11 +286,18 @@ export class DesiredStateController {
     return null;
   }
 
-  /** Takes off the manual queue what the medium snapshot shows done. */
-  #pruneManualIntents(mediumData: MediumSnapshotData): void {
+  /** Takes off the manual queue what the connected Agent reports done; whether it took any. */
+  #dropDoneManualIntents(): boolean {
+    const doneIds = new Set(
+      this.#reportedOutcomes()
+        .filter((outcome) => outcome.done)
+        .map((outcome) => outcome.id),
+    );
     const queue = readManualIntents(this.#store);
-    const notDone = queue.filter((each) => !intentDone(each, mediumData));
-    if (notDone.length !== queue.length) writeManualIntents(this.#store, notDone);
+    const notDone = queue.filter((each) => !doneIds.has(each.id));
+    if (notDone.length === queue.length) return false;
+    writeManualIntents(this.#store, notDone);
+    return true;
   }
 
   #update(): void {

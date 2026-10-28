@@ -257,7 +257,7 @@ export class ControlChannel {
   #sendDesiredStateIfDue(session: AgentSession): void {
     if (this.#desiredState === null) return;
     const trusted = session.welcomed && session.deploymentId === this.#deploymentState.deployedId && !this.#holding();
-    // Otherwise only what starts nothing new goes (nothing bought; the hack loop off, or as last sent), and to any
+    // Otherwise only what starts nothing new goes (no intents; the hack loop off, or as last sent), and to any
     // connected Agent, whatever the brain knows: an Agent too old to know it ignores it. After a Steam update the brain
     // holds before it ever learns the deployed id.
     const state = trusted

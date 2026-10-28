@@ -14,6 +14,8 @@ import type { NS } from "../ns.ts";
 const POLL_MS = 50;
 /** The end of the caller's time kept for the way back to the Terminal: a few renders. */
 const RETURN_RESERVE_MS = 300;
+/** The longest a closed dialog stays in the page while it fades out: MUI's `Fade`, 195 ms, and a render. */
+const DIALOG_FADE_MS = 400;
 /** Any modal open: the game's alerts and prompts (`ui/React/Modal.tsx`, MUI's `Modal`). */
 const OPEN_DIALOG_XPATH = "//div[contains(concat(' ', @class, ' '), ' MuiModal-root ')]";
 
@@ -89,7 +91,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
 
     /**
      * Clicks the element, `what`, if it's in the page now: for a step the game may skip, such as a confirmation the
-     * player's Options turn off. Null if it wasn't there or was clicked; a problem if it couldn't be clicked.
+     * player's Options turn off. `problem` is null unless it was there and couldn't be clicked.
      */
     async clickIfThere(xpath: string, what: string): Promise<{ clicked: boolean; problem: string | null }> {
       const element = findElement(xpath);
@@ -104,9 +106,18 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     /** Whether the steps' time is up (the way back to the Terminal has its own). */
     stepsTimeUp: () => timeLeftMs(stepsEndMs) <= 0,
 
-    /** Whether a dialog is open: the owner's to read and close, so nothing is done over it. */
-    dialogOpen(): boolean {
-      return findElement(OPEN_DIALOG_XPATH) !== null;
+    /**
+     * Whether a dialog is open, and stays open: the owner's to read and close, so nothing is done over it. One that's
+     * just been closed stays in the page while it fades out (`ui/React/Modal.tsx`, `closeAfterTransition`), so it's
+     * given that long to go.
+     */
+    async dialogStaysOpen(): Promise<boolean> {
+      const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, stepsEndMs);
+      while (findElement(OPEN_DIALOG_XPATH) !== null) {
+        if (timeLeftMs(fadeEndsMs) <= 0) return true;
+        await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));
+      }
+      return false;
     },
 
     openSidebarPage: (pageName: string) => openSidebarPage(pageName, stepsEndMs),

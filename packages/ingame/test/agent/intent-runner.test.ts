@@ -102,7 +102,7 @@ test("done: never run again while it stays, and a problem on the way is still lo
   expect(runner.outcomes()).toEqual([{ id: AEVUM.id, done: true, tries: 1, problem: backProblem }]);
 });
 
-test("a worker that doesn't run is tried again next round, logged on a change, and not counted as a try", async () => {
+test("a worker that doesn't run is tried again next round, logged on a change, and counted as a try", async () => {
   const { runner, lines, runWorker, round } = runnerWith(() => "no report");
   runner.desire([AEVUM]);
   await round();
@@ -110,7 +110,7 @@ test("a worker that doesn't run is tried again next round, logged on a change, a
   expect(runWorker).toHaveBeenCalledTimes(2);
   expect(lines).toHaveLength(1);
   expect(lines[0]).toMatch(/^agent: travel to Aevum: .*; trying again next round$/);
-  expect(runner.outcomes()).toMatchObject([{ id: AEVUM.id, done: false, tries: 0 }]);
+  expect(runner.outcomes()).toMatchObject([{ id: AEVUM.id, done: false, tries: 2 }]);
 });
 
 test("in order, each in turn: one that takes the round leaves the next for the round after", async () => {

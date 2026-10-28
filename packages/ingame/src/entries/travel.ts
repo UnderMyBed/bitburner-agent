@@ -10,7 +10,7 @@
 //   $200k: without it, the game does nothing.
 // - Once it has moved the page, it goes back to the Terminal, however it ends.
 // RAM: `getPlayer` 0.5 (ram-budget.json); the page costs nothing.
-import type { EffectorReport } from "@bitburner-agent/core";
+import { type EffectorReport, TRAVEL_COST } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { type GamePage, openGamePage } from "../page/game-page.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
@@ -34,7 +34,7 @@ async function travelTo(ns: NS, gamePage: GamePage, city: string): Promise<strin
     if (confirmation.problem !== null) return confirmation.problem;
     if (!confirmation.clicked) await gamePage.waitARender();
   }
-  if (!inCity()) return `not in ${city} after travelling (is the $200k ticket there?)`;
+  if (!inCity()) return `not in ${city} after travelling (is the $${TRAVEL_COST / 1000}k ticket there?)`;
   // The alert saying so, unless Options turn it off: it opens as the travel ends, so give it a render.
   const alertCloseXpath = `//div[button and contains(., 'You are now in ${city}!')]/button`;
   await gamePage.waitARender();
@@ -52,7 +52,7 @@ export async function main(ns: NS): Promise<void> {
     const gamePage = openGamePage(ns, deadlineMs);
     if (gamePage === null) {
       report.problem = "no game page to travel through";
-    } else if (gamePage.dialogOpen()) {
+    } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog is open: it's the owner's to close";
     } else {
       const problem = await travelTo(ns, gamePage, city);

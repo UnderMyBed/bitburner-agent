@@ -13,8 +13,8 @@ export type AlertName = "agentSilent" | "versionDrift" | "deployFailed" | "super
 export interface Alert {
   name: AlertName;
   /**
-   * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for the others, the
-   * event or give-up that raised it.
+   * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck`, the
+   * newest fast snapshot that shows it stuck; for the others, the event or give-up that raised it.
    */
   sinceMs: number;
   detail: string;

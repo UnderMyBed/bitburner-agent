@@ -9,7 +9,6 @@
 import { isUpgradableHomeRam } from "./home-ram.ts";
 import { CITIES, TECH_VENDORS } from "./locations.ts";
 import { PORT_OPENER_PROGRAMS } from "./programs.ts";
-import type { MediumSnapshotData } from "./snapshots.ts";
 
 /** Each action and its arguments. */
 export type IntentRequest =
@@ -21,8 +20,6 @@ export type IntentRequest =
 /** An intent: an action, its arguments, and the id made from them (`intentId`). */
 export type Intent = IntentRequest & { id: string };
 export type ActionName = IntentRequest["action"];
-
-export const ACTION_NAMES: ActionName[] = ["buyTor", "buyProgram", "upgradeHomeRam", "travel"];
 
 /** The most intents a desired state carries. */
 export const MAX_INTENTS = 100;
@@ -40,7 +37,7 @@ export interface IntentOutcome {
   id: string;
   /** Its worker reported it done. */
   done: boolean;
-  /** Its worker's runs that reported, done or not. */
+  /** Its worker's runs, done or not, reported or not. */
   tries: number;
   /** The last problem: the worker's, or why it didn't run. Null for none. */
   problem: string | null;
@@ -90,30 +87,16 @@ export function parseIntentRequest(value: unknown): Parsed<Intent> {
   const { action, args } = value as JsonObject;
   if (typeof args !== "object" || args === null) return { ok: false, reason: "an intent without args" };
   const parsed = parseArgs(action, args as JsonObject);
-  if (parsed === null) return { ok: false, reason: `an intent of an unknown action (${String(action).slice(0, 64)})` };
+  if (parsed === null) {
+    // The action comes from outside (the dashboard, the store): quoted, never converted, and cut short.
+    return {
+      ok: false,
+      reason: `an intent of an unknown action (${(JSON.stringify(action) ?? typeof action).slice(0, 64)})`,
+    };
+  }
   if (!parsed.ok) return parsed;
   return {
     ok: true,
     message: { ...parsed.message, id: intentId(parsed.message.action, parsed.message.args) } as Intent,
   };
-}
-
-/**
- * Whether the medium snapshot shows `intent` done. Snapshot data comes from the game, so nothing in it is taken on
- * trust: what can't be read is never done.
- */
-export function intentDone(intent: Intent, mediumData: MediumSnapshotData): boolean {
-  switch (intent.action) {
-    case "buyTor":
-      return mediumData.hasTorRouter === true;
-    case "buyProgram":
-      return Array.isArray(mediumData.programs) && mediumData.programs.includes(intent.args.program);
-    case "upgradeHomeRam": {
-      const servers = Array.isArray(mediumData.servers) ? mediumData.servers : [];
-      const homeRam = servers.find((server) => server?.hostname === "home")?.maxRam;
-      return typeof homeRam === "number" && homeRam > intent.args.fromRam;
-    }
-    case "travel":
-      return mediumData.player?.city === intent.args.city;
-  }
 }
