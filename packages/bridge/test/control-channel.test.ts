@@ -217,6 +217,53 @@ describe("snapshots", () => {
     ]);
   });
 
+  test("after a brain restart, a session's numbering carries on from what the store has (#119)", () => {
+    const asked: string[] = [];
+    channel = new ControlChannel({
+      token: TOKEN,
+      clock,
+      storedSequenceNumbers: (agentSessionId) => {
+        asked.push(agentSessionId);
+        return agentSessionId === "session-1" ? { fast: 7, slow: 2 } : {};
+      },
+    });
+    channel.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    // 7 is stored already: a duplicate. 8 follows it, so nothing was missed; slow 4 follows 2, so 3 was.
+    for (const sequenceNumber of [7, 8]) connection.receive(snapshot(sequenceNumber));
+    connection.receive(snapshot(4, "slow"));
+    connection.receive(snapshot(1, "medium"));
+    expect(received()).toEqual([
+      ["fast", 8, 0],
+      ["slow", 4, 1],
+      ["medium", 1, 0],
+    ]);
+    // Asked once, when the session is new to this channel: a reconnect within its run carries on from memory.
+    connectAgent().receive(snapshot(9));
+    expect(received().at(-1)).toEqual(["fast", 9, 0]);
+    connectAgent(hello({ agentSessionId: "session-2" })).receive(snapshot(1, "fast", "session-2"));
+    expect(received().at(-1)).toEqual(["fast", 1, 0]);
+    expect(asked).toEqual(["session-1", "session-2"]);
+  });
+
+  test("a store that can't say counts from scratch, and its error goes where a listener's would", () => {
+    const errors: unknown[] = [];
+    channel = new ControlChannel({
+      token: TOKEN,
+      clock,
+      onListenerError: (error) => errors.push(error),
+      storedSequenceNumbers: () => {
+        throw new Error("the store is closed");
+      },
+    });
+    channel.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    expect(connection.sentMessages()).toEqual([{ protocolVersion: 1, type: "welcome" }]);
+    connection.receive(snapshot(3));
+    expect(received()).toEqual([["fast", 3, 2]]);
+    expect(errors).toEqual([new Error("the store is closed")]);
+  });
+
   test("every snapshot is stamped with the channel's clock", () => {
     const connection = connectAgent();
     clock.advance(2_000);

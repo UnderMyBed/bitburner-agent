@@ -8,8 +8,8 @@ export default defineConfig({
     // Paths below are the repository root's, wherever this is run from.
     root: REPOSITORY_ROOT,
     include: ["packages/e2/test/**/*.e2.test.ts"],
-    // The simulator makes the saves the tests load.
-    globalSetup: ["packages/sim/test/global-setup.ts"],
+    // The simulator's (it makes the saves the tests load), and the run's count of retried loads (#120).
+    globalSetup: ["packages/e2/test/global-setup.ts"],
     fileParallelism: false,
     maxWorkers: 1,
     testTimeout: 300_000,

@@ -4,7 +4,7 @@ import path from "node:path";
 import { type Clock, type Connection, ControlChannel, EventListeners } from "@bitburner-agent/bridge";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, expect, test } from "vitest";
-import { recordChannelEvents, recordEvents } from "../src/record-channel-events.ts";
+import { brainChannel, recordChannelEvents, recordEvents } from "../src/record-channel-events.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const TOKEN = "a".repeat(64);
@@ -100,6 +100,49 @@ test("the game's dialogs the Agent handled (#143) are stored as gameDialog event
     { kind: "alert", text: "Offline for 5 minutes." },
     { kind: "factionInvitation", text: "You received a faction invitation." },
     { kind: "alert", text: "x".repeat(1_000) },
+  ]);
+  store.close();
+});
+
+test("after a brain restart, the same session's next snapshots don't count stored ones as missed (#119)", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const hello = encodeControlMessage({
+    protocolVersion: CONTROL_PROTOCOL_VERSION,
+    type: "hello",
+    token: TOKEN,
+    deploymentId: "deployment-a",
+    agentSessionId: "session-1",
+    game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+  });
+  const snapshot = (sequenceNumber: number) =>
+    encodeControlMessage({
+      protocolVersion: CONTROL_PROTOCOL_VERSION,
+      type: "snapshot",
+      agentSessionId: "session-1",
+      tier: "fast",
+      sequenceNumber,
+      gameTimeMs: sequenceNumber,
+      data: null,
+    });
+  /** A brain's channel, as main.ts makes it, with the Agent connected and sending `sequenceNumbers`. */
+  const brainRun = (sequenceNumbers: number[]) => {
+    const channel = brainChannel({ token: TOKEN, clock: fixedClock, store, environment: "E2" });
+    recordChannelEvents(channel, store, { environment: "E2", brainRelease: "v0.2.0" });
+    const page = connectionFromTest();
+    channel.accept(page.connection);
+    page.receive(hello);
+    for (const sequenceNumber of sequenceNumbers) page.receive(snapshot(sequenceNumber));
+  };
+  brainRun([1, 2, 3]);
+  // The brain restarts; the same Agent reconnects, sending one it may have sent already, then the next.
+  brainRun([3, 4]);
+  expect(store.snapshots({ environment: "E2" }).map((row) => [row.sequenceNumber, row.missedBefore])).toEqual([
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
   ]);
   store.close();
 });

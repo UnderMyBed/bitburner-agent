@@ -1,4 +1,4 @@
-import type { ControlChannel } from "@bitburner-agent/bridge";
+import { type Clock, ControlChannel } from "@bitburner-agent/bridge";
 import { type FastSnapshotData, type HandledDialog, MAX_DIALOG_TEXT_LENGTH } from "@bitburner-agent/core";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
@@ -15,6 +15,28 @@ function handledDialogsIn(data: unknown): HandledDialog[] {
         (dialog?.kind === "alert" || dialog?.kind === "factionInvitation") && typeof dialog.text === "string",
     )
     .map(({ kind, text }) => ({ kind, text: text.slice(0, MAX_DIALOG_TEXT_LENGTH) }));
+}
+
+/**
+ * The brain's control channel, its numbering seeded from `store` (#119): after a brain restart, the same Agent
+ * session's next snapshots carry on from those stored, so none stored counts as missed, and none is stored twice.
+ */
+export function brainChannel({
+  token,
+  clock,
+  store,
+  environment,
+}: {
+  token: string;
+  clock: Clock;
+  store: TelemetryStore;
+  environment: Environment;
+}): ControlChannel {
+  return new ControlChannel({
+    token,
+    clock,
+    storedSequenceNumbers: (agentSessionId) => store.lastSequenceNumbers({ environment, agentSessionId }),
+  });
 }
 
 /**

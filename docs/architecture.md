@@ -357,7 +357,19 @@ interface Effectors {
 
 **Installing augmentations (#164; [`packages/ingame`](../packages/ingame/README.md#installing-augmentations)):** the `installAugmentations` intent, past the brain's gate (§5.3). Every script dies with the install, the Agent too; the next Agent, started by `boot.js`, connects in a new session, and the brain forgets the last one's snapshots, so the reset game's hack loop target is chosen afresh. Through Singularity, the game starts `boot.js` itself; in the simulator, its `sim` effector does the same, 500 ms after the reset. The simulator's chaos tests cover the Agent's side: the brain down mid-install, a reload just after it, and the reconnect to the reset game ([`packages/brain`](../packages/brain/README.md#the-install-suite)). Through the page (`ui`, before SF4), the page-level timer, terminal injection and save-and-reload fallback are slice 10b, with E2's repeated cycles answering Q5; until then the `ui` worker installs nothing, and says so.
 
-**Fresh save:** a new game starts the interactive tutorial. On v3.0.1, while it runs, finished scripts are never cleaned up and never free their RAM (fixed on `dev`; S1 finding). The first thing the Agent does on a fresh save is end the tutorial, through the `ui` backend's equivalent of the Skip button.
+**Fresh save:** a new game starts the interactive tutorial. On v3.0.1, while it runs, finished scripts are never cleaned up and never free their RAM (fixed on `dev`; S1 finding). **On the owner's and the brain's normal paths the Agent never runs alongside it, so it doesn't end it; the owner's "Exit Tutorial" click does** (#168):
+- while the tutorial runs, the terminal runs only the tutorial's own commands, so `run agent/boot.js` is refused (`Terminal/Terminal.ts:713-856`);
+- autoexec runs only when a save loads (`NetscriptWorker.ts:252-256`), and a load never brings the tutorial back: it isn't in the save;
+- Options' "Reset tutorial" kills every script first, the Agent included. The supervisor's relaunch after 5 silent minutes (§10.2) loads the save, without the tutorial.
+- `ls`'s clickable file links open a file in the script editor, but folders aren't clickable (`Terminal/commands/ls.tsx:164-165`, `:226-245`), so `agent/boot.js` can't be reached that way during the tutorial's `ls` step.
+
+**The exceptions** are deliberate owner actions after "Reset tutorial", and a hand-edited tutorial script. With the tutorial running again, the owner can restart the killed Agent:
+- from its log's "Run" button: Active Scripts' Recently Killed opens the log (`ui/ActiveScripts/RecentScriptAccordion.tsx:51`), or a tail window was left open. Its `run` calls `startWorkerScript` with no tutorial check (`ui/React/LogBoxManager.tsx:228-250`). The Agent is listed there because only autoexec's run is `temporary` (`NetscriptWorker.ts:210`);
+- from the script editor's Run on a file still open (`ScriptEditor/ui/ScriptEditorRoot.tsx:224-252`): the editor's open files survive the reset.
+
+The tutorial's own `n00dles.js` can also carry extra code: the editor only checks that it `includes` the tutorial's (`ScriptEditorRoot.tsx:203-205`). The Agent has no page check for any of these (owner's decision, #168).
+
+So on a fresh save the owner clicks "Exit Tutorial" before the first `run agent/boot.js` ([setup](setup.md)). A save and a reload end it too. The E2 skeleton's "a fresh save's tutorial" test pins both. NS can't see the tutorial; only the page shows it. If a later version's terminal runs `agent/boot.js` during the tutorial, or the save keeps the tutorial, that test fails, and the Agent gets the step then.
 
 ---
 
@@ -509,12 +521,12 @@ No scheduled (nightly) runs. The heavy suites are run deliberately, not on a tim
 1. One time, following [docs/setup.md](setup.md) (#95):
    - install Steam and Bitburner;
    - in a clone of the repo, `npm run bootstrap`, then `npm run brain`. The brain launches the game itself, so pause supervision while setting up;
-   - on a new save, exit the tutorial (until the agent does it itself, §5.7);
+   - on a new save, exit the tutorial: the terminal won't run `agent/boot.js` while it runs, so the agent can't end it itself (§5.7);
    - in the game's options, set the Remote API's Hostname to `127.0.0.1` (the brain listens there only, not on `localhost`) and port 12525, with a reconnection delay above 0, and click Connect (changing the settings alone doesn't connect);
    - set autoexec to `agent/boot.js`, and save the game so the settings are kept;
    - once the brain has deployed, run `agent/boot.js` once in the game's terminal: autoexec fires at load, before the first deploy exists;
    - resume supervision.
-2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase. Its first action on a fresh save is to skip the tutorial (§5.7).
+2. None during play. The agent plays BN1.1 itself through the `ui` backend; there is no manual phase.
 3. Anything the game gates behind a trusted click. None is known on the critical path so far; flag any we find.
 4. Interruptions of the game (it closes, freezes, or Steam restarts it) are recovered automatically while the brain runs (§10.2). A human is needed if recovery gives up and raises an alert, and to start the brain again after a reboot: nothing is installed to do it (owner decision 30). A crash of the brain itself is restarted by `npm run brain` (D1).
 
