@@ -353,7 +353,7 @@ The brain keeps the game itself running, for unattended play ([#94](https://gith
 
 ## The gap report
 
-The evidence for M2's exit criterion, "live snapshots on Steam without gaps" (architecture §13), and for each release's live run ([releasing](../../docs/releasing.md) step 2):
+The evidence for M2's exit criterion, "live snapshots on Steam without gaps" (architecture §13). Since M3, a release's live run is read back with [the run report](#the-run-report) instead ([releasing](../../docs/releasing.md) step 2), whose health section has the same gap check:
 
 ```
 npm run gaps -- --since 2026-10-27T00:00:00Z --until 2026-10-28T00:00:00Z

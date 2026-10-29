@@ -482,7 +482,7 @@ Proven by spike S1 ([report](spikes/s1-headless-engine.md), ADR 0007).
 | Scenario (simulator) | Seeded runs: fresh BN1.1→destroy; entry into each BitNode with representative Source-File sets; odd mid-run states | On demand when touching brain/activities/actions; before every release. Includes **fast-model fidelity** (divergence from the engine over a horizon). |
 | Chaos (simulator) | Kill random scripts, drop the brain, reload mid-batch, offline gaps, duplicated messages | Before every release |
 | End-to-end (E2 source build) | UI driver actions, bootstrap/restart paths (Q5), Agent RAM in a real 8 GB start (Q1), bridge connect/reconnect, RFA deploy, real save/reload | On demand when touching `ingame/` or `bridge/`; before every release |
-| Smoke (E0 Steam) | Short checklist confirming E2 results hold on the shipped binary | Before relying on a new UI path in the campaign |
+| Live run (E0 Steam) | A run on Steam with `npm run brain`, read back with the run report (`npm run report`), which must PASS; no manual checklist (owner decision 45) | Before every release |
 
 No scheduled (nightly) runs. The heavy suites are run deliberately, not on a timer. Mutation testing runs periodically on core logic (ADR 0004).
 
