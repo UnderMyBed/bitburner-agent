@@ -10,7 +10,7 @@ export const INTENT_STUCK_AFTER_TRIES = 5;
 /**
  * Money not risen for this long, with the hack loop on against a target, is `incomeStalled` (#184): 10 minutes. The
  * loop earns every few seconds once it hacks, and a target being prepared never holds every host when there are two or
- * more.
+ * more. The run report (#185) uses the same threshold for its income stalls.
  */
 export const INCOME_STALLED_AFTER_MS = 10 * 60_000;
 

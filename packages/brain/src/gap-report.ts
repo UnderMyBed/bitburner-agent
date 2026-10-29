@@ -1,7 +1,8 @@
 /**
  * Gaps in the fast snapshots (the heartbeat, every 2 s): the evidence for M2's "live snapshots on Steam for 24 h
  * without gaps" (architecture §13). A gap is an interval longer than the threshold between consecutive snapshots, or
- * between the window's edges and the first or last one.
+ * between the window's edges and the first or last one. Also the lines `npm run gaps` and `npm run report` both print:
+ * times, durations and the page heap.
  */
 export interface GapWindow {
   sinceMs: number;
@@ -50,4 +51,27 @@ export function findGaps(receivedAtMs: number[], { sinceMs, untilMs, thresholdMs
     lastMs: inWindow.at(-1) ?? null,
     longestIntervalMs,
   };
+}
+
+/** A time as ISO, or "none" for no time. */
+export const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
+/** A duration in seconds, to a tenth: "10.0 s". */
+export const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
+const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+/**
+ * The page heap over a window, for a person to read (`npm run gaps`, `npm run report`): growth would show here first
+ * (architecture R10).
+ */
+export function describePageHeap(pageHeapsBytes: number[]): string {
+  const first = pageHeapsBytes[0];
+  const last = pageHeapsBytes.at(-1);
+  if (first === undefined || last === undefined) return "page heap: not reported";
+  const lowest = pageHeapsBytes.reduce((low, bytes) => Math.min(low, bytes));
+  const highest = pageHeapsBytes.reduce((high, bytes) => Math.max(high, bytes));
+  return (
+    `page heap: first ${formatMegabytes(first)}, last ${formatMegabytes(last)}, lowest ${formatMegabytes(lowest)}, ` +
+    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshot${pageHeapsBytes.length === 1 ? "" : "s"} ` +
+    "reported it)"
+  );
 }
