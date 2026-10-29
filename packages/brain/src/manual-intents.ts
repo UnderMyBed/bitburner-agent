@@ -39,6 +39,8 @@ export interface ResetSentNote {
   id: string;
   field: "lastAugReset" | "lastNodeReset";
   resetAt: number;
+  /** When it went out, by the brain's clock (#210): an older brain's note has none. */
+  sentAtMs?: number;
 }
 
 /**
@@ -61,7 +63,15 @@ export function readResetSentNote(store: TelemetryStore): ResetSentNote | null {
   ) {
     throw new Error(`the store's ${RESET_SENT_SETTING} isn't a note the brain wrote`);
   }
-  return { id: note.id, field: note.field, resetAt: note.resetAt };
+  if (note.sentAtMs !== undefined && typeof note.sentAtMs !== "number") {
+    throw new Error(`the store's ${RESET_SENT_SETTING} isn't a note the brain wrote`);
+  }
+  return {
+    id: note.id,
+    field: note.field,
+    resetAt: note.resetAt,
+    ...(note.sentAtMs === undefined ? {} : { sentAtMs: note.sentAtMs }),
+  };
 }
 
 export function writeResetSentNote(store: TelemetryStore, note: ResetSentNote | null): void {

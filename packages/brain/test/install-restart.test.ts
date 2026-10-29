@@ -30,6 +30,8 @@ async function withAugmentationQueued({ singularity = false, queued = true } = {
     },
   });
   fresh.controller().setProgramsEnabled(false);
+  // Buying and installing augmentations (#210) off: the queue here is the test's own.
+  fresh.controller().setAugmentationsEnabled(false);
   fresh.controller().setHomeRamEnabled(false);
   // The connected Agent's first slow snapshot, so the brain knows the game's last reset before the install.
   await fresh.game.runUntil(() => fresh.latest<SlowSnapshotData>("slow") !== null, 10_000);

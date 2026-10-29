@@ -2,6 +2,7 @@
 // there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
+import type { InstallAwaitingRestart, NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
@@ -24,6 +25,12 @@ export const INCOME_STALLED_AFTER_MS = 10 * 60_000;
  * real path. An overdue one may have no intent (the rule broken), so `intentStuck` can't say.
  */
 export const BACKDOOR_OVERDUE_AFTER_MS = 5 * 60_000;
+/**
+ * An install out when the Agent disconnected, with no slow snapshot showing the reset this long after, is
+ * `installNotRestarted` (#210), and a run report failure: 5 minutes. The game starts boot.js 500 ms after the reset,
+ * or the page timer types it (#164, #167), and the next Agent's first slow snapshot comes in its first round: seconds.
+ */
+export const INSTALL_NOT_RESTARTED_AFTER_MS = 5 * 60_000;
 
 /** How much of a blocking dialog's text the alert quotes. */
 const BLOCKING_DIALOG_QUOTE_LENGTH = 200;
@@ -41,7 +48,9 @@ export type AlertName =
   | "factionStateUnread"
   | "backdoorOverdue"
   | "factionWorkStalled"
-  | "batcherNotRunning";
+  | "batcherNotRunning"
+  | "augmentationNotQueued"
+  | "installNotRestarted";
 
 export interface Alert {
   name: AlertName;
@@ -104,6 +113,10 @@ export interface AlertFacts {
    * since the first of them, and the newest's reason; null when the newest says it runs, or isn't wanted.
    */
   batcherNotRunning?: { sinceMs: number; inARow: number; problem: string } | null;
+  /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
+  augmentationsNotQueued: NotQueued[];
+  /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
+  installAwaitingRestart: InstallAwaitingRestart | null;
 }
 
 /**
@@ -118,7 +131,8 @@ export interface IncomeFacts {
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
- * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning.
+ * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then one
+ * augmentationNotQueued per purchase not queued, then installNotRestarted.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -208,6 +222,52 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail:
         `the batcher isn't running, in the last ${notRunning.inARow} fast snapshots, so nothing hacks the servers the ` +
         `hack loop left to it: ${notRunning.problem}`,
+    });
+  }
+  alerts.push(...augmentationAlerts(facts));
+  return alerts;
+}
+
+/**
+ * The augmentations' alerts (#210): `augmentationNotQueued`, one per purchase the Agent reported done that two faction
+ * state reads since didn't show queued; and `installNotRestarted`, an install out when the Agent disconnected with no
+ * slow snapshot showing the reset `INSTALL_NOT_RESTARTED_AFTER_MS` later, or at once for an install reported done
+ * that the next slow snapshot didn't show reset (#213 re-review).
+ */
+export function augmentationAlerts({
+  nowMs,
+  augmentationsNotQueued,
+  installAwaitingRestart,
+}: Pick<AlertFacts, "nowMs" | "augmentationsNotQueued" | "installAwaitingRestart">): Alert[] {
+  const alerts: Alert[] = augmentationsNotQueued.map((notQueued) => ({
+    name: "augmentationNotQueued",
+    sinceMs: notQueued.boughtAtMs,
+    detail:
+      (notQueued.augmentation === "NeuroFlux Governor"
+        ? `${notQueued.augmentation} (level ${notQueued.level}) `
+        : `${notQueued.augmentation} `) +
+      "was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
+  }));
+  if (installAwaitingRestart?.doneNotReset === true) {
+    alerts.push({
+      name: "installNotRestarted",
+      sinceMs: installAwaitingRestart.sinceMs,
+      detail:
+        `${installAwaitingRestart.id}: install reported done but the game didn't reset: the faction state's queue ` +
+        "isn't the game's. The install cycle is called off, and no other is chosen until a reset (or the brain " +
+        "restarts): check the Augmentations page",
+    });
+  } else if (
+    installAwaitingRestart !== null &&
+    nowMs - installAwaitingRestart.sinceMs >= INSTALL_NOT_RESTARTED_AFTER_MS
+  ) {
+    const minutes = Math.floor((nowMs - installAwaitingRestart.sinceMs) / 60_000);
+    alerts.push({
+      name: "installNotRestarted",
+      sinceMs: installAwaitingRestart.sinceMs,
+      detail:
+        `${installAwaitingRestart.id} went out and the Agent disconnected ${minutes} min ago, and no slow snapshot ` +
+        "has shown the reset: is the game at the Terminal, and did boot.js run?",
     });
   }
   return alerts;

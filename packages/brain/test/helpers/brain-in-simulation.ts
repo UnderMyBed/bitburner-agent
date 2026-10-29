@@ -144,7 +144,7 @@ export function startBrainInSimulation(
   } as const;
   if (data) recordEvents(deployer, data.store, deployerReleaseContext);
   if (data && saveBackups) recordEvents(saveBackups, data.store, deployerReleaseContext);
-  // The brain's faction work's events (#203), as main.ts records them.
+  // The rules' events (#203, #210), as main.ts records them.
   if (data && desiredStateController) recordEvents(desiredStateController, data.store, deployerReleaseContext);
   const openConnections: Connection[] = [];
   let stopped = false;

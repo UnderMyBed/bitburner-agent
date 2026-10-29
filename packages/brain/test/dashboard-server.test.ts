@@ -20,6 +20,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const homeRamCalls: boolean[] = [];
   const cloudServersCalls: boolean[] = [];
   const factionWorkCalls: boolean[] = [];
+  const augmentationsCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
   const workRequests: unknown[] = [];
@@ -34,6 +35,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setHomeRamEnabled: (enabled) => homeRamCalls.push(enabled),
     setCloudServersEnabled: (enabled) => cloudServersCalls.push(enabled),
     setFactionWorkEnabled: (enabled) => factionWorkCalls.push(enabled),
+    setAugmentationsEnabled: (enabled) => augmentationsCalls.push(enabled),
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
       intentRequests.push(request);
@@ -63,6 +65,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     homeRamCalls,
     cloudServersCalls,
     factionWorkCalls,
+    augmentationsCalls,
     intentRequests,
     cancelledIds,
     workRequests,
@@ -197,6 +200,7 @@ const SWITCHES = [
   ["home RAM (#138)", "/api/home-ram", "homeRamCalls"],
   ["cloud servers (#194)", "/api/cloud-servers", "cloudServersCalls"],
   ["the brain's faction work (#203)", "/api/faction-work", "factionWorkCalls"],
+  ["augmentations (#210)", "/api/augmentations", "augmentationsCalls"],
 ] as const;
 
 test.each(SWITCHES)("POST sets the switch for %s, from the dashboard's own page", async (_name, switchPath, own) => {
@@ -405,6 +409,7 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { method: "GET", path: "/api/hack-loop" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/programs" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/home-ram" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/augmentations" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/intents" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/intents/cancel" })).status).toBe(405);
 });

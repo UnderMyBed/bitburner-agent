@@ -2,10 +2,10 @@
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136), home's RAM (#138) or a cloud server (#194), the next backdoor for
 // the hacker factions (#195, ./backdoors.ts), the next faction to join and the brain's faction work (#203,
-// ./factions.ts), and the owner's manual queue and work. Irreversible intents wait for their guard and a save backup
-// first (#147). Each state carries how long the Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An
-// install of augmentations (#164) or a destroy of the BitNode (#175) holds back what's queued after it, and leaves the
-// queue once a slow snapshot shows the game reset.
+// ./factions.ts), the augmentations' purchases and install (#210, ./augmentations.ts), and the owner's manual queue and
+// work. Irreversible intents wait for their guard and a save backup first (#147). Each state carries how long the Agent
+// keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the
+// BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
@@ -24,6 +24,17 @@ import {
   type StaticSnapshotData,
   TOR_ROUTER,
 } from "@bitburner-agent/core";
+import {
+  AUGMENTATION_INSTALL_INTENT,
+  AUGMENTATION_INSTALL_SENT_EVENT_KIND,
+  type AugmentationEvent,
+  AugmentationRule,
+  type AugmentationsView,
+  type InstallAwaitingRestart,
+  type NotQueued,
+  readAugmentationsEnabled,
+  writeAugmentationsEnabled,
+} from "./augmentations.ts";
 import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
 import {
   BATCHER_ENABLED_SETTING,
@@ -85,9 +96,9 @@ export const SAFE_MODE_TTL_MS = 12 * 60 * 60_000;
 
 /**
  * The owner's manual queue's limit: the protocol's 100, less room for the purchase (a program, home RAM or a cloud
- * server, #194, one at a time), the backdoor (#195) and the join (#203).
+ * server, #194, one at a time), the backdoor (#195), the join (#203) and the augmentation purchase or install (#210).
  */
-export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 3;
+export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 4;
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -172,8 +183,11 @@ export interface CloudServersView {
 /** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
 export interface IntentView {
   id: string;
-  /** The owner's manual queue, the brain's purchase rules, its backdoors (#195), or its joins (#203). */
-  source: "manual" | "purchase" | "backdoor" | "join";
+  /**
+   * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), or its augmentations'
+   * purchases and install (#210).
+   */
+  source: "manual" | "purchase" | "backdoor" | "join" | "augmentation";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -200,10 +214,15 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - Then a cloud server (#194, ./cloud-servers.ts), only while neither of those is being bought, and with the hack loop
  *   on (they only run it). While the cheaper of the two waits for money, its price is held back from cloud servers if
  *   the hack loop's income would cover it within `CLOUD_SERVER_RESERVE_HORIZON_MS`.
- * - Intents go in order: the owner's manual queue first, as added, then the purchase, then the backdoor (#195), asked
- *   for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once the connected Agent reports
- *   it done: the game's state can change again (a travel there and back), so a snapshot can't say it was done. Never
- *   more than the protocol's 100: a queue stored under the old limit (99) leaves the rules' intents out, logged.
+ * - Intents go in order: the owner's manual queue first, as added, then the brain's install of augmentations (#210,
+ *   ./augmentations.ts) behind it, then the purchase, then the augmentation purchase (#210), then the backdoor (#195),
+ *   asked for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once
+ *   the connected Agent reports it done: the game's state can change again (a travel there and back), so a snapshot
+ *   can't say it was done. Never more than the protocol's 100: a queue stored under an older limit leaves the rules'
+ *   intents out, logged.
+ * - Augmentations (#210): once an install is chosen, the programs and cloud servers stand down (an install loses
+ *   them), and home's RAM is the augmentation rule's. Before that, cloud servers leave alone the augmentation rule's
+ *   reserve too: the set's money, for an install projected within A2's payback limit.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
  *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
  *   intents after it go on without it: a held join doesn't hold up a travel queued later.
@@ -277,13 +296,28 @@ export class DesiredStateController {
   readonly #factions: FactionRule;
   #join: Intent | null = null;
   #factionWork: { faction: string; workType: FactionWorkType } | null = null;
-  /** Who gets the rule's events (#203): the store, through main.ts. */
-  readonly #listeners = new Set<(event: FactionWorkEvent) => void>();
+  /** Who gets the rules' events (#203, #210): the store, through main.ts. */
+  readonly #listeners = new Set<(event: FactionWorkEvent | AugmentationEvent) => void>();
   /** When the connected Agent's latest medium and slow snapshots arrived, or null. */
   #mediumAtMs: number | null = null;
+  /** The game's time of the connected Agent's latest medium and fast snapshots (their `gameTimeMs`), or null (#213). */
+  #mediumGameTimeMs: number | null = null;
+  #fastGameTimeMs: number | null = null;
   #slowAtMs: number | null = null;
-  /** The latest channel event's time: the controller's clock, for the rule's events. Null before any. */
+  /** The game's time in the connected Agent's latest slow snapshot (its `gameTimeMs`), or null (#210). */
+  #slowGameTimeMs: number | null = null;
+  /** The latest channel event's time: the controller's clock, for the rules' events (#210). Null before any. */
   #lastEventAtMs: number | null = null;
+  /**
+   * Augmentations and the reset (#210): the rule, the purchase it asks for now, whether it asks for the install, and
+   * whether it's committed to one (the programs then stand down).
+   */
+  readonly #augmentations: AugmentationRule;
+  #augmentationIntent: Intent | null = null;
+  #augmentationInstall = false;
+  #augmentationsCommitted = false;
+  /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
+  #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
   /** The intents left out to keep to the protocol's 100, as last logged (#195 review): logged on a change. */
   #leftOut = "";
@@ -304,13 +338,13 @@ export class DesiredStateController {
     this.#store = store;
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
-    this.#factions = new FactionRule({
-      log,
-      emit: (event) => {
-        for (const listener of this.#listeners) listener(event);
-      },
-    });
+    this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
+    this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
+    // A brain restarted with an install out: the Agent went with it, as far as this brain knows, since it went out.
+    if (this.#resetSent?.field === "lastAugReset" && this.#resetSent.sentAtMs !== undefined) {
+      this.#installDisconnectedAtMs = this.#resetSent.sentAtMs;
+    }
     this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
       this.#lastEventAtMs = event.atMs;
@@ -318,16 +352,27 @@ export class DesiredStateController {
         this.#staticData = null;
         this.#mediumData = null;
         this.#mediumAtMs = null;
+        this.#mediumGameTimeMs = null;
+        this.#fastGameTimeMs = null;
         this.#slowData = null;
+        this.#slowGameTimeMs = null;
         this.#slowAtMs = null;
         this.#fastData = null;
-        // Counted on the last Agent's snapshots: every gate starts again, and the income is measured afresh.
+        // Counted on the last Agent's snapshots: every gate starts again, and the cloud servers' income is measured
+        // afresh (#194). The augmentations' income is the game's own count since the install: kept (#210).
         this.#gates.forget();
         this.#income.clear();
+        // An install out when the Agent goes: the reset should show within minutes (#210, `installNotRestarted`). An
+        // Agent back is no longer awaited: its slow snapshot shows the reset, or the gate sends the install again.
+        if (event.type === "agentDisconnected" && this.#resetSent?.field === "lastAugReset") {
+          this.#installDisconnectedAtMs ??= event.atMs;
+        }
+        if (event.type === "agentConnected") this.#installDisconnectedAtMs = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
-        // The intents' and the work's outcomes: for the views, and the manual intents done. Anything else changes
-        // nothing to send.
+        // The intents' and the work's outcomes: for the views, and the manual intents done, or the augmentation
+        // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
+        this.#fastGameTimeMs = event.snapshot.gameTimeMs;
         // A batcher sent but not running, logged when that changes (#211); the dashboard and the run report say more.
         const notRunning = batcherNotRunning(this.#fastData?.batcherDeploy);
         if (notRunning !== this.#batcherNotRunning) {
@@ -337,16 +382,19 @@ export class DesiredStateController {
           this.#batcherNotRunning = notRunning;
         }
         const problemNoted = this.#noteCloudServerProblem();
-        if (!this.#dropDoneManualIntents() && !problemNoted) return;
+        const dropped = this.#dropDoneManualIntents();
+        if (!dropped && !problemNoted && !this.#augmentations.askedDone(this.#doneIds())) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
         this.#income.add(event.atMs, this.#staticData, this.#mediumData);
         this.#mediumAtMs = event.atMs;
-        this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store), this.#staticData);
+        this.#mediumGameTimeMs = event.snapshot.gameTimeMs;
+        this.#gates.mediumSnapshot(this.#mediumData, this.#gatedQueue(), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
+        this.#slowGameTimeMs = event.snapshot.gameTimeMs;
         this.#slowAtMs = event.atMs;
         this.#dropResetIntentOnceReset();
       } else {
@@ -410,10 +458,49 @@ export class DesiredStateController {
     this.#update();
   }
 
-  /** Listens for the faction rule's events (#203), to store them; returns a function that stops it. */
-  subscribe(listener: (event: FactionWorkEvent) => void): () => void {
+  /** Buying and installing augmentations' switch (#210), likewise: off calls a cycle under way off. */
+  setAugmentationsEnabled(enabled: boolean): void {
+    writeAugmentationsEnabled(this.#store, enabled);
+    this.#update();
+  }
+
+  /** Listens for the rules' events (#203, #210), to store them; returns a function that stops it. */
+  subscribe(listener: (event: FactionWorkEvent | AugmentationEvent) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  /** What the dashboard shows of augmentations (#210). */
+  augmentationsView(): AugmentationsView {
+    return this.#augmentations.view();
+  }
+
+  /**
+   * The money held back for augmentations (#210): the set the money covers, or will within the cloud servers' reserve
+   * horizon of income, and all of it once an install is chosen. `#reserveForOtherPurchase` holds it back from cloud
+   * servers (#194) where it's more than the program's or home RAM's.
+   */
+  augmentationReserve(): number {
+    return this.#augmentations.reserve();
+  }
+
+  /** The purchases reported done that the faction state never showed queued (#210): `augmentationNotQueued`'s. */
+  augmentationsNotQueued(): NotQueued[] {
+    return this.#augmentations.notQueued();
+  }
+
+  /**
+   * The install out when the Agent disconnected (or, for a restarted brain, when it went out), and since when, until a
+   * slow snapshot shows the reset or the Agent connects again (#210): the `installNotRestarted` alert's. Or an install
+   * reported done with no reset in the next slow snapshot (`doneNotReset`, #213 re-review), until a reset. Null with
+   * neither.
+   */
+  installAwaitingRestart(): InstallAwaitingRestart | null {
+    const notReset = this.#augmentations.installNotReset();
+    if (notReset !== null) return { id: INSTALL_INTENT.id, sinceMs: notReset.atMs, doneNotReset: true };
+    const sent = this.#resetSent;
+    if (sent === null || sent.field !== "lastAugReset" || this.#installDisconnectedAtMs === null) return null;
+    return { id: sent.id, sinceMs: this.#installDisconnectedAtMs };
   }
 
   /** Adds `request` (`{ action, args }`) to the manual queue, kept in the store, and sends it at once. */
@@ -421,7 +508,8 @@ export class DesiredStateController {
     const parsed = parseIntentRequest(request);
     if (!parsed.ok) return parsed;
     const queue = readManualIntents(this.#store);
-    // Room for the purchase and the backdoor: a desired state over the protocol's limit would be refused by the Agent.
+    // Room for the purchase, the backdoor and the augmentation's (#210): a desired state over the protocol's limit
+    // would be refused by the Agent.
     if (!queue.some((each) => each.id === parsed.message.id)) {
       if (queue.length >= MANUAL_QUEUE_LIMIT) {
         return { ok: false, reason: `the manual queue is full: ${MANUAL_QUEUE_LIMIT} intents at most` };
@@ -489,19 +577,49 @@ export class DesiredStateController {
     const manual = readManualIntents(this.#store);
     const fromRule = (intent: Intent | null) =>
       this.#desired !== null && intent && !manual.some((each) => each.id === intent.id) ? [intent] : [];
+    const install = this.#gatedQueue().slice(manual.length);
     return [
-      ...manual.map(({ id }) => ({ id, source: "manual" as const })),
-      ...fromRule(this.#purchase).map(({ id }) => ({ id, source: "purchase" as const })),
-      ...fromRule(this.#backdoor).map(({ id }) => ({ id, source: "backdoor" as const })),
-      ...fromRule(this.#join).map(({ id }) => ({ id, source: "join" as const })),
-    ].map((view, index) => ({
-      ...view,
-      outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null,
+      ...manual.map((intent) => ({ intent, source: "manual" as const })),
+      ...install.map((intent) => ({ intent, source: "augmentation" as const })),
+      ...fromRule(this.#purchase).map((intent) => ({ intent, source: "purchase" as const })),
+      ...fromRule(this.#augmentationIntent).map((intent) => ({ intent, source: "augmentation" as const })),
+      ...fromRule(this.#backdoor).map((intent) => ({ intent, source: "backdoor" as const })),
+      ...fromRule(this.#join).map((intent) => ({ intent, source: "join" as const })),
+    ].map(({ intent, source }, index) => ({
+      id: intent.id,
+      source,
+      outcome: outcomes.find((outcome) => outcome.id === intent.id) ?? null,
       waitingFor:
-        view.source === "manual" && afterReset(manual, index)
+        source === "manual" && afterReset(manual, index)
           ? waitingForReset(manual.find(resetsTheGame) as Intent)
-          : (this.#gates.waitingFor(view.id) ?? this.#resetTimeAwaited(manual[index])),
+          : (this.#gates.waitingFor(intent.id) ?? this.#resetTimeAwaited(intent)),
     }));
+  }
+
+  /**
+   * The intents the gates judge, in order: the owner's queue, then the brain's install (#210) unless the owner queued
+   * one, so it waits behind the whole queue (an install's guard: nothing before it undone).
+   */
+  #gatedQueue(): Intent[] {
+    const manual = readManualIntents(this.#store);
+    // Once sent, it stays while the cycle is committed, the snapshots gone with the Agent it killed (or a restarted
+    // brain's not yet in), so its reset note does too, until a slow snapshot shows the reset.
+    const sent = this.#augmentationsCommitted && this.#resetSent?.id === INSTALL_INTENT.id;
+    if (!(this.#augmentationInstall || sent) || manual.some((each) => each.id === INSTALL_INTENT.id)) return manual;
+    return [...manual, INSTALL_INTENT];
+  }
+
+  /** The done intents in the connected Agent's latest fast snapshot. */
+  #doneIds(): Set<string> {
+    return new Set(
+      this.#reportedOutcomes()
+        .filter((outcome) => outcome.done)
+        .map((outcome) => outcome.id),
+    );
+  }
+
+  #emit(event: FactionWorkEvent | AugmentationEvent): void {
+    for (const listener of this.#listeners) listener(event);
   }
 
   /**
@@ -649,6 +767,11 @@ export class DesiredStateController {
     this.#cloudServersPlan = plan;
     this.#waitingFor.cloudServers = plan.waitingFor;
     let next = enabled ? plan.next : null;
+    // An install chosen (#210): cloud servers are lost at it, so none is bought or upgraded until the reset.
+    if (enabled && this.#augmentationsCommitted) {
+      this.#waitingFor.cloudServers = "the install of augmentations chosen (cloud servers are lost at it)";
+      next = null;
+    }
     if (next !== null && !readHackLoopEnabled(this.#store)) {
       this.#waitingFor.cloudServers = "the hack loop, switched off: cloud servers only run it";
       next = null;
@@ -672,7 +795,8 @@ export class DesiredStateController {
   /**
    * The money held back from cloud servers (#194): the price of the program or home RAM upgrade bought next (the
    * cheaper, among those switched on) while it waits for money, if the hack loop's income (`perSecond`) would cover
-   * what's still short of it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none.
+   * what's still short of it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none. Or the augmentations' (#210), the
+   * money of the set the money will cover within that horizon, where that's more.
    */
   #reserveForOtherPurchase(perSecond: number): MoneyReserve | null {
     const waiting: MoneyReserve[] = [];
@@ -686,10 +810,14 @@ export class DesiredStateController {
       waiting.push({ amount: homeRam.price, forWhat: `home RAM to ${homeRam.ram * 2} GB` });
     }
     const cheaper = waiting.sort((a, b) => a.amount - b.amount)[0];
-    if (cheaper === undefined) return null;
     const money = this.#mediumData?.player?.money;
-    const shortfall = cheaper.amount - (typeof money === "number" ? money : 0);
-    return shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
+    const shortfall = (cheaper?.amount ?? 0) - (typeof money === "number" ? money : 0);
+    const other =
+      cheaper !== undefined && shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
+    const augmentations = this.#augmentations.reserve();
+    return augmentations > (other?.amount ?? 0)
+      ? { amount: augmentations, forWhat: "the augmentations to buy before the install" }
+      : other;
   }
 
   /** The next program or home RAM upgrade, as an intent: one at a time, cheapest first, among those switched on. */
@@ -707,6 +835,16 @@ export class DesiredStateController {
       homeRam: homeRamPlan?.waitingFor ?? null,
       cloudServers: null,
     };
+    // An install chosen (#210): programs are lost at it, and home's RAM is the augmentation rule's, after the set.
+    if (this.#augmentationsCommitted) {
+      const held = "the install of augmentations chosen (the augmentation rule buys for it)";
+      this.#waitingFor = {
+        programs: programsNext === null ? this.#waitingFor.programs : held,
+        homeRam: homeRamNext === null ? this.#waitingFor.homeRam : held,
+        cloudServers: null,
+      };
+      return null;
+    }
     // Until the slow snapshot says which BitNode, the upgrade's price isn't known, so neither is which goes first.
     if (programsNext !== null && homeRamEnabled && this.#slowData === null) {
       this.#waitingFor.programs = "the Agent's slow snapshot (which BitNode), to compare with home RAM";
@@ -771,6 +909,16 @@ export class DesiredStateController {
     if (JSON.stringify(note) === JSON.stringify(this.#resetSent)) return;
     this.#resetSent = note;
     writeResetSentNote(this.#store, note);
+    if (note === null) this.#installDisconnectedAtMs = null;
+    // An install going out (#210): stored, so the run report can look for the reset after it.
+    if (note?.field === "lastAugReset") {
+      this.#emit({
+        type: AUGMENTATION_INSTALL_SENT_EVENT_KIND,
+        atMs: this.#lastEventAtMs ?? 0,
+        source: readManualIntents(this.#store).some((each) => each.id === note.id) ? "manual" : "brain",
+        queued: this.#augmentations.queued(),
+      });
+    }
   }
 
   /** Takes off the manual queue what the connected Agent reports done; whether it took any. */
@@ -812,17 +960,28 @@ export class DesiredStateController {
 
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
+    // Augmentations and the reset (#210) first: an install chosen holds the programs back.
+    const augmentations = this.#augmentations.update({
+      mediumData: this.#mediumData,
+      mediumGameTimeMs: this.#mediumGameTimeMs,
+      slowData: this.#slowData,
+      slowGameTimeMs: this.#slowGameTimeMs,
+      doneIds: this.#doneIds(),
+      fastGameTimeMs: this.#fastGameTimeMs,
+      nowMs: this.#lastEventAtMs,
+      enabled: readAugmentationsEnabled(this.#store),
+      homeRamEnabled: readHomeRamEnabled(this.#store),
+    });
+    this.#augmentationIntent = augmentations.intent;
+    this.#augmentationInstall = augmentations.install;
+    this.#augmentationsCommitted = augmentations.committed;
     this.#purchase = this.#choosePurchase();
     this.#backdoor = this.#backdoors.intent({
       staticData: this.#staticData,
       mediumData: this.#mediumData,
       mediumAtMs: this.#mediumAtMs,
       resetAt: resetTimeOf(this.#slowData, "lastAugReset"),
-      doneIds: new Set(
-        this.#reportedOutcomes()
-          .filter((outcome) => outcome.done)
-          .map((outcome) => outcome.id),
-      ),
+      doneIds: this.#doneIds(),
     });
     // The joins and the brain's faction work (#203): its work only with no owner's work and the switch on.
     const factions = this.#factions.update({
@@ -835,19 +994,22 @@ export class DesiredStateController {
     });
     this.#join = factions.join;
     this.#factionWork = factions.work;
-    // The manual queue first; then the purchase, then the backdoor (#195), then the join (#203), each only if the owner
-    // hasn't queued the same. The purchase before the backdoor: a `buy` never waits for its terminal action.
+    // The manual queue first, then the brain's install (#210) behind it; then the purchase, the augmentation purchase
+    // (#210), the backdoor (#195) and the join (#203), each only if the owner hasn't queued the same. The purchases
+    // before the backdoor: a `buy` never waits for its terminal action.
     const manual = readManualIntents(this.#store);
+    const gated = this.#gatedQueue();
     const notManual = (intent: Intent | null) =>
       intent && !manual.some((each) => each.id === intent.id) ? [intent] : [];
     // An irreversible intent goes once its gate lets it, and nothing queued after a reset's intent before it's done.
-    this.#gates.sync(manual);
+    this.#gates.sync(gated);
     const intents = [
-      ...manual.filter(
+      ...gated.filter(
         (each, index) =>
-          !afterReset(manual, index) && this.#gates.isReleased(each.id) && this.#resetTimeAwaited(each) === null,
+          !afterReset(gated, index) && this.#gates.isReleased(each.id) && this.#resetTimeAwaited(each) === null,
       ),
       ...notManual(this.#purchase),
+      ...notManual(this.#augmentationIntent),
       ...notManual(this.#backdoor),
       ...notManual(this.#join),
     ];
@@ -891,7 +1053,7 @@ export class DesiredStateController {
     this.#channel.setDesiredState(this.#desired);
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).
     // Only the first can be out: what's after it waits.
-    const reset = manual.find(resetsTheGame);
+    const reset = gated.find(resetsTheGame);
     if (reset === undefined || (this.#resetSent !== null && this.#resetSent.id !== reset.id)) {
       this.#noteResetSent(null);
     }
@@ -902,11 +1064,15 @@ export class DesiredStateController {
     ) {
       const field = resetFieldOf(reset);
       const resetAt = resetTimeOf(this.#slowData, field);
-      if (resetAt !== null) this.#noteResetSent({ id: reset.id, field, resetAt });
+      if (resetAt !== null) {
+        this.#noteResetSent({ id: reset.id, field, resetAt, sentAtMs: this.#lastEventAtMs ?? undefined });
+      }
     }
   }
 }
 
+/** The install of augmentations (#164), as the brain's rule asks for it (#210): the owner's would have the same id. */
+const INSTALL_INTENT: Intent = AUGMENTATION_INSTALL_INTENT;
 /** A program or home RAM purchase, for the dashboard: "BruteSSH.exe", "the TOR router", "home RAM to 16 GB". */
 function describePurchase(intent: Intent): string {
   if (intent.action === "buyTor") return "the TOR router";
