@@ -226,6 +226,8 @@ describe("the sections", () => {
       "  TOR router: no → yes",
       "  port openers: none → BruteSSH.exe",
       "  the game's servers rooted: 1 → 2",
+      // n00dles and pserv-0, then foodnstuff too (#194).
+      "  the hack loop's hosts' RAM: 12 GB on 2 servers → 28 GB on 3 servers",
       "  city: Sector-12 (unchanged)",
       "  factions: none → CyberSec",
       "  jobs: none (unchanged)",
@@ -242,6 +244,8 @@ describe("the sections", () => {
     for (const line of [
       `    buyTor(Alpha Enterprises): done after 2 tries (ui); done by ${at(60 * SECOND)}`,
       `    ${at(10 * SECOND)}  none wanted`,
+      // pserv-0 was there from the first medium snapshot: not bought in the window (#194).
+      "  cloud servers bought or upgraded (from the medium snapshots):\n    none",
       `    ${at(30 * SECOND)}  not converged (sim): busy`,
       `    ${at(40 * SECOND)}  converged (sim)`,
       `    ${at(12 * MINUTE)}  Noodle Bar: Waiter → Head Waiter`,
@@ -350,6 +354,63 @@ describe("the sections", () => {
     ]) {
       expect(text).toContain(line);
     }
+  });
+});
+
+describe("cloud servers (#194)", () => {
+  /** A run whose medium snapshots show pserv-1 from 5 minutes at 8 GB, and at 64 GB from 12 minutes. */
+  function withPurchases(currentNode = 1) {
+    event(0, "brainStarted", { release: "r" });
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 2 * SECOND) snapshot("fast", offsetMs, fastData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({ money: 1_000 + offsetMs });
+      if (offsetMs >= 5 * MINUTE) {
+        data.servers.push({ ...(data.servers.at(-1) as MediumSnapshotData["servers"][number]), hostname: "pserv-1" });
+        (data.servers.at(-1) as { maxRam: number }).maxRam = offsetMs >= 12 * MINUTE ? 64 : 8;
+      }
+      snapshot("medium", offsetMs, data);
+    }
+    const slow = slowData(["pserv-0", "pserv-1"]);
+    snapshot("slow", RUN_MS, { ...slow, resetInfo: { ...slow.resetInfo, currentNode } });
+  }
+
+  test("each bought or upgraded, when, its RAM and BN1's price, and the total; the hosts' RAM", () => {
+    withPurchases();
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      "  cloud servers bought or upgraded (from the medium snapshots):\n" +
+        `    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, $440,000\n` +
+        `    ${at(12 * MINUTE)}  pserv-1 upgraded, 8 GB → 64 GB, $3,080,000\n` +
+        "    in all: 1 bought, 1 upgraded, $3,520,000",
+    );
+    expect(text).toContain("  the hack loop's hosts' RAM: 12 GB on 2 servers → 76 GB on 3 servers");
+  });
+
+  test("outside BN1, the price is unknown", () => {
+    withPurchases(2);
+    const { text } = report();
+    expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 2`);
+    expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
+  });
+
+  test("a cloud purchase done with a problem is a failure, with its problem; another intent's isn't one", () => {
+    const problem = "bought as pserv-1-0: a server off the network held pserv-1";
+    cleanRun({
+      fast: () =>
+        fastData({
+          intents: [
+            intent("buyServer(pserv-1, 8)", { done: true, problem }),
+            intent("travel(Aevum)", { done: true, problem: "odd" }),
+          ],
+        }),
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([`cloud server purchase done with a problem: buyServer(pserv-1, 8): ${problem}`]);
+    expect(text).toContain(`    buyServer(pserv-1, 8): done after 1 try (sim): ${problem}; done by ${at(10 * SECOND)}`);
+    expect(text).toContain(
+      "  cloud server purchases done with a problem:\n    cloud server purchase done with a problem: buyServer(pserv-1, 8)",
+    );
   });
 });
 

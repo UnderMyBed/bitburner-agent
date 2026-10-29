@@ -8,7 +8,7 @@ import {
   SNAPSHOT_TIERS,
   type SnapshotTier,
 } from "@bitburner-agent/core";
-import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
+import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
@@ -84,6 +84,8 @@ export interface DashboardStatus {
   programs: ProgramsView;
   /** Home's RAM (#138): its size, the upgrade being bought, or what it waits for. */
   homeRam: HomeRamView;
+  /** Cloud servers (#194): those owned, the purchase being made, or what it waits for, and a problem noted. */
+  cloudServers: CloudServersView;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -105,6 +107,8 @@ export interface DashboardStatusOptions {
   programs: ProgramsView;
   /** Home RAM's view (#138), likewise. */
   homeRam: HomeRamView;
+  /** Cloud servers' view (#194), likewise. */
+  cloudServers: CloudServersView;
   /** The intents' view (#141), likewise. */
   intents: IntentView[];
   /** The work's view (#151), likewise. */
@@ -130,6 +134,7 @@ export function buildDashboardStatus({
   hackLoop,
   programs,
   homeRam,
+  cloudServers,
   intents,
   work,
   income,
@@ -219,6 +224,7 @@ export function buildDashboardStatus({
       ),
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
+      cloudServerProblem: cloudServers.problem,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -240,6 +246,7 @@ export function buildDashboardStatus({
     hackLoop,
     programs,
     homeRam,
+    cloudServers,
     intents,
     work,
   };

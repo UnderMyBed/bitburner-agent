@@ -2,10 +2,10 @@
 // them through the simulator's own effectors, or, in a game with SF4.3, through its Singularity workers. The `ui`
 // backend is E2's (packages/e2/test/effectors.e2.test.ts): the simulator renders no page. Joining a faction (#147) goes
 // through the brain's gate for irreversible intents: two medium snapshots with its guard holding, then a save backup.
-// Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work
-// (#151, #153, #156, #158): faction work, company work, the job applied for first, crime, and classes. Buying a cloud
-// server (#159): one NS worker for the page's backend and Singularity's alike. Backdoors (#162): through the terminal's
-// own commands, the terminal busy meanwhile, or Singularity's.
+// Buying augmentations (#149): from a faction joined with reputation, NeuroFlux Governor a level at a time. Work (#151,
+// #153, #156, #158): faction work, company work, the job applied for first, crime, and classes. Buying a cloud server
+// (#159), and upgrading one (#194): one NS worker each for the page's backend and Singularity's alike. Backdoors
+// (#162): through the terminal's own commands, the terminal busy meanwhile, or Singularity's.
 import { gunzipSync } from "node:zlib";
 import {
   classStartProblem,
@@ -718,6 +718,71 @@ test("buying a server (sim, #159): at the limit of 25, refused as the worker ref
     problem: "the game's limit of 25 cloud servers is reached",
     backend: "sim",
   });
+});
+
+const upgrade = (hostname: string, ram: number) => intent({ action: "upgradeServer", args: { hostname, ram } });
+/** 8 GB to 64 GB in BN1: the 56 GB more, at $55,000 a GB (`ServerPurchases.ts:44-54`). */
+const EIGHT_TO_64_PRICE = 56 * 55_000;
+
+/**
+ * `pserv-0` bought at 8 GB, upgraded to 64 GB, paid the difference once; sent again, or for less, done with nothing
+ * paid; and the refusals: no such server, a game server, short of the money (#194).
+ */
+async function upgradedOnceAndRefused(fresh: ForServers, backend: "sim" | "ui") {
+  await fresh.game.runUntil(() => fresh.money() !== null, 10_000);
+  const moneyBefore = fresh.money() as number;
+  await boughtEach(fresh, [server("pserv-0")]);
+  await fresh.game.runUntil(() => fresh.money() === moneyBefore - EIGHT_GB_PRICE, 5_000);
+  // The buy's outcome gone from the fast snapshot first.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  const outcomes = await boughtEach(fresh, [upgrade("pserv-0", 64)]);
+  expect(outcomes).toEqual([{ id: "upgradeServer(pserv-0, 64)", done: true, tries: 1, problem: null, backend }]);
+  const ramOf = () => fresh.medium()?.servers.find((each) => each.hostname === "pserv-0")?.maxRam;
+  await fresh.game.runUntil(() => ramOf() === 64, 15_000);
+  await fresh.game.runUntil(() => fresh.money() === moneyBefore - EIGHT_GB_PRICE - EIGHT_TO_64_PRICE, 5_000);
+  // Sent again as a new intent, and for less: at that RAM or more, done, nothing more paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(2_000);
+  const again = await boughtEach(fresh, [upgrade("pserv-0", 64), upgrade("pserv-0", 16)]);
+  expect(again.map(({ done, problem }) => [done, problem])).toEqual([
+    [true, null],
+    [true, null],
+  ]);
+  await fresh.game.run(2_000);
+  expect(fresh.money()).toBe(moneyBefore - EIGHT_GB_PRICE - EIGHT_TO_64_PRICE);
+  // No server by that name, and a server of the game's: refused, nothing paid.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [upgrade("pserv-9", 64)] });
+  expect(await triedOnce(fresh, "upgradeServer(pserv-9, 64)")).toMatchObject({
+    done: false,
+    problem: "there's no server named pserv-9",
+    backend,
+  });
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [upgrade("n00dles", 64)] });
+  expect(await triedOnce(fresh, "upgradeServer(n00dles, 64)")).toMatchObject({
+    done: false,
+    problem: "n00dles isn't one of the player's cloud servers",
+    backend,
+  });
+  // Without the money, the price says why: 64 GB to 128 GB is $3.52m.
+  await fresh.simulation.diagnostics.setMoney(3_519_999);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [upgrade("pserv-0", 128)] });
+  expect(await triedOnce(fresh, "upgradeServer(pserv-0, 128)")).toMatchObject({
+    done: false,
+    problem: "not enough money: upgrading pserv-0 to 128 GB costs $3520000",
+    backend,
+  });
+  await fresh.game.run(12_000);
+  expect(ramOf()).toBe(64);
+  expect(fresh.money()).toBe(3_519_999);
+}
+
+test("upgrading a server (sim, #194): upgraded once at the difference; again, done; refused without one, or the money", async () => {
+  await upgradedOnceAndRefused(await forServers(1e10, { sim: true, singularity: false }), "sim");
+});
+
+test("upgrading a server (its worker, #194): on a fresh save's 8 GB home beside the Agent, through the NS API alone", async () => {
+  await upgradedOnceAndRefused(await forServers(1e10, { sim: false, singularity: false }), "ui");
 });
 
 /**

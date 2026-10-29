@@ -19,6 +19,7 @@ const NEUROFLUX_3 = intent({
   args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 },
 });
 const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+const PSERV_0_TO_64 = intent({ action: "upgradeServer", args: { hostname: "pserv-0", ram: 64 } });
 const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
 const INSTALL = intent({ action: "installAugmentations", args: {} });
 const DESTROY_INTO_2 = intent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
@@ -79,6 +80,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     JOIN_SECTOR_12,
     NEUROFLUX_3,
     PSERV_0,
+    PSERV_0_TO_64,
     BACKDOOR_CSEC,
     INSTALL,
     DESTROY_INTO_2,
@@ -93,6 +95,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
+    ["agent/abcdef123456/upgrade-server.js", ["pserv-0", 64]],
     ["agent/abcdef123456/backdoor.js", ["CSEC"]],
     ["agent/abcdef123456/install-augmentations.js", ["agent/boot.js"]],
     ["agent/abcdef123456/destroy-bitnode.js", [2, "agent/boot.js"]],
@@ -242,6 +245,7 @@ describe("backends (#145)", () => {
       buyAugmentationFrom: (faction: string, augmentation: string, level: number) =>
         effector(DONE)(`buyAugmentationFrom ${faction} ${augmentation} ${level}`),
       buyCloudServer: (hostname: string, ram: number) => effector(DONE)(`buyCloudServer ${hostname} ${ram}`),
+      upgradeCloudServer: (hostname: string, ram: number) => effector(DONE)(`upgradeCloudServer ${hostname} ${ram}`),
       backdoorServer: (hostname: string) => effector(DONE)(`backdoorServer ${hostname}`),
       installQueuedAugmentations: (callbackScript: string) =>
         effector(DONE)(`installQueuedAugmentations ${callbackScript}`),
@@ -257,6 +261,7 @@ describe("backends (#145)", () => {
       JOIN_SECTOR_12,
       NEUROFLUX_3,
       PSERV_0,
+      PSERV_0_TO_64,
       BACKDOOR_CSEC,
       INSTALL,
       DESTROY_INTO_2,
@@ -271,6 +276,7 @@ describe("backends (#145)", () => {
       "acceptFactionInvitation Sector-12",
       "buyAugmentationFrom Sector-12 NeuroFlux Governor 3",
       "buyCloudServer pserv-0 8",
+      "upgradeCloudServer pserv-0 64",
       "backdoorServer CSEC",
       "installQueuedAugmentations agent/boot.js",
       "destroyWorldDaemon 2 agent/boot.js",
@@ -279,6 +285,7 @@ describe("backends (#145)", () => {
       [true, "sim"],
       [true, "sim"],
       [false, "sim"],
+      [true, "sim"],
       [true, "sim"],
       [true, "sim"],
       [true, "sim"],
@@ -321,14 +328,20 @@ describe("backends (#145)", () => {
     expect(runner.outcomes().every((outcome) => outcome.backend === "singularity")).toBe(true);
   });
 
-  test("an action with no Singularity worker (#159): its NS worker, reported as ui, with Singularity or without", async () => {
+  test("an action with no Singularity worker (#159, #194): its NS worker, reported as ui, with Singularity or without", async () => {
     for (const available of [true, false]) {
       const { runner, workerFiles, round, lines } = runnerWith(() => DONE, { available }, { maxRam: 16 });
-      runner.desire([PSERV_0]);
+      runner.desire([PSERV_0, PSERV_0_TO_64]);
       await round();
-      expect(workerFiles()).toEqual(["agent/abcdef123456/buy-server.js"]);
-      expect(runner.outcomes()).toMatchObject([{ done: true, backend: "ui" }]);
-      expect(lines).toEqual(["agent: buy the 8 GB server pserv-0 (ui): done"]);
+      expect(workerFiles()).toEqual(["agent/abcdef123456/buy-server.js", "agent/abcdef123456/upgrade-server.js"]);
+      expect(runner.outcomes()).toMatchObject([
+        { done: true, backend: "ui" },
+        { done: true, backend: "ui" },
+      ]);
+      expect(lines).toEqual([
+        "agent: buy the 8 GB server pserv-0 (ui): done",
+        "agent: upgrade the server pserv-0 to 64 GB (ui): done",
+      ]);
     }
   });
 

@@ -7,7 +7,7 @@ import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
-import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
+import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -36,6 +36,14 @@ const programs: ProgramsView = {
   waitingFor: null,
 };
 const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
+const cloudServers: CloudServersView = {
+  enabled: true,
+  waiting: false,
+  servers: [{ hostname: "pserv-0", ram: 64 }],
+  buying: null,
+  waitingFor: null,
+  problem: null,
+};
 const intents: IntentView[] = [{ id: "travel(Aevum)", source: "manual", outcome: null, waitingFor: null }];
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
@@ -53,7 +61,11 @@ afterEach(() => {
 
 const status = (
   nowMs: number,
-  { income = null, loop = hackLoop }: { income?: IncomeFacts | null; loop?: HackLoopView } = {},
+  {
+    income = null,
+    loop = hackLoop,
+    cloud = cloudServers,
+  }: { income?: IncomeFacts | null; loop?: HackLoopView; cloud?: CloudServersView } = {},
 ) =>
   buildDashboardStatus({
     store,
@@ -65,6 +77,7 @@ const status = (
     hackLoop: loop,
     programs,
     homeRam,
+    cloudServers: cloud,
     intents,
     work: { desired: null, outcome: null },
     income,
@@ -156,6 +169,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     hackLoop,
     programs,
     homeRam,
+    cloudServers,
     intents,
     work: { desired: null, outcome: null },
   });
@@ -178,6 +192,16 @@ test("incomeStalled (#184): from the income watch's facts, while the hack loop i
   // Off, it isn't expected to earn.
   const off = { ...hackLoop, enabled: false, target: null, hosts: [] };
   expect(status(nowMs, { income, loop: off }).alerts).toEqual([]);
+});
+
+test("cloudServerProblem (#194): from the controller's view of cloud servers, while it has a problem noted", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const problem = "buyServer(pserv-0, 64): bought as pserv-0-0: a server off the network held pserv-0";
+  expect(status(nowMs, { cloud: { ...cloudServers, problem } }).alerts).toMatchObject([
+    { name: "cloudServerProblem", sinceMs: nowMs, detail: expect.stringContaining(problem) },
+  ]);
+  expect(status(nowMs).alerts).toEqual([]);
 });
 
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
@@ -347,6 +371,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     hackLoop,
     programs,
     homeRam,
+    cloudServers,
     intents,
     work: { desired: null, outcome: null },
     income: null,

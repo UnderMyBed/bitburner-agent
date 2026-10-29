@@ -24,14 +24,15 @@ export type AlertName =
   | "supervisionGaveUp"
   | "dialogBlocking"
   | "intentStuck"
-  | "incomeStalled";
+  | "incomeStalled"
+  | "cloudServerProblem";
 
 export interface Alert {
   name: AlertName;
   /**
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
-   * first watched); for the others, the event or give-up that raised it.
+   * first watched); for `cloudServerProblem`, now; for the others, the event or give-up that raised it.
    */
   sinceMs: number;
   detail: string;
@@ -60,6 +61,11 @@ export interface AlertFacts {
   hackLoopTarget: string | null;
   /** The player's money in the medium snapshots, and when it last rose (#184): ./income-watch.ts. */
   income: IncomeFacts | null;
+  /**
+   * A cloud purchase the Agent reported done with a problem (#194), as the controller noted it ("<id>: <problem>"), or
+   * null. Optional for the callers that don't watch cloud servers.
+   */
+  cloudServerProblem?: string | null;
 }
 
 /**
@@ -73,7 +79,7 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, then one intentStuck per stuck intent.
+ * dialogBlocking, incomeStalled, cloudServerProblem, then one intentStuck per stuck intent.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -114,6 +120,15 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   }
   const incomeStalled = incomeStalledAlert(facts);
   if (incomeStalled !== null) alerts.push(incomeStalled);
+  if (facts.cloudServerProblem) {
+    alerts.push({
+      name: "cloudServerProblem",
+      sinceMs: facts.nowMs,
+      detail:
+        `a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and on: ` +
+        facts.cloudServerProblem,
+    });
+  }
   for (const outcome of facts.intentOutcomes) {
     if (outcome.done || outcome.tries < INTENT_STUCK_AFTER_TRIES) continue;
     alerts.push({

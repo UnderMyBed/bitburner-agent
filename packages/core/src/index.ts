@@ -50,8 +50,10 @@ export {
   CLOUD_SERVER_MAX_RAM,
   isCloudServerHostname,
   isCloudServerRam,
+  isHacknetServerName,
   MAX_CLOUD_SERVER_HOSTNAME_LENGTH,
   RESERVED_HOSTNAME_PREFIXES,
+  UPGRADE_SERVER_WORKER_NAME,
   WORLD_DAEMON,
 } from "./cloud-servers.ts";
 export {

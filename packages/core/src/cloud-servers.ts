@@ -1,6 +1,7 @@
 /**
- * Cloud servers (#159, M3's ninth slice): the servers the player buys with `ns.cloud.purchaseServer`, which needs no
- * Singularity. Shared by the in-game code and the brain. The constants are plain literals, as in deploy-layout.ts.
+ * Cloud servers (#159, M3's ninth slice): the servers the player buys with `ns.cloud.purchaseServer` and upgrades with
+ * `ns.cloud.upgradeServer` (#194), neither of which needs Singularity. Shared by the in-game code and the brain. The
+ * constants are plain literals, as in deploy-layout.ts.
  */
 
 /** The most RAM a cloud server can have, in GB, before the BitNode's multiplier (`Server/data/Constants.ts:13`). */
@@ -11,6 +12,9 @@ export const RESERVED_HOSTNAME_PREFIXES = ["hacknet-node-", "hacknet-server-"];
 
 /** Home worker: buys one cloud server through the NS API, with or without Singularity. */
 export const BUY_SERVER_WORKER_NAME = "buy-server.js";
+
+/** Home worker: upgrades one cloud server's RAM through the NS API, with or without Singularity (#194). */
+export const UPGRADE_SERVER_WORKER_NAME = "upgrade-server.js";
 
 /**
  * The server whose name the brain never buys a cloud server under (#161 review). Before The Red Pill it has no network
@@ -38,7 +42,7 @@ export function isCloudServerHostname(hostname: unknown): hostname is string {
     hostname !== WORLD_DAEMON &&
     new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,${MAX_CLOUD_SERVER_HOSTNAME_LENGTH - 1}}$`).test(hostname) &&
     !IP_ADDRESS.test(hostname) &&
-    !RESERVED_HOSTNAME_PREFIXES.some((prefix) => hostname.startsWith(prefix))
+    !isHacknetServerName(hostname)
   );
 }
 
@@ -50,4 +54,9 @@ export function isCloudServerRam(ram: unknown): ram is number {
     (ram as number) <= CLOUD_SERVER_MAX_RAM &&
     Math.log2(ram as number) % 1 === 0
   );
+}
+
+/** Whether `hostname` is a Hacknet server's: one of the game's reserved prefixes, which no cloud server's name has. */
+export function isHacknetServerName(hostname: string): boolean {
+  return RESERVED_HOSTNAME_PREFIXES.some((prefix) => hostname.startsWith(prefix));
 }

@@ -11,6 +11,7 @@ import type {
   StaticSnapshotData,
   WorkOutcome,
 } from "@bitburner-agent/core";
+import { cloudServerPrice } from "./cloud-servers.ts";
 import { INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import {
@@ -21,7 +22,7 @@ import {
   formatSeconds,
   type Gap,
 } from "./gap-report.ts";
-import { readHackLoopEnabled } from "./hack-loop.ts";
+import { hackLoopHosts, readHackLoopEnabled } from "./hack-loop.ts";
 import { WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
@@ -196,6 +197,44 @@ interface FastPoint {
   work: WorkOutcome | null | undefined;
 }
 
+/** A cloud server bought (`fromRam` null) or upgraded (#194), as the medium snapshots show it. */
+export interface CloudServerChange {
+  atMs: number;
+  hostname: string;
+  fromRam: number | null;
+  toRam: number;
+}
+
+/**
+ * Each cloud server bought or upgraded in the window, in order: one of `cloudServers` (the slow snapshots' lists, the
+ * game's word) that a medium snapshot shows first after the window's first, or with more RAM than the one before.
+ */
+class CloudServerChanges {
+  readonly changes: CloudServerChange[] = [];
+  readonly #ram = new Map<string, number>();
+  #first = true;
+  readonly #cloudServers: ReadonlySet<string>;
+
+  constructor(cloudServers: ReadonlySet<string>) {
+    this.#cloudServers = cloudServers;
+  }
+
+  add(atMs: number, data: MediumSnapshotData): void {
+    for (const server of Array.isArray(data?.servers) ? data.servers : []) {
+      if (typeof server?.hostname !== "string" || !this.#cloudServers.has(server.hostname)) continue;
+      if (!isNumber(server.maxRam)) continue;
+      const before = this.#ram.get(server.hostname);
+      if (before === undefined && !this.#first) {
+        this.changes.push({ atMs, hostname: server.hostname, fromRam: null, toRam: server.maxRam });
+      } else if (before !== undefined && server.maxRam > before) {
+        this.changes.push({ atMs, hostname: server.hostname, fromRam: before, toRam: server.maxRam });
+      }
+      this.#ram.set(server.hostname, server.maxRam);
+    }
+    this.#first = false;
+  }
+}
+
 /** What the report reads from the store for a window, folded as it's read. */
 interface RunFacts extends RunWindow {
   events: StoredEvent[];
@@ -210,6 +249,8 @@ interface RunFacts extends RunWindow {
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
+  /** Cloud servers bought or upgraded (#194). */
+  cloudServerChanges: CloudServerChange[];
   /** The dashboard's switch, now: the store keeps no history of it. */
   hackLoopEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
@@ -236,16 +277,21 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     }
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
+    const cloudServers = new Set<string>();
     for (const { data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
       slowFirst ??= data;
       slowLast = data;
-      for (const name of namesOf(data.purchasedServers)) playersServers.add(name);
+      for (const name of namesOf(data.purchasedServers)) {
+        playersServers.add(name);
+        cloudServers.add(name);
+      }
     }
     let mediumFirst: MediumSnapshotData | undefined;
     let mediumLast: MediumSnapshotData | undefined;
     const money: MoneyPoint[] = [];
     const inference = new HackTargetInference(playersServers);
+    const cloudServerChanges = new CloudServerChanges(cloudServers);
     for (const { atMs, data } of ofTier<MediumSnapshotData>("medium")) {
       snapshotCount++;
       mediumFirst ??= data;
@@ -253,6 +299,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       const playerMoney = playerOf(data).money;
       if (typeof playerMoney === "number") money.push({ atMs, money: playerMoney });
       inference.add(atMs, data);
+      cloudServerChanges.add(atMs, data);
     }
     const fast: FastPoint[] = [];
     for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
@@ -285,6 +332,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowLast,
       snapshotCount,
       playersServers,
+      cloudServerChanges: cloudServerChanges.changes,
       hackLoopEnabled: readHackLoopEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
     };
@@ -479,6 +527,13 @@ function progressSection(facts: RunFacts): string[] {
         (server) => server?.hasAdminRights === true && !facts.playersServers.has(server.hostname),
       ).length;
     lines.push(`  the game's servers rooted: ${describeChange(String(rooted(first)), String(rooted(last)))}`);
+    // The hack loop's hosts as its rule has them (#194), the cloud servers among them.
+    const hosts = (data: MediumSnapshotData) => {
+      const each = hackLoopHosts(data);
+      const ram = each.reduce((total, host) => total + host.ram, 0);
+      return `${formatGigabytes(ram)} on ${each.length} ${each.length === 1 ? "server" : "servers"}`;
+    };
+    lines.push(`  the hack loop's hosts' RAM: ${describeChange(hosts(first), hosts(last))}`);
     const [playerFirst, playerLast] = [playerOf(first), playerOf(last)];
     lines.push(`  city: ${describeChange(displayValue(playerFirst.city), displayValue(playerLast.city))}`);
     lines.push(
@@ -553,9 +608,8 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
 function describeIntent(outcome: IntentOutcome): string {
   const backend = outcome.backend === null ? "" : ` (${outcome.backend})`;
   const tries = `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${backend}`;
-  return outcome.done
-    ? `done after ${tries}`
-    : `not done, ${tries}${outcome.problem === null ? "" : `: ${outcome.problem}`}`;
+  const problem = outcome.problem === null ? "" : `: ${outcome.problem}`;
+  return outcome.done ? `done after ${tries}${problem}` : `not done, ${tries}${problem}`;
 }
 
 function actionsSection(facts: RunFacts): string[] {
@@ -566,6 +620,8 @@ function actionsSection(facts: RunFacts): string[] {
     lines.push(`    ${id}: ${describeIntent(outcome)}; ${when}`);
   }
   if (episodes.length === 0) lines.push("    none");
+
+  lines.push(...cloudServerLines(facts));
 
   lines.push("  work, as it changed:");
   let previous: string | undefined;
@@ -606,6 +662,38 @@ function actionsSection(facts: RunFacts): string[] {
   return lines;
 }
 
+/**
+ * The cloud servers bought or upgraded (#194), each with its RAM and price, and the total. The price is BN1's (the
+ * brain's rule knows no other yet): in another BitNode, unknown.
+ */
+function cloudServerLines(facts: RunFacts): string[] {
+  const lines = ["  cloud servers bought or upgraded (from the medium snapshots):"];
+  const currentNode = facts.slowLast?.resetInfo?.currentNode;
+  const priceOf = ({ fromRam, toRam }: CloudServerChange) =>
+    currentNode === 1 ? cloudServerPrice(toRam) - (fromRam === null ? 0 : cloudServerPrice(fromRam)) : null;
+  let total = 0;
+  for (const change of facts.cloudServerChanges) {
+    const price = priceOf(change);
+    total += price ?? 0;
+    const what =
+      change.fromRam === null
+        ? `${change.hostname} bought, ${formatGigabytes(change.toRam)}`
+        : `${change.hostname} upgraded, ${formatGigabytes(change.fromRam)} → ${formatGigabytes(change.toRam)}`;
+    const cost = price === null ? `price unknown in BitNode ${displayValue(currentNode)}` : formatMoney(price);
+    lines.push(`    ${formatIsoTime(change.atMs)}  ${what}, ${cost}`);
+  }
+  if (facts.cloudServerChanges.length === 0) {
+    lines.push("    none");
+  } else {
+    const bought = facts.cloudServerChanges.filter((change) => change.fromRam === null).length;
+    const upgraded = facts.cloudServerChanges.length - bought;
+    lines.push(
+      `    in all: ${bought} bought, ${upgraded} upgraded${currentNode === 1 ? `, ${formatMoney(total)}` : ""}`,
+    );
+  }
+  return lines;
+}
+
 // --- 4. Health --------------------------------------------------------------------------------------------------------
 
 /** Each check prints what it found, and adds a line to `failures` for each failure. */
@@ -626,6 +714,19 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
     failures.push(line);
   }
   if (stuck === 0) lines.push("    none");
+
+  // Done, but not as asked (#194): a server bought under another name.
+  lines.push("  cloud server purchases done with a problem:");
+  let wrong = 0;
+  for (const { id, outcome } of intentEpisodes(facts)) {
+    if (!outcome.done || outcome.problem === null) continue;
+    if (!id.startsWith("buyServer(") && !id.startsWith("upgradeServer(")) continue;
+    wrong++;
+    const line = `cloud server purchase done with a problem: ${id}: ${outcome.problem}`;
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (wrong === 0) lines.push("    none");
 
   lines.push("  dialogs left blocking the page:");
   const blocking = blockingEpisodes(facts);

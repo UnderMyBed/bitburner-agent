@@ -1,9 +1,9 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
-// the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue. Irreversible
-// intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
-// brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
-// back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
+// the next purchase of the hacking programs (#136), home's RAM (#138) or a cloud server (#194), and the owner's manual
+// queue. Irreversible intents wait for their guard and a save backup first (#147). Each state carries how long the
+// Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of
+// the BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
@@ -14,11 +14,24 @@ import {
   intentId,
   MAX_INTENTS,
   type MediumSnapshotData,
+  PORT_OPENER_PROGRAMS,
   parseIntentRequest,
   resetsTheGame,
   type SlowSnapshotData,
   type StaticSnapshotData,
+  TOR_ROUTER,
 } from "@bitburner-agent/core";
+import {
+  CLOUD_SERVER_RESERVE_HORIZON_MS,
+  CLOUD_SERVERS_ENABLED_SETTING,
+  type CloudServer,
+  type CloudServerPurchase,
+  type CloudServersPlan,
+  chooseCloudServerPurchase,
+  HackLoopIncome,
+  type MoneyReserve,
+  readCloudServersEnabled,
+} from "./cloud-servers.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
@@ -110,6 +123,25 @@ export interface HomeRamView {
   waitingFor: string | null;
 }
 
+/** What the dashboard shows of cloud servers (#194). */
+export interface CloudServersView {
+  enabled: boolean;
+  /** As for the hack loop: no static and medium snapshots from the connected Agent yet. */
+  waiting: boolean;
+  /** The player's cloud servers, by name, with their RAM. */
+  servers: CloudServer[];
+  /** The purchase being sent now: a new server, or more RAM for one, or null. */
+  buying: Pick<CloudServerPurchase, "action" | "hostname" | "ram" | "price" | "paybackMs"> | null;
+  /** Why nothing is bought now, or null. */
+  waitingFor: string | null;
+  /**
+   * A cloud purchase the connected Agent reported done with a problem (bought under another name), as "<id>:
+   * <problem>", or null: the `cloudServerProblem` alert. The rule buys nothing more until the switch is turned off and
+   * on.
+   */
+  problem: string | null;
+}
+
 /** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
 export interface IntentView {
   id: string;
@@ -138,6 +170,9 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - One purchase at a time, cheapest first: of the next program and the next RAM upgrade, both affordable, the cheaper
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
+ * - Then a cloud server (#194, ./cloud-servers.ts), only while neither of those is being bought, and with the hack loop
+ *   on (they only run it). While the cheaper of the two waits for money, its price is held back from cloud servers if
+ *   the hack loop's income would cover it within `CLOUD_SERVER_RESERVE_HORIZON_MS`.
  * - Intents go in order: the owner's manual queue first, as added, then the purchase. A manual intent leaves the queue
  *   once the connected Agent reports it done: the game's state can change again (a travel there and back), so a
  *   snapshot can't say it was done.
@@ -183,8 +218,22 @@ export class DesiredStateController {
   #programsPlan: ProgramsPlan | null = null;
   /** From its latest medium and slow snapshots, or null. */
   #homeRamPlan: HomeRamPlan | null = null;
+  /** From its latest static, medium and slow snapshots, or null (#194). */
+  #cloudServersPlan: CloudServersPlan | null = null;
+  /** The hack loop's income, from its medium snapshots (#194). */
+  readonly #income = new HackLoopIncome();
+  /** The cloud purchase last sent, kept while still to do so its id holds (#194), or null. */
+  #lastCloudPurchase: CloudServerPurchase | null = null;
+  /** A cloud purchase reported done with a problem, until the switch is turned off (#194), or null. */
+  #cloudServerProblem: { id: string; text: string } | null = null;
+  /** The ids of the problems the switch turned off has seen, so a fast snapshot still showing one isn't noted again. */
+  readonly #seenCloudServerProblems = new Set<string>();
   /** Why each activity's purchase isn't asked for now, or null: its plan's reason, or the cheaper purchase first. */
-  #waitingFor: { programs: string | null; homeRam: string | null } = { programs: null, homeRam: null };
+  #waitingFor: { programs: string | null; homeRam: string | null; cloudServers: string | null } = {
+    programs: null,
+    homeRam: null,
+    cloudServers: null,
+  };
   /** Each irreversible intent queued and not yet done (none goes out with a brain that takes no save backups). */
   readonly #gates: IrreversibleIntentGates;
   /** The reset time when the first intent that resets the game was sent, while it's queued, or null (#164, #175). */
@@ -209,17 +258,21 @@ export class DesiredStateController {
         this.#mediumData = null;
         this.#slowData = null;
         this.#fastData = null;
-        // Counted on the last Agent's snapshots: every gate starts again.
+        // Counted on the last Agent's snapshots: every gate starts again, and the income is measured afresh.
         this.#gates.forget();
+        this.#income.clear();
+        this.#lastCloudPurchase = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' and the work's outcomes: for the views, and the manual intents done. Anything else changes
         // nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
-        if (!this.#dropDoneManualIntents()) return;
+        const problemNoted = this.#noteCloudServerProblem();
+        if (!this.#dropDoneManualIntents() && !problemNoted) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
+        this.#income.add(event.atMs, this.#mediumData);
         this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
@@ -247,6 +300,19 @@ export class DesiredStateController {
   /** Home RAM's switch, likewise. */
   setHomeRamEnabled(enabled: boolean): void {
     writeSwitch(this.#store, HOME_RAM_ENABLED_SETTING, enabled);
+    this.#update();
+  }
+
+  /**
+   * Cloud servers' switch, likewise. Turned off, a problem noted is forgotten, so turning it on again goes on buying
+   * (#194).
+   */
+  setCloudServersEnabled(enabled: boolean): void {
+    writeSwitch(this.#store, CLOUD_SERVERS_ENABLED_SETTING, enabled);
+    if (!enabled && this.#cloudServerProblem !== null) {
+      this.#seenCloudServerProblems.add(this.#cloudServerProblem.id);
+      this.#cloudServerProblem = null;
+    }
     this.#update();
   }
 
@@ -388,8 +454,122 @@ export class DesiredStateController {
     };
   }
 
+  cloudServersView(): CloudServersView {
+    const enabled = readCloudServersEnabled(this.#store);
+    const waiting = enabled && (this.#desired === null || this.#cloudServersPlan === null);
+    const purchase = this.#desired === null ? null : this.#purchase;
+    const buying =
+      purchase?.action === "buyServer" || purchase?.action === "upgradeServer" ? this.#lastCloudPurchase : null;
+    return {
+      enabled,
+      waiting,
+      servers: this.#cloudServersPlan?.servers ?? [],
+      buying:
+        buying === null
+          ? null
+          : {
+              action: buying.action,
+              hostname: buying.hostname,
+              ram: buying.ram,
+              price: buying.price,
+              paybackMs: buying.paybackMs,
+            },
+      waitingFor: enabled && !waiting ? this.#waitingFor.cloudServers : null,
+      problem: this.#cloudServerProblem?.text ?? null,
+    };
+  }
+
+  /**
+   * Notes the first cloud purchase the connected Agent reports done with a problem (#194): bought under another name,
+   * say, which the rule didn't ask for. Whether it noted one now.
+   */
+  #noteCloudServerProblem(): boolean {
+    if (this.#cloudServerProblem !== null) return false;
+    const outcome = this.#reportedOutcomes().find(
+      ({ id, done, problem }) =>
+        done &&
+        problem !== null &&
+        (id.startsWith("buyServer(") || id.startsWith("upgradeServer(")) &&
+        !this.#seenCloudServerProblems.has(id),
+    );
+    if (outcome === undefined) return false;
+    this.#cloudServerProblem = { id: outcome.id, text: `${outcome.id}: ${outcome.problem}` };
+    return true;
+  }
+
   /** The purchase to ask for now, as an intent: one at a time, cheapest first, among the activities switched on. */
   #choosePurchase(): Intent | null {
+    const other = this.#chooseProgramOrHomeRam();
+    const cloud = this.#chooseCloudServer(other);
+    return other ?? cloud;
+  }
+
+  /**
+   * The cloud purchase (#194), when nothing else (`other`) is bought: the plan, and why it waits. The plan is worked
+   * out with the switch off too, for the dashboard's list of servers.
+   */
+  #chooseCloudServer(other: Intent | null): Intent | null {
+    const enabled = readCloudServersEnabled(this.#store);
+    if (this.#staticData === null || this.#mediumData === null) {
+      this.#cloudServersPlan = null;
+      this.#waitingFor.cloudServers = null;
+      return null;
+    }
+    const income = this.#income.rate();
+    const plan = chooseCloudServerPurchase({
+      staticData: this.#staticData,
+      mediumData: this.#mediumData,
+      slowData: this.#slowData,
+      income,
+      reserve: this.#reserveForOtherPurchase(income?.perSecond ?? 0),
+      previous: this.#lastCloudPurchase,
+    });
+    this.#cloudServersPlan = plan;
+    this.#waitingFor.cloudServers = plan.waitingFor;
+    let next = enabled ? plan.next : null;
+    if (next !== null && !readHackLoopEnabled(this.#store)) {
+      this.#waitingFor.cloudServers = "the hack loop, switched off: cloud servers only run it";
+      next = null;
+    }
+    if (next !== null && this.#cloudServerProblem !== null) {
+      this.#waitingFor.cloudServers = `you to look at ${this.#cloudServerProblem.text}, then turn cloud servers off and on again`;
+      next = null;
+    }
+    if (next !== null && other !== null) {
+      this.#waitingFor.cloudServers = `${describePurchase(other)} first`;
+      next = null;
+    }
+    this.#lastCloudPurchase = next;
+    if (next === null) return null;
+    const args = { hostname: next.hostname, ram: next.ram };
+    return next.action === "buyServer"
+      ? { id: intentId("buyServer", args), action: "buyServer", args }
+      : { id: intentId("upgradeServer", args), action: "upgradeServer", args };
+  }
+
+  /**
+   * The money held back from cloud servers (#194): the price of the program or home RAM upgrade bought next (the
+   * cheaper, among those switched on) while it waits for money, if the hack loop's income (`perSecond`) would cover
+   * it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none.
+   */
+  #reserveForOtherPurchase(perSecond: number): MoneyReserve | null {
+    const waiting: MoneyReserve[] = [];
+    const programs = this.#programsPlan;
+    if (readProgramsEnabled(this.#store) && programs !== null && programs.price !== null) {
+      const item = [TOR_ROUTER, ...PORT_OPENER_PROGRAMS].find((each) => !programs.owned.includes(each));
+      waiting.push({ amount: programs.price, forWhat: item ?? "the next program" });
+    }
+    const homeRam = this.#homeRamPlan;
+    if (readHomeRamEnabled(this.#store) && typeof homeRam?.price === "number" && homeRam.ram !== null) {
+      waiting.push({ amount: homeRam.price, forWhat: `home RAM to ${homeRam.ram * 2} GB` });
+    }
+    const cheaper = waiting.sort((a, b) => a.amount - b.amount)[0];
+    if (cheaper === undefined) return null;
+    return cheaper.amount <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
+  }
+
+  /** The next program or home RAM upgrade, as an intent: one at a time, cheapest first, among those switched on. */
+  #chooseProgramOrHomeRam(): Intent | null {
     const programsEnabled = readProgramsEnabled(this.#store);
     const homeRamEnabled = readHomeRamEnabled(this.#store);
     const programsPlan = this.#mediumData === null ? null : chooseNextPurchase(this.#mediumData);
@@ -398,7 +578,11 @@ export class DesiredStateController {
     this.#homeRamPlan = homeRamPlan;
     let programsNext = programsEnabled ? (programsPlan?.next ?? null) : null;
     let homeRamNext = homeRamEnabled ? (homeRamPlan?.next ?? null) : null;
-    this.#waitingFor = { programs: programsPlan?.waitingFor ?? null, homeRam: homeRamPlan?.waitingFor ?? null };
+    this.#waitingFor = {
+      programs: programsPlan?.waitingFor ?? null,
+      homeRam: homeRamPlan?.waitingFor ?? null,
+      cloudServers: null,
+    };
     // Until the slow snapshot says which BitNode, the upgrade's price isn't known, so neither is which goes first.
     if (programsNext !== null && homeRamEnabled && this.#slowData === null) {
       this.#waitingFor.programs = "the Agent's slow snapshot (which BitNode), to compare with home RAM";
@@ -531,6 +715,14 @@ export class DesiredStateController {
       if (resetAt !== null) this.#noteResetSent({ id: reset.id, field, resetAt });
     }
   }
+}
+
+/** A program or home RAM purchase, for the dashboard: "BruteSSH.exe", "the TOR router", "home RAM to 16 GB". */
+function describePurchase(intent: Intent): string {
+  if (intent.action === "buyTor") return "the TOR router";
+  if (intent.action === "buyProgram") return intent.args.program;
+  if (intent.action === "upgradeHomeRam") return `home RAM to ${intent.args.fromRam * 2} GB`;
+  return intent.id;
 }
 
 /** Whether the manual queue's intent at `index` comes after one that resets the game, so waits for it (#164, #175). */

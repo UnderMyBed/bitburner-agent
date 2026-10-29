@@ -57,7 +57,9 @@ import { safelyCreateUniqueServer } from "../../../../../vendor/bitburner-src/sr
 import {
   getCloudServerCost,
   getCloudServerLimit,
+  getCloudServerUpgradeCost,
   purchaseRamForHomeComputer,
+  upgradeCloudServer,
 } from "../../../../../vendor/bitburner-src/src/Server/ServerPurchases";
 import { Settings } from "../../../../../vendor/bitburner-src/src/Settings/Settings";
 import { Terminal } from "../../../../../vendor/bitburner-src/src/Terminal";
@@ -444,6 +446,30 @@ const effectors = {
       return { done: true, problem: `bought as ${server.hostname}: a server off the network held ${hostname}` };
     }
     return result(isPlayers(), `${hostname} isn't the player's after buying it`);
+  },
+  /**
+   * A cloud server's RAM raised (#194), as `ns.cloud.upgradeServer` does it (`Server/ServerPurchases.ts:44-63`), with
+   * the `ui` worker's checks first: no server by that name as its `ns.serverExists` sees it
+   * (`NetscriptFunctions.ts:1051-1055`), or not one of the player's cloud servers, refused; at least the RAM already,
+   * done; then the price and the money. Not named `upgradeServer`, an NS function. The problems read as the worker's.
+   */
+  upgradeCloudServer(hostname: string, ram: number): EffectorResult {
+    const server = GetServer(hostname);
+    if (server === null || (server.serversOnNetwork.length === 0 && !(server instanceof DarknetServer))) {
+      return result(false, `there's no server named ${hostname}`);
+    }
+    if (!Player.purchasedServers.includes(server.hostname)) {
+      return result(false, `${hostname} isn't one of the player's cloud servers`);
+    }
+    const maxRam = server.maxRam;
+    if (maxRam >= ram) return result(true, "");
+    const cost = getCloudServerUpgradeCost(hostname, ram);
+    if (cost === Number.POSITIVE_INFINITY) return result(false, `the game sells no ${ram} GB server in this BitNode`);
+    if (Player.money < cost) {
+      return result(false, `not enough money: upgrading ${hostname} to ${ram} GB costs $${Math.ceil(cost)}`);
+    }
+    upgradeCloudServer(hostname, ram);
+    return result(server.maxRam >= ram, `the game refused to upgrade ${hostname} from ${maxRam} to ${ram} GB`);
   },
   /**
    * The work activity's effector for crime (#156), as the Slums page does it (`Locations/ui/SlumsLocation.tsx:24-29`:

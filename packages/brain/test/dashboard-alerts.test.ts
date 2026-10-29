@@ -153,3 +153,33 @@ describe("incomeStalled (#184): the hack loop on against a target, and money not
     ]);
   });
 });
+
+describe("cloudServerProblem (#194): a cloud purchase the Agent reported done with a problem", () => {
+  const problem = "buyServer(pserv-0, 64): bought as pserv-0-0: a server off the network held pserv-0";
+
+  test("holds while the controller has one noted, saying what and how to go on", () => {
+    expect(activeAlerts({ ...quiet, cloudServerProblem: problem })).toEqual([
+      {
+        name: "cloudServerProblem",
+        sinceMs: quiet.nowMs,
+        detail:
+          "a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and " +
+          `on: ${problem}`,
+      },
+    ]);
+    expect(names({ ...quiet, cloudServerProblem: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after incomeStalled, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    const stalled = {
+      hackLoopTarget: "zer0",
+      income: { money: 1, lastRiseAtMs: quiet.nowMs - INCOME_STALLED_AFTER_MS - 1 },
+    };
+    expect(names({ ...quiet, ...stalled, cloudServerProblem: problem, intentOutcomes: [stuck] })).toEqual([
+      "incomeStalled",
+      "cloudServerProblem",
+      "intentStuck",
+    ]);
+  });
+});

@@ -13,10 +13,12 @@ import {
   type IntentOutcome,
   type IntentRequest,
   intentId,
+  PORT_OPENER_PROGRAMS,
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
@@ -1327,5 +1329,206 @@ describe("work (#151, owner decision 37)", () => {
     expect(controller.workView().outcome).toEqual({ converged: true, problem: null, backend: "ui" });
     send(connection, "fast", fast({ converged: "yes" }));
     expect(controller.workView().outcome).toBeNull();
+  });
+});
+
+describe("cloud servers (#194): after the programs and home RAM, by the hack loop's measured income", () => {
+  const MINUTE = 60_000;
+  let clock: ManualClock;
+  beforeEach(() => {
+    clock = new ManualClock();
+    channel = new ControlChannel({ token: TOKEN, clock });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+  });
+  const sentPurchases = (connection: MemoryConnection) =>
+    connection
+      .sentMessages()
+      .filter((message) => message.type === "desiredState")
+      .map((message) => (message as unknown as DesiredState).intents)
+      .at(-1);
+  interface Options {
+    programs?: string[];
+    homeRam?: number;
+    cloud?: Record<string, number>;
+    noodlesRam?: number;
+  }
+  /** Every program owned, unless `programs` says which; n00dles rooted, 4 GB; home at `homeRam` GB, if given. */
+  const medium = (
+    money: number,
+    { programs = PORT_OPENER_PROGRAMS, homeRam, cloud = {}, noodlesRam = 4 }: Options = {},
+  ) => {
+    const data = mediumData(
+      1,
+      { n00dles: true, ...Object.fromEntries(Object.keys(cloud).map((hostname) => [hostname, true])) },
+      { money, hasTorRouter: true, programs, ...(homeRam === undefined ? {} : { homeRam }) },
+    );
+    for (const server of data.servers) {
+      if (server.hostname in cloud) server.maxRam = cloud[server.hostname] as number;
+      if (server.hostname === "n00dles") server.maxRam = noodlesRam;
+    }
+    return data;
+  };
+  /**
+   * The Agent connected, its static and slow snapshots in, and 10 minutes of medium snapshots, a minute apart, with
+   * money rising `perSecond` ($512) from `money` on n00dles's 4 GB: $128 a GB a second, so a GB pays back in 7.2
+   * minutes. With `endMoney`, a last snapshot 10 s on with money there (spent: not income).
+   */
+  const earning = (
+    money: number,
+    options: Options = {},
+    { perSecond = 512, endMoney = null as number | null } = {},
+  ) => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    for (let minute = 0; minute <= 10; minute++) {
+      if (minute > 0) clock.advance(MINUTE);
+      send(connection, "medium", medium(money + minute * 60 * perSecond, options));
+    }
+    if (endMoney !== null) {
+      clock.advance(10_000);
+      send(connection, "medium", medium(endMoney, options));
+    }
+    return { controller, connection, money: endMoney ?? money + 10 * 60 * perSecond };
+  };
+  const buyServer = (hostname: string, ram: number) => intent({ action: "buyServer", args: { hostname, ram } });
+  const upgradeServer = (hostname: string, ram: number) => intent({ action: "upgradeServer", args: { hostname, ram } });
+
+  test("nothing until the income spans 10 minutes; then the largest server money allows, and the view says so", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    send(connection, "medium", medium(10e6));
+    clock.advance(9 * MINUTE);
+    send(connection, "medium", medium(10e6 + 9 * 60 * 512));
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView()).toMatchObject({
+      enabled: true,
+      waiting: false,
+      buying: null,
+      waitingFor: "the hack loop's income over 10 min (measured from the medium snapshots)",
+    });
+    clock.advance(MINUTE);
+    send(connection, "medium", medium(10e6 + 10 * 60 * 512));
+    // $10.3m covers 128 GB ($7.04m).
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    expect(controller.cloudServersView()).toEqual({
+      enabled: true,
+      waiting: false,
+      servers: [],
+      buying: { action: "buyServer", hostname: "pserv-0", ram: 128, price: 7_040_000, paybackMs: 429_687.5 },
+      waitingFor: null,
+      problem: null,
+    });
+    expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+      ["buyServer(pserv-0, 128)", "purchase"],
+    ]);
+  });
+
+  test("bought, it's listed and a host; the next is the next name; at the limit, the smallest is upgraded", () => {
+    const { connection, controller, money } = earning(10e6);
+    clock.advance(10_000);
+    send(connection, "medium", medium(money - 7_040_000, { cloud: { "pserv-0": 128 } }));
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-1", 32)]);
+    expect(controller.cloudServersView().servers).toEqual([{ hostname: "pserv-0", ram: 128 }]);
+    expect(controller.hackLoopView().hosts).toEqual(["n00dles", "pserv-0"]);
+    const full = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`pserv-${index}`, 64]));
+    clock.advance(10_000);
+    send(connection, "medium", medium(10e6, { cloud: { ...full, "pserv-4": 8 } }));
+    expect(sentPurchases(connection)).toEqual([upgradeServer("pserv-4", 128)]);
+  });
+
+  test("a program or home RAM upgrade the money covers goes first; the cloud server waits, saying so", () => {
+    const { connection, controller } = earning(10e6, { programs: ["BruteSSH.exe"] });
+    expect(sentPurchases(connection)).toEqual([buyProgram("FTPCrack.exe")]);
+    expect(controller.cloudServersView()).toMatchObject({ buying: null, waitingFor: "FTPCrack.exe first" });
+  });
+
+  test("the next program waiting for money is held back if the income covers it within 5 minutes; one further off isn't", () => {
+    // SQLInject.exe ($250m) is further off: nothing is held back.
+    const far = earning(1e6, { programs: PORT_OPENER_PROGRAMS.slice(0, 4) });
+    expect(sentPurchases(far.connection)).toEqual([buyServer("pserv-0", 16)]);
+    far.connection.dropFromGameSide();
+    // At $4,096 a second (on 32 GB), 5 minutes bring $1,228,800: BruteSSH.exe ($500k), short at $400,000, is held back.
+    const near = earning(0, { programs: [], noodlesRam: 32 }, { perSecond: 4_096, endMoney: 400_000 });
+    expect(sentPurchases(near.connection)).toEqual([]);
+    expect(near.controller.cloudServersView().waitingFor).toBe(
+      "money for pserv-0 with 8 GB ($440,000, beyond $500,000 held for BruteSSH.exe)",
+    );
+  });
+
+  test("of a program and home RAM both waiting, the cheaper is what's held back", () => {
+    // FTPCrack.exe ($1.5m) and home RAM from 2 GB to 4 GB ($101,120), neither affordable at $100,000: the upgrade,
+    // within the 5 minutes' $153,600.
+    const { controller, connection } = earning(0, { programs: ["BruteSSH.exe"], homeRam: 2 }, { endMoney: 100_000 });
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      "money for pserv-0 with 8 GB ($440,000, beyond $101,120 held for home RAM to 4 GB)",
+    );
+  });
+
+  test("the hack loop off, or the switch off: none, saying why; the switch is kept in the store", () => {
+    const { controller, connection } = earning(10e6);
+    controller.setCloudServersEnabled(false);
+    expect(readCloudServersEnabled(store)).toBe(false);
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView()).toMatchObject({ enabled: false, buying: null, waitingFor: null });
+    controller.setCloudServersEnabled(true);
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    controller.setHackLoopEnabled(false);
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe("the hack loop, switched off: cloud servers only run it");
+  });
+
+  test("a purchase in flight keeps its id as money rises, so a failing one reaches intentStuck", () => {
+    const { connection, money } = earning(10e6);
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    clock.advance(10_000);
+    send(connection, "medium", medium(money + 20e6));
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+  });
+
+  test("a cloud purchase done with a problem: noted, in the view, none bought until the switch goes off and on", () => {
+    const { controller, connection, money } = earning(10e6);
+    const problem = "bought as pserv-0-0: a server off the network held pserv-0";
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: true, tries: 1, problem, backend: "ui" }],
+    });
+    expect(controller.cloudServersView().problem).toBe(`buyServer(pserv-0, 128): ${problem}`);
+    expect(sentPurchases(connection)).toEqual([]);
+    clock.advance(10_000);
+    send(connection, "medium", medium(money, { cloud: { "pserv-0-0": 128 } }));
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      `you to look at buyServer(pserv-0, 128): ${problem}, then turn cloud servers off and on again`,
+    );
+    controller.setCloudServersEnabled(false);
+    controller.setCloudServersEnabled(true);
+    expect(controller.cloudServersView().problem).toBeNull();
+    // A fast snapshot from before the Agent had the new state, still showing it: not noted again.
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: true, tries: 1, problem, backend: "ui" }],
+    });
+    expect(controller.cloudServersView().problem).toBeNull();
+    // The renamed one's name is passed over.
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-1", 128)]);
+  });
+
+  test("a disconnect forgets the income: 10 more minutes of it before the next", () => {
+    const { connection } = earning(10e6);
+    connection.dropFromGameSide();
+    const again = connectAgent("session-2");
+    send(again, "static", network, "session-2");
+    send(again, "slow", slowData(), "session-2");
+    send(again, "medium", medium(20e6), "session-2");
+    expect(sentPurchases(again)).toEqual([]);
   });
 });
