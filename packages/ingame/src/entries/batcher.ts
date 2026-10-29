@@ -1,22 +1,26 @@
 // agent/<deploymentId>/batcher.js: the batcher (#204, M4 phase A slice A7a), a reflex (architecture §5.5). Its config
 // (core's `BatcherConfig`): the target and its figures, the player's multipliers, the hosts, the share a batch hacks
-// and the spacing between batches, chosen by the brain from core's `batchPlan` (#205; #206 chooses more). It never
-// decides strategy; it times and launches, and checks what lands. Design: #204.
+// and the spacing between batches, chosen by the brain from core's `batchPlan` (#205), and the next target to prepare
+// (#206). It never decides strategy; it times and launches, and checks what lands. Design: #204.
 // - **Its config, hot (#205):** with no argument, as the Agent's `batcher-deploy.js` starts it, it re-reads its config
 //   from its config port every loop, where the Agent writes the desired state's (architecture §5.5): a new share,
-//   spacing or player applies from the next batch; new hosts get the operation scripts; a new target lets what's in
-//   flight land, as after a desync, then prepares it. With none there yet, or one it can't read, it says so and waits.
-//   Given its config as its argument (#204's tests), it keeps that one.
+//   spacing or player applies from the next batch; new hosts get the operation scripts. A new target (#206) is a move:
+//   the batches out keep theirs and land, hacks and all, while the new one is prepared beside them (at once if it was
+//   the next target, prepared already). With none there yet, or one it can't read, it says so and waits. Given its
+//   config as its argument (#204's tests), it keeps that one.
 // - **After another batcher (#205):** it waits for the latest landing the one before it last published, so its first
 //   operations don't find the hosts' RAM still held, and publishes that time as its own until it's past, so one
 //   started while it waits waits too (#211).
 // - **Preparing:** while the target isn't at its minimum security and maximum money, a wave at a time (core's
-//   `preparationWave`): weaken, grow and weaken, landing in that order, on the RAM free.
+//   `preparationWave`), once the last has landed: weaken, grow and weaken, landing in that order, on the RAM free. A
+//   last wave on a target at its minimum security, with room beside it for the batches, starts them at once (#206).
+// - **The next target (#206):** the config's `next`, prepared the same way on at most its RAM, beside the batches.
 // - **Batching:** a batch's hack lands every spacing, its weaken, grow and weaken δ apart after it. Each operation is
 //   started just in time, its hold before it lands (core's `batchOrders`), on the hosts' free RAM (`placeThreads`),
 //   and lands itself (../workers/batch-operation.ts). A batch's threads are planned when its first weaken goes out,
 //   and its hack threads replanned when its hack does (`hackThreadsAtLaunch`), at the hacking level then; the hack goes
-//   out only if the rest did and the target is within the bounds of every batch still landing (`batchBounds`).
+//   out only if the rest did and the target is within the bounds of every batch still landing (`batchBounds`). Each
+//   operation's lead covers the security the largest batch still landing may leave (#206).
 // - **Checked, loudly:** every landing is recorded on the landing port, cleared when it starts; each id starts with
 //   this run's name, so a previous run's records are only counted (unexpected), never trusted. One before a landing
 //   already recorded is out of order, one started too late is late, one never recorded is lost. Out of order, or the
@@ -42,6 +46,7 @@ import {
   batchBounds,
   batchHoldsMs,
   batchOrders,
+  batchPeakRamGb,
   batchRamGb,
   batchThreads,
   type HackingPlayer,
@@ -149,6 +154,13 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   /** What stays wrong while the hosts do: hosts it couldn't copy its scripts to. Other problems clear back to it. */
   let lastingProblem: string | null = null;
   const landings = new LandingWatch();
+  /**
+   * The parts of the target's preparation wave, and of the next target's (#206), not yet recorded: the next wave of
+   * each starts once its last has landed, whatever else is in flight.
+   */
+  let preparing = new Set<string>();
+  let preparingNext = new Set<string>();
+  let nextWave = 0;
   const playerNow = (): HackingPlayer => ({
     skills: { hacking: ns.getHackingLevel(), intelligence: current().player.intelligence },
     mults: current().player.mults,
@@ -156,8 +168,18 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const freeRam = (): HostRam[] =>
     hosts.map((host) => ({ host, freeGb: ns.getServerMaxRam(host) - ns.getServerUsedRam(host) }));
 
-  /** Starts an operation's threads on the free RAM, landing at `landAt`; false if they didn't all start. */
-  const launch = (operation: BatchOperation, threads: number, landAt: number, id: string, target: string): boolean => {
+  /**
+   * Starts an operation's threads on the free RAM, landing at `landAt`, each part's id added to `wave` when given (a
+   * preparation wave waits for its own); false if they didn't all start.
+   */
+  const launch = (
+    operation: BatchOperation,
+    threads: number,
+    landAt: number,
+    id: string,
+    target: string,
+    wave?: Set<string>,
+  ): boolean => {
     const placed = placeThreads(freeRam(), threads, operationRamGb(operation));
     if (placed === null) return false;
     for (const [part, { host, threads: partThreads }] of placed.entries()) {
@@ -167,6 +189,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         ns.exec(folder + operationScriptName(operation), host, options, target, landAt, BATCHER_LANDING_PORT, partId)
       ) {
         landings.expect(partId, landAt);
+        wave?.add(partId);
       } else {
         return false;
       }
@@ -195,6 +218,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         health.unexpected += 1;
         continue;
       }
+      preparing.delete(record.id);
+      preparingNext.delete(record.id);
       const isHack = record.id.split(".")[2] === "hack";
       if (record.late) {
         health.late += 1;
@@ -222,8 +247,29 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   let nextLandAt = 0;
   const pending: LaunchOrder[] = [];
   const batches = new Map<number, PlannedBatch>();
-  let landing: { threads: BatchThreads; untilMs: number }[] = [];
+  let landing: { target: string; threads: BatchThreads; untilMs: number }[] = [];
   let wave = 0;
+
+  /**
+   * The most hack and grow threads of any batch planned or landing on `target`, which set the most security it may
+   * be left with: kept from the last look, so planning many batches at once looks once.
+   */
+  let largest: { target: string; atMs: number; threads: BatchThreads } | null = null;
+  const largestLanding = (target: string): BatchThreads => {
+    if (largest?.target === target && largest.atMs === Date.now()) return largest.threads;
+    let mostHack = 0;
+    let mostGrow = 0;
+    for (const each of [...batches.values(), ...landing]) {
+      if (each.target !== target) continue;
+      // Destructured: the game would charge hack's and grow's RAM for `.hack` and `.grow`.
+      const { hack: hackCount, grow: growCount } = each.threads;
+      mostHack = Math.max(mostHack, hackCount);
+      mostGrow = Math.max(mostGrow, growCount);
+    }
+    const threads: BatchThreads = { hack: mostHack, weaken1: 0, grow: mostGrow, weaken2: 0 };
+    largest = { target, atMs: Date.now(), threads };
+    return threads;
+  };
 
   /** The next batch, planned at the hacking level now: its threads, its hack's share and its orders. */
   const planNextBatch = () => {
@@ -233,14 +279,18 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     // Not `threads.hack`: the game would charge hack's 0.1 GB for the name (Script/RamCalculations.ts:436-440).
     const { hack: hackCount } = threads;
     const plannedShare = hackCount * hackSharePerThread(figures, player);
+    // Its leads cover the largest batch still landing on the target (#206): the plan grows with the RAM.
     return {
       batch: { target, figures, threads, plannedShare, short: false },
-      orders: batchOrders(nextBatch, nextLandAt, batchHoldsMs(figures, player, threads)),
+      orders: batchOrders(nextBatch, nextLandAt, batchHoldsMs(figures, player, threads, [largestLanding(target)])),
     };
   };
 
-  /** Starts batching: the first batch's operations all start from now, after anything still in flight lands. */
-  const startBatching = () => {
+  /**
+   * Starts batching: the first batch's operations all start from now, after anything still in flight lands, and its
+   * hack lands no sooner than `notBeforeMs`.
+   */
+  const startBatching = (notBeforeMs = 0) => {
     health.state = "batching";
     logNow = true;
     setProblem(lastingProblem);
@@ -249,7 +299,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const threads = batchThreads(figures, player, hackThreadsForShare(hackShare, figures, player));
     const holds = batchHoldsMs(figures, player, threads);
     const firstLandAt = Date.now() + Math.max(...Object.values(holds));
-    nextLandAt = Math.max(firstLandAt, landings.latestLandAt() + spacingMs);
+    nextLandAt = Math.max(firstLandAt, landings.latestLandAt() + spacingMs, notBeforeMs);
   };
 
   /** Launches one order of a batch. */
@@ -260,13 +310,15 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     if (order.operation === "hack") {
       // The hack is a batch's last order out.
       batches.delete(order.batch);
-      if (batch.short || health.state !== "batching") {
+      // After a desync no hack goes out; after a move (#206) the batches out still hack their own target.
+      if (batch.short || health.state === "recovering") {
         health.hacksSkipped += 1;
         return;
       }
       const player = playerNow();
       landing = landing.filter((each) => each.untilMs >= Date.now());
-      const bounds = batchBounds(batch.figures, player, [batch.threads, ...landing.map((each) => each.threads)]);
+      const sameTarget = landing.filter((each) => each.target === batch.target).map((each) => each.threads);
+      const bounds = batchBounds(batch.figures, player, [batch.threads, ...sameTarget]);
       const seen = {
         money: ns.getServerMoneyAvailable(batch.target),
         security: ns.getServerSecurityLevel(batch.target),
@@ -279,7 +331,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         return;
       }
       threads = hackThreadsAtLaunch(threads, batch.plannedShare, batch.figures, player);
-      landing.push({ threads: batch.threads, untilMs: order.landAt + landingOffsetMs("weaken2") });
+      landing.push({
+        target: batch.target,
+        threads: batch.threads,
+        untilMs: order.landAt + landingOffsetMs("weaken2"),
+      });
     }
     const started = launch(order.operation, threads, order.landAt, `${order.batch}.${order.operation}`, batch.target);
     // A hack that didn't all start is skipped too: what of it started still lands, and is counted as it does.
@@ -306,7 +362,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const newTarget =
       config !== null &&
       (config.target !== next.target || JSON.stringify(config.figures) !== JSON.stringify(next.figures));
-    if (newTarget && health.state === "batching") health.state = "recovering";
+    if (newTarget) {
+      // A move (#206): the batches out keep their target and land, hacks and all, while the new one is prepared beside
+      // them; the next target's waves in flight, if it's that one, are its own now.
+      preparing = config?.next?.target === next.target ? preparingNext : new Set();
+      preparingNext = new Set();
+      if (health.state === "batching") health.state = "preparing";
+    }
+    if (next.next?.target !== config?.next?.target) {
+      preparingNext = new Set();
+      health.next = next.next === undefined ? null : { target: next.next.target, wavesStarted: 0, ready: false };
+    }
     logNow = true;
     config = next;
     health.target = next.target;
@@ -323,14 +389,32 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
   };
 
-  /** Starts a preparation wave if nothing is in flight, or starts batching once the target is ready. */
+  /** The RAM free for a preparation wave, GB: the hosts' free, less what the orders not yet out will take. */
+  const freeForWaves = () => {
+    let reserved = 0;
+    for (const order of pending) {
+      const batch = batches.get(order.batch);
+      if (batch !== undefined) reserved += batch.threads[order.operation] * operationRamGb(order.operation);
+    }
+    return Math.max(0, batchRamGb(freeRam().map((host) => host.freeGb)) - reserved);
+  };
+
+  /**
+   * Starts a preparation wave once the last has landed, or starts batching once the target is ready. A previous
+   * target's batches may still be landing (#206): the wave takes the RAM they leave.
+   */
   const prepare = () => {
-    if (landings.inFlight() > 0 || Date.now() < waitUntilMs) return;
+    if (preparing.size > 0 || Date.now() < waitUntilMs) return;
     const { target, figures } = current();
+    // A move back to a target its batches are still landing on (#216's review): they land first, so no wave goes out
+    // among them.
+    if ([...batches.values()].some((each) => each.target === target)) return;
+    if (landing.some((each) => each.target === target && each.untilMs >= Date.now())) return;
     const now = { money: ns.getServerMoneyAvailable(target), security: ns.getServerSecurityLevel(target) };
     health.seen = now;
     const player = playerNow();
-    const usableGb = batchRamGb(freeRam().map((host) => host.freeGb));
+    // The RAM free, less what the batches out still need (a previous target's, after a move) and the next target's.
+    const usableGb = Math.max(0, freeForWaves() - (current().next?.ramGb ?? 0));
     const threads = preparationWave(figures, player, now, usableGb);
     if (threads === null) {
       startBatching();
@@ -339,7 +423,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     // Never `.grow` in this script: the game would charge grow's RAM for the name (Script/RamCalculations.ts:436-440).
     const { weaken1, grow: growCount, weaken2 } = threads;
     if (weaken1 + growCount === 0) {
-      setProblem(`no RAM to prepare ${target}`);
+      // None while a previous target's batches still hold the RAM (#206): it frees as they land.
+      if (pending.length === 0) setProblem(`no RAM to prepare ${target}`);
       return;
     }
     // Called at the security now, so their times are the longest they'll be: all land after their time from now.
@@ -352,13 +437,64 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     let problem: string | null = lastingProblem;
     for (const [operation, operationThreads, operationLandAt] of parts) {
       const id = `p${wave}.${operation}`;
-      if (operationThreads > 0 && !launch(operation, operationThreads, operationLandAt, id, target)) {
+      if (operationThreads > 0 && !launch(operation, operationThreads, operationLandAt, id, target, preparing)) {
         problem = `a preparation ${operation} of ${operationThreads} threads wouldn't start`;
       }
     }
     setProblem(problem);
     wave += 1;
     health.wavesStarted += 1;
+    // The last wave, all started, on a target at its minimum security (#206): batches start now, their operations'
+    // times as they'll be, their hacks out once the wave has landed, so the first lands a hack's time after it, not a
+    // weaken's. A fresh start's n00dles, at its minimum, needs only grow.
+    const whole = preparationWave(figures, player, now, Number.POSITIVE_INFINITY) ?? { weaken1: -1, grow: -1 };
+    const { weaken1: wholeWeaken1, grow: wholeGrow } = whole;
+    const last = wholeWeaken1 === weaken1 && wholeGrow === growCount;
+    // Only where the batches' peak fits beside the wave: otherwise they'd be short until it lands.
+    const batchThreadsNow = batchThreads(figures, player, hackThreadsForShare(current().hackShare, figures, player));
+    const peakGb = batchPeakRamGb(batchThreadsNow, batchHoldsMs(figures, player, batchThreadsNow), current().spacingMs);
+    const room = batchRamGb(freeRam().map((host) => host.freeGb)) >= peakGb;
+    if (problem === lastingProblem && last && room && now.security <= figures.minDifficulty + 1e-9) {
+      const wavesLastAt = landAt + 2 * BATCH_LANDING_GAP_MS;
+      // The wave counts among the batches landing until it has (#216's review): its grow raises the security until its
+      // weaken2 lands, so the batches' leads (`largestLanding`) cover it.
+      landing.push({ target, threads: { hack: 0, weaken1, grow: growCount, weaken2 }, untilMs: wavesLastAt });
+      // A second to spare: a hack's lead grows with the security its batch may leave (`launchLeadMs`).
+      startBatching(wavesLastAt + operationTimeMs("hack", figures, player) + BATCH_LAUNCH_LEAD_MS + 1_000);
+    }
+  };
+
+  /**
+   * The next target (#206): a preparation wave on at most the config's RAM for it, once its last has landed, so a move
+   * to it batches at once. Its operations hold RAM the batches don't plan on (the brain plans them on the rest).
+   */
+  const prepareNext = () => {
+    const next = current().next;
+    if (next === undefined || next.target === current().target || preparingNext.size > 0) return;
+    const now = { money: ns.getServerMoneyAvailable(next.target), security: ns.getServerSecurityLevel(next.target) };
+    const player = playerNow();
+    const usableGb = Math.min(next.ramGb, freeForWaves());
+    const threads = preparationWave(next.figures, player, now, usableGb);
+    const nextHealth = health.next ?? { target: next.target, wavesStarted: 0, ready: false };
+    health.next = nextHealth;
+    nextHealth.ready = threads === null;
+    if (threads === null) return;
+    const { weaken1, grow: growCount, weaken2 } = threads;
+    if (weaken1 + growCount === 0) return;
+    const landAt = Date.now() + operationTimeMs("weaken1", next.figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
+    const parts: [BatchOperation, number, number][] = [
+      ["weaken1", weaken1, landAt],
+      ["grow", growCount, landAt + BATCH_LANDING_GAP_MS],
+      ["weaken2", weaken2, landAt + 2 * BATCH_LANDING_GAP_MS],
+    ];
+    for (const [operation, operationThreads, operationLandAt] of parts) {
+      // A part that won't start waits for the next wave: the RAM was the batches'.
+      if (operationThreads > 0) {
+        launch(operation, operationThreads, operationLandAt, `n${nextWave}.${operation}`, next.target, preparingNext);
+      }
+    }
+    nextWave += 1;
+    nextHealth.wavesStarted += 1;
   };
 
   let lastLineAt = 0;
@@ -372,9 +508,13 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       continue;
     }
     drainLandings();
-    const lost = landings.takeLost(Date.now());
-    if (lost > 0) {
-      health.lost += lost;
+    const lost = landings.takeLostIds(Date.now());
+    for (const id of lost) {
+      preparing.delete(id);
+      preparingNext.delete(id);
+    }
+    if (lost.length > 0) {
+      health.lost += lost.length;
       logNow = true;
     }
     let wakeAt = Date.now() + PREPARING_LOOK_EVERY_MS;
@@ -401,19 +541,20 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         setProblem(`a hack of ${current().target} takes nothing at this hacking level`);
       }
     }
-    if (health.state !== "preparing") {
-      pending.sort((a, b) => a.launchAt - b.launchAt || a.landAt - b.landAt);
-      while (pending.length > 0 && (pending[0] as LaunchOrder).launchAt <= Date.now()) {
-        launchOrder(pending.shift() as LaunchOrder);
-      }
-      if (pending.length > 0) wakeAt = Math.min(wakeAt, (pending[0] as LaunchOrder).launchAt);
-      if (health.state === "recovering" && pending.length === 0 && landings.inFlight() === 0) {
-        health.state = "preparing";
-        batches.clear();
-        landing = [];
-        logNow = true;
-      }
+    // The batches planned go out in every state, a previous target's too after a move (#206).
+    pending.sort((a, b) => a.launchAt - b.launchAt || a.landAt - b.landAt);
+    while (pending.length > 0 && (pending[0] as LaunchOrder).launchAt <= Date.now()) {
+      launchOrder(pending.shift() as LaunchOrder);
     }
+    if (pending.length > 0) wakeAt = Math.min(wakeAt, (pending[0] as LaunchOrder).launchAt);
+    if (health.state === "recovering" && pending.length === 0 && landings.inFlight() === 0) {
+      health.state = "preparing";
+      batches.clear();
+      landing = [];
+      preparing = new Set();
+      logNow = true;
+    }
+    if (health.state !== "recovering") prepareNext();
     // Awake when a part would be lost, so it's counted then, not at the next launch.
     wakeAt = Math.min(wakeAt, landings.nextLostAtMs());
     health.batchesPending = batches.size;

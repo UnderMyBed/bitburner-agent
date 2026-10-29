@@ -52,6 +52,8 @@ async function freshStart({
 }) {
   const fresh = await freshStartOf({
     withDesiredState,
+    // The hack loop's own suite: the batcher (#206) would take its hosts.
+    batcher: false,
     beforeAgent: async (game) => {
       await game.simulation.writeFile("home", OWNER_SCRIPT, IDLE_SCRIPT_SOURCE);
       await beforeAgent(game);

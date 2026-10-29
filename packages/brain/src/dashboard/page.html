@@ -281,10 +281,12 @@ function render(status) {
     health === null
       ? "Its health: not reported"
       : `Its health: ${health.state}, ${health.batchesStarted} batches, ${health.hacksLanded} hacks landed ` +
-        `(${health.hacksFailed} failed, ${health.hacksSkipped} skipped), ${health.desyncs} desyncs ` +
+        `(${health.hacksFailed} failed, ${health.hacksSkipped} skipped), ${health.desyncs} desync${health.desyncs === 1 ? "" : "s"} ` +
         `(${health.outOfOrder} out of order, ${health.outOfBounds} out of bounds), ${health.late} late, ` +
         `${health.lost} lost, ${health.batchesShort} short${health.problem === null ? "" : `; ${health.problem}`}`;
-  const healthBad = health !== null && (health.desyncs > 0 || health.problem !== null);
+  // Red when out of step (#206: a desync, a late or lost operation fails the run) or with a problem.
+  const healthBad =
+    health !== null && (health.desyncs + health.late + health.lost > 0 || health.problem !== null);
   document.querySelector("#batcher div").replaceChildren(
     element("div", `Batcher: ${batcherText}`, batcher.enabled ? "ok" : "muted"),
     element("div", healthText, healthBad ? "bad" : undefined),

@@ -16,7 +16,7 @@ import {
 } from "@bitburner-agent/core";
 import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline } from "./augmentation-report.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
-import { batcherSection } from "./batcher-report.ts";
+import { batcherSection, whoHacked } from "./batcher-report.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
 import {
   BACKDOOR_OVERDUE_AFTER_MS,
@@ -529,7 +529,7 @@ export function runReport(
     "",
     ...healthSection(facts, gapThresholdMs, failures),
     "",
-    ...facts.hacking.section(failures),
+    ...withWhoHacked(facts.hacking.section(failures), facts),
     "",
     ...batcherSection(
       facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
@@ -540,6 +540,20 @@ export function runReport(
     ...failures.map((failure) => `  ${failure}`),
   ];
   return { text: lines.join("\n"), failures };
+}
+
+/**
+ * Section 5's lines with, under the best 10 minutes, who hacked in them (#206): the batcher, from its health in the
+ * fast snapshots then, or the hack loop. That's the batcher's percentage of A1's measure, the figure it's judged on.
+ */
+function withWhoHacked(lines: string[], facts: RunFacts): string[] {
+  const best = facts.hacking.totals().best;
+  const at = lines.findIndex((line) => line.startsWith("  the best 10 minutes: ") && !line.includes("none yet"));
+  if (best === null || at === -1) return lines;
+  const points = facts.fast
+    .filter(({ atMs }) => atMs >= best.fromMs && atMs <= best.toMs)
+    .map(({ atMs, batcher }) => ({ atMs, health: batcher }));
+  return [...lines.slice(0, at + 1), `    by: ${whoHacked(points)}`, ...lines.slice(at + 1)];
 }
 
 // --- Formatting -------------------------------------------------------------------------------------------------------

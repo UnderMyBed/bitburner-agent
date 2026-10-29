@@ -1,6 +1,6 @@
 // The World Daemon (#215), in the simulator: from a harness-edited late game to the end of BN1.1, the brain's rules as
-// on Steam (the hack loop, programs, home RAM, cloud servers, backdoors, faction work, augmentations and the destroy,
-// all on).
+// on Steam (the hack loop, the batcher, programs, home RAM, cloud servers, backdoors, faction work, augmentations and
+// the destroy, all on).
 // - Before the Agent, harness edits stand in for the run so far: 30 augmentations installed (Daedalus's count in BN1),
 //   the hacking level past 2500, and $200b. The game invites Daedalus within seconds; A5 joins it.
 // - Joined, a harness edit puts Daedalus's reputation just short of The Red Pill's 2.5m: A5 works for it, A6 holds
@@ -124,6 +124,8 @@ test.each(SEEDS)(
       return (slow()?.resetInfo.lastNodeReset ?? nodeResetBefore) !== nodeResetBefore;
     }, STAGE_MS);
     expect({ openers, rooted }).toEqual({ openers: true, rooted: true });
+    // The batcher on, by default (owner decision 49): the hack loop's root worker roots w0r1d_d43m0n all the same.
+    expect(fresh.controller().batcherView().enabled).toBe(true);
 
     // BN1 again, with SF1.1; the next Agent back, the destroy off the queue.
     expect(slow()?.resetInfo).toMatchObject({ currentNode: 1, ownedSF: { 1: 1 }, ownedAugs: {} });

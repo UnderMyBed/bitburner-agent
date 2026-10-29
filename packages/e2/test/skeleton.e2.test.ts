@@ -10,7 +10,6 @@ import {
   deployedFilePath,
   type FastSnapshotData,
   freshSaveHomeWorkerFileNames,
-  HACK_LOOP_SCRIPT_NAME,
   type MediumSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   SNAPSHOT_TIERS,
@@ -414,18 +413,15 @@ describe("the skeleton on E2", () => {
         `home RAM in use at each fast snapshot at most ${mostHomeRamUsedGb} GB of 8; page heap ${heapText}`,
     );
 
-    // The hack loop (#134), on by default, in the real game: n00dles is rooted, and runs the loop.
+    // The hacking, on by default, in the real game: n00dles is rooted (the hack loop's root worker, #134), and the
+    // batcher, the default since #206, has the servers: its deploy worker reports it running, and its health comes
+    // back in the fast snapshots.
     const latestMedium = rowsOf(rows, session, "medium").at(-1)?.data as MediumSnapshotData;
     expect(latestMedium.servers.find((server) => server.hostname === "n00dles")).toMatchObject({
       hasAdminRights: true,
     });
-    await typeCommand(page, "connect n00dles");
-    const terminalLengthBeforePs = (await terminalText(page)).length;
-    await typeCommand(page, "ps");
-    const loopFile = deployedFilePath(brain.deploymentId, HACK_LOOP_SCRIPT_NAME);
-    await advanceUntil(page, async () => (await terminalText(page)).slice(terminalLengthBeforePs).includes(loopFile), {
-      realTimeoutMs: 10_000,
-    });
-    await typeCommand(page, "home");
+    const deployed = fastRows.map((fast) => fast.batcherDeploy).filter((deploy) => deploy?.running);
+    expect(deployed.length, "a fast snapshot with the batcher running").toBeGreaterThan(0);
+    expect(fastRows.some((fast) => fast.batcher?.runName)).toBe(true);
   });
 });

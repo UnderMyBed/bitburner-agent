@@ -3,7 +3,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import {
+  type FastSnapshotData,
+  type MediumSnapshotData,
+  newBatcherHealth,
+  type StaticSnapshotData,
+} from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { AugmentationsView } from "../src/augmentations.ts";
 import type { BackdoorDue } from "../src/backdoors.ts";
@@ -664,4 +669,20 @@ test("messageRefused (#194's review): from the newest fast snapshot's refused me
   ]);
   recordSnapshot("fast", nowMs - 500, { ...fastData(1), refusedMessage: { reason: 7 } });
   expect(status(nowMs).alerts).toEqual([]);
+});
+
+test("batcherOutOfStep (#206): a rise in the batcher run's desyncs, late or lost in the newest fast snapshots", () => {
+  const nowMs = STARTED_AT_MS + 300_000;
+  const health = (desyncs: number) => ({ ...newBatcherHealth("n00dles", "r1", 0), state: "batching", desyncs });
+  recordSnapshot("fast", STARTED_AT_MS + 10_000, { ...fastData(1), batcher: health(0) });
+  recordSnapshot("fast", STARTED_AT_MS + 12_000, { ...fastData(1), batcher: health(0) });
+  expect(status(nowMs - 270_000).alerts.map((alert) => alert.name)).not.toContain("batcherOutOfStep");
+  recordSnapshot("fast", STARTED_AT_MS + 14_000, { ...fastData(1), batcher: health(1) });
+  expect(status(nowMs - 270_000).alerts).toContainEqual({
+    name: "batcherOutOfStep",
+    sinceMs: STARTED_AT_MS + 14_000,
+    detail:
+      "the batcher is out of step on n00dles: 1 desync, 0 late, 0 lost lately; it stops hacking, prepares the " +
+      "target again and goes on, and the run report fails the run",
+  });
 });
