@@ -51,6 +51,7 @@ import {
 } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
+import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
 
 /** An Agent disconnect with no reconnect within this is a failure, unless the run ended there. */
 export const RECONNECT_WITHIN_MS = 60_000;
@@ -366,6 +367,8 @@ interface RunFacts extends RunWindow {
   factionWork: FactionWorkTimeline;
   /** The installs over the slow snapshots (#210), for the augmentation rule's events. */
   augmentations: AugmentationTimeline;
+  /** The hacking experience rate over the medium snapshots (#215), for the World Daemon's ETA. */
+  worldDaemon: WorldDaemonFold;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -435,7 +438,9 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const money: MoneyPoint[] = [];
     const inference = new HackTargetInference(playersServers);
     const cloudServerChanges = new CloudServerChanges(cloudServers);
+    const worldDaemon = new WorldDaemonFold();
     for (const { atMs, data } of ofTier<MediumSnapshotData>("medium")) {
+      worldDaemon.addMedium(atMs, data);
       snapshotCount++;
       mediumFirst ??= data;
       mediumLast = data;
@@ -482,6 +487,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       factionState,
       factionWork,
       augmentations,
+      worldDaemon,
       snapshotCount,
       playersServers,
       staticLast,
@@ -597,6 +603,7 @@ function windowSection(facts: RunFacts): string[] {
     FACTION_WORK_CHOSEN_EVENT_KIND,
     FACTION_WORK_STOPPED_EVENT_KIND,
     ...AUGMENTATION_EVENT_KINDS,
+    ...WORLD_DAEMON_EVENT_KINDS,
   ];
   const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)}`);
@@ -892,6 +899,7 @@ function actionsSection(facts: RunFacts): string[] {
   lines.push(...backdoorLines(facts));
   lines.push(...factionLines(facts));
   lines.push(...facts.augmentations.actionLines(facts.events, formatIsoTime));
+  lines.push(...facts.worldDaemon.pathLines(facts, facts.events, formatIsoTime));
   return lines;
 }
 
@@ -1097,6 +1105,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
       formatTime: formatIsoTime,
     }),
   );
+  lines.push(...facts.worldDaemon.healthLines(facts.events, failures, formatIsoTime));
 
   // Done, but not as asked (#194): a server bought under another name.
   lines.push("  cloud server purchases done with a problem:");

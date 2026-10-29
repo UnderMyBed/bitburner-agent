@@ -86,6 +86,18 @@ import {
   workFocus,
   writeOwnersWork,
 } from "./work.ts";
+import {
+  BITNODE_DESTROY_SENT_EVENT_KIND,
+  NEXT_BITNODE,
+  nextBitNodeProblem,
+  readWorldDaemonEnabled,
+  WORLD_DAEMON_DESTROY_INTENT,
+  type WorldDaemonEvent,
+  WorldDaemonRule,
+  type WorldDaemonStall,
+  type WorldDaemonView,
+  writeWorldDaemonEnabled,
+} from "./world-daemon.ts";
 
 /**
  * Safe mode (#160, architecture §5.4): how long the Agent keeps converging on the last state, minus its intents, after
@@ -97,9 +109,10 @@ export const SAFE_MODE_TTL_MS = 12 * 60 * 60_000;
 
 /**
  * The owner's manual queue's limit: the protocol's 100, less room for the purchase (a program, home RAM or a cloud
- * server, #194, one at a time), the backdoor (#195), the join (#203) and the augmentation purchase or install (#210).
+ * server, #194, one at a time), the backdoor (#195), the join (#203), the augmentation purchase or install (#210; never
+ * both) and the World Daemon's destroy (#215).
  */
-export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 4;
+export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 5;
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -186,9 +199,9 @@ export interface IntentView {
   id: string;
   /**
    * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), or its augmentations'
-   * purchases and install (#210).
+   * purchases and install (#210), or its destroy (#215).
    */
-  source: "manual" | "purchase" | "backdoor" | "join" | "augmentation";
+  source: "manual" | "purchase" | "backdoor" | "join" | "augmentation" | "worldDaemon";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -300,7 +313,7 @@ export class DesiredStateController {
   #join: Intent | null = null;
   #factionWork: { faction: string; workType: FactionWorkType } | null = null;
   /** Who gets the rules' events (#203, #210): the store, through main.ts. */
-  readonly #listeners = new Set<(event: FactionWorkEvent | AugmentationEvent) => void>();
+  readonly #listeners = new Set<(event: FactionWorkEvent | AugmentationEvent | WorldDaemonEvent) => void>();
   /** When the connected Agent's latest medium and slow snapshots arrived, or null. */
   #mediumAtMs: number | null = null;
   /** The game's time of the connected Agent's latest medium and fast snapshots (their `gameTimeMs`), or null (#213). */
@@ -319,6 +332,9 @@ export class DesiredStateController {
   #augmentationIntent: Intent | null = null;
   #augmentationInstall = false;
   #augmentationsCommitted = false;
+  /** The World Daemon (#215): the rule, and whether it asks for the destroy. */
+  readonly #worldDaemon: WorldDaemonRule;
+  #worldDaemonDestroy = false;
   /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
   #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
@@ -343,7 +359,12 @@ export class DesiredStateController {
     this.#backdoors = new BackdoorRule(log);
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
+    this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
+    // A restarted brain with its destroy out (#215 review): held, and its note kept, until the BitNode's reset shows.
+    if (this.#resetSent?.field === "lastNodeReset" && this.#resetSent.id === WORLD_DAEMON_DESTROY_INTENT.id) {
+      this.#worldDaemon.restore(this.#resetSent.resetAt);
+    }
     // A brain restarted with an install out: the Agent went with it, as far as this brain knows, since it went out.
     if (this.#resetSent?.field === "lastAugReset" && this.#resetSent.sentAtMs !== undefined) {
       this.#installDisconnectedAtMs = this.#resetSent.sentAtMs;
@@ -478,8 +499,25 @@ export class DesiredStateController {
     this.#update();
   }
 
-  /** Listens for the rules' events (#203, #210), to store them; returns a function that stops it. */
-  subscribe(listener: (event: FactionWorkEvent | AugmentationEvent) => void): () => void {
+  /** Destroying the BitNode's switch (#215), likewise: off, a destroy the brain asked for is withdrawn. */
+  setWorldDaemonEnabled(enabled: boolean): void {
+    writeWorldDaemonEnabled(this.#store, enabled);
+    this.#update();
+  }
+
+  /** What the dashboard shows of the path to the World Daemon (#215). */
+  worldDaemonView(): WorldDaemonView {
+    const ownersDestroy = readManualIntents(this.#store).some((each) => each.action === "destroyBitNode");
+    return { ...this.#worldDaemon.view(), ownersDestroy };
+  }
+
+  /** A step on the path stalled (#215), or null: the `worldDaemonStalled` alert's. */
+  worldDaemonStall(): WorldDaemonStall | null {
+    return this.#worldDaemon.stall();
+  }
+
+  /** Listens for the rules' events (#203, #210, #215), to store them; returns a function that stops it. */
+  subscribe(listener: (event: FactionWorkEvent | AugmentationEvent | WorldDaemonEvent) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -591,10 +629,13 @@ export class DesiredStateController {
     const manual = readManualIntents(this.#store);
     const fromRule = (intent: Intent | null) =>
       this.#desired !== null && intent && !manual.some((each) => each.id === intent.id) ? [intent] : [];
-    const install = this.#gatedQueue().slice(manual.length);
+    const brainsGated = this.#gatedQueue().slice(manual.length);
     return [
       ...manual.map((intent) => ({ intent, source: "manual" as const })),
-      ...install.map((intent) => ({ intent, source: "augmentation" as const })),
+      ...brainsGated.map((intent) => ({
+        intent,
+        source: intent.action === "destroyBitNode" ? ("worldDaemon" as const) : ("augmentation" as const),
+      })),
       ...fromRule(this.#purchase).map((intent) => ({ intent, source: "purchase" as const })),
       ...fromRule(this.#augmentationIntent).map((intent) => ({ intent, source: "augmentation" as const })),
       ...fromRule(this.#backdoor).map((intent) => ({ intent, source: "backdoor" as const })),
@@ -611,16 +652,25 @@ export class DesiredStateController {
   }
 
   /**
-   * The intents the gates judge, in order: the owner's queue, then the brain's install (#210) unless the owner queued
-   * one, so it waits behind the whole queue (an install's guard: nothing before it undone).
+   * The intents the gates judge, in order: the owner's queue; then the brain's destroy (#215) unless the owner queued a
+   * destroy (theirs wins, whatever BitNode it enters); then the brain's install (#210) unless the owner queued one. Each
+   * waits behind the whole queue (a reset's guard: nothing before it undone). The destroy goes before the install
+   * (#215 review): an install resets the hacking level w0r1d_d43m0n needs, and drops its root.
    */
   #gatedQueue(): Intent[] {
     const manual = readManualIntents(this.#store);
+    const queue = [...manual];
+    // The rule holds its ask until a slow snapshot shows the BitNode reset, so its reset note stays too.
+    if (this.#worldDaemonDestroy && !manual.some((each) => each.action === "destroyBitNode")) {
+      queue.push(WORLD_DAEMON_DESTROY_INTENT);
+    }
     // Once sent, it stays while the cycle is committed, the snapshots gone with the Agent it killed (or a restarted
     // brain's not yet in), so its reset note does too, until a slow snapshot shows the reset.
     const sent = this.#augmentationsCommitted && this.#resetSent?.id === INSTALL_INTENT.id;
-    if (!(this.#augmentationInstall || sent) || manual.some((each) => each.id === INSTALL_INTENT.id)) return manual;
-    return [...manual, INSTALL_INTENT];
+    if ((this.#augmentationInstall || sent) && !manual.some((each) => each.id === INSTALL_INTENT.id)) {
+      queue.push(INSTALL_INTENT);
+    }
+    return queue;
   }
 
   /** The done intents in the connected Agent's latest fast snapshot. */
@@ -632,7 +682,7 @@ export class DesiredStateController {
     );
   }
 
-  #emit(event: FactionWorkEvent | AugmentationEvent): void {
+  #emit(event: FactionWorkEvent | AugmentationEvent | WorldDaemonEvent): void {
     for (const listener of this.#listeners) listener(event);
   }
 
@@ -859,6 +909,17 @@ export class DesiredStateController {
       };
       return null;
     }
+    // Daedalus's $100b held for its invitation (#215 review): home RAM only with the money above it.
+    const daedalusHold = this.#augmentations.daedalusHold();
+    const playerMoney = this.#mediumData?.player?.money;
+    if (
+      homeRamNext !== null &&
+      daedalusHold > 0 &&
+      (typeof playerMoney === "number" ? playerMoney : 0) - (homeRamPlan?.price ?? 0) < daedalusHold
+    ) {
+      this.#waitingFor.homeRam = `money above the $${daedalusHold.toLocaleString("en-US")} held for Daedalus's invitation`;
+      homeRamNext = null;
+    }
     // Until the slow snapshot says which BitNode, the upgrade's price isn't known, so neither is which goes first.
     if (programsNext !== null && homeRamEnabled && this.#slowData === null) {
       this.#waitingFor.programs = "the Agent's slow snapshot (which BitNode), to compare with home RAM";
@@ -924,6 +985,17 @@ export class DesiredStateController {
     this.#resetSent = note;
     writeResetSentNote(this.#store, note);
     if (note === null) this.#installDisconnectedAtMs = null;
+    // A destroy going out (#215): stored, for the run report.
+    if (note?.field === "lastNodeReset") {
+      const manual = readManualIntents(this.#store).find((each) => each.id === note.id);
+      const destroy = manual ?? WORLD_DAEMON_DESTROY_INTENT;
+      this.#emit({
+        type: BITNODE_DESTROY_SENT_EVENT_KIND,
+        atMs: this.#lastEventAtMs ?? 0,
+        source: manual === undefined ? "brain" : "manual",
+        nextBitNode: destroy.action === "destroyBitNode" ? destroy.args.nextBitNode : NEXT_BITNODE,
+      });
+    }
     // An install going out (#210): stored, so the run report can look for the reset after it.
     if (note?.field === "lastAugReset") {
       this.#emit({
@@ -1005,10 +1077,22 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       enabled: readAugmentationsEnabled(this.#store),
       homeRamEnabled: readHomeRamEnabled(this.#store),
+      // The destroy wanted once The Red Pill is installed (#215 review): ordinary installs held for it.
+      destroyWanted:
+        readWorldDaemonEnabled(this.#store) && nextBitNodeProblem(this.#slowData?.resetInfo?.ownedSF ?? {}) === null,
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
     this.#augmentationsCommitted = augmentations.committed;
+    // The World Daemon (#215): the destroy once w0r1d_d43m0n is ready, through the gate after the install.
+    this.#worldDaemonDestroy = this.#worldDaemon.update({
+      staticData: this.#staticData,
+      mediumData: this.#mediumData,
+      mediumGameTimeMs: this.#mediumGameTimeMs,
+      slowData: this.#slowData,
+      nowMs: this.#lastEventAtMs,
+      enabled: readWorldDaemonEnabled(this.#store),
+    });
     this.#purchase = this.#choosePurchase();
     this.#backdoor = this.#backdoors.intent({
       staticData: this.#staticData,

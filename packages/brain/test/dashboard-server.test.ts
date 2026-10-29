@@ -21,6 +21,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const cloudServersCalls: boolean[] = [];
   const factionWorkCalls: boolean[] = [];
   const augmentationsCalls: boolean[] = [];
+  const worldDaemonCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
   const workRequests: unknown[] = [];
@@ -36,6 +37,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setCloudServersEnabled: (enabled) => cloudServersCalls.push(enabled),
     setFactionWorkEnabled: (enabled) => factionWorkCalls.push(enabled),
     setAugmentationsEnabled: (enabled) => augmentationsCalls.push(enabled),
+    setWorldDaemonEnabled: (enabled) => worldDaemonCalls.push(enabled),
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
       intentRequests.push(request);
@@ -66,6 +68,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     cloudServersCalls,
     factionWorkCalls,
     augmentationsCalls,
+    worldDaemonCalls,
     intentRequests,
     cancelledIds,
     workRequests,
@@ -201,6 +204,7 @@ const SWITCHES = [
   ["cloud servers (#194)", "/api/cloud-servers", "cloudServersCalls"],
   ["the brain's faction work (#203)", "/api/faction-work", "factionWorkCalls"],
   ["augmentations (#210)", "/api/augmentations", "augmentationsCalls"],
+  ["destroying the BitNode (#215)", "/api/world-daemon", "worldDaemonCalls"],
 ] as const;
 
 test.each(SWITCHES)("POST sets the switch for %s, from the dashboard's own page", async (_name, switchPath, own) => {
