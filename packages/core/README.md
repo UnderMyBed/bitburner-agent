@@ -28,3 +28,18 @@ Generated from the pinned game by the simulator's engine, never typed by hand: `
 | `daedalusAugmentationsRequired(currentNode, ownedSF)` | The installed augmentations Daedalus's invitation needs. |
 
 `state` is what the brain has: `installed` is `resetInfo.ownedAugs`; `queued` is the queued augmentations in order, one entry per NeuroFlux Governor level; `sourceFile11Level` is `resetInfo.ownedSF["11"] ?? 0` (the game has already applied the BitNode options' overrides); and `bitNodeMultipliers` is `augmentationBitNodeMultipliers(resetInfo.currentNode, resetInfo.ownedSF)`. An unknown augmentation, an installed level that isn't a whole number from 1, an SF11 level outside 0-3, or a multiplier that isn't finite and above 0 throws.
+
+## The hacking ceilings
+
+Built in #196 (M4 phase A slice A1): "how good is our hacking" as a number. `src/hacking-ceiling.ts`; the brain applies them to the snapshots ([brain: the hacking ceiling](../brain/README.md#the-hacking-ceiling)).
+
+| Function | What |
+|---|---|
+| `hackChance(server, player)` | The game's `calculateHackingChance` (Hacking.ts:9-24), on a rooted server. |
+| `hackTimeSeconds(server, player)` | The game's `calculateHackingTime` (Hacking.ts:60-80); a grow takes `GROW_TIME_PER_HACK_TIME` (3.2) of it, a weaken `WEAKEN_TIME_PER_HACK_TIME` (4). |
+| `intelligenceBonus(intelligence)`, `coreBonus(cores)` | The game's (intelligence.ts:1-3, ServerHelpers.ts:287-290). |
+| `hackingIncomePerGigabyteSecond(target, player, cores)` | The hacking ceiling: the most $ a GB-second of RAM can earn on `target`, by any hacker, as the limit of a batch's share going to 0. Nothing passes it. |
+| `batcherIncomePerGigabyteSecond(target, player, cores)` | The batcher ceiling: the same with grow and weaken paid for failed hacks too, as a batcher (HWGW) commits them first. The score the batcher (A7) is judged on. |
+| `usableRamGb(ramGb)` | A host's RAM in whole threads: floor(RAM/1.7) at 1.75 GB each, at most its RAM. |
+
+With `percentMoneyHackedPerThread` and `growthLogPerThread` (`src/hack-loop.ts`, #187), and the script RAM (1.7, 1.75, 1.75 GB) and security a thread (0.002, 0.004, 0.05) as constants. BitNode multipliers are taken as 1: exact in BN1, high elsewhere (the safe side) but for BN11's weaken rate. `test/hacking-ceiling.test.ts` works them by hand, and the brain's `hacking-ceiling-parity.test.ts` checks them against the engine's `ns.formulas.hacking`.

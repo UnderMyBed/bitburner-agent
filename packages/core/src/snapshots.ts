@@ -48,7 +48,7 @@ export interface StaticSnapshotData {
   }[];
 }
 
-/** slow: every 60 s. `ns.getResetInfo()` (its Maps as objects) and the purchased servers. */
+/** slow: every 60 s. `ns.getResetInfo()` (its Maps as objects), the purchased servers, and the money by source. */
 export interface SlowSnapshotData {
   resetInfo: {
     lastAugReset: number;
@@ -61,6 +61,11 @@ export interface SlowSnapshotData {
     bitNodeOptions: Record<string, unknown>;
   };
   purchasedServers: string[];
+  /**
+   * `ns.getMoneySources().sinceInstall` (#196): money made (and spent, as negatives) by source since the last install,
+   * which resets it (PlayerObjectGeneralMethods.ts:128). `hacking` is every hack's money. Absent from an older Agent.
+   */
+  moneySources?: Record<string, number>;
 }
 
 /** medium: every 10 s. `ns.getPlayer()` whole, and every reachable server's RAM, cores, money, security and access. */
