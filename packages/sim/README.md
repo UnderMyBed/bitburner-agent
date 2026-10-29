@@ -100,6 +100,8 @@ await sim.close();
   - `toPage(page, flume?)` and `back()`: navigate as game code does (see [Pages](#pages-and-the-bitverse)). **Test-only:** they change game state (going to the BitVerse kills every script), and scenarios must not use them.
   - `destroyBitNode(n)`: destroys the current BitNode and enters BitNode `n`, as the BitVerse's portal does after a real destroy, granting the current BitNode's Source-File. **Test-only**, like `toPage`; scenarios use `runUntil`'s `onBitVerse`.
   - `bitNodeMultipliers(n, level)`: the game's own `getBitNodeMultipliers`, for comparison
+  - `gameData()`: the game's augmentations and factions, read from its own objects (`Augmentations`, `FactionInfos`), in the game's order; infinite costs come as `"Infinity"`, which JSON can carry. Core's generated data comes from it, and the test that keeps that in step uses it (#193, [Generated game data](#generated-game-data)). **Test-only.**
+  - `augmentationCosts()`: every augmentation's price now, by the game's own `getAugCost`: core's price parity (#193). **Test-only.**
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
   - `setMoney(money)`: sets the player's money (finite, 0 or more). A harness edit, for test scenarios (#145).
   - `giveInstalledAugmentation(augmentation)`: gives the player an augmentation, installed and unpaid (one of the game's names, not already installed). A harness edit, for test scenarios (#151).
@@ -309,6 +311,16 @@ const { now, stoppedBy } = await sim.runUntil(24 * 3_600_000, {
   - `homeRamUsed`, `homeRamMax`, `scripts`
   - `augsInstalled`, `augsQueued`
 
+## Generated game data
+
+Core holds the game's augmentations, the BitNode multipliers on them, and the factions as committed TypeScript (`packages/core/src/augmentation-data.ts`, `faction-data.ts`, #193), generated from this engine rather than typed by hand:
+
+```sh
+node packages/sim/scripts/generate-game-data.ts
+```
+
+It builds the bundle if needed, boots a new BN1, reads `diagnostics.gameData()` and `bitNodeMultipliers(n, 1)` for BitNodes 1-15, writes both files, and formats them with Biome, so a run that changes nothing leaves no diff. `test/game-data.test.ts` compares every entry with the engine and every price core computes with `getAugCost`, so a game bump that changes any of it fails until the generator is rerun.
+
 ## Scenarios
 
 Scenario files run a described workload across many seeds in parallel, with per-seed results and an aggregate (the repeatability metric of architecture §9.3):
@@ -419,6 +431,6 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
 | `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), prompt rules (`prompts.ts`), machine-independent paths (`paths.ts`), heap and CPU profile measurement (`measure.ts`), engine loading |
 | `src/host/parity/` | Browser-parity fixes: locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, the network (offline, but for sockets to the parent), Node's globals hidden |
-| `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts`, `typecheck-bundle.ts` (run by the root `npm run` scripts), `bench.ts` (`npm run bench -w @bitburner-agent/sim`) |
+| `scripts/` | `setup-engine.ts`, `build-engine.ts`, `run-scenario.ts`, `typecheck-bundle.ts` (run by the root `npm run` scripts), `bench.ts` (`npm run bench -w @bitburner-agent/sim`), `generate-game-data.ts` (core's game data, [above](#generated-game-data)) |
 | `tsconfig.bundle.json` | The bundled sources' typecheck against the game's types ([Typecheck boundary](#typecheck-boundary)) |
 | `test/` | Unit and integration tests; `global-setup.ts` builds the bundle; `helpers/` holds child-process probes and save helpers (decoding, and editing saves into test fixtures) |

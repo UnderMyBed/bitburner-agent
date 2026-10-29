@@ -219,6 +219,14 @@ async function start(options: HostOptions): Promise<Host> {
       engine.queueAugmentation(augmentation);
     },
     "diagnostics.bitNodeMultipliers": ({ n, level }) => engine.bitNodeMultipliers(n, level),
+    "diagnostics.gameData": () => {
+      booted(); // the invitation requirements read the game's servers (a company's backdoor)
+      return engine.gameData();
+    },
+    "diagnostics.augmentationCosts": () => {
+      booted();
+      return engine.augmentationCosts();
+    },
     "diagnostics.heap": () => heapUsed(),
     "diagnostics.heapLimit": () => heapLimit(),
     "diagnostics.profile": async ({ action }) => {

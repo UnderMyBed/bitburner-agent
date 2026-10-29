@@ -251,6 +251,10 @@ export class Simulation {
     queueAugmentation: (augmentation: string) => this.rpc.call("diagnostics.queueAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */
     bitNodeMultipliers: (n: number, level: number) => this.rpc.call("diagnostics.bitNodeMultipliers", { n, level }),
+    /** The game's augmentations and factions, from its own objects (#193). Test-only. */
+    gameData: () => this.rpc.call("diagnostics.gameData", {}),
+    /** Every augmentation's price now, by the game's own `getAugCost` (#193). Test-only. */
+    augmentationCosts: () => this.rpc.call("diagnostics.augmentationCosts", {}),
     /** The host's V8 heap in use, in bytes, after a full garbage collection. */
     heap: () => this.rpc.call("diagnostics.heap", {}),
     /** The host's V8 heap limit, in bytes: `maxHeapMb` plus a little for the young generation, or Node's default. */
