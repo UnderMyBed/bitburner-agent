@@ -99,6 +99,15 @@ Reading the fourth row (58f0c4d, M2's run, the reference rig, [#100](https://git
 - Every workload is within 1.4% of the third row (lean +1.4%, batch +0.2%, churn +1.0%, copies unchanged), which is noise. So M2's changes to the simulator cost nothing measurable. M2 then moved its candidate to 201e133. As the owner decided ([#100](https://github.com/UnderMyBed/bitburner-agent/issues/100#issuecomment-6436963056)), only the suites that change could affect ran on it: the workloads and E2. Every workload ended in the same state hash as on 58f0c4d.
 - **The heap still doesn't grow.** It starts and ends 1.6 MB higher than the third row's.
 
+Reading the fifth row (fa9c5dc, M3's first candidate, the reference rig, [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140#issuecomment-6469333597)):
+- Every workload is within 3.5% of the fourth row (lean −0.2%, batch −0.7%, churn −3.5%, copies +1.4%), and the benchmark found no regression. So M3's changes to the simulator's bundle cost the workloads nothing measurable.
+- **The heap still doesn't grow.** It starts 1.2 MB and ends 1.3 MB higher than the fourth row's.
+
+Reading the sixth row (7990834, M3's run after #155 moved its candidate, the reference rig, [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140#issuecomment-6477585240)):
+- Every workload is within 7% of the fifth row (lean −2.1%, batch +1.0%, churn −6.9%, copies −1.3%), and the benchmark found no regression. Churn's drop is noise: the churn scenario run through the scenario runner (`npm run sim -- packages/sim/scenarios/churn.json`) with nothing else on the machine, on each commit, twice and back to back, gave fa9c5dc 340× and 338×, 7990834 335× and 339× (medians), with the same state hashes. The runner runs the four seeds at once, so these are slower than the benchmark's, which runs them one at a time: they compare the two commits with each other, not with the rows. #155 added only harness edits and company work's effector to the simulator, which churn never calls.
+- **The heap still doesn't grow.** It starts 0.1 MB lower and ends 0.1 MB lower than the fifth row's.
+- **M3's candidate then moved on to 33ec5d6** ([#184](https://github.com/UnderMyBed/bitburner-agent/issues/184), [#185](https://github.com/UnderMyBed/bitburner-agent/issues/185), [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187)). The benchmark didn't run on it, an explained exception, recorded on [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140): nothing it runs changed (`packages/sim`, `packages/legacy`, the game's source and the lockfile are as on 7990834, and of `packages/core`, which changed only in `control-protocol.ts`, `hack-loop.ts` and `index.ts`, the simulator loads only `PINNED_GAME`, `packages/sim/src/engine/build.ts`), and a run then would have shared the machine with five builders, so it wouldn't be comparable. 7990834's row stands for 33ec5d6.
+
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
 
 | Date | Commit | Rig | Node | lean | batch | churn | copies | Heap start | Heap end | Heap growth per day |
@@ -107,3 +116,5 @@ Rows are appended at the end of this file, so keep the results table last. When 
 | 2026-10-25 | 5457a1c | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 27034x | 10028x | 479x | 12040x | 103.6 MB | 93.5 MB | +0.0 MB |
 | 2026-10-26 | 3cf08f9 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26503x | 9991x | 487x | 12081x | 103.7 MB | 93.5 MB | +0.0 MB |
 | 2026-10-27 | 58f0c4d | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26866x | 10014x | 492x | 12081x | 105.3 MB | 95.1 MB | +0.0 MB |
+| 2026-10-28 | fa9c5dc | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26799x | 9945x | 475x | 12245x | 106.5 MB | 96.4 MB | +0.0 MB |
+| 2026-10-28 | 7990834 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26245x | 10042x | 442x | 12081x | 106.4 MB | 96.3 MB | +0.0 MB |

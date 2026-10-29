@@ -2,7 +2,7 @@
 
 Environment E2 (architecture §9.4): the game built from `vendor/bitburner-src` at the pinned commit, served on 127.0.0.1 and driven by Playwright. It covers what the simulator can't show: the rendered UI, and the page's real network, storage and reload ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)).
 
-> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)), and the walking skeleton's tests on it ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97)).
+> **Status:** built in M2 ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)): the source build, the Playwright harness, its fixtures and the game clock ([#96](https://github.com/UnderMyBed/bitburner-agent/issues/96)), and the walking skeleton's tests on it ([#97](https://github.com/UnderMyBed/bitburner-agent/issues/97)). M3 ([v0.3.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.3.0)) added the `ui` effectors' tests on the real page (`test/effectors.e2.test.ts`): every BN1 action and work activity, the game's dialogs, safe mode, and the install's and the destroy's restarts. The skeleton's tests gained the fresh save's tutorial ([#168](https://github.com/UnderMyBed/bitburner-agent/issues/168)) and every worker's RAM, and a load still under way after 20 s (the loading screen, or an empty page) is retried once ([#120](https://github.com/UnderMyBed/bitburner-agent/issues/120), [fixtures](#fixtures)).
 
 E2 is a heavy tier. Run it on demand when `ingame/` or `bridge/` change, and before every release ([releasing](../../docs/releasing.md) step 2; architecture §9.3, ADR 0004). It isn't part of `npm test` or CI.
 
@@ -46,6 +46,8 @@ It downloads Playwright's Chromium headless shell into `.cache/e2/browsers/`, no
 ### `npm run e2`
 
 It runs `test/**/*.e2.test.ts` under `vitest.config.ts`, from the repository root: one file at a time, one browser. Its global setup (`test/global-setup.ts`) runs the simulator's, since the simulator makes the saves the tests load, and counts the run's retried loads (#120, below). The root Vitest config excludes `*.e2.test.ts`.
+
+**To see the lines the tests log** (the clock's speed-up, the RFA times, the cadence: [What the tests show](#what-the-tests-show)), run `npm run e2 -- --silent=false`, as a release run must. Run from a coding agent (Claude Code among them), Vitest 5 uses its `minimal` reporter, whose `--silent` defaults to `passed-only`: it drops passing tests' console lines. In a terminal of your own they show anyway, and the flag changes nothing.
 
 The package's other tests (`test/*.test.ts`: the static server, the build's checks, the webpack config, the load diagnosis and the count of retried loads) need no browser and run with `npm test` in CI.
 
