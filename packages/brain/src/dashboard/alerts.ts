@@ -224,17 +224,19 @@ export function augmentationAlerts({
     name: "augmentationNotQueued",
     sinceMs: notQueued.boughtAtMs,
     detail:
-      `${notQueued.augmentation}${notQueued.augmentation === "NeuroFlux Governor" ? ` (level ${notQueued.level})` : ""} ` +
+      (notQueued.augmentation === "NeuroFlux Governor"
+        ? `${notQueued.augmentation} (level ${notQueued.level}) `
+        : `${notQueued.augmentation} `) +
       "was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
   }));
   if (installAwaitingRestart !== null && nowMs - installAwaitingRestart.sinceMs >= INSTALL_NOT_RESTARTED_AFTER_MS) {
+    const minutes = Math.floor((nowMs - installAwaitingRestart.sinceMs) / 60_000);
     alerts.push({
       name: "installNotRestarted",
       sinceMs: installAwaitingRestart.sinceMs,
       detail:
-        `${installAwaitingRestart.id} went out and the Agent disconnected ` +
-        `${Math.floor((nowMs - installAwaitingRestart.sinceMs) / 60_000)} min ago, and no slow snapshot has shown the ` +
-        "reset: is the game at the Terminal, and did boot.js run?",
+        `${installAwaitingRestart.id} went out and the Agent disconnected ${minutes} min ago, and no slow snapshot ` +
+        "has shown the reset: is the game at the Terminal, and did boot.js run?",
     });
   }
   return alerts;

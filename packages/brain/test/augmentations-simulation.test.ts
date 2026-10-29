@@ -1,14 +1,16 @@
 // Augmentations and the reset (#210), in the simulator: a fresh 8 GB start in BN1 reaching its first install, the
-// brain's rules as on Steam (the hack loop, programs, home RAM, backdoors and augmentations, all on). 20 virtual
-// minutes in, a harness edit stands in for the hours of CyberSec's work (A5's, #203): CyberSec joined with the
-// reputation for its five augmentations, and the money for them. The brain chooses the install (nothing else is worth
-// installing at the joined factions), buys the five in buy order through the Agent's `sim` effector, then NeuroFlux
-// Governor with what money is left, and installs through the gate and a save backup; the game starts boot.js after the reset, and the next
-// Agent connects. 20 minutes after the reset, the hacking level is above where it was 20 minutes after the start. CI
-// runs seed 1; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
+// brain's rules as on Steam (the hack loop, programs, home RAM, backdoors, faction work and augmentations, all on).
+// - 20 virtual minutes in, a harness edit stands in for the hours of work (A5's, #203): CyberSec joined with the
+//   reputation for its five augmentations, NiteSec joined with none (so the decision compares, #213 review), and the
+//   money for the five, home's next RAM upgrade and a NeuroFlux Governor level.
+// - The brain chooses the install because NiteSec's next comes sooner installing first ("sooner installing"), buys
+//   the five in buy order through the Agent's `sim` effector, then home's RAM, then NeuroFlux Governor, and installs
+//   through the gate and a save backup; the game starts boot.js after the reset, and the next Agent connects.
+// - After the reset, the player's multipliers are the five's and NeuroFlux Governor's, and home has its new RAM.
+// CI runs seed 1; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
 import type { MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { AUGMENTATION_BOUGHT_EVENT_KIND } from "../src/augmentations.ts";
+import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { useFreshStarts } from "./helpers/fresh-start.ts";
@@ -39,6 +41,9 @@ const FIVE = [
   "Neurotrainer I",
 ];
 const FIVE_COST = 447_170_900;
+/** NeuroFlux Governor's first level after the five: 750k × 1.9⁵. */
+const NEUROFLUX_LEVEL_1 = 750_000 * 1.9 ** 5;
+const NEUROFLUX = 1.01000262;
 
 test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd entry fails loudly", () => {
   expect(augmentationSeeds(undefined)).toEqual([1]);
@@ -47,7 +52,7 @@ test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd 
 });
 
 test.each(SEEDS)(
-  "seed %i: from a fresh start, CyberSec's five bought in buy order and installed, the Agent back, hacking faster",
+  "seed %i: from a fresh start, CyberSec's five, home RAM and NeuroFlux Governor bought and installed, the Agent back",
   { timeout: 300_000 },
   async (seed) => {
     const fresh = await freshStartOf({ withDesiredState: true, seed });
@@ -63,9 +68,13 @@ test.each(SEEDS)(
     const homeRamBefore = homeRam();
     const startedAt = slow()?.resetInfo.lastAugReset as number;
 
-    // The harness edit: CyberSec's reputation for all five, and the money for them, with a little over.
+    // The harness edit: CyberSec's reputation for all five, NiteSec joined, and the money for the five, home's next
+    // upgrade (its price in BN1, as the brain works it out) and a NeuroFlux Governor level, with $3m over.
+    const homeRamNow = homeRamBefore as number;
+    const homeRamPrice = homeRamNow * 32_000 * 1.58 ** Math.log2(homeRamNow);
     await simulation.diagnostics.joinFactionWithReputation("CyberSec", 18_750);
-    await simulation.diagnostics.setMoney(FIVE_COST + 2_000_000);
+    await simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
+    await simulation.diagnostics.setMoney(FIVE_COST + homeRamPrice + NEUROFLUX_LEVEL_1 + 3_000_000);
     const editedAtMs = game.clock.now();
     await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt, INSTALLED_WITHIN_MS);
     const resetAt = slow()?.resetInfo.lastAugReset as number;
@@ -73,9 +82,18 @@ test.each(SEEDS)(
 
     // The brain's choice, then its purchases in buy order, each from CyberSec at its price then; then the install,
     // through its gate and one save backup.
+    const chosen = fresh.data.store
+      .eventsInWindow({ environment: "E1", sinceMs: editedAtMs, untilMs: game.clock.now() })
+      .find((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)?.detail as
+      | { reason: string; without: { faction: string; ms: number | null } | null; with: { ms: number | null } | null }
+      | undefined;
+    // Decided by the comparison: NiteSec's next sooner installing first.
+    expect(chosen?.reason).toBe("sooner installing");
+    expect(chosen?.without?.faction).toBe("NiteSec");
+    expect(chosen?.with?.ms as number).toBeLessThan(chosen?.without?.ms ?? Number.POSITIVE_INFINITY);
     expect(brain.logLines).toContainEqual(
       expect.stringMatching(
-        /^augmentations: install chosen, \S+ \S+ since the last: buying Cranial Signal Processors - Gen I, .* nothing else worth installing at the joined factions$/,
+        /^augmentations: install chosen, \S+ \S+ since the last: buying Cranial Signal Processors - Gen I, .* sooner /,
       ),
     );
     const bought = fresh.data.store
@@ -85,23 +103,32 @@ test.each(SEEDS)(
     expect(bought.slice(0, 5).map((each) => [each.augmentation, each.faction, each.queueLength])).toEqual(
       FIVE.map((augmentation, index) => [augmentation, "CyberSec", index + 1]),
     );
+    // Then home's RAM and NeuroFlux Governor's first level, before the install.
+    expect(bought.map((each) => each.augmentation)).toEqual([...FIVE, "NeuroFlux Governor"]);
+    expect(brain.logLines).toContainEqual(
+      `augmentations: upgradeHomeRam(${homeRamNow}, Alpha Enterprises) done, before the install (home's RAM stays)`,
+    );
     expect(brain.saveBackupEvents.filter((event) => "file" in event).length).toBeGreaterThanOrEqual(1);
     expect(brain.logLines.filter((line) => line.includes("NOT QUEUED"))).toEqual([]);
 
     // The reset game: the five installed, the next Agent back, the cycle over.
     const installed = slow()?.resetInfo.ownedAugs ?? {};
-    expect(Object.keys(installed)).toEqual(expect.arrayContaining(FIVE));
+    expect(installed).toEqual({ ...Object.fromEntries(FIVE.map((name) => [name, 1])), "NeuroFlux Governor": 1 });
     const sessions = brain.channelEvents.filter((event) => event.type === "agentConnected");
     expect(sessions.length).toBeGreaterThanOrEqual(2);
     expect(fresh.controller().augmentationsView()).toMatchObject({ committed: false, notQueued: [] });
     expect(fresh.controller().installAwaitingRestart()).toBeNull();
 
-    // 20 minutes after the reset: hacking above the first cycle's at the same point.
+    // After the reset: the multipliers the five and the NeuroFlux level bring (`Augmentations.ts`'s data), and home's
+    // new RAM, which an install keeps. The hacking level 20 minutes on is logged, not judged: home's RAM differs too.
     await game.runUntil(() => game.clock.now() >= resetAt + COMPARED_AFTER_MS, COMPARED_AFTER_MS + MINUTE);
     const levelAfter = hacking(fresh.medium());
-    expect(levelAfter).toBeGreaterThan(levelBefore);
-    const mults = fresh.medium()?.player.mults as { hacking?: number } | undefined;
-    expect(mults?.hacking).toBeCloseTo(1.05 * 1.05 * 1.07 * 1.01000262 ** (installed["NeuroFlux Governor"] ?? 0), 6);
+    const mults = fresh.medium()?.player.mults as Record<string, number> | undefined;
+    expect(mults?.hacking).toBeCloseTo(1.05 * 1.05 * 1.07 * NEUROFLUX, 6);
+    expect(mults?.hacking_speed).toBeCloseTo(1.03 * 1.01 * 1.02 * NEUROFLUX, 6);
+    expect(mults?.hacking_exp).toBeCloseTo(1.1 * NEUROFLUX, 6);
+    expect(mults?.hacking_chance).toBeCloseTo(1.05 * NEUROFLUX, 6);
+    expect(homeRam()).toBe(homeRamNow * 2);
 
     // The run report: the decision, the purchases and the install, the Agent back, and no failure.
     const { text, failures } = runReport(fresh.data.store, {

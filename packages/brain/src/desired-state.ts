@@ -25,7 +25,7 @@ import {
   TOR_ROUTER,
 } from "@bitburner-agent/core";
 import {
-  AUGMENTATIONS_INSTALL_SENT_EVENT_KIND,
+  AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   type AugmentationEvent,
   AugmentationRule,
   type AugmentationsView,
@@ -203,10 +203,15 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - Then a cloud server (#194, ./cloud-servers.ts), only while neither of those is being bought, and with the hack loop
  *   on (they only run it). While the cheaper of the two waits for money, its price is held back from cloud servers if
  *   the hack loop's income would cover it within `CLOUD_SERVER_RESERVE_HORIZON_MS`.
- * - Intents go in order: the owner's manual queue first, as added, then the purchase, then the backdoor (#195), asked
- *   for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once the connected Agent reports
- *   it done: the game's state can change again (a travel there and back), so a snapshot can't say it was done. Never
- *   more than the protocol's 100: a queue stored under the old limit (99) leaves the rules' intents out, logged.
+ * - Intents go in order: the owner's manual queue first, as added, then the brain's install of augmentations (#210,
+ *   ./augmentations.ts) behind it, then the purchase, then the augmentation purchase (#210), then the backdoor (#195),
+ *   asked for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once
+ *   the connected Agent reports it done: the game's state can change again (a travel there and back), so a snapshot
+ *   can't say it was done. Never more than the protocol's 100: a queue stored under an older limit leaves the rules'
+ *   intents out, logged.
+ * - Augmentations (#210): once an install is chosen, the programs and cloud servers stand down (an install loses
+ *   them), and home's RAM is the augmentation rule's. Before that, cloud servers leave alone the augmentation rule's
+ *   reserve too: the set's money, for an install projected within A2's payback limit.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
  *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
  *   intents after it go on without it: a held join doesn't hold up a travel queued later.
@@ -318,6 +323,10 @@ export class DesiredStateController {
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
+    // A brain restarted with an install out: the Agent went with it, as far as this brain knows, since it went out.
+    if (this.#resetSent?.field === "lastAugReset" && this.#resetSent.sentAtMs !== undefined) {
+      this.#installDisconnectedAtMs = this.#resetSent.sentAtMs;
+    }
     this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
       this.#lastEventAtMs = event.atMs;
@@ -329,15 +338,16 @@ export class DesiredStateController {
         this.#slowGameTimeMs = null;
         this.#slowAtMs = null;
         this.#fastData = null;
-        // Counted on the last Agent's snapshots: every gate starts again, and the incomes are measured afresh (#194,
-        // #210).
+        // Counted on the last Agent's snapshots: every gate starts again, and the cloud servers' income is measured
+        // afresh (#194). The augmentations' income is the game's own count since the install: kept (#210).
         this.#gates.forget();
         this.#income.clear();
-        this.#augmentations.forget();
-        // An install out when the Agent goes: the reset should show within minutes (#210, `installNotRestarted`).
+        // An install out when the Agent goes: the reset should show within minutes (#210, `installNotRestarted`). An
+        // Agent back is no longer awaited: its slow snapshot shows the reset, or the gate sends the install again.
         if (event.type === "agentDisconnected" && this.#resetSent?.field === "lastAugReset") {
           this.#installDisconnectedAtMs ??= event.atMs;
         }
+        if (event.type === "agentConnected") this.#installDisconnectedAtMs = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' and the work's outcomes: for the views, and the manual intents done, or the augmentation
         // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send.
@@ -434,8 +444,8 @@ export class DesiredStateController {
   }
 
   /**
-   * The install out when the Agent disconnected, and since when, until a slow snapshot shows the reset (#210): the
-   * `installNotRestarted` alert's. Null with none.
+   * The install out when the Agent disconnected (or, for a restarted brain, when it went out), and since when, until a
+   * slow snapshot shows the reset or the Agent connects again (#210): the `installNotRestarted` alert's. Null with none.
    */
   installAwaitingRestart(): { id: string; sinceMs: number } | null {
     const sent = this.#resetSent;
@@ -854,7 +864,7 @@ export class DesiredStateController {
     // An install going out (#210): stored, so the run report can look for the reset after it.
     if (note?.field === "lastAugReset") {
       this.#emit({
-        type: AUGMENTATIONS_INSTALL_SENT_EVENT_KIND,
+        type: AUGMENTATION_INSTALL_SENT_EVENT_KIND,
         atMs: this.#lastEventAtMs ?? 0,
         source: readManualIntents(this.#store).some((each) => each.id === note.id) ? "manual" : "brain",
         queued: this.#augmentations.queued(),
@@ -881,6 +891,7 @@ export class DesiredStateController {
     // Augmentations and the reset (#210) first: an install chosen holds the programs back.
     const augmentations = this.#augmentations.update({
       mediumData: this.#mediumData,
+      mediumAtMs: this.#mediumAtMs,
       slowData: this.#slowData,
       slowGameTimeMs: this.#slowGameTimeMs,
       doneIds: this.#doneIds(),
@@ -977,7 +988,9 @@ export class DesiredStateController {
     ) {
       const field = resetFieldOf(reset);
       const resetAt = resetTimeOf(this.#slowData, field);
-      if (resetAt !== null) this.#noteResetSent({ id: reset.id, field, resetAt });
+      if (resetAt !== null) {
+        this.#noteResetSent({ id: reset.id, field, resetAt, sentAtMs: this.#lastEventAtMs ?? undefined });
+      }
     }
   }
 }

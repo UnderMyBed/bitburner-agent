@@ -1,13 +1,14 @@
 // Augmentations in the run report (#210): the installs the slow snapshots show, and the augmentation rule's events (its
 // decisions, purchases, installs sent and cycles called off), with the failures: a purchase not queued, and an install
 // sent with no reset seen after it.
-import { installGains, NEUROFLUX_GOVERNOR, type SlowSnapshotData } from "@bitburner-agent/core";
+import { type InstallReason, installGains, NEUROFLUX_GOVERNOR, type SlowSnapshotData } from "@bitburner-agent/core";
 import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
-  AUGMENTATIONS_INSTALL_SENT_EVENT_KIND,
+  describeReason,
   formatEta,
   type StoredWay,
 } from "./augmentations.ts";
@@ -19,7 +20,7 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
-  AUGMENTATIONS_INSTALL_SENT_EVENT_KIND,
+  AUGMENTATION_INSTALL_SENT_EVENT_KIND,
 ];
 
 /** An install the slow snapshots show: another `lastAugReset`, and what `ownedAugs` gained. */
@@ -113,10 +114,14 @@ export class AugmentationTimeline {
             `install chosen, ${formatEta(isFiniteNumber(fields.sinceResetMs) ? fields.sinceResetMs : null)} since ` +
             `the last: buying ${set.map((each) => String(each.augmentation)).join(", ") || "nothing more"} ` +
             `(${formatMoney(fields.cost)}); ` +
-            (without === null
-              ? "nothing else worth installing at the joined factions"
-              : `the next (${without.augmentation}) ${formatEta(withInstall?.ms ?? null)} installing first, ` +
-                `${formatEta(without.ms)} carrying on`),
+            describeReason(
+              (typeof fields.reason === "string"
+                ? fields.reason
+                : without === null
+                  ? "nothing left"
+                  : "sooner installing") as InstallReason,
+              { with: withInstall, without },
+            ),
         });
       } else if (kind === AUGMENTATION_BOUGHT_EVENT_KIND) {
         const level = fields.augmentation === NEUROFLUX_GOVERNOR ? ` (level ${String(fields.level)})` : "";
@@ -126,11 +131,12 @@ export class AugmentationTimeline {
             `bought ${String(fields.augmentation)}${level} from ${String(fields.faction)} for ` +
             `${formatMoney(fields.price)} (queue ${String(fields.queueLength)})`,
         });
-      } else if (kind === AUGMENTATIONS_INSTALL_SENT_EVENT_KIND) {
+      } else if (kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND) {
         const queued = Array.isArray(fields.queued) ? fields.queued.map(String) : [];
         entries.push({
           atMs,
-          text: `install sent (${fields.source === "manual" ? "yours" : "the brain's"}): ${describeAugmentations(queued)}`,
+          text:
+            `install sent (${fields.source === "manual" ? "yours" : "the brain's"}): ` + describeAugmentations(queued),
         });
       } else if (kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) {
         entries.push({ atMs, text: `install cycle called off: ${String(fields.reason)}` });
@@ -158,7 +164,8 @@ export class AugmentationTimeline {
 
   /**
    * Section 4's lines, each failure added to `failures`: a purchase not queued (the rule's event), and an install sent
-   * with no slow snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first).
+   * with no slow snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first, nor
+   * where the cycle was called off meanwhile: withdrawn).
    */
   healthLines(
     events: readonly StoredEvent[],
@@ -183,7 +190,7 @@ export class AugmentationTimeline {
     if (notQueued.length === 0) lines.push("    none");
     lines.push(`  installs sent and not seen done (a slow snapshot with another reset) within ${formatEta(withinMs)}:`);
     let notSeen = 0;
-    for (const sent of events.filter((event) => event.kind === AUGMENTATIONS_INSTALL_SENT_EVENT_KIND)) {
+    for (const sent of events.filter((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND)) {
       if (sent.atMs + withinMs > untilMs) continue;
       const before = this.#resets.filter((reset) => reset.atMs <= sent.atMs).at(-1);
       const seen = this.#resets.some(
@@ -191,6 +198,19 @@ export class AugmentationTimeline {
           reset.atMs > sent.atMs && reset.atMs <= sent.atMs + withinMs && reset.lastAugReset !== before?.lastAugReset,
       );
       if (seen) continue;
+      // Withdrawn: the cycle called off (the switch turned off) before the reset was due.
+      const calledOff = events.find(
+        (event) =>
+          event.kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND &&
+          event.atMs >= sent.atMs &&
+          event.atMs <= sent.atMs + withinMs,
+      );
+      if (calledOff !== undefined) {
+        lines.push(
+          `    install sent at ${formatTime(sent.atMs)}, withdrawn at ${formatTime(calledOff.atMs)}: not a failure`,
+        );
+        continue;
+      }
       notSeen++;
       const line =
         `install not seen done: sent at ${formatTime(sent.atMs)}, no slow snapshot with another reset ` +

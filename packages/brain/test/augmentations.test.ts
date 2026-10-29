@@ -99,9 +99,11 @@ let gameTimeMs = 7 * HOUR;
 beforeEach(() => {
   gameTimeMs = 7 * HOUR;
 });
+/** An update; the medium snapshot arrived with it (`mediumAtMs` its `nowMs`) unless said: its money is fresh. */
 function update(fields: Partial<AugmentationInputs> & { slowData?: SlowSnapshotData | null } = {}) {
   return rule.update({
     mediumData: medium(),
+    mediumAtMs: fields.nowMs ?? 1_000,
     slowData: slow(),
     slowGameTimeMs: gameTimeMs,
     doneIds: new Set(),
@@ -155,7 +157,7 @@ describe("the decision", () => {
   test("CyberSec's five reached and covered, nothing else at the joined factions: install chosen, at once", () => {
     const ask = update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: FIVE_COST }) });
     expect(ask).toEqual({ intent: purchaseIntent("CyberSec", GEN_I, 1), install: false, committed: true });
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0 });
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false });
     expect(events).toEqual([
       {
         type: "augmentationInstallChosen",
@@ -167,6 +169,7 @@ describe("the decision", () => {
         rebuildMs: expect.any(Number),
         without: null,
         with: null,
+        reason: "nothing left",
       },
     ]);
     expect(lines).toEqual([
@@ -180,7 +183,7 @@ describe("the decision", () => {
     });
   });
 
-  test("the next one sooner carrying on: no install, saying both, and the money held back for the set", () => {
+  test("the next one sooner carrying on: no install, saying both; none within 15 minutes either, so no reserve", () => {
     // Hacking 300, focused hacking work: 300 / 975 × 5 = 1.54 rep/s. Gen II: 8,750 more rep, 1.6 h; installing, the
     // rebuild then 18,750 from scratch.
     measureIncome(100_000, { reputation: 10_000 }, medium({ money: 200e6 }));
@@ -198,21 +201,44 @@ describe("the decision", () => {
       "Synaptic Enhancement Implant",
       "Neurotrainer I",
     ]);
-    expect(reserve).toBeCloseTo(70e6 + 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3, 0);
+    // With 15 minutes more income ($290m), Gen II is still over an hour off carrying on: nothing held back.
+    expect(reserve).toBe(0);
     expect(readAugmentationCycle(store)).toBeNull();
     expect(events).toEqual([]);
   });
 
-  test("the reserve: the set the money will cover within the cloud servers' reserve horizon of income", () => {
-    // $60m and $200k/s: $72m within the minute. By value at hacking 300, Gen II (with Gen I) is past it, Gen I ($70m)
-    // isn't, and nothing more fits with it. $60m alone covers BitWire, Synaptic and Neurotrainer I.
-    measureIncome(200_000, { reputation: 10_000 }, medium({ money: 60e6 }));
-    expect(rule.view().set.map((each) => each.augmentation)).toEqual([
-      "BitWire",
-      "Synaptic Enhancement Implant",
-      "Neurotrainer I",
-    ]);
-    expect(rule.reserve()).toBeCloseTo(70e6, 0);
+  test("the reserve: an install projected within A2's payback limit holds its set's money back; not before", () => {
+    // CyberSec's five reached, NiteSec joined (its next far off), $435m at $20k/s. Now, Synaptic is left out ($447m with
+    // it) and comes in 10 min: no install. In 15 minutes ($453m) the five are covered, and NiteSec's next is 15 h off
+    // carrying on (Neurotrainer II at 1.9⁵ its price), 3.3 h installing first: install.
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 0, favor: 0 },
+    ];
+    measureIncome(20_000, { joined }, medium({ money: 435e6 }));
+    expect(rule.view()).toMatchObject({ committed: false, decision: { install: false } });
+    expect(rule.reserve()).toBeCloseTo(FIVE_COST, 0);
+    // $100m: the five not covered within the 15 minutes ($118m): nothing held back.
+    rule = newRule();
+    measureIncome(20_000, { joined }, medium({ money: 100e6 }));
+    expect(rule.view()).toMatchObject({ committed: false });
+    expect(rule.reserve()).toBe(0);
+    // No income: nothing held back.
+    rule = newRule();
+    measureIncome(0, { joined }, medium({ money: 400e6 }));
+    expect(rule.reserve()).toBe(0);
+  });
+
+  test("an income of 0 never installs: the money's wait can't be judged (#213 review)", () => {
+    // As above, with nothing earned over the window: before the fix, every candidate short of money was "never".
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 0, favor: 0 },
+    ];
+    measureIncome(0, { joined }, medium({ money: 400e6 }));
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view().waitingFor).toMatch(/^an income above \$0 a second/);
+    expect(events).toEqual([]);
   });
 
   test("the money far off carrying on: install chosen", () => {
@@ -222,9 +248,13 @@ describe("the decision", () => {
       { name: "NiteSec", reputation: 6_250, favor: 0 },
     ];
     measureIncome(10_000, { joined }, medium({ money: FIVE_COST }));
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0 });
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false });
     const [chosen] = events;
-    expect(chosen).toMatchObject({ type: "augmentationInstallChosen", without: { faction: "NiteSec" } });
+    expect(chosen).toMatchObject({
+      type: "augmentationInstallChosen",
+      without: { faction: "NiteSec" },
+      reason: "sooner installing",
+    });
     if (chosen?.type !== "augmentationInstallChosen") throw new Error("no decision");
     expect(chosen.with?.ms as number).toBeLessThan(chosen.without?.ms as number);
   });
@@ -239,7 +269,7 @@ function committed() {
 }
 
 describe("committed", () => {
-  test("the set in buy order, each once reported done, then home's RAM, then NeuroFlux Governor, then the install", () => {
+  test("the set in buy order, each once reported done; then home's RAM, NeuroFlux Governor, the install", () => {
     committed();
     let money = 1e9;
     const queue: string[] = [];
@@ -345,7 +375,7 @@ describe("committed", () => {
     expect(ask.install).toBe(true);
   });
 
-  test("a purchase not shown queued by two reads after it's reported done: the event, the log line, the alert's list", () => {
+  test("a purchase two reads don't show queued: the event, the log line, the alert's list", () => {
     committed();
     const first = update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 1e9 }) });
     update({
@@ -378,6 +408,69 @@ describe("committed", () => {
       `augmentations: ${GEN_I} NOT QUEUED: the Agent reported it bought, and 2 faction state reads since don't show it`,
     );
     expect(rule.view().notQueued).toHaveLength(1);
+    // Never asked for again (#213 review): it counts as queued, alerted; the next is still Gen II.
+    expect(update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 1e9 }) }).intent).toEqual(
+      purchaseIntent("CyberSec", GEN_II, 1),
+    );
+  });
+
+  test("the money spent since the medium snapshot is taken off its money: no phantom money (#213 review)", () => {
+    // $447,170,900 covers the five exactly. Bought, with the medium snapshot from before them still the latest, nothing
+    // is left: no NeuroFlux Governor ($18.6m) on money already spent.
+    update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: FIVE_COST }) });
+    const queue: string[] = [];
+    for (const [index, name] of FIVE.entries()) {
+      const nowMs = 2_000 + index;
+      const ask = update({
+        slowData: slow({ reputation: 18_750, queued: [...queue] }),
+        mediumData: medium({ money: FIVE_COST }),
+        mediumAtMs: 1_000,
+        nowMs,
+      });
+      expect(ask.intent).toEqual(purchaseIntent("CyberSec", name, 1));
+      update({
+        slowData: slow({ reputation: 18_750, queued: [...queue] }),
+        mediumData: medium({ money: FIVE_COST }),
+        mediumAtMs: 1_000,
+        nowMs,
+        doneIds: new Set([ask.intent?.id as string]),
+      });
+      queue.push(name);
+    }
+    const stale = update({
+      slowData: slow({ reputation: 18_750, queued: queue }),
+      mediumData: medium({ money: FIVE_COST }),
+      mediumAtMs: 1_000,
+      nowMs: 3_000,
+    });
+    // Not NeuroFlux Governor: waiting for the faction state to show the five, with nothing left to buy.
+    expect(stale).toEqual({ intent: null, install: false, committed: true });
+    expect(rule.view().waitingFor).toMatch(/^the faction state to show /);
+  });
+
+  test("a medium snapshot after the purchases is the money: the spending isn't taken off twice", () => {
+    update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 1e9 }) });
+    const first = update({
+      slowData: slow({ reputation: 18_750 }),
+      mediumData: medium({ money: 1e9 }),
+      nowMs: 2_000,
+      mediumAtMs: 1_000,
+    });
+    update({
+      slowData: slow({ reputation: 18_750 }),
+      mediumData: medium({ money: 1e9 }),
+      nowMs: 2_000,
+      mediumAtMs: 1_000,
+      doneIds: new Set([first.intent?.id as string]),
+    });
+    // The newer snapshot shows $377,170,900 left: Gen II and the rest exactly, nothing more taken off it.
+    const ask = update({
+      slowData: slow({ reputation: 18_750, queued: [GEN_I] }),
+      mediumData: medium({ money: 377_170_900 }),
+      nowMs: 3_000,
+      mediumAtMs: 3_000,
+    });
+    expect(ask.intent).toEqual(purchaseIntent("CyberSec", GEN_II, 1));
   });
 
   test("a purchase shown queued by the next read: confirmed, never not queued", () => {
@@ -407,6 +500,21 @@ describe("committed", () => {
     });
     expect(readAugmentationCycle(store)).toBeNull();
     expect(lines.at(-1)).toBe("augmentations: the game has reset (installed): the install cycle is over");
+    // The next Agent's medium snapshot not in yet: nothing held back from cloud servers (#213 review).
+    update({ mediumData: null, slowData: slow({ lastAugReset: 9 * HOUR }) });
+    expect(rule.reserve()).toBe(0);
+  });
+
+  test("a restarted brain with the install asked for buys nothing more (#213 review)", () => {
+    committed();
+    const queue = [...FIVE];
+    const install = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money: 0 }) });
+    expect(install.install).toBe(true);
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: true });
+    rule = newRule();
+    // $1b now covers NeuroFlux Governor, but the install is out.
+    const after = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money: 1e9 }) });
+    expect(after).toEqual({ intent: null, install: true, committed: true });
   });
 
   test("a restarted brain carries the commit on, and ends it on a reset it missed", () => {

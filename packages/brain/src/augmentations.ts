@@ -5,8 +5,9 @@
 //   covers them), and core's `installDecision` against the next one worth installing at the joined factions. Install
 //   chosen: committed, kept in the store until the game resets, so a restarted brain carries on.
 // - Committed, one intent at a time: the set's next purchase (recomputed from what's queued), then home's RAM, which
-//   an install keeps (`Server/ServerHelpers.ts:224-237`), then NeuroFlux Governor a level at a time, then, once every
-//   purchase the Agent reported done shows in the faction state's queue, the install (the controller's gate and backup).
+//   an install keeps (`Server/ServerHelpers.ts:224-237`), then NeuroFlux Governor a level at a time, then, once
+//   every purchase the Agent reported done shows in the faction state's queue, the install (the controller's gate and
+//   backup).
 //   Once the install is asked for, nothing more is bought, so the gate's count isn't restarted by a purchase.
 // - Fail loudly: a purchase reported done that two faction state reads after it don't show queued is
 //   `augmentationNotQueued` (an event, a log line, the dashboard's alert and the run report's failure).
@@ -25,6 +26,7 @@ import {
   factionReadingOf,
   type InstallCandidate,
   type InstallDecision,
+  type InstallReason,
   type Intent,
   installDecision,
   intentId,
@@ -36,7 +38,7 @@ import {
   type SlowSnapshotData,
   type WorkingPerson,
 } from "@bitburner-agent/core";
-import { CLOUD_SERVER_RESERVE_HORIZON_MS } from "./cloud-servers.ts";
+import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
 import { bestWorkRate, workCandidates, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
@@ -53,13 +55,20 @@ export function writeAugmentationsEnabled(store: TelemetryStore, enabled: boolea
   writeSwitch(store, AUGMENTATIONS_ENABLED_SETTING, enabled);
 }
 
-/** The commit, kept in the store until the game resets: the game's `lastAugReset` when the install was chosen. */
+/**
+ * The commit, kept in the store until the game resets: the game's `lastAugReset` when the install was chosen, and
+ * whether the install has been asked for (so a restarted brain buys nothing more, #213 review).
+ */
 export const AUGMENTATION_CYCLE_SETTING = "augmentations.cycle";
 
 /** How long the income is measured over: the slow snapshots' money sources across 10 minutes. */
 export const AUGMENTATION_INCOME_WINDOW_MS = 10 * 60_000;
-/** The reserve holds the set the income would let the money cover within this: A2's reserve horizon (#194). */
-export const AUGMENTATION_RESERVE_HORIZON_MS = CLOUD_SERVER_RESERVE_HORIZON_MS;
+/**
+ * Before an install is chosen, money is held back from cloud servers (A2, #194) only for an install projected within
+ * this: A2's payback limit (`CLOUD_SERVER_PAYBACK_LIMIT_MS`, 15 minutes, decided in #213's review). A server bought now
+ * pays itself back within it, so holding money any sooner would cost the income the install is waiting for.
+ */
+export const AUGMENTATION_RESERVE_LOOKAHEAD_MS = CLOUD_SERVER_PAYBACK_LIMIT_MS;
 /**
  * Faction state reads after a purchase reported done that may miss it before it's `augmentationNotQueued`: 2. The first
  * may have been read before the purchase, in the same round (snapshots come before the intents).
@@ -79,7 +88,7 @@ export const AUGMENTATION_BOUGHT_EVENT_KIND = "augmentationBought";
 export const AUGMENTATION_NOT_QUEUED_EVENT_KIND = "augmentationNotQueued";
 export const AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND = "augmentationCycleCalledOff";
 /** Stored by the controller, as the install goes out (its reset note written): the brain's, or the owner's. */
-export const AUGMENTATIONS_INSTALL_SENT_EVENT_KIND = "augmentationsInstallSent";
+export const AUGMENTATION_INSTALL_SENT_EVENT_KIND = "augmentationInstallSent";
 
 /** A decision's figures as stored: Infinity (never) as null, which JSON can carry. */
 export interface StoredWay {
@@ -101,6 +110,8 @@ export type AugmentationEvent =
       rebuildMs: number;
       without: StoredWay | null;
       with: StoredWay | null;
+      /** Nothing left at the joined factions, nothing reachable at a positive rate, or the next sooner installing. */
+      reason: InstallReason;
     }
   | {
       type: typeof AUGMENTATION_BOUGHT_EVENT_KIND;
@@ -121,7 +132,7 @@ export type AugmentationEvent =
     }
   | { type: typeof AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND; atMs: number; reason: string }
   | {
-      type: typeof AUGMENTATIONS_INSTALL_SENT_EVENT_KIND;
+      type: typeof AUGMENTATION_INSTALL_SENT_EVENT_KIND;
       atMs: number;
       source: "brain" | "manual";
       /** The queue as last known: the faction state's, with the purchases since. */
@@ -170,13 +181,18 @@ export interface AugmentationsView {
   /** Why nothing is asked for, or no install chosen, or null. */
   waitingFor: string | null;
   notQueued: NotQueued[];
-  /** The money held back from cloud servers (A2) for augmentations: Infinity while committed. */
+  /**
+   * The money held back from cloud servers (A2) for augmentations: Infinity while committed; before that, the set's
+   * money only for an install projected within `AUGMENTATION_RESERVE_LOOKAHEAD_MS`, else 0.
+   */
   reserve: number;
 }
 
 /** What the controller hands the rule each update. */
 export interface AugmentationInputs {
   mediumData: MediumSnapshotData | null;
+  /** When it arrived (the controller's clock), or null: purchases recorded since are taken off its money. */
+  mediumAtMs: number | null;
   slowData: SlowSnapshotData | null;
   /** The game's time of the latest slow snapshot (its `gameTimeMs`), or null. */
   slowGameTimeMs: number | null;
@@ -201,6 +217,9 @@ export interface AugmentationAsk {
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isRecordOf = (value: unknown): value is Record<string, number> =>
   typeof value === "object" && value !== null && Object.values(value).every(isFiniteNumber);
+/** "BitWire", or "NeuroFlux Governor (level 3)". */
+const levelled = (augmentation: string, level: number) =>
+  augmentation === NEUROFLUX_GOVERNOR ? `${augmentation} (level ${level})` : augmentation;
 const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
 
 /**
@@ -248,22 +267,28 @@ export function earnedOf(slowData: SlowSnapshotData): number | null {
 }
 
 /** The commit as stored, or null; a value the brain didn't write fails, as the reset note does. */
-export function readAugmentationCycle(store: TelemetryStore): { lastAugReset: number } | null {
+export interface AugmentationCycle {
+  lastAugReset: number;
+  installing: boolean;
+}
+
+export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle | null {
   const value = store.getSetting(AUGMENTATION_CYCLE_SETTING);
   if (value === null) return null;
-  let note: { lastAugReset?: unknown } | null;
+  let note: { lastAugReset?: unknown; installing?: unknown } | null;
   try {
-    note = JSON.parse(value) as { lastAugReset?: unknown } | null;
+    note = JSON.parse(value) as { lastAugReset?: unknown; installing?: unknown } | null;
   } catch {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't JSON`);
   }
-  if (!isFiniteNumber(note?.lastAugReset)) {
+  const installing = note?.installing ?? false;
+  if (!isFiniteNumber(note?.lastAugReset) || typeof installing !== "boolean") {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't a note the brain wrote`);
   }
-  return { lastAugReset: note.lastAugReset };
+  return { lastAugReset: note.lastAugReset, installing };
 }
 
-function writeAugmentationCycle(store: TelemetryStore, note: { lastAugReset: number } | null): void {
+function writeAugmentationCycle(store: TelemetryStore, note: AugmentationCycle | null): void {
   if (note === null) store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
   else store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify(note));
 }
@@ -278,6 +303,23 @@ export function formatEta(ms: number | null): string {
 
 const storedWay = (way: InstallDecision["without"]): StoredWay | null =>
   way === null ? null : { ...way, ms: Number.isFinite(way.ms) ? way.ms : null };
+
+/** Why the install was chosen, in words, for the log and the report. */
+export function describeReason(
+  reason: InstallReason,
+  {
+    with: withInstall,
+    without,
+  }: { with: { ms: number | null } | null; without: { augmentation: string; ms: number | null } | null },
+): string {
+  if (reason === "nothing left") return "nothing else worth installing at the joined factions";
+  if (reason === "nothing reachable")
+    return "nothing else reachable at a joined faction's work (a reputation rate of 0)";
+  return (
+    `the next sooner installing (${formatEta(withInstall?.ms ?? null)} against ${formatEta(without?.ms ?? null)}, ` +
+    `${without?.augmentation ?? "?"})`
+  );
+}
 
 /** The intent buying `augmentation` from `faction` (`level` 1 but for NeuroFlux Governor). */
 export function purchaseIntent(faction: string, augmentation: string, level: number): Intent {
@@ -304,7 +346,12 @@ export class AugmentationRule {
   #recorded = new Set<string>();
   #bought: Bought[] = [];
   #notQueued: NotQueued[] = [];
-  /** The install asked for: nothing more is bought. */
+  /**
+   * The money of each purchase recorded done, and when (#213 review): until a medium snapshot arrives after it, its
+   * money is taken off the medium snapshot's, which was read before it.
+   */
+  #spent: { atMs: number; price: number }[] = [];
+  /** The install asked for: nothing more is bought. Kept in the commit's note too. */
   #installing = false;
   #view: Omit<AugmentationsView, "enabled" | "notQueued"> = {
     waiting: true,
@@ -333,12 +380,6 @@ export class AugmentationRule {
     readAugmentationCycle(store);
   }
 
-  /** The connected Agent changed: the income is measured again (A2's rule does the same). */
-  forget(): void {
-    this.#incomeSamples = [];
-    this.#sampledGameTimeMs = null;
-  }
-
   /** Whether the purchase asked for is among `doneIds`, not yet recorded: the controller updates at once then. */
   askedDone(doneIds: ReadonlySet<string>): boolean {
     const asked = this.#asked;
@@ -365,35 +406,38 @@ export class AugmentationRule {
   }
 
   update(inputs: AugmentationInputs): AugmentationAsk {
-    const { mediumData, slowData, slowGameTimeMs, doneIds, nowMs, enabled, homeRamEnabled } = inputs;
+    const { mediumData, mediumAtMs, slowData, slowGameTimeMs, doneIds, nowMs, enabled, homeRamEnabled } = inputs;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
     // Nothing asked for now; the last purchase asked for is kept, so its done is recorded when it's reported (after a
     // reconnect, say).
-    const none = (waitingFor: string | null, view: Partial<AugmentationsView> = {}): AugmentationAsk => {
+    const askNothing = (waitingFor: string | null, view: Partial<AugmentationsView> = {}): AugmentationAsk => {
       const committed = readAugmentationCycle(this.#store) !== null;
-      this.#view = { ...this.#view, asking: null, waitingFor, committed, ...view };
+      const reserve = committed ? Number.POSITIVE_INFINITY : 0;
+      this.#view = { ...this.#view, asking: null, waitingFor, committed, reserve, ...view };
       return { intent: null, install: false, committed };
     };
     if (slowData !== null) this.#sample(slowData, slowGameTimeMs, atMs);
     this.#recordDone(doneIds, atMs);
+    // Spending a medium snapshot that arrived after it already shows.
+    if (mediumAtMs !== null) this.#spent = this.#spent.filter((each) => each.atMs > mediumAtMs);
     if (!enabled) {
       if (readAugmentationCycle(this.#store) !== null) this.#callOff(atMs, "the Augmentations switch turned off");
-      return none(null, { waiting: false, committed: false, reserve: 0, decision: null, set: [], setCost: 0 });
+      return askNothing(null, { waiting: false, committed: false, reserve: 0, decision: null, set: [], setCost: 0 });
     }
-    if (mediumData === null || slowData === null) return none(null, { waiting: true });
+    if (mediumData === null || slowData === null) return askNothing(null, { waiting: true });
     const resetInfo = resetInfoOf(slowData);
-    if (resetInfo === null) return none("the reset info in the Agent's slow snapshot", { waiting: false });
+    if (resetInfo === null) return askNothing("the reset info in the Agent's slow snapshot", { waiting: false });
     const player = playerOf(mediumData);
     if (player === null) {
-      return none("the player's skills, experience, money and multipliers in the Agent's medium snapshot", {
+      return askNothing("the player's skills, experience, money and multipliers in the Agent's medium snapshot", {
         waiting: false,
       });
     }
     const state: FactionState | null = factionReadingOf(slowData)?.state ?? null;
     if (state === null) {
       const problem = factionReadingOf(slowData)?.problem;
-      return none(`the faction state in the Agent's slow snapshot${problem ? ` (unread: ${problem})` : ""}`, {
+      return askNothing(`the faction state in the Agent's slow snapshot${problem ? ` (unread: ${problem})` : ""}`, {
         waiting: false,
       });
     }
@@ -401,20 +445,19 @@ export class AugmentationRule {
     try {
       return this.#decide({ state, resetInfo, player, slowData, mediumData, slowGameTimeMs, atMs, homeRamEnabled });
     } catch (error) {
-      return none(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
+      return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
     }
   }
 
-  /** Each slow snapshot once: the income's sample, a reset, and the faction state's read for the purchases. */
+  /** A slow snapshot: a reset; and once per snapshot, the income's sample and the faction state's read. */
   #sample(slowData: SlowSnapshotData, gameTimeMs: number | null, atMs: number): void {
-    if (gameTimeMs === null || gameTimeMs === this.#sampledGameTimeMs) return;
-    this.#sampledGameTimeMs = gameTimeMs;
     const lastAugReset = slowData.resetInfo?.lastAugReset;
     if (isFiniteNumber(lastAugReset) && this.#lastAugReset !== null && lastAugReset !== this.#lastAugReset) {
       // A new game: its purchases start afresh.
       this.#bought = [];
       this.#notQueued = [];
       this.#recorded.clear();
+      this.#spent = [];
       this.#installing = false;
     }
     if (isFiniteNumber(lastAugReset)) {
@@ -427,6 +470,9 @@ export class AugmentationRule {
         this.#log("augmentations: the game has reset (installed): the install cycle is over");
       }
     }
+    // A reset is judged on every slow snapshot; the income and the reads once per snapshot (by its game time).
+    if (gameTimeMs === null || gameTimeMs === this.#sampledGameTimeMs) return;
+    this.#sampledGameTimeMs = gameTimeMs;
     const earned = earnedOf(slowData);
     if (earned === null || !isFiniteNumber(lastAugReset)) {
       this.#incomeSamples = [];
@@ -442,7 +488,11 @@ export class AugmentationRule {
     this.#confirmQueued(slowData, atMs);
   }
 
-  /** The money earned a second over the window, or null until it's a window long. */
+  /**
+   * The money earned a second over the window, or null until it's a window long. The samples are the game's own count
+   * since the install, so they're kept across the Agent's reconnects (#213 review): a reset (another `lastAugReset`)
+   * starts them again.
+   */
   #income(): number | null {
     const first = this.#incomeSamples[0];
     const last = this.#incomeSamples.at(-1);
@@ -479,8 +529,8 @@ export class AugmentationRule {
       this.#notQueued.push(notQueued);
       this.#emit({ type: AUGMENTATION_NOT_QUEUED_EVENT_KIND, atMs, ...notQueued });
       this.#log(
-        `augmentations: ${bought.augmentation}${bought.augmentation === NEUROFLUX_GOVERNOR ? ` (level ${bought.level})` : ""} ` +
-          `NOT QUEUED: the Agent reported it bought, and ${NOT_QUEUED_AFTER_READS} faction state reads since don't show it`,
+        `augmentations: ${levelled(bought.augmentation, bought.level)} NOT QUEUED: the Agent reported it bought, ` +
+          `and ${NOT_QUEUED_AFTER_READS} faction state reads since don't show it`,
       );
     }
     this.#bought = left;
@@ -491,6 +541,7 @@ export class AugmentationRule {
     const asked = this.#asked;
     if (asked === null || !doneIds.has(asked.intent.id) || this.#recorded.has(asked.intent.id)) return;
     this.#recorded.add(asked.intent.id);
+    this.#spent.push({ atMs, price: asked.price });
     if (asked.augmentation === null) {
       this.#log(`augmentations: ${asked.intent.id} done, before the install (home's RAM stays)`);
       return;
@@ -507,8 +558,8 @@ export class AugmentationRule {
       queueLength,
     });
     this.#log(
-      `augmentations: bought ${asked.augmentation}${asked.augmentation === NEUROFLUX_GOVERNOR ? ` (level ${asked.level})` : ""} ` +
-        `from ${asked.faction} for ${formatMoney(asked.price)} (queue ${queueLength})`,
+      `augmentations: bought ${levelled(asked.augmentation, asked.level)} from ${asked.faction} for ` +
+        `${formatMoney(asked.price)} (queue ${queueLength})`,
     );
   }
 
@@ -540,9 +591,13 @@ export class AugmentationRule {
     homeRamEnabled: boolean;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
-    // The queue: the faction state's, with each purchase reported done that it doesn't show yet.
+    // The queue: the faction state's, with each purchase reported done that it doesn't show yet, and each never shown
+    // (`augmentationNotQueued`, alerted): asked for again, its done is already recorded, and it would be asked forever.
     const queue = [...state.queuedAugmentations];
-    for (const bought of this.#bought) {
+    for (const bought of [
+      ...this.#bought,
+      ...this.#notQueued.map(({ augmentation, level }) => ({ augmentation, level })),
+    ]) {
       const copies = queue.filter((name) => name === bought.augmentation).length;
       const shown =
         bought.augmentation === NEUROFLUX_GOVERNOR
@@ -561,7 +616,7 @@ export class AugmentationRule {
     const shops = new Map(
       joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
     );
-    const repOf = (faction: string) => joined.find((each) => each.name === faction)?.reputation ?? 0;
+    const reputationOf = (faction: string) => joined.find((each) => each.name === faction)?.reputation ?? 0;
     /** The joined seller with the most reputation covering what `augmentation` needs now, or null. */
     const sellerOf = (augmentation: string): string | null => {
       const needed = augmentationCost(augmentation, purchaseState).reputation;
@@ -569,8 +624,8 @@ export class AugmentationRule {
       for (const [faction, shop] of shops) {
         if (
           shop.includes(augmentation) &&
-          repOf(faction) >= needed &&
-          (best === null || repOf(faction) > repOf(best))
+          reputationOf(faction) >= needed &&
+          (best === null || reputationOf(faction) > reputationOf(best))
         ) {
           best = faction;
         }
@@ -580,7 +635,7 @@ export class AugmentationRule {
     const owned = (name: string) => Object.hasOwn(ownedAugs, name) || queue.includes(name);
     const sold = [...new Set([...shops.values()].flat())].filter((name) => name !== NEUROFLUX_GOVERNOR);
     const reached = sold.filter((name) => !owned(name) && sellerOf(name) !== null);
-    const { money } = player;
+    const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
     const hackingLevel = player.person.skills.hacking;
     const set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel);
     const setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
@@ -588,36 +643,59 @@ export class AugmentationRule {
     const cycle = readAugmentationCycle(this.#store);
 
     if (cycle === null) {
-      const covered = income === null ? money : money + (income * AUGMENTATION_RESERVE_HORIZON_MS) / 1000;
-      const reserve = chooseAugmentationsToBuy(reached, purchaseState, covered, hackingLevel).money;
       if (slowGameTimeMs === null) {
-        return this.#asks(null, { waitingFor: "the game's time in the Agent's slow snapshot", set: setView, reserve });
+        return this.#ask(null, {
+          waitingFor: "the game's time in the Agent's slow snapshot",
+          set: setView,
+          setCost: set.money,
+          reserve: 0,
+          committed: false,
+        });
       }
-      const installing = [...queue, ...set.purchases.map((purchase) => purchase.name)];
-      const decision = installDecision({
-        sinceResetMs: Math.max(0, slowGameTimeMs - resetInfo.lastAugReset),
-        hackingLevel,
-        hackingExp: player.hackingExp,
-        installing,
-        money,
-        incomePerSecond: income,
-        candidates: this.#candidates({
-          state,
-          resetInfo,
-          slowData,
-          purchaseState,
-          installing,
-          reachedLeftOut: reached
-            .filter((name) => isWorthInstalling(name) && !installing.includes(name))
-            .map((augmentation) => {
-              const faction = sellerOf(augmentation) as string;
-              const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
-              return { faction, augmentation, reputation: repOf(faction), reputationNeeded };
-            }),
-          person: player.person,
+      // The time since the last install counts time the game was closed too, which earns less: a longer rebuild, and a
+      // later install, the safe side.
+      const sinceResetMs = Math.max(0, slowGameTimeMs - resetInfo.lastAugReset);
+      /** The decision with `spare` money (and the set it covers), `laterMs` from now. */
+      const decide = (spare: number, laterMs: number) => {
+        const covered = laterMs === 0 ? set : chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel);
+        const installing = [...queue, ...covered.purchases.map((purchase) => purchase.name)];
+        const decision = installDecision({
+          sinceResetMs: sinceResetMs + laterMs,
           hackingLevel,
-        }),
-      });
+          hackingExp: player.hackingExp,
+          installing,
+          money: spare,
+          incomePerSecond: income,
+          candidates: this.#candidates({
+            state,
+            resetInfo,
+            slowData,
+            purchaseState,
+            installing,
+            reachedLeftOut: reached
+              .filter((name) => isWorthInstalling(name) && !installing.includes(name))
+              .map((augmentation) => {
+                const faction = sellerOf(augmentation) as string;
+                const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
+                return { faction, augmentation, reputation: reputationOf(faction), reputationNeeded };
+              }),
+            person: player.person,
+            hackingLevel,
+          }),
+        });
+        return { covered, installing, decision };
+      };
+      const { installing, decision } = decide(money, 0);
+      // Held back from cloud servers only for an install projected within A2's payback limit: the decision with that
+      // much more income, then (#213 review).
+      let reserve = 0;
+      if (!decision.install && income !== null && income > 0) {
+        const ahead = decide(
+          money + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000,
+          AUGMENTATION_RESERVE_LOOKAHEAD_MS,
+        );
+        if (ahead.decision.install) reserve = ahead.covered.money;
+      }
       const view = { set: setView, setCost: set.money, decision, reserve, committed: false };
       if (!decision.install) {
         const why =
@@ -626,11 +704,11 @@ export class AugmentationRule {
             ? "an augmentation worth installing that a joined faction's reputation and the money cover"
             : `the next augmentation to come no sooner by installing (${formatEta(decision.without?.ms ?? null)} ` +
               `carrying on, ${formatEta(decision.with?.ms ?? null)} installing)`);
-        return this.#asks(null, { ...view, waitingFor: why });
+        return this.#ask(null, { ...view, waitingFor: why });
       }
-      writeAugmentationCycle(this.#store, { lastAugReset: resetInfo.lastAugReset });
+      writeAugmentationCycle(this.#store, { lastAugReset: resetInfo.lastAugReset, installing: false });
       this.#installing = false;
-      const sinceResetMs = Math.max(0, slowGameTimeMs - resetInfo.lastAugReset);
+      const reason = decision.reason as InstallReason;
       this.#emit({
         type: AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
         atMs,
@@ -641,24 +719,24 @@ export class AugmentationRule {
         rebuildMs: decision.rebuildMs,
         without: storedWay(decision.without),
         with: storedWay(decision.with),
+        reason,
       });
       this.#log(
         `augmentations: install chosen, ${formatEta(sinceResetMs)} since the last: buying ` +
           `${setView.map((each) => each.augmentation).join(", ") || "nothing more"} (${formatMoney(set.money)}), ` +
-          (decision.without === null
-            ? "nothing else worth installing at the joined factions"
-            : `the next sooner installing (${formatEta(decision.with?.ms ?? null)} against ` +
-              `${formatEta(decision.without.ms)}, ${decision.without.augmentation})`),
+          describeReason(reason, decision),
       );
     }
 
-    // Committed: the set, home's RAM, NeuroFlux Governor, then the install.
+    // Committed: the set, home's RAM, NeuroFlux Governor, then the install (already asked for, a restarted brain's note
+    // says: nothing more is bought).
+    if (cycle?.installing === true) this.#installing = true;
     const committedView = { set: setView, setCost: set.money, reserve: Number.POSITIVE_INFINITY, committed: true };
     if (!this.#installing) {
       const [first] = set.purchases;
       if (first !== undefined) {
         const faction = sellerOf(first.name) as string;
-        return this.#asks(
+        return this.#ask(
           {
             intent: purchaseIntent(faction, first.name, 1),
             augmentation: first.name,
@@ -672,7 +750,7 @@ export class AugmentationRule {
       const homeRam = homeRamEnabled ? chooseHomeRamUpgrade(mediumData, slowData) : null;
       if (homeRam?.next) {
         const args = { fromRam: homeRam.next.fromRam, vendor: homeRam.next.vendor };
-        return this.#asks(
+        return this.#ask(
           {
             intent: { id: intentId("upgradeHomeRam", args), action: "upgradeHomeRam", args },
             augmentation: null,
@@ -683,25 +761,31 @@ export class AugmentationRule {
           { ...committedView, asking: `home RAM to ${homeRam.next.fromRam * 2} GB before the install (it stays)` },
         );
       }
-      const neuroFlux = this.#neuroFlux(purchaseState, shops, repOf, money);
+      const neuroFlux = this.#neuroFlux(purchaseState, shops, reputationOf, money);
       if (neuroFlux !== null) {
-        return this.#asks(neuroFlux, {
+        return this.#ask(neuroFlux, {
           ...committedView,
-          asking: `buying ${NEUROFLUX_GOVERNOR} level ${neuroFlux.level} from ${neuroFlux.faction} for ${formatMoney(neuroFlux.price)}`,
+          asking:
+            `buying ${NEUROFLUX_GOVERNOR} level ${neuroFlux.level} from ${neuroFlux.faction} for ` +
+            formatMoney(neuroFlux.price),
         });
       }
       const unconfirmed = this.#bought.map((bought) => bought.augmentation);
       if (unconfirmed.length > 0) {
-        return this.#asks(null, {
+        return this.#ask(null, {
           ...committedView,
           waitingFor: `the faction state to show ${unconfirmed.join(", ")} queued, before the install`,
         });
       }
       if (queue.length === 0) {
         this.#callOff(atMs, "nothing was bought to install");
-        return this.#asks(null, { committed: false, reserve: 0, waitingFor: null });
+        return this.#ask(null, { committed: false, reserve: 0, waitingFor: null });
       }
       this.#installing = true;
+      writeAugmentationCycle(this.#store, {
+        lastAugReset: cycle?.lastAugReset ?? resetInfo.lastAugReset,
+        installing: true,
+      });
       this.#log(`augmentations: installing ${queue.length} queued (the gate, then a save backup first)`);
     }
     this.#asked = null;
@@ -719,7 +803,7 @@ export class AugmentationRule {
   #neuroFlux(
     purchaseState: AugmentationPurchaseState,
     shops: Map<string, string[]>,
-    repOf: (faction: string) => number,
+    reputationOf: (faction: string) => number,
     money: number,
   ) {
     const cost = augmentationCost(NEUROFLUX_GOVERNOR, purchaseState);
@@ -728,8 +812,8 @@ export class AugmentationRule {
     for (const [name, shop] of shops) {
       if (
         shop.includes(NEUROFLUX_GOVERNOR) &&
-        repOf(name) >= cost.reputation &&
-        (faction === null || repOf(name) > repOf(faction))
+        reputationOf(name) >= cost.reputation &&
+        (faction === null || reputationOf(name) > reputationOf(faction))
       ) {
         faction = name;
       }
@@ -748,8 +832,8 @@ export class AugmentationRule {
     };
   }
 
-  /** The ask set (or none), and the view with it. */
-  #asks(asked: Asked | null, view: Partial<AugmentationsView>): AugmentationAsk {
+  /** What's asked for now (or nothing), and the view with it. */
+  #ask(asked: Asked | null, view: Partial<AugmentationsView>): AugmentationAsk {
     this.#asked = asked;
     this.#view = { ...this.#view, asking: null, waitingFor: null, waiting: false, ...view };
     const committed = readAugmentationCycle(this.#store) !== null;
@@ -788,11 +872,9 @@ export class AugmentationRule {
       return faction === undefined ? 0 : (bestWorkRate(person, faction, conditions)?.perSecond ?? 0);
     };
     const afterSet = { installed: purchaseState.installed, queued: [...purchaseState.queued, ...installing] };
-    const afterInstall: AugmentationPurchaseState = {
-      ...purchaseState,
-      installed: { ...purchaseState.installed, ...Object.fromEntries(installing.map((name) => [name, 1])) },
-      queued: [],
-    };
+    const installed: Record<string, number> = { ...purchaseState.installed };
+    for (const name of installing) installed[name] = name === NEUROFLUX_GOVERNOR ? (installed[name] ?? 0) + 1 : 1;
+    const afterInstall: AugmentationPurchaseState = { ...purchaseState, installed, queued: [] };
     const toBuy = installing.filter((name) => !purchaseState.queued.includes(name));
     const ways = [
       ...workCandidates({ ...state, queuedAugmentations: [...purchaseState.queued] }, resetInfo, hackingLevel),

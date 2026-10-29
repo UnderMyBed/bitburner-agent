@@ -28,7 +28,7 @@ const GEN_II = "Cranial Signal Processors - Gen II";
 const BITWIRE = "BitWire";
 const SYNAPTIC = "Synaptic Enhancement Implant";
 const NEUROTRAINER = "Neurotrainer I";
-/** CyberSec's five worth installing (`Faction/FactionInfo.tsx`'s shop, less NeuroFlux Governor). */
+/** CyberSec's five worth installing (its shop, `Faction/Factions.ts:14-21`, less NeuroFlux Governor). */
 const CYBERSEC = [NEUROTRAINER, SYNAPTIC, BITWIRE, GEN_I, GEN_II];
 /** The hacking level the values are at (A5's `hackingValue` weighs the hacking skill multiplier by it). */
 const LEVEL = 300;
@@ -67,16 +67,20 @@ describe("the buy order", () => {
     expect(augmentationBuyOrder(CYBERSEC)).toEqual([GEN_I, GEN_II, BITWIRE, SYNAPTIC, NEUROTRAINER]);
   });
 
-  test("a chain is bought in its order, whatever the prices; one outside the list is taken as owned", () => {
+  test("a chain goes by its dearest member, in its order; one outside the list is taken as owned", () => {
     const gens = ["Cranial Signal Processors - Gen V", "Cranial Signal Processors - Gen III", GEN_II, GEN_I];
-    expect(augmentationBuyOrder([...gens, "Cranial Signal Processors - Gen IV", "DataJack"])).toEqual([
-      "DataJack", // $450m: dearer than Gen I, the only Gen ready at first
-      GEN_I,
+    const order = [
+      GEN_I, // $70m, but it heads Gen V's chain ($2.25b)
       GEN_II,
       "Cranial Signal Processors - Gen III",
       "Cranial Signal Processors - Gen IV",
-      "Cranial Signal Processors - Gen V", // $2.25b, but after Gen IV
-    ]);
+      "Cranial Signal Processors - Gen V",
+      "DataJack", // $450m
+    ];
+    expect(augmentationBuyOrder([...gens, "Cranial Signal Processors - Gen IV", "DataJack"])).toEqual(order);
+    // $50.3b, where DataJack first ($450m, dearer than Gen I alone) would cost $74.8b.
+    const withDataJackFirst = ["DataJack", ...order.slice(0, 5)];
+    expect(purchaseSequenceCost(order, BN1).money).toBeLessThan(purchaseSequenceCost(withDataJackFirst, BN1).money);
     expect(augmentationBuyOrder([GEN_II, BITWIRE])).toEqual([GEN_II, BITWIRE]);
   });
 
@@ -89,7 +93,30 @@ describe("the buy order", () => {
     expect(augmentationBuyOrder([BITWIRE, BITWIRE])).toEqual([BITWIRE]);
   });
 
-  test("falling prices really cost least: CyberSec's five in buy order against rising prices", () => {
+  test("a cheap prerequisite of a dear one first: ENM, its Core Implant, Gen IV ($8.97b, not $10.6b)", () => {
+    const owned = { ...BN1, installed: { [GEN_I]: 1, [GEN_II]: 1, "Cranial Signal Processors - Gen III": 1 } };
+    const set = [
+      "Cranial Signal Processors - Gen IV",
+      "Embedded Netburner Module Core Implant",
+      "Embedded Netburner Module",
+    ];
+    const order = augmentationBuyOrder(set);
+    expect(order).toEqual([
+      "Embedded Netburner Module",
+      "Embedded Netburner Module Core Implant",
+      "Cranial Signal Processors - Gen IV",
+    ]);
+    expect(purchaseSequenceCost(order, owned).money).toBeCloseTo(250e6 + 2.5e9 * 1.9 + 1.1e9 * 1.9 ** 2, 0);
+    // Dearest ready first: Gen IV, then ENM, then its Core Implant, $10.6b.
+    const dearestReady = [
+      "Cranial Signal Processors - Gen IV",
+      "Embedded Netburner Module",
+      "Embedded Netburner Module Core Implant",
+    ];
+    expect(purchaseSequenceCost(dearestReady, owned).money).toBeCloseTo(1.1e9 + 250e6 * 1.9 + 2.5e9 * 1.9 ** 2, 0);
+  });
+
+  test("the buy order costs less than rising prices: CyberSec's five", () => {
     const inOrder = purchaseSequenceCost(augmentationBuyOrder(CYBERSEC), BN1).money;
     const rising = purchaseSequenceCost([NEUROTRAINER, SYNAPTIC, BITWIRE, GEN_I, GEN_II], BN1).money;
     expect(inOrder).toBeLessThan(rising);
@@ -124,7 +151,7 @@ describe("the set to buy", () => {
     ]);
   });
 
-  test("the hacking level weighs the skill multipliers: at 300, Gen I and BitWire; at 1, Neurotrainer I's exp first", () => {
+  test("the level weighs the skill multipliers: at 300, Gen I and BitWire; at 1, Neurotrainer I first", () => {
     // $90m. At level 300, Gen II (with Gen I) is past it; Gen I ($70m) and BitWire ($19m) fit, Neurotrainer I doesn't.
     expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 90e6, 300).purchases.map((each) => each.name)).toEqual([
       GEN_I,
@@ -257,7 +284,12 @@ describe("the decision", () => {
   });
 
   test("nothing left to work for: install, with something to install; never with nothing", () => {
-    expect(installDecision({ ...base, candidates: [] })).toMatchObject({ install: true, without: null, with: null });
+    expect(installDecision({ ...base, candidates: [] })).toMatchObject({
+      install: true,
+      reason: "nothing left",
+      without: null,
+      with: null,
+    });
     expect(installDecision({ ...base, installing: [], candidates: [] }).install).toBe(false);
     // The income doesn't matter then.
     expect(installDecision({ ...base, incomePerSecond: null, candidates: [] }).install).toBe(true);
@@ -266,7 +298,7 @@ describe("the decision", () => {
   test("the next one sooner carrying on: no install", () => {
     // Carrying on: 10,000 rep at 2/s, 5,000 s (1.39 h). Installing: 1.44 h, then 5,000 s.
     const decision = installDecision({ ...base, candidates: [candidate({})] });
-    expect(decision.install).toBe(false);
+    expect(decision).toMatchObject({ install: false, reason: null });
     expect(decision.without).toEqual({ augmentation: "Neurotrainer II", faction: "NiteSec", ms: 5_000_000 });
     expect(decision.with?.ms).toBeCloseTo(REBUILD + 5_000_000, -1);
     expect(decision.rebuildMs).toBeCloseTo(REBUILD, -1);
@@ -279,7 +311,7 @@ describe("the decision", () => {
     const decision = installDecision({ ...base, candidates: [far] });
     expect(decision.without?.ms).toBeCloseTo(224_000_000, -1);
     expect(decision.with?.ms).toBeCloseTo(REBUILD + 5_000_000, -1);
-    expect(decision.install).toBe(true);
+    expect(decision).toMatchObject({ install: true, reason: "sooner installing" });
   });
 
   test("the longer of reputation and money on each side; the soonest candidate on each", () => {
@@ -305,14 +337,24 @@ describe("the decision", () => {
     expect(plain.without?.ms).toBe(500_000);
   });
 
-  test("reached and covered: 0 carrying on; no rate is never, and never on both sides is as good as nothing left", () => {
+  test("reached and covered: 0 carrying on; no rate is never, and never is as good as nothing left", () => {
     const covered = candidate({ reputation: 10_000, costAfterSet: 100e6 });
     expect(installDecision({ ...base, candidates: [covered] }).without?.ms).toBe(0);
     const noRate = candidate({ reputationPerSecond: 0 });
     const never = installDecision({ ...base, candidates: [noRate] });
     expect(never.without?.ms).toBe(Number.POSITIVE_INFINITY);
-    expect(never.install).toBe(true);
+    expect(never).toMatchObject({ install: true, reason: "nothing reachable" });
     expect(installDecision({ ...base, installing: [], candidates: [noRate] }).install).toBe(false);
+  });
+
+  test("an income of 0 (the hack loop off or stalled): it waits, never installs on money it can't judge", () => {
+    // Short of money for every candidate: at $0 a second, carrying on would be never, and install.
+    const short = candidate({ reputation: 10_000, costAfterSet: 22.9e9 });
+    for (const income of [0, -1, Number.NaN]) {
+      const decision = installDecision({ ...base, incomePerSecond: income, candidates: [short] });
+      expect(decision).toMatchObject({ install: false, reason: null, without: null, with: null });
+      expect(decision.waitingFor).toMatch(/^an income above \$0 a second/);
+    }
   });
 
   test("with candidates and no income measured: it waits, saying why", () => {

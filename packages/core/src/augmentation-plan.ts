@@ -49,22 +49,30 @@ export function installGains(names: readonly string[]): InstallGains {
 }
 
 /**
- * `names` in the order to buy them: the dearest first, since each purchase multiplies the next one's price by 1.9
- * (`Constants.ts:41`), so falling prices cost least; but a prerequisite before what needs it
- * (`FactionHelpers.tsx:88-95`). Each time, the dearest whose prerequisites in `names` are bought (one not in `names` is taken as owned). Ties go to
- * the game's order. The base price decides: every other factor of `getAugCost` is the same for all but NeuroFlux
- * Governor and Shadows of Anarchy's, which the brain never puts in a set.
+ * `names` in the order to buy them (#210): each purchase multiplies the next one's price by 1.9 (`Constants.ts:41`),
+ * so the dear ones go early; but a prerequisite goes before what needs it (`FactionHelpers.tsx:88-95`). Each time, of
+ * those whose prerequisites in `names` are bought (one not in `names` is taken as owned), the one heading the dearest
+ * chain: its own price, or that of the dearest in `names` that needs it, so a cheap prerequisite of a dear augmentation
+ * goes first, its chain right after (Embedded Netburner Module, then its Core Implant, then Cranial Signal Processors
+ * Gen IV: $8.97b, where the dearest-first order costs $10.6b). Ties go to the dearer itself, then the game's order. The
+ * base price decides: every other factor of `getAugCost` is the same for all but NeuroFlux Governor and Shadows of
+ * Anarchy's, which the brain never puts in a set.
  */
 export function augmentationBuyOrder(names: readonly string[]): string[] {
   const left = [...new Set(names)];
   const order: string[] = [];
+  const price = (name: string) => dataOf(name).baseMoneyCost;
+  // The data lists every prerequisite of a chain (Gen V's are Gen I to IV), so those that need `name` are direct.
+  const chainPrice = (name: string) =>
+    Math.max(price(name), ...left.filter((each) => dataOf(each).prereqs.includes(name)).map(price));
   while (left.length > 0) {
     const ready = left.filter((name) => dataOf(name).prereqs.every((prereq) => !left.includes(prereq)));
     if (ready.length === 0) throw new RangeError(`the prerequisites of ${left.join(", ")} go round in a circle`);
     const next = ready.reduce((best, name) => {
-      const price = dataOf(name).baseMoneyCost;
-      const bestPrice = dataOf(best).baseMoneyCost;
-      return price > bestPrice || (price === bestPrice && gameOrder(name) < gameOrder(best)) ? name : best;
+      const [chain, bestChain] = [chainPrice(name), chainPrice(best)];
+      if (chain !== bestChain) return chain > bestChain ? name : best;
+      if (price(name) !== price(best)) return price(name) > price(best) ? name : best;
+      return gameOrder(name) < gameOrder(best) ? name : best;
     });
     order.push(next);
     left.splice(left.indexOf(next), 1);
@@ -196,11 +204,19 @@ export interface InstallDecisionInputs {
   candidates: readonly InstallCandidate[];
 }
 
+/** Why an install is, or would be, chosen (#210). */
+export type InstallReason = "nothing left" | "nothing reachable" | "sooner installing";
+
 /** The decision, with its figures (ms; Infinity for never) for the dashboard, the events and the report. */
 export interface InstallDecision {
   install: boolean;
-  /** Why not, when it can't be decided: the income not measured yet. Null otherwise. */
+  /** Why not, when it can't be decided: the income not measured yet, or none. Null otherwise. */
   waitingFor: string | null;
+  /**
+   * Why it installs, or would: nothing left at the joined factions; nothing reachable at a positive reputation rate; or
+   * the next one sooner installing first. Null while it waits.
+   */
+  reason: InstallReason | null;
   rebuildMs: number;
   /** The soonest next augmentation not installing, and how long; null with no candidate. */
   without: { augmentation: string; faction: string; ms: number } | null;
@@ -219,16 +235,27 @@ const eta = (amount: number, perSecond: number) =>
  *   order less the money now, at the income.
  * - Installing: `rebuildTimeMs`, then the longer of its whole reputation (it becomes favour, left out: conservative) at
  *   the rate times the install's `faction_rep`, and its price with nothing queued from no money, at the income.
- * The soonest candidate on each side. Without an income measured, a decision with candidates waits.
+ * The soonest candidate on each side. A decision with candidates waits without an income measured, or with one of 0
+ * (the hack loop off or stalled): money's wait can't be judged then, and an install is never chosen on it. Never
+ * carrying on is only reputation no joined faction's work earns (a rate of 0).
  */
 export function installDecision(inputs: InstallDecisionInputs): InstallDecision {
   const { sinceResetMs, hackingLevel, hackingExp, installing, money, incomePerSecond, candidates } = inputs;
   const gains = installGains(installing);
   const rebuildMs = rebuildTimeMs({ sinceResetMs, hackingLevel, hackingExp, gains });
-  const decided = (install: boolean, waitingFor: string | null = null) => ({ install, waitingFor, rebuildMs });
-  if (candidates.length === 0) return { ...decided(installing.length > 0), without: null, with: null };
-  if (incomePerSecond === null) {
-    return { ...decided(false, "the income, measured over 10 minutes of slow snapshots"), without: null, with: null };
+  const decided = (install: boolean, reason: InstallReason | null, waitingFor: string | null = null) => ({
+    install,
+    waitingFor,
+    reason,
+    rebuildMs,
+  });
+  if (candidates.length === 0) return { ...decided(installing.length > 0, "nothing left"), without: null, with: null };
+  if (incomePerSecond === null || !(incomePerSecond > 0)) {
+    const waitingFor =
+      incomePerSecond === null
+        ? "the income, measured over 10 minutes of slow snapshots"
+        : "an income above $0 a second (none over the last 10 minutes), to judge the money's wait";
+    return { ...decided(false, null, waitingFor), without: null, with: null };
   }
   const soonest = (ms: (candidate: InstallCandidate) => number) =>
     candidates
@@ -248,6 +275,11 @@ export function installDecision(inputs: InstallDecisionInputs): InstallDecision 
         eta(candidate.priceAfterInstall, incomePerSecond),
       ),
   );
-  const install = installing.length > 0 && (without.ms === Number.POSITIVE_INFINITY || withInstall.ms < without.ms);
-  return { ...decided(install), without, with: withInstall };
+  const reason: InstallReason | null =
+    without.ms === Number.POSITIVE_INFINITY
+      ? "nothing reachable"
+      : withInstall.ms < without.ms
+        ? "sooner installing"
+        : null;
+  return { ...decided(installing.length > 0 && reason !== null, reason), without, with: withInstall };
 }

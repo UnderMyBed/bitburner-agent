@@ -8,6 +8,7 @@ export {
   type InstallDecision,
   type InstallDecisionInputs,
   type InstallGains,
+  type InstallReason,
   installDecision,
   installGains,
   isWorthInstalling,

@@ -22,7 +22,7 @@ import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
-import { readManualIntents } from "../src/manual-intents.ts";
+import { readManualIntents, writeResetSentNote } from "../src/manual-intents.ts";
 import { readProgramsEnabled } from "../src/programs.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -582,7 +582,7 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
   });
 
-  test("full at 96, leaving room for the purchase, the backdoor (#195), the join (#203) and the augmentation's (#210)", () => {
+  test("full at 96: room for the purchase, the backdoor (#195), the join (#203), the augmentation's (#210)", () => {
     const controller = new DesiredStateController({ channel, store });
     const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
     for (let index = 0; index < 96; index += 1) {
@@ -1244,7 +1244,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         intents: [{ id, done: true, tries: 1, problem: null, backend: "sim" }],
       });
 
-    test("the install chosen: its purchases as the source `augmentation`, one at a time, the next at once; programs held", () => {
+    test("the install chosen: its purchases (`augmentation`), one at a time, the next at once; programs held", () => {
       const { controller, connection, sentIds } = connectedWithLoopOff();
       send(connection, "slow", slowWith());
       send(connection, "medium", richMedium(1e9));
@@ -1274,7 +1274,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.augmentationReserve()).toBe(0);
     });
 
-    test("the install: after the owner's queue, through the gate and a backup, as the source `augmentation`, stored as sent", async () => {
+    test("the install: after the owner's queue, through the gate and a backup, as `augmentation`; stored as sent", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
       const sent: unknown[] = [];
       controller.subscribe((event) => sent.push(event));
@@ -1297,13 +1297,15 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([INSTALL.id]);
       expect(sent).toEqual([
         expect.objectContaining({ type: "augmentationInstallChosen" }),
-        { type: "augmentationsInstallSent", atMs: expect.any(Number), source: "brain", queued: FIVE },
+        { type: "augmentationInstallSent", atMs: expect.any(Number), source: "brain", queued: FIVE },
       ]);
       // The install kills the Agent: awaiting its restart until a slow snapshot shows the reset.
       expect(controller.installAwaitingRestart()).toBeNull();
       connection.dropFromGameSide();
       expect(controller.installAwaitingRestart()).toEqual({ id: INSTALL.id, sinceMs: expect.any(Number) });
       const again = connectAgent("session-2");
+      // Back: no longer awaited (#213 review); its slow snapshot shows the reset, or the gate sends it again.
+      expect(controller.installAwaitingRestart()).toBeNull();
       send(again, "static", network, "session-2");
       send(
         again,
@@ -1315,6 +1317,15 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.intentsView()).toEqual([]);
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("a restarted brain awaits an install's restart from when it went out, until the Agent connects", () => {
+      store.setSetting("augmentations.cycle", JSON.stringify({ lastAugReset: 1_000, installing: true }));
+      writeResetSentNote(store, { id: INSTALL.id, field: "lastAugReset", resetAt: 1_000, sentAtMs: 5 });
+      const controller = new DesiredStateController({ channel, store });
+      expect(controller.installAwaitingRestart()).toEqual({ id: INSTALL.id, sinceMs: 5 });
+      connectAgent();
+      expect(controller.installAwaitingRestart()).toBeNull();
     });
 
     test("the owner's install queued too: one install, the owner's", () => {
@@ -1922,12 +1933,16 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
   });
 
   describe("with augmentations (#210)", () => {
-    /** CyberSec joined at `reputation` in the slow snapshot, and the player's figures the augmentation rule reads. */
-    const slowWithCyberSec = (reputation: number) => ({
+    /**
+     * A slow snapshot 7 h into the cycle, `minute` minutes on: the joined factions, and the hacking money earned since the
+     * install at `earnedPerSecond` (the augmentation rule's income).
+     */
+    const slowAt = (joined: { name: string; reputation: number }[], minute = 0, earnedPerSecond = 0) => ({
       ...slowData(),
+      moneySources: { hacking: minute * 60 * earnedPerSecond },
       factions: {
         backend: "sim",
-        state: { joined: [{ name: "CyberSec", reputation, favor: 0 }], invitations: [], queuedAugmentations: [] },
+        state: { joined: joined.map((each) => ({ ...each, favor: 0 })), invitations: [], queuedAugmentations: [] },
         problem: null,
       },
     });
@@ -1935,36 +1950,66 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       ...data,
       player: {
         ...data.player,
-        skills: { hacking: 1, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
-        exp: { hacking: 0 },
+        skills: { hacking: 300, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+        exp: { hacking: Math.exp(500 / 32) - 534.6 },
         mults: { faction_rep: 1, hacking: 1 },
       },
     });
-    /** As `earning`, with CyberSec at `reputation`. */
-    const earningWithCyberSec = (money: number, reputation: number) => {
+    /** A snapshot at the game's time `gameTimeMs` (the rule samples each slow snapshot's once). */
+    const sendAt = (connection: MemoryConnection, tier: SnapshotTier, data: unknown, gameTimeMs: number) =>
+      connection.receive(
+        encodeControlMessage({
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "snapshot",
+          agentSessionId: "session-1",
+          tier,
+          sequenceNumber: ++sequenceNumber,
+          gameTimeMs,
+          data,
+        }),
+      );
+    /**
+     * As `earning`, with `joined` in a slow snapshot each minute, 7 h into the cycle, earning `earnedPerSecond` by the
+     * game's count, and the player's hacking at 300.
+     */
+    const earningWithFactions = (
+      money: number,
+      joined: { name: string; reputation: number }[],
+      earnedPerSecond = 20_000,
+    ) => {
       const controller = new DesiredStateController({ channel, store });
       const connection = connectAgent();
       send(connection, "static", network);
-      send(connection, "slow", slowWithCyberSec(reputation));
       for (let minute = 0; minute <= 10; minute++) {
         if (minute > 0) clock.advance(MINUTE);
+        sendAt(connection, "slow", slowAt(joined, minute, earnedPerSecond), 7 * 3_600_000 + minute * MINUTE);
         send(connection, "medium", withPlayer(medium(money + minute * 60 * 512)));
       }
       return { controller, connection };
     };
+    const CYBERSEC_ALL = [{ name: "CyberSec", reputation: 18_750 }];
+    const AND_NITESEC = [...CYBERSEC_ALL, { name: "NiteSec", reputation: 0 }];
 
-    test("the money that covers the augmentations reached is held back: a smaller server", () => {
-      // Without augmentations, $10.3m buys 128 GB. Reached at 10,000: Neurotrainer I ($4m) is the set $10.3m covers at
-      // hacking 1, and it's held back: $6.3m buys 64 GB ($3.52m).
-      const { controller, connection } = earningWithCyberSec(10e6, 10_000);
-      expect(controller.augmentationReserve()).toBe(4e6);
-      expect(controller.augmentationsView()).toMatchObject({ committed: false });
-      expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 64)]);
+    test("an install projected within 15 minutes holds its set's money from cloud servers; further off, not", () => {
+      // $435m at $20k/s (the rule's tests work it): CyberSec's five ($447,170,900) covered within the 15 minutes, and
+      // the install chosen then. Held back, no server is bought.
+      const near = earningWithFactions(435e6, AND_NITESEC);
+      expect(near.controller.augmentationsView()).toMatchObject({ committed: false });
+      expect(near.controller.augmentationReserve()).toBeCloseTo(447_170_900, 0);
+      expect(sentPurchases(near.connection)).toEqual([]);
+      expect(near.controller.cloudServersView().waitingFor).toMatch(
+        /beyond \$447,170,900 held for the augmentations to buy before the install\)$/,
+      );
+      near.connection.dropFromGameSide();
+      // $100m: the five not covered within the 15 minutes: nothing held back, and the largest server bought.
+      const far = earningWithFactions(100e6, AND_NITESEC);
+      expect(far.controller.augmentationReserve()).toBe(0);
+      expect(sentPurchases(far.connection)?.map((each) => each.action)).toEqual(["buyServer"]);
     });
 
     test("an install chosen: no cloud server at all, saying why, and the augmentation bought instead", () => {
       // CyberSec's five reached, and nothing else at the joined factions: committed at once.
-      const { controller, connection } = earningWithCyberSec(1e9, 18_750);
+      const { controller, connection } = earningWithFactions(1e9, CYBERSEC_ALL);
       expect(controller.augmentationsView()).toMatchObject({ committed: true });
       expect(sentPurchases(connection)).toEqual([
         intent({

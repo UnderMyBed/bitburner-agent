@@ -1297,7 +1297,7 @@ describe("augmentations and the reset (#210)", () => {
         ],
         [
           8 * MINUTE,
-          "augmentationsInstallSent",
+          "augmentationInstallSent",
           { source: "brain", queued: ["BitWire", "NeuroFlux Governor", "NeuroFlux Governor"] },
         ],
         [8 * MINUTE + 5 * SECOND, "agentDisconnected", { agentSessionId: "session-1" }],
@@ -1340,8 +1340,7 @@ describe("augmentations and the reset (#210)", () => {
           "augmentationNotQueued",
           { augmentation: "NeuroFlux Governor", level: 3, boughtAtMs: T0 + 3 * MINUTE },
         ],
-        [6 * MINUTE, "augmentationsInstallSent", { source: "manual", queued: ["BitWire"] }],
-        [6 * MINUTE + SECOND, "augmentationCycleCalledOff", { reason: "the Augmentations switch turned off" }],
+        [6 * MINUTE, "augmentationInstallSent", { source: "manual", queued: ["BitWire"] }],
       ],
     });
     expect(report.failures).toContain(
@@ -1352,21 +1351,58 @@ describe("augmentations and the reset (#210)", () => {
       `install not seen done: sent at ${at(6 * MINUTE)}, no slow snapshot with another reset 5 min on`,
     );
     expect(report.text).toContain(`${at(6 * MINUTE)}  install sent (yours): BitWire`);
+  });
+
+  test("an install sent, then withdrawn (the cycle called off) before its reset was due: no failure", () => {
+    const report = augmentationRun({
+      events: [
+        [6 * MINUTE, "augmentationInstallSent", { source: "brain", queued: ["BitWire"] }],
+        [6 * MINUTE + SECOND, "augmentationCycleCalledOff", { reason: "the Augmentations switch turned off" }],
+      ],
+    });
+    expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toEqual([]);
+    expect(report.text).toContain(
+      `    install sent at ${at(6 * MINUTE)}, withdrawn at ${at(6 * MINUTE + SECOND)}: not a failure`,
+    );
     expect(report.text).toContain(
       `${at(6 * MINUTE + SECOND)}  install cycle called off: the Augmentations switch turned off`,
     );
   });
 
+  test("an install chosen says why: nothing reachable at a positive rate, or the next sooner installing", () => {
+    const report = augmentationRun({
+      events: [
+        [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "nothing reachable" }],
+        [
+          3 * MINUTE,
+          "augmentationInstallChosen",
+          {
+            ...CHOSEN,
+            reason: "sooner installing",
+            without: { augmentation: "DataJack", faction: "NiteSec", ms: 15 * 3_600_000 },
+            with: { augmentation: "DataJack", faction: "NiteSec", ms: 3.3 * 3_600_000 },
+          },
+        ],
+      ],
+    });
+    expect(report.text).toContain(
+      "buying BitWire ($10,000,000); nothing else reachable at a joined faction's work (a reputation rate of 0)",
+    );
+    expect(report.text).toContain(
+      "buying BitWire ($10,000,000); the next sooner installing (3.3 h against 15.0 h, DataJack)",
+    );
+  });
+
   test("an install sent too near the window's end isn't judged; one the reset follows within 5 minutes passes", () => {
     const late = augmentationRun({
-      events: [[RUN_MS - 4 * MINUTE, "augmentationsInstallSent", { source: "brain", queued: [] }]],
+      events: [[RUN_MS - 4 * MINUTE, "augmentationInstallSent", { source: "brain", queued: [] }]],
     });
     expect(late.failures.filter((failure) => failure.startsWith("install not seen done"))).toEqual([]);
   });
 
   test("a reset more than 5 minutes after the install was sent is a failure all the same", () => {
     const report = augmentationRun({
-      events: [[2 * MINUTE, "augmentationsInstallSent", { source: "brain", queued: [] }]],
+      events: [[2 * MINUTE, "augmentationInstallSent", { source: "brain", queued: [] }]],
       installedAtMs: 8 * MINUTE,
     });
     expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
