@@ -209,6 +209,7 @@ export {
   factionReputationPerCycle,
   factionReputationPerSecond,
   HACKING_MULTIPLIERS,
+  hackingSkillValue,
   hackingValue,
   MAX_SKILL_LEVEL,
   UNFOCUSED_WORK_BONUS,

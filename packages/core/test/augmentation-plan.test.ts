@@ -30,6 +30,8 @@ const SYNAPTIC = "Synaptic Enhancement Implant";
 const NEUROTRAINER = "Neurotrainer I";
 /** CyberSec's five worth installing (`Faction/FactionInfo.tsx`'s shop, less NeuroFlux Governor). */
 const CYBERSEC = [NEUROTRAINER, SYNAPTIC, BITWIRE, GEN_I, GEN_II];
+/** The hacking level the values are at (A5's `hackingValue` weighs the hacking skill multiplier by it). */
+const LEVEL = 300;
 
 describe("which augmentations", () => {
   test("worth installing: a hacking value, not NeuroFlux Governor", () => {
@@ -100,57 +102,74 @@ describe("the set to buy", () => {
   const ALL_FIVE = 70e6 + 125e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
 
   test("money for all of them: all five, in buy order, at the game's prices", () => {
-    const set = chooseAugmentationsToBuy(CYBERSEC, BN1, ALL_FIVE);
+    const set = chooseAugmentationsToBuy(CYBERSEC, BN1, ALL_FIVE, LEVEL);
     expect(set.purchases.map((purchase) => purchase.name)).toEqual([GEN_I, GEN_II, BITWIRE, SYNAPTIC, NEUROTRAINER]);
     expect(set.money).toBeCloseTo(447_170_900, 0);
     expect(set.purchases[1]).toEqual({ name: GEN_II, money: 125e6 * 1.9, reputation: 18_750 });
   });
 
   test("short of it: the most hacking value, greedily, each kept only if the whole set's money is covered", () => {
-    // By value: Gen II (with Gen I, $307.5m), Neurotrainer I, Gen I, BitWire, then Synaptic, which takes it past.
-    const fourHundred = chooseAugmentationsToBuy(CYBERSEC, BN1, 400e6);
+    // By value at level 300: Gen II (with Gen I, $307.5m), Gen I, BitWire, Neurotrainer I, then Synaptic, which
+    // takes it past.
+    const fourHundred = chooseAugmentationsToBuy(CYBERSEC, BN1, 400e6, LEVEL);
     expect(fourHundred.purchases.map((purchase) => purchase.name)).toEqual([GEN_I, GEN_II, BITWIRE, NEUROTRAINER]);
     expect(fourHundred.money).toBeCloseTo(70e6 + 125e6 * 1.9 + 10e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3, 0);
     // Under Gen II's $307.5m: Neurotrainer I, Gen I, BitWire and Synaptic, $143.5m.
-    const threeHundred = chooseAugmentationsToBuy(CYBERSEC, BN1, 300e6);
+    const threeHundred = chooseAugmentationsToBuy(CYBERSEC, BN1, 300e6, LEVEL);
     expect(threeHundred.purchases.map((purchase) => purchase.name)).toEqual([GEN_I, BITWIRE, SYNAPTIC, NEUROTRAINER]);
     expect(threeHundred.money).toBeCloseTo(143_511_000, 0);
-    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 3_999_999)).toEqual({ purchases: [], money: 0 });
-    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 4e6).purchases.map((purchase) => purchase.name)).toEqual([
+    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 3_999_999, LEVEL)).toEqual({ purchases: [], money: 0 });
+    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 4e6, LEVEL).purchases.map((purchase) => purchase.name)).toEqual([
+      NEUROTRAINER,
+    ]);
+  });
+
+  test("the hacking level weighs the skill multipliers: at 300, Gen I and BitWire; at 1, Neurotrainer I's exp first", () => {
+    // $90m. At level 300, Gen II (with Gen I) is past it; Gen I ($70m) and BitWire ($19m) fit, Neurotrainer I doesn't.
+    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 90e6, 300).purchases.map((each) => each.name)).toEqual([
+      GEN_I,
+      BITWIRE,
+    ]);
+    // At level 1, Neurotrainer I, then Synaptic, then BitWire: Gen I with them is past it.
+    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 90e6, 1).purchases.map((each) => each.name)).toEqual([
+      BITWIRE,
+      SYNAPTIC,
       NEUROTRAINER,
     ]);
   });
 
   test("a prerequisite not reached keeps out what needs it; one installed or queued doesn't", () => {
-    expect(chooseAugmentationsToBuy([GEN_II], BN1, 1e12)).toEqual({ purchases: [], money: 0 });
+    expect(chooseAugmentationsToBuy([GEN_II], BN1, 1e12, LEVEL)).toEqual({ purchases: [], money: 0 });
     const installed = { ...BN1, installed: { [GEN_I]: 1 } };
-    expect(chooseAugmentationsToBuy([GEN_II], installed, 1e12).purchases).toEqual([
+    expect(chooseAugmentationsToBuy([GEN_II], installed, 1e12, LEVEL).purchases).toEqual([
       { name: GEN_II, money: 125e6, reputation: 18_750 },
     ]);
     // Queued: Gen II at 1.9 × its price.
     const queued = { ...BN1, queued: [GEN_I] };
-    expect(chooseAugmentationsToBuy([GEN_I, GEN_II], queued, 1e12).purchases).toEqual([
+    expect(chooseAugmentationsToBuy([GEN_I, GEN_II], queued, 1e12, LEVEL).purchases).toEqual([
       { name: GEN_II, money: 125e6 * 1.9, reputation: 18_750 },
     ]);
   });
 
   test("a prerequisite reached but not worth installing goes in with what needs it", () => {
     // Graphene Bionic Spine Upgrade needs Bionic Spine (combat both): neither is worth installing.
-    expect(chooseAugmentationsToBuy(["Bionic Spine", "Graphene Bionic Spine Upgrade"], BN1, 1e15).purchases).toEqual(
-      [],
-    );
+    expect(
+      chooseAugmentationsToBuy(["Bionic Spine", "Graphene Bionic Spine Upgrade"], BN1, 1e15, LEVEL).purchases,
+    ).toEqual([]);
     // Gen II's prerequisite is worth it anyway; the rule is the bundle's, whatever its worth.
-    expect(chooseAugmentationsToBuy([GEN_I, GEN_II], BN1, 1e12).purchases.map((each) => each.name)).toEqual([
+    expect(chooseAugmentationsToBuy([GEN_I, GEN_II], BN1, 1e12, LEVEL).purchases.map((each) => each.name)).toEqual([
       GEN_I,
       GEN_II,
     ]);
   });
 
   test("not worth installing, owned or unknown: left out, or refused", () => {
-    expect(chooseAugmentationsToBuy(["Combat Rib I", "NeuroFlux Governor"], BN1, 1e12).purchases).toEqual([]);
-    expect(chooseAugmentationsToBuy([BITWIRE], { ...BN1, installed: { [BITWIRE]: 1 } }, 1e12).purchases).toEqual([]);
-    expect(chooseAugmentationsToBuy([BITWIRE], { ...BN1, queued: [BITWIRE] }, 1e12).purchases).toEqual([]);
-    expect(() => chooseAugmentationsToBuy(["Nothing"], BN1, 1e12)).toThrow(RangeError);
+    expect(chooseAugmentationsToBuy(["Combat Rib I", "NeuroFlux Governor"], BN1, 1e12, LEVEL).purchases).toEqual([]);
+    expect(chooseAugmentationsToBuy([BITWIRE], { ...BN1, installed: { [BITWIRE]: 1 } }, 1e12, LEVEL).purchases).toEqual(
+      [],
+    );
+    expect(chooseAugmentationsToBuy([BITWIRE], { ...BN1, queued: [BITWIRE] }, 1e12, LEVEL).purchases).toEqual([]);
+    expect(() => chooseAugmentationsToBuy(["Nothing"], BN1, 1e12, LEVEL)).toThrow(RangeError);
   });
 });
 

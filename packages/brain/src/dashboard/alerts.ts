@@ -5,6 +5,7 @@ import type { IntentOutcome } from "@bitburner-agent/core";
 import type { NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
+import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
 export const AGENT_SILENT_AFTER_MS = 60_000;
@@ -43,6 +44,7 @@ export type AlertName =
   | "incomeStalled"
   | "factionStateUnread"
   | "backdoorOverdue"
+  | "factionWorkStalled"
   | "augmentationNotQueued"
   | "installNotRestarted";
 
@@ -89,6 +91,8 @@ export interface AlertFacts {
   factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
   backdoorsDue: BackdoorDue[];
+  /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
+  factionWorkStall: FactionWorkStall | null;
   /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
   augmentationsNotQueued: NotQueued[];
   /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
@@ -107,7 +111,8 @@ export interface IncomeFacts {
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue
- * per overdue backdoor, then one augmentationNotQueued per purchase not queued, then installNotRestarted.
+ * per overdue backdoor, then factionWorkStalled, then one augmentationNotQueued per purchase not queued, then
+ * installNotRestarted.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -168,6 +173,8 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     });
   }
   alerts.push(...backdoorOverdueAlerts(facts));
+  const factionWorkStalled = factionWorkStalledAlert(facts);
+  if (factionWorkStalled !== null) alerts.push(factionWorkStalled);
   alerts.push(...augmentationAlerts(facts));
   return alerts;
 }
@@ -200,6 +207,29 @@ export function augmentationAlerts({
     });
   }
   return alerts;
+}
+
+/**
+ * `factionWorkStalled` (#203), or null: the brain's faction work is sent, and its faction's reputation has risen under
+ * half the work's rate over the last `FACTION_WORK_STALLED_AFTER_MS` of the connected Agent's slow snapshots
+ * (../factions.ts, `underRateSince`). The work isn't converged (the Agent's problem says why), or the game credits it
+ * elsewhere (another faction's work under way, say). With no reading in the window at all, it says that instead.
+ */
+export function factionWorkStalledAlert({
+  nowMs,
+  factionWorkStall,
+}: Pick<AlertFacts, "nowMs" | "factionWorkStall">): Alert | null {
+  if (factionWorkStall === null || nowMs - factionWorkStall.sinceMs < FACTION_WORK_STALLED_AFTER_MS) return null;
+  const { faction, sinceMs, lastReadingAtMs } = factionWorkStall;
+  const minutes = (fromMs: number) => Math.floor((nowMs - fromMs) / 60_000);
+  // No reading in the window at all: the snapshots stopped, or each was skipped, so the rate can't be blamed.
+  const detail =
+    nowMs - lastReadingAtMs >= FACTION_WORK_STALLED_AFTER_MS
+      ? `no reading of ${faction}'s reputation for ${minutes(lastReadingAtMs)} min, with the brain's faction work for ` +
+        "it: no slow snapshot, or each one's faction state skipped (see the Factions section)"
+      : `${faction}'s reputation has risen under half the work's rate for ${minutes(sinceMs)} min, with the brain's ` +
+        "faction work for it: see the Work section's outcome";
+  return { name: "factionWorkStalled", sinceMs, detail };
 }
 
 /**

@@ -14,6 +14,7 @@
 // RAM: nothing beyond the base (ram-budget.json); the page costs nothing.
 import type { FactionWorkType, Work } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
+import { pageMustStayProblem } from "../page/faction-state-page.ts";
 import { openGamePage } from "../page/game-page.ts";
 import { reportPageEffect } from "../page/page-effect.ts";
 import { convergeWorkOnPage, workShown } from "../page/work-page.ts";
@@ -34,5 +35,7 @@ export async function main(ns: NS): Promise<void> {
     steps: (gamePage, { wasFocused }) => convergeWorkOnPage(gamePage, work, { wasFocused }),
     notDoneAfter: `not ${work.focus ? "focused on" : "doing"} ${work.workType} work for ${work.faction} after starting it`,
     ending: "steps",
+    // Not from the casino mid-hand, nor without a sidebar (#203 review): caught up on a later try.
+    mustStay: pageMustStayProblem,
   });
 }

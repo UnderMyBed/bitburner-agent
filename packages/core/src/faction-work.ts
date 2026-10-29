@@ -1,7 +1,7 @@
 /**
- * Faction work's reputation (#203, M4 phase A slice A5): the game's formulas, for the brain's choice of which faction to
- * work for and its ETAs, and what an augmentation is worth to the hacking the brain does. Shared by the brain and the
- * simulator's tests; checked against the engine's `ns.formulas.work.factionGains` (the brain's parity suite).
+ * Faction work's reputation (#203, M4 phase A slice A5): the game's formulas, for the brain's choice of which faction
+ * to work for and its ETAs, and what an augmentation is worth to the hacking the brain does. Shared by the brain and
+ * the simulator's tests; checked against the engine's `ns.formulas.work.factionGains` (the brain's parity suite).
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
 import { intelligenceBonus } from "./hacking-ceiling.ts";
@@ -39,16 +39,17 @@ const finite = (value: number, what: string) => {
  * - hacking: (hacking + intelligence/3 + a tenth of charisma with SF15.3) / 975;
  * - field: 0.9 × (str + def + dex + agi + cha + hacking + intelligence + 3/10 of charisma with SF15.3) / 975 / 5.5;
  * - security: 0.9 × (str + def + dex + agi + 3/10 of charisma with SF15.3 + hacking + intelligence) / 975 / 4.5;
- * - each × `faction_rep` × the intelligence bonus × (1 + favour/100).
- * The share bonus is 1: the brain runs no `share()` (`NetworkShare/Share.ts:43-57`, 1 with no threads). The BitNode's
- * `FactionWorkRepGain` is taken as 1: exact in BN1; elsewhere it scales every faction and work type alike
- * (`reputation.ts:13`), so a choice between them is the same and only an ETA is off. A figure that isn't finite throws.
+ * - each × `faction_rep` × the intelligence bonus × (1 + favour/100) × the BitNode's `FactionWorkRepGain`
+ *   (`reputation.ts:8-14`; core's `augmentationBitNodeMultipliers`).
+ * The share bonus is 1: the brain runs no `share()` (`NetworkShare/Share.ts:43-57`, 1 with no threads). A figure that
+ * isn't finite throws.
  */
 export function factionReputationPerCycle(
   person: WorkingPerson,
   workType: FactionWorkType,
   favor: number,
   sourceFile15Level: number,
+  factionWorkRepGain: number,
 ): number {
   const skills = Object.fromEntries(
     Object.entries(person.skills).map(([name, value]) => [name, finite(value, `the player's ${name}`)]),
@@ -57,12 +58,17 @@ export function factionReputationPerCycle(
   if (!(finite(favor, "the faction's favour") >= 0)) throw new RangeError(`the faction's favour is ${favor}`);
   // `getDarknetCharismaBonus` (`reputation.ts:54-59`): charisma × the scalar with SF15 at level 3 or more.
   const charismaBonus = (scalar: number) => (sourceFile15Level >= 3 ? skills.charisma * scalar : 0);
-  const favorMult = 1 + favor / 100;
+  const favorMult = (1 + favor / 100) * finite(factionWorkRepGain, "the BitNode's FactionWorkRepGain");
   // At weight 1 (`reputation.ts:20`, `:37`, `:51`): hacking-ceiling.ts's, shared.
-  const intBonus = intelligenceBonus(skills.intelligence);
+  const intelligenceMultiplier = intelligenceBonus(skills.intelligence);
   const { hacking, strength, defense, dexterity, agility, charisma, intelligence } = skills;
   if (workType === "hacking") {
-    return ((hacking + intelligence / 3 + charismaBonus(0.1)) / MAX_SKILL_LEVEL) * factionRep * intBonus * favorMult;
+    return (
+      ((hacking + intelligence / 3 + charismaBonus(0.1)) / MAX_SKILL_LEVEL) *
+      factionRep *
+      intelligenceMultiplier *
+      favorMult
+    );
   }
   const physical = strength + defense + dexterity + agility;
   const sum =
@@ -70,7 +76,7 @@ export function factionReputationPerCycle(
       ? physical + charisma + hacking + intelligence + charismaBonus(0.3)
       : physical + charismaBonus(0.3) + hacking + intelligence;
   const divisor = workType === "field" ? 5.5 : 4.5;
-  return ((0.9 * sum) / MAX_SKILL_LEVEL / divisor) * factionRep * favorMult * intBonus;
+  return ((0.9 * sum) / MAX_SKILL_LEVEL / divisor) * factionRep * favorMult * intelligenceMultiplier;
 }
 
 /**
@@ -86,12 +92,12 @@ export function factionReputationPerSecond(
     sourceFile15Level,
     focused,
     implant,
-  }: { favor: number; sourceFile15Level: number; focused: boolean; implant: boolean },
+    factionWorkRepGain,
+  }: { favor: number; sourceFile15Level: number; focused: boolean; implant: boolean; factionWorkRepGain: number },
 ): number {
   const focusBonus = focused || implant ? 1 : UNFOCUSED_WORK_BONUS;
-  return (
-    factionReputationPerCycle(person, workType, favor, sourceFile15Level) * focusBonus * FACTION_WORK_CYCLES_PER_SECOND
-  );
+  const perCycle = factionReputationPerCycle(person, workType, favor, sourceFile15Level, factionWorkRepGain);
+  return perCycle * focusBonus * FACTION_WORK_CYCLES_PER_SECOND;
 }
 
 /**
@@ -109,13 +115,33 @@ export const HACKING_MULTIPLIERS = [
 ] as const;
 
 /**
- * What an augmentation is worth to the brain's hacking (#203): the natural logarithms of its `HACKING_MULTIPLIERS`
- * added up, so two of them together are worth what their product is. 0 for one with none (combat, The Red Pill);
- * Unstable Circadian Modulator's are drawn at random (augmentation-data.ts), so 0 too. An unknown name throws.
+ * What `hacking` × `multiplier` is worth at `hackingLevel`, as the hacking experience multiplier that lifts the level
+ * as much: ln x = (L/32)(1 − 1/m). The level is m × (32 ln(exp + 534.6) − 200) (`PersonObjects/Person.ts:60-63`,
+ * `formulas/skill.ts:13`), so ×m on it is worth ×x on experience, at level L. At L=300, BitWire's ×1.05 is worth an
+ * experience multiplier of ×1.56; at L=3000, ×87: the skill multipliers outgrow the rest as the level climbs.
  */
-export function hackingValue(augmentation: string): number {
-  if (!Object.hasOwn(AUGMENTATIONS, augmentation))
+export function hackingSkillValue(multiplier: number, hackingLevel: number): number {
+  if (!(Number.isFinite(hackingLevel) && hackingLevel >= 1)) {
+    throw new RangeError(`the hacking level must be 1 or more, not ${hackingLevel}`);
+  }
+  return (hackingLevel / 32) * (1 - 1 / multiplier);
+}
+
+/**
+ * What an augmentation is worth to the brain's hacking at `hackingLevel` (#203; A6 ranks its purchases by it too): the
+ * natural logarithms of its `HACKING_MULTIPLIERS` added up, so two of them together are worth what their product is,
+ * but for `hacking` itself, weighed by the level formula (`hackingSkillValue`) as the experience multiplier it equals
+ * at that level. `hacking_speed` is counted once, though faster hacks bring both money and experience sooner. 0 for one
+ * with none (combat, The Red Pill); Unstable Circadian Modulator's are drawn at random (augmentation-data.ts), so 0 too.
+ * An unknown name throws.
+ */
+export function hackingValue(augmentation: string, hackingLevel: number): number {
+  if (!Object.hasOwn(AUGMENTATIONS, augmentation)) {
     throw new RangeError(`no augmentation ${JSON.stringify(augmentation)}`);
+  }
   const { multipliers } = AUGMENTATIONS[augmentation] as (typeof AUGMENTATIONS)[string];
-  return HACKING_MULTIPLIERS.reduce((sum, key) => sum + Math.log(multipliers[key] ?? 1), 0);
+  return HACKING_MULTIPLIERS.reduce((sum, key) => {
+    const multiplier = multipliers[key] ?? 1;
+    return sum + (key === "hacking" ? hackingSkillValue(multiplier, hackingLevel) : Math.log(multiplier));
+  }, 0);
 }

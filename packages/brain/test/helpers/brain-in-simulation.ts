@@ -47,7 +47,7 @@ export interface BrainInSimulation {
   desiredState: DesiredStateController | null;
   /** With the controller, the money's last rise (#184), as main.ts has it. */
   incomeWatch: IncomeWatch | null;
-  /** What the brain logged, in order: the income watch's lines (#184), and the backdoors' (#195). */
+  /** What the brain logged, in order: the income watch's lines (#184), the backdoors' (#195), the factions' (#203). */
   logLines: string[];
   /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
@@ -143,7 +143,7 @@ export function startBrainInSimulation(
   } as const;
   if (data) recordEvents(deployer, data.store, deployerReleaseContext);
   if (data && saveBackups) recordEvents(saveBackups, data.store, deployerReleaseContext);
-  // The augmentation rule's events (#210), as main.ts records them.
+  // The rules' events (#203, #210), as main.ts records them.
   if (data && desiredStateController) recordEvents(desiredStateController, data.store, deployerReleaseContext);
   const openConnections: Connection[] = [];
   let stopped = false;

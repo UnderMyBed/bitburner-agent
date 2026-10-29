@@ -1,14 +1,16 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136) or home's RAM (#138), the next backdoor for the hacker factions
-// (#195, ./backdoors.ts), the augmentations' purchases and install (#210, ./augmentations.ts), and the owner's manual
-// queue. Irreversible intents wait for their guard and a save backup first (#147). Each state carries how long the
-// Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the
-// BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
+// (#195, ./backdoors.ts), the next faction to join and the brain's faction work (#203, ./factions.ts), the
+// augmentations' purchases and install (#210, ./augmentations.ts), and the owner's manual queue and work. Irreversible
+// intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
+// brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
+// back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
   EFFECTOR_BACKENDS,
+  type FactionWorkType,
   type FastSnapshotData,
   type Intent,
   type IntentOutcome,
@@ -30,6 +32,14 @@ import {
   writeAugmentationsEnabled,
 } from "./augmentations.ts";
 import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
+import {
+  FactionRule,
+  type FactionsView,
+  type FactionWorkEvent,
+  type FactionWorkStall,
+  readFactionWorkEnabled,
+  writeFactionWorkEnabled,
+} from "./factions.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
@@ -61,10 +71,10 @@ import {
 export const SAFE_MODE_TTL_MS = 12 * 60 * 60_000;
 
 /**
- * The owner's manual queue's limit: the protocol's 100, less room for the purchase, the backdoor (#195), and the
- * augmentation purchase or install (#210).
+ * The owner's manual queue's limit: the protocol's 100, less room for the purchase, the backdoor (#195), the join
+ * (#203) and the augmentation purchase or install (#210).
  */
-export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 3;
+export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 4;
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -131,10 +141,10 @@ export interface HomeRamView {
 export interface IntentView {
   id: string;
   /**
-   * The owner's manual queue, the brain's purchase rules, its backdoors for the hacker factions (#195), or its
-   * augmentations' purchases and install (#210).
+   * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), or its augmentations'
+   * purchases and install (#210).
    */
-  source: "manual" | "purchase" | "backdoor" | "augmentation";
+  source: "manual" | "purchase" | "backdoor" | "join" | "augmentation";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -159,7 +169,7 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
  * - Intents go in order: the owner's manual queue first, as added, then the purchase, then the backdoor (#195), asked
- *   for until the connected Agent reports it done. A manual intent leaves the queue once the connected Agent reports
+ *   for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once the connected Agent reports
  *   it done: the game's state can change again (a travel there and back), so a snapshot can't say it was done. Never
  *   more than the protocol's 100: a queue stored under the old limit (99) leaves the rules' intents out, logged.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
@@ -213,8 +223,15 @@ export class DesiredStateController {
   /** The backdoors for the hacker factions (#195): the rule, and the one it asks for now, or null. */
   readonly #backdoors: BackdoorRule;
   #backdoor: Intent | null = null;
-  /** When the connected Agent's latest medium snapshot arrived, or null. */
+  /** The joins and the brain's faction work (#203): the rule, the join it asks for now, the work it sends, or null. */
+  readonly #factions: FactionRule;
+  #join: Intent | null = null;
+  #factionWork: { faction: string; workType: FactionWorkType } | null = null;
+  /** Who gets the rules' events (#203, #210): the store, through main.ts. */
+  readonly #listeners = new Set<(event: FactionWorkEvent | AugmentationEvent) => void>();
+  /** When the connected Agent's latest medium and slow snapshots arrived, or null. */
   #mediumAtMs: number | null = null;
+  #slowAtMs: number | null = null;
   /** The game's time in the connected Agent's latest slow snapshot (its `gameTimeMs`), or null (#210). */
   #slowGameTimeMs: number | null = null;
   /** The latest channel event's time: the controller's clock, for the rules' events (#210). Null before any. */
@@ -227,8 +244,6 @@ export class DesiredStateController {
   #augmentationIntent: Intent | null = null;
   #augmentationInstall = false;
   #augmentationsCommitted = false;
-  /** Who gets the rules' events (#210): the store, through main.ts. */
-  readonly #listeners = new Set<(event: AugmentationEvent) => void>();
   /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
   #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
@@ -252,6 +267,7 @@ export class DesiredStateController {
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
+    this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
     this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
@@ -262,6 +278,7 @@ export class DesiredStateController {
         this.#mediumAtMs = null;
         this.#slowData = null;
         this.#slowGameTimeMs = null;
+        this.#slowAtMs = null;
         this.#fastData = null;
         // Counted on the last Agent's snapshots: every gate starts again, and the income is measured again (#210).
         this.#gates.forget();
@@ -285,6 +302,7 @@ export class DesiredStateController {
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
         this.#slowGameTimeMs = event.snapshot.gameTimeMs;
+        this.#slowAtMs = event.atMs;
         this.#dropResetIntentOnceReset();
       } else {
         return;
@@ -312,14 +330,20 @@ export class DesiredStateController {
     this.#update();
   }
 
+  /** The brain's faction work's switch (#203), likewise. The joins have none. */
+  setFactionWorkEnabled(enabled: boolean): void {
+    writeFactionWorkEnabled(this.#store, enabled);
+    this.#update();
+  }
+
   /** Buying and installing augmentations' switch (#210), likewise: off calls a cycle under way off. */
   setAugmentationsEnabled(enabled: boolean): void {
     writeAugmentationsEnabled(this.#store, enabled);
     this.#update();
   }
 
-  /** Listens for the augmentation rule's events (#210), to store them; returns a function that stops it. */
-  subscribe(listener: (event: AugmentationEvent) => void): () => void {
+  /** Listens for the rules' events (#203, #210), to store them; returns a function that stops it. */
+  subscribe(listener: (event: FactionWorkEvent | AugmentationEvent) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -382,13 +406,28 @@ export class DesiredStateController {
     return { ok: true };
   }
 
-  /** What the brain sends of the work, and how the connected Agent last reported it. */
+  /**
+   * What the brain sends of the work, whose it is, and how the connected Agent last reported it: the owner's, or else
+   * the brain's faction work (#203).
+   */
   workView(): WorkView {
     const owners = readOwnersWork(this.#store);
+    const work = owners ?? (this.#factionWork === null ? null : { kind: "faction" as const, ...this.#factionWork });
     return {
-      desired: owners === null ? null : { ...owners, focus: workFocus(owners, this.#slowData) },
-      outcome: owners === null ? null : reportedWorkOutcome(this.#fastData?.work),
+      desired: work === null ? null : { ...work, focus: workFocus(work, this.#slowData) },
+      source: owners !== null ? "owner" : work === null ? null : "brain",
+      outcome: work === null ? null : reportedWorkOutcome(this.#fastData?.work),
     };
+  }
+
+  /** What the dashboard shows of the joins and the brain's faction work (#203). */
+  factionsView(): FactionsView {
+    return this.#factions.view();
+  }
+
+  /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
+  factionWorkStall(): FactionWorkStall | null {
+    return this.#factions.stall();
   }
 
   /** Takes the intent `id` off the manual queue; false if it isn't there. */
@@ -418,6 +457,7 @@ export class DesiredStateController {
       ...fromRule(this.#purchase).map((intent) => ({ intent, source: "purchase" as const })),
       ...fromRule(this.#augmentationIntent).map((intent) => ({ intent, source: "augmentation" as const })),
       ...fromRule(this.#backdoor).map((intent) => ({ intent, source: "backdoor" as const })),
+      ...fromRule(this.#join).map((intent) => ({ intent, source: "join" as const })),
     ].map(({ intent, source }, index) => ({
       id: intent.id,
       source,
@@ -451,7 +491,7 @@ export class DesiredStateController {
     );
   }
 
-  #emit(event: AugmentationEvent): void {
+  #emit(event: FactionWorkEvent | AugmentationEvent): void {
     for (const listener of this.#listeners) listener(event);
   }
 
@@ -659,9 +699,20 @@ export class DesiredStateController {
       resetAt: resetTimeOf(this.#slowData, "lastAugReset"),
       doneIds: this.#doneIds(),
     });
+    // The joins and the brain's faction work (#203): its work only with no owner's work and the switch on.
+    const factions = this.#factions.update({
+      mediumData: this.#mediumData,
+      slowData: this.#slowData,
+      slowAtMs: this.#slowAtMs,
+      nowMs: this.#lastEventAtMs,
+      ownersWork: readOwnersWork(this.#store) !== null,
+      enabled: readFactionWorkEnabled(this.#store),
+    });
+    this.#join = factions.join;
+    this.#factionWork = factions.work;
     // The manual queue first, then the brain's install (#210) behind it; then the purchase, the augmentation purchase
-    // (#210) and the backdoor (#195), each only if the owner hasn't queued the same. The purchases before the backdoor:
-    // a `buy` never waits for its terminal action.
+    // (#210), the backdoor (#195) and the join (#203), each only if the owner hasn't queued the same. The purchases
+    // before the backdoor: a `buy` never waits for its terminal action.
     const manual = readManualIntents(this.#store);
     const gated = this.#gatedQueue();
     const notManual = (intent: Intent | null) =>
@@ -676,9 +727,10 @@ export class DesiredStateController {
       ...notManual(this.#purchase),
       ...notManual(this.#augmentationIntent),
       ...notManual(this.#backdoor),
+      ...notManual(this.#join),
     ];
-    // A queue stored under the old limit (99, before #195) would make the state too long, and the Agent would refuse it
-    // whole: the rules' intents wait for room, the last first.
+    // A queue stored under an old limit (99 before #195, 98 before #203) would make the state too long, and the Agent
+    // would refuse it whole: the rules' intents wait for room, the last first.
     const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
     if (leftOut.join() !== this.#leftOut) {
       this.#leftOut = leftOut.join();
@@ -689,8 +741,9 @@ export class DesiredStateController {
         );
       }
     }
-    // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says
-    // whether the implant is in, so the focus never flips on a connect. None set: not managed.
+    // The owner's work, or the brain's faction work (#203), its focus from the connected Agent's slow snapshot
+    // (decision 37): sent only once that says whether the implant is in, so the focus never flips on a connect. None:
+    // not managed.
     const work = this.#slowData === null ? null : this.workView().desired;
     // Every state, so the Agent's safe mode keeps it (#160).
     const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };

@@ -204,15 +204,15 @@ describe("the decision", () => {
   });
 
   test("the reserve: the set the money will cover within 5 minutes of income", () => {
-    // $60m and $100k/s: $90m in 5 minutes. By value, Gen II (with Gen I) is past it, Neurotrainer I and Gen I ($77.6m)
-    // aren't, and BitWire or Synaptic with them would be.
+    // $60m and $100k/s: $90m in 5 minutes. By value at hacking 300, Gen II (with Gen I) is past it; Gen I and BitWire
+    // ($89m) aren't, and Neurotrainer I with them would be. $60m alone covers BitWire, Synaptic and Neurotrainer I.
     measureIncome(100_000, { reputation: 10_000 }, medium({ money: 60e6 }));
     expect(rule.view().set.map((each) => each.augmentation)).toEqual([
       "BitWire",
       "Synaptic Enhancement Implant",
       "Neurotrainer I",
     ]);
-    expect(rule.reserve()).toBeCloseTo(70e6 + 4e6 * 1.9, 0);
+    expect(rule.reserve()).toBeCloseTo(70e6 + 10e6 * 1.9, 0);
   });
 
   test("the money far off carrying on: install chosen", () => {

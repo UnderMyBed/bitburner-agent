@@ -17,6 +17,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const hackLoopCalls: boolean[] = [];
   const programsCalls: boolean[] = [];
   const homeRamCalls: boolean[] = [];
+  const factionWorkCalls: boolean[] = [];
   const augmentationsCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
@@ -29,6 +30,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setHackLoopEnabled: (enabled) => hackLoopCalls.push(enabled),
     setProgramsEnabled: (enabled) => programsCalls.push(enabled),
     setHomeRamEnabled: (enabled) => homeRamCalls.push(enabled),
+    setFactionWorkEnabled: (enabled) => factionWorkCalls.push(enabled),
     setAugmentationsEnabled: (enabled) => augmentationsCalls.push(enabled),
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
@@ -56,6 +58,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     hackLoopCalls,
     programsCalls,
     homeRamCalls,
+    factionWorkCalls,
     augmentationsCalls,
     intentRequests,
     cancelledIds,
@@ -188,6 +191,7 @@ const SWITCHES = [
   ["the hack loop (#134)", "/api/hack-loop", "hackLoopCalls"],
   ["the hacking programs (#136)", "/api/programs", "programsCalls"],
   ["home RAM (#138)", "/api/home-ram", "homeRamCalls"],
+  ["the brain's faction work (#203)", "/api/faction-work", "factionWorkCalls"],
   ["augmentations (#210)", "/api/augmentations", "augmentationsCalls"],
 ] as const;
 

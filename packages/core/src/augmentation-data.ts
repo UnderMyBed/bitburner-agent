@@ -2188,81 +2188,96 @@ export const AUGMENTATIONS: Record<string, AugmentationData> = {
   },
 };
 
-/** Each BitNode's multipliers on augmentations, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */
+/** Each BitNode's multipliers on augmentations and faction work, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */
 export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNodeMultipliers> = {
   "1": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "2": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 0.5,
   },
   "3": {
     AugmentationMoneyCost: 3,
     AugmentationRepCost: 3,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "4": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 0.75,
   },
   "5": {
     AugmentationMoneyCost: 2,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "6": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 35,
+    FactionWorkRepGain: 1,
   },
   "7": {
     AugmentationMoneyCost: 3,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 35,
+    FactionWorkRepGain: 1,
   },
   "8": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "9": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "10": {
     AugmentationMoneyCost: 5,
     AugmentationRepCost: 2,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "11": {
     AugmentationMoneyCost: 2,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 1,
   },
   "12": {
     AugmentationMoneyCost: 1.02,
     AugmentationRepCost: 1.02,
     DaedalusAugsRequirement: 31,
+    FactionWorkRepGain: 0.9803921568627451,
   },
   "13": {
     AugmentationMoneyCost: 1,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 0.6,
   },
   "14": {
     AugmentationMoneyCost: 1.5,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 30,
+    FactionWorkRepGain: 0.2,
   },
   "15": {
     AugmentationMoneyCost: 3,
     AugmentationRepCost: 1,
     DaedalusAugsRequirement: 20,
+    FactionWorkRepGain: 1,
   },
 };

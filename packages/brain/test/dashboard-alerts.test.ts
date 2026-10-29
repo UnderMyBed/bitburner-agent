@@ -8,6 +8,7 @@ import {
   INCOME_STALLED_AFTER_MS,
   INSTALL_NOT_RESTARTED_AFTER_MS,
 } from "../src/dashboard/alerts.ts";
+import { FACTION_WORK_STALLED_AFTER_MS } from "../src/factions.ts";
 
 const STARTED_AT_MS = 1_000_000;
 const quiet: AlertFacts = {
@@ -23,6 +24,7 @@ const quiet: AlertFacts = {
   income: null,
   factionState: null,
   backdoorsDue: [],
+  factionWorkStall: null,
   augmentationsNotQueued: [],
   installAwaitingRestart: null,
 };
@@ -200,6 +202,54 @@ describe("incomeStalled (#184): the hack loop on against a target, and money not
       "incomeStalled",
       "intentStuck",
     ]);
+  });
+});
+
+describe("factionWorkStalled (#203): the brain's faction work under half its rate for 10 minutes", () => {
+  const NOW = STARTED_AT_MS + 60 * 60_000;
+  test("at 10 minutes, not before, saying the faction and for how long", () => {
+    const stall = (sinceMs: number) =>
+      activeAlerts({
+        ...quiet,
+        nowMs: NOW,
+        lastFastSnapshotAtMs: NOW,
+        factionWorkStall: { faction: "CyberSec", sinceMs, lastReadingAtMs: NOW - 30_000 },
+      });
+    expect(stall(NOW - FACTION_WORK_STALLED_AFTER_MS + 1)).toEqual([]);
+    expect(stall(NOW - FACTION_WORK_STALLED_AFTER_MS)).toEqual([
+      {
+        name: "factionWorkStalled",
+        sinceMs: NOW - FACTION_WORK_STALLED_AFTER_MS,
+        detail:
+          "CyberSec's reputation has risen under half the work's rate for 10 min, with the brain's faction work for " +
+          "it: see the Work section's outcome",
+      },
+    ]);
+    expect(activeAlerts({ ...quiet, nowMs: NOW, lastFastSnapshotAtMs: NOW })).toEqual([]);
+  });
+
+  test("no reading of its reputation in the window (slow snapshots stopped, or each skipped): says so, not the rate", () => {
+    const stall = { faction: "CyberSec", sinceMs: NOW - 11 * 60_000, lastReadingAtMs: NOW - 11 * 60_000 };
+    expect(activeAlerts({ ...quiet, nowMs: NOW, lastFastSnapshotAtMs: NOW, factionWorkStall: stall })).toEqual([
+      {
+        name: "factionWorkStalled",
+        sinceMs: NOW - 11 * 60_000,
+        detail:
+          "no reading of CyberSec's reputation for 11 min, with the brain's faction work for it: no slow snapshot, or " +
+          "each one's faction state skipped (see the Factions section)",
+      },
+    ]);
+  });
+
+  test("last in the order, after backdoorOverdue", () => {
+    const names = activeAlerts({
+      ...quiet,
+      nowMs: NOW,
+      lastFastSnapshotAtMs: NOW,
+      backdoorsDue: [{ hostname: "CSEC", sinceMs: STARTED_AT_MS }],
+      factionWorkStall: { faction: "CyberSec", sinceMs: STARTED_AT_MS, lastReadingAtMs: NOW - 30_000 },
+    }).map((alert) => alert.name);
+    expect(names.slice(-2)).toEqual(["backdoorOverdue", "factionWorkStalled"]);
   });
 });
 

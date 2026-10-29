@@ -20,11 +20,9 @@ import {
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
   FACTION_NAMES,
-  FACTIONS,
   type FactionState,
   factionReadingKind,
   factionReadingOf,
-  factionReputationPerSecond,
   type InstallCandidate,
   type InstallDecision,
   type Intent,
@@ -34,11 +32,11 @@ import {
   type MediumSnapshotData,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
-  NEURORECEPTOR_MANAGEMENT_IMPLANT,
   purchaseSequenceCost,
   type SlowSnapshotData,
   type WorkingPerson,
 } from "@bitburner-agent/core";
+import { bestWorkRate, workCandidates, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -206,24 +204,15 @@ const isRecordOf = (value: unknown): value is Record<string, number> =>
   typeof value === "object" && value !== null && Object.values(value).every(isFiniteNumber);
 const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
 
-/** What the rule reads of the player in a medium snapshot, or null: it's the Agent's word. */
+/**
+ * What the rule reads of the player in a medium snapshot, or null: it's the Agent's word. The person is A5's
+ * (`workingPersonOf`, #203), with the hacking experience and the money.
+ */
 function playerOf(mediumData: MediumSnapshotData) {
-  const player = mediumData.player as {
-    skills?: Record<string, unknown>;
-    exp?: Record<string, unknown>;
-    mults?: Record<string, unknown>;
-    money?: unknown;
-  };
-  const skills = player?.skills;
-  const names = ["hacking", "strength", "defense", "dexterity", "agility", "charisma", "intelligence"] as const;
-  if (!skills || !names.every((name) => isFiniteNumber(skills[name]))) return null;
-  const factionRep = player.mults?.faction_rep;
-  const hackingExp = player.exp?.hacking;
-  if (!isFiniteNumber(factionRep) || !isFiniteNumber(hackingExp) || !isFiniteNumber(player.money)) return null;
-  const person: WorkingPerson = {
-    skills: Object.fromEntries(names.map((name) => [name, skills[name]])) as WorkingPerson["skills"],
-    mults: { faction_rep: factionRep },
-  };
+  const person = workingPersonOf(mediumData);
+  const player = mediumData.player as { exp?: Record<string, unknown>; money?: unknown } | undefined;
+  const hackingExp = player?.exp?.hacking;
+  if (person === null || !isFiniteNumber(hackingExp) || !isFiniteNumber(player?.money)) return null;
   return { person, hackingExp, money: player.money };
 }
 
@@ -593,34 +582,41 @@ export class AugmentationRule {
     const sold = [...new Set([...shops.values()].flat())].filter((name) => name !== NEUROFLUX_GOVERNOR);
     const reached = sold.filter((name) => !owned(name) && sellerOf(name) !== null);
     const { money } = player;
-    const set = chooseAugmentationsToBuy(reached, purchaseState, money);
+    const hackingLevel = player.person.skills.hacking;
+    const set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel);
     const setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
     const income = this.#income();
     const cycle = readAugmentationCycle(this.#store);
 
     if (cycle === null) {
       const covered = income === null ? money : money + (income * AUGMENTATION_RESERVE_HORIZON_MS) / 1000;
-      const reserve = chooseAugmentationsToBuy(reached, purchaseState, covered).money;
+      const reserve = chooseAugmentationsToBuy(reached, purchaseState, covered, hackingLevel).money;
       if (slowGameTimeMs === null) {
         return this.#asks(null, { waitingFor: "the game's time in the Agent's slow snapshot", set: setView, reserve });
       }
       const installing = [...queue, ...set.purchases.map((purchase) => purchase.name)];
       const decision = installDecision({
         sinceResetMs: Math.max(0, slowGameTimeMs - resetInfo.lastAugReset),
-        hackingLevel: player.person.skills.hacking,
+        hackingLevel,
         hackingExp: player.hackingExp,
         installing,
         money,
         incomePerSecond: income,
         candidates: this.#candidates({
+          state,
+          resetInfo,
+          slowData,
           purchaseState,
-          joined,
-          shops,
-          set: installing,
-          owned,
-          ownedAugs,
-          ownedSF,
-          player,
+          installing,
+          reachedLeftOut: reached
+            .filter((name) => isWorthInstalling(name) && !installing.includes(name))
+            .map((augmentation) => {
+              const faction = sellerOf(augmentation) as string;
+              const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
+              return { faction, augmentation, reputation: repOf(faction), reputationNeeded };
+            }),
+          person: player.person,
+          hackingLevel,
         }),
       });
       const view = { set: setView, setCost: set.money, decision, reserve, committed: false };
@@ -762,64 +758,59 @@ export class AugmentationRule {
   }
 
   /**
-   * Each way to the next augmentation worth installing: at each joined seller with work, one not owned, not in the set,
-   * whose prerequisites are owned or in the set; at the faction's best work rate (A5's formula, focused: decision 37's
-   * focus, or the implant's, gains the same), and its money, after the set and with nothing queued.
+   * Each way to the next augmentation worth installing: A5's candidates (#203, `workCandidates`: worth working for at a
+   * joined faction, not reached there), with the queue as the rule knows it, and the reached ones the set leaves out
+   * (their money); each with its prerequisites owned or in the set. The rate is its faction's best work's (A5's
+   * `bestWorkRate`, 0 for none), the money the set's and its own in buy order, and its price with nothing queued.
    */
   #candidates({
+    state,
+    resetInfo,
+    slowData,
     purchaseState,
-    joined,
-    shops,
-    set,
-    owned,
-    ownedAugs,
-    ownedSF,
-    player,
+    installing,
+    reachedLeftOut,
+    person,
+    hackingLevel,
   }: {
+    state: FactionState;
+    resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
+    slowData: SlowSnapshotData;
     purchaseState: AugmentationPurchaseState;
-    joined: FactionState["joined"];
-    shops: Map<string, string[]>;
-    set: string[];
-    owned: (name: string) => boolean;
-    ownedAugs: Record<string, number>;
-    ownedSF: Record<string, number>;
-    player: NonNullable<ReturnType<typeof playerOf>>;
+    /** What's queued and the set to buy. */
+    installing: string[];
+    reachedLeftOut: { faction: string; augmentation: string; reputation: number; reputationNeeded: number }[];
+    person: WorkingPerson;
+    hackingLevel: number;
   }): InstallCandidate[] {
-    const implant = Object.hasOwn(ownedAugs, NEURORECEPTOR_MANAGEMENT_IMPLANT);
-    const afterSet = { installed: purchaseState.installed, queued: [...purchaseState.queued, ...set] };
+    const conditions = workConditionsOf(resetInfo, slowData);
+    const rateOf = (name: string) => {
+      const faction = state.joined.find((each) => each.name === name);
+      return faction === undefined ? 0 : (bestWorkRate(person, faction, conditions)?.perSecond ?? 0);
+    };
+    const afterSet = { installed: purchaseState.installed, queued: [...purchaseState.queued, ...installing] };
     const afterInstall: AugmentationPurchaseState = {
       ...purchaseState,
-      installed: { ...purchaseState.installed, ...Object.fromEntries(set.map((name) => [name, 1])) },
+      installed: { ...purchaseState.installed, ...Object.fromEntries(installing.map((name) => [name, 1])) },
       queued: [],
     };
-    const toBuy = set.filter((name) => !purchaseState.queued.includes(name));
+    const toBuy = installing.filter((name) => !purchaseState.queued.includes(name));
+    const ways = [
+      ...workCandidates({ ...state, queuedAugmentations: [...purchaseState.queued] }, resetInfo, hackingLevel),
+      ...reachedLeftOut,
+    ];
     const candidates: InstallCandidate[] = [];
-    for (const faction of joined) {
-      const workTypes = FACTIONS[faction.name]?.workTypes ?? [];
-      const rate = Math.max(
-        0,
-        ...workTypes.map((workType) =>
-          factionReputationPerSecond(player.person, workType, {
-            favor: faction.favor,
-            sourceFile15Level: ownedSF["15"] ?? 0,
-            focused: true,
-            implant,
-          }),
-        ),
-      );
-      for (const augmentation of shops.get(faction.name) ?? []) {
-        if (!isWorthInstalling(augmentation) || owned(augmentation) || set.includes(augmentation)) continue;
-        if (missingPrerequisites(augmentation, afterSet).length > 0) continue;
-        candidates.push({
-          augmentation,
-          faction: faction.name,
-          reputation: faction.reputation,
-          reputationNeeded: augmentationCost(augmentation, purchaseState).reputation,
-          reputationPerSecond: rate,
-          costAfterSet: purchaseSequenceCost(augmentationBuyOrder([...toBuy, augmentation]), purchaseState).money,
-          priceAfterInstall: augmentationCost(augmentation, afterInstall).money,
-        });
-      }
+    for (const { faction, augmentation, reputation, reputationNeeded } of ways) {
+      if (installing.includes(augmentation) || missingPrerequisites(augmentation, afterSet).length > 0) continue;
+      candidates.push({
+        augmentation,
+        faction,
+        reputation,
+        reputationNeeded,
+        reputationPerSecond: rateOf(faction),
+        costAfterSet: purchaseSequenceCost(augmentationBuyOrder([...toBuy, augmentation]), purchaseState).money,
+        priceAfterInstall: augmentationCost(augmentation, afterInstall).money,
+      });
     }
     return candidates;
   }

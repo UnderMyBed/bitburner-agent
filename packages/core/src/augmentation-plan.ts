@@ -27,12 +27,13 @@ function dataOf(name: string) {
 const gameOrder = (name: string) => Object.keys(AUGMENTATIONS).indexOf(name);
 
 /**
- * Whether the brain installs `name` (#210): a hacking value (A5's `hackingValue`, #203) above 0, and not NeuroFlux
+ * Whether the brain installs `name` (#210): a hacking value (A5's `hackingValue`, #203, at any level) above 0, and not
+ * NeuroFlux
  * Governor, which is bought last with what money is left. Combat, charisma and Hacknet augmentations, and The Red Pill,
  * have none.
  */
 export function isWorthInstalling(name: string): boolean {
-  return name !== NEUROFLUX_GOVERNOR && hackingValue(name) > 0;
+  return name !== NEUROFLUX_GOVERNOR && hackingValue(name, 1) > 0;
 }
 
 /** The multipliers an install brings, each the product over `names` (each NeuroFlux Governor copy listed counts). */
@@ -79,7 +80,8 @@ export interface AugmentationSet {
 
 /**
  * The set to buy of `reached` (augmentations whose reputation a joined seller has), with `money` (#210): the most
- * hacking value the money covers, greedily. By hacking value (ties to the cheaper, then the game's order), each is
+ * hacking value the money covers, greedily. By hacking value at `hackingLevel` (A5's `hackingValue`, which weighs the
+ * hacking skill multiplier by the level; ties to the cheaper, then the game's order), each is
  * added with its prerequisites not yet owned, queued or chosen, if they're all reached too, and kept if the whole set,
  * in buy order, costs no more than the money (core's `purchaseSequenceCost`). Only those worth installing count.
  */
@@ -87,13 +89,14 @@ export function chooseAugmentationsToBuy(
   reached: readonly string[],
   state: AugmentationPurchaseState,
   money: number,
+  hackingLevel: number,
 ): AugmentationSet {
   const owned = (name: string) => Object.hasOwn(state.installed, name) || state.queued.includes(name);
   const candidates = [...new Set(reached)]
     .filter((name) => isWorthInstalling(name) && !owned(name))
     .sort(
       (a, b) =>
-        hackingValue(b) - hackingValue(a) ||
+        hackingValue(b, hackingLevel) - hackingValue(a, hackingLevel) ||
         dataOf(a).baseMoneyCost - dataOf(b).baseMoneyCost ||
         gameOrder(a) - gameOrder(b),
     );
