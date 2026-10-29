@@ -572,7 +572,7 @@ function windowSection(facts: RunFacts): string[] {
     FACTION_WORK_STOPPED_EVENT_KIND,
   ];
   const timeline = facts.events.filter((event) => !actions.includes(event.kind));
-  for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event)}`);
+  for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)}`);
   if (timeline.length === 0) lines.push("  no events from the brain or the Agent");
   const count = (kind: string) => timeline.filter((event) => event.kind === kind).length;
   const backups = timeline.filter((event) => event.kind === "saveBackup" && !fieldsOf(event.detail).failure).length;
@@ -584,7 +584,11 @@ function windowSection(facts: RunFacts): string[] {
   return lines;
 }
 
-function describeEvent({ kind, detail }: StoredEvent): string {
+/**
+ * An event as a line. `sinceMs`, the window's start: a restart's note from before it (the page's storage outlives a
+ * run, #212) says so.
+ */
+function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.NEGATIVE_INFINITY): string {
   const fields = fieldsOf(detail);
   switch (kind) {
     case BRAIN_STARTED_EVENT_KIND:
@@ -617,7 +621,11 @@ function describeEvent({ kind, detail }: StoredEvent): string {
     case RESTART_FELL_BACK_EVENT_KIND:
       return (
         `restart after a reset couldn't type run /agent/boot.js: ${displayValue(fields.reason)}; ` +
-        (fields.outcome === "reloading" ? "it saved and reloaded the game" : "it gave up")
+        (fields.outcome === "reloading" ? "it saved and reloaded the game" : "it gave up") +
+        // The note's own time, the page's clock: it can come from before this run, reported only now.
+        (isNumber(fields.atMs) && fields.atMs > 0
+          ? ` (noted ${formatIsoTime(fields.atMs)}${fields.atMs < sinceMs ? ", from before this run" : ""})`
+          : "")
       );
     case "saveBackupRotationFailed":
       return `old save backups not removed: ${displayValue(fields.failure)}`;
@@ -1108,11 +1116,11 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
 
   lines.push(
     "  deploy failures, version drift, supervision given up, brain messages the Agent refused, restarts that couldn't " +
-      "type (#212):",
+      "type:",
   );
   const failureEvents = facts.events.filter((event) => FAILURE_EVENT_KINDS.includes(event.kind));
   for (const event of failureEvents) {
-    const line = `${formatIsoTime(event.atMs)} ${describeEvent(event)}`;
+    const line = `${formatIsoTime(event.atMs)} ${describeEvent(event, facts.sinceMs)}`;
     lines.push(`    ${line}`);
     failures.push(line);
   }

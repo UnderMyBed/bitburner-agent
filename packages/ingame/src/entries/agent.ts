@@ -134,7 +134,7 @@ export async function main(ns: NS): Promise<void> {
     batcherDeploy: () => batcher.deployReport(),
     dialogReport: () => dialogWatcher.takeReport(),
     // A restart after a reset that couldn't type `run /agent/boot.js` left a note: reported, never silent (#212).
-    restartNote: takeRestartNote(),
+    takeRestartNote,
     refusedMessage: () => refused,
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
     factionsUnread: (problem) => factionStateReader.unread(problem),

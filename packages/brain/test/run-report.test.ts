@@ -481,7 +481,7 @@ describe("cloud servers (#194)", () => {
     expect(failures).toEqual([line]);
     expect(text).toContain(
       "  deploy failures, version drift, supervision given up, brain messages the Agent refused, restarts that couldn't " +
-        `type (#212):\n    ${line}`,
+        `type:\n    ${line}`,
     );
   });
 
@@ -880,11 +880,14 @@ describe("each failure is a FAIL, with its line", () => {
 
   test("a restart after a reset that couldn't type (#212): a failure, with why and what it did", () => {
     cleanRun();
-    event(MINUTE, "restartFellBack", { outcome: "reloading", reason: "no terminal", atMs: 1 });
-    event(2 * MINUTE, "restartFellBack", { outcome: "gaveUp", reason: "no terminal", atMs: 2 });
+    // The first noted in this run; the second before it (the page's storage outlives a run), reported only now.
+    event(MINUTE, "restartFellBack", { outcome: "reloading", reason: "no terminal", atMs: T0 + 30 * SECOND });
+    event(2 * MINUTE, "restartFellBack", { outcome: "gaveUp", reason: "no terminal", atMs: T0 - MINUTE });
     expect(verdict().failures).toEqual([
-      `${at(MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it saved and reloaded the game`,
-      `${at(2 * MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it gave up`,
+      `${at(MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it saved and reloaded the ` +
+        `game (noted ${at(30 * SECOND)})`,
+      `${at(2 * MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it gave up (noted ` +
+        `${at(-MINUTE)}, from before this run)`,
     ]);
   });
 

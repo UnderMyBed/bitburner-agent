@@ -58,16 +58,28 @@ export function takeRestartNote(): RestartNote | null {
     const text = storage.getItem(RESTART_NOTE_STORAGE_KEY);
     if (text === null) return null;
     storage.removeItem(RESTART_NOTE_STORAGE_KEY);
-    const note = JSON.parse(text) as Partial<RestartNote>;
-    const outcome = note.outcome === "reloading" || note.outcome === "gaveUp" ? note.outcome : "gaveUp";
-    return {
-      outcome,
-      reason: typeof note.reason === "string" ? note.reason : "not recorded",
-      atMs: typeof note.atMs === "number" ? note.atMs : 0,
-    };
+    return parseRestartNote(text);
   } catch {
     return null;
   }
+}
+
+/** The note a restart left, as text; one that can't be read is still reported, never dropped (#212). */
+export function parseRestartNote(text: string): RestartNote {
+  const unreadable: RestartNote = { outcome: "gaveUp", reason: "unreadable restart note", atMs: 0 };
+  let note: Partial<RestartNote>;
+  try {
+    note = JSON.parse(text) as Partial<RestartNote>;
+  } catch {
+    return unreadable;
+  }
+  if (typeof note !== "object" || note === null) return unreadable;
+  if (note.outcome !== "reloading" && note.outcome !== "gaveUp") return unreadable;
+  return {
+    outcome: note.outcome,
+    reason: typeof note.reason === "string" ? note.reason : "not recorded",
+    atMs: typeof note.atMs === "number" ? note.atMs : 0,
+  };
 }
 
 /** How often the timer looks at the page. */
@@ -216,7 +228,8 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
           // The production build asks before unloading, except on `file://` (Steam): asked, the reload could stop.
           const view = page.defaultView as { onbeforeunload: unknown } | null;
           if (view !== null) view.onbeforeunload = null;
-          // Noted before the click, which saves and reloads the page (#212).
+          // Noted before the click, which saves and reloads the page (#212). A click that then doesn't reload is still
+          // noted as reloading; its reason (why the terminal wasn't used) is right either way.
           leaveRestartNote(page, { outcome: "reloading", reason: reason ?? "not recorded", atMs: Date.now() });
           outcome = callHandler(forceKill, "onClick", playerEvent()) ? "reloading" : "gaveUp";
           return false;

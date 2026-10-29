@@ -77,7 +77,7 @@ export function createSnapshotter(
     batcherHealth = () => null,
     batcherDeploy = () => null,
     dialogReport,
-    restartNote = null,
+    takeRestartNote = () => null,
     refusedMessage = () => null,
     readFactions,
     factionsUnread = (problem) => ({ backend: "ui", state: null, problem }),
@@ -95,8 +95,11 @@ export function createSnapshotter(
     batcherDeploy?: () => BatcherDeployReport | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
-    /** A restart's note this Agent found at its start (#212): sent in the first fast snapshot, then dropped. */
-    restartNote?: RestartNote | null;
+    /**
+     * A restart's note, taken (read and removed) as the fast snapshot that carries it is built, so an Agent handed over
+     * before its welcome leaves it for the next (#212).
+     */
+    takeRestartNote?: () => RestartNote | null;
     /** The brain's last message refused, while the Agent hasn't taken a desired state since (#194's review). */
     refusedMessage?: () => FastSnapshotData["refusedMessage"];
     /** The faction state, read within the deadline, for each slow snapshot (#197). */
@@ -113,8 +116,6 @@ export function createSnapshotter(
   /** The latest slow snapshot's data, for what the Agent decides from it (Singularity, #145). */
   let lastSlowData: SlowSnapshotData | null = null;
   let staticToSend = false;
-  /** The restart's note, until the first fast snapshot carries it (#212). */
-  let restartToSend: RestartNote | null = restartNote;
   /** The slow worker's report, waiting for a round with the time for the faction state's read (#197). */
   let slowReport: WorkerReport | null = null;
   /** Rounds the slow report has waited for the time to read: at `MOST_ROUNDS_WAITING_TO_READ`, it goes unread. */
@@ -184,6 +185,8 @@ export function createSnapshotter(
       const roundStartedAtMs = Date.now();
       const roundEndsAtMs = roundStartedAtMs + SNAPSHOT_ROUND_MS;
       const fastReport = await runTierWorker("fast", roundEndsAtMs);
+      // Taken now, as it's sent (#212).
+      const restart = takeRestartNote();
       const fastData: FastSnapshotData = {
         degradedTiers: [...degradedTiers],
         pageHeapUsedBytes: pageHeapUsedBytes(),
@@ -191,12 +194,11 @@ export function createSnapshotter(
         intents: intentOutcomes(),
         dialogs: dialogReport(),
         work: workOutcome(),
-        ...(restartToSend === null ? {} : { restart: restartToSend }),
+        ...(restart === null ? {} : { restart }),
         batcher: batcherHealth(),
         batcherDeploy: batcherDeploy(),
         refusedMessage: refusedMessage(),
       };
-      restartToSend = null;
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 
       for (const tier of ["medium", "slow"] as const) {

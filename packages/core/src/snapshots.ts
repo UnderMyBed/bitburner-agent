@@ -134,8 +134,8 @@ export interface FastSnapshotData {
   work?: WorkOutcome | null;
   /**
    * A restart after a reset through the page that couldn't type `run /agent/boot.js` (#212): the page timer's note,
-   * left in the page's storage, taken by the Agent it started (through the fallback's reload, or after the
-   * supervisor's relaunch), and sent once. Absent where there was none.
+   * left in the page's storage (through the fallback's reload, or the supervisor's relaunch), taken as the next
+   * welcomed Agent builds its first fast snapshot, and sent once. Absent where there was none.
    */
   restart?: RestartNote;
   /**
