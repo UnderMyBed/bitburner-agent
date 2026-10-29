@@ -1104,6 +1104,146 @@ describe("backdoors for the hacker factions (#195)", () => {
   });
 });
 
+describe("factions and their work (#203)", () => {
+  const CHOICE = {
+    faction: "CyberSec",
+    workType: "hacking",
+    augmentation: "Neurotrainer I",
+    reputation: 2,
+    reputationNeeded: 1_000,
+    reputationPerSecond: 0.5,
+    etaSeconds: 1_996,
+  };
+  /**
+   * A 20-minute run: the brain's work for CyberSec chosen at 1 min (unless `chosenAtMs` is null), CyberSec joined at 30 s,
+   * and a slow snapshot each minute (but those `skipSlow` leaves out) with CyberSec's reputation `reputation(minute)`.
+   */
+  function factionRun({
+    reputation,
+    chosenAtMs = MINUTE,
+    skipSlow = () => false,
+    invitations = [],
+  }: {
+    reputation: (minute: number) => number;
+    chosenAtMs?: number | null;
+    skipSlow?: (minute: number) => boolean;
+    invitations?: string[];
+  }) {
+    event(0, "brainStarted", { release: "r" });
+    if (chosenAtMs !== null) event(chosenAtMs, "factionWorkChosen", CHOICE);
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      snapshot(
+        "medium",
+        offsetMs,
+        mediumData({ money: offsetMs, factions: offsetMs >= 30 * SECOND ? ["CyberSec"] : [] }),
+      );
+    }
+    for (let minute = 1; minute <= RUN_MS / MINUTE; minute++) {
+      if (skipSlow(minute)) continue;
+      const joined = [{ name: "CyberSec", reputation: reputation(minute), favor: 0 }];
+      snapshot("slow", minute * MINUTE, slowData([], {}, {}, factionState({ joined, invitations })));
+    }
+  }
+
+  test("the joins, the invitations left, each choice and why, and the reputation gained: PASS", () => {
+    // 0.5/s is 30 a minute: on track.
+    factionRun({ reputation: (minute) => 2 + (minute - 1) * 30, invitations: ["Sector-12"] });
+    event(10 * MINUTE + 1, "factionWorkChosen", {
+      ...CHOICE,
+      augmentation: "BitWire",
+      reputation: 1_000,
+      etaSeconds: 5_500,
+    });
+    event(15 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    const { text, failures } = report();
+    expect(text).toContain(
+      "  factions (joins, and the brain's faction work):\n" +
+        `    joined: CyberSec by ${at(30 * SECOND)}\n` +
+        `    invitations left to you (factions with enemies): Sector-12 (first seen ${at(MINUTE)})\n` +
+        "    the brain's faction work, as chosen:\n" +
+        `      ${at(MINUTE)}  hacking for CyberSec, for Neurotrainer I (reputation 2 of 1,000, 0.50/s: about 33 min)\n` +
+        `      ${at(10 * MINUTE + 1)}  hacking for CyberSec, for BitWire (reputation 1,000 of 1,000, 0.50/s: about 1.5 h)\n` +
+        `      ${at(15 * MINUTE + 1)}  stopped (your work on the dashboard)\n` +
+        // Minutes 1 to 15: 14 rises of 30, the work on.
+        "    reputation gained with the brain's work on it: CyberSec +420\n",
+    );
+    expect(text).toContain("no slow snapshot gap over 3 min):\n    none");
+    // Actions, not the window's events.
+    expect(text).not.toContain("factionWorkChosen");
+    expect(text).not.toContain("factionWorkStopped");
+    expect(failures).toEqual([]);
+  });
+
+  test("none chosen, none joined: said so", () => {
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    snapshot("medium", 10 * SECOND, mediumData({ money: 1 }));
+    const { text } = report();
+    expect(text).toContain(
+      "    joined: none\n    invitations left to you (factions with enemies): none\n" +
+        "    the brain's faction work, as chosen:\n      none\n    reputation gained with the brain's work on it: none",
+    );
+  });
+
+  test("stalled: under half the work's rate over 10 minutes, from the first such window's start: FAIL", () => {
+    // On track to minute 4, then 10 a minute (under 15, half of 30), to the end: the window from minute 2 is the first
+    // under it (60 to 200 by minute 12, under 150).
+    factionRun({ reputation: (minute) => (minute <= 4 ? minute * 30 : 120 + (minute - 4) * 10) });
+    const { text, failures } = report();
+    const line =
+      `faction work stalled: CyberSec's reputation rose under half the hacking work's 0.50/s from ${at(2 * MINUTE)} to ` +
+      `${at(20 * MINUTE)} (18 min), with the brain's work for it; still under it at the last slow snapshot`;
+    expect(text).toContain(`    ${line}`);
+    expect(failures).toEqual([line]);
+  });
+
+  test("not stalled: a 4-minute dip in work that's otherwise on track, as each 10 minutes still earns half its rate", () => {
+    // 30 a minute (0.5/s), but nothing from minute 8 to 11: 180 over any 10 minutes, over the 150 that counts.
+    factionRun({ reputation: (minute) => 30 * (minute - Math.max(0, Math.min(minute, 11) - 7)) });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not stalled with no choice stored (the owner's work, or the switch off)", () => {
+    factionRun({ reputation: () => 5, chosenAtMs: null });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not stalled across a gap in the slow snapshots, which starts the clock again", () => {
+    // Flat throughout, but a 5-minute gap at minutes 8 to 12: 7 minutes flat before, 8 after.
+    factionRun({ reputation: () => 5, skipSlow: (minute) => minute >= 8 && minute <= 12 });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("stale readings that jump at the page's 10-minute refresh are a stall all the same", () => {
+    factionRun({ reputation: (minute) => 100 + 25 * Math.floor(minute / 10) });
+    expect(report().failures).toEqual([expect.stringContaining(`from ${at(MINUTE)} to ${at(20 * MINUTE)}`)]);
+  });
+
+  test("the stretch starts where the first window under the rate starts: work that stops at minute 10, from minute 6", () => {
+    // On track to minute 10, then 1 a minute: the window from minute 5 (150) to 15 (305) still earns 155; the one from
+    // minute 6 (180 to 306) is the first under 150.
+    factionRun({ reputation: (minute) => (minute <= 10 ? minute * 30 : 300 + (minute - 10)) });
+    expect(report().failures).toEqual([
+      expect.stringContaining(`from ${at(6 * MINUTE)} to ${at(20 * MINUTE)} (14 min)`),
+    ]);
+  });
+
+  test("not stalled across a stop and a choice again: the clock starts with the new choice", () => {
+    // Flat from minute 1 to 14: 13 minutes, but stopped and chosen again at 5 min, so 8 from the next slow snapshot.
+    factionRun({ reputation: () => 5, skipSlow: (minute) => minute > 14 });
+    event(5 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    event(5 * MINUTE + 2, "factionWorkChosen", CHOICE);
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not stalled across a brain start, which ends the brain's choice", () => {
+    factionRun({ reputation: () => 5 });
+    event(6 * MINUTE, "brainStarted", { release: "r" });
+    expect(report().failures).toEqual([]);
+  });
+});
+
 test("a window that ends before it starts, or with nothing in it, can't be reported", () => {
   expect(() => runReport(store, { ...window, untilMs: T0 })).toThrow(RangeError);
   expect(() => runReport(store, window)).toThrow("nothing recorded (E0) from 2026-10-26T00:00:00.000Z");

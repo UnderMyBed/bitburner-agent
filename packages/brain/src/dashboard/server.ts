@@ -19,6 +19,7 @@ const WRITE_PATHS = [
   "/api/hack-loop",
   "/api/programs",
   "/api/home-ram",
+  "/api/faction-work",
   "/api/intents",
   "/api/intents/cancel",
   "/api/work",
@@ -38,6 +39,8 @@ export interface DashboardServerOptions {
   setHomeRamEnabled(enabled: boolean): void;
   /** Cloud servers' switch (#194). */
   setCloudServersEnabled(enabled: boolean): void;
+  /** The brain's faction work's switch (#203). */
+  setFactionWorkEnabled(enabled: boolean): void;
   /** The manual intents queue (#141): adds `{ action, args }`. */
   addIntent(request: unknown): AddedIntent;
   /** Takes an intent off the manual queue by id; false if it isn't there. */
@@ -111,6 +114,8 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "enabled", options.setHomeRamEnabled);
       case "POST /api/cloud-servers":
         return handleSwitch(request, response, origin, "enabled", options.setCloudServersEnabled);
+      case "POST /api/faction-work":
+        return handleSwitch(request, response, origin, "enabled", options.setFactionWorkEnabled);
       case "POST /api/intents": {
         const added = options.addIntent(await readJsonWrite(request, origin));
         if (!added.ok) throw new RequestError(400, added.reason);

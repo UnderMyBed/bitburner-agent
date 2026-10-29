@@ -15,6 +15,7 @@ import {
 import type { BackdoorDue } from "../backdoors.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
+import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { reportedRefusal } from "../record-channel-events.ts";
@@ -115,6 +116,8 @@ export interface DashboardStatus {
     opened: string[] | null;
     unreadInARow: number;
   } | null;
+  /** The brain's joins and faction work (#203): its switch, the join under way, the invitations left, its choice. */
+  factionWork: FactionsView;
   /** The hacking ceiling now, and what hacking earned over the last 10 minutes (#196). */
   hacking: HackingView;
 }
@@ -144,6 +147,9 @@ export interface DashboardStatusOptions {
   income: IncomeFacts | null;
   /** The backdoors due and since when (#195), the controller's, for the `backdoorOverdue` alert. */
   backdoorsDue: BackdoorDue[];
+  /** The joins and the brain's faction work (#203), the controller's view, and its stall for the alert. */
+  factionWork: FactionsView;
+  factionWorkStall: FactionWorkStall | null;
   nowMs: number;
 }
 
@@ -168,6 +174,8 @@ export function buildDashboardStatus({
   work,
   income,
   backdoorsDue,
+  factionWork,
+  factionWorkStall,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -278,6 +286,7 @@ export function buildDashboardStatus({
               problem: newestUnread.problem ?? "",
             }
           : null,
+      factionWorkStall,
       backdoorsDue,
     }),
     events: store
@@ -314,6 +323,7 @@ export function buildDashboardStatus({
           unreadInARow: unreadInARow.length,
         }
       : null,
+    factionWork,
     hacking: hackingView({
       store,
       environment,

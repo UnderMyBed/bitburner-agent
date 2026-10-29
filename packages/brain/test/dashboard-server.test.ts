@@ -18,6 +18,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const programsCalls: boolean[] = [];
   const homeRamCalls: boolean[] = [];
   const cloudServersCalls: boolean[] = [];
+  const factionWorkCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
   const workRequests: unknown[] = [];
@@ -30,6 +31,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setProgramsEnabled: (enabled) => programsCalls.push(enabled),
     setHomeRamEnabled: (enabled) => homeRamCalls.push(enabled),
     setCloudServersEnabled: (enabled) => cloudServersCalls.push(enabled),
+    setFactionWorkEnabled: (enabled) => factionWorkCalls.push(enabled),
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
       intentRequests.push(request);
@@ -57,6 +59,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     programsCalls,
     homeRamCalls,
     cloudServersCalls,
+    factionWorkCalls,
     intentRequests,
     cancelledIds,
     workRequests,
@@ -189,6 +192,7 @@ const SWITCHES = [
   ["the hacking programs (#136)", "/api/programs", "programsCalls"],
   ["home RAM (#138)", "/api/home-ram", "homeRamCalls"],
   ["cloud servers (#194)", "/api/cloud-servers", "cloudServersCalls"],
+  ["the brain's faction work (#203)", "/api/faction-work", "factionWorkCalls"],
 ] as const;
 
 test.each(SWITCHES)("POST sets the switch for %s, from the dashboard's own page", async (_name, switchPath, own) => {

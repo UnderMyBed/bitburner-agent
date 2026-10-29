@@ -9,9 +9,11 @@ import type { BackdoorDue } from "../src/backdoors.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
+import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
 import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
 
 const STARTED_AT_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60_000;
@@ -68,7 +70,16 @@ const status = (
     loop = hackLoop,
     cloud = cloudServers,
     backdoorsDue = [],
-  }: { income?: IncomeFacts | null; loop?: HackLoopView; cloud?: CloudServersView; backdoorsDue?: BackdoorDue[] } = {},
+    factionWork = QUIET_FACTIONS_VIEW,
+    factionWorkStall = null,
+  }: {
+    income?: IncomeFacts | null;
+    loop?: HackLoopView;
+    cloud?: CloudServersView;
+    backdoorsDue?: BackdoorDue[];
+    factionWork?: FactionsView;
+    factionWorkStall?: FactionWorkStall | null;
+  } = {},
 ) =>
   buildDashboardStatus({
     store,
@@ -82,9 +93,11 @@ const status = (
     homeRam,
     cloudServers: cloud,
     intents,
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     income,
     backdoorsDue,
+    factionWork,
+    factionWorkStall,
     nowMs,
   });
 
@@ -180,7 +193,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     homeRam,
     cloudServers,
     intents,
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     factions: {
       receivedAtMs: STARTED_AT_MS + 2_000,
       kind: "read",
@@ -239,6 +252,21 @@ test("backdoorOverdue (#195): from the controller's backdoors due, once one has 
   expect(status(nowMs + 1, { backdoorsDue: [avmnite] }).alerts.map((alert) => alert.name)).toEqual(["backdoorOverdue"]);
   expect(status(nowMs).alerts).toEqual([]);
 });
+test("factionWorkStalled (#203): from the controller's stall; its factions view passed through", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const factionWork: FactionsView = { ...QUIET_FACTIONS_VIEW, waiting: false, joining: "NiteSec" };
+  const stall = {
+    faction: "CyberSec",
+    sinceMs: nowMs - FACTION_WORK_STALLED_AFTER_MS,
+    lastReadingAtMs: nowMs - 30_000,
+  };
+  const built = status(nowMs, { factionWork, factionWorkStall: stall });
+  expect(built.alerts.map((alert) => [alert.name, alert.sinceMs])).toEqual([["factionWorkStalled", stall.sinceMs]]);
+  expect(built.factionWork).toEqual(factionWork);
+  expect(status(nowMs, { factionWorkStall: { ...stall, sinceMs: stall.sinceMs + 1 } }).alerts).toEqual([]);
+});
+
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
   const nowMs = STARTED_AT_MS + DAY_MS;
   // One heartbeat from before the window (not counted), then the last 10 minutes every 2 s, but for 100 s.
@@ -408,9 +436,11 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     homeRam,
     cloudServers,
     intents,
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     income: null,
     backdoorsDue: [],
+    factionWork: QUIET_FACTIONS_VIEW,
+    factionWorkStall: null,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

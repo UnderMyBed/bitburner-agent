@@ -200,12 +200,17 @@ export interface AugmentationData {
   randomMultipliers?: true;
 }
 
-/** The BitNode multipliers on augmentations (`BitNode/BitNodeMultipliers.ts`), by the game's names. */
+/**
+ * The BitNode multipliers on augmentations (`BitNode/BitNodeMultipliers.ts`), by the game's names, and (#203) on the
+ * reputation faction work earns, which decides which augmentations come soonest.
+ */
 export interface AugmentationBitNodeMultipliers {
   AugmentationMoneyCost: number;
   AugmentationRepCost: number;
   /** The installed augmentations Daedalus's invitation needs (`Faction/FactionInfo.tsx:142`). */
   DaedalusAugsRequirement: number;
+  /** Faction work's reputation (`PersonObjects/formulas/reputation.ts:13`): 0.2 in BN14, 0.5 in BN2, … */
+  FactionWorkRepGain: number;
 }
 
 /** The price's growth with each augmentation queued: `MultipleAugMultiplier` (`Constants.ts:41`). */
@@ -373,10 +378,10 @@ export function augmentationsSoldBy(faction: string, bitNode: number, gangFactio
 }
 
 /**
- * The current BitNode's multipliers on augmentations (`getBitNodeMultipliers`, `BitNode/BitNode.tsx:570-1127`), from
- * `resetInfo`: its `currentNode`, at the level the game sets them (`initBitNodeMultipliers`, `:1129-1131`), its own
- * active Source-File + 1 (`ownedSF`). Only BN12's depend on the level: 1.02^level, and Daedalus's
- * floor(min(30 + 1.02^level, 40)) (`:924-929`).
+ * The current BitNode's multipliers on augmentations and faction work (`getBitNodeMultipliers`,
+ * `BitNode/BitNode.tsx:570-1127`), from `resetInfo`: its `currentNode`, at the level the game sets them
+ * (`initBitNodeMultipliers`, `:1129-1131`), its own active Source-File + 1 (`ownedSF`). Only BN12's depend on the
+ * level: 1.02^level (faction work's 1/1.02^level), and Daedalus's floor(min(30 + 1.02^level, 40)) (`:924-929`).
  */
 export function augmentationBitNodeMultipliers(
   currentNode: number,
@@ -393,6 +398,8 @@ export function augmentationBitNodeMultipliers(
     AugmentationMoneyCost: growth,
     AugmentationRepCost: growth,
     DaedalusAugsRequirement: Math.floor(Math.min(defaultDaedalus + growth, 40)),
+    // BN12's `dec` (`BitNode/BitNode.tsx:926`, `:968`).
+    FactionWorkRepGain: 1 / growth,
   };
 }
 

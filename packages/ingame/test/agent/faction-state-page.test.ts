@@ -564,12 +564,12 @@ describe("around it, the page put back as found", () => {
 });
 
 describe("the worker: skipped where a page can't or mustn't be left (#197)", () => {
-  /** Runs `faction-state.js`'s `main` on the page now, a first read, and returns its report. */
-  async function runWorker(): Promise<unknown> {
+  /** Runs `faction-state.js`'s `main` on the page now, a first read unless `context` says, and returns its report. */
+  async function runWorker(context: FactionReadContext = FIRST): Promise<unknown> {
     const { main } = await import("../../src/entries/faction-state.ts");
     await main({
       ...ns,
-      args: [JSON.stringify(FIRST), Date.now() + 1_500],
+      args: [JSON.stringify(context), Date.now() + 1_500],
       disableLog: () => {},
       getResetInfo: () => ({ lastAugReset: 5, ownedAugs: new Map() }),
       getPlayer: () => ({ factions: ["CyberSec"] }),
@@ -585,6 +585,19 @@ describe("the worker: skipped where a page can't or mustn't be left (#197)", () 
       problem: null,
       skipped: factionStatePageProblems.casino,
       state: null,
+    });
+    expect(clicks).toEqual([]);
+  });
+
+  test("skipped at the casino while working: the last state, with the worked faction's reputation from its prop (#203)", async () => {
+    // Frozen at the last read, it would look to the brain like faction work earning nothing.
+    standInGame({ joined: [CYBERSEC], startOn: "Stats", working: { faction: "CyberSec", reputation: 1_234.5 } });
+    document.body.append(element("button", { textContent: "Play coin flip" }));
+    expect(await runWorker(since(memoryOf()))).toEqual({
+      done: false,
+      problem: null,
+      skipped: factionStatePageProblems.casino,
+      state: memoryOf({ joined: [{ name: "CyberSec", reputation: 1_234.5, favor: 2.5 }] }).state,
     });
     expect(clicks).toEqual([]);
   });
