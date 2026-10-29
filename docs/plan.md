@@ -20,7 +20,7 @@
 | 1 | First-principles mechanics reference ([`mechanics/`](mechanics/)) and [`synthesis.md`](synthesis.md) | ✅ |
 | 1b | Community research ([`research/`](research/)) | ✅ |
 | — | Architecture ([`architecture.md`](architecture.md)) and decision records ([`decisions/`](decisions/)) | ✅ draft |
-| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); M2 done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)); M3 in progress (#134) |
+| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); M2 done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)); M3 closing (#134); M4 phase A, a playable BN1, started (owner decision 46) |
 
 ## Tracking
 - **Work:** [GitHub milestones](https://github.com/UnderMyBed/bitburner-agent/milestones) → epics → task issues. Each task carries its own design, implementation plan and acceptance criteria ([ADR 0008](decisions/0008-work-tracking-and-reviews.md)).
@@ -28,7 +28,7 @@
 - **Open questions:** `type:question` issues, mirrored in architecture §15.
 
 ## Campaign start
-The agent plays from the very first BitNode. The campaign starts on Steam with a **fresh save at BN1.1** as soon as M4 passes its simulator exit criteria. BN1.1 has no Singularity API, so it's played through the `ui` effector backend, which puts milestone M3 on the critical path. There is no manual phase.
+The agent plays from the very first BitNode. The campaign starts on Steam with a **fresh save at BN1.1** (the owner's, from 2026-10-28) and M4 phase A's live runs, each read back with the run report (`npm run report`). It doesn't wait for M4's simulator exit criteria (owner decision 46). BN1.1 has no Singularity API, so it's played through the `ui` effector backend, which puts milestone M3 on the critical path. There is no manual phase.
 
 ## Legacy fork
 [UnderMyBed/bitburner-scripts](https://github.com/UnderMyBed/bitburner-scripts) is retired: upstream fixes merged, then archived. It doesn't play the campaign. Its proven managers run under the agent as legacy reflexes, and the whole fork runs in the simulator as the baseline the planner must beat (architecture §12.3).

@@ -34,7 +34,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
        Also compare `node --version` with the last rows' Node column.
      - **Nothing changed:** don't run it. Post the empty output and the last rows' commit on the review issue.
      - **Something changed:** run it. Or, if a change can't reach the simulation (code the simulator never loads), say why on the review issue instead. To run it, `npm run baseline -w @bitburner-agent/legacy` plays the legacy fork's BN1 baseline over its 8 seeds, to 4, 8 and 12 virtual hours, and prints its rows. It takes about an hour on one core. A seed that hits its 60-minute limit has gone wrong ([running it](sim/baselines.md#running-it)). Explain any failed seed in the file's Failures section at step 4.
-     - **At M4,** run it whatever the check says: the planner is compared with it then.
+     - **At M4 (phase B),** run it whatever the check says: the planner is compared with it then.
    - the benchmarks, on the reference rig: `npm run bench -w @bitburner-agent/sim`, which appends a row to `docs/sim/benchmarks.md` ([benchmarks](sim/benchmarks.md)). Post the printed row. A regression (exit 1) isn't recorded. Find the cause before going on: fix it, or say on the review issue why it's accepted and record it with `-- --accept` ([regressions](sim/benchmarks.md#regressions)).
    - the upstream watchers ([ADR 0009](decisions/0009-upstream-watchers-on-demand.md), [`tools/upstream-watch`](../tools/upstream-watch/README.md)). They run on `main`, which is the candidate commit until the close-out:
 

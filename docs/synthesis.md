@@ -84,5 +84,5 @@ ML and LLMs have narrow roles. Their best uses are as a **supervisor** that reco
 1. **Legacy fork:** merge the upstream fixes, point its README at this project, delete its issues, archive it.
 2. **Rules line:** anything reachable through NS or page/React state is allowed (BN12 overrides, Go RNG prediction, casino/infiltration state reading). DevTools, save editing and modifying game code are forbidden.
 3. **SF-1** is excluded from the goal.
-4. **BN1.1 (revised):** the agent plays BN1.1 itself from a fresh save, through the UI backend, once M4 passes. The legacy fork never plays the campaign. (This supersedes the earlier "start the clock on the fork with manual clicks".)
+4. **BN1.1 (revised):** the agent plays BN1.1 itself from a fresh save, through the UI backend, from M4 phase A's live runs (owner decision 46; first "once M4 passes"). The legacy fork never plays the campaign. (This supersedes the earlier "start the clock on the fork with manual clicks".)
 5. **Strategy:** not a per-BitNode scripted campaign but a general model-driven system (see [`architecture.md`](architecture.md)). The campaign order in §3 is the planner's prior, not hard-coded logic.
