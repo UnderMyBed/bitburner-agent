@@ -21,6 +21,7 @@ import {
   type FastSnapshotData,
   type FastWorkerData,
   type IntentOutcome,
+  type RestartNote,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   type SnapshotMessage,
@@ -76,6 +77,7 @@ export function createSnapshotter(
     batcherHealth = () => null,
     batcherDeploy = () => null,
     dialogReport,
+    takeRestartNote = () => null,
     refusedMessage = () => null,
     readFactions,
     factionsUnread = (problem) => ({ backend: "ui", state: null, problem }),
@@ -93,6 +95,11 @@ export function createSnapshotter(
     batcherDeploy?: () => BatcherDeployReport | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
+    /**
+     * A restart's note, taken (read and removed) as the fast snapshot that carries it is built, so an Agent handed over
+     * before its welcome leaves it for the next (#212).
+     */
+    takeRestartNote?: () => RestartNote | null;
     /** The brain's last message refused, while the Agent hasn't taken a desired state since (#194's review). */
     refusedMessage?: () => FastSnapshotData["refusedMessage"];
     /** The faction state, read within the deadline, for each slow snapshot (#197). */
@@ -178,6 +185,8 @@ export function createSnapshotter(
       const roundStartedAtMs = Date.now();
       const roundEndsAtMs = roundStartedAtMs + SNAPSHOT_ROUND_MS;
       const fastReport = await runTierWorker("fast", roundEndsAtMs);
+      // Taken now, as it's sent (#212).
+      const restart = takeRestartNote();
       const fastData: FastSnapshotData = {
         degradedTiers: [...degradedTiers],
         pageHeapUsedBytes: pageHeapUsedBytes(),
@@ -185,6 +194,7 @@ export function createSnapshotter(
         intents: intentOutcomes(),
         dialogs: dialogReport(),
         work: workOutcome(),
+        ...(restart === null ? {} : { restart }),
         batcher: batcherHealth(),
         batcherDeploy: batcherDeploy(),
         refusedMessage: refusedMessage(),

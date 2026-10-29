@@ -167,6 +167,14 @@ async function moneyedGameWithAgent({
   if (!keepOfflineAlert) await closeOfflineAlert(page);
   await beforeAgent(page);
   await advanceUntil(page, async () => eventCount("agentConnected") === 1, { realTimeoutMs: STEP_REAL_TIMEOUT_MS });
+  // Its first round over too (#212): its slow snapshot goes once the faction state's first read (#197), which may open
+  // the Factions or Augmentations page, has put the page back. Game time stands still between the test's steps, so a
+  // test that looked at the page mid-read would wait for ever for what the next tick brings back.
+  const slowCount = () => readStore(dataDirectory).snapshots.filter((row) => row.tier === "slow").length;
+  await advanceUntil(page, async () => slowCount() > 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
   return { dataDirectory, page, ports };
 }
 
@@ -969,6 +977,14 @@ async function installedThroughThePage({
     browserDialogs.push(dialog.type());
     void dialog.dismiss().catch(() => {});
   });
+  // The Agent's first round over first, as a player would see it: its faction state's first read opens the Factions or
+  // Augmentations page (#197, #212), and the page is back on the Terminal once its slow snapshot is sent. Game time
+  // stands still between the test's steps, so typing mid-read would wait for a terminal that never comes back.
+  const lastAugResetBefore = await firstLastAugReset(page, dataDirectory);
+  await advanceUntil(page, async () => (await page.locator(TERMINAL_INPUT).count()) === 1, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 2_000,
+  });
   if (ownerCommand !== "") await typeCommand(page, ownerCommand);
   if (ownerLine !== "") {
     // Typed as a player types: the page then has the user's activation, so its unload prompt would really ask.
@@ -976,7 +992,6 @@ async function installedThroughThePage({
     await page.keyboard.type(ownerLine);
   }
   const unloadPromptArmed = await page.evaluate(() => typeof window.onbeforeunload === "function");
-  const lastAugResetBefore = await firstLastAugReset(page, dataDirectory);
   await queueIntent(ports.dashboardPort, { action: "installAugmentations", args: {} });
   // The gate (two medium snapshots, a backup), then the worker installs: the Agent dies with it.
   await advanceUntil(page, async () => eventsOf(dataDirectory, "agentDisconnected").length > 0, {
@@ -1031,6 +1046,7 @@ test("installing through the page (#167, Q5): cycle after cycle, the page timer'
     const { dataDirectory, page, navigations } = cycle;
     expect(navigations, `cycle ${index + 1}`).toEqual([]);
     expect(await terminalText(page)).toMatch(BOOT_STARTED);
+    expect(eventsOf(dataDirectory, "restartFellBack")).toEqual([]);
     if (ownerCommand !== "") expect(await terminalText(page)).toMatch(/\[home \/agent\/\]> run \/agent\/boot\.js/);
     await expectInstalled(page, dataDirectory, [...installed, queued], cycle.lastAugResetBefore);
     // The install's alert was closed by the page timer, before the next Agent's dialog watcher ever saw it.
@@ -1057,6 +1073,16 @@ test("the restart's fallback (#167, Q5): a line the owner left in the terminal, 
     // The reloaded game was saved after the install: it's installed, and autoexec brought the Agent back.
     await expectInstalled(page, dataDirectory, [...installed, queued], cycle.lastAugResetBefore);
     expect(await terminalText(page)).not.toMatch(BOOT_STARTED);
+    // Never silent (#212): the reloaded game's Agent reported the restart that couldn't type, and why.
+    await advanceUntil(page, async () => eventsOf(dataDirectory, "restartFellBack").length > 0, {
+      realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+      gameTimeoutMs: 10_000,
+    });
+    expect(
+      readStore(dataDirectory)
+        .events.filter((event) => event.kind === "restartFellBack")
+        .map((event) => event.detail),
+    ).toEqual([{ outcome: "reloading", reason: "the terminal didn't take the line", atMs: expect.any(Number) }]);
     for (const opened of started.pages.splice(0)) await closeGame(opened).catch(() => {});
     for (const brain of started.brains.splice(0)) await brain.stop();
   }

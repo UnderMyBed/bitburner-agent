@@ -480,7 +480,8 @@ describe("cloud servers (#194)", () => {
     const line = `${at(2 * MINUTE)} the Agent REFUSED the brain's message (2 so far): an intent's hostname isn't valid`;
     expect(failures).toEqual([line]);
     expect(text).toContain(
-      `  deploy failures, version drift, supervision given up, brain messages the Agent refused:\n    ${line}`,
+      "  deploy failures, version drift, supervision given up, brain messages the Agent refused, restarts that couldn't " +
+        `type:\n    ${line}`,
     );
   });
 
@@ -874,6 +875,19 @@ describe("each failure is a FAIL, with its line", () => {
       `${at(MINUTE)} deploy of dep-c FAILED: write refused`,
       `${at(2 * MINUTE)} version drift: the Agent's game: commit 3162fd2, pinned 1da7316ff`,
       `${at(3 * MINUTE)} supervisor GAVE UP: {"launchesInLastHour":4}`,
+    ]);
+  });
+
+  test("a restart after a reset that couldn't type (#212): a failure, with why and what it did", () => {
+    cleanRun();
+    // The first noted in this run; the second before it (the page's storage outlives a run), reported only now.
+    event(MINUTE, "restartFellBack", { outcome: "reloading", reason: "no terminal", atMs: T0 + 30 * SECOND });
+    event(2 * MINUTE, "restartFellBack", { outcome: "gaveUp", reason: "no terminal", atMs: T0 - MINUTE });
+    expect(verdict().failures).toEqual([
+      `${at(MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it saved and reloaded the ` +
+        `game (noted ${at(30 * SECOND)})`,
+      `${at(2 * MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it gave up (noted ` +
+        `${at(-MINUTE)}, from before this run)`,
     ]);
   });
 
