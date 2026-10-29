@@ -63,6 +63,7 @@ const dashboard = (fresh: Awaited<ReturnType<typeof freshStart>>) =>
     intents: [],
     work: { desired: null, outcome: null },
     income: null,
+    backdoorsDue: [],
     nowMs: fresh.game.clock.now(),
   });
 
