@@ -464,10 +464,20 @@ test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread;
       name: "factionStateUnread",
       sinceMs: STARTED_AT_MS + 60_000,
       detail:
-        "the faction state couldn't be read in the last 3 slow snapshots (ui): no game page to read the faction " +
-        "state through",
+        "the faction state couldn't be read in the last 3 slow snapshots in a row (ui): no game page to read the " +
+        "faction state through",
     },
   ]);
+  // A skipped one neither ends the streak nor adds to it; the next unread does, its start kept.
+  recordSnapshot("slow", STARTED_AT_MS + 200_000, {
+    factions: { backend: "ui", state: null, problem: null, skipped: "no sidebar on the page" },
+  });
+  expect(status(nowMs).alerts).toMatchObject([
+    { sinceMs: STARTED_AT_MS + 60_000, detail: expect.stringContaining("in the last 3 slow snapshots in a row") },
+  ]);
+  recordSnapshot("slow", STARTED_AT_MS + 220_000, unread("no game page to read the faction state through"));
+  expect(status(nowMs).alerts).toMatchObject([{ sinceMs: STARTED_AT_MS + 60_000 }]);
+  expect(status(nowMs).factions).toMatchObject({ kind: "unread", unreadInARow: 4 });
   // An older Agent's slow snapshot (a redeploy) has no reading: not read by this Agent, never a problem.
   recordSnapshot("slow", STARTED_AT_MS + 240_000, { purchasedServers: [] });
   expect(status(nowMs).alerts).toEqual([]);

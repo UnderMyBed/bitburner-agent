@@ -73,9 +73,9 @@ export interface AlertFacts {
   /** The player's money in the medium snapshots, and when it last rose (#184): ./income-watch.ts. */
   income: IncomeFacts | null;
   /**
-   * The faction state unread in the newest slow snapshots (#197): how many in a row (counted up to
-   * `FACTION_STATE_UNREAD_AFTER`), since when, and the newest's backend and problem; null where the newest was read,
-   * skipped, or from an older Agent, or there's no slow snapshot.
+   * The faction state unread in the newest slow snapshots (#197): how many in a row (skipped ones neither end nor add
+   * to it), since the first of them, and the newest's backend and problem; null where the newest was read, skipped,
+   * or from an older Agent, or there's no slow snapshot.
    */
   factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
@@ -142,7 +142,7 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       name: "factionStateUnread",
       sinceMs,
       detail:
-        `the faction state couldn't be read in the last ${unreadInARow} slow snapshots` +
+        `the faction state couldn't be read in the last ${unreadInARow} slow snapshots in a row` +
         `${backend === null ? "" : ` (${backend})`}: ${problem}`,
     });
   }

@@ -6,8 +6,8 @@
 // - First, without moving the page: the worked faction's reputation from its prop, and the sidebar's counts. The pages
 //   are opened only for what may have changed (../page/faction-state-page.ts, `pagesToOpen`); otherwise the last
 //   reading stands, with that reputation, and the page isn't touched.
-// - A page to open with no sidebar to reach it by (the BitVerse, an infiltration), and the player not on the Work page:
-//   skipped this time, which isn't a problem.
+// - A page to open with no sidebar to reach it by (the BitVerse, an infiltration), and the player not on the Work page,
+//   or with the casino open (leaving it mid-hand forfeits a blackjack bet): skipped this time, which isn't a problem.
 // - Otherwise around the steps, `reportPageEffect` (../page/page-effect.ts): never over an owner's dialog, focused work
 //   unfocused for them and focused again, and any other page gone back to as found (its sidebar item, or a faction's
 //   own page), not left on the Terminal.
@@ -15,6 +15,7 @@
 import { type FactionState, NEUROFLUX_GOVERNOR } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import {
+  casinoShown,
   type FactionGameFacts,
   type FactionPageMemory,
   type FactionReadContext,
@@ -63,18 +64,22 @@ export async function main(ns: NS): Promise<void> {
     const problem = await readFactionStateOnPage(gamePage, context, game, worked, read);
     return reportToAgent(ns, { done: read.state !== null, problem, ...reportAlso() });
   }
-  if (gamePage !== null && facts !== null && !facts.sidebar && !focusedOnWork(gamePage)) {
-    return reportToAgent(ns, {
-      done: false,
-      problem: null,
-      skipped: factionStatePageProblems.noSidebar,
-      state: context.memory?.state ?? null,
-    });
+  // Skipped, which isn't a problem: no sidebar to reach a page by, or the casino, where leaving loses a hand.
+  const skipped =
+    gamePage === null || facts === null
+      ? null
+      : casinoShown(gamePage)
+        ? factionStatePageProblems.casino
+        : !facts.sidebar && !focusedOnWork(gamePage)
+          ? factionStatePageProblems.noSidebar
+          : null;
+  if (skipped !== null) {
+    return reportToAgent(ns, { done: false, problem: null, skipped, state: context.memory?.state ?? null });
   }
   await reportPageEffect(ns, deadlineMs, {
     isDone: () => read.state !== null,
     doing: "read the faction state through",
-    steps: (page) => readFactionStateOnPage(page, context, game, worked, read),
+    steps: (page, { wasFocused }) => readFactionStateOnPage(page, context, game, worked, read, { wasFocused }),
     // Never reported: the steps return null only once they've read it.
     notDoneAfter: "the faction state wasn't read",
     reportAlso,

@@ -180,7 +180,7 @@ test("ui backend with its worker gone from home: unread, one event, then after 3
   expect(dashboard(fresh).alerts).toContainEqual(
     expect.objectContaining({
       name: "factionStateUnread",
-      detail: `the faction state couldn't be read in the last 3 slow snapshots (ui): ${problem}`,
+      detail: `the faction state couldn't be read in the last ${slows.length} slow snapshots in a row (ui): ${problem}`,
     }),
   );
   const slowTimes = fresh.data.store

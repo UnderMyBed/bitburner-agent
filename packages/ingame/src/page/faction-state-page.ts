@@ -60,6 +60,7 @@ export const factionStatePageProblems = {
     `the Augmentations page's "${text}" isn't a NeuroFlux Governor level above the installed ${installedLevel}`,
   sectionCollapsed: (pageName: string) => `"${pageName}" in the sidebar (is its section collapsed?)`,
   noSidebar: "no sidebar on the page (the BitVerse, an infiltration?)",
+  casino: "the casino is open: leaving it mid-hand would forfeit the bet",
 };
 
 const listOrNone = (names: string[]) => (names.length === 0 ? "none" : names.join(", "));
@@ -287,7 +288,10 @@ export async function readFactionStateOnPage(
   game: FactionGameFacts,
   worked: { faction: string; reputation: number } | null,
   read: { state: FactionState | null; opened: string[]; memory: FactionPageMemory | null },
+  { wasFocused = false }: { wasFocused?: boolean } = {},
 ): Promise<string | null> {
+  // Just unfocused, the sidebar may still be rendering: waited for, or it would look collapsed.
+  if (wasFocused) await gamePage.findWhenThere(sidebarItemXpath("Stats"));
   const facts = sidebarFacts(gamePage);
   const plan = pagesToOpen(context, game, facts);
   const { memory } = context;
@@ -339,6 +343,14 @@ export function readMovesThePage(context: FactionReadContext, game: FactionGameF
   const plan = pagesToOpen(context, game, facts);
   return plan.factions || plan.augmentations;
 }
+
+/**
+ * The casino's games (`Locations/ui/CasinoLocation.tsx:24-36`), shown: its game picker, or a game's "Stop playing".
+ * Leaving mid-hand forfeits a blackjack bet, taken at the deal and kept in the component's state
+ * (`Casino/Blackjack.tsx:66`), so the read is skipped there.
+ */
+const CASINO_XPATH = "//button[normalize-space()='Play coin flip' or normalize-space()='Stop playing']";
+export const casinoShown = (gamePage: GamePage) => gamePage.findElementNow(CASINO_XPATH) !== null;
 
 /** Whether the page shows the Work page focused: its "Do something else simultaneously". */
 export const focusedOnWork = (gamePage: GamePage) => gamePage.findElementNow(UNFOCUS_XPATH) !== null;

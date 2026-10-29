@@ -12,7 +12,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { createEffectorRunner } from "../../src/agent/effector-runner.ts";
 import { createFactionStateReader, readingOfRun } from "../../src/agent/faction-state.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
-import { createSnapshotter } from "../../src/agent/snapshotter.ts";
+import { createSnapshotter, noTimeToRead } from "../../src/agent/snapshotter.ts";
 import type { NS } from "../../src/ns.ts";
 
 const STATE: FactionState = {
@@ -35,12 +35,12 @@ function readerWith(
     singularity = false,
     homeRam = 8,
     invitationsAnswered = () => 0,
-    augmentationsBought = () => [] as string[],
+    augmentationsBought = () => 0,
   }: {
     singularity?: boolean;
     homeRam?: number;
     invitationsAnswered?: () => number;
-    augmentationsBought?: () => string[];
+    augmentationsBought?: () => number;
   } = {},
 ) {
   const happened: string[] = [];
@@ -142,7 +142,8 @@ describe("the page reader's memory, and the Agent's news since", () => {
 
   test("each page read's memory goes to the next, with an invitation answered or a purchase done since", async () => {
     let invitations = 0;
-    let bought: string[] = ["purchaseAugmentation(CyberSec, BitWire, 1)"];
+    // Counted, all told: the brain stops sending a done intent long before the next read (#197).
+    let bought = 1;
     const { reader, contexts } = readerWith(() => ({ done: true, problem: null, state: STATE, opened: [], memory }), {
       invitationsAnswered: () => invitations,
       augmentationsBought: () => bought,
@@ -150,7 +151,7 @@ describe("the page reader's memory, and the Agent's news since", () => {
     await reader.read(10_000);
     await reader.read(10_000);
     invitations = 1;
-    bought = [...bought, "purchaseAugmentation(CyberSec, Neurotrainer I, 1)"];
+    bought = 2;
     await reader.read(10_000);
     await reader.read(10_000);
     expect(contexts()).toEqual([
@@ -180,19 +181,33 @@ describe("the page reader's memory, and the Agent's news since", () => {
     ]);
   });
 
-  test("skipped (no sidebar): not a problem, the last state with it", async () => {
-    const { reader } = readerWith(() => ({
-      done: false,
-      problem: null,
-      skipped: "no sidebar on the page (the BitVerse, an infiltration?)",
-      state: STATE,
-    }));
+  test("skipped (no sidebar): not a problem, the last state with it; logged as skipped, never as read again", async () => {
+    const answers: unknown[] = [
+      { done: false, problem: "a dialog the Agent leaves for the owner is open", state: null },
+      { done: false, problem: null, skipped: "no sidebar on the page (the BitVerse, an infiltration?)", state: STATE },
+    ];
+    const { reader, lines } = readerWith(() => answers.shift());
+    await reader.read(10_000);
     expect(await reader.read(10_000)).toEqual({
       backend: "ui",
       state: STATE,
       problem: null,
       skipped: "no sidebar on the page (the BitVerse, an infiltration?)",
     });
+    expect(lines).toEqual([
+      "agent: the faction state (ui): a dialog the Agent leaves for the owner is open",
+      "agent: the faction state's read is skipped: no sidebar on the page (the BitVerse, an infiltration?)",
+    ]);
+  });
+
+  test("a slow snapshot with no time for the read: unread with the last backend, and logged", async () => {
+    const { reader, lines } = readerWith(() => ({ done: true, problem: null, state: STATE }), {
+      singularity: true,
+      homeRam: 32,
+    });
+    await reader.read(10_000);
+    expect(reader.unread("no time")).toEqual({ backend: "singularity", state: null, problem: "no time" });
+    expect(lines).toEqual(["agent: the faction state (singularity): no time"]);
   });
 });
 
@@ -328,6 +343,38 @@ describe("the slow snapshot", () => {
       expect(sent.map((message) => message.tier)).toEqual(["fast", "medium", "static", "fast", "slow"]);
       // The first round's slow report, kept: its worker isn't run again (a hung worker's RAM may not leave room).
       expect(order.filter((each) => each === "snapshot-slow.js")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("never waiting for ever: after 3 rounds with no time for the read, the slow snapshot goes, unread, saying why", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { snapshotter, order, sent, send } = snapshotterWith(async () => ({
+        backend: "ui",
+        state: STATE,
+        problem: null,
+      }));
+      // Every worker takes 1.1 s, so no round has a second left for the read.
+      let nowMs = Date.now();
+      const runOrder = order as string[];
+      const push = runOrder.push.bind(runOrder);
+      runOrder.push = (...items: string[]) => {
+        nowMs += 1_100;
+        vi.setSystemTime(nowMs);
+        return push(...items);
+      };
+      for (let round = 0; round < 3; round += 1) await snapshotter.takeRound(send);
+      expect(order).not.toContain("readFactions");
+      const slows = sent.filter((message) => message.tier === "slow");
+      expect(slows).toHaveLength(1);
+      expect((slows[0]?.data as SlowSnapshotData).factions).toEqual({
+        backend: "ui",
+        state: null,
+        problem: noTimeToRead(3),
+      });
+      expect(noTimeToRead(3)).toBe("no time left for the faction state's read in 3 rounds running (under 1 s each)");
     } finally {
       vi.useRealTimers();
     }

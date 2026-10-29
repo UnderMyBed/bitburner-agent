@@ -492,6 +492,12 @@ describe("each failure is a FAIL, with its line", () => {
     const unread = (problem: string): FactionStateReading => ({ backend: "ui", state: null, problem });
     snapshot("slow", 2 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
     snapshot("slow", 3 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
+    // Skipped between them: neither ends the stretch nor adds to it.
+    snapshot(
+      "slow",
+      3.5 * MINUTE,
+      slowData([], {}, {}, { backend: "ui", state: null, problem: null, skipped: "no sidebar on the page" }),
+    );
     snapshot("slow", 4 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
     // Read at 10 min (cleanRun's); a single miss at 12 min, then read again at 13 min (P → read → P: two stretches).
     snapshot("slow", 11 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));

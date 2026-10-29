@@ -169,11 +169,12 @@ test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread,
     {
       name: "factionStateUnread",
       sinceMs,
-      detail: "the faction state couldn't be read in the last 3 slow snapshots (ui): no game page to read it through",
+      detail:
+        "the faction state couldn't be read in the last 3 slow snapshots in a row (ui): no game page to read it through",
     },
   ]);
   // Not well formed, so no backend.
   expect(activeAlerts(unread(3, null))[0]?.detail).toBe(
-    "the faction state couldn't be read in the last 3 slow snapshots: no game page to read it through",
+    "the faction state couldn't be read in the last 3 slow snapshots in a row: no game page to read it through",
   );
 });

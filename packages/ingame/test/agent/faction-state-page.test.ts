@@ -515,7 +515,8 @@ describe("around it, the page put back as found", () => {
     await reportPageEffect(ns, Date.now() + 1_500, {
       isDone: () => result.state !== null,
       doing: "read the faction state through",
-      steps: (gamePage) => readFactionStateOnPage(gamePage, context, facts, null, result),
+      steps: (gamePage, { wasFocused }) =>
+        readFactionStateOnPage(gamePage, context, facts, null, result, { wasFocused }),
       notDoneAfter: "the faction state wasn't read",
       reportAlso: () => ({ state: result.state }),
       restoreFoundPage: true,
@@ -548,11 +549,55 @@ describe("around it, the page put back as found", () => {
     standInGame({ joined: [CYBERSEC] });
     const game_ = [...document.body.children];
     const focus = clickable(element("button", { textContent: "Focus" }), "Focus");
-    const unfocus = clickable(element("button", { textContent: "Do something else simultaneously" }), "unfocus", () =>
-      document.body.replaceChildren(...game_, focus),
-    );
+    // The sidebar renders a while after the unfocus click, slower than the click's own render: it's waited for.
+    const unfocus = clickable(element("button", { textContent: "Do something else simultaneously" }), "unfocus", () => {
+      document.body.replaceChildren(focus);
+      setTimeout(() => document.body.replaceChildren(...game_, focus), 150);
+    });
     document.body.replaceChildren(unfocus);
     await readAround(FIRST, game(["CyberSec"]));
     expect(clicks).toEqual(["unfocus", "Factions", "Focus"]);
+    expect(reports).toEqual([
+      { done: true, problem: null, state: expect.objectContaining({ joined: expect.any(Array) }) },
+    ]);
+  });
+});
+
+describe("the worker: skipped where a page can't or mustn't be left (#197)", () => {
+  /** Runs `faction-state.js`'s `main` on the page now, a first read, and returns its report. */
+  async function runWorker(): Promise<unknown> {
+    const { main } = await import("../../src/entries/faction-state.ts");
+    await main({
+      args: [JSON.stringify(FIRST), Date.now() + 1_500],
+      disableLog: () => {},
+      getResetInfo: () => ({ lastAugReset: 5, ownedAugs: new Map() }),
+      getPlayer: () => ({ factions: ["CyberSec"] }),
+      ...ns,
+    } as unknown as NS);
+    return reports.at(-1);
+  }
+
+  test("the casino open: leaving it mid-hand forfeits a blackjack bet, so nothing is opened", async () => {
+    standInGame({ joined: [CYBERSEC], startOn: "Stats" });
+    document.body.append(element("button", { textContent: "Play coin flip" }));
+    expect(await runWorker()).toEqual({
+      done: false,
+      problem: null,
+      skipped: factionStatePageProblems.casino,
+      state: null,
+    });
+    expect(clicks).toEqual([]);
+  });
+
+  test("no sidebar, and not the Work page: nothing to reach a page by", async () => {
+    document.body.replaceChildren(element("h4", { textContent: "The BitVerse" }));
+    expect(await runWorker()).toMatchObject({ skipped: factionStatePageProblems.noSidebar, problem: null });
+    expect(clicks).toEqual([]);
+  });
+
+  test("otherwise read, the page put back", async () => {
+    standInGame({ joined: [CYBERSEC], startOn: "Stats" });
+    expect(await runWorker()).toMatchObject({ done: true, problem: null, opened: ["Factions"] });
+    expect(clicks).toEqual(["Factions", "Stats"]);
   });
 });

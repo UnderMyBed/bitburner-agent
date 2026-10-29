@@ -14,7 +14,7 @@ import {
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
-import { FACTION_STATE_UNREAD_AFTER, factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
+import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
@@ -28,6 +28,8 @@ export const RECENT_EVENT_COUNT = 50;
 /** The newest gaps listed; the count and total cover them all. */
 export const LISTED_GAP_COUNT = 20;
 const RECENT_RELAUNCH_COUNT = 10;
+/** How many slow snapshots back an unread streak is followed for its start (#197): a day's, at one a minute. */
+const UNREAD_STREAK_LOOKBACK = 24 * 60;
 /** The event the brain records as it starts: everything stored after it is this run of the brain. */
 export const BRAIN_STARTED_EVENT_KIND = "brainStarted";
 
@@ -171,12 +173,16 @@ export function buildDashboardStatus({
   const slow = latestOfTier.slow;
   const factionReading = slow ? factionReadingOf(slow.data) : null;
   const factionStatus = slow ? factionStatusOf(slow.data) : null;
-  // The newest slow snapshots unread in a row, up to the alert's count (#197).
-  const unreadInARow: { receivedAtMs: number }[] = [];
-  for (const each of store.latestSnapshots({ environment, tier: "slow", limit: FACTION_STATE_UNREAD_AFTER })) {
-    if (factionStatusOf(each.data).kind !== "unread") break;
-    unreadInARow.push(each);
+  // The newest slow snapshots unread in a row (#197), the streak's first one too, as far back as a day's: a skipped one
+  // neither ends the streak nor adds to it.
+  const unreadInARow: { receivedAtMs: number; status: SlowFactionStatus }[] = [];
+  for (const each of store.latestSnapshots({ environment, tier: "slow", limit: UNREAD_STREAK_LOOKBACK })) {
+    const status = factionStatusOf(each.data);
+    if (status.kind === "skipped") continue;
+    if (status.kind !== "unread") break;
+    unreadInARow.push({ receivedAtMs: each.receivedAtMs, status });
   }
+  const newestUnread = unreadInARow[0]?.status;
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -256,12 +262,12 @@ export function buildDashboardStatus({
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
       factionState:
-        factionStatus?.kind === "unread" && factionStatus.problem !== null
+        newestUnread !== undefined
           ? {
               sinceMs: unreadInARow.at(-1)?.receivedAtMs ?? 0,
               unreadInARow: unreadInARow.length,
-              backend: factionStatus.backend,
-              problem: factionStatus.problem,
+              backend: newestUnread.backend,
+              problem: newestUnread.problem ?? "",
             }
           : null,
       backdoorsDue,

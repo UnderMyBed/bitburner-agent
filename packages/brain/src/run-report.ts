@@ -226,9 +226,11 @@ class FactionStateFolding {
 
   add(atMs: number, data: SlowSnapshotData): void {
     const { kind, backend, problem } = factionStatusOf(data);
-    if (kind !== "unread") {
+    if (kind === "skipped") {
+      // Neither ends a stretch of unread ones nor adds to it.
+      this.skipped += 1;
+    } else if (kind !== "unread") {
       this.#current = null;
-      if (kind === "skipped") this.skipped += 1;
       if (kind === "absent") this.absent += 1;
       if (kind === "readPageNotRestored") {
         this.notRestored += 1;

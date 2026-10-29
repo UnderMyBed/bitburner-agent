@@ -48,23 +48,44 @@ export function createFactionStateReader(
     effectorRunner,
     handleDialogs,
     invitationsAnswered = () => 0,
-    augmentationsBought = () => [],
+    augmentationsBought = () => 0,
   }: {
     effectorRunner: EffectorRunner;
     /** The dialog watcher's `handle`: the routine dialogs closed or answered, within the deadline. */
     handleDialogs: (deadlineMs: number) => Promise<void>;
     /** How many faction invitations the dialog watcher has answered, all told. */
     invitationsAnswered?: () => number;
-    /** The ids of the augmentation purchases reported done (the intents' outcomes). */
-    augmentationsBought?: () => string[];
+    /**
+     * How many augmentation purchases the intent runner has seen done, all told: a count, as the brain stops sending
+     * a done intent within seconds, before the next read.
+     */
+    augmentationsBought?: () => number;
   },
 ) {
-  /** The last reading's problem, so the log says each change once. */
-  let lastProblem: string | null = null;
+  /** What the log said last (the problem, skipped, or read), so it says each change once. */
+  let lastLogged: string | null = null;
+  /** The last reading's backend, for one the round had no time for (the page's until there's one). */
+  let lastBackend: FactionStateReading["backend"] = "ui";
   /** What the page's reader read last, and what the Agent had seen by then. */
   let memory: FactionPageMemory | null = null;
   let invitationsAtRead = 0;
-  let boughtAtRead = new Set<string>();
+  let boughtAtRead = 0;
+
+  function logged(reading: FactionStateReading): FactionStateReading {
+    const line =
+      reading.skipped !== undefined
+        ? `agent: the faction state's read is skipped: ${reading.skipped}`
+        : reading.problem === null
+          ? "agent: the faction state is read again"
+          : `agent: the faction state (${reading.backend}): ${reading.problem}`;
+    // "Read again" only after a line saying otherwise: never at the first read.
+    if (line !== lastLogged && (lastLogged !== null || reading.problem !== null || reading.skipped !== undefined)) {
+      ns.print(line);
+    }
+    lastLogged = line;
+    return reading;
+  }
+
   return {
     /** Reads the faction state within `deadlineMs`: the routine dialogs first, then the reader. */
     async read(deadlineMs: number): Promise<FactionStateReading> {
@@ -75,25 +96,23 @@ export function createFactionStateReader(
       const context: FactionReadContext = {
         memory,
         invitationAnswered: memory !== null && invitations > invitationsAtRead,
-        augmentationBought: memory !== null && bought.some((id) => !boughtAtRead.has(id)),
+        augmentationBought: memory !== null && bought > boughtAtRead,
       };
       const run = await effectorRunner.run(factionStateReader(JSON.stringify(context)), deadlineMs);
+      lastBackend = run.backend;
       const reading = readingOfRun(run);
       const remembered = run.backend === "ui" ? memoryOf(run.report) : null;
       if (remembered !== null) {
         memory = remembered;
         invitationsAtRead = invitations;
-        boughtAtRead = new Set(bought);
+        boughtAtRead = bought;
       }
-      if (reading.problem !== lastProblem) {
-        ns.print(
-          reading.problem === null
-            ? "agent: the faction state is read again"
-            : `agent: the faction state (${reading.backend}): ${reading.problem}`,
-        );
-        lastProblem = reading.problem;
-      }
-      return reading;
+      return logged(reading);
+    },
+
+    /** A reading for a slow snapshot sent without its read (no time in round after round): unread, saying why. */
+    unread(problem: string): FactionStateReading {
+      return logged({ backend: lastBackend, state: null, problem });
     },
   };
 }
