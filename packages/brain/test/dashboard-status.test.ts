@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import { INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
-import { hackingCeiling } from "../src/hacking-ceiling.ts";
+import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -435,13 +435,26 @@ test("the hacking rows (#196): the ceiling at the newest snapshots, and hacking'
     recordSnapshot("slow", nowMs - minute * 60_000, { moneySources: { hacking: 1e9 + (10 - minute) * 60_000 } });
   }
   const { hacking } = status(nowMs);
-  expect(hacking).toEqual({ ceiling: hackingCeiling(staticData, mediumData), incomePerSecond: 1_000 });
-  expect(hacking.ceiling).toMatchObject({ known: true, target: "zer0", hostCount: 1, hostRamGb: 32 });
+  const ceiling = hackingCeiling(staticData, mediumData);
+  if (!ceiling.known) throw new Error(ceiling.reason);
+  expect(ceiling).toMatchObject({ target: "zer0", hostCount: 1, hostRamGb: 32 });
+  const percent = (whole: number) => `${((1_000 / whole) * 100).toFixed(1)}%`;
+  expect(hacking).toEqual({
+    ceiling,
+    incomePerSecond: 1_000,
+    // The run report's words (describeCeiling), so the page can't drift from them.
+    ceilingText: describeCeiling(ceiling),
+    incomeText:
+      `$1,000/s over the last 10 min: ${percent(ceiling.batcherIncomePerSecond)} of the batcher ceiling now, ` +
+      `${percent(ceiling.incomePerSecond)} of the ceiling`,
+  });
 });
 
 test("the hacking rows with no snapshots: the ceiling unknown, no income", () => {
   expect(status(STARTED_AT_MS + 1_000).hacking).toEqual({
     ceiling: { known: false, reason: "no static snapshot" },
     incomePerSecond: null,
+    ceilingText: "unknown: no static snapshot",
+    incomeText: "— (not two slow snapshots with the money sources in the last 10 min)",
   });
 });

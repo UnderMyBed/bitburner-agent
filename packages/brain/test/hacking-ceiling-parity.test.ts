@@ -2,10 +2,11 @@
 // simulator: `ns.formulas.hacking` (Formulas.exe, bought through the simulator's own effectors) takes any server and
 // any person, so each is checked over servers and players that differ in every figure it reads, multipliers and
 // intelligence included; the security a thread and the scripts' RAM come from the base NS API and the game's own RAM
-// calculator. Then the ceiling stands above a batch sized with the game's own grow threads (`formulas.hacking.
-// growThreads`, whole threads), at every share.
+// calculator. Then the batcher ceiling stands above a whole-thread HWGW batch sized with the game's own grow threads
+// (`formulas.hacking.growThreads`), at every share, and the hacking ceiling above that.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  batcherIncomePerGigabyteSecond,
   coreBonus,
   GROW_SCRIPT_RAM_GB,
   GROW_SECURITY_PER_THREAD,
@@ -131,9 +132,11 @@ for (const [serverIndex, figures] of servers.entries()) {
     close(growthLogPerThread(server, player) * coreBonus(game.cores), Math.log(game.growPercent), "growth log");
     close(WEAKEN_SECURITY_PER_THREAD * coreBonus(game.cores), game.weakenEffect, "weaken");
 
-    // At their minimum, the ceiling stands above a whole-thread batch at every share, as the game sizes its grow.
+    // At their minimum, the batcher ceiling stands above a whole-thread HWGW batch at every share (its threads all
+    // committed, a failed hack's included), as the game sizes its grow; the hacking ceiling above that.
     if (server.hackDifficulty !== server.minDifficulty || !(game.percent > 0) || !(game.chance > 0)) continue;
-    const ceiling = hackingIncomePerGigabyteSecond(server, player, game.cores);
+    const ceiling = batcherIncomePerGigabyteSecond(server, player, game.cores);
+    expect(ceiling).toBeLessThanOrEqual(hackingIncomePerGigabyteSecond(server, player, game.cores));
     for (const { hackThreads, growThreads } of game.batches) {
       const taken = Math.min(1, hackThreads * game.percent);
       const security = hackThreads * HACK_SECURITY_PER_THREAD + growThreads * GROW_SECURITY_PER_THREAD;

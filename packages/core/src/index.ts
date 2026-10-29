@@ -126,6 +126,7 @@ export {
   percentMoneyHackedPerThread,
 } from "./hack-loop.ts";
 export {
+  batcherIncomePerGigabyteSecond,
   coreBonus,
   GROW_SCRIPT_RAM_GB,
   GROW_SECURITY_PER_THREAD,
@@ -138,6 +139,7 @@ export {
   hackingIncomePerGigabyteSecond,
   hackTimeSeconds,
   intelligenceBonus,
+  usableRamGb,
   WEAKEN_SCRIPT_RAM_GB,
   WEAKEN_SECURITY_PER_THREAD,
   WEAKEN_TIME_PER_HACK_TIME,

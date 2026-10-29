@@ -232,6 +232,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     // The player's servers first, from the static and slow snapshots, so the medium ones can be read in one pass.
     const playersServers = new Set(["home"]);
     const hacking = new HackingFold(playersServers);
+    // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
+    const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
+    if (isObject(staticBefore?.data))
+      hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
     for (const { atMs, data } of ofTier<StaticSnapshotData>("static")) {
       snapshotCount++;
       hacking.addStatic(atMs, data);

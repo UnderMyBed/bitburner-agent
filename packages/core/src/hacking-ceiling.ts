@@ -1,7 +1,8 @@
 /**
- * The hacking ceiling (#196, M4 phase A slice A1): the most hacking income a GB-second of RAM can earn on a target,
- * from the game's formulas, so "how good is our hacking" is a number: what hacking earned, against this times the hack
- * loop's RAM. Shared by the brain (the dashboard, the run report) and, later, the batcher (A7), which is scored on it.
+ * The hacking ceilings (#196, M4 phase A slice A1): the most hacking income a GB-second of RAM can earn on a target,
+ * from the game's formulas, by any hacker and by a batcher, so "how good is our hacking" is a number: what hacking
+ * earned, against these times the RAM. Shared by the brain (the dashboard, the run report) and, later, the batcher
+ * (A7), which is scored on the batcher's.
  * BitNode multipliers are taken as 1, until they come to core: exact in BN1; elsewhere `ScriptHackMoney`,
  * `ScriptHackMoneyGain`, `ServerGrowthRate` and `HackingSpeedMultiplier` are at most 1 (BitNode.tsx), so this errs
  * high, the safe side for a ceiling, but for BN11's `ServerWeakenRate` of 2 (BitNode.tsx:896), where it errs low.
@@ -81,26 +82,42 @@ export function hackTimeSeconds(
 }
 
 /**
- * The most hacking income a GB-second of RAM can earn on `target` (#196), in $: 1 over the GB-seconds each dollar
- * costs at least, with `cores` the hosts' best for grow and weaken. At the target's minimum security and maximum money
- * M, where every figure is at its best (the largest share p, chance c and growth log k, the shortest hack time T):
+ * The RAM of a host that hack, grow and weaken threads can use: its whole threads of the smallest such script (1.7 GB)
+ * at the largest's 1.75 GB, at most its RAM. A 2 GB host runs one thread, not 1.18 (#196).
+ */
+export function usableRamGb(ramGb: number): number {
+  return Math.min(ramGb, Math.floor(ramGb / HACK_SCRIPT_RAM_GB) * GROW_SCRIPT_RAM_GB);
+}
+
+/**
+ * The GB-seconds each dollar hacked from `target` costs at least, by whoever hacks it (`reactive`) and by a batcher
+ * (`batcher`), with `cores` the hosts' best for grow and weaken (the best on all their RAM: loose where their cores
+ * differ). Null where nothing can be hacked: no money, below the hacking it needs, security 100, or no chance. At the
+ * target's minimum security and maximum money M, where every figure is at its best (the largest share p, chance c and
+ * growth log k, the shortest hack time T), each dollar takes
  * - **hack:** 1/(c p M) threads, failed ones included, each `HACK_SCRIPT_RAM_GB` for T;
  * - **grow:** at least 1/(M k + 1) threads, each `GROW_SCRIPT_RAM_GB` for 3.2 T. Growing back a share f takes x threads
- *   with (M(1 - f) + x) e^(kx) = M (grow.ts:38-58: $1 a thread first, then e^(kx)); log(1 + u) <= u gives
- *   x >= f M/(M k + 1), whatever f;
+ *   with (M(1 - f) + x) e^(kx) = M (grow.ts:38-58: $1 a thread first, then e^(kx)). With u = x/M - f, that's
+ *   kx = -log(1 + u) >= -u, so x (k + 1/M) >= f: equal only as u goes to 0, that is as f goes to 0;
  * - **weaken:** what those add, 0.002 for each successful hack thread, 1/(p M) a dollar, and 0.004 a grow thread, over
  *   0.05 x the core bonus, each `WEAKEN_SCRIPT_RAM_GB` for 4 T.
- * A batch taking a share f costs at least this a dollar, and gets there only as f goes to 0 (grow's log is convex): the
- * best over f is this limit. It assumes continuous batching with no gaps, every operation landing at the right
- * moment, fractional threads, and security and money held at their best: an upper bound, not a plan. 0 where nothing
- * can be hacked: no money, below the hacking it needs, security 100, or no chance.
+ * The hack and its weaken cost the same a dollar at any share f, and grow costs more as f grows, so the best over f is
+ * the limit as f goes to 0, this. It's what a reactive hacker reaches, one that grows and weakens only what a hack that
+ * landed took. A batcher (HWGW) commits its grow and weaken threads before it knows whether the hack lands, so a failed
+ * hack wastes them too: its grow and weaken cost 1/c times as much a dollar. Both assume continuous batching with no
+ * gaps, every operation landing at the right moment, fractional threads, and security and money held at their best:
+ * upper bounds, not plans.
  */
-export function hackingIncomePerGigabyteSecond(target: HackingTarget, player: HackingPlayer, cores: number): number {
+function gigabyteSecondsPerDollar(
+  target: HackingTarget,
+  player: HackingPlayer,
+  cores: number,
+): { reactive: number; batcher: number } | null {
   const atMinimum = { hackDifficulty: target.minDifficulty, requiredHackingSkill: target.requiredHackingSkill };
   const money = target.moneyMax;
   const share = percentMoneyHackedPerThread(atMinimum, player);
   const chance = hackChance(atMinimum, player);
-  if (!(money > 0) || !(share > 0) || !(chance > 0)) return 0;
+  if (!(money > 0) || !(share > 0) || !(chance > 0)) return null;
   const bonus = coreBonus(cores);
   const growthLog =
     growthLogPerThread({ serverGrowth: target.serverGrowth, hackDifficulty: target.minDifficulty }, player) * bonus;
@@ -110,10 +127,29 @@ export function hackingIncomePerGigabyteSecond(target: HackingTarget, player: Ha
   const weakenThreads =
     (HACK_SECURITY_PER_THREAD / (share * money) + GROW_SECURITY_PER_THREAD * growThreads) /
     (WEAKEN_SECURITY_PER_THREAD * bonus);
-  const gigabyteSecondsPerDollar =
+  const hack = hackSeconds * hackThreads * HACK_SCRIPT_RAM_GB;
+  const growAndWeaken =
     hackSeconds *
-    (hackThreads * HACK_SCRIPT_RAM_GB +
-      growThreads * GROW_SCRIPT_RAM_GB * GROW_TIME_PER_HACK_TIME +
+    (growThreads * GROW_SCRIPT_RAM_GB * GROW_TIME_PER_HACK_TIME +
       weakenThreads * WEAKEN_SCRIPT_RAM_GB * WEAKEN_TIME_PER_HACK_TIME);
-  return 1 / gigabyteSecondsPerDollar;
+  return { reactive: hack + growAndWeaken, batcher: hack + growAndWeaken / chance };
+}
+
+/**
+ * The hacking ceiling (#196): the most hacking income a GB-second of RAM can earn on `target`, in $, by any hacker (1
+ * over `gigabyteSecondsPerDollar`'s `reactive`). Nothing passes it; the run report fails a run that does. 0 where
+ * nothing can be hacked.
+ */
+export function hackingIncomePerGigabyteSecond(target: HackingTarget, player: HackingPlayer, cores: number): number {
+  const cost = gigabyteSecondsPerDollar(target, player, cores);
+  return cost === null ? 0 : 1 / cost.reactive;
+}
+
+/**
+ * The batcher ceiling (#196): the most a batcher (HWGW) can earn a GB-second on `target`, its grow and weaken paid for
+ * hacks that fail too. The score the batcher (A7) is judged on. 0 where nothing can be hacked.
+ */
+export function batcherIncomePerGigabyteSecond(target: HackingTarget, player: HackingPlayer, cores: number): number {
+  const cost = gigabyteSecondsPerDollar(target, player, cores);
+  return cost === null ? 0 : 1 / cost.batcher;
 }

@@ -101,7 +101,7 @@ The Singularity workers' figures are at SF4.3 or in BN4, where the test measures
 
 `buy-server.js` (#159, 4.5 GB) is a fresh-save worker: its NS calls need no Singularity. So is `backdoor.js` (#162, 4.0 GB).
 
-The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.55 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
+The workers write to a port (`writePort`, free). The Agent plus the largest home workers a fresh save runs (`hack-loop-deploy.js`, 4.65 GB, and since #196 `snapshot-slow.js`, as large) is 7.55 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
 ## Deploy layout
 

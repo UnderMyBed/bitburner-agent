@@ -200,6 +200,19 @@ test("the latest snapshot of a tier, in the order stored (a clock set back can't
   expect(store.latestSnapshot({ environment: "E1", tier: "slow" })).toBeNull();
 });
 
+test("the newest snapshot of a tier received before a time (#196), in an environment", () => {
+  store.recordSnapshot(context, snapshotAt(1_000, "static", { n: 1 }));
+  store.recordSnapshot(context, snapshotAt(3_000, "static", { n: 3 }));
+  store.recordSnapshot(context, snapshotAt(5_000, "static", { n: 5 }));
+  store.recordSnapshot({ environment: "E0", release: "r" }, snapshotAt(4_000, "static", { n: 4 }));
+  expect(store.latestSnapshotBefore({ environment: "E1", tier: "static", beforeMs: 5_000 })).toMatchObject({
+    receivedAtMs: 3_000,
+    data: { n: 3 },
+  });
+  expect(store.latestSnapshotBefore({ environment: "E1", tier: "static", beforeMs: 1_000 })).toBeNull();
+  expect(store.latestSnapshotBefore({ environment: "E1", tier: "slow", beforeMs: 9_000 })).toBeNull();
+});
+
 test("a session's last sequence number of each tier (#119), in an environment, from any release", () => {
   const ofSession = (agentSessionId: string, tier: string, sequenceNumber: number) => ({
     ...snapshotAt(sequenceNumber, tier),

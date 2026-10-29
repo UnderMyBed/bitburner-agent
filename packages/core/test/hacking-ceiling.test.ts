@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { growthLogPerThread, percentMoneyHackedPerThread } from "../src/hack-loop.ts";
 import {
+  batcherIncomePerGigabyteSecond,
   coreBonus,
   GROW_SCRIPT_RAM_GB,
   GROW_SECURITY_PER_THREAD,
@@ -12,6 +13,7 @@ import {
   hackingIncomePerGigabyteSecond,
   hackTimeSeconds,
   intelligenceBonus,
+  usableRamGb,
   WEAKEN_SCRIPT_RAM_GB,
   WEAKEN_SECURITY_PER_THREAD,
   WEAKEN_TIME_PER_HACK_TIME,
@@ -85,6 +87,19 @@ describe("hackTimeSeconds: the game's calculateHackingTime, Hacking.ts:60-80", (
 });
 
 /**
+ * The grow threads that take money from `start` to `end`: (start + x) e^(kx) = end, by Newton's method on
+ * log((start + x)/end) + kx, as the game's `numCycleForGrowthCorrected` does (ServerHelpers.ts:90-199), not rounded up.
+ */
+function growThreadsFor(start: number, end: number, growthLog: number): number {
+  let threads = (end - start) / (1 + (end / 16 + (start * 15) / 16) * growthLog);
+  for (let step = 0; step < 100; step++) {
+    const startPlusThreads = start + threads;
+    threads = (threads - startPlusThreads * Math.log(startPlusThreads / end)) / (1 + startPlusThreads * growthLog);
+  }
+  return threads;
+}
+
+/**
  * One batch, as a batcher would size it, but with fractional threads: hack a share f of the maximum with f/p threads,
  * grow it back with the threads the game's own rule gives (`numCycleForGrowthCorrected`, ServerHelpers.ts:90-199, here
  * solved exactly, not rounded up) for each hack that succeeds, and weaken what both add. Money and GB-seconds are
@@ -98,13 +113,7 @@ function batchIncomePerGigabyteSecond(target: typeof zer0, hacker: HackingPlayer
     growthLogPerThread({ serverGrowth: target.serverGrowth, hackDifficulty: target.minDifficulty }, hacker) *
     coreBonus(cores);
   const hackThreads = share / perThread;
-  // (M(1 - f) + x) e^(kx) = M, by Newton's method on log((o + x)/n) + kx, as the game does.
-  const [start, end] = [target.moneyMax * (1 - share), target.moneyMax];
-  let growThreads = (end - start) / (1 + (end / 16 + (start * 15) / 16) * growthLog);
-  for (let step = 0; step < 100; step++) {
-    const ox = start + growThreads;
-    growThreads = (growThreads - ox * Math.log(ox / end)) / (1 + ox * growthLog);
-  }
+  const growThreads = growThreadsFor(target.moneyMax * (1 - share), target.moneyMax, growthLog);
   const security = chance * (hackThreads * HACK_SECURITY_PER_THREAD + growThreads * GROW_SECURITY_PER_THREAD);
   const weakenThreads = security / (WEAKEN_SECURITY_PER_THREAD * coreBonus(cores));
   const hackSeconds = hackTimeSeconds(atMinimum, hacker);
@@ -118,23 +127,28 @@ function batchIncomePerGigabyteSecond(target: typeof zer0, hacker: HackingPlayer
 describe("hackingIncomePerGigabyteSecond: the most a GB-second of the hosts' RAM can hack, at the target's best", () => {
   test("RAM over the GB-seconds a dollar costs at least: hack, grow and weaken, worked by hand on zer0", () => {
     const hacker = player(150);
-    const p = (0.9 * (76 / 150)) / 240;
-    const c = ((262.5 - 75) / 262.5) * 0.9;
-    const k = Math.log1p(0.003) * 0.25;
-    const t = 59.375;
-    const m = zer0.moneyMax;
-    const growThreads = 1 / (m * k + 1);
-    const perDollar =
-      (1.7 * t) / (c * p * m) +
-      1.75 * 3.2 * t * growThreads +
-      1.75 * 4 * t * ((0.002 / (p * m) + 0.004 * growThreads) / 0.05);
-    expect(hackingIncomePerGigabyteSecond(zer0, hacker, 1)).toBeCloseTo(1 / perDollar, 12);
+    const share = (0.9 * (76 / 150)) / 240;
+    const chance = ((262.5 - 75) / 262.5) * 0.9;
+    const growthLog = Math.log1p(0.003) * 0.25;
+    const hackSeconds = 59.375;
+    const money = zer0.moneyMax;
+    const growThreads = 1 / (money * growthLog + 1);
+    const hack = (1.7 * hackSeconds) / (chance * share * money);
+    const growAndWeaken =
+      1.75 * 3.2 * hackSeconds * growThreads +
+      1.75 * 4 * hackSeconds * ((0.002 / (share * money) + 0.004 * growThreads) / 0.05);
+    expect(hackingIncomePerGigabyteSecond(zer0, hacker, 1)).toBeCloseTo(1 / (hack + growAndWeaken), 12);
+    // A batcher pays its grow and weaken for failed hacks too: about 68% of it here, at a chance of 64%.
+    expect(batcherIncomePerGigabyteSecond(zer0, hacker, 1)).toBeCloseTo(1 / (hack + growAndWeaken / chance), 12);
+    expect(
+      batcherIncomePerGigabyteSecond(zer0, hacker, 1) / hackingIncomePerGigabyteSecond(zer0, hacker, 1),
+    ).toBeCloseTo(0.6773, 4);
     // About $323 a GB-second: 100 GB of hosts could earn about $32,000 a second on zer0 at hacking 150, three quarters
     // of the RAM growing it back (zer0's growth is 25).
     expect(hackingIncomePerGigabyteSecond(zer0, hacker, 1)).toBeCloseTo(323.397, 3);
   });
 
-  test("the limit of a batch's income as its share falls, which is above every batch's (grow's log is convex)", () => {
+  test("the limit of a batch's income as its share falls, above every batch's: grow's cost a dollar rises with the share", () => {
     for (const [target, hacking, cores] of [
       [zer0, 150, 1],
       [zer0, 400, 4],
@@ -173,4 +187,66 @@ describe("hackingIncomePerGigabyteSecond: the most a GB-second of the hosts' RAM
     expect(noGrowth).toBeGreaterThan(0);
     expect(noGrowth).toBeLessThan(0.01);
   });
+});
+
+/**
+ * A whole-thread HWGW batch, as a batcher (A7) would run it: hack threads taking about a share f, the grow threads to
+ * bring that back (rounded up) and the weaken threads for both (rounded up), all committed before the hack lands, so
+ * a hack that fails wastes them. Expected money over GB-seconds.
+ */
+function hwgwIncomePerGigabyteSecond(target: typeof zer0, hacker: HackingPlayer, share: number, cores = 1): number {
+  const atMinimum = { hackDifficulty: target.minDifficulty, requiredHackingSkill: target.requiredHackingSkill };
+  const chance = hackChance(atMinimum, hacker);
+  const perThread = percentMoneyHackedPerThread(atMinimum, hacker);
+  const growthLog =
+    growthLogPerThread({ serverGrowth: target.serverGrowth, hackDifficulty: target.minDifficulty }, hacker) *
+    coreBonus(cores);
+  const hackThreads = Math.max(1, Math.round(share / perThread));
+  const taken = hackThreads * perThread;
+  const growThreads = Math.ceil(growThreadsFor(target.moneyMax * (1 - taken), target.moneyMax, growthLog));
+  const security = hackThreads * HACK_SECURITY_PER_THREAD + growThreads * GROW_SECURITY_PER_THREAD;
+  const weakenThreads = Math.ceil(security / (WEAKEN_SECURITY_PER_THREAD * coreBonus(cores)));
+  const hackSeconds = hackTimeSeconds(atMinimum, hacker);
+  const gigabyteSeconds =
+    hackSeconds *
+    (hackThreads * HACK_SCRIPT_RAM_GB +
+      growThreads * GROW_SCRIPT_RAM_GB * GROW_TIME_PER_HACK_TIME +
+      weakenThreads * WEAKEN_SCRIPT_RAM_GB * WEAKEN_TIME_PER_HACK_TIME);
+  return (chance * taken * target.moneyMax) / gigabyteSeconds;
+}
+
+describe("batcherIncomePerGigabyteSecond: the batcher's ceiling, its grow and weaken paid for failed hacks too", () => {
+  /** phantasy: $600m, security 7, needs 100, growth 35. */
+  const phantasy = { moneyMax: 600_000_000, minDifficulty: 7, requiredHackingSkill: 100, serverGrowth: 35 };
+
+  test("a whole-thread HWGW batch at 5 to 10% stays under it, and comes within a few percent of it", () => {
+    for (const [target, hacking, cores] of [
+      [zer0, 150, 1],
+      [zer0, 500, 1],
+      [phantasy, 250, 1],
+      [phantasy, 600, 4],
+    ] as const) {
+      const ceiling = batcherIncomePerGigabyteSecond(target, player(hacking), cores);
+      for (const share of [0.05, 0.1]) {
+        const batch = hwgwIncomePerGigabyteSecond(target, player(hacking), share, cores);
+        expect(batch, `${target.moneyMax} at ${hacking}, ${share}`).toBeLessThanOrEqual(ceiling);
+        expect(batch / ceiling, `${target.moneyMax} at ${hacking}, ${share}`).toBeGreaterThan(0.85);
+      }
+    }
+  });
+
+  test("never above the hacking ceiling; equal to it at a chance of 1; none where nothing can be hacked", () => {
+    for (const hacking of [80, 150, 400, 2_000]) {
+      const batcher = batcherIncomePerGigabyteSecond(zer0, player(hacking), 1);
+      expect(batcher).toBeLessThanOrEqual(hackingIncomePerGigabyteSecond(zer0, player(hacking), 1));
+    }
+    const sure = player(150, { hacking_chance: 10 });
+    expect(batcherIncomePerGigabyteSecond(zer0, sure, 1)).toBeCloseTo(hackingIncomePerGigabyteSecond(zer0, sure, 1), 9);
+    expect(batcherIncomePerGigabyteSecond(zer0, player(74), 1)).toBe(0);
+    expect(batcherIncomePerGigabyteSecond({ ...zer0, moneyMax: 0 }, player(150), 1)).toBe(0);
+  });
+});
+
+test("usableRamGb: a host's whole threads of the 1.7 GB script, at 1.75 GB each, at most its RAM", () => {
+  expect([1, 1.7, 2, 4, 8, 16, 32].map(usableRamGb)).toEqual([0, 1.7, 1.75, 3.5, 7, 15.75, 31.5]);
 });

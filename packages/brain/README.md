@@ -249,47 +249,98 @@ Seed 1 prepares from 48 minutes, moves to max-hardware at 90, and goes 7.7 minut
 
 ## The hacking ceiling
 
-"How good is our hacking" as a number (#196, M4 phase A slice A1): the most hacking income a second that the hack loop's hosts' RAM could earn at the player's hacking now, from the game's formulas, against what hacking actually earned. The batcher (A7) is scored against it.
+"How good is our hacking" as a number (#196, M4 phase A slice A1): the most hacking income a second that RAM could earn at the player's hacking now, from the game's formulas, against what hacking actually earned. Two ceilings, both upper bounds:
 
-- **Per GB-second** (core's `hackingIncomePerGigabyteSecond`, `packages/core/src/hacking-ceiling.ts`): on a target at its minimum security and maximum money M, where every figure is at its best, each dollar hacked costs at least
-  - **hack:** 1/(c·p·M) threads of a 1.7 GB script for T, c the chance (`hackChance`, Hacking.ts:9-24), p one thread's share (`percentMoneyHackedPerThread`, Hacking.ts:44-57) and T the hack time (`hackTimeSeconds`, Hacking.ts:60-80); failed hacks cost their time too;
-  - **grow:** 1/(M·k + 1) threads of a 1.75 GB script for 3.2T, k one thread's growth log with the hosts' best core bonus (`growthLogPerThread`, grow.ts:8-29; ServerHelpers.ts:287-290). Growing a share f back takes x with (M(1 − f) + x)·e^(kx) = M (grow.ts:38-58), and log(1 + u) ≤ u gives x ≥ f·M/(M·k + 1) for any f;
-  - **weaken:** the 0.002 a successful hack thread adds and the 0.004 a grow thread adds (Constants.ts:9; ServerHelpers.ts:209-211), over 0.05 × the core bonus a thread (Constants.ts:10), of a 1.75 GB script for 4T.
+- **The batcher ceiling, the score** the batcher (A7) is judged on: a batcher (HWGW) commits its grow and weaken threads before it knows whether the hack lands, so a failed hack wastes them.
+- **The hacking ceiling,** reached only by a reactive hacker that grows and weakens just what a landed hack took. Nothing passes it.
 
-  A batch taking a share f costs at least that a dollar, and gets there only as f goes to 0 (grow's log is convex), so the best over f is this limit, a closed form. The script RAM is the game's: 1.6 GB base, 0.1 for `hack`, 0.15 for `grow` or `weaken` (RamCostGenerator.ts:11-20), not the hack loop's 2.4.
-- **It assumes,** and so ignores: continuous batching with no gaps, every operation landing at the right moment, fractional threads, security and money held at their best, the hosts' whole RAM free, one target at a time, and the hacking level as the snapshot has it. It's an upper bound: a batcher can approach it, never pass it.
-- **BitNode multipliers** are taken as 1: exact in BN1. Elsewhere `ScriptHackMoney`, `ScriptHackMoneyGain`, `ServerGrowthRate` and `HackingSpeedMultiplier` are at most 1, so it errs high, the safe side for a ceiling; BN11's `ServerWeakenRate` of 2 errs low (BitNode.tsx:896). To revisit when BitNode multipliers come to core.
-- **Over the snapshots** (`hackingCeiling`, `src/hacking-ceiling.ts`): the hack loop's hosts (`chooseHackHosts`: the game's rooted servers with RAM, never home or the player's own), their `maxRam` in the medium snapshot added up, times the best per-GB-second among the targets: the game's servers rooted, with money, needing at most the player's hacking. Unknown, saying why, without both snapshots or the player's skills (`hacking`, `intelligence`) and multipliers (`hacking_chance`, `hacking_speed`, `hacking_money`, `hacking_grow`).
-- **What hacking earned:** the slow snapshot's `moneySources` (#196), `ns.getMoneySources().sinceInstall`, whose `hacking` counts every hack's money (NetscriptHelpers.tsx:599). It rises between slow snapshots; after a fall (an install resets it) what it says is what was earned since. Money's rises would count crime and work, and purchases would hide hacking.
-- **The dashboard's rows:** "Hacking ceiling: $X/s on T, with N GB on K servers", from the newest static and medium snapshots, and "Hacking income: $Y/s over the last 10 min (Z% of the ceiling now)", from the last 10 minutes of slow snapshots.
-- **The run report's section 5** (`HackingFold`, fed by the run report's own pass over the store): each medium snapshot's ceiling, with the static snapshot then, stepped across each interval between slow snapshots; what hacking earned in it; added up over the window and each hour, as $ a second and a percentage, and the ceiling now. An interval where the ceiling was unknown isn't judged, and the section says for how long.
-  - **A failure:** hacking earned more over the window than the ceiling's $ plus what the game's servers' money fell by from the first medium snapshot to the last (money held at the start, hacked and not grown back, which no RAM paid for in the window). That means the formula, or the measure, is wrong. Hacks finishing early in the window that started before it aren't allowed for: a few minutes' worth, small against a run.
-  - **No floor yet:** A7's batcher sets one.
-- **Tests:**
-  - `packages/core/test/hacking-ceiling.test.ts`: chance, time, the bonuses and the per-dollar cost by hand on zer0, their edges, each multiplier and the cores, and a batch at shares from 0.9 to 0.0001 (grow threads solved as the game's `numCycleForGrowthCorrected` does) always below the ceiling, rising towards it.
-  - `test/hacking-ceiling-parity.test.ts`: in the simulator, Formulas.exe bought through the simulator's own effectors, core's chance, share, hack, grow and weaken times, growth log (1 and 4 cores) and weaken against `ns.formulas.hacking`, over four servers (n00dles, zer0, phantasy and one hard to hack, above its minimum) and two players (one with every hacking multiplier moved, and intelligence); the security a thread against `hackAnalyzeSecurity` and `growthAnalyzeSecurity`; the scripts' RAM by the game's calculator; and the ceiling above a whole-thread batch sized with the game's own `growThreads`, at shares from 0.9 to 0.01.
-  - `test/hacking-ceiling.test.ts`: the targets and hosts counted, the cores, the multipliers, the unknowns, the income's rises and resets, the step across medium snapshots, the section's lines, the failure and its allowance.
-  - `test/run-report.test.ts`, `test/dashboard-status.test.ts`, `test/dashboard-page.test.ts`: the section, its FAIL, and the rows.
+**Per GB-second** (core's `batcherIncomePerGigabyteSecond` and `hackingIncomePerGigabyteSecond`, `packages/core/src/hacking-ceiling.ts`). On a target at its minimum security and maximum money M, where every figure is at its best, each dollar hacked costs at least:
+- **hack:** 1/(c·p·M) threads of a 1.7 GB script for T, failed hacks included. c is the chance (`hackChance`, Hacking.ts:9-24), p one thread's share (`percentMoneyHackedPerThread`, Hacking.ts:44-57), and T the hack time (`hackTimeSeconds`, Hacking.ts:60-80).
+- **grow:** 1/(M·k + 1) threads of a 1.75 GB script for 3.2T, k being one thread's growth log with the core bonus (`growthLogPerThread`, grow.ts:8-29; ServerHelpers.ts:287-290). Growing a share f back takes x threads with (M(1 − f) + x)·e^(kx) = M (grow.ts:38-58). With u = x/M − f, that is kx = −log(1 + u) ≥ −u, so x·(k + 1/M) ≥ f, with equality only as f → 0.
+- **weaken:** removes what the hack adds (0.002 a successful thread) and what the grow adds (0.004 a thread) (Constants.ts:9; ServerHelpers.ts:209-211), at 0.05 × the core bonus a thread (Constants.ts:10), with a 1.75 GB script for 4T.
+
+**Why the limit is the best over f:** the hack and its weaken cost the same per dollar at any share f, and grow costs more as f grows, so the cheapest batch is the one at f → 0.
+
+**The batcher ceiling** divides the grow and weaken terms by c too. On zer0 at hacking 150 that is about 68% of the hacking ceiling. A whole-thread HWGW batch at f = 5–10% comes within 15% of the batcher ceiling, and never above it.
+
+The script RAM is the game's (RamCostGenerator.ts:11-20). A host's usable RAM counts whole threads (`usableRamGb`): floor(RAM/1.7) threads at 1.75 GB each, at most its RAM, so a 2 GB host gives 1.75 GB.
+
+**What both assume, and so ignore:**
+- continuous batching with no gaps, every operation landing on time, and fractional threads within a host;
+- security and money held at their best;
+- the hosts' whole RAM free, and the best cores among them applied to all of it (loose where cores differ);
+- one target at a time;
+- the hacking level as the snapshot has it.
+
+**BitNode multipliers** are taken as 1. That is exact in BN1. Elsewhere `ScriptHackMoney`, `ScriptHackMoneyGain`, `ServerGrowthRate` and `HackingSpeedMultiplier` are at most 1, so the ceilings err high, the safe side. BN11's `ServerWeakenRate` of 2 errs low (BitNode.tsx:896).
+
+**Over the snapshots** (`hackingCeiling`, `src/hacking-ceiling.ts`). The targets are the game's servers rooted, with money:
+- **The score** uses the RAM the brain's hacking uses: the hack loop's hosts (`chooseHackHosts`; A2's `hackLoopHosts` and A7's later). It gives the best target's batcher ceiling, and beside it the hacking ceiling.
+- **The bound** uses all the RAM a script could run on: every rooted server, including home and the cloud and Hacknet servers. It gives the best target's hacking ceiling. The owner's scripts, a terminal `hack`, or A7 on home all count in what hacking earns, so all that RAM counts here.
+- **Unknown, with the reason,** when either snapshot is missing, or the player's skills (`hacking`, `intelligence`) or multipliers (`hacking_chance`, `hacking_speed`, `hacking_money`, `hacking_grow`).
+
+**What hacking earned:** the slow snapshot's `moneySources` (#196), which is `ns.getMoneySources().sinceInstall`. Its `hacking` field counts every hack's money (NetscriptHelpers.tsx:599).
+- **Between slow snapshots** it is the rise in that count.
+- **After an install** (`resetInfo.lastAugReset` changed; the install resets the count), what the count says is what was earned since.
+- **A fall with no install** is a relaunch, which loads the save's older count. That interval counts as nothing earned.
+- **Why not money's rises:** they would count crime and work, and purchases would hide hacking.
+
+**The dashboard's rows:** "Hacking ceiling" and "Hacking income". The income row shows the last 10 minutes as percentages of both ceilings now. The brain sends their text, the same words the run report uses.
+
+**The run report's section 5** (`HackingFold`, fed by the run report's own pass over the store: static, slow, then medium snapshots):
+- **The ceilings:** each medium snapshot's ceilings, with the static snapshot in force then, stepped across each interval between slow snapshots. A window that starts after the Agent's static snapshot takes the one before it (`latestSnapshotBefore`).
+- **The headline is the best 10 minutes:** hacking's percentage of the batcher ceiling, the stretch A7 is judged on. Preparing a target and switching between targets mean no run comes near 100% over a whole window.
+- **Then the window and each hour** against both ceilings, and the ceilings now.
+- **Not judged:** intervals where the ceilings were unknown; the section says for how long.
+- **A failure:** hacking earned more over the window than the bound's $ allow. The bound's $ are the ceiling on all rooted RAM, plus what the game's servers' money fell by between relaunches and installs (money they held at the start, hacked and not grown back, which no RAM paid for). This means the formula, or the measure, is wrong.
+- **Not allowed for, known slack:** security left above where it started, which is the same kind of debt; and hacks finishing early in the window that started before it, a few minutes' worth.
+- **No floor yet:** A7 sets one.
+
+**Tests:**
+- **`packages/core/test/hacking-ceiling.test.ts`:**
+  - chance, time, the bonuses and both per-dollar costs by hand on zer0, and their edges;
+  - each multiplier and the cores;
+  - a batch at shares from 0.9 to 0.0001 always below the hacking ceiling, rising towards it;
+  - whole-thread HWGW batches at 5–10% below the batcher ceiling and within 15% of it;
+  - `usableRamGb`.
+- **`test/hacking-ceiling-parity.test.ts`:** in the simulator, with Formulas.exe bought through the simulator's own effectors:
+  - core's chance, share, times, growth log and weaken against `ns.formulas.hacking`, over four servers and two players;
+  - the security per thread and the scripts' RAM against the game's own;
+  - the batcher ceiling above whole-thread HWGW batches sized with the game's own `growThreads`.
+- **`test/hacking-ceiling.test.ts`:**
+  - the score's hosts and the bound's rooted servers, cores, multipliers and unknowns;
+  - income rises, relaunches and installs;
+  - the step across medium snapshots;
+  - the section's lines and the best 10 minutes;
+  - the failure and its allowance, split at relaunches;
+  - no time judged, and the order the snapshots are fed in.
+- **`test/run-report.test.ts`, `test/dashboard-status.test.ts`, `test/dashboard-page.test.ts`, `test/telemetry-store.test.ts`:** the section, its FAIL, a relaunch that isn't one, a window after the static snapshot, and the rows.
 
 ### The ceiling suite
 
-`test/hacking-ceiling-simulation.test.ts` (#196) runs the brain from an 8 GB fresh start in BN1, with the loop, the programs and home RAM on, for 90 virtual minutes: past the loop's move from n00dles. Over the store, the run report's section 5 says what hacking earned against the ceiling, with no failure; read directly, hacking never earns more than the ceiling over the run, each hour, or each 10 minutes. In CI it runs seed 1, in about 11 s.
+`test/hacking-ceiling-simulation.test.ts` (#196) runs the brain from an 8 GB fresh start in BN1, with the loop, the programs and home RAM on, for 90 virtual minutes, past the loop's move from n00dles.
+- **The run report's section 5** gives the best 10 minutes, the window and the hours, with no failure.
+- **Read directly:** hacking never earns more than the hacking ceiling on the loop's hosts, over the run, each hour or each 10 minutes; the batcher ceiling ≤ the hacking ceiling ≤ the bound.
+- **In CI** it runs seed 1, in about 10 s.
 
-**The hack loop's percentage**, the baseline the batcher (A7) must beat (`HACKING_CEILING_SEEDS` set to `1,2,3,4,5,6,7,8`, as for the income suite, about 85 s):
+**The hack loop's percentages,** the baseline the batcher (A7) must beat. Set `HACKING_CEILING_SEEDS` to `1,2,3,4,5,6,7,8`, as for the income suite; it takes about 75 s.
 
-| Seed | Hacking income / the ceiling, over 90 min | First hour | Last half hour | Most in any 10 min | The ceiling at the end |
-|---|---|---|---|---|---|
-| 1 | $19,074/s / $1,553,692/s: **1.2%** | 2.3% | 0.8% | 15.3% | $3.84m/s on phantasy, 1500 GB |
-| 2 | $74,339/s / $1,973,812/s: **3.8%** | 1.8% | 4.7% | 15.4% | $4.42m/s, 1596 GB |
-| 3 | $30,735/s / $1,585,170/s: **1.9%** | 1.9% | 2.0% | 14.7% | $3.47m/s, 1316 GB |
-| 4 | $76,279/s / $2,053,551/s: **3.7%** | 2.0% | 4.4% | 11.6% | $4.99m/s, 1740 GB |
-| 5 | $79,568/s / $2,062,046/s: **3.9%** | 1.8% | 4.7% | 14.9% | $4.88m/s, 1748 GB |
-| 6 | $59,861/s / $1,751,468/s: **3.4%** | 1.8% | 4.3% | 15.2% | $3.69m/s, 1420 GB |
-| 7 | $18,762/s / $1,561,188/s: **1.2%** | 2.0% | 0.8% | 14.1% | $3.39m/s, 1324 GB |
-| 8 | $18,176/s / $1,301,643/s: **1.4%** | 2.2% | 0.9% | 14.5% | $2.66m/s, 1012 GB |
+| Seed | Over the run, of the batcher ceiling | Over the run, of the hacking ceiling | Best 10 min, of the batcher ceiling (of the hacking ceiling) | Ceilings at the end (batcher / hacking / bound) |
+|---|---|---|---|---|
+| 1 | **1.8%** | 1.2% | **19.8%** (15.6%) | $2.74m/s / $3.81m/s on 1500 GB / $4.14m/s on 1628 GB |
+| 2 | **5.3%** | 3.8% | **19.9%** (15.7%) | $3.19m/s / $4.39m/s on 1596 GB / $5.10m/s |
+| 3 | **2.8%** | 2.0% | **19.0%** (15.0%) | $2.48m/s / $3.44m/s on 1316 GB / $4.12m/s |
+| 4 | **5.2%** | 3.7% | **19.7%** (15.7%) | $3.62m/s / $4.96m/s on 1740 GB / $5.69m/s |
+| 5 | **5.5%** | 3.9% | **19.3%** (15.2%) | $3.53m/s / $4.85m/s on 1748 GB / $5.57m/s |
+| 6 | **4.9%** | 3.4% | **19.6%** (15.5%) | $2.64m/s / $3.66m/s on 1420 GB / $4.32m/s |
+| 7 | **1.7%** | 1.2% | **18.3%** (14.4%) | $2.42m/s / $3.37m/s on 1324 GB / $3.69m/s |
+| 8 | **2.0%** | 1.4% | **18.7%** (14.8%) | $1.90m/s / $2.64m/s on 1012 GB / $2.97m/s |
 
-The loop reaches 1.2% to 3.9% of the ceiling over the run, and at best 15% in a 10-minute stretch (on n00dles, early). It hacks at 75% of the maximum money and up to 5 over the minimum security, with a 2.4 GB script whose threads mostly wait, and every server prepares its target from 4% of its money; the ceiling allows for none of that.
-
+**Reading the table:**
+- **Over the run,** the loop reaches 1.7% to 5.5% of the batcher ceiling.
+- **Its best 10 minutes, 18% to 20%,** always come in the first minutes, on n00dles with a few small hosts.
+- **The batcher's best target is phantasy** at the end of every seed.
+- **Why the loop is so far below:** it hacks at 75% of max money and up to 5 over min security, with a 2.4 GB script whose threads mostly wait, and it prepares every target from 4% of its money.
 ## The hacking programs
 
 M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the brain tells the Agent which hacking program to buy next, and the Agent buys it through the game's page ([`packages/ingame`](../ingame/README.md#the-hacking-programs)). The code is `src/programs.ts`.
@@ -431,7 +482,7 @@ npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [
   - **blocking dialogs:** each stretch a `dialogs.blocking` text was shown, in a row, with when it was first and last seen.
   - **disconnects:** an `agentDisconnected` with no `agentConnected` within 60 s. A connect in the same millisecond counts (a replaced session). Not one under 60 s before the window ends (there's no telling yet), nor one that's the run's last record (the run ended there). The line names what was recorded meanwhile, as for gaps.
   - `deployFailed`, `versionDrift` and `supervisionGaveUp` events.
-  - **hacking income above the ceiling** (#196), section 5: what hacking earned over the window more than the ceiling allows ([the hacking ceiling](#the-hacking-ceiling)).
+  - **hacking income above what all the rooted RAM could earn** (#196), section 5: what hacking earned over the window, more than the hacking ceiling on every rooted server's RAM plus what the game's servers' money fell by ([the hacking ceiling](#the-hacking-ceiling)).
 - **Values the snapshots don't have**, or have malformed, read as "unknown".
 - **The hack loop's target** is inferred, and says so: the game's servers (not home or purchased ones) whose money or security changed between consecutive medium snapshots, in stretches. Only scripts change them, so the owner's own would show too.
 - **Exit codes:** 0 on PASS, 1 on FAIL, 2 when it couldn't run (no store, no brain start without `--since`, a window that ends before it starts, or one with nothing recorded).
