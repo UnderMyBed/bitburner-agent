@@ -28,3 +28,16 @@ Generated from the pinned game by the simulator's engine, never typed by hand: `
 | `daedalusAugmentationsRequired(currentNode, ownedSF)` | The installed augmentations Daedalus's invitation needs. |
 
 `state` is what the brain has: `installed` is `resetInfo.ownedAugs`; `queued` is the queued augmentations in order, one entry per NeuroFlux Governor level; `sourceFile11Level` is `resetInfo.ownedSF["11"] ?? 0` (the game has already applied the BitNode options' overrides); and `bitNodeMultipliers` is `augmentationBitNodeMultipliers(resetInfo.currentNode, resetInfo.ownedSF)`. An unknown augmentation, an installed level that isn't a whole number from 1, an SF11 level outside 0-3, or a multiplier that isn't finite and above 0 throws.
+
+### Faction work
+
+`src/faction-work.ts` ([#203](https://github.com/UnderMyBed/bitburner-agent/issues/203)), for the brain's choice of which faction to work for, and how soon its next augmentation comes ([packages/brain](../brain/README.md#factions-and-their-work)):
+
+| Function | What |
+|---|---|
+| `factionReputationPerCycle(person, workType, favor, sourceFile15Level)` | The reputation a cycle of hacking, field or security work earns, focused: the game's `calculateFactionRep` (`Work/Formulas.ts:82-89`, `PersonObjects/formulas/reputation.ts`). Hacking: (hacking + intelligence/3) / 975; field: 0.9 × (the five combat-and-charisma skills + hacking + intelligence) / 975 / 5.5; security: the same without charisma, / 4.5; each × `faction_rep` × the intelligence bonus × (1 + favour/100), and SF15.3's charisma terms. A figure that isn't finite throws. |
+| `factionReputationPerSecond(person, workType, { favor, sourceFile15Level, focused, implant })` | Five cycles a second (`MilliPerCycle`, 200 ms), × 0.8 unfocused unless the Neuroreceptor Management Implant is installed (`focusPenalty`). |
+| `hackingValue(augmentation)` | What it's worth to the brain's hacking: the natural logarithms of its `HACKING_MULTIPLIERS` (hacking, speed, money, growth, chance, experience, faction reputation) added up; 0 for one with none. |
+| `intelligenceBonus(intelligence, weight)` | `calculateIntelligenceBonus`: 1 + weight × intelligence^0.8 / 600. |
+
+`person` is `ns.getPlayer()`'s seven skills and its `faction_rep` multiplier (`WorkingPerson`). Two things are taken as 1: the share bonus (the brain runs no `share()`), and the BitNode's `FactionWorkRepGain`, exact in BN1 and the same for every faction and work type elsewhere, so only an ETA is off. `test/faction-work.test.ts` works each by hand and checks the constants and terms against the game's source; the brain's `faction-work-parity.test.ts` checks the rate against the engine's `ns.formulas.work.factionGains` for every work type, over people and favours that differ in every figure it reads.

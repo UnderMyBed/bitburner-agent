@@ -992,6 +992,21 @@ describe("factions and their work (#203)", () => {
     expect(report().failures).toEqual([]);
   });
 
+  test("exactly 10 minutes under is a stall", () => {
+    factionRun({ reputation: (minute) => (minute <= 10 ? minute * 30 : 300 + (minute - 10)) });
+    expect(report().failures).toEqual([
+      expect.stringContaining(`from ${at(10 * MINUTE)} to ${at(20 * MINUTE)} (10 min)`),
+    ]);
+  });
+
+  test("not stalled across a stop and a choice again: the clock starts with the new choice", () => {
+    // Flat from minute 1 to 14: 13 minutes, but stopped and chosen again at 5 min, so 8 from the next slow snapshot.
+    factionRun({ reputation: () => 5, skipSlow: (minute) => minute > 14 });
+    event(5 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    event(5 * MINUTE + 2, "factionWorkChosen", CHOICE);
+    expect(report().failures).toEqual([]);
+  });
+
   test("not stalled across a brain start, which ends the brain's choice", () => {
     factionRun({ reputation: () => 5 });
     event(6 * MINUTE, "brainStarted", { release: "r" });

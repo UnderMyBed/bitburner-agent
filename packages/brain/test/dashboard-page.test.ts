@@ -294,7 +294,7 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
 describe("the brain's joins and faction work (#203)", () => {
   const CHOICE = {
     faction: "CyberSec",
-    workType: "hacking",
+    workType: "hacking" as const,
     augmentation: "Neurotrainer I",
     reputation: 2.4,
     reputationNeeded: 1_000,

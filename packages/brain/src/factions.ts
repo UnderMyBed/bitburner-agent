@@ -297,7 +297,10 @@ export interface FactionsView {
   waitingFor: string | null;
 }
 
-/** The brain's faction work not raising reputation (#203): the faction, and since when it last rose (or was chosen). */
+/**
+ * The brain's faction work's watch (#203): its faction, and the last slow snapshot whose reputation was on track (or the
+ * work's first): 10 minutes before now is `factionWorkStalled`.
+ */
 export interface FactionWorkStall {
   faction: string;
   sinceMs: number;
@@ -332,7 +335,7 @@ export function describeEta(seconds: number): string {
 }
 
 /** A choice in words, for the log, the dashboard and the run report. */
-export function describeChoice(choice: Omit<FactionWorkChoice, "etaSeconds"> & { etaSeconds: number }): string {
+export function describeChoice(choice: FactionWorkChoice): string {
   return (
     `${choice.workType} for ${choice.faction}, for ${choice.augmentation} (reputation ` +
     `${formatReputation(choice.reputation)} of ${formatReputation(choice.reputationNeeded)}, ` +
@@ -343,18 +346,18 @@ export function describeChoice(choice: Omit<FactionWorkChoice, "etaSeconds"> & {
 /**
  * Joins and faction work as the desired state's controller runs them, on every update (so it logs only on a change):
  * the join to send and the work to send, the view, the stall, and the events for the store.
- * - The join is asked for until the medium snapshot shows the faction joined; the next waits for it.
+ * - The join is asked for until a snapshot shows the faction joined; the next waits for it.
  * - The work is sent while it's the rule's (no owner's work, the switch on). Its choice is stored as an event when its
  *   faction, work type or target changes, and its end as another when a definite reason stops it: the owner's work,
  *   the switch, nothing left worth it. Snapshots missing (a reconnect, the faction state unread) change nothing stored:
  *   the work isn't sent meanwhile, and the Agent leaves the game's work as it is.
- * - The stall: while the rule's work is sent, its faction's reputation in the slow snapshots, and when it last rose (or
- *   the work was chosen). Another faction, the work not sent, or the snapshots gone, starts it again.
+ * - The stall: while the rule's work is sent, its faction's reputation in the slow snapshots, and the last one on track
+ *   (`onTrack`), or the work's first. Another faction, the work not sent, or the snapshots gone, starts it again.
  */
 export class FactionRule {
   readonly #log: (line: string) => void;
   readonly #emit: (event: FactionWorkEvent) => void;
-  /** The faction asked to join, and whether a medium snapshot has shown it joined since. */
+  /** The faction asked to join, until a snapshot shows it joined, or its invitation is gone; or null. */
   #joining: string | null = null;
   /** The invitations left to the owner already logged, in this run of the brain. */
   readonly #leftLogged = new Set<string>();
@@ -423,9 +426,9 @@ export class FactionRule {
       this.#leftLogged.add(faction);
       this.#log(`factions: ${faction}'s invitation is left to you (joining it bans ${bans.join(", ")})`);
     }
-    // Asked for until joined: a slow snapshot older than the join may still list the invitation.
-    const next = this.#joining ?? plan.next;
-    if (next !== null && this.#joining === null) {
+    // Asked for until a snapshot shows it joined: the invitations are in the order received, so it stays the first.
+    const next = plan.next;
+    if (next !== null && next !== this.#joining) {
       this.#joining = next;
       this.#log(`factions: joining ${next} (its invitation)`);
     }

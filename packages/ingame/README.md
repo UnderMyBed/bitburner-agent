@@ -444,7 +444,7 @@ M3's twelfth slice ([#160](https://github.com/UnderMyBed/bitburner-agent/issues/
   - when the brain's latest has no `ttlMs` (a brain from before #160).
 
   Once dropped, the loops and the work carry on as the game has them, untended, as after any disconnect before #160.
-- **The owner taking over by hand:** before stopping the brain, click **Stop managing work** on the dashboard (and turn the hack loop off if you want it gone): safe mode then keeps that. With the brain already stopped, the Agent keeps re-converging the work for up to 12 hours. `kill` stops it only until the next load, when autoexec's Agent resumes from the file; to stop it for good, `rm agent/desired-state.json`, then kill it ([setup](../../docs/setup.md)).
+- **The owner taking over by hand:** before stopping the brain, click **Stop the brain's faction work** (#203) and **Stop managing work** on the dashboard (and turn the hack loop off if you want it gone): safe mode then keeps that. With the brain already stopped, the Agent keeps re-converging the work for up to 12 hours. `kill` stops it only until the next load, when autoexec's Agent resumes from the file; to stop it for good, `rm agent/desired-state.json`, then kill it ([setup](../../docs/setup.md)).
 - **A game other than the pinned release** (Steam updated it overnight, say): only what a hold would send goes on, the hack loop as kept and no work, since the work effectors drive the game's page and nobody has checked this version (architecture §12.4). The log says so.
 - **RAM:** none; the Agent stays at 2.9 GB.
 

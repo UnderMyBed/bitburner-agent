@@ -170,6 +170,13 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), genOne).choice?.augmentation).toBe("Cranial Signal Processors - Gen II");
   });
 
+  test("the value counts, not the time alone: NiteSec at 0 works for Artificial Synaptic Potentiation, not BitWire", () => {
+    // BitWire: ln 1.05 over 3,750; Artificial Synaptic Potentiation: ln 1.02 + ln 1.05 + ln 1.05 over 6,250.
+    expect(chooseFactionWork(player(55), slow({ joined: { NiteSec: 0 } })).choice?.augmentation).toBe(
+      "Artificial Synaptic Potentiation",
+    );
+  });
+
   test("installed and queued augmentations are passed over, and NeuroFlux Governor", () => {
     const plan = chooseFactionWork(
       player(55),
@@ -193,6 +200,12 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), slow({ joined: { "Sector-12": 0 } })).choice?.augmentation).toBe(
       "Neuralstimulator",
     );
+    // With it installed, only those without one are left: none.
+    const left = slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } });
+    expect(chooseFactionWork(player(55), left)).toMatchObject({
+      choice: null,
+      waitingFor: "an augmentation worth working for at the joined factions",
+    });
   });
 
   test("one already reached at another joined faction that sells it is A6's to buy, not worked for", () => {
@@ -220,6 +233,10 @@ describe("chooseFactionWork", () => {
       }),
     );
     expect(withGen2.choice?.augmentation).toBe("Cranial Signal Processors - Gen III");
+    // Every missing one, not just one: Embedded Netburner Module Core V2 Upgrade at OmniTek, 100 away, needs the
+    // Module (NiteSec sells it) and its Core Implant (neither does).
+    const oneOfTwo = chooseFactionWork(player(600), slow({ joined: { "OmniTek Incorporated": 999_900, NiteSec: 0 } }));
+    expect(oneOfTwo.choice?.augmentation).not.toBe("Embedded Netburner Module Core V2 Upgrade");
     const withNiteSec = chooseFactionWork(player(600), slow({ joined: { BitRunners: 49_900, NiteSec: 0 } }));
     expect(withNiteSec.choice).toMatchObject({
       faction: "BitRunners",
@@ -382,6 +399,7 @@ describe("FactionRule", () => {
     expect(update({ slowData: slow({ invitations: ["CyberSec"] }) }).join).toEqual(joinIntent("CyberSec"));
     // The slow snapshot shows it joined first: joined, and none asked for.
     expect(update({ slowData: slow({ joined: { CyberSec: 0 } }) }).join).toBeNull();
+    expect(log).toContain("factions: CyberSec joined");
     expect(update({ slowData: slow({ invitations: ["NiteSec"] }) }).join).toEqual(joinIntent("NiteSec"));
     // An install: no invitation, not joined.
     expect(update({ slowData: slow() }).join).toBeNull();
