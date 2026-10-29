@@ -1469,7 +1469,10 @@ describe("factions and their work (#203)", () => {
     expect(store.getSetting("factionWork.enabled")).toBe("false");
     expect(lastState(connection)?.work).toBeUndefined();
     expect(controller.workView()).toEqual({ desired: null, source: null, outcome: null });
-    expect(controller.factionsView()).toMatchObject({ enabled: false, waitingFor: "the Faction work switch is off" });
+    expect(controller.factionsView()).toMatchObject({
+      enabled: false,
+      waitingFor: "the brain's faction work is switched off",
+    });
     // A restarted brain keeps the switch off.
     expect(
       new DesiredStateController({
@@ -1485,7 +1488,7 @@ describe("factions and their work (#203)", () => {
       "factionWorkChosen",
       "your work on the dashboard",
       "factionWorkChosen",
-      "the Faction work switch is off",
+      "the brain's faction work is switched off",
       "factionWorkChosen",
     ]);
   });
@@ -1494,7 +1497,11 @@ describe("factions and their work (#203)", () => {
     const { controller, connection } = connected();
     send(connection, "medium", withSkills(["CyberSec"]));
     send(connection, "slow", factionsSlow({ joined: 0 }));
-    expect(controller.factionWorkStall()).toEqual({ faction: "CyberSec", sinceMs: expect.any(Number) });
+    expect(controller.factionWorkStall()).toEqual({
+      faction: "CyberSec",
+      sinceMs: expect.any(Number),
+      lastReadingAtMs: expect.any(Number),
+    });
     connection.dropFromGameSide();
     expect(controller.factionWorkStall()).toBeNull();
     expect(controller.factionsView()).toMatchObject({ waiting: true, sent: false });

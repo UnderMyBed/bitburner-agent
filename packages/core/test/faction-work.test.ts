@@ -9,6 +9,7 @@ import {
   factionReputationPerCycle,
   factionReputationPerSecond,
   HACKING_MULTIPLIERS,
+  hackingSkillValue,
   hackingValue,
   MAX_SKILL_LEVEL,
   UNFOCUSED_WORK_BONUS,
@@ -43,43 +44,45 @@ test("the constants are the pinned game's: 975, 200 ms a cycle, 0.8 unfocused", 
 const intelligenceBonus = (intelligence: number) => 1 + intelligence ** 0.8 / 600;
 
 test("hacking work: (hacking + intelligence/3) / 975 × faction_rep × the intelligence bonus × (1 + favour/100)", () => {
-  expect(factionReputationPerCycle(FRESH, "hacking", 0, 0)).toBeCloseTo(55 / 975, 15);
+  expect(factionReputationPerCycle(FRESH, "hacking", 0, 0, 1)).toBeCloseTo(55 / 975, 15);
   const { skills } = MOVED;
-  expect(factionReputationPerCycle(MOVED, "hacking", 25, 0)).toBeCloseTo(
+  expect(factionReputationPerCycle(MOVED, "hacking", 25, 0, 1)).toBeCloseTo(
     ((skills.hacking + skills.intelligence / 3) / 975) * 1.25 * intelligenceBonus(90) * 1.25,
     15,
   );
   // SF15.3 adds a tenth of charisma (`reputation.ts:54-59`); below level 3, nothing.
-  expect(factionReputationPerCycle(MOVED, "hacking", 25, 2)).toBe(factionReputationPerCycle(MOVED, "hacking", 25, 0));
-  expect(factionReputationPerCycle(MOVED, "hacking", 25, 3)).toBeCloseTo(
+  expect(factionReputationPerCycle(MOVED, "hacking", 25, 2, 1)).toBe(
+    factionReputationPerCycle(MOVED, "hacking", 25, 0, 1),
+  );
+  expect(factionReputationPerCycle(MOVED, "hacking", 25, 3, 1)).toBeCloseTo(
     ((skills.hacking + skills.intelligence / 3 + skills.charisma * 0.1) / 975) * 1.25 * intelligenceBonus(90) * 1.25,
     15,
   );
 });
 
 test("field work: 0.9 × (str + def + dex + agi + cha + hacking + intelligence) / 975 / 5.5 × the rest", () => {
-  expect(factionReputationPerCycle(FRESH, "field", 0, 0)).toBeCloseTo((0.9 * 60) / 975 / 5.5, 15);
+  expect(factionReputationPerCycle(FRESH, "field", 0, 0, 1)).toBeCloseTo((0.9 * 60) / 975 / 5.5, 15);
   const { skills } = MOVED;
   const sum = 40 + 50 + 60 + 70 + 80 + skills.hacking + skills.intelligence;
-  expect(factionReputationPerCycle(MOVED, "field", 50, 0)).toBeCloseTo(
+  expect(factionReputationPerCycle(MOVED, "field", 50, 0, 1)).toBeCloseTo(
     ((0.9 * sum) / 975 / 5.5) * 1.25 * 1.5 * intelligenceBonus(90),
     15,
   );
   // SF15.3: three tenths of charisma beside hacking and intelligence.
-  expect(factionReputationPerCycle(MOVED, "field", 50, 3)).toBeCloseTo(
+  expect(factionReputationPerCycle(MOVED, "field", 50, 3, 1)).toBeCloseTo(
     ((0.9 * (sum + 80 * 0.3)) / 975 / 5.5) * 1.25 * 1.5 * intelligenceBonus(90),
     15,
   );
 });
 
 test("security work: 0.9 × (str + def + dex + agi + hacking + intelligence) / 975 / 4.5 × the rest, no charisma", () => {
-  expect(factionReputationPerCycle(FRESH, "security", 0, 0)).toBeCloseTo((0.9 * 59) / 975 / 4.5, 15);
+  expect(factionReputationPerCycle(FRESH, "security", 0, 0, 1)).toBeCloseTo((0.9 * 59) / 975 / 4.5, 15);
   const sum = 40 + 50 + 60 + 70 + 300 + 90;
-  expect(factionReputationPerCycle(MOVED, "security", 10, 0)).toBeCloseTo(
+  expect(factionReputationPerCycle(MOVED, "security", 10, 0, 1)).toBeCloseTo(
     ((0.9 * sum) / 975 / 4.5) * 1.25 * 1.1 * intelligenceBonus(90),
     15,
   );
-  expect(factionReputationPerCycle(MOVED, "security", 10, 3)).toBeCloseTo(
+  expect(factionReputationPerCycle(MOVED, "security", 10, 3, 1)).toBeCloseTo(
     ((0.9 * (sum + 80 * 0.3)) / 975 / 4.5) * 1.25 * 1.1 * intelligenceBonus(90),
     15,
   );
@@ -87,16 +90,16 @@ test("security work: 0.9 × (str + def + dex + agi + hacking + intelligence) / 9
 
 test("a skill or multiplier that isn't a finite number, or a negative favour, throws rather than guess", () => {
   const broken = { ...FRESH, skills: { ...FRESH.skills, strength: Number.NaN } };
-  expect(() => factionReputationPerCycle(broken, "field", 0, 0)).toThrow(/strength/);
+  expect(() => factionReputationPerCycle(broken, "field", 0, 0, 1)).toThrow(/strength/);
   expect(() =>
-    factionReputationPerCycle({ ...FRESH, mults: { faction_rep: Number.POSITIVE_INFINITY } }, "hacking", 0, 0),
+    factionReputationPerCycle({ ...FRESH, mults: { faction_rep: Number.POSITIVE_INFINITY } }, "hacking", 0, 0, 1),
   ).toThrow(/faction_rep/);
-  expect(() => factionReputationPerCycle(FRESH, "hacking", Number.NaN, 0)).toThrow(/favour/);
+  expect(() => factionReputationPerCycle(FRESH, "hacking", Number.NaN, 0, 1)).toThrow(/favour/);
 });
 
 test("factionReputationPerSecond: five cycles a second, × 0.8 unfocused unless the implant is installed", () => {
-  const perCycle = factionReputationPerCycle(FRESH, "hacking", 0, 0);
-  const options = { favor: 0, sourceFile15Level: 0 };
+  const perCycle = factionReputationPerCycle(FRESH, "hacking", 0, 0, 1);
+  const options = { favor: 0, sourceFile15Level: 0, factionWorkRepGain: 1 };
   expect(factionReputationPerSecond(FRESH, "hacking", { ...options, focused: true, implant: false })).toBeCloseTo(
     perCycle * 5,
     15,
@@ -113,6 +116,19 @@ test("factionReputationPerSecond: five cycles a second, × 0.8 unfocused unless 
   expect(factionReputationPerSecond(FRESH, "hacking", { ...options, focused: true, implant: false })).toBeCloseTo(
     0.282,
     3,
+  );
+});
+
+test("the BitNode's FactionWorkRepGain scales every work type (#203 review): 0.2 in BN14", () => {
+  for (const workType of ["hacking", "field", "security"] as const) {
+    expect(factionReputationPerCycle(MOVED, workType, 25, 0, 0.2)).toBeCloseTo(
+      factionReputationPerCycle(MOVED, workType, 25, 0, 1) * 0.2,
+      15,
+    );
+  }
+  expect(() => factionReputationPerCycle(FRESH, "hacking", 0, 0, Number.NaN)).toThrow(/FactionWorkRepGain/);
+  expect(source("PersonObjects/formulas/reputation.ts")).toContain(
+    "return favorMult * currentNodeMults.FactionWorkRepGain;",
   );
 });
 
@@ -147,18 +163,35 @@ test("HACKING_MULTIPLIERS: the hacking ones and faction reputation, each a key s
   for (const key of HACKING_MULTIPLIERS) expect(keys).toContain(key);
 });
 
-test("hackingValue: the logarithms of the hacking multipliers added up; others count for nothing", () => {
+test("hackingSkillValue: ×m on the skill as the experience multiplier that lifts the level as much, at level L", () => {
+  // The level is m × (32 ln(exp + 534.6) − 200): ×x on experience adds 32 ln x before m, so ln x = (L/32)(1 − 1/m).
+  expect(hackingSkillValue(1.05, 300)).toBeCloseTo((300 / 32) * (1 - 1 / 1.05), 15);
+  expect(hackingSkillValue(1, 300)).toBe(0);
+  // A level's worth: ×1.05 at 300 is ×1.56 on experience; at 3000, ×87.
+  expect(Math.exp(hackingSkillValue(1.05, 300))).toBeCloseTo(1.5627, 4);
+  expect(Math.exp(hackingSkillValue(1.05, 3000))).toBeCloseTo(86.859, 2);
+  for (const odd of [0, Number.NaN]) expect(() => hackingSkillValue(1.05, odd)).toThrow(/hacking level/);
+  expect(source("PersonObjects/formulas/skill.ts")).toContain(
+    "const value = Math.floor(mult * (32 * Math.log(exp + 534.6) - 200));",
+  );
+});
+
+test("hackingValue: the hacking skill weighed by the level, the other multipliers' logarithms; others nothing", () => {
   // BitWire: hacking 1.05 only.
-  expect(hackingValue("BitWire")).toBeCloseTo(Math.log(1.05), 15);
-  // Neurotrainer I: every exp 1.1, hacking_exp among them.
-  expect(hackingValue("Neurotrainer I")).toBeCloseTo(Math.log(1.1), 15);
+  expect(hackingValue("BitWire", 300)).toBeCloseTo(hackingSkillValue(1.05, 300), 15);
+  // Neurotrainer I: every exp 1.1, hacking_exp among them, the level aside.
+  expect(hackingValue("Neurotrainer I", 300)).toBeCloseTo(Math.log(1.1), 15);
+  expect(hackingValue("Neurotrainer I", 3000)).toBeCloseTo(Math.log(1.1), 15);
+  // The review's case: at level 300, BitWire is worth more than Neurotrainer I, not half of it (summed logs: 0.049
+  // against 0.095).
+  expect(hackingValue("BitWire", 300)).toBeGreaterThan(hackingValue("Neurotrainer I", 300) * 4);
   // Cranial Signal Processors - Gen II: hacking_chance 1.05, hacking_speed 1.02, hacking 1.07.
-  expect(hackingValue("Cranial Signal Processors - Gen II")).toBeCloseTo(
-    Math.log(1.05) + Math.log(1.02) + Math.log(1.07),
+  expect(hackingValue("Cranial Signal Processors - Gen II", 100)).toBeCloseTo(
+    Math.log(1.05) + Math.log(1.02) + hackingSkillValue(1.07, 100),
     15,
   );
   // Combat only, and The Red Pill: nothing.
-  expect(hackingValue("Augmented Targeting I")).toBe(0);
-  expect(hackingValue("The Red Pill")).toBe(0);
-  expect(() => hackingValue("No Such Augmentation")).toThrow(/No Such Augmentation/);
+  expect(hackingValue("Augmented Targeting I", 300)).toBe(0);
+  expect(hackingValue("The Red Pill", 300)).toBe(0);
+  expect(() => hackingValue("No Such Augmentation", 300)).toThrow(/No Such Augmentation/);
 });

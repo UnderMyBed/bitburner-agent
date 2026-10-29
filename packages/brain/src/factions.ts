@@ -1,5 +1,5 @@
 // Factions and their work (#203, M4 phase A slice A5): the brain joins every invitation from a faction with no enemies,
-// and works for the faction whose next augmentation worth having for its hacking is nearest, so a run earns the
+// and works for the faction and work type that bring the most hacking value per second of work, so a run earns the
 // reputation A6 buys with. Choices computed from the game's formulas (owner decision 46). Also what the dashboard's
 // `factionWorkStalled` alert and the run report (#185) read of them.
 // - Joining: the `joinFaction` intent (#147), one at a time, in the order invited. A faction with enemies (the six
@@ -10,7 +10,7 @@
 //   queued or already within a joined seller's reputation, the one with the most value per second of work to reach its
 //   reputation, by the game's rate (core's `factionReputationPerSecond`) for the faction's best work type. NeuroFlux
 //   Governor is A6's: sold everywhere, it never runs out.
-// - The owner's work wins; the dashboard's "Faction work" switch turns the brain's off.
+// - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
   type AugmentationPurchaseState,
   augmentationBitNodeMultipliers,
@@ -21,11 +21,13 @@ import {
   FACTIONS,
   type FactionState,
   type FactionWorkType,
+  factionReadingKind,
   factionReadingOf,
   factionReputationPerSecond,
   hackingValue,
   type Intent,
   intentId,
+  type JoinedFaction,
   type MediumSnapshotData,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
@@ -143,7 +145,7 @@ export function joinIntent(faction: string): Intent {
 
 // --- Working ----------------------------------------------------------------------------------------------------------
 
-/** The brain's choice of faction work, and why: the augmentation it brings nearest, and when. */
+/** The brain's choice of faction work, and why: the augmentation it works for, and when it's reached. */
 export interface FactionWorkChoice {
   faction: string;
   workType: FactionWorkType;
@@ -185,8 +187,15 @@ export function workingPersonOf(mediumData: MediumSnapshotData): WorkingPerson |
   };
 }
 
-/** The slow snapshot's reset info as the rule needs it, or null where it doesn't say. */
-function resetInfoOf(slowData: SlowSnapshotData) {
+/** The slow snapshot's reset info, as the rule needs it. */
+export interface WorkResetInfo {
+  currentNode: number;
+  ownedAugs: Record<string, number>;
+  ownedSF: Record<string, number>;
+}
+
+/** The slow snapshot's reset info as the rule needs it, or null where it doesn't say (#203; A6 too). */
+export function resetInfoOf(slowData: SlowSnapshotData): WorkResetInfo | null {
   const info = slowData.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
   if (!Number.isInteger(info?.currentNode) || !isRecordOf(info?.ownedAugs) || !isRecordOf(info?.ownedSF)) return null;
   return { currentNode: info.currentNode as number, ownedAugs: info.ownedAugs, ownedSF: info.ownedSF };
@@ -199,14 +208,11 @@ function unreadFactionState(slowData: SlowSnapshotData): string {
 }
 
 /**
- * The faction work to do now: of the augmentations the joined factions sell, the candidate with the most hacking
- * value per second of work, and its faction's best work type.
- * - A candidate: a hacking value, neither installed nor queued, not NeuroFlux Governor, each missing prerequisite sold
- *   by a joined faction, and its reputation not yet reached at any joined faction that sells it (one reached is A6's to
- *   buy). Its reputation is the game's (`augmentationCost`), at the faction's own reputation now.
- * - The rate: the best of the faction's work types (core's `FACTIONS`), at the focus the work goes with (decision 37,
- *   ./work.ts's `workFocus`).
- * - Ties go to the sooner, then the faction first in the game's order. A gang's faction isn't modelled (none in BN1).
+ * The faction work to do now: of the augmentations the joined factions sell (`workCandidates`), the one with the most
+ * hacking value per second of work to reach its reputation, at its faction's best work type (`bestWorkRate`).
+ * - A tie (the same augmentation at two factions, as near and at the same rate) goes to the faction first in the
+ *   game's order.
+ * - It ranks by the reputation's ETA alone: the money is A6's, which adds its own ETA (#210).
  */
 export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: SlowSnapshotData): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
@@ -221,14 +227,10 @@ export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: Slow
   );
   if (state.joined.length === 0) return waiting("a faction to join", false);
   if (working.length === 0) return waiting("a joined faction that offers work", false);
-
-  const { currentNode, ownedAugs, ownedSF } = resetInfo;
-  const implant = Object.hasOwn(ownedAugs, NEURORECEPTOR_MANAGEMENT_IMPLANT);
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
-    // Faction work's focus turns on the implant alone, the same for every faction and work type.
-    const focused = workFocus({ kind: "faction", faction: working[0]?.name ?? "", workType: "hacking" }, slowData);
-    const choice = bestCandidate(person, state, working, { currentNode, ownedAugs, ownedSF }, { focused, implant });
+    const conditions = workConditionsOf(resetInfo, slowData);
+    const choice = bestCandidate(person, state, resetInfo, conditions);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
   } catch (error) {
@@ -236,20 +238,77 @@ export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: Slow
   }
 }
 
-/** `chooseFactionWork`'s candidates and choice, from figures already checked; null for none. */
-function bestCandidate(
+/** What a faction work rate depends on beyond the person and the faction: the run's figures and the focus. */
+export interface WorkConditions {
+  sourceFile15Level: number;
+  /** As the work goes (decision 37, ./work.ts's `workFocus`). */
+  focused: boolean;
+  /** The Neuroreceptor Management Implant installed: unfocused at the full rate. */
+  implant: boolean;
+  /** The BitNode's (core's `augmentationBitNodeMultipliers`). */
+  factionWorkRepGain: number;
+}
+
+/** The work conditions in the slow snapshot's reset info. Throws for a BitNode core doesn't know. */
+export function workConditionsOf(resetInfo: WorkResetInfo, slowData: SlowSnapshotData | null): WorkConditions {
+  const { currentNode, ownedAugs, ownedSF } = resetInfo;
+  return {
+    sourceFile15Level: ownedSF["15"] ?? 0,
+    // Faction work's focus turns on the implant alone, the same for every faction and work type.
+    focused: workFocus({ kind: "faction", faction: "CyberSec", workType: "hacking" }, slowData),
+    implant: Object.hasOwn(ownedAugs, NEURORECEPTOR_MANAGEMENT_IMPLANT),
+    factionWorkRepGain: augmentationBitNodeMultipliers(currentNode, ownedSF).FactionWorkRepGain,
+  };
+}
+
+/**
+ * A faction's best work type and its reputation a second, by the game's formula (core's `factionReputationPerSecond`)
+ * for each type it offers (core's `FACTIONS`); null for one that offers none, or earns nothing (#203; A6 too). The first
+ * in the game's order wins a tie.
+ */
+export function bestWorkRate(
   person: WorkingPerson,
+  faction: JoinedFaction,
+  conditions: WorkConditions,
+): { workType: FactionWorkType; perSecond: number } | null {
+  const workTypes = FACTION_NAMES.includes(faction.name) ? (FACTIONS[faction.name]?.workTypes ?? []) : [];
+  let best: { workType: FactionWorkType; perSecond: number } | null = null;
+  for (const workType of workTypes) {
+    const perSecond = factionReputationPerSecond(person, workType, { favor: faction.favor, ...conditions });
+    if (best === null || perSecond > best.perSecond) best = { workType, perSecond };
+  }
+  return best !== null && best.perSecond > 0 ? best : null;
+}
+
+/** An augmentation worth working for at a joined faction (`workCandidates`). */
+export interface WorkCandidate {
+  faction: string;
+  augmentation: string;
+  /** Core's `hackingValue`, at the player's hacking level. */
+  value: number;
+  /** Its reputation (core's `augmentationCost`), and the faction's now. */
+  reputationNeeded: number;
+  reputation: number;
+}
+
+/**
+ * The augmentations worth working for (#203; A6 too), at each joined faction that sells them, in the order joined
+ * factions and their shops list them: a hacking value at `hackingLevel` (core's `hackingValue`), neither installed nor
+ * queued, not NeuroFlux Governor (A6's), each missing prerequisite sold by a joined faction, and its reputation not yet
+ * reached at any joined faction that sells it (one reached is A6's to buy). Throws for what core doesn't know.
+ */
+export function workCandidates(
   state: FactionState,
-  working: FactionState["joined"],
-  { currentNode, ownedAugs, ownedSF }: NonNullable<ReturnType<typeof resetInfoOf>>,
-  { focused, implant }: { focused: boolean; implant: boolean },
-): FactionWorkChoice | null {
+  { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
+  hackingLevel: number,
+): WorkCandidate[] {
   const purchaseState: AugmentationPurchaseState = {
     installed: ownedAugs,
     queued: state.queuedAugmentations,
     sourceFile11Level: ownedSF["11"] ?? 0,
     bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
   };
+  // A gang's faction isn't modelled (none in BN1): gangFaction null, so every shop is the faction's own list.
   const shops = new Map<string, string[]>();
   for (const { name } of state.joined) {
     if (FACTION_NAMES.includes(name)) shops.set(name, augmentationsSoldBy(name, currentNode, null));
@@ -258,51 +317,51 @@ function bestCandidate(
     Object.hasOwn(ownedAugs, augmentation) || state.queuedAugmentations.includes(augmentation);
   const soldByJoined = (augmentation: string) => [...shops].filter(([, shop]) => shop.includes(augmentation));
   const reputationOf = (faction: string) => state.joined.find((each) => each.name === faction)?.reputation ?? 0;
-
-  let best: (FactionWorkChoice & { score: number }) | null = null;
-  for (const faction of working) {
-    const sourceFile15Level = ownedSF["15"] ?? 0;
-    const rates = (FACTIONS[faction.name]?.workTypes ?? []).map((workType) => ({
-      workType,
-      perSecond: factionReputationPerSecond(person, workType, {
-        favor: faction.favor,
-        sourceFile15Level,
-        focused,
-        implant,
-      }),
-    }));
-    const rate = rates.reduce((top, each) => (each.perSecond > top.perSecond ? each : top));
-    if (!(rate.perSecond > 0)) continue;
-    for (const augmentation of shops.get(faction.name) ?? []) {
+  const candidates: WorkCandidate[] = [];
+  for (const [faction, shop] of shops) {
+    for (const augmentation of shop) {
       if (augmentation === NEUROFLUX_GOVERNOR || owned(augmentation)) continue;
-      const value = hackingValue(augmentation);
+      const value = hackingValue(augmentation, hackingLevel);
       if (!(value > 0)) continue;
       const missing = missingPrerequisites(augmentation, purchaseState);
       if (!missing.every((prerequisite) => soldByJoined(prerequisite).length > 0)) continue;
       const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
-      const reached = soldByJoined(augmentation).some(([seller]) => reputationOf(seller) >= reputationNeeded);
-      if (reached) continue;
-      const etaSeconds = (reputationNeeded - faction.reputation) / rate.perSecond;
-      const score = value / etaSeconds;
-      const better =
-        best === null ||
-        score > best.score ||
-        (score === best.score &&
-          (etaSeconds < best.etaSeconds ||
-            (etaSeconds === best.etaSeconds &&
-              FACTION_NAMES.indexOf(faction.name) < FACTION_NAMES.indexOf(best.faction))));
-      if (better) {
-        best = {
-          faction: faction.name,
-          workType: rate.workType,
-          augmentation,
-          reputation: faction.reputation,
-          reputationNeeded,
-          reputationPerSecond: rate.perSecond,
-          etaSeconds,
-          score,
-        };
-      }
+      if (soldByJoined(augmentation).some(([seller]) => reputationOf(seller) >= reputationNeeded)) continue;
+      candidates.push({ faction, augmentation, value, reputationNeeded, reputation: reputationOf(faction) });
+    }
+  }
+  return candidates;
+}
+
+/** `chooseFactionWork`'s choice from figures already checked; null for none. */
+function bestCandidate(
+  person: WorkingPerson,
+  state: FactionState,
+  resetInfo: WorkResetInfo,
+  conditions: WorkConditions,
+): FactionWorkChoice | null {
+  const rates = new Map(state.joined.map((faction) => [faction.name, bestWorkRate(person, faction, conditions)]));
+  let best: (FactionWorkChoice & { score: number }) | null = null;
+  for (const candidate of workCandidates(state, resetInfo, person.skills.hacking)) {
+    const rate = rates.get(candidate.faction);
+    if (!rate) continue;
+    const etaSeconds = (candidate.reputationNeeded - candidate.reputation) / rate.perSecond;
+    const score = candidate.value / etaSeconds;
+    const better =
+      best === null ||
+      score > best.score ||
+      (score === best.score && FACTION_NAMES.indexOf(candidate.faction) < FACTION_NAMES.indexOf(best.faction));
+    if (better) {
+      best = {
+        faction: candidate.faction,
+        workType: rate.workType,
+        augmentation: candidate.augmentation,
+        reputation: candidate.reputation,
+        reputationNeeded: candidate.reputationNeeded,
+        reputationPerSecond: rate.perSecond,
+        etaSeconds,
+        score,
+      };
     }
   }
   if (best === null) return null;
@@ -314,7 +373,7 @@ function bestCandidate(
 
 /** What the dashboard shows of factions (#203). */
 export interface FactionsView {
-  /** The "Faction work" switch. */
+  /** The brain's faction work's switch. */
   enabled: boolean;
   /** No medium and slow snapshots from the connected Agent yet. */
   waiting: boolean;
@@ -335,6 +394,8 @@ export interface FactionsView {
 export interface FactionWorkStall {
   faction: string;
   sinceMs: number;
+  /** The newest reading of its reputation the window counted: not a skipped one (#197). */
+  lastReadingAtMs: number;
 }
 
 /** An event the rule's choices are stored as. */
@@ -352,7 +413,7 @@ export interface FactionInputs {
   nowMs: number | null;
   /** The owner's work is set: it wins. */
   ownersWork: boolean;
-  /** The "Faction work" switch. */
+  /** The brain's faction work's switch. */
   enabled: boolean;
 }
 
@@ -390,13 +451,15 @@ export class FactionRule {
   readonly #emit: (event: FactionWorkEvent) => void;
   /** The faction asked to join, until a snapshot shows it joined, or its invitation is gone; or null. */
   #joining: string | null = null;
-  /** The invitations left to the owner already logged, in this run of the brain. */
+  /** The invitations left to the owner already logged, since the game's last reset. */
   readonly #leftLogged = new Set<string>();
+  /** The game's `lastAugReset` when they were logged: another (an install) logs them afresh, as they come again. */
+  #leftLoggedResetAt: number | null = null;
   /** The last choice stored (faction, work type, target), "stopped", or null before any. */
   #lastStored: string | null = null;
   /**
-   * The stall's watch on the work sent: its faction, the last slow snapshot whose reputation was on track (or the first
-   * of the work), and the latest one's reputation and time, and whether the stall was logged.
+   * The stall's watch on the work sent: its faction, its reputation's readings the 10-minute window still needs (skipped
+   * ones left out), and where the window it's been stalled over started, while it is.
    */
   #watch: {
     faction: string;
@@ -417,7 +480,7 @@ export class FactionRule {
   constructor({
     log = () => {},
     emit = () => {},
-  }: { log?: (line: string) => void; emit?: (e: FactionWorkEvent) => void }) {
+  }: { log?: (line: string) => void; emit?: (event: FactionWorkEvent) => void }) {
     this.#log = log;
     this.#emit = emit;
   }
@@ -426,12 +489,16 @@ export class FactionRule {
     return this.#view;
   }
 
-  /** The brain's work's stall, or null: its faction and since when its reputation last rose. */
+  /**
+   * The brain's work's watch, or null: its faction, where the window it's been stalled over started (else its newest
+   * reading), and its newest reading.
+   */
   stall(): FactionWorkStall | null {
     const watch = this.#watch;
     if (watch === null) return null;
-    // Not stalled: since the newest reading, so the alert waits for the next to say otherwise.
-    return { faction: watch.faction, sinceMs: watch.stalledSinceMs ?? (watch.readings.at(-1)?.atMs as number) };
+    const lastReadingAtMs = watch.readings.at(-1)?.atMs as number;
+    // Not stalled: since the newest reading, so the alert waits for the next, unless none comes (the alert says so).
+    return { faction: watch.faction, sinceMs: watch.stalledSinceMs ?? lastReadingAtMs, lastReadingAtMs };
   }
 
   update(inputs: FactionInputs): { join: Intent | null; work: { faction: string; workType: FactionWorkType } | null } {
@@ -446,6 +513,11 @@ export class FactionRule {
     if (state === null || !Array.isArray(joined)) {
       this.#view = { ...this.#view, joining: null, leftToOwner: [] };
       return null;
+    }
+    const resetAt = (slowData?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
+    if (typeof resetAt === "number" && resetAt !== this.#leftLoggedResetAt) {
+      this.#leftLogged.clear();
+      this.#leftLoggedResetAt = resetAt;
     }
     const joinedNames = [
       ...joined.filter((name): name is string => typeof name === "string"),
@@ -481,7 +553,11 @@ export class FactionRule {
       mediumData === null || slowData === null
         ? { choice: null, waitingFor: "the Agent's medium and slow snapshots", transient: true }
         : chooseFactionWork(mediumData, slowData);
-    const notSent = !enabled ? "the Faction work switch is off" : ownersWork ? "your work on the dashboard" : null;
+    const notSent = !enabled
+      ? "the brain's faction work is switched off"
+      : ownersWork
+        ? "your work on the dashboard"
+        : null;
     const sent = plan.choice !== null && notSent === null ? plan.choice : null;
     this.#view = {
       ...this.#view,
@@ -519,6 +595,16 @@ export class FactionRule {
     }
     const watch = this.#watch;
     const now = { atMs: slowAtMs, reputation: sent.reputation };
+    // A skipped reading (#197: the casino, an infiltration) is the last one again: not a reading of the window's.
+    const reading = factionReadingOf(slowData);
+    if (
+      watch !== null &&
+      watch.faction === sent.faction &&
+      reading !== null &&
+      factionReadingKind(reading) === "skipped"
+    ) {
+      return;
+    }
     if (watch === null || watch.faction !== sent.faction) {
       this.#watch = { faction: sent.faction, readings: [now], stalledSinceMs: null };
       return;
@@ -595,7 +681,7 @@ export class FactionWorkTimeline {
   readonly joined = new Map<string, number | null>();
   /** Each invitation from a faction with enemies the slow snapshots showed, not joined, and when first. */
   readonly leftToOwner = new Map<string, number>();
-  /** Each faction's reputation gained between slow snapshots while the brain's work was on it. */
+  /** Each faction's reputation gained while the brain's work was on it: its rises, summed (skipped readings aside). */
   readonly gained = new Map<string, number>();
   readonly stalls: ReputationStall[] = [];
   readonly #ends: number[];
@@ -656,12 +742,15 @@ export class FactionWorkTimeline {
 
   /** Slow snapshots, in time order: the invitations left, and the reputation under the brain's work. */
   addSlow(atMs: number, data: SlowSnapshotData): void {
-    const state = factionReadingOf(data)?.state ?? null;
-    if (state === null) return;
+    const reading = factionReadingOf(data);
+    const state = reading?.state ?? null;
+    if (reading === null || state === null) return;
     const joinedNow = state.joined.map((each) => each.name);
     for (const { faction } of chooseJoin(state.invitations, joinedNow).leftToOwner) {
       if (!this.leftToOwner.has(faction)) this.leftToOwner.set(faction, atMs);
     }
+    // A skipped reading (#197) is the last one again: neither a gain nor a reading of the stall's window.
+    if (factionReadingKind(reading) === "skipped") return;
     const current = this.choiceAt(atMs);
     const reputation = current && state.joined.find((each) => each.name === current.choice.faction)?.reputation;
     if (current === null || reputation === undefined || reputation === null) {

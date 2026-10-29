@@ -166,7 +166,7 @@ describe("factionWorkStalled (#203): the brain's faction work under half its rat
         ...quiet,
         nowMs: NOW,
         lastFastSnapshotAtMs: NOW,
-        factionWorkStall: { faction: "CyberSec", sinceMs },
+        factionWorkStall: { faction: "CyberSec", sinceMs, lastReadingAtMs: NOW - 30_000 },
       });
     expect(stall(NOW - FACTION_WORK_STALLED_AFTER_MS + 1)).toEqual([]);
     expect(stall(NOW - FACTION_WORK_STALLED_AFTER_MS)).toEqual([
@@ -181,13 +181,26 @@ describe("factionWorkStalled (#203): the brain's faction work under half its rat
     expect(activeAlerts({ ...quiet, nowMs: NOW, lastFastSnapshotAtMs: NOW })).toEqual([]);
   });
 
+  test("no reading of its reputation in the window (slow snapshots stopped, or each skipped): says so, not the rate", () => {
+    const stall = { faction: "CyberSec", sinceMs: NOW - 11 * 60_000, lastReadingAtMs: NOW - 11 * 60_000 };
+    expect(activeAlerts({ ...quiet, nowMs: NOW, lastFastSnapshotAtMs: NOW, factionWorkStall: stall })).toEqual([
+      {
+        name: "factionWorkStalled",
+        sinceMs: NOW - 11 * 60_000,
+        detail:
+          "no reading of CyberSec's reputation for 11 min, with the brain's faction work for it: no slow snapshot, or " +
+          "each one's faction state skipped (see the Factions section)",
+      },
+    ]);
+  });
+
   test("last in the order, after backdoorOverdue", () => {
     const names = activeAlerts({
       ...quiet,
       nowMs: NOW,
       lastFastSnapshotAtMs: NOW,
       backdoorsDue: [{ hostname: "CSEC", sinceMs: STARTED_AT_MS }],
-      factionWorkStall: { faction: "CyberSec", sinceMs: STARTED_AT_MS },
+      factionWorkStall: { faction: "CyberSec", sinceMs: STARTED_AT_MS, lastReadingAtMs: NOW - 30_000 },
     }).map((alert) => alert.name);
     expect(names.slice(-2)).toEqual(["backdoorOverdue", "factionWorkStalled"]);
   });

@@ -156,7 +156,7 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
  * - Intents go in order: the owner's manual queue first, as added, then the purchase, then the backdoor (#195), asked
- *   for until the connected Agent reports it done. A manual intent leaves the queue once the connected Agent reports
+ *   for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once the connected Agent reports
  *   it done: the game's state can change again (a travel there and back), so a snapshot can't say it was done. Never
  *   more than the protocol's 100: a queue stored under the old limit (99) leaves the rules' intents out, logged.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
@@ -361,7 +361,7 @@ export class DesiredStateController {
     return this.#factions.view();
   }
 
-  /** The brain's faction work's faction and since when its reputation last rose, or null (#203): the alert's. */
+  /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
   factionWorkStall(): FactionWorkStall | null {
     return this.#factions.stall();
   }
@@ -603,8 +603,8 @@ export class DesiredStateController {
       ...notManual(this.#backdoor),
       ...notManual(this.#join),
     ];
-    // A queue stored under the old limit (99, before #195) would make the state too long, and the Agent would refuse it
-    // whole: the rules' intents wait for room, the last first.
+    // A queue stored under an old limit (99 before #195, 98 before #203) would make the state too long, and the Agent
+    // would refuse it whole: the rules' intents wait for room, the last first.
     const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
     if (leftOut.join() !== this.#leftOut) {
       this.#leftOut = leftOut.join();

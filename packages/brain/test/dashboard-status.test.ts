@@ -234,7 +234,11 @@ test("factionWorkStalled (#203): from the controller's stall; its factions view 
   const nowMs = STARTED_AT_MS + 30 * 60_000;
   recordSnapshot("fast", nowMs - 1_000, fastData(1));
   const factionWork: FactionsView = { ...QUIET_FACTIONS_VIEW, waiting: false, joining: "NiteSec" };
-  const stall = { faction: "CyberSec", sinceMs: nowMs - FACTION_WORK_STALLED_AFTER_MS };
+  const stall = {
+    faction: "CyberSec",
+    sinceMs: nowMs - FACTION_WORK_STALLED_AFTER_MS,
+    lastReadingAtMs: nowMs - 30_000,
+  };
   const built = status(nowMs, { factionWork, factionWorkStall: stall });
   expect(built.alerts.map((alert) => [alert.name, alert.sinceMs])).toEqual([["factionWorkStalled", stall.sinceMs]]);
   expect(built.factionWork).toEqual(factionWork);

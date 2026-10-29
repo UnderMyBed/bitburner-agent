@@ -115,6 +115,8 @@ let enableProgramsNext = false;
 let enableHomeRamNext = false;
 /** What the brain's faction work's switch sends next (#203), likewise. */
 let enableFactionWorkNext = false;
+/** Whose work the Work section shows (#203): its stop button turns the brain's faction work off while it's the brain's. */
+let workSource = null;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -328,6 +330,10 @@ function render(status) {
             (workOutcome.problem === null ? "" : ` (${workOutcome.problem})`) +
             (workOutcome.promotion ? `; promoted from ${workOutcome.promotion.from} to ${workOutcome.promotion.to}` : ""));
   document.querySelector("#work div").replaceChildren(element("div", workText, desired === null ? "muted" : "ok"));
+  // Clearing your work would hand it to the brain's faction work, so while that's showing, the button stops it instead.
+  workSource = status.work.source;
+  document.querySelector("#stop-work").textContent =
+    workSource === "brain" ? "Stop the brain's faction work" : "Stop managing work";
 
   // The faction state (#197): each joined faction's reputation and favour, the invitations and the queued
   // augmentations, from the newest slow snapshot; or why they couldn't be read.
@@ -508,7 +514,9 @@ document.querySelector("#class-work").addEventListener("submit", (event) => {
   sendWrite("/api/work", { work }, "#work-problem", "Not set");
 });
 document.querySelector("#stop-work").addEventListener("click", () =>
-  sendWrite("/api/work", { work: null }, "#work-problem", "Not stopped"),
+  workSource === "brain"
+    ? sendSwitch("/api/faction-work", { enabled: false }, "#work-problem")
+    : sendWrite("/api/work", { work: null }, "#work-problem", "Not stopped"),
 );
 
 refresh();

@@ -409,3 +409,53 @@ test("the gap report's command prints the page heap over the window; it doesn't 
   ]);
   expect(otherEnvironment.output).toContain("lowest 7.0 MB, highest 7.0 MB (1 snapshot reported it)");
 });
+
+test("the brain stores its faction work's choice (#203): main.ts records the controller's events", async () => {
+  const { config, controlPort } = await startBrain();
+  const agent = new WebSocket(`ws://127.0.0.1:${controlPort}`, { origin: "file://" });
+  await once(agent, "open");
+  const send = (message: Record<string, unknown>) =>
+    agent.send(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, ...message } as never));
+  send({
+    type: "hello",
+    token: config.token,
+    deploymentId: "deployment-a",
+    agentSessionId: "session-1",
+    game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+  });
+  await once(agent, "message");
+  const snapshot = (tier: string, sequenceNumber: number, data: unknown) =>
+    send({ type: "snapshot", agentSessionId: "session-1", tier, sequenceNumber, gameTimeMs: 1_000, data });
+  snapshot("medium", 1, {
+    player: {
+      skills: { hacking: 55, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+      mults: { faction_rep: 1 },
+      factions: ["CyberSec"],
+    },
+    hasTorRouter: false,
+    programs: [],
+    servers: [],
+  });
+  snapshot("slow", 2, {
+    resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs: {}, ownedSF: {}, bitNodeOptions: {} },
+    purchasedServers: [],
+    factions: {
+      backend: "ui",
+      state: { joined: [{ name: "CyberSec", reputation: 0, favor: 0 }], invitations: [], queuedAugmentations: [] },
+      problem: null,
+    },
+  });
+  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  const chosen = () => eventsSinceStart(store).filter((event) => event.kind === "factionWorkChosen");
+  for (let attempt = 0; attempt < 100 && chosen().length === 0; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(chosen()).toMatchObject([
+    {
+      detail: { faction: "CyberSec", workType: "hacking", augmentation: "Neurotrainer I" },
+      release: expect.stringMatching(/\+/),
+    },
+  ]);
+  store.close();
+  agent.close();
+});

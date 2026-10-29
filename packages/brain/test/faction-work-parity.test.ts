@@ -59,7 +59,7 @@ for (const [index, each] of people.entries()) {
   }[];
   expect(figures).toHaveLength(PEOPLE.length * FAVOURS.length * FACTION_WORK_TYPES.length);
   for (const { index, favor, workType, reputation } of figures) {
-    const ours = factionReputationPerCycle(PEOPLE[index] as WorkingPerson, workType, favor, 0);
+    const ours = factionReputationPerCycle(PEOPLE[index] as WorkingPerson, workType, favor, 0, 1);
     expect(ours, `person ${index}, favour ${favor}, ${workType}`).toBeCloseTo(reputation, 14);
     expect(reputation).toBeGreaterThan(0);
   }

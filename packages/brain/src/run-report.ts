@@ -788,9 +788,9 @@ function factionLines({ factionWork }: RunFacts): string[] {
 
 /**
  * The brain's faction work stalled (#203): a stretch of `FACTION_WORK_STALLED_AFTER_MS` or more, with its choice in
- * force, in which its faction's reputation rose under half the work's rate between slow snapshots (a faction not being
- * worked gains a little passively); a gap of over `SLOW_SNAPSHOT_GAP_MS` in them starts the clock again, as it's a
- * failure of its own.
+ * force, in which its faction's reputation rose under half the work's rate over each 10-minute window of slow snapshots
+ * (a faction not being worked gains a little passively; skipped readings left out); a gap of over
+ * `SLOW_SNAPSHOT_GAP_MS` in them starts the readings again, as it's a failure of its own.
  */
 function factionWorkHealthLines({ factionWork }: RunFacts, failures: string[]): string[] {
   const lines = [

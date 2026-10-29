@@ -374,7 +374,7 @@ describe("the brain's joins and faction work (#203)", () => {
     expect((await rule({ waitingFor: "a faction to join" }))[0]).toBe(
       "The brain's faction work: none: waiting for a faction to join",
     );
-    expect(await rule({ enabled: false, waitingFor: "the Faction work switch is off" })).toEqual([
+    expect(await rule({ enabled: false, waitingFor: "the brain's faction work is switched off" })).toEqual([
       "The brain's faction work: off",
       "Start the brain's faction work",
     ]);
@@ -838,6 +838,23 @@ describe("work (#151)", () => {
       },
     }));
     expect(textOf(course, "#work div")).toBe("Yours: Networks at Rothman University, unfocused: converged via ui");
+  });
+
+  test("while the brain's faction work shows (#203), the stop button says so and turns it off, not your work", async () => {
+    const brainWork = {
+      desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
+      source: "brain",
+      outcome: null,
+    } as const;
+    const { document, requests } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work: brainWork } }));
+    expect(textOf(document, "#stop-work")).toBe("Stop the brain's faction work");
+    (document.querySelector("#stop-work") as HTMLButtonElement).click();
+    await settle();
+    expect(
+      requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body]),
+    ).toEqual([["/api/faction-work", '{"enabled":false}']]);
+    const yours = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
+    expect(textOf(yours.document, "#stop-work")).toBe("Stop managing work");
   });
 
   test("the forms set faction, company, crime or class work, and the stop button stops managing it", async () => {

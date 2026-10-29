@@ -3,12 +3,15 @@
 import {
   augmentationBitNodeMultipliers,
   factionReputationPerSecond,
+  factionStateOf,
+  hackingValue,
   type JoinedFaction,
   type MediumSnapshotData,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
 import {
+  bestWorkRate,
   chooseFactionWork,
   chooseJoin,
   describeChoice,
@@ -22,7 +25,9 @@ import {
   FactionWorkTimeline,
   joinIntent,
   onTrack,
+  resetInfoOf,
   SLOW_SNAPSHOT_GAP_MS,
+  workCandidates,
   workingPersonOf,
 } from "../src/factions.ts";
 
@@ -64,17 +69,30 @@ function slow({
   installed = {} as Record<string, number>,
   currentNode = 1,
   ownedSF = {} as Record<string, number>,
+  lastAugReset = 0,
+  skipped,
+}: {
+  joined?: Record<string, number | { reputation: number; favor: number }>;
+  invitations?: string[];
+  queued?: string[];
+  installed?: Record<string, number>;
+  currentNode?: number;
+  ownedSF?: Record<string, number>;
+  lastAugReset?: number;
+  /** A skipped reading (#197): the last state again. */
+  skipped?: string;
 } = {}): SlowSnapshotData {
   const factions: JoinedFaction[] = Object.entries(joined).map(([name, figures]) =>
     typeof figures === "number" ? { name, reputation: figures, favor: 0 } : { name, ...figures },
   );
   return {
-    resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode, ownedAugs: installed, ownedSF, bitNodeOptions: {} },
+    resetInfo: { lastAugReset, lastNodeReset: 0, currentNode, ownedAugs: installed, ownedSF, bitNodeOptions: {} },
     purchasedServers: [],
     factions: {
-      backend: "sim",
+      backend: skipped === undefined ? "sim" : "ui",
       state: { joined: factions, invitations, queuedAugmentations: queued },
       problem: null,
+      ...(skipped === undefined ? {} : { skipped }),
     },
   };
 }
@@ -84,6 +102,7 @@ const hackingRate = (medium: MediumSnapshotData, favor = 0) =>
   factionReputationPerSecond(workingPersonOf(medium) as NonNullable<ReturnType<typeof workingPersonOf>>, "hacking", {
     favor,
     sourceFile15Level: 0,
+    factionWorkRepGain: 1,
     focused: true,
     implant: false,
   });
@@ -154,14 +173,15 @@ describe("chooseFactionWork", () => {
     });
   });
 
-  test("by value a second, not the nearest alone: with 1,000 reputation, Synaptic Enhancement Implant, then BitWire", () => {
-    // Synaptic: ln 1.03 / 1,000 left; BitWire: ln 1.05 / 2,750 left; Neurotrainer I is reached (A6's to buy).
-    expect(chooseFactionWork(player(55), slow({ joined: { CyberSec: 1_000 } })).choice?.augmentation).toBe(
+  test("by value a second at the player's level: CyberSec's next targets at hacking 55", () => {
+    // At 1,500, Synaptic Enhancement Implant (ln 1.03 over 500 left) before BitWire (hacking ×1.05 at level 55, 0.082,
+    // over 2,250); Neurotrainer I is reached (A6's to buy).
+    expect(chooseFactionWork(player(55), slow({ joined: { CyberSec: 1_500 } })).choice?.augmentation).toBe(
       "Synaptic Enhancement Implant",
     );
     expect(chooseFactionWork(player(55), slow({ joined: { CyberSec: 2_000 } })).choice?.augmentation).toBe("BitWire");
-    // At 3,750: Cranial Signal Processors - Gen I (ln 1.01 + ln 1.05 over 6,250 left) over Gen II, the more valuable
-    // (ln 1.05 + ln 1.02 + ln 1.07) but over 15,000 left.
+    // At 3,750: Cranial Signal Processors - Gen I (0.092 over 6,250 left) over Gen II, the more valuable (0.181) but
+    // over 15,000 left.
     expect(chooseFactionWork(player(55), slow({ joined: { CyberSec: 3_750 } })).choice?.augmentation).toBe(
       "Cranial Signal Processors - Gen I",
     );
@@ -170,11 +190,12 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), genOne).choice?.augmentation).toBe("Cranial Signal Processors - Gen II");
   });
 
-  test("the value counts, not the time alone: NiteSec at 0 works for Artificial Synaptic Potentiation, not BitWire", () => {
-    // BitWire: ln 1.05 over 3,750; Artificial Synaptic Potentiation: ln 1.02 + ln 1.05 + ln 1.05 over 6,250.
-    expect(chooseFactionWork(player(55), slow({ joined: { NiteSec: 0 } })).choice?.augmentation).toBe(
-      "Artificial Synaptic Potentiation",
-    );
+  test("the value counts, not the time alone, and the level weighs the skill: CyberSec at 1,000", () => {
+    // At hacking 300 BitWire's ×1.05 is worth 0.45 (an experience ×1.56), over 2,750 left, before Synaptic
+    // Enhancement Implant's 0.030 over 1,000 left, the nearer.
+    expect(chooseFactionWork(player(300), slow({ joined: { CyberSec: 1_000 } })).choice?.augmentation).toBe("BitWire");
+    // At hacking 55 BitWire is worth 0.082, against Synaptic's 0.030 a third as far: still just ahead.
+    expect(chooseFactionWork(player(55), slow({ joined: { CyberSec: 1_000 } })).choice?.augmentation).toBe("BitWire");
   });
 
   test("installed and queued augmentations are passed over, and NeuroFlux Governor", () => {
@@ -249,7 +270,7 @@ describe("chooseFactionWork", () => {
     const plan = chooseFactionWork(fighter, slow({ joined: { "The Black Hand": 0 } }));
     expect(plan.choice?.workType).toBe("field");
     const person = workingPersonOf(fighter) as NonNullable<ReturnType<typeof workingPersonOf>>;
-    const options = { favor: 0, sourceFile15Level: 0, focused: true, implant: false };
+    const options = { favor: 0, sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: 1 };
     expect(plan.choice?.reputationPerSecond).toBe(factionReputationPerSecond(person, "field", options));
     expect(chooseFactionWork(player(500), slow({ joined: { "The Black Hand": 0 } })).choice?.workType).toBe("hacking");
   });
@@ -338,6 +359,61 @@ function aevumCheaperOnes(): Record<string, number> {
   return { "Synaptic Enhancement Implant": 1, "Neurotrainer I": 1, PCMatrix: 1 };
 }
 
+describe("chooseFactionWork's parts, for A6 too (#203 review)", () => {
+  const person = workingPersonOf(player(55)) as NonNullable<ReturnType<typeof workingPersonOf>>;
+  const conditions = { sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: 1 };
+
+  test("bestWorkRate: the faction's best work type and its rate; null for none offered, or none earned", () => {
+    expect(bestWorkRate(person, { name: "CyberSec", reputation: 0, favor: 0 }, conditions)).toEqual({
+      workType: "hacking",
+      perSecond: hackingRate(player(55)),
+    });
+    expect(bestWorkRate(person, { name: "Shadows of Anarchy", reputation: 0, favor: 0 }, conditions)).toBeNull();
+    expect(bestWorkRate(person, { name: "Not A Faction", reputation: 0, favor: 0 }, conditions)).toBeNull();
+    const nobody = workingPersonOf(player(0, { others: 0 })) as NonNullable<ReturnType<typeof workingPersonOf>>;
+    expect(bestWorkRate(nobody, { name: "CyberSec", reputation: 0, favor: 0 }, conditions)).toBeNull();
+  });
+
+  test("workCandidates: each augmentation worth working for, with its value at the level and the reputation", () => {
+    const state = factionStateOf(slow({ joined: { CyberSec: 1_000 } })) as NonNullable<
+      ReturnType<typeof factionStateOf>
+    >;
+    const resetInfo = resetInfoOf(slow()) as NonNullable<ReturnType<typeof resetInfoOf>>;
+    expect(workCandidates(state, resetInfo, 55).map(({ augmentation }) => augmentation)).toEqual([
+      "BitWire",
+      "Synaptic Enhancement Implant",
+      "Cranial Signal Processors - Gen I",
+      "Cranial Signal Processors - Gen II",
+    ]);
+    expect(workCandidates(state, resetInfo, 300)[0]).toEqual({
+      faction: "CyberSec",
+      augmentation: "BitWire",
+      value: hackingValue("BitWire", 300),
+      reputationNeeded: 3_750,
+      reputation: 1_000,
+    });
+  });
+
+  test("the ETA is to what's left: the requirement less the faction's reputation, at the rate", () => {
+    const plan = chooseFactionWork(player(55), slow({ joined: { CyberSec: 1_500 } }));
+    expect(plan.choice?.etaSeconds).toBeCloseTo((2_000 - 1_500) / hackingRate(player(55)), 9);
+  });
+
+  test("the BitNode's FactionWorkRepGain in the rate (#203 review): BN14's 0.2, so its work isn't taken for stalled", () => {
+    const bn14 = chooseFactionWork(player(55), slow({ joined: { CyberSec: 0 }, currentNode: 14 }));
+    expect(bn14.choice?.reputationPerSecond).toBeCloseTo(hackingRate(player(55)) * 0.2, 12);
+    // Working at BN14's own rate for 20 minutes: never under half of it.
+    const { factions, log, update } = ruleOf();
+    const rate = hackingRate(player(55)) * 0.2;
+    for (let minute = 0; minute <= 20; minute++) {
+      const reputation = rate * 60 * minute;
+      update({ slowData: slow({ joined: { CyberSec: reputation }, currentNode: 14 }), slowAtMs: minute * 60_000 });
+    }
+    expect(log.filter((line) => line.includes("STALLED"))).toEqual([]);
+    expect(factions.stall()).toMatchObject({ sinceMs: 20 * 60_000 });
+  });
+});
+
 describe("describeChoice and describeEta", () => {
   test("in words, for the log, the dashboard and the run report", () => {
     expect(describeEta(30)).toBe("30 s");
@@ -357,6 +433,24 @@ describe("describeChoice and describeEta", () => {
     ).toBe("hacking for CyberSec, for BitWire (reputation 1,235 of 3,750, 0.35/s: about 1.9 h)");
   });
 });
+
+/** A rule, its log and its events, and an update with the inputs given over BN1's defaults. */
+function ruleOf() {
+  const log: string[] = [];
+  const events: FactionWorkEvent[] = [];
+  const factions = new FactionRule({ log: (line) => log.push(line), emit: (event) => events.push(event) });
+  const update = (inputs: Partial<FactionInputs>) =>
+    factions.update({
+      mediumData: player(55),
+      slowData: slow(),
+      slowAtMs: 1_000,
+      nowMs: 1_000,
+      ownersWork: false,
+      enabled: true,
+      ...inputs,
+    });
+  return { factions, log, events, update };
+}
 
 describe("FactionRule", () => {
   /** The rule, its log and its events, and an update with the inputs given over these defaults. */
@@ -443,7 +537,7 @@ describe("FactionRule", () => {
     });
     expect(events.map((event) => [event.type, event.atMs, "augmentation" in event && event.augmentation])).toEqual([
       [FACTION_WORK_CHOSEN_EVENT_KIND, 1_000, "Neurotrainer I"],
-      [FACTION_WORK_CHOSEN_EVENT_KIND, 3_000, "Synaptic Enhancement Implant"],
+      [FACTION_WORK_CHOSEN_EVENT_KIND, 3_000, "BitWire"],
     ]);
     expect(log.filter((line) => line.startsWith("faction work: "))).toHaveLength(2);
     expect(log[0]).toMatch(/^faction work: hacking for CyberSec, for Neurotrainer I \(reputation 0 of 1,000, /);
@@ -459,7 +553,7 @@ describe("FactionRule", () => {
     expect(factions.view().choice?.faction).toBe("CyberSec");
     update({ slowData: joined, ownersWork: true, nowMs: 3_000 });
     expect(update({ slowData: joined, enabled: false, nowMs: 4_000 }).work).toBeNull();
-    expect(factions.view()).toMatchObject({ enabled: false, waitingFor: "the Faction work switch is off" });
+    expect(factions.view()).toMatchObject({ enabled: false, waitingFor: "the brain's faction work is switched off" });
     expect(update({ slowData: joined, nowMs: 5_000 }).work).not.toBeNull();
     expect(events.map((event) => [event.type, event.atMs, "reason" in event ? event.reason : null])).toEqual([
       [FACTION_WORK_CHOSEN_EVENT_KIND, 1_000, null],
@@ -497,31 +591,54 @@ describe("FactionRule", () => {
     expect(fresh.events).toEqual([]);
   });
 
-  test("the stall: under half the work's rate over the last 10 minutes, logged once; on track again ends it", () => {
+  test("the stall: under half the work's rate over the last 10 minutes, logged once; at half its rate again, it ends", () => {
     const { factions, log, update } = rule();
     const rate = hackingRate(player(55));
     const at = (minutes: number, reputation: number) =>
       update({ slowData: slow({ joined: { CyberSec: reputation } }), slowAtMs: minutes * 60_000 });
     at(0, 0);
     // Not stalled: since the newest reading.
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 0 });
     // The passive gain's few a minute: nothing judged before 10 minutes of readings.
     for (let minute = 1; minute <= 9; minute++) at(minute, minute * 2);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 9 * 60_000 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 9 * 60_000 });
     at(10, 20);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 0 });
     expect(log.filter((line) => line.includes("STALLED"))).toEqual([
       expect.stringMatching(
         /^faction work STALLED: CyberSec's reputation has risen under half the hacking work's 0\.\d\d\/s over the last 10 min, /,
       ),
     ]);
     at(11, 22);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 0 });
     expect(log.filter((line) => line.includes("STALLED"))).toHaveLength(1);
     // Half the rate over the 10 minutes from minute 2: on track again.
     at(12, 4 + 0.5 * rate * 600);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 12 * 60_000 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 12 * 60_000 });
     expect(log.at(-1)).toBe("faction work: CyberSec's reputation is rising at the work's rate again");
+  });
+
+  test("skipped readings (#197: the casino, an infiltration) are left out of the window: no stall over them", () => {
+    const { factions, log, update } = rule();
+    update({ slowData: slow({ joined: { CyberSec: 0 } }), slowAtMs: 0 });
+    // Twenty minutes of skipped readings, the state as last read.
+    for (let minute = 1; minute <= 20; minute++) {
+      update({ slowData: slow({ joined: { CyberSec: 0 }, skipped: "the casino is open" }), slowAtMs: minute * 60_000 });
+    }
+    expect(log.filter((line) => line.includes("STALLED"))).toEqual([]);
+    // The newest reading counted is the first: the alert says there's been none since (dashboard-alerts.test.ts).
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0, lastReadingAtMs: 0 });
+    // A read again, at the work's rate since: on track.
+    update({ slowData: slow({ joined: { CyberSec: hackingRate(player(55)) * 60 * 21 } }), slowAtMs: 21 * 60_000 });
+    expect(log.filter((line) => line.includes("STALLED"))).toEqual([]);
+  });
+
+  test("an invitation left to the owner is logged again after a reset (#203 review): it comes again", () => {
+    const { log, update } = rule();
+    update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 1 }) });
+    update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 1 }) });
+    update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 2 }) });
+    expect(log.filter((line) => line.startsWith("factions: Sector-12's invitation"))).toHaveLength(2);
   });
 
   test("the stall with the page's stale readings: flat, then the passive gain's jump at its 10-minute refresh", () => {
@@ -532,10 +649,10 @@ describe("FactionRule", () => {
       update({ slowData: slow({ joined: { CyberSec: reputation } }), slowAtMs: minutes * 60_000 });
     for (let minute = 0; minute <= 9; minute++) at(minute, 100);
     at(10, 125);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 0 });
     for (let minute = 11; minute <= 19; minute++) at(minute, 125);
     at(20, 150);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    expect(factions.stall()).toMatchObject({ faction: "CyberSec", sinceMs: 0 });
     expect(log.filter((line) => line.includes("STALLED"))).toHaveLength(1);
     expect(log.filter((line) => line.includes("again"))).toEqual([]);
   });
@@ -547,7 +664,7 @@ describe("FactionRule", () => {
     expect(factions.stall()?.sinceMs).toBe(5 * 60_000);
     // Another faction: NiteSec's BitWire reached, its Cranial Signal Processors nearer than CyberSec's.
     update({ slowData: slow({ joined: { CyberSec: 0, NiteSec: 9_000 } }), slowAtMs: 6 * 60_000 });
-    expect(factions.stall()).toEqual({ faction: "NiteSec", sinceMs: 6 * 60_000 });
+    expect(factions.stall()).toMatchObject({ faction: "NiteSec", sinceMs: 6 * 60_000 });
     update({ slowData: slow({ joined: { CyberSec: 0, NiteSec: 9_000 } }), ownersWork: true });
     expect(factions.stall()).toBeNull();
     update({ slowData: slow({ joined: { CyberSec: 0 } }), slowAtMs: 7 * 60_000 });
@@ -631,7 +748,7 @@ describe("FactionWorkTimeline", () => {
     expect(timeline.stalls).toEqual([]);
   });
 
-  test("a stall: under half the rate for 10 minutes or more, from the last snapshot on track, ongoing at the end", () => {
+  test("a stall: under half the rate over a 10-minute window, from the first such window's start, ongoing at the end", () => {
     const timeline = new FactionWorkTimeline([chosen(0)], STARTED);
     slows(timeline, 0, 3, 30);
     // 0.5/s is 30 a minute: 14 a minute is under half.
@@ -671,6 +788,25 @@ describe("FactionWorkTimeline", () => {
       timeline.addSlow(minute * 60_000, slow({ joined: { CyberSec: 100 + 25 * Math.floor(minute / 10) } }));
     }
     expect(timeline.stalls).toEqual([expect.objectContaining({ fromMs: 0, toMs: 20 * 60_000, ongoing: true })]);
+  });
+
+  test("skipped readings are neither a reading of the window nor a gain; a drop isn't a negative gain", () => {
+    const timeline = new FactionWorkTimeline([chosen(0)], STARTED);
+    timeline.addSlow(0, slow({ joined: { CyberSec: 0 } }));
+    for (let minute = 1; minute <= 2; minute++) {
+      timeline.addSlow(minute * 60_000, slow({ joined: { CyberSec: 0 }, skipped: "the casino is open" }));
+    }
+    timeline.addSlow(3 * 60_000, slow({ joined: { CyberSec: 90 } }));
+    timeline.addSlow(4 * 60_000, slow({ joined: { CyberSec: 10 } }));
+    timeline.addSlow(5 * 60_000, slow({ joined: { CyberSec: 40 } }));
+    expect([...timeline.gained]).toEqual([["CyberSec", 120]]);
+    const skipping = new FactionWorkTimeline([chosen(0)], STARTED);
+    skipping.addSlow(0, slow({ joined: { CyberSec: 0 } }));
+    for (let minute = 1; minute <= 20; minute++) {
+      // Each within 3 minutes of the last, so no gap: only the skipped readings stand between.
+      if (minute % 2 === 0) skipping.addSlow(minute * 60_000, slow({ joined: { CyberSec: 0 }, skipped: "the casino" }));
+    }
+    expect(skipping.stalls).toEqual([]);
   });
 
   test("a stall that ends: on track again, not ongoing", () => {
