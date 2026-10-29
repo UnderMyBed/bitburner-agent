@@ -67,6 +67,10 @@ describe("factionReadingOf and factionStateOf", () => {
     ["neither a state nor a problem", { factions: { backend: "ui", state: null, problem: null } }],
 
     ["a state not well formed", { factions: { backend: "sim", state: { joined: [] }, problem: null } }],
+    [
+      "a state not well formed, with a problem",
+      { factions: { backend: "ui", state: { joined: [] }, problem: "late" } },
+    ],
     ["a problem that isn't text", { factions: { backend: "sim", state: null, problem: 3 } }],
   ])("%s: no reading", (_description, slow) => {
     expect(factionReadingOf(slow as never)).toBeNull();

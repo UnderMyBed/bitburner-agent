@@ -4,7 +4,8 @@
 // - Each joined faction (`getPlayer().factions`): `getFactionRep` and `getFactionFavor`
 //   (`NetscriptFunctions/Singularity.ts:907-918`).
 // - The invitations: `checkFactionInvitations` (`:771-778`), which also runs the game's invitation check now
-//   (`:773-775`), bringing one due within its 2 s forward.
+//   (`:773-775`), bringing one due within its 2 s forward. Its dialog may then open after the round's dialogs were
+//   handled: the next round's dialog watcher answers it.
 // - The queue: `getOwnedAugmentations(true)` lists the installed, then the queued, NeuroFlux once per queued level
 //   (`:79-92`); what's past the installed (`getOwnedAugmentations(false)`) is the queue, in the game's form.
 // RAM: `getPlayer` 0.5 + `getFactionRep` 1 + `getFactionFavor` 1 + `checkFactionInvitations` 3 +

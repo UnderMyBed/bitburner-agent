@@ -109,6 +109,8 @@ export async function main(ns: NS): Promise<void> {
   const factionStateReader = createFactionStateReader(ns, {
     effectorRunner,
     handleDialogs: (deadlineMs) => dialogWatcher.handle(deadlineMs),
+    invitationsAnswered: () => dialogWatcher.invitationsAnswered(),
+    augmentationsBought: () => intentRunner.augmentationsBought(),
   });
   const snapshotter = createSnapshotter(ns, {
     deploymentId,
@@ -118,6 +120,7 @@ export async function main(ns: NS): Promise<void> {
     workOutcome: () => workActivity.outcome(),
     dialogReport: () => dialogWatcher.takeReport(),
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
+    factionsUnread: (problem) => factionStateReader.unread(problem),
   });
   singularityAvailable = () => snapshotter.singularityAvailable();
   const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });

@@ -179,10 +179,8 @@ test("with money, the Agent buys the TOR router at Alpha Enterprises and every p
   // meanwhile, so the bound allows for that.
   const money = latestMedium(dataDirectory)?.player.money as number;
   expect(money).toBeLessThanOrEqual(MONEY - 250_000_000);
-  // Back on the Terminal, and no dialog left open, once the Agent's round is over: the medium snapshot that shows the
-  // last one bought may share its round with a slow one, whose faction state is read from the page just after it
-  // (#197; $1b earned Sector-12's invitation as the save first loaded).
-  await advanceGameTime(page, 2_000);
+  // Back on the Terminal, and no dialog left open, as the last purchase left it: the faction state's read opens a page
+  // only at its first read and when something changed (#197), so none is under way here.
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
@@ -493,51 +491,71 @@ test("faction work (#151): started focused on the real page, refocused after the
   await expect(workPageShown(page)()).resolves.toBe(true);
 });
 
-test("the faction state (#197): read from the real page while focused on CyberSec's work, its invitation and queue, and the work focused again", async () => {
+test("the faction state (#197): the first read opens Factions and Augmentations; then, focused on CyberSec's work, the reputation from its prop, no page opened", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     // $20m in Sector-12 earns Sector-12's invitation as the save first loads; it waits on the Factions page.
     money: 20_000_000,
     prepareSave: async (sim) => {
       await sim.diagnostics.joinFactionWithReputation("CyberSec", 1_234.5);
+      // NeuroFlux installed at level 1, then levels 2 and 3 queued: the page shows "Level 3", two copies queued.
+      await sim.diagnostics.giveInstalledAugmentation("NeuroFlux Governor");
       for (const augmentation of ["Neurotrainer I", "NeuroFlux Governor", "NeuroFlux Governor"]) {
         await sim.diagnostics.queueAugmentation(augmentation);
       }
     },
     brainSettings: ONLY_WORK,
   });
+  const slows = () =>
+    readStore(dataDirectory)
+      .snapshots.filter((row) => row.tier === "slow")
+      .map((row) => (row.data as SlowSnapshotData).factions);
+  // The welcome round's read: nothing read yet, so both pages, and back to the Terminal it found.
+  await advanceUntil(page, async () => slows().length > 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 10_000,
+  });
+  const QUEUE = ["Neurotrainer I", "NeuroFlux Governor", "NeuroFlux Governor"];
+  const first = slows()[0];
+  expect(first).toMatchObject({
+    backend: "ui",
+    problem: null,
+    opened: ["Factions", "Augmentations"],
+    state: { invitations: ["Sector-12"], queuedAugmentations: QUEUE },
+  });
+  // The save's 1,234.5, and the passive gain since (`FactionHelpers.tsx:132-170`), unrounded.
+  expect(first?.state?.joined.map(({ name, favor }) => [name, favor])).toEqual([["CyberSec", 0]]);
+  const firstReputation = first?.state?.joined[0]?.reputation as number;
+  expect(firstReputation).toBeGreaterThanOrEqual(1_234.5);
+  await advanceGameTime(page, 2_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+
   await setWork(ports.dashboardPort, { faction: "CyberSec", workType: "hacking" });
   await advanceUntil(page, workPageShown(page), { realTimeoutMs: STEP_REAL_TIMEOUT_MS, gameTimeoutMs: 20_000 });
-  // The next slow snapshot (each minute) is read with the player focused: the Factions page, then the Augmentations
-  // page, then focused again.
-  const slowCount = () => readStore(dataDirectory).snapshots.filter((row) => row.tier === "slow").length;
-  const slowsBefore = slowCount();
-  await advanceUntil(page, async () => slowCount() > slowsBefore, {
+  // The next slow snapshot (each minute), focused: nothing changed, so no page opened; CyberSec's reputation from the
+  // Work page's `Reputation` prop, unrounded, and more than the save had.
+  const slowsBefore = slows().length;
+  await advanceUntil(page, async () => slows().length > slowsBefore, {
     realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 70_000,
   });
-  const reading = latestSlow(dataDirectory)?.factions;
+  const reading = slows().at(-1);
   expect(reading).toMatchObject({
     backend: "ui",
     problem: null,
-    state: {
-      invitations: ["Sector-12"],
-      queuedAugmentations: ["Neurotrainer I", "NeuroFlux Governor", "NeuroFlux Governor"],
-    },
+    opened: [],
+    state: { invitations: ["Sector-12"], queuedAugmentations: QUEUE },
   });
-  // The game's own numbers, unrounded: the reputation the save had, and more from the work; no favour yet.
   const [cyberSec, ...others] = reading?.state?.joined ?? [];
   expect(others).toEqual([]);
   expect(cyberSec).toMatchObject({ name: "CyberSec", favor: 0 });
-  expect(cyberSec?.reputation).toBeGreaterThan(1_234.5);
+  expect(cyberSec?.reputation).toBeGreaterThan(firstReputation);
   expect(Number.isInteger(cyberSec?.reputation)).toBe(false);
-  // The page as it was: focused on the work, never restarted ("You worked for…" would have shown), no dialog.
-  await advanceGameTime(page, 2_000);
+  // The work stayed focused all along, never restarted ("You worked for…" would have shown), no dialog.
   await expect(workPageShown(page)()).resolves.toBe(true);
   await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
   expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You worked for"))).toEqual([]);
   expect(readStore(dataDirectory).events.filter((event) => event.kind === "factionStateUnread")).toEqual([]);
 });
-
 test("safe mode (#160): with the brain stopped, the Agent refocuses the work on the real page; after a reload too, the 'Offline for…' alert closed", async () => {
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     money: 1_000_000,

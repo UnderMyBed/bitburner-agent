@@ -210,7 +210,7 @@ export class DesiredStateController {
   /** The backdoors for the hacker factions (#195): the rule, and the one it asks for now, or null. */
   readonly #backdoors: BackdoorRule;
   #backdoor: Intent | null = null;
-  /** The joins and the brain's faction work (#203): the rule, the join it asks for now, and the work it sends, or null. */
+  /** The joins and the brain's faction work (#203): the rule, the join it asks for now, the work it sends, or null. */
   readonly #factions: FactionRule;
   #join: Intent | null = null;
   #factionWork: { faction: string; workType: FactionWorkType } | null = null;
@@ -615,8 +615,9 @@ export class DesiredStateController {
         );
       }
     }
-    // The owner's work, or the brain's faction work (#203), its focus from the connected Agent's slow snapshot (decision
-    // 37): sent only once that says whether the implant is in, so the focus never flips on a connect. None: not managed.
+    // The owner's work, or the brain's faction work (#203), its focus from the connected Agent's slow snapshot
+    // (decision 37): sent only once that says whether the implant is in, so the focus never flips on a connect. None:
+    // not managed.
     const work = this.#slowData === null ? null : this.workView().desired;
     // Every state, so the Agent's safe mode keeps it (#160).
     const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };

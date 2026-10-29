@@ -17,7 +17,7 @@ import {
 import { BackdoorTimeline } from "./backdoors.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
-import { factionStateProblemOf } from "./faction-state.ts";
+import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
 import {
   describeChoice,
   FACTION_WORK_CHOSEN_EVENT_KIND,
@@ -225,16 +225,33 @@ class FactionStateFolding {
   lastQueue: string[] | null = null;
   readonly unread: UnreadStretch[] = [];
   #current: UnreadStretch | null = null;
+  /** Slow snapshots not read, but not a problem: skipped (no sidebar), and from an older Agent (no reading). */
+  skipped = 0;
+  absent = 0;
+  /** Read, but with the page not put back as found: how many, and the last problem. */
+  notRestored = 0;
+  lastNotRestored: string | null = null;
 
   add(atMs: number, data: SlowSnapshotData): void {
-    const { backend, problem } = factionStateProblemOf(data);
-    if (problem === null) {
+    const { kind, backend, problem } = factionStatusOf(data);
+    if (kind === "skipped") {
+      // Neither ends a stretch of unread ones nor adds to it.
+      this.skipped += 1;
+    } else if (kind !== "unread") {
       this.#current = null;
-    } else if (this.#current?.problem === problem && this.#current.backend === backend) {
+      if (kind === "absent") this.absent += 1;
+      if (kind === "readPageNotRestored") {
+        this.notRestored += 1;
+        this.lastNotRestored = problem;
+      }
+    } else if (this.#current !== null) {
+      // In a row, whatever each one's reason: the latest's is shown.
       this.#current.toMs = atMs;
       this.#current.count += 1;
+      this.#current.problem = problem ?? this.#current.problem;
+      this.#current.backend = backend;
     } else {
-      this.#current = { problem, backend, fromMs: atMs, toMs: atMs, count: 1 };
+      this.#current = { problem: problem ?? "", backend, fromMs: atMs, toMs: atMs, count: 1 };
       this.unread.push(this.#current);
     }
     const state: FactionState | null = factionStateOf(data);
@@ -746,8 +763,8 @@ function actionsSection(facts: RunFacts): string[] {
 
 /**
  * The joins and the brain's faction work (#203): the factions the medium snapshots showed joined, the invitations left
- * to the owner (a faction with enemies), each choice of work and why, or its end, and the reputation each faction gained
- * while the brain's work was on it.
+ * to the owner (a faction with enemies), each choice of work and why, or its end, and the reputation each faction
+ * gained while the brain's work was on it.
  */
 function factionLines({ factionWork }: RunFacts): string[] {
   const lines = ["  factions (joins, and the brain's faction work):"];
@@ -914,15 +931,31 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
   }
   if (blocking.length === 0) lines.push("    none");
 
-  lines.push("  faction state unread (slow snapshots whose faction state couldn't be read, #197):");
-  for (const { problem, backend, fromMs, toMs, count } of facts.factionState.unread) {
+  lines.push(
+    `  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; ` +
+      `${FACTION_STATE_UNREAD_AFTER} or more is a failure):`,
+  );
+  const folding = facts.factionState;
+  for (const { problem, backend, fromMs, toMs, count } of folding.unread) {
     const line =
       `faction state unread from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} (${count} slow ` +
-      `${count === 1 ? "snapshot" : "snapshots"}${backend === null ? "" : `, ${backend}`}): ${problem}`;
-    lines.push(`    ${line}`);
-    failures.push(line);
+      `${count === 1 ? "snapshot" : "snapshots"} in a row${backend === null ? "" : `, ${backend}`}): ${problem}`;
+    if (count >= FACTION_STATE_UNREAD_AFTER) {
+      lines.push(`    ${line}`);
+      failures.push(line);
+    } else {
+      lines.push(`    ${line}; under ${FACTION_STATE_UNREAD_AFTER} in a row, not counted`);
+    }
   }
-  if (facts.factionState.unread.length === 0) lines.push("    none");
+  if (folding.unread.length === 0) lines.push("    none");
+  const others = [
+    folding.skipped > 0 ? `${folding.skipped} skipped (no sidebar on the page)` : null,
+    folding.absent > 0 ? `${folding.absent} from an older Agent, with no faction state` : null,
+    folding.notRestored > 0
+      ? `${folding.notRestored} read, but the page not put back as found (the last: ${folding.lastNotRestored})`
+      : null,
+  ].filter((each) => each !== null);
+  if (others.length > 0) lines.push(`  faction state otherwise: ${others.join("; ")}`);
 
   lines.push(...disconnectLines(facts, failures));
 

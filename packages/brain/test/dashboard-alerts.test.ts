@@ -21,8 +21,8 @@ const quiet: AlertFacts = {
   blockingDialog: null,
   hackLoopTarget: null,
   income: null,
-  backdoorsDue: [],
   factionState: null,
+  backdoorsDue: [],
   factionWorkStall: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
@@ -193,20 +193,25 @@ describe("factionWorkStalled (#203): the brain's faction work under half its rat
   });
 });
 
-test("factionStateUnread (#197): while the newest slow snapshot's faction state couldn't be read, since it came", () => {
-  const atMs = STARTED_AT_MS + 5_000;
-  expect(
-    activeAlerts({ ...quiet, factionState: { atMs, backend: "ui", problem: "no game page to read it through" } }),
-  ).toEqual([
+test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread, since the first of them", () => {
+  const sinceMs = STARTED_AT_MS + 5_000;
+  const unread = (unreadInARow: number, backend: string | null = "ui") => ({
+    ...quiet,
+    factionState: { sinceMs, unreadInARow, backend, problem: "no game page to read it through" },
+  });
+  // One or two misses (a dialog flood, the owner acting mid-read): not yet.
+  expect(activeAlerts(unread(1))).toEqual([]);
+  expect(activeAlerts(unread(2))).toEqual([]);
+  expect(activeAlerts(unread(3))).toEqual([
     {
       name: "factionStateUnread",
-      sinceMs: atMs,
-      detail: "the faction state couldn't be read (ui): no game page to read it through",
+      sinceMs,
+      detail:
+        "the faction state couldn't be read in the last 3 slow snapshots in a row (ui): no game page to read it through",
     },
   ]);
-  // No reading at all, so no backend.
-  expect(
-    activeAlerts({ ...quiet, factionState: { atMs, backend: null, problem: "the slow snapshot carries none" } })[0]
-      ?.detail,
-  ).toBe("the faction state couldn't be read: the slow snapshot carries none");
+  // Not well formed, so no backend.
+  expect(activeAlerts(unread(3, null))[0]?.detail).toBe(
+    "the faction state couldn't be read in the last 3 slow snapshots in a row: no game page to read it through",
+  );
 });

@@ -484,38 +484,67 @@ describe("each failure is a FAIL, with its line", () => {
     ]);
   });
 
-  test("the faction state unread (#197): each stretch of slow snapshots with the same problem, and none at all", () => {
+  const HEADING =
+    "  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; 3 or more is a failure):";
+
+  test("the faction state unread (#197): 3 slow snapshots in a row is a FAIL, whatever each one's reason; fewer is shown, not counted", () => {
     cleanRun();
     const unread = (problem: string): FactionStateReading => ({ backend: "ui", state: null, problem });
     snapshot("slow", 2 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
     snapshot("slow", 3 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
+    // Skipped between them: neither ends the stretch nor adds to it.
+    snapshot(
+      "slow",
+      3.5 * MINUTE,
+      slowData([], {}, {}, { backend: "ui", state: null, problem: null, skipped: "no sidebar on the page" }),
+    );
     snapshot("slow", 4 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
-    // Read at 10 min (cleanRun's), then a slow snapshot with no reading at all: an older Agent, or a bug.
-    snapshot("slow", 11 * MINUTE, slowData([], {}, {}, null));
+    // Read at 10 min (cleanRun's); a single miss at 12 min, then read again at 13 min (P → read → P: two stretches).
+    snapshot("slow", 11 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
+    snapshot("slow", 12 * MINUTE, slowData());
+    snapshot("slow", 13 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
     const { text, failures, verdictLine } = verdict();
     expect(verdictLine).toBe("Verdict: FAIL");
-    expect(failures).toEqual([
-      `faction state unread from ${at(2 * MINUTE)} to ${at(3 * MINUTE)} (2 slow snapshots, ui): a dialog the Agent ` +
-        "leaves for the owner is open",
-      `faction state unread from ${at(4 * MINUTE)} to ${at(4 * MINUTE)} (1 slow snapshot, ui): no game page to read ` +
-        "the faction state through",
-      `faction state unread from ${at(11 * MINUTE)} to ${at(11 * MINUTE)} (1 slow snapshot): the slow snapshot ` +
-        "carries no faction state the brain can read",
-    ]);
+    const three =
+      `faction state unread from ${at(2 * MINUTE)} to ${at(4 * MINUTE)} (3 slow snapshots in a row, ui): no game page ` +
+      "to read the faction state through";
+    expect(failures).toEqual([three]);
     expect(text).toContain(
-      `  faction state unread (slow snapshots whose faction state couldn't be read, #197):\n    faction`,
+      `${HEADING}\n    ${three}\n` +
+        `    faction state unread from ${at(11 * MINUTE)} to ${at(11 * MINUTE)} (1 slow snapshot in a row, ui): no ` +
+        "game page to read the faction state through; under 3 in a row, not counted\n" +
+        `    faction state unread from ${at(13 * MINUTE)} to ${at(13 * MINUTE)} (1 slow snapshot in a row, ui): no ` +
+        "game page to read the faction state through; under 3 in a row, not counted",
     );
     // What was read still shows.
     expect(text).toContain("    CyberSec: reputation 100 → 1,235, favour 0 (unchanged)");
   });
 
-  test("a clean run's faction state is read throughout: none unread", () => {
+  test("an older Agent's slow snapshots (no reading), skipped ones and ones read with the page not put back: shown, never a FAIL", () => {
     cleanRun();
-    expect(report().text).toContain(
-      "  faction state unread (slow snapshots whose faction state couldn't be read, #197):\n    none",
+    snapshot("slow", 2 * MINUTE, slowData([], {}, {}, null));
+    snapshot("slow", 3 * MINUTE, slowData([], {}, {}, null));
+    snapshot("slow", 4 * MINUTE, slowData([], {}, {}, null));
+    snapshot(
+      "slow",
+      5 * MINUTE,
+      slowData([], {}, {}, { backend: "ui", state: null, problem: null, skipped: "no sidebar" }),
+    );
+    snapshot("slow", 6 * MINUTE, slowData([], {}, {}, { ...factionState(), problem: 'no "Stats" in the sidebar' }));
+    const { text, failures } = verdict();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`${HEADING}\n    none`);
+    expect(text).toContain(
+      "  faction state otherwise: 1 skipped (no sidebar on the page); 3 from an older Agent, with no faction state; 1 " +
+        'read, but the page not put back as found (the last: no "Stats" in the sidebar)',
     );
   });
 
+  test("a clean run's faction state is read throughout: none unread", () => {
+    cleanRun();
+    expect(report().text).toContain(`${HEADING}\n    none`);
+    expect(report().text).not.toContain("faction state otherwise");
+  });
   test("never read: the faction lines say so, never an empty state", () => {
     event(0, "brainStarted", { release: "r" });
     snapshot("fast", 10 * SECOND, fastData());
@@ -1057,19 +1086,21 @@ describe("factions and their work (#203)", () => {
     );
   });
 
-  test("stalled: under half the work's rate for 10 minutes or more, from the last snapshot on track: FAIL", () => {
-    // On track to minute 4, then 10 a minute (under 15, half of 30), to the end.
+  test("stalled: under half the work's rate over 10 minutes, from the first such window's start: FAIL", () => {
+    // On track to minute 4, then 10 a minute (under 15, half of 30), to the end: the window from minute 2 is the first
+    // under it (60 to 200 by minute 12, under 150).
     factionRun({ reputation: (minute) => (minute <= 4 ? minute * 30 : 120 + (minute - 4) * 10) });
     const { text, failures } = report();
     const line =
-      `faction work stalled: CyberSec's reputation rose under half the hacking work's 0.50/s from ${at(4 * MINUTE)} to ` +
-      `${at(20 * MINUTE)} (16 min), with the brain's work for it; still under it at the last slow snapshot`;
+      `faction work stalled: CyberSec's reputation rose under half the hacking work's 0.50/s from ${at(2 * MINUTE)} to ` +
+      `${at(20 * MINUTE)} (18 min), with the brain's work for it; still under it at the last slow snapshot`;
     expect(text).toContain(`    ${line}`);
     expect(failures).toEqual([line]);
   });
 
-  test("not stalled: 9 minutes under; with no choice in force; across a gap in the slow snapshots", () => {
-    factionRun({ reputation: (minute) => (minute <= 11 ? minute * 30 : 330 + (minute - 11) * 10) });
+  test("not stalled: a 4-minute dip in work that's otherwise on track, as each 10 minutes still earns half its rate", () => {
+    // 30 a minute (0.5/s), but nothing from minute 8 to 11: 180 over any 10 minutes, over the 150 that counts.
+    factionRun({ reputation: (minute) => 30 * (minute - Math.max(0, Math.min(minute, 11) - 7)) });
     expect(report().failures).toEqual([]);
   });
 
@@ -1084,10 +1115,17 @@ describe("factions and their work (#203)", () => {
     expect(report().failures).toEqual([]);
   });
 
-  test("exactly 10 minutes under is a stall", () => {
+  test("stale readings that jump at the page's 10-minute refresh are a stall all the same", () => {
+    factionRun({ reputation: (minute) => 100 + 25 * Math.floor(minute / 10) });
+    expect(report().failures).toEqual([expect.stringContaining(`from ${at(MINUTE)} to ${at(20 * MINUTE)}`)]);
+  });
+
+  test("the stretch starts where the first window under the rate starts: work that stops at minute 10, from minute 6", () => {
+    // On track to minute 10, then 1 a minute: the window from minute 5 (150) to 15 (305) still earns 155; the one from
+    // minute 6 (180 to 306) is the first under 150.
     factionRun({ reputation: (minute) => (minute <= 10 ? minute * 30 : 300 + (minute - 10)) });
     expect(report().failures).toEqual([
-      expect.stringContaining(`from ${at(10 * MINUTE)} to ${at(20 * MINUTE)} (10 min)`),
+      expect.stringContaining(`from ${at(6 * MINUTE)} to ${at(20 * MINUTE)} (14 min)`),
     ]);
   });
 

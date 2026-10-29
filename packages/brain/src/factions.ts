@@ -2,9 +2,9 @@
 // and works for the faction whose next augmentation worth having for its hacking is nearest, so a run earns the
 // reputation A6 buys with. Choices computed from the game's formulas (owner decision 46). Also what the dashboard's
 // `factionWorkStalled` alert and the run report (#185) read of them.
-// - Joining: the `joinFaction` intent (#147), one at a time, in the order invited. A faction with enemies (the six city
-//   factions, `Faction/FactionInfo.tsx:498-552`) bans them when joined (`Faction/FactionHelpers.tsx:35-52`): left to the
-//   owner, conservatively. Of the augmentations with a hacking value, only PCMatrix (Aevum) and Neuregen Gene
+// - Joining: the `joinFaction` intent (#147), one at a time, in the order invited. A faction with enemies (the six
+//   city factions, `Faction/FactionInfo.tsx:498-552`) bans them when joined (`Faction/FactionHelpers.tsx:35-52`): left
+//   to the owner, conservatively. Of the augmentations with a hacking value, only PCMatrix (Aevum) and Neuregen Gene
 //   Modification (Chongqing) are sold by no faction without enemies.
 // - Working: an augmentation's hacking value is core's `hackingValue`. Of those a joined faction sells, not installed,
 //   queued or already within a joined seller's reputation, the one with the most value per second of work to reach its
@@ -49,18 +49,29 @@ export function writeFactionWorkEnabled(store: TelemetryStore, enabled: boolean)
 }
 
 /**
- * The brain's faction work earning under `FACTION_WORK_ON_TRACK_SHARE` of its rate for this long is
- * `factionWorkStalled` (#203), and a run report failure: 10 minutes. The work earns every cycle while it goes on, and
- * the slow snapshot (every 60 s) shows it.
+ * The window the brain's faction work is judged over (#203): earning under `FACTION_WORK_ON_TRACK_SHARE` of its rate
+ * across the last 10 minutes is `factionWorkStalled`, and a run report failure. The work earns every cycle while it
+ * goes on, and the slow snapshot (every 60 s) shows it.
+ * - Over the whole window, not snapshot to snapshot: the page's reader (#197) reads the worked faction's reputation
+ *   fresh each time from the work's own display, but any other faction's only when it opens the Factions page, at
+ *   least every 10 minutes (`FACTIONS_PAGE_REFRESH_MS`). Work that isn't going on leaves its faction's reading flat,
+ *   then jumping by the passive gain of up to 10 minutes: one interval of that could pass for on track, a 10-minute
+ *   window can't.
  */
 export const FACTION_WORK_STALLED_AFTER_MS = 10 * 60_000;
 /**
- * The share of the work's rate (the game's formula, at the choice) the faction's reputation must rise by, between slow
- * snapshots, to count: a half. Not just any rise: a joined faction not being worked gains reputation passively, at
- * most a tenth of the best work's rate, or 1/120 a cycle (`processPassiveFactionRepGain`,
- * `Faction/FactionHelpers.tsx:132-170`), so a rise alone doesn't show the work going on. Unfocused work earns 0.8 of it.
+ * The share of the work's rate (the game's formula) the faction's reputation must rise by to count: a half. Not just
+ * any rise: a joined faction not being worked gains reputation passively, at most a tenth of the best work's rate, or
+ * 1/120 a cycle (`processPassiveFactionRepGain`, `Faction/FactionHelpers.tsx:132-170`), so a rise alone doesn't show
+ * the work going on. Unfocused work earns 0.8 of it.
  */
 export const FACTION_WORK_ON_TRACK_SHARE = 0.5;
+
+/** A faction's reputation at a slow snapshot. */
+export interface ReputationReading {
+  atMs: number;
+  reputation: number;
+}
 
 /** Whether reputation rose from `from` to `to` by at least the share of `perSecond` that counts. */
 export function onTrack(
@@ -69,6 +80,26 @@ export function onTrack(
   perSecond: number,
 ): boolean {
   return to.reputation - from.reputation >= (FACTION_WORK_ON_TRACK_SHARE * perSecond * (to.atMs - from.atMs)) / 1000;
+}
+
+/**
+ * Where the window `FACTION_WORK_STALLED_AFTER_MS` before `now` starts, if reputation rose under the share of
+ * `perSecond` that counts since then; null if it rose by that or more, or the readings don't go back that far. The
+ * window starts at the newest reading at least 10 minutes before `now`. `readings` are in time order.
+ */
+export function underRateSince(
+  readings: readonly ReputationReading[],
+  now: ReputationReading,
+  perSecond: number,
+): number | null {
+  const start = readings.findLast((each) => each.atMs <= now.atMs - FACTION_WORK_STALLED_AFTER_MS);
+  return start === undefined || onTrack(start, now, perSecond) ? null : start.atMs;
+}
+
+/** The readings a window from `nowMs` still needs: the newest at least 10 minutes back, and those after it. */
+function trimmedReadings(readings: ReputationReading[], nowMs: number): ReputationReading[] {
+  const start = readings.findLastIndex((each) => each.atMs <= nowMs - FACTION_WORK_STALLED_AFTER_MS);
+  return start <= 0 ? readings : readings.slice(start);
 }
 
 /** The events the rule's choices are stored as (#203), for the run report. */
@@ -298,8 +329,8 @@ export interface FactionsView {
 }
 
 /**
- * The brain's faction work's watch (#203): its faction, and the last slow snapshot whose reputation was on track (or the
- * work's first): 10 minutes before now is `factionWorkStalled`.
+ * The brain's faction work's watch (#203): its faction, and where the window it's been stalled over started, or else
+ * its newest slow snapshot: 10 minutes before now is `factionWorkStalled`.
  */
 export interface FactionWorkStall {
   faction: string;
@@ -351,8 +382,8 @@ export function describeChoice(choice: FactionWorkChoice): string {
  *   faction, work type or target changes, and its end as another when a definite reason stops it: the owner's work,
  *   the switch, nothing left worth it. Snapshots missing (a reconnect, the faction state unread) change nothing stored:
  *   the work isn't sent meanwhile, and the Agent leaves the game's work as it is.
- * - The stall: while the rule's work is sent, its faction's reputation in the slow snapshots, and the last one on track
- *   (`onTrack`), or the work's first. Another faction, the work not sent, or the snapshots gone, starts it again.
+ * - The stall: while the rule's work is sent, its faction's reputation in the slow snapshots, judged over the last 10
+ *   minutes (`underRateSince`). Another faction, the work not sent, or the snapshots gone, starts it again.
  */
 export class FactionRule {
   readonly #log: (line: string) => void;
@@ -367,7 +398,12 @@ export class FactionRule {
    * The stall's watch on the work sent: its faction, the last slow snapshot whose reputation was on track (or the first
    * of the work), and the latest one's reputation and time, and whether the stall was logged.
    */
-  #watch: { faction: string; sinceMs: number; reputation: number; slowAtMs: number; stalled: boolean } | null = null;
+  #watch: {
+    faction: string;
+    readings: ReputationReading[];
+    /** Where the window it's been stalled over started, while it is; null while it isn't. */
+    stalledSinceMs: number | null;
+  } | null = null;
   #view: FactionsView = {
     enabled: true,
     waiting: true,
@@ -392,7 +428,10 @@ export class FactionRule {
 
   /** The brain's work's stall, or null: its faction and since when its reputation last rose. */
   stall(): FactionWorkStall | null {
-    return this.#watch === null ? null : { faction: this.#watch.faction, sinceMs: this.#watch.sinceMs };
+    const watch = this.#watch;
+    if (watch === null) return null;
+    // Not stalled: since the newest reading, so the alert waits for the next to say otherwise.
+    return { faction: watch.faction, sinceMs: watch.stalledSinceMs ?? (watch.readings.at(-1)?.atMs as number) };
   }
 
   update(inputs: FactionInputs): { join: Intent | null; work: { faction: string; workType: FactionWorkType } | null } {
@@ -479,26 +518,27 @@ export class FactionRule {
       return;
     }
     const watch = this.#watch;
+    const now = { atMs: slowAtMs, reputation: sent.reputation };
     if (watch === null || watch.faction !== sent.faction) {
-      this.#watch = { faction: sent.faction, sinceMs: slowAtMs, reputation: sent.reputation, slowAtMs, stalled: false };
+      this.#watch = { faction: sent.faction, readings: [now], stalledSinceMs: null };
       return;
     }
-    if (slowAtMs === watch.slowAtMs) return;
-    const now = { atMs: slowAtMs, reputation: sent.reputation };
-    if (onTrack({ atMs: watch.slowAtMs, reputation: watch.reputation }, now, sent.reputationPerSecond)) {
-      if (watch.stalled) this.#log(`faction work: ${watch.faction}'s reputation is rising at the work's rate again`);
-      watch.sinceMs = slowAtMs;
-      watch.stalled = false;
-    } else if (!watch.stalled && slowAtMs - watch.sinceMs >= FACTION_WORK_STALLED_AFTER_MS) {
-      watch.stalled = true;
+    if (slowAtMs === watch.readings.at(-1)?.atMs) return;
+    const under = underRateSince(watch.readings, now, sent.reputationPerSecond);
+    watch.readings = trimmedReadings([...watch.readings, now], slowAtMs);
+    if (under === null) {
+      if (watch.stalledSinceMs !== null) {
+        this.#log(`faction work: ${watch.faction}'s reputation is rising at the work's rate again`);
+      }
+      watch.stalledSinceMs = null;
+    } else if (watch.stalledSinceMs === null) {
+      watch.stalledSinceMs = under;
       this.#log(
         `faction work STALLED: ${watch.faction}'s reputation has risen under half the ${sent.workType} work's ` +
-          `${sent.reputationPerSecond.toFixed(2)}/s for ${Math.floor((slowAtMs - watch.sinceMs) / 60_000)} min, at ` +
+          `${sent.reputationPerSecond.toFixed(2)}/s over the last ${Math.floor((slowAtMs - under) / 60_000)} min, at ` +
           `${formatReputation(sent.reputation)}, with the work the brain's choice`,
       );
     }
-    watch.slowAtMs = slowAtMs;
-    watch.reputation = sent.reputation;
   }
 }
 
@@ -510,16 +550,16 @@ export class FactionRule {
  */
 export const SLOW_SNAPSHOT_GAP_MS = 3 * 60_000;
 
-/** A stretch of the brain's faction work in which its faction's reputation rose under half the work's rate. */
+/** A stretch in which the brain's faction work earned under half its rate over each 10-minute window. */
 export interface ReputationStall {
   faction: string;
   workType: string;
   /** The work's rate, at its choice. */
   reputationPerSecond: number;
-  /** The last slow snapshot on track (or the work's first, or the one after a gap), to the last one that wasn't. */
+  /** The start of the first window judged under the rate, to the last slow snapshot whose window was. */
   fromMs: number;
   toMs: number;
-  /** Still not risen at the window's last slow snapshot. */
+  /** Still under it at the report window's last slow snapshot. */
   ongoing: boolean;
 }
 
@@ -545,8 +585,8 @@ const isChoice = (detail: unknown): detail is FactionWorkChoice => {
  * The brain's joins and faction work over a run, for the run report: the stored choices and ends (a `brainStarted`
  * ends one too, as the brain that made it is gone), the factions the medium snapshots show joined, the invitations
  * left to the owner, and, from the slow snapshots, each faction's reputation gained while the brain's work was on it,
- * and the stretches of `FACTION_WORK_STALLED_AFTER_MS` or more in which it rose under half the work's rate (`onTrack`,
- * with the rate stored at the choice: the skills only grow, so the work earns at least that).
+ * and the stretches in which it rose under half the work's rate over the last `FACTION_WORK_STALLED_AFTER_MS`
+ * (`underRateSince`, with the rate stored at the choice: the skills only grow, so the work earns at least that).
  */
 export class FactionWorkTimeline {
   /** The choices and ends, in time order; a malformed one is left out. */
@@ -566,8 +606,8 @@ export class FactionWorkTimeline {
     record: FactionWorkRecord;
     reputation: number;
     lastSlowMs: number;
-    /** The last slow snapshot on track, or the work's first, or the one after a gap. */
-    onTrackMs: number;
+    /** The readings since the work's first, or the one after a gap, that its window still needs. */
+    readings: ReputationReading[];
     stall: ReputationStall | null;
   } | null = null;
 
@@ -638,7 +678,7 @@ export class FactionWorkTimeline {
         record: current.record,
         reputation,
         lastSlowMs: atMs,
-        onTrackMs: atMs,
+        readings: [{ atMs, reputation }],
         stall: null,
       };
       return;
@@ -649,25 +689,21 @@ export class FactionWorkTimeline {
     if (reputation > watch.reputation) {
       this.gained.set(faction, (this.gained.get(faction) ?? 0) + (reputation - watch.reputation));
     }
+    const now = { atMs, reputation };
     if (atMs - watch.lastSlowMs > SLOW_SNAPSHOT_GAP_MS) {
       if (watch.stall) watch.stall.ongoing = false;
       watch.stall = null;
-      watch.onTrackMs = atMs;
-    } else if (onTrack({ atMs: watch.lastSlowMs, reputation: watch.reputation }, { atMs, reputation }, perSecond)) {
-      if (watch.stall) watch.stall.ongoing = false;
-      watch.stall = null;
-      watch.onTrackMs = atMs;
-    } else if (atMs - watch.onTrackMs >= FACTION_WORK_STALLED_AFTER_MS) {
-      if (watch.stall) watch.stall.toMs = atMs;
-      else {
-        watch.stall = {
-          faction,
-          workType,
-          reputationPerSecond: perSecond,
-          fromMs: watch.onTrackMs,
-          toMs: atMs,
-          ongoing: true,
-        };
+      watch.readings = [now];
+    } else {
+      const under = underRateSince(watch.readings, now, perSecond);
+      watch.readings = trimmedReadings([...watch.readings, now], atMs);
+      if (under === null) {
+        if (watch.stall) watch.stall.ongoing = false;
+        watch.stall = null;
+      } else if (watch.stall) {
+        watch.stall.toMs = atMs;
+      } else {
+        watch.stall = { faction, workType, reputationPerSecond: perSecond, fromMs: under, toMs: atMs, ongoing: true };
         this.stalls.push(watch.stall);
       }
     }

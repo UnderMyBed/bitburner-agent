@@ -497,42 +497,54 @@ describe("FactionRule", () => {
     expect(fresh.events).toEqual([]);
   });
 
-  test("the stall: under half the work's rate for 10 minutes, logged once; on track again ends it", () => {
+  test("the stall: under half the work's rate over the last 10 minutes, logged once; on track again ends it", () => {
     const { factions, log, update } = rule();
-    const medium = player(55);
-    const rate = hackingRate(medium);
+    const rate = hackingRate(player(55));
     const at = (minutes: number, reputation: number) =>
       update({ slowData: slow({ joined: { CyberSec: reputation } }), slowAtMs: minutes * 60_000 });
     at(0, 0);
+    // Not stalled: since the newest reading.
     expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
-    // On track: just half the rate for the minute.
-    at(1, 0.5 * rate * 60);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 60_000 });
-    // Under half, minute after minute (the passive gain's few).
-    let reputation = 0.5 * rate * 60;
-    for (let minute = 2; minute <= 11; minute++) {
-      reputation += 2;
-      at(minute, reputation);
-    }
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 60_000 });
+    // The passive gain's few a minute: nothing judged before 10 minutes of readings.
+    for (let minute = 1; minute <= 9; minute++) at(minute, minute * 2);
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 9 * 60_000 });
+    at(10, 20);
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
     expect(log.filter((line) => line.includes("STALLED"))).toEqual([
       expect.stringMatching(
-        /^faction work STALLED: CyberSec's reputation has risen under half the hacking work's 0\.\d\d\/s for 10 min, /,
+        /^faction work STALLED: CyberSec's reputation has risen under half the hacking work's 0\.\d\d\/s over the last 10 min, /,
       ),
     ]);
-    reputation += 2;
-    at(12, reputation);
+    at(11, 22);
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
     expect(log.filter((line) => line.includes("STALLED"))).toHaveLength(1);
-    at(13, reputation + rate * 60);
-    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 13 * 60_000 });
+    // Half the rate over the 10 minutes from minute 2: on track again.
+    at(12, 4 + 0.5 * rate * 600);
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 12 * 60_000 });
     expect(log.at(-1)).toBe("faction work: CyberSec's reputation is rising at the work's rate again");
+  });
+
+  test("the stall with the page's stale readings: flat, then the passive gain's jump at its 10-minute refresh", () => {
+    // Work not going on, read through the page: the faction's reputation as last read, then 10 minutes of passive gain
+    // (1/120 a cycle, 25) when the Factions page is opened again. One interval of it looks on track; the window doesn't.
+    const { factions, log, update } = rule();
+    const at = (minutes: number, reputation: number) =>
+      update({ slowData: slow({ joined: { CyberSec: reputation } }), slowAtMs: minutes * 60_000 });
+    for (let minute = 0; minute <= 9; minute++) at(minute, 100);
+    at(10, 125);
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    for (let minute = 11; minute <= 19; minute++) at(minute, 125);
+    at(20, 150);
+    expect(factions.stall()).toEqual({ faction: "CyberSec", sinceMs: 0 });
+    expect(log.filter((line) => line.includes("STALLED"))).toHaveLength(1);
+    expect(log.filter((line) => line.includes("again"))).toEqual([]);
   });
 
   test("the stall's watch starts again with another faction, and goes with the work not sent or the snapshots", () => {
     const { factions, update } = rule();
     update({ slowData: slow({ joined: { CyberSec: 0 } }), slowAtMs: 0 });
     update({ slowData: slow({ joined: { CyberSec: 0 } }), slowAtMs: 5 * 60_000 });
-    expect(factions.stall()?.sinceMs).toBe(0);
+    expect(factions.stall()?.sinceMs).toBe(5 * 60_000);
     // Another faction: NiteSec's BitWire reached, its Cranial Signal Processors nearer than CyberSec's.
     update({ slowData: slow({ joined: { CyberSec: 0, NiteSec: 9_000 } }), slowAtMs: 6 * 60_000 });
     expect(factions.stall()).toEqual({ faction: "NiteSec", sinceMs: 6 * 60_000 });
@@ -653,10 +665,19 @@ describe("FactionWorkTimeline", () => {
     expect(FACTION_WORK_STALLED_AFTER_MS).toBe(10 * 60_000);
   });
 
+  test("a stall through the page's stale readings: flat, then a jump at each 10-minute refresh", () => {
+    const timeline = new FactionWorkTimeline([chosen(0)], STARTED);
+    for (let minute = 0; minute <= 20; minute++) {
+      timeline.addSlow(minute * 60_000, slow({ joined: { CyberSec: 100 + 25 * Math.floor(minute / 10) } }));
+    }
+    expect(timeline.stalls).toEqual([expect.objectContaining({ fromMs: 0, toMs: 20 * 60_000, ongoing: true })]);
+  });
+
   test("a stall that ends: on track again, not ongoing", () => {
     const timeline = new FactionWorkTimeline([chosen(0)], STARTED);
     slows(timeline, 0, 12, 1);
-    timeline.addSlow(13 * 60_000, slow({ joined: { CyberSec: 12 + 30 } }));
+    // Over the window from minute 3, half of 0.5/s is 150.
+    timeline.addSlow(13 * 60_000, slow({ joined: { CyberSec: 3 + 150 } }));
     expect(timeline.stalls).toEqual([expect.objectContaining({ fromMs: 0, toMs: 12 * 60_000, ongoing: false })]);
   });
 });

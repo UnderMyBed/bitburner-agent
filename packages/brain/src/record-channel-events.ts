@@ -1,10 +1,6 @@
 import { type Clock, ControlChannel } from "@bitburner-agent/bridge";
 import { type FastSnapshotData, type HandledDialog, MAX_DIALOG_TEXT_LENGTH } from "@bitburner-agent/core";
-import {
-  FACTION_STATE_READ_EVENT_KIND,
-  FACTION_STATE_UNREAD_EVENT_KIND,
-  factionStateProblemOf,
-} from "./faction-state.ts";
+import { FACTION_STATE_READ_EVENT_KIND, FACTION_STATE_UNREAD_EVENT_KIND, factionStatusOf } from "./faction-state.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 import { reportedPromotion } from "./work.ts";
 
@@ -105,7 +101,16 @@ export function recordChannelEvents(
         }
       }
       if (tier === "slow") {
-        const { backend, problem } = factionStateProblemOf(data);
+        // Only unread changes it: one read (or read with the page not put back) clears it; one skipped, or from an
+        // older Agent (no reading), is neither (faction-state.ts).
+        const status = factionStatusOf(data);
+        const { backend } = status;
+        const problem =
+          status.kind === "unread"
+            ? status.problem
+            : status.kind === "skipped" || status.kind === "absent"
+              ? lastFactionProblem
+              : null;
         if (problem !== lastFactionProblem) {
           if (problem === null) {
             store.recordEvent(context, { atMs: event.atMs, kind: FACTION_STATE_READ_EVENT_KIND, detail: { backend } });

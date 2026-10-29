@@ -50,8 +50,8 @@ export interface StaticSnapshotData {
 }
 
 /**
- * slow: every 60 s. `ns.getResetInfo()` (its Maps as objects), the purchased servers and the money by source, from the
- * slow worker; and the faction state (#197), read just after it by the Agent's faction state reader.
+ * slow: every 60 s. `ns.getResetInfo()` (its Maps as objects), the purchased servers, and the money by source, from the
+ * slow worker; and the faction state (#197), read after it by the Agent's faction state reader.
  */
 export interface SlowSnapshotData {
   resetInfo: {

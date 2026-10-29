@@ -1,7 +1,7 @@
 /**
- * Faction work's reputation (#203, M4 phase A slice A5): the game's formulas, for the brain's choice of which faction to
- * work for and its ETAs, and what an augmentation is worth to the hacking the brain does. Shared by the brain and the
- * simulator's tests; checked against the engine's `ns.formulas.work.factionGains` (the brain's parity suite).
+ * Faction work's reputation (#203, M4 phase A slice A5): the game's formulas, for the brain's choice of which faction
+ * to work for and its ETAs, and what an augmentation is worth to the hacking the brain does. Shared by the brain and
+ * the simulator's tests; checked against the engine's `ns.formulas.work.factionGains` (the brain's parity suite).
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
 import { intelligenceBonus } from "./hacking-ceiling.ts";

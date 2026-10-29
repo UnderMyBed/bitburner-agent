@@ -4,14 +4,15 @@
 // - `sim`: CyberSec joined, working for it, so its reputation rises; Sector-12's invitation ($20m in Sector-12); three
 //   augmentations queued, NeuroFlux Governor twice.
 // - `singularity`: the same, in BN1 with SF4.3, through Singularity's worker.
-// - `ui` in the simulator, whose page renders no sidebar: every reading says why, an event, the alert, and a FAIL.
-//   Never an empty state. E2 reads the real page (packages/e2/test/effectors.e2.test.ts).
+// - `ui` in the simulator, whose page renders no sidebar: skipped each time, which isn't a problem, and says so.
+// - `ui` with its worker gone from home: every reading says why, never an empty state; one event, then the alert and
+//   the report's FAIL once 3 in a row are unread. E2 reads the real page (packages/e2/test/effectors.e2.test.ts).
 import { type DesiredState, type FactionState, factionReadingOf, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { buildDashboardStatus } from "../src/dashboard/status.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
-import { type FreshGame, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
+import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
 
 const freshStart = useFreshStarts();
@@ -111,7 +112,8 @@ test("sim backend: each slow snapshot has CyberSec's rising reputation, Sector-1
   expect(lines.find((line) => line.startsWith("    Sector-12, "))).toBeDefined();
   expect(lines).toContain("  augmentations queued: Neurotrainer I, NeuroFlux Governor ×2 (unchanged)");
   expect(report.text).toContain(
-    "  faction state unread (slow snapshots whose faction state couldn't be read, #197):\n    none",
+    "  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; 3 or more is a " +
+      "failure):\n    none",
   );
   expect(report.failures).toEqual([]);
   expect(fresh.data.store.events({ environment: "E1" }).map((event) => event.kind)).not.toContain("factionStateUnread");
@@ -133,7 +135,7 @@ test("singularity backend: in BN1 with SF4.3, the simulator's effectors taken aw
   expect(report.failures).toEqual([]);
 });
 
-test("ui backend on the simulator's page, which renders no sidebar: every slow snapshot says why, never an empty state; the event, the alert and a FAIL", async () => {
+test("ui backend on the simulator's page, which renders no sidebar: skipped each time, not a problem, and PASS", async () => {
   const fresh = await freshStart({
     withDesiredState: false,
     beforeAgent: async (game) => {
@@ -142,8 +144,38 @@ test("ui backend on the simulator's page, which renders no sidebar: every slow s
     },
   });
   const { slows, report } = await run(fresh);
-  const problem = '"Factions" in the sidebar (is its section collapsed?)';
   expect(slows.length).toBeGreaterThanOrEqual(4);
+  for (const slow of slows) {
+    expect(slow.factions).toEqual({
+      backend: "ui",
+      state: null,
+      problem: null,
+      skipped: "no sidebar on the page (the BitVerse, an infiltration?)",
+    });
+  }
+  expect(fresh.data.store.events({ environment: "E1" }).map((event) => event.kind)).not.toContain("factionStateUnread");
+  expect(dashboard(fresh).alerts.map((alert) => alert.name)).not.toContain("factionStateUnread");
+  expect(report.failures).toEqual([]);
+  expect(report.text).toContain(`  faction state otherwise: ${slows.length} skipped (no sidebar on the page)`);
+});
+
+test("ui backend with its worker gone from home: unread, one event, then after 3 in a row the alert and a FAIL", async () => {
+  const fresh = await freshStart({
+    withDesiredState: false,
+    beforeAgent: async (game) => {
+      await factionsToRead(game);
+      await withoutSimEffectors(game);
+      // The owner deletes the page's worker: it can't start.
+      await ownerRunsOnHome(
+        game,
+        'export async function main(ns) { for (const file of ns.ls("home", "/faction-state.js")) ' +
+          'if (!file.includes("singularity")) ns.rm(file); }',
+      );
+    },
+  });
+  const { slows, report } = await run(fresh);
+  expect(slows.length).toBeGreaterThanOrEqual(4);
+  const problem = `agent/${fresh.deploymentId}/faction-state.js couldn't start`;
   for (const slow of slows) expect(slow.factions).toEqual({ backend: "ui", state: null, problem });
   // One event for the stretch, as the problem didn't change.
   const unread = fresh.data.store.events({ environment: "E1" }).filter((event) => event.kind === "factionStateUnread");
@@ -151,16 +183,16 @@ test("ui backend on the simulator's page, which renders no sidebar: every slow s
   expect(dashboard(fresh).alerts).toContainEqual(
     expect.objectContaining({
       name: "factionStateUnread",
-      detail: `the faction state couldn't be read (ui): ${problem}`,
+      detail: `the faction state couldn't be read in the last ${slows.length} slow snapshots in a row (ui): ${problem}`,
     }),
   );
   const slowTimes = fresh.data.store
     .snapshots({ environment: "E1" })
     .filter((row) => row.tier === "slow")
     .map((row) => new Date(row.receivedAtMs).toISOString());
-  const [unreadFrom, unreadTo] = [slowTimes[0], slowTimes.at(-1)];
   expect(report.failures).toEqual([
-    `faction state unread from ${unreadFrom} to ${unreadTo} (${slows.length} slow snapshots, ui): ${problem}`,
+    `faction state unread from ${slowTimes[0]} to ${slowTimes.at(-1)} (${slows.length} slow snapshots in a row, ui): ` +
+      problem,
   ]);
   expect(report.text).toContain("  faction reputation and favour, first reading → last:\n    never read");
 });
