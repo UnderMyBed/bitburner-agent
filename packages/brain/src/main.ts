@@ -8,6 +8,7 @@ import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
+import { readBatcherEnabled } from "./batcher.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
@@ -218,7 +219,7 @@ try {
   );
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
   log(
-    `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
+    `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, the batcher ${readBatcherEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,

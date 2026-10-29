@@ -230,12 +230,11 @@ export function chooseBatcher(
     };
   });
   if (planned.length === 0) return { batcher: null, why: firstWhy ?? "no target can be planned" };
-  // Of those alike, or with none earning within the horizon, the soonest to earn.
-  const byWorth = (a: Weighed, b: Weighed) =>
-    b.weighed.worth - a.weighed.worth || a.weighed.untilEarningMs - b.weighed.untilEarningMs;
+  // The worthiest of those earning soon; with none such, the soonest to earn.
   const soon = planned.filter((each) => each.weighed.untilEarningMs <= BATCHER_MOST_IDLE_MS);
   const soonest = [...planned].sort((a, b) => a.weighed.untilEarningMs - b.weighed.untilEarningMs)[0] as Weighed;
-  const worthiest = soon.length === 0 ? soonest : ([...soon].sort(byWorth)[0] as Weighed);
+  const worthiest =
+    soon.length === 0 ? soonest : ([...soon].sort((a, b) => b.weighed.worth - a.weighed.worth)[0] as Weighed);
   const kept = soon.find((each) => each.weighed.target === sent);
   // Kept while nothing is worth the move; one worth nothing gives way (nothing is less than 0).
   const chosen =

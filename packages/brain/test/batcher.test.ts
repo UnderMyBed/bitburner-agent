@@ -672,6 +672,8 @@ describe("chooseBatcher, review fixes (#216)", () => {
     expect(n00dles.untilEarningMs).toBeLessThanOrEqual(BATCHER_MOST_IDLE_MS);
     expect(chosen.batcher.config.target).toBe("n00dles");
     expect(chosen.batcher.config.next?.target).toBe("rich");
+    // Rich sent and still preparing, far off: not kept for its worth while n00dles earns soon.
+    expect(chosenOf(choiceNetwork, data, "rich", null).batcher.config.target).toBe("n00dles");
   });
 
   test("with none earning soon and nothing batched, the soonest; sent and still preparing, kept only if soon", () => {
