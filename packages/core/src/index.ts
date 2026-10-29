@@ -125,6 +125,23 @@ export {
   isHackLoopReady,
   percentMoneyHackedPerThread,
 } from "./hack-loop.ts";
+export {
+  coreBonus,
+  GROW_SCRIPT_RAM_GB,
+  GROW_SECURITY_PER_THREAD,
+  GROW_TIME_PER_HACK_TIME,
+  HACK_SCRIPT_RAM_GB,
+  HACK_SECURITY_PER_THREAD,
+  type HackingPlayer,
+  type HackingTarget,
+  hackChance,
+  hackingIncomePerGigabyteSecond,
+  hackTimeSeconds,
+  intelligenceBonus,
+  WEAKEN_SCRIPT_RAM_GB,
+  WEAKEN_SECURITY_PER_THREAD,
+  WEAKEN_TIME_PER_HACK_TIME,
+} from "./hacking-ceiling.ts";
 export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {

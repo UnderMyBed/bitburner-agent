@@ -119,6 +119,26 @@ const time = (ms) => (ms === null ? "never" : new Date(ms).toLocaleString());
 const seconds = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
 const orNone = (value, format = String) => (value === null || value === undefined ? "—" : format(value));
 const megabytes = (bytes) => `${(bytes / 1024 / 1024).toFixed(0)} MB`;
+const dollarsPerSecond = (dollars) => `$${Math.round(dollars).toLocaleString("en-US")}/s`;
+
+/** The hacking ceiling (#196): the most the hack loop's hosts' RAM could earn a second, on which target, or why unknown. */
+function hackingCeilingText(ceiling) {
+  if (!ceiling.known) return `unknown: ${ceiling.reason}`;
+  const servers = ceiling.hostCount === 1 ? "server" : "servers";
+  const hosts = `${Math.round(ceiling.hostRamGb * 100) / 100} GB on ${ceiling.hostCount} ${servers}`;
+  return ceiling.target === null
+    ? `$0/s: nothing the player can hack is rooted (${hosts})`
+    : `${dollarsPerSecond(ceiling.incomePerSecond)} on ${ceiling.target}, with ${hosts}`;
+}
+
+/** What hacking earned a second over the last 10 minutes, and its part of the ceiling now. */
+function hackingIncomeText({ ceiling, incomePerSecond }) {
+  if (incomePerSecond === null) return "— (not two slow snapshots with the money sources in the last 10 min)";
+  const ofCeiling = ceiling.known && ceiling.incomePerSecond > 0
+    ? ` (${((incomePerSecond / ceiling.incomePerSecond) * 100).toFixed(1)}% of the ceiling now)`
+    : "";
+  return `${dollarsPerSecond(incomePerSecond)} over the last 10 min${ofCeiling}`;
+}
 
 function fillTable(table, rows) {
   table.replaceChildren(
@@ -172,6 +192,8 @@ function render(status) {
   fillTable(document.querySelector("#values table"), [
     ["Money", orNone(values.money, (money) => `$${Math.round(money).toLocaleString()}`)],
     ["Hacking level", orNone(values.hackingLevel)],
+    ["Hacking ceiling", hackingCeilingText(status.hacking.ceiling)],
+    ["Hacking income", hackingIncomeText(status.hacking)],
     ["Home RAM", values.homeRamUsed === null ? "—" : `${values.homeRamUsed} of ${values.homeMaxRam} GB`],
     ["Scripts on home", orNone(values.homeScripts)],
     ["Page heap", orNone(values.pageHeapUsedBytes, megabytes)],

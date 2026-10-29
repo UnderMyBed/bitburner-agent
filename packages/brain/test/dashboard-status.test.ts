@@ -3,11 +3,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
+import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
+import { hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -400,4 +401,47 @@ test("a dialog left open in the newest fast snapshot (#143) is the dialogBlockin
   expect(status(STARTED_AT_MS + 3_000).alerts).toMatchObject([
     { name: "dialogBlocking", sinceMs: STARTED_AT_MS + 2_000, detail: expect.stringContaining("travel to Aevum") },
   ]);
+});
+
+test("the hacking rows (#196): the ceiling at the newest snapshots, and hacking's income over the last 10 minutes", () => {
+  const staticData: StaticSnapshotData = {
+    servers: [
+      { hostname: "home", purchasedByPlayer: true, moneyMax: 0 },
+      {
+        hostname: "zer0",
+        purchasedByPlayer: false,
+        moneyMax: 187_500_000,
+        minDifficulty: 10,
+        requiredHackingSkill: 75,
+        serverGrowth: 25,
+      },
+    ],
+  };
+  const mediumData: MediumSnapshotData = {
+    player: {
+      skills: { hacking: 150, intelligence: 0 },
+      mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+    },
+    hasTorRouter: false,
+    programs: [],
+    servers: [{ hostname: "zer0", maxRam: 32, cpuCores: 1, hasAdminRights: true }],
+  };
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("static", STARTED_AT_MS, staticData);
+  recordSnapshot("medium", nowMs - 5_000, mediumData);
+  // A slow snapshot every minute: $1,000 a second of hacking, but for one 11 minutes ago, out of the window.
+  recordSnapshot("slow", nowMs - 11 * 60_000, { moneySources: { hacking: 0 } });
+  for (let minute = 10; minute >= 1; minute--) {
+    recordSnapshot("slow", nowMs - minute * 60_000, { moneySources: { hacking: 1e9 + (10 - minute) * 60_000 } });
+  }
+  const { hacking } = status(nowMs);
+  expect(hacking).toEqual({ ceiling: hackingCeiling(staticData, mediumData), incomePerSecond: 1_000 });
+  expect(hacking.ceiling).toMatchObject({ known: true, target: "zer0", hostCount: 1, hostRamGb: 32 });
+});
+
+test("the hacking rows with no snapshots: the ceiling unknown, no income", () => {
+  expect(status(STARTED_AT_MS + 1_000).hacking).toEqual({
+    ceiling: { known: false, reason: "no static snapshot" },
+    incomePerSecond: null,
+  });
 });

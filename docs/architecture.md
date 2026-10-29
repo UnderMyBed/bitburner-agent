@@ -193,6 +193,7 @@ interface FastModel {
 - **Expectation by default:** deterministic and RNG-free. A stochastic mode exists for risk-sensitive choices.
 - **Fidelity is measured, not assumed.** Simulator scenarios compare fast-model trajectories against the real engine over the same horizon, and divergence is a tracked metric with a tolerance gate. That's the main job of the "estimate vs actual" calibration loop (§11).
 - **Batchable:** rollouts are independent, so they parallelise across workers today and can move to native code or the GPU later behind the same interface (ADR 0006).
+- **First piece, the hacking ceiling (M4 phase A, #196):** core's `hackingIncomePerGigabyteSecond` (`packages/core/src/hacking-ceiling.ts`), the most hacking income a GB-second of RAM can earn on a target at the player's current stats, from the game's own hack, grow and weaken formulas, as an upper bound (continuous batching, no timing gaps). It's checked against the game's `ns.formulas.hacking` in the simulator. The dashboard and the run report measure what hacking earned against it times the hack loop's RAM, and the batcher (A7) is scored on it ([`packages/brain`](../packages/brain/README.md#the-hacking-ceiling)).
 
 ### 4.4 Win routes as goal trees
 A route is a requirement tree. Its leaves are quantities that activities produce or actions grant. Routes are data, checked against `availability`.
@@ -279,7 +280,7 @@ Some things genuinely can't be estimated cheaply: known traps (accept Stanek's G
 - Each tier is one worker batch. Snapshots carry a monotonic sequence number and game timestamps. Tiers are merged into one model on the brain side.
 - **M2 contents (#89):** what can be read cheaply without Singularity ([each tier's data](bridge/protocol.md#each-tiers-data)):
   - static: the servers' fixed fields (max money, min security, required hacking level, ports needed, and, from M3, growth);
-  - slow: the reset info (installed augmentations, Source-Files, the BitNode) and the purchased servers;
+  - slow: the reset info (installed augmentations, Source-Files, the BitNode) and the purchased servers, and since #196 the money made by source since the install (`getMoneySources`: hacking's income, for the hacking ceiling);
   - medium: the player, the hacking programs they own (from M3), and every server's RAM, cores, money, security and access;
   - fast: money, home's RAM and the scripts on home.
 
@@ -406,7 +407,7 @@ Two channels, because the game's Remote File API (RFA) only handles files:
 ---
 
 ## 7. Telemetry and observability
-- **Store:** an append-only time series of snapshots, decision records, estimate-vs-actual errors, reflex health, and transitions. It's SQLite through Node's built-in `node:sqlite`, in the brain's data directory, by default the repo's gitignored `.data/` (owner decision 30; [`packages/brain`](../packages/brain/README.md#the-telemetry-store)). Old data is thinned once the campaign's months of data need it (M4). The gap report over its fast snapshots is the evidence for M2's live criterion. The run report (`npm run report`, [#185](https://github.com/UnderMyBed/bitburner-agent/issues/185); [`packages/brain`](../packages/brain/README.md#the-run-report)) reads a run's window of it after a live run: what the run did, and its gaps, income stalls, stuck intents, blocking dialogs, disconnects and failures, with a PASS or FAIL (owner decision 45).
+- **Store:** an append-only time series of snapshots, decision records, estimate-vs-actual errors, reflex health, and transitions. It's SQLite through Node's built-in `node:sqlite`, in the brain's data directory, by default the repo's gitignored `.data/` (owner decision 30; [`packages/brain`](../packages/brain/README.md#the-telemetry-store)). Old data is thinned once the campaign's months of data need it (M4). The gap report over its fast snapshots is the evidence for M2's live criterion. The run report (`npm run report`, [#185](https://github.com/UnderMyBed/bitburner-agent/issues/185); [`packages/brain`](../packages/brain/README.md#the-run-report)) reads a run's window of it after a live run: what the run did, and its gaps, income stalls, stuck intents, blocking dialogs, disconnects and failures, and since #196 what hacking earned against the hacking ceiling, with a PASS or FAIL (owner decision 45).
 - **Losing the store never breaks play,** because state is always rebuilt from the game. It does lose history and calibration data, so the data directory (store plus save backups) gets a rotating backup once the campaign starts (M4, [#15](https://github.com/UnderMyBed/bitburner-agent/issues/15)).
 - **Release tagging:** every record carries the agent release that produced it, so releases can be compared directly ("did v0.4 beat v0.3 on BN1?").
 - **Dashboard:** a web page the brain serves on **`127.0.0.1` only**, refusing foreign `Host` headers (DNS rebinding) and writes from other pages.

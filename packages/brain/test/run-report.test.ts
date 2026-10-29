@@ -14,6 +14,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
+import { hackingCeiling } from "../src/hacking-ceiling.ts";
 import { findIncomeStalls, formatDuration, inferHackTargets, runReport } from "../src/run-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -347,11 +348,65 @@ describe("the sections", () => {
       "  work, as it changed:\n    not reported",
       "  promotions:\n    none",
       "  dialogs handled:\n    none",
+      "  the ceiling now: unknown: no medium snapshot",
+      "  actual: unknown: fewer than two slow snapshots in the window",
     ]) {
       expect(text).toContain(line);
     }
   });
+
+  test("5. Hacking: what hacking earned against the ceiling over the window, as a percentage, and the ceiling now", () => {
+    const ceilingPerSecond = hackingRun(0.5);
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    const perSecond = (value: number) => `$${Math.round(value).toLocaleString("en-US")}/s`;
+    expect(text).toContain(`  the ceiling now: ${perSecond(ceilingPerSecond)} on zer0, with 16 GB on 1 server\n`);
+    expect(text).toContain(
+      `  ${perSecond(ceilingPerSecond / 2)} against a ceiling of ${perSecond(ceilingPerSecond)}: 50.0%, from ` +
+        `${at(10 * SECOND)} to ${at(10 * SECOND + RUN_MS)} (0.3 h)`,
+    );
+  });
 });
+
+/**
+ * A run with what the ceiling needs (#196): zer0 rooted with 16 GB at hacking 150, a medium snapshot every 10 s with the
+ * player's skills and multipliers, and hacking earning `ofCeiling` of the ceiling, by the slow snapshots' money sources
+ * every minute. Returns the ceiling, $ a second.
+ */
+function hackingRun(ofCeiling: number): number {
+  const servers: StaticSnapshotData = {
+    servers: [
+      { ...staticServer("home"), purchasedByPlayer: true, moneyMax: 0 },
+      staticServer("zer0", { moneyMax: 187_500_000, minDifficulty: 10, requiredHackingSkill: 75, serverGrowth: 25 }),
+    ],
+  };
+  const player = {
+    money: 0,
+    skills: { hacking: 150, intelligence: 0 },
+    mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+  };
+  const zer0 = {
+    hostname: "zer0",
+    maxRam: 16,
+    cpuCores: 1,
+    hasAdminRights: true,
+    moneyAvailable: 0,
+    hackDifficulty: 10,
+  };
+  const medium: MediumSnapshotData = { player, hasTorRouter: false, programs: [], servers: [zer0] };
+  const ceiling = hackingCeiling(servers, medium);
+  if (!ceiling.known) throw new Error(ceiling.reason);
+  event(0, "brainStarted", { release: "r" });
+  snapshot("static", 10 * SECOND, servers);
+  for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+  for (let offsetMs = 10 * SECOND; offsetMs <= 10 * SECOND + RUN_MS; offsetMs += 10 * SECOND) {
+    snapshot("medium", offsetMs, medium);
+    const earned = ((offsetMs - 10 * SECOND) / 1000) * ceiling.incomePerSecond * ofCeiling;
+    if ((offsetMs - 10 * SECOND) % MINUTE === 0)
+      snapshot("slow", offsetMs, { ...slowData(), moneySources: { hacking: earned } });
+  }
+  return ceiling.incomePerSecond;
+}
 
 describe("each failure is a FAIL, with its line", () => {
   const verdict = () => {
@@ -569,6 +624,17 @@ describe("each failure is a FAIL, with its line", () => {
     expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * SECOND }).failures).toEqual([]);
     expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 61 * SECOND }).failures).toEqual([
       `Agent disconnected at ${at(RUN_MS + SECOND)} (session session-1) and never reconnected in the window; nothing recorded during it`,
+    ]);
+  });
+
+  test("hacking income above the ceiling: its formula or the measure is wrong (#196)", () => {
+    hackingRun(1.5);
+    const { failures, verdictLine } = verdict();
+    expect(verdictLine).toBe("Verdict: FAIL");
+    expect(failures).toEqual([
+      expect.stringMatching(
+        /^hacking income above the ceiling: \$[\d,]+ earned from .*: the ceiling's formula or the measure is wrong$/,
+      ),
     ]);
   });
 

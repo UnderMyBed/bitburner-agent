@@ -140,6 +140,8 @@ test("each tier's contents: the servers, the reset info, the player, and home", 
   const slowData = snapshotsOf(events, "slow")[0]?.data as SlowSnapshotData;
   expect(slowData.resetInfo).toMatchObject({ currentNode: 1, ownedAugs: {}, ownedSF: {} });
   expect(slowData.purchasedServers).toEqual([]);
+  // The money made by source since the install (#196): nothing hacked yet.
+  expect(slowData.moneySources).toMatchObject({ hacking: 0, total: expect.any(Number) });
   const mediumData = snapshotsOf(events, "medium")[0]?.data as MediumSnapshotData;
   expect(mediumData.player).toMatchObject({ money: expect.any(Number), city: "Sector-12", skills: expect.any(Object) });
   expect(mediumData.servers.map((server) => server.hostname)).toEqual(hostnames);
@@ -259,8 +261,8 @@ test("with static's worker hanging from the start, the heartbeat has no gap, and
   const welcomedAtMs = brain.game.clock.now();
   await brain.game.run(30_000);
   expect(snapshotsOf(brain.events, "static")).toEqual([]);
-  // The first round's medium and slow ran before static hung. After that the hung worker's 1.6 GB leaves room for
-  // slow's worker (3.65 GB) but not medium's (4.3 GB), so medium is skipped too.
+  // The first round's medium and slow ran before static hung. After that the hung worker's 1.6 GB leaves no room for
+  // medium's worker (4.45 GB), so medium is skipped too; slow's (4.65 GB since #196) isn't due again within the 30 s.
   expect(snapshotsOf(brain.events, "slow")).toHaveLength(1);
   expect(snapshotsOf(brain.events, "medium")).toHaveLength(1);
   expect(fastData(snapshotsOf(brain.events, "fast").at(-1)).degradedTiers.sort()).toEqual(["medium", "static"]);

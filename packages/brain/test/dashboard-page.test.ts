@@ -102,6 +102,10 @@ const BUSY_STATUS: DashboardStatus = {
     desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
     outcome: { converged: false, problem: "no CyberSec among the factions joined", backend: "ui" },
   },
+  hacking: {
+    ceiling: { known: true, incomePerSecond: 51_234.6, target: "joesguns", hostCount: 3, hostRamGb: 48 },
+    incomePerSecond: 2_049.4,
+  },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -243,6 +247,11 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#values")).toContain("4.7 of 8 GB");
   expect(textOf(document, "#values")).toContain("250 MB");
   expect(textOf(document, "#values")).toContain("Degraded tiersstatic");
+  // The hacking ceiling and income (#196).
+  expect(textOf(document, "#values")).toContain("Hacking ceiling$51,235/s on joesguns, with 48 GB on 3 servers");
+  expect(textOf(document, "#values")).toContain(
+    "Hacking income$2,049/s over the last 10 min (4.0% of the ceiling now)",
+  );
   expect(textOf(document, "#gaps")).toContain("1800 fast snapshots");
   expect(textOf(document, "#gaps")).toContain("25 gaps, 500 s in all; the newest 1:");
   expect(textOf(document, "#gaps")).toContain("(100 s)");
@@ -273,6 +282,25 @@ test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
   expect(textOf(document, "#gaps")).toContain("No gaps.");
   expect(textOf(document, "#agent")).toContain("Connectedyes");
   expect(textOf(document, "#tiers")).toContain("mediumnone yet");
+  // No snapshots yet: the ceiling says why, and there's no income.
+  expect(textOf(document, "#values")).toContain("Hacking ceilingunknown: no static snapshot");
+  expect(textOf(document, "#values")).toContain(
+    "Hacking income— (not two slow snapshots with the money sources in the last 10 min)",
+  );
+});
+
+test("the hacking rows (#196): nothing hackable rooted, and income with no ceiling to compare it with", async () => {
+  const hacking = {
+    ceiling: { known: true, incomePerSecond: 0, target: null, hostCount: 1, hostRamGb: 4 },
+    incomePerSecond: 12,
+  };
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, hacking } }));
+  expectDataShown(document);
+  expect(textOf(document, "#values")).toContain(
+    "Hacking ceiling$0/s: nothing the player can hack is rooted (4 GB on 1 server)",
+  );
+  expect(textOf(document, "#values")).toContain("Hacking income$12/s over the last 10 min");
+  expect(textOf(document, "#values")).not.toContain("of the ceiling now");
 });
 
 test("gave up, from the real builder: the Agent gone, a relaunch listed, and the switch offers Resume", async () => {

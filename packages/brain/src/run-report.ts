@@ -22,6 +22,7 @@ import {
   type Gap,
 } from "./gap-report.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
+import { HackingFold } from "./hacking-ceiling.ts";
 import { WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
@@ -214,6 +215,8 @@ interface RunFacts extends RunWindow {
   hackLoopEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
   earlierBrainStartMs: number | null;
+  /** Hacking income against the ceiling (#196). */
+  hacking: HackingFold;
 }
 
 const isObject = (data: unknown): data is object => data !== null && typeof data === "object";
@@ -228,16 +231,19 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let snapshotCount = 0;
     // The player's servers first, from the static and slow snapshots, so the medium ones can be read in one pass.
     const playersServers = new Set(["home"]);
-    for (const { data } of ofTier<StaticSnapshotData>("static")) {
+    const hacking = new HackingFold(playersServers);
+    for (const { atMs, data } of ofTier<StaticSnapshotData>("static")) {
       snapshotCount++;
+      hacking.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
       }
     }
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
-    for (const { data } of ofTier<SlowSnapshotData>("slow")) {
+    for (const { atMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
+      hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
       for (const name of namesOf(data.purchasedServers)) playersServers.add(name);
@@ -253,6 +259,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       const playerMoney = playerOf(data).money;
       if (typeof playerMoney === "number") money.push({ atMs, money: playerMoney });
       inference.add(atMs, data);
+      hacking.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
@@ -287,6 +294,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       playersServers,
       hackLoopEnabled: readHackLoopEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
+      hacking,
     };
   });
 }
@@ -320,6 +328,8 @@ export function runReport(
     ...actionsSection(facts),
     "",
     ...healthSection(facts, gapThresholdMs, failures),
+    "",
+    ...facts.hacking.section(failures),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
     ...failures.map((failure) => `  ${failure}`),
