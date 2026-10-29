@@ -562,22 +562,21 @@ M4 phase A's sixth slice ([#210](https://github.com/UnderMyBed/bitburner-agent/i
 ### The augmentation suite
 
 `test/augmentations-simulation.test.ts`:
-- **The start:** an 8 GB fresh start in BN1, the brain as on Steam (the hack loop, programs, home RAM, backdoors and augmentations on).
-- **The edit:** 20 virtual minutes in, a harness edit stands in for the hours of CyberSec's work (A5's): CyberSec joined with 18,750 reputation, and $449m.
+- **The start:** an 8 GB fresh start in BN1, the brain as on Steam (the hack loop, programs, home RAM, cloud servers, backdoors, faction work and augmentations on).
+- **The edit:** 20 virtual minutes in, a harness edit stands in for the hours of work (A5's): CyberSec joined with 18,750 reputation, NiteSec joined with none, and the money for the five, home's next RAM upgrade and a NeuroFlux Governor level, $3m over. Programs, home RAM and cloud servers are paused from just before the edit until the install is chosen, so none takes that money before the next slow snapshot shows CyberSec's reputation.
+- **The decision is the comparison's** (#213 review): NiteSec's next comes sooner by installing first ("sooner installing", its times in the event), not "nothing left".
 - **The install:**
-  - the brain chooses the install, with nothing else worth installing at the joined factions;
-  - it buys Cranial Signal Processors Gen I and Gen II, BitWire, Synaptic Enhancement Implant and Neurotrainer I, in that order, through the `sim` effector;
+  - the brain buys Cranial Signal Processors Gen I and Gen II, BitWire, Synaptic Enhancement Implant and Neurotrainer I, in that order, through the `sim` effector;
+  - then home's RAM (its next size), then NeuroFlux Governor's first level;
   - it installs through the gate and a save backup;
   - the game starts boot.js, and the next Agent connects.
 - **After the reset:**
-  - 20 minutes after it, the hacking level is above the first cycle's at 20 minutes;
-  - the hacking multiplier is the five's (×1.18);
+  - the five and NeuroFlux Governor level 1 installed, home at its new RAM;
+  - the player's multipliers are theirs: hacking ×1.18 × 1.01, speed, exp and chance likewise;
   - the run report lists the decision, the purchases, the install sent and the install seen (the multipliers gained, the Agent away a few seconds), and passes.
+  - The hacking level 20 minutes on is logged, not judged: home's RAM differs between the cycles.
 - **Seeds:** CI runs seed 1 (about 6 s); `AUGMENTATION_SEEDS=1,2,3,4,5` runs others.
-- **On seeds 1 to 5:**
-  - 82 s from the edit to the reset;
-  - the hacking level was 87 to 90 after 20 minutes of the first cycle, and 127 to 133 after 20 minutes of the second (after merging A5, #209, whose faction work then runs too);
-  - home's RAM was 32 GB in both.
+- **On seeds 1 to 5:** 122 s from the edit to the reset; home 32 GB then 64 GB; the hacking level 87 to 90 after 20 minutes of the first cycle, 126 to 137 after 20 minutes of the second.
 
 ## Intents
 

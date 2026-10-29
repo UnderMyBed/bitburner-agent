@@ -65,8 +65,15 @@ test.each(SEEDS)(
     await game.run(COMPARED_AFTER_MS);
     const levelBefore = hacking(fresh.medium());
     const homeRam = () => fresh.medium()?.servers.find((server) => server.hostname === "home")?.maxRam;
-    const homeRamBefore = homeRam();
     const startedAt = slow()?.resetInfo.lastAugReset as number;
+    // Programs, home RAM and cloud servers paused until the install is chosen (then programs and cloud servers stand
+    // down, and home RAM is the rule's), so none takes the edit's money before the next slow snapshot shows CyberSec's
+    // reputation; 20 s on, a medium snapshot shows home's RAM settled.
+    fresh.controller().setProgramsEnabled(false);
+    fresh.controller().setHomeRamEnabled(false);
+    fresh.controller().setCloudServersEnabled(false);
+    await game.run(20_000);
+    const homeRamBefore = homeRam();
 
     // The harness edit: CyberSec's reputation for all five, NiteSec joined, and the money for the five, home's next
     // upgrade (its price in BN1, as the brain works it out) and a NeuroFlux Governor level, with $3m over.
@@ -76,6 +83,10 @@ test.each(SEEDS)(
     await simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
     await simulation.diagnostics.setMoney(FIVE_COST + homeRamPrice + NEUROFLUX_LEVEL_1 + 3_000_000);
     const editedAtMs = game.clock.now();
+    await game.runUntil(() => fresh.controller().augmentationsView().committed, INSTALLED_WITHIN_MS);
+    fresh.controller().setProgramsEnabled(true);
+    fresh.controller().setHomeRamEnabled(true);
+    fresh.controller().setCloudServersEnabled(true);
     await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt, INSTALLED_WITHIN_MS);
     const resetAt = slow()?.resetInfo.lastAugReset as number;
     expect(resetAt).not.toBe(startedAt);
