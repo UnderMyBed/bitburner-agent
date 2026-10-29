@@ -7,6 +7,7 @@ import type { BackdoorDue } from "../backdoors.ts";
 import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
+import type { WorldDaemonStall } from "../world-daemon.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
 export const AGENT_SILENT_AFTER_MS = 60_000;
@@ -50,7 +51,8 @@ export type AlertName =
   | "factionWorkStalled"
   | "batcherNotRunning"
   | "augmentationNotQueued"
-  | "installNotRestarted";
+  | "installNotRestarted"
+  | "worldDaemonStalled";
 
 export interface Alert {
   name: AlertName;
@@ -117,6 +119,8 @@ export interface AlertFacts {
   augmentationsNotQueued: NotQueued[];
   /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
   installAwaitingRestart: InstallAwaitingRestart | null;
+  /** A step on the path to the World Daemon stalled (#215): the controller's, or null. */
+  worldDaemonStall?: WorldDaemonStall | null;
 }
 
 /**
@@ -132,7 +136,7 @@ export interface IncomeFacts {
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then one
- * augmentationNotQueued per purchase not queued, then installNotRestarted.
+ * augmentationNotQueued per purchase not queued, then installNotRestarted, then worldDaemonStalled.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -225,6 +229,12 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     });
   }
   alerts.push(...augmentationAlerts(facts));
+  const stall = facts.worldDaemonStall ?? null;
+  if (stall !== null) {
+    // The rule raises it `WORLD_DAEMON_STALLED_AFTER_MS` (5 minutes) after the step could be done (#215).
+    const minutes = Math.floor((facts.nowMs - stall.sinceMs) / 60_000);
+    alerts.push({ name: "worldDaemonStalled", sinceMs: stall.sinceMs, detail: `${stall.detail}, for ${minutes} min` });
+  }
   return alerts;
 }
 

@@ -44,6 +44,8 @@ Generated from the pinned game by the simulator's engine, never typed by hand: `
 
 ## Augmentations and the reset
 
+`src/factions.ts` also has Daedalus's invitation requirements (#215): `daedalusRequirements` (the BitNode's count of installed augmentations, $100b, hacking 2500 or every combat skill 1500, `Faction/FactionInfo.tsx:138-149`) and `daedalusMissing`, what's still missing, worded. `InstallReason` has the brain's own "The Red Pill".
+
 `src/augmentation-plan.ts` (#210, M4 phase A slice A6): which augmentations the brain buys, in what order, and whether installing them now beats carrying on. The functions are pure and use the game's formulas. The brain's rule (`packages/brain/src/augmentations.ts`) feeds them what the snapshots say. An augmentation's worth is A5's `hackingValue` (`src/faction-work.ts`, #203) at the player's hacking level.
 
 | Function | What |

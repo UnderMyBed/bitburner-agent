@@ -94,5 +94,50 @@ export function daedalusAugmentationsRequired(currentNode: number, ownedSF: Read
   return augmentationBitNodeMultipliers(currentNode, ownedSF).DaedalusAugsRequirement;
 }
 
+/** The faction that sells The Red Pill (`Augmentation/Augmentations.ts:1946-1953`). */
+export const DAEDALUS = "Daedalus";
+
+/**
+ * Daedalus's invitation requirements in a BitNode (`Faction/FactionInfo.tsx:138-149`): the BitNode's installed
+ * augmentation count (`daedalusAugmentationsRequired`; installed only, NeuroFlux Governor once:
+ * `FactionJoinCondition.ts:116-131`), $100b held, and hacking 2500 or every combat skill 1500.
+ */
+export function daedalusRequirements(currentNode: number, ownedSF: Readonly<Record<string, number>>) {
+  return {
+    augmentations: daedalusAugmentationsRequired(currentNode, ownedSF),
+    money: 100e9,
+    hacking: 2500,
+    combat: 1500,
+  };
+}
+
+/** The player's figures Daedalus's invitation turns on. */
+export interface DaedalusFigures {
+  /** Installed augmentations: `ownedAugs`' names, NeuroFlux Governor once. */
+  augmentations: number;
+  money: number;
+  skills: { hacking: number; strength: number; defense: number; dexterity: number; agility: number };
+}
+
+/** What Daedalus's invitation still needs, worded, in its order; empty when it's met. */
+export function daedalusMissing(figures: DaedalusFigures, required: ReturnType<typeof daedalusRequirements>): string[] {
+  const missing: string[] = [];
+  const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+  if (figures.augmentations < required.augmentations) {
+    missing.push(`${count(figures.augmentations)} of ${count(required.augmentations)} augmentations installed`);
+  }
+  if (figures.money < required.money) {
+    missing.push(`$${count(figures.money)} of $${count(required.money)}`);
+  }
+  const { hacking, strength, defense, dexterity, agility } = figures.skills;
+  const combat = Math.min(strength, defense, dexterity, agility) >= required.combat;
+  if (hacking < required.hacking && !combat) {
+    missing.push(
+      `hacking ${count(hacking)} of ${count(required.hacking)} (or every combat skill ${count(required.combat)})`,
+    );
+  }
+  return missing;
+}
+
 /** Home worker: joins a faction through the game's Factions page (#147). */
 export const JOIN_FACTION_WORKER_NAME = "join-faction.js";

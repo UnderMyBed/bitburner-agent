@@ -102,8 +102,9 @@ async function withTwentyMillion(options: { singularity: boolean }) {
     },
   });
   fresh.controller().setProgramsEnabled(false);
-  // Buying and installing augmentations (#210) off: the queue here is the test's own.
+  // Buying and installing augmentations (#210) and the brain's destroy (#215) off: the queue here is the test's own.
   fresh.controller().setAugmentationsEnabled(false);
+  fresh.controller().setWorldDaemonEnabled(false);
   fresh.controller().setHomeRamEnabled(false);
   return fresh;
 }

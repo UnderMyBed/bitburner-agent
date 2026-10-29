@@ -204,8 +204,11 @@ export interface InstallDecisionInputs {
   candidates: readonly InstallCandidate[];
 }
 
-/** Why an install is, or would be, chosen (#210). */
-export type InstallReason = "nothing left" | "nothing reachable" | "sooner installing";
+/**
+ * Why an install is, or would be, chosen (#210). "The Red Pill" is the brain's own (#215): it's reached or queued, and
+ * installing it links w0r1d_d43m0n (`installDecision` never gives it).
+ */
+export type InstallReason = "nothing left" | "nothing reachable" | "sooner installing" | "The Red Pill";
 
 /** The decision, with its figures (ms; Infinity for never) for the dashboard, the events and the report. */
 export interface InstallDecision {

@@ -59,6 +59,10 @@
     <h2>Augmentations</h2><div></div><button type="button">Stop buying and installing augmentations</button>
     <div class="bad" id="augmentations-problem" hidden></div>
   </section>
+  <section id="world-daemon">
+    <h2>World Daemon</h2><div></div><button type="button">Stop destroying the BitNode</button>
+    <div class="bad" id="world-daemon-problem" hidden></div>
+  </section>
   <section id="intents">
     <h2>Intents</h2><table></table>
     <form>
@@ -135,6 +139,8 @@ let enableFactionWorkNext = false;
 let workSource = null;
 /** What the augmentations' switch sends next (#210), likewise. */
 let enableAugmentationsNext = false;
+/** What destroying the BitNode's switch sends next (#215), likewise. */
+let enableWorldDaemonNext = false;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -387,6 +393,28 @@ function render(status) {
   document.querySelector("#augmentations button").textContent = augmentations.enabled
     ? "Stop buying and installing augmentations"
     : "Start buying and installing augmentations";
+  // The path to the World Daemon (#215): Daedalus, The Red Pill, w0r1d_d43m0n, in the brain's words; the destroy.
+  const worldDaemon = status.worldDaemon;
+  enableWorldDaemonNext = worldDaemon === null ? true : !worldDaemon.enabled;
+  document.querySelector("#world-daemon div").replaceChildren(
+    ...(worldDaemon === null
+      ? [element("div", "Not given by this brain", "muted")]
+      : [
+          element(
+            "div",
+            `Destroying the BitNode (into BitNode 1): ${
+              !worldDaemon.enabled ? "off" : worldDaemon.destroying ? "asked for, through the gate" : "on, once w0r1d_d43m0n is ready"
+            }`,
+            worldDaemon.enabled ? "ok" : "muted",
+          ),
+          ...(worldDaemon.lines.length === 0
+            ? [element("div", "Waiting for the Agent's snapshots", "muted")]
+            : worldDaemon.lines.map((line) => element("div", line))),
+          ...(worldDaemon.stall === null ? [] : [element("div", `STALLED: ${worldDaemon.stall.detail}`, "bad")]),
+        ]),
+  );
+  document.querySelector("#world-daemon button").textContent =
+    worldDaemon === null || worldDaemon.enabled ? "Stop destroying the BitNode" : "Start destroying the BitNode";
 
   // With the backend of the last try (#145), unless an older Agent didn't say.
   const via = (outcome) => (outcome.backend === null || outcome.backend === undefined ? "" : ` via ${outcome.backend}`);
@@ -595,6 +623,9 @@ document.querySelector("#factions button").addEventListener("click", () =>
 );
 document.querySelector("#augmentations button").addEventListener("click", () =>
   sendSwitch("/api/augmentations", { enabled: enableAugmentationsNext }, "#augmentations-problem"),
+);
+document.querySelector("#world-daemon button").addEventListener("click", () =>
+  sendSwitch("/api/world-daemon", { enabled: enableWorldDaemonNext }, "#world-daemon-problem"),
 );
 document.querySelector("#intents form").addEventListener("submit", (event) => {
   event.preventDefault();

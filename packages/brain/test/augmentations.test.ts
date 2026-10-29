@@ -4,7 +4,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FactionState, MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
+import {
+  AUGMENTATION_NAMES,
+  type FactionState,
+  type MediumSnapshotData,
+  type SlowSnapshotData,
+} from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   AUGMENTATION_CYCLE_SETTING,
@@ -788,6 +793,107 @@ describe("committed", () => {
     expect(rule.installNotReset()).toBeNull();
     expect(events.map((event) => event.type)).not.toContain("augmentationInstallNotReset");
     expect(events.map((event) => event.type)).not.toContain("augmentationCycleCalledOff");
+  });
+});
+
+describe("The Red Pill and Daedalus first (#215)", () => {
+  const RED_PILL = "The Red Pill";
+  /** Thirty installed, none of CyberSec's: Daedalus's count in BN1. */
+  const THIRTY = Object.fromEntries(
+    AUGMENTATION_NAMES.filter((name) => ![...FIVE, NFG, RED_PILL].includes(name))
+      .slice(0, 30)
+      .map((name) => [name, 1]),
+  );
+
+  test("The Red Pill reached at a joined Daedalus: install chosen for it, whatever the income; bought last", () => {
+    const joined = [{ name: "Daedalus", reputation: 2.5e6, favor: 0 }];
+    const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }) });
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false });
+    expect(events).toEqual([expect.objectContaining({ type: "augmentationInstallChosen", reason: "The Red Pill" })]);
+    expect(lines.at(-1)).toMatch(/The Red Pill reached: it links w0r1d_d43m0n once installed$/);
+    // Nothing else the money covers: The Red Pill, from Daedalus, then the install once it shows queued.
+    expect(ask.intent).toEqual(purchaseIntent("Daedalus", RED_PILL, 1));
+    expect(rule.view().asking).toBe("buying The Red Pill from Daedalus");
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: 0 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    gameTimeMs += MINUTE;
+    expect(update({ slowData: slow({ joined, queued: [RED_PILL] }), mediumData: medium({ money: 0 }) })).toEqual({
+      intent: null,
+      install: true,
+      committed: true,
+    });
+  });
+
+  test("bought after the set, home's RAM and NeuroFlux Governor: the others first, as each purchase dearens the next", () => {
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "Daedalus", reputation: 2.5e6, favor: 0 },
+    ];
+    // $70m: one of CyberSec's; then NeuroFlux Governor isn't covered, so The Red Pill.
+    const first = update({ slowData: slow({ joined }), mediumData: medium({ money: 70e6 }) });
+    expect(first.intent?.args).toMatchObject({ faction: expect.any(String) });
+    expect(first.intent?.args).not.toMatchObject({ augmentation: RED_PILL });
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: 70e6 }),
+      doneIds: new Set([first.intent?.id as string]),
+    });
+    const next = update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }), nowMs: 5_000 });
+    expect(next.intent).toEqual(purchaseIntent("Daedalus", RED_PILL, 1));
+  });
+
+  test("queued already (the owner's, say): the install is chosen for it", () => {
+    update({ slowData: slow({ queued: [RED_PILL] }), mediumData: medium({ money: 0 }) });
+    expect(events).toEqual([expect.objectContaining({ type: "augmentationInstallChosen", reason: "The Red Pill" })]);
+  });
+
+  test("Daedalus joined, The Red Pill short: no install, though installing first would be sooner; nothing held back", () => {
+    // As "the money far off carrying on", which installs, with Daedalus joined at 1m.
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 6_250, favor: 0 },
+      { name: "Daedalus", reputation: 1e6, favor: 0 },
+    ];
+    measureIncome(10_000, { joined }, medium({ money: FIVE_COST }));
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(events).toEqual([]);
+    expect(rule.view()).toMatchObject({
+      waitingFor: "The Red Pill: Daedalus's reputation 1,000,000 of 2,500,000 (an install now would lose it)",
+      reserve: 0,
+    });
+  });
+
+  test("Daedalus's count and hacking reached, the money short: no install, its $100b held back from cloud servers", () => {
+    const fields = { reputation: 18_750, ownedAugs: THIRTY };
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 50e9 }) });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view()).toMatchObject({
+      waitingFor:
+        "Daedalus's invitation ($50,000,000,000 of $100,000,000,000): an install now would reset the money and the " +
+        "hacking level",
+      reserve: 100e9,
+    });
+    expect(rule.reserve()).toBe(100e9);
+    // Met: still none, until it invites and A5 joins.
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 150e9 }) });
+    expect(rule.view().waitingFor).toMatch(/^Daedalus's invitation \(the game's next check\)/);
+    // Its hacking short, the money there, ordinary installs go on (they raise the multiplier): CyberSec's five.
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2000, money: 150e9 }) });
+    expect(readAugmentationCycle(store)).not.toBeNull();
+    // Short of the count: likewise.
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    rule = newRule();
+    update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ hacking: 2600, money: 50e9 }) });
+    expect(readAugmentationCycle(store)).not.toBeNull();
+  });
+
+  test("The Red Pill installed: Daedalus is done with, ordinary installs go on", () => {
+    const fields = { reputation: 18_750, ownedAugs: { ...THIRTY, [RED_PILL]: 1 } };
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 50e9 }) });
+    expect(readAugmentationCycle(store)).not.toBeNull();
   });
 });
 

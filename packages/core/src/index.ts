@@ -228,7 +228,11 @@ export {
   type WorkingPerson,
 } from "./faction-work.ts";
 export {
+  DAEDALUS,
+  type DaedalusFigures,
   daedalusAugmentationsRequired,
+  daedalusMissing,
+  daedalusRequirements,
   FACTION_ENEMIES,
   FACTION_NAMES,
   type FactionData,

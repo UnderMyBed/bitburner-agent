@@ -124,6 +124,7 @@ async function keptGame() {
   const controller = fresh.controller();
   controller.setProgramsEnabled(false);
   controller.setAugmentationsEnabled(false);
+  controller.setWorldDaemonEnabled(false);
   controller.setHomeRamEnabled(false);
   expect(controller.setWork({ faction: "Sector-12", workType: "hacking" })).toEqual({ ok: true });
   expect(controller.addManualIntent({ action: "joinFaction", args: { faction: "CyberSec" } })).toMatchObject({

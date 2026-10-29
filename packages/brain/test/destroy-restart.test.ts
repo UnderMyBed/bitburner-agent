@@ -73,8 +73,9 @@ async function readyToDestroy({ singularity = false, rooted = true, levelled = t
   });
   if (withDesiredState) {
     fresh.controller().setProgramsEnabled(false);
-    // Buying and installing augmentations (#210) off: the queue here is the test's own.
+    // Buying and installing augmentations (#210) and the brain's destroy (#215) off: the queue here is the test's own.
     fresh.controller().setAugmentationsEnabled(false);
+    fresh.controller().setWorldDaemonEnabled(false);
     fresh.controller().setHomeRamEnabled(false);
   }
   // The connected Agent's first slow snapshot, so the brain knows the game's last reset before the destroy, and the
@@ -295,8 +296,9 @@ test("a save that starts at the BitVerse (w0r1d_d43m0n backdoored, no portal pic
     },
   });
   fresh.controller().setProgramsEnabled(false);
-  // Buying and installing augmentations (#210) off: the queue here is the test's own.
+  // Buying and installing augmentations (#210) and the brain's destroy (#215) off: the queue here is the test's own.
   fresh.controller().setAugmentationsEnabled(false);
+  fresh.controller().setWorldDaemonEnabled(false);
   fresh.controller().setHomeRamEnabled(false);
   // The game saved there and loaded: it starts at the BitVerse, with no cinematic, and autoexec starts the Agent.
   const reloaded = await fresh.reload();

@@ -24,6 +24,7 @@ import { reportedRefusal } from "../record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
+import type { WorldDaemonStall, WorldDaemonView } from "../world-daemon.ts";
 import { type Alert, activeAlerts, type IncomeFacts } from "./alerts.ts";
 
 /** How far back the batcher's not-running streak is read (#211): fast snapshots, 2 s apart. */
@@ -109,6 +110,11 @@ export interface DashboardStatus {
    * purchases not queued. The reserve is Infinity while committed, which JSON carries as null.
    */
   augmentations: AugmentationsView;
+  /**
+   * The path to the World Daemon (#215): Daedalus, The Red Pill, w0r1d_d43m0n, in figures and in words; the destroy's
+   * switch and whether it's asked for; and a stall. Null from a brain that doesn't give it.
+   */
+  worldDaemon: WorldDaemonView | null;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -168,6 +174,9 @@ export interface DashboardStatusOptions {
   /** The joins and the brain's faction work (#203), the controller's view, and its stall for the alert. */
   factionWork: FactionsView;
   factionWorkStall: FactionWorkStall | null;
+  /** The path to the World Daemon (#215), the controller's view, and its stall for the alert. */
+  worldDaemon?: WorldDaemonView;
+  worldDaemonStall?: WorldDaemonStall | null;
   nowMs: number;
 }
 
@@ -197,6 +206,8 @@ export function buildDashboardStatus({
   backdoorsDue,
   factionWork,
   factionWorkStall,
+  worldDaemon,
+  worldDaemonStall = null,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -326,6 +337,7 @@ export function buildDashboardStatus({
             },
       augmentationsNotQueued: augmentations.notQueued,
       installAwaitingRestart,
+      worldDaemonStall,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -350,6 +362,7 @@ export function buildDashboardStatus({
     homeRam,
     cloudServers,
     augmentations,
+    worldDaemon: worldDaemon ?? null,
     intents,
     work,
     factions: slow

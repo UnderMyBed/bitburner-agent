@@ -14,6 +14,10 @@
 // - Fail loudly: a purchase reported done that two faction state reads after it don't show queued is
 //   `augmentationNotQueued` (an event, a log line, the dashboard's alert and the run report's failure); an install
 //   reported done that the next slow snapshot doesn't show reset is `augmentationInstallNotReset` (likewise).
+// - The Red Pill first (#215, A8): with Daedalus's count of installed augmentations reached and its other
+//   requirements but the money, no install is chosen and its $100b is held back from cloud servers, until it invites
+//   (A5 joins). Joined, none is chosen while The Red Pill is short of its reputation (an install resets it,
+//   `Faction/Faction.ts:77-85`); reached, or queued, the install is chosen ("The Red Pill"), and it's bought last.
 // - The "Augmentations" switch, on by default (owner decision 48): off, nothing is bought or installed, and a cycle
 //   under way is called off (what's bought stays queued, for the owner).
 import {
@@ -23,6 +27,9 @@ import {
   augmentationCost,
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
+  DAEDALUS,
+  daedalusMissing,
+  daedalusRequirements,
   FACTION_NAMES,
   type FactionState,
   factionReadingKind,
@@ -40,6 +47,7 @@ import {
   purchaseSequenceCost,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
+  THE_RED_PILL,
   type WorkingPerson,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
@@ -361,6 +369,7 @@ export function describeReason(
   }: { with: { ms: number | null } | null; without: { augmentation: string; ms: number | null } | null },
 ): string {
   if (reason === "nothing left") return "nothing else worth installing at the joined factions";
+  if (reason === "The Red Pill") return "The Red Pill reached: it links w0r1d_d43m0n once installed";
   if (reason === "nothing reachable")
     return "nothing else reachable at a joined faction's work (a reputation rate of 0)";
   return (
@@ -838,7 +847,19 @@ export class AugmentationRule {
       const chosen = decide(money, 0);
       const { installing } = chosen;
       let { decision } = chosen;
-      if (unsteady(decision)) {
+      const endgame = this.#endgame({ resetInfo, player, purchaseState, installable, shops, reputationOf });
+      if (endgame.kind === "redPill") {
+        decision = { ...decision, install: true, waitingFor: null, reason: "The Red Pill" };
+      } else if (endgame.kind === "hold") {
+        return this.#ask(null, {
+          set: setView,
+          setCost: set.money,
+          decision: null,
+          reserve: endgame.reserve,
+          committed: false,
+          waitingFor: endgame.waitingFor,
+        });
+      } else if (unsteady(decision)) {
         const why =
           `a steady income: ${formatMoney(measured?.window ?? 0)} a second over the last 10 minutes is under half ` +
           `this cycle's average (${formatMoney(measured?.average ?? 0)}), too low to judge the money's wait on`;
@@ -930,6 +951,20 @@ export class AugmentationRule {
             formatMoney(neuroFlux.price),
         });
       }
+      // The Red Pill reached at a joined seller (#215): last, as every purchase makes the next dearer and it costs $0.
+      const redPillSeller = owned(THE_RED_PILL) ? null : sellerOf(THE_RED_PILL);
+      if (redPillSeller !== null) {
+        return this.#ask(
+          {
+            intent: purchaseIntent(redPillSeller, THE_RED_PILL, 1),
+            augmentation: THE_RED_PILL,
+            faction: redPillSeller,
+            level: 1,
+            price: augmentationCost(THE_RED_PILL, purchaseState).money,
+          },
+          { ...committedView, asking: `buying ${THE_RED_PILL} from ${redPillSeller}` },
+        );
+      }
       const unconfirmed = this.#bought.map((bought) => bought.augmentation);
       if (unconfirmed.length > 0) {
         return this.#ask(null, {
@@ -961,6 +996,65 @@ export class AugmentationRule {
       waiting: false,
     };
     return { intent: null, install: true, committed: true };
+  }
+
+  /**
+   * The Red Pill's way (#215), before an ordinary install is chosen:
+   * - `redPill`: it's queued, or reached at a joined seller (Daedalus): install, for it.
+   * - `hold`: no ordinary install, saying why. Joined, it's short of its reputation, which an install would reset
+   *   (`Faction/Faction.ts:77-85`). Not joined, with Daedalus's count of installed augmentations reached and its skill
+   *   requirement met: only money, held at the game's check, is missing, so its $100b is held back from cloud servers
+   *   (an install would reset the money and the hacking level). With the skill short, ordinary installs go on: they
+   *   raise the hacking multiplier.
+   * - `none`: installed already, not sold in this BitNode (BN15), or Daedalus's count not reached.
+   */
+  #endgame({
+    resetInfo,
+    player,
+    purchaseState,
+    installable,
+    shops,
+    reputationOf,
+  }: {
+    resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
+    player: NonNullable<ReturnType<typeof playerOf>>;
+    purchaseState: AugmentationPurchaseState;
+    installable: string[];
+    shops: Map<string, string[]>;
+    reputationOf: (faction: string) => number;
+  }): { kind: "redPill" } | { kind: "hold"; waitingFor: string; reserve: number } | { kind: "none" } {
+    const { currentNode, ownedAugs, ownedSF } = resetInfo;
+    if (Object.hasOwn(ownedAugs, THE_RED_PILL)) return { kind: "none" };
+    if (installable.includes(THE_RED_PILL)) return { kind: "redPill" };
+    const needed = augmentationCost(THE_RED_PILL, purchaseState).reputation;
+    const sellers = [...shops].filter(([, shop]) => shop.includes(THE_RED_PILL)).map(([faction]) => faction);
+    if (sellers.some((faction) => reputationOf(faction) >= needed)) return { kind: "redPill" };
+    if (sellers.length > 0) {
+      const best = sellers.reduce((a, b) => (reputationOf(b) > reputationOf(a) ? b : a));
+      const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+      return {
+        kind: "hold",
+        reserve: 0,
+        waitingFor:
+          `${THE_RED_PILL}: ${best}'s reputation ${count(reputationOf(best))} of ${count(needed)} (an install now ` +
+          "would lose it)",
+      };
+    }
+    if (!augmentationsSoldBy(DAEDALUS, currentNode, null).includes(THE_RED_PILL)) return { kind: "none" };
+    const required = daedalusRequirements(currentNode, ownedSF);
+    const skills = player.person.skills;
+    const figures = { augmentations: Object.keys(ownedAugs).length, money: player.money, skills };
+    const missing = daedalusMissing(figures, required);
+    const onlyMoney = missing.length === 0 || (missing.length === 1 && figures.money < required.money);
+    // Only the money missing (the count short is missing too): held.
+    if (!onlyMoney) return { kind: "none" };
+    return {
+      kind: "hold",
+      reserve: required.money,
+      waitingFor:
+        `${DAEDALUS}'s invitation (${missing.join(", ") || "the game's next check"}): an install now would reset the ` +
+        "money and the hacking level",
+    };
   }
 
   /** The next NeuroFlux Governor level, if the money and a joined seller's reputation cover it, as an ask. */

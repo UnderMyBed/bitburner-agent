@@ -26,6 +26,7 @@ import { setSupervisionPaused } from "./supervision.ts";
 import { Supervisor, shouldSupervise } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 import { WindowsGameProcess } from "./windows-game-process.ts";
+import { readWorldDaemonEnabled } from "./world-daemon.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
 const MAX_LOG_LINE_LENGTH = 500;
@@ -102,8 +103,9 @@ try {
   );
   const stopRecordingBackups = recordEvents(saveBackups, store, deployerReleaseContext);
   // The rules' events, for the run report: the brain's faction work's choices and ends (#203), and the augmentation
-  // rule's decisions and purchases and the installs sent (#210). None comes before an Agent's snapshots, and none of
-  // those before this: the control server's listen resolves before its first connection is handled.
+  // rule's decisions and purchases and the installs sent (#210), and the World Daemon's stalls and destroys (#215).
+  // None comes before an Agent's snapshots, and none of those before this: the control server's listen resolves before
+  // its first connection is handled.
   const stopRecordingRules = recordEvents(desiredState, store, deployerReleaseContext);
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
@@ -155,6 +157,8 @@ try {
         backdoorsDue: desiredState.backdoorsDue(),
         factionWork: desiredState.factionsView(),
         factionWorkStall: desiredState.factionWorkStall(),
+        worldDaemon: desiredState.worldDaemonView(),
+        worldDaemonStall: desiredState.worldDaemonStall(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -177,6 +181,10 @@ try {
     setAugmentationsEnabled: (enabled) => {
       desiredState.setAugmentationsEnabled(enabled);
       log(`buying and installing augmentations turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setWorldDaemonEnabled: (enabled) => {
+      desiredState.setWorldDaemonEnabled(enabled);
+      log(`destroying the BitNode turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
@@ -221,7 +229,8 @@ try {
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
-      `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+      `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
+      `${readWorldDaemonEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
   );
   log(
     supervising

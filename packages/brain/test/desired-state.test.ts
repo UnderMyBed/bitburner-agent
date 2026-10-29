@@ -1458,6 +1458,61 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       return { ...connected, daemonMedium, releaseDestroy };
     }
 
+    describe("the brain's destroy (#215)", () => {
+      const BRAINS = intent({ action: "destroyBitNode", args: { nextBitNode: 1 } });
+      /** Connected with w0r1d_d43m0n in the static snapshot and The Red Pill installed in the slow one. */
+      function withTheRedPill() {
+        const connected = connectedWithLoopOff();
+        send(connected.connection, "static", staticWithDaemon());
+        const slow = slowAt(1_000, 1_000);
+        send(connected.connection, "slow", {
+          ...slow,
+          resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } },
+        });
+        const daemonMedium = (hacking = 3000, { rooted = true } = {}) =>
+          send(connected.connection, "medium", mediumData(hacking, { [WD]: rooted }));
+        return { ...connected, daemonMedium };
+      }
+
+      test("once w0r1d_d43m0n is rooted at its level: into BitNode 1, through the gate and a backup, stored as sent", async () => {
+        const { controller, sentIds, waitingFor, backupNow, settleBackup, daemonMedium } = withTheRedPill();
+        const stored: unknown[] = [];
+        controller.subscribe((event) => stored.push(event));
+        daemonMedium(3000, { rooted: false });
+        expect(controller.intentsView().map((view) => view.id)).not.toContain(BRAINS.id);
+        daemonMedium();
+        expect(controller.intentsView().map(({ id, source }) => [id, source])).toContainEqual([
+          BRAINS.id,
+          "worldDaemon",
+        ]);
+        expect(controller.worldDaemonView()).toMatchObject({ enabled: true, destroying: true });
+        expect(waitingFor(BRAINS.id)).toBe(
+          "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)",
+        );
+        daemonMedium();
+        daemonMedium();
+        expect(backupNow).toHaveBeenCalledTimes(1);
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([BRAINS.id]);
+        expect(stored).toEqual([
+          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1 },
+        ]);
+      });
+
+      test("the owner's destroy wins, whatever BitNode it enters; the switch off, none of the brain's", () => {
+        const { controller, daemonMedium } = withTheRedPill();
+        controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+        daemonMedium();
+        expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([[DESTROY.id, "manual"]]);
+        expect(controller.cancelManualIntent(DESTROY.id)).toBe(true);
+        controller.setWorldDaemonEnabled(false);
+        expect(store.getSetting("worldDaemon.enabled")).toBe("false");
+        daemonMedium();
+        expect(controller.intentsView()).toEqual([]);
+        expect(controller.worldDaemonView()).toMatchObject({ enabled: false, destroying: false });
+      });
+    });
+
     test("its guard: what's queued before it first, then w0r1d_d43m0n's preconditions, each saying why, before any backup", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, daemonMedium, releaseDestroy } = readyToDestroy();
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });

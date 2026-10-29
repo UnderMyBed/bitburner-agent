@@ -104,6 +104,16 @@ const BUSY_STATUS: DashboardStatus = {
     problem: null,
   },
   augmentations: idleAugmentations,
+  worldDaemon: {
+    enabled: true,
+    path: null,
+    lines: [
+      "Daedalus: joined; 31 of 30 augmentations installed",
+      "The Red Pill: Daedalus's reputation 1,000,000 of 2,500,000 at 40.0/s: about 10.4 h",
+    ],
+    destroying: false,
+    stall: null,
+  },
   intents: [
     {
       id: "travel(Aevum)",
@@ -616,6 +626,7 @@ test.each([
   ["cloud servers", "#cloud-servers button", "#cloud-servers-problem"],
   ["the brain's faction work", "#factions button", "#faction-work-problem"],
   ["augmentations", "#augmentations button", "#augmentations-problem"],
+  ["destroying the BitNode", "#world-daemon button", "#world-daemon-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -746,6 +757,48 @@ test.each([
   const cloudServers = { ...BUSY_STATUS.cloudServers, ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, cloudServers } }));
   expect(textOf(document, "#cloud-servers")).toContain(text);
+});
+
+test("the World Daemon (#215): the path in the brain's words, a stall in red, and its switch", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = {
+        ...BUSY_STATUS,
+        worldDaemon: { ...(BUSY_STATUS.worldDaemon as NonNullable<DashboardStatus["worldDaemon"]>), enabled },
+      };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  expect(textOf(document, "#world-daemon")).toContain(
+    "Destroying the BitNode (into BitNode 1): on, once w0r1d_d43m0n is ready",
+  );
+  expect(textOf(document, "#world-daemon")).toContain("Daedalus: joined; 31 of 30 augmentations installed");
+  expect(textOf(document, "#world-daemon")).toContain("The Red Pill: Daedalus's reputation 1,000,000 of 2,500,000");
+  expect(textOf(document, "#world-daemon button")).toBe("Stop destroying the BitNode");
+  (document.querySelector("#world-daemon button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/world-daemon", '{"enabled":false}']],
+  );
+  expect(textOf(document, "#world-daemon")).toContain("Destroying the BitNode (into BitNode 1): off");
+  expect(textOf(document, "#world-daemon button")).toBe("Start destroying the BitNode");
+});
+
+test.each([
+  ["asked for", { destroying: true }, "asked for, through the gate"],
+  [
+    "stalled",
+    { stall: { step: "destroy", sinceMs: 0, detail: "w0r1d_d43m0n at its level, the BitNode not destroyed" } },
+    "STALLED: w0r1d_d43m0n at its level, the BitNode not destroyed",
+  ],
+  ["with no path yet", { lines: [] }, "Waiting for the Agent's snapshots"],
+])("the World Daemon, %s, says so", async (_description, changes, text) => {
+  const worldDaemon = { ...(BUSY_STATUS.worldDaemon as NonNullable<DashboardStatus["worldDaemon"]>), ...changes };
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, worldDaemon } }));
+  expect(textOf(document, "#world-daemon")).toContain(text);
 });
 
 test("the augmentations' button (#210) sends its switch, and each state reads plainly", async () => {
