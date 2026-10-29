@@ -55,7 +55,7 @@ A port of 0 picks any free port, which is for tests only: the game's RFA setting
 
 ## The telemetry store
 
-SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap report's command) never blocks the brain's writes (architecture §7, §11).
+SQLite through Node's built-in `node:sqlite`, in WAL mode so a reader (the gap report's and the run report's commands) never blocks the brain's writes (architecture §7, §11).
 
 | Table | Rows |
 |---|---|
@@ -321,6 +321,28 @@ npm run gaps -- --since 2026-10-27T00:00:00Z --until 2026-10-28T00:00:00Z
   - `--until`, default now.
 - **Exit codes:** 0 with no gaps, 1 with gaps, 2 when it couldn't run.
 
+## The run report
+
+What a run did and what went wrong, from the store alone (#185, owner decision 45): the "analyse" step of build, test, run, analyse, in place of a manual smoke test. What each section says, and what a FAIL means, is in [docs/setup.md](../../docs/setup.md#after-a-run-the-run-report).
+
+```
+npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [--environment E0]
+```
+
+- **The window:** `--since` defaults to the newest `brainStarted` event, `--until` to now. Times need a `Z` or an offset, as for the gap report. The newest `brainStarted` includes the brain runner's own restart after a crash, so a run spanning a restart needs `--since`; section 1 notes a `brainStarted` in the 24 h before the window.
+- **What it reads** (nothing new is recorded): the fast, medium, slow and static snapshots and the events in the window, through `iterateSnapshotsInWindow` and `eventsInWindow`, and the hack loop's switch. The snapshots are folded one row at a time (a day's are hundreds of MB once parsed), and every read is in one read transaction (`readTransaction`). It opens the store read-only, so it's safe while the brain runs.
+- **The checks** (`src/run-report.ts`), each a line under FAIL:
+  - **gaps** over 6 s in the fast snapshots (`findGaps`, as `npm run gaps`), from the first fast snapshot to the run's last record (its newest fast snapshot or event): the silence before the Agent first reports, and after the run stops, is shown, not counted. A window with no fast snapshot at all fails. Each gap names the restart events recorded in it (`brainStarted`, `relaunch`, `agentDisconnected`, `agentConnected`, deploys, supervision) and an `installAugmentations` or `destroyBitNode` intent the Agent held at the last fast snapshot before it: a restart is still a FAIL, but a self-explaining one.
+  - **income stalls:** each stretch of `INCOME_STALLED_AFTER_MS` (10 minutes, `dashboard/alerts.ts`, the same as #184's `incomeStalled` alert) or more, after money first rose, in which the medium snapshots' money didn't rise. A drop (a purchase) isn't a rise. A stretch still going at the last snapshot says so, and one over a heartbeat gap names the gap. While the hack loop's switch (`hackLoop.enabled`, as it is now: the store keeps no history of it) is off, stalls are shown, not counted.
+  - **stuck intents:** an intent whose latest outcome in the window is not done after `INTENT_STUCK_AFTER_TRIES` (5) tries or more, as the dashboard's `intentStuck`. Intents are tracked per episode: the same id seen not done after it was done, or with fewer tries, was given again (after a reset, say), and is listed again.
+  - **blocking dialogs:** each stretch a `dialogs.blocking` text was shown, in a row, with when it was first and last seen.
+  - **disconnects:** an `agentDisconnected` with no `agentConnected` within 60 s. A connect in the same millisecond counts (a replaced session). Not one under 60 s before the window ends (there's no telling yet), nor one that's the run's last record (the run ended there). The line names what was recorded meanwhile, as for gaps.
+  - `deployFailed`, `versionDrift` and `supervisionGaveUp` events.
+- **Values the snapshots don't have**, or have malformed, read as "unknown".
+- **The hack loop's target** is inferred, and says so: the game's servers (not home or purchased ones) whose money or security changed between consecutive medium snapshots, in stretches. Only scripts change them, so the owner's own would show too.
+- **Exit codes:** 0 on PASS, 1 on FAIL, 2 when it couldn't run (no store, no brain start without `--since`, a window that ends before it starts, or one with nothing recorded).
+- **Tests:** `test/run-report.test.ts` builds a store and checks each section, each failure and the command's exit codes and default window; `test/run-report-simulation.test.ts` reads a 20-virtual-minute fresh start's store in the simulator (the hack loop on n00dles, TOR, two programs and home RAM bought) and gets PASS.
+
 ## The lockstep driver
 
 `SimulatedGame` (`src/simulated-game.ts`) runs a brain against a simulation ([ADR 0012](../../docs/decisions/0012-simulator-network-in-lockstep.md)). Every brain-plus-simulator test uses it; the live brain never loads it.
@@ -423,6 +445,7 @@ The `ui` backend's destroy (the terminal, the BitVerse page, the restart) is E2'
 | `src/record-channel-events.ts` | The control channel's, the deployer's and the save backups' events into the store, the game's dialogs (#143) and promotions (#155) the Agent reports included; and `brainChannel`, the control channel with its numbering seeded from the store (#119) |
 | `src/in-game-build.ts` | Reads the in-game build (checked against its manifest) and the pinned definitions |
 | `src/gap-report.ts`, `src/gaps-cli.ts` | The gap report and its command (`npm run gaps`) |
+| `src/run-report.ts`, `src/report-cli.ts` | The run report and its command (`npm run report`, #185) |
 | `src/simulated-game.ts` | The lockstep driver |
 | `src/save-backups.ts` | The save backups |
 | `src/dashboard/` | The dashboard: `server.ts` (HTTP), `status.ts` (what it shows), `alerts.ts` (the rules), `page.html` (the page) |

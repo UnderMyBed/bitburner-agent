@@ -68,6 +68,38 @@ test("fast snapshots' receipt times, by environment and window, for the gap repo
   expect(store.fastSnapshotTimes({ environment: "E1", sinceMs: 1_000, untilMs: 3_000 })).toEqual([1_000, 3_000]);
 });
 
+test("snapshots of a tier and events, by environment and window (both edges), in order: the run report", () => {
+  for (const [receivedAtMs, tier, environment] of [
+    [3_000, "medium", "E1"],
+    [1_000, "medium", "E1"],
+    [2_000, "fast", "E1"],
+    [4_000, "medium", "E0"],
+    [5_000, "medium", "E1"],
+    [9_000, "medium", "E1"],
+  ] as const) {
+    store.recordSnapshot(
+      { environment, release: "r" },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: 1,
+        gameTimeMs: 0,
+        receivedAtMs,
+        missedBefore: 0,
+        data: receivedAtMs,
+      },
+    );
+    store.recordEvent({ environment, release: "r" }, { atMs: receivedAtMs, kind: tier, detail: receivedAtMs });
+  }
+  const window = { environment: "E1", sinceMs: 1_000, untilMs: 5_000 } as const;
+  // By time of arrival, not the order stored, one row at a time.
+  const rows = store.iterateSnapshotsInWindow({ ...window, tier: "medium" });
+  expect(rows.next().value?.data).toBe(1_000);
+  expect([...rows].map((snapshot) => snapshot.data)).toEqual([3_000, 5_000]);
+  // Events in the order stored.
+  expect(store.eventsInWindow(window).map((event) => event.detail)).toEqual([3_000, 1_000, 2_000, 5_000]);
+});
+
 test("fast snapshots' page heaps, by environment and window, in order of arrival, numbers only", () => {
   for (const [receivedAtMs, tier, environment, data] of [
     [3_000, "fast", "E0", { pageHeapUsedBytes: 30 }],
@@ -101,6 +133,26 @@ test("the store is in WAL mode, so a reader never blocks the brain's writes; a r
   expect(store.journalMode()).toBe("wal");
   const reader = TelemetryStore.openReadOnly(path.join(directory, "telemetry.sqlite"));
   expect(() => reader.setSetting("x", "y")).toThrow();
+  reader.close();
+});
+
+test("a read transaction sees the store as at its first read, whatever is written meanwhile (the run report)", () => {
+  const reader = TelemetryStore.openReadOnly(path.join(directory, "telemetry.sqlite"));
+  const count = () => reader.events({ environment: "E1" }).length;
+  store.recordEvent(context, { atMs: 1, kind: "a", detail: null });
+  const [before, during] = reader.readTransaction(() => {
+    const first = count();
+    store.recordEvent(context, { atMs: 2, kind: "b", detail: null });
+    return [first, count()];
+  });
+  expect([before, during, count()]).toEqual([1, 1, 2]);
+  // A read that throws still ends the transaction.
+  expect(() =>
+    reader.readTransaction(() => {
+      throw new Error("read failed");
+    }),
+  ).toThrow("read failed");
+  expect(reader.readTransaction(count)).toBe(2);
   reader.close();
 });
 
