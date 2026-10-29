@@ -4,7 +4,7 @@
 
 The legacy fork's scripts, vendored unchanged, for:
 - **The baseline now.** The fork's progress in BN1, from BN1 with SF1.1 and SF4.3, at 4, 8 and 12 virtual hours, is what the agent is measured against ([architecture §12.3](../../docs/architecture.md#123-migration-from-the-fork-strangler-pattern), [ADR 0011](../../docs/decisions/0011-checkpointed-simulator-comparisons.md)).
-- **Legacy reflexes later.** Its proven managers (the batcher in `daemon.js`, `stockmaster.js`, `gangs.js`, `bladeburner.js`) will run under the agent through adapters in this package, until our own replacements prove at least as good (architecture §12.3).
+- **Legacy reflexes later.** Its proven managers (`stockmaster.js`, `gangs.js`, `bladeburner.js`) will run under the agent through adapters in this package, until our own replacements prove at least as good (architecture §12.3). The batcher in `daemon.js` won't: ours replaces it from the start (#204, architecture §5.5, [ADR 0013](../../docs/decisions/0013-own-batcher-not-legacy-daemon.md)), and `daemon.js` runs only in the baseline, where the two can be compared.
 
 The files are in [`fork/`](fork/), exactly as recorded. [`PROVENANCE.md`](PROVENANCE.md) says where they came from and the rules: `fork/` is never edited in place, and a change would be a patch. They're MIT-licensed, © 2021 Alain Bryden ([`fork/LICENSE`](fork/LICENSE)). `fork/README.md` and `fork/CLAUDE.md` are the fork's own docs, about the fork as it was, not about this repository. The repository's [`.claude/settings.json`](../../.claude/settings.json) excludes `fork/CLAUDE.md` from Claude Code's memory (`claudeMdExcludes`), for sessions started at the repository root, where Claude Code reads that file.
 

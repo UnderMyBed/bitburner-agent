@@ -3,6 +3,7 @@
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
+import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
 export const AGENT_SILENT_AFTER_MS = 60_000;
@@ -35,6 +36,7 @@ export type AlertName =
   | "incomeStalled"
   | "cloudServerProblem"
   | "messageRefused"
+  | "factionStateUnread"
   | "backdoorOverdue";
 
 export interface Alert {
@@ -43,7 +45,8 @@ export interface Alert {
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
    * first watched); for `cloudServerProblem`, now; for `messageRefused`, the newest fast snapshot that shows it; for
-   * the others, the event or give-up that raised it.
+   * `factionStateUnread`, the first of the unread slow snapshots in a row; for the others, the event or give-up that
+   * raised it.
    */
   sinceMs: number;
   detail: string;
@@ -82,6 +85,12 @@ export interface AlertFacts {
    * callers that don't read it.
    */
   refusedMessage?: { reason: string; count: number } | null;
+  /**
+   * The faction state unread in the newest slow snapshots (#197): how many in a row (skipped ones neither end nor add
+   * to it), since the first of them, and the newest's backend and problem; null where the newest was read, skipped,
+   * or from an older Agent, or there's no slow snapshot.
+   */
+  factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
   backdoorsDue: BackdoorDue[];
 }
@@ -97,8 +106,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, then one intentStuck per stuck intent, then one
- * backdoorOverdue per overdue backdoor.
+ * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
+ * intent, then one backdoorOverdue per overdue backdoor.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -155,6 +164,17 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail:
         `the Agent refused the brain's message (${facts.refusedMessage.count} so far), so it acts on the last one it ` +
         `took: ${facts.refusedMessage.reason}`,
+    });
+  }
+  // Only once it's unread in a row: a single miss (a dialog flood, the owner acting mid-read) is a log line and an event.
+  if (facts.factionState !== null && facts.factionState.unreadInARow >= FACTION_STATE_UNREAD_AFTER) {
+    const { sinceMs, unreadInARow, backend, problem } = facts.factionState;
+    alerts.push({
+      name: "factionStateUnread",
+      sinceMs,
+      detail:
+        `the faction state couldn't be read in the last ${unreadInARow} slow snapshots in a row` +
+        `${backend === null ? "" : ` (${backend})`}: ${problem}`,
     });
   }
   for (const outcome of facts.intentOutcomes) {

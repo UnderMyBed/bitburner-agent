@@ -79,8 +79,11 @@ async function readOnHome(simulation: Simulation, game: SimulatedGame, fileName:
 
 const runningFiles = async (simulation: Simulation) =>
   (await simulation.ps("home")).map((process) => process.filename).filter((name) => name !== "read-probe.js");
-/** Long enough for the game to reconnect its RFA, the deploy to finish, and the Agent to hand over. */
-const AFTER_A_BRAIN_RESTART_MS = RFA_RECONNECT_SECONDS * 1_000 + 30_000;
+/**
+ * Long enough for the game to reconnect its RFA, the deploy to finish (as long as a first deploy may take: it grows with
+ * each bundle, and 37 were past 30 s, #197), and the Agent to hand over.
+ */
+const AFTER_A_BRAIN_RESTART_MS = RFA_RECONNECT_SECONDS * 1_000 + DEPLOY_WITHIN_MS;
 
 /** A game with the brain's first deployment, and its Agent started by the one-time `run agent/boot.js`. */
 async function gameWithAgent() {

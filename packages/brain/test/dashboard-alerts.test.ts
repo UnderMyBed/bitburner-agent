@@ -20,6 +20,7 @@ const quiet: AlertFacts = {
   blockingDialog: null,
   hackLoopTarget: null,
   income: null,
+  factionState: null,
   backdoorsDue: [],
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
@@ -153,6 +154,29 @@ describe("incomeStalled (#184): the hack loop on against a target, and money not
       "intentStuck",
     ]);
   });
+});
+
+test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread, since the first of them", () => {
+  const sinceMs = STARTED_AT_MS + 5_000;
+  const unread = (unreadInARow: number, backend: string | null = "ui") => ({
+    ...quiet,
+    factionState: { sinceMs, unreadInARow, backend, problem: "no game page to read it through" },
+  });
+  // One or two misses (a dialog flood, the owner acting mid-read): not yet.
+  expect(activeAlerts(unread(1))).toEqual([]);
+  expect(activeAlerts(unread(2))).toEqual([]);
+  expect(activeAlerts(unread(3))).toEqual([
+    {
+      name: "factionStateUnread",
+      sinceMs,
+      detail:
+        "the faction state couldn't be read in the last 3 slow snapshots in a row (ui): no game page to read it through",
+    },
+  ]);
+  // Not well formed, so no backend.
+  expect(activeAlerts(unread(3, null))[0]?.detail).toBe(
+    "the faction state couldn't be read in the last 3 slow snapshots in a row: no game page to read it through",
+  );
 });
 
 describe("cloudServerProblem (#194): a cloud purchase the Agent reported done with a problem", () => {

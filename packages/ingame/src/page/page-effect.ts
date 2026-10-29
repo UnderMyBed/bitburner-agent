@@ -19,6 +19,7 @@ export async function reportPageEffect(
     ending = "restore",
     stepsWhenDone = false,
     reportAlso = () => ({}),
+    restoreFoundPage = false,
   }: {
     /** Whether the game shows it done: checked first, and again after the steps. */
     isDone: () => boolean;
@@ -44,6 +45,11 @@ export async function reportPageEffect(
     stepsWhenDone?: boolean;
     /** More for the report, read as it's sent: a promotion taken (#155). */
     reportAlso?: () => Record<string, unknown>;
+    /**
+     * With `"restore"`, back to the page found (its sidebar item, or a faction's own page), not the Terminal: for what
+     * runs without the brain asking, the faction state's read (#197).
+     */
+    restoreFoundPage?: boolean;
   },
 ): Promise<void> {
   const report: EffectorReport = { done: !stepsWhenDone && isDone(), problem: null };
@@ -56,13 +62,21 @@ export async function reportPageEffect(
       report.problem = "a dialog the Agent leaves for the owner is open";
       if (stepsWhenDone) report.done = isDone();
     } else {
+      const found = restoreFoundPage ? gamePage.foundPage() : null;
       const unfocused = await gamePage.unfocusWork();
       const problem = unfocused.problem ?? (await steps(gamePage, { wasFocused: unfocused.clicked }));
       // As found, however it went, in the time kept for it: the page was moved. Focused again if it was; if that can't
       // be (the work ended meanwhile), the Terminal.
       let backProblem: string | null = null;
       if (ending === "restore") {
-        backProblem = unfocused.clicked ? await gamePage.refocusWork() : await gamePage.returnToTerminal();
+        backProblem = unfocused.clicked
+          ? await gamePage.refocusWork()
+          : found !== null && found.item !== "Terminal"
+            ? await gamePage.returnTo(found)
+            : await gamePage.returnToTerminal();
+        if (found !== null && !unfocused.clicked && backProblem !== null) {
+          backProblem = (await gamePage.returnToTerminal()) ?? backProblem;
+        }
         if (unfocused.clicked && backProblem !== null) backProblem = (await gamePage.returnToTerminal()) ?? backProblem;
       }
       report.problem = problem ?? backProblem;

@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
+  FactionState,
+  FactionStateReading,
   FastSnapshotData,
   IntentOutcome,
   MediumSnapshotData,
@@ -109,13 +111,22 @@ function mediumData({
     ],
   };
 }
+/** A faction state read (#197): nothing joined, invited or queued unless said. */
+const factionState = (state: Partial<FactionState> = {}): FactionStateReading => ({
+  backend: "ui",
+  state: { joined: [], invitations: [], queuedAugmentations: [], ...state },
+  problem: null,
+});
 const slowData = (
   purchasedServers: string[] = [],
   ownedAugs: Record<string, number> = {},
   ownedSF: Record<string, number> = {},
+  /** Null for none: an older Agent. */
+  factions: FactionStateReading | null = factionState(),
 ): SlowSnapshotData => ({
   resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs, ownedSF, bitNodeOptions: {} },
   purchasedServers,
+  ...(factions === null ? {} : { factions }),
 });
 const staticData = (): StaticSnapshotData => ({
   servers: [{ ...staticServer("home"), purchasedByPlayer: true, moneyMax: 0 }, staticServer("n00dles")],
@@ -154,7 +165,10 @@ function cleanRun({
     game: { version: "3.0.1", platform: "Steam" },
   });
   snapshot("static", 10 * SECOND, staticData());
-  snapshot("slow", 10 * SECOND, slowData());
+  snapshot("slow", 10 * SECOND, slowData([], {}, {}, factionState({ invitations: ["CyberSec"] })));
+  const inCyberSec = (reputation: number, state: Partial<FactionState> = {}) =>
+    factionState({ joined: [{ name: "CyberSec", reputation, favor: 0 }], ...state });
+  snapshot("slow", 10 * MINUTE, slowData([], {}, {}, inCyberSec(100.4)));
   for (const offsetMs of fastOffsets(skipFast)) snapshot("fast", offsetMs, fast(offsetMs));
   for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
     const late = offsetMs >= 10 * MINUTE;
@@ -172,7 +186,19 @@ function cleanRun({
       }),
     );
   }
-  snapshot("slow", RUN_MS, slowData(["pserv-0"], { "Neurotrainer I": 1 }, { 4: 3 }));
+  snapshot(
+    "slow",
+    RUN_MS,
+    slowData(
+      ["pserv-0"],
+      { "Neurotrainer I": 1 },
+      { 4: 3 },
+      inCyberSec(1234.5, {
+        invitations: ["Sector-12"],
+        queuedAugmentations: ["NeuroFlux Governor", "BitWire", "NeuroFlux Governor"],
+      }),
+    ),
+  );
   event(3 * MINUTE, "gameDialog", {
     kind: "alert",
     text: "Message received from unknown sender: I know you can sense it. I know you are searching for it.",
@@ -237,6 +263,10 @@ describe("the sections", () => {
       "  BitNode: 1 (unchanged)",
       "  Source-Files: none → SF4.3",
       "  purchased servers: none → pserv-0",
+      // The faction state (#197): reputation first → last, each invitation as first seen, the queue counted.
+      "  faction reputation and favour, first reading → last:\n    CyberSec: reputation 100 → 1,235, favour 0 (unchanged)",
+      `  faction invitations, as first seen:\n    CyberSec, ${at(10 * SECOND)}\n    Sector-12, ${at(RUN_MS)}`,
+      "  augmentations queued: none → NeuroFlux Governor ×2, BitWire",
       `    n00dles: ${at(20 * SECOND)} to ${at(RUN_MS)}`,
     ]) {
       expect(text).toContain(line);
@@ -552,6 +582,77 @@ describe("each failure is a FAIL, with its line", () => {
         `brainStarted at ${at(80 * SECOND)}, agentConnected at ${at(99 * SECOND)}; before it, the Agent held ` +
         "installAugmentations()",
     ]);
+  });
+
+  const HEADING =
+    "  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; 3 or more is a failure):";
+
+  test("the faction state unread (#197): 3 slow snapshots in a row is a FAIL, whatever each one's reason; fewer is shown, not counted", () => {
+    cleanRun();
+    const unread = (problem: string): FactionStateReading => ({ backend: "ui", state: null, problem });
+    snapshot("slow", 2 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
+    snapshot("slow", 3 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
+    // Skipped between them: neither ends the stretch nor adds to it.
+    snapshot(
+      "slow",
+      3.5 * MINUTE,
+      slowData([], {}, {}, { backend: "ui", state: null, problem: null, skipped: "no sidebar on the page" }),
+    );
+    snapshot("slow", 4 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
+    // Read at 10 min (cleanRun's); a single miss at 12 min, then read again at 13 min (P → read → P: two stretches).
+    snapshot("slow", 11 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
+    snapshot("slow", 12 * MINUTE, slowData());
+    snapshot("slow", 13 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
+    const { text, failures, verdictLine } = verdict();
+    expect(verdictLine).toBe("Verdict: FAIL");
+    const three =
+      `faction state unread from ${at(2 * MINUTE)} to ${at(4 * MINUTE)} (3 slow snapshots in a row, ui): no game page ` +
+      "to read the faction state through";
+    expect(failures).toEqual([three]);
+    expect(text).toContain(
+      `${HEADING}\n    ${three}\n` +
+        `    faction state unread from ${at(11 * MINUTE)} to ${at(11 * MINUTE)} (1 slow snapshot in a row, ui): no ` +
+        "game page to read the faction state through; under 3 in a row, not counted\n" +
+        `    faction state unread from ${at(13 * MINUTE)} to ${at(13 * MINUTE)} (1 slow snapshot in a row, ui): no ` +
+        "game page to read the faction state through; under 3 in a row, not counted",
+    );
+    // What was read still shows.
+    expect(text).toContain("    CyberSec: reputation 100 → 1,235, favour 0 (unchanged)");
+  });
+
+  test("an older Agent's slow snapshots (no reading), skipped ones and ones read with the page not put back: shown, never a FAIL", () => {
+    cleanRun();
+    snapshot("slow", 2 * MINUTE, slowData([], {}, {}, null));
+    snapshot("slow", 3 * MINUTE, slowData([], {}, {}, null));
+    snapshot("slow", 4 * MINUTE, slowData([], {}, {}, null));
+    snapshot(
+      "slow",
+      5 * MINUTE,
+      slowData([], {}, {}, { backend: "ui", state: null, problem: null, skipped: "no sidebar" }),
+    );
+    snapshot("slow", 6 * MINUTE, slowData([], {}, {}, { ...factionState(), problem: 'no "Stats" in the sidebar' }));
+    const { text, failures } = verdict();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`${HEADING}\n    none`);
+    expect(text).toContain(
+      "  faction state otherwise: 1 skipped (no sidebar on the page); 3 from an older Agent, with no faction state; 1 " +
+        'read, but the page not put back as found (the last: no "Stats" in the sidebar)',
+    );
+  });
+
+  test("a clean run's faction state is read throughout: none unread", () => {
+    cleanRun();
+    expect(report().text).toContain(`${HEADING}\n    none`);
+    expect(report().text).not.toContain("faction state otherwise");
+  });
+  test("never read: the faction lines say so, never an empty state", () => {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("fast", 10 * SECOND, fastData());
+    snapshot("slow", 10 * SECOND, slowData([], {}, {}, { backend: "ui", state: null, problem: "no game page" }));
+    const { text } = report();
+    expect(text).toContain("  faction reputation and favour, first reading → last:\n    never read");
+    expect(text).toContain("  faction invitations, as first seen:\n    never read");
+    expect(text).toContain("  augmentations queued: unknown (unchanged)");
   });
 
   test("an interval of exactly 6 s isn't a gap", () => {

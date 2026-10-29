@@ -43,3 +43,19 @@ Built in #196 (M4 phase A slice A1): "how good is our hacking" as a number. `src
 | `usableRamGb(ramGb)` | A host's RAM in whole threads: floor(RAM/1.7) at 1.75 GB each, at most its RAM. |
 
 With `percentMoneyHackedPerThread` and `growthLogPerThread` (`src/hack-loop.ts`, #187), and the script RAM (1.7, 1.75, 1.75 GB) and security a thread (0.002, 0.004, 0.05) as constants. BitNode multipliers are taken as 1: exact in BN1, high elsewhere (the safe side) but for BN11's weaken rate. `test/hacking-ceiling.test.ts` works them by hand, and the brain's `hacking-ceiling-parity.test.ts` checks them against the engine's `ns.formulas.hacking`.
+
+## The batcher
+
+Built in #204 (M4 phase A slice A7a): the maths of a batch (hack, weaken, grow, weaken), pure, so the in-game batcher ([ingame: the batcher](../ingame/README.md#the-batcher)) and the brain (#206) use the same functions. `src/batcher.ts`.
+
+| Function | What |
+|---|---|
+| `growThreads(start, target, moneyMax, growthLog)` | The game's `numCycleForGrowthCorrected` (ServerHelpers.ts:90-199), line for line: the fewest whole grow threads from `start` to `target`. Checked against the engine's `formulas.hacking.growThreads` in the brain's parity test. |
+| `batchThreads(target, player, hackThreads)` | A batch's whole threads at 1 core: the hack; weaken1 for its 0.002 a thread; grow back from a hack of `GROW_MARGIN` (1.1) times its share, for the share's rise with the hacking level before it lands; weaken2 for the grow's 0.004 a thread. |
+| `operationTimeMs`, `landingOffsetMs`, `launchLeadMs`, `batchHoldsMs`, `batchOrders` | The timing: the operations land in order 20 ms apart (`BATCH_LANDING_GAP_MS`); each starts its time plus a lead before it lands (200 ms, plus what security at the bounds adds to its time); a batch's orders, weaken1 out first and the hack last. |
+| `batchPeakRamGb`, `leastSpacingMs`, `batchPlan(target, player, ramGb)` | The plan: for each count of hack threads, the least spacing (at least 80 ms) at which batches' peak RAM (each operation's threads × RAM × ⌈its hold / the spacing⌉) fits; the most income wins. Never above the batcher ceiling, and above 60% of it on 100 GB to 1 TB in the tests. |
+| `batchRamGb(hostsRamGb)`, `threadsThatFit`, `placeThreads(hosts, threads, ramGb)` | The RAM: each host's whole 1.8 GB threads, as `exec` counts them (NetscriptWorker.ts:110-117); an operation on the host with the least free RAM that holds it all, else split across the largest. |
+| `batchBounds`, `isOutsideBounds`, `hackThreadsAtLaunch`, `isTargetPrepared`, `preparationWave` | The bounds batches in step keep their target within, over every batch still landing (money at least what 1.1× the largest share leaves, security at most the minimum plus the largest hack's or grow's rise), and whether what was seen is outside them; a batch's hack threads replanned when it goes out, so the share's rise with the hacking level over a weaken's time stays within the margin (a rising-level test shows it does, and that unreplanned it doesn't); a target at its minimum security and maximum money; the next wave preparing one on some RAM, weaken first. |
+| `LandingWatch`, `parseLandingRecord`, `parseBatcherConfig`, `newBatcherHealth` | The checks on the landings (out of order, lost 10 s after their time; a record never expected, or a late hack's, moves nothing), the batcher's config and its health. |
+
+The operation scripts' RAM (1.75, 1.8, 1.8 GB) are constants the ingame RAM test checks against `ram-budget.json`. `test/batcher.test.ts` works these by hand and over seeded sweeps.

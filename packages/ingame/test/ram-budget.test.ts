@@ -2,6 +2,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  BATCH_GROW_RAM_GB,
+  BATCH_GROW_SCRIPT_NAME,
+  BATCH_HACK_RAM_GB,
+  BATCH_HACK_SCRIPT_NAME,
+  BATCH_WEAKEN_RAM_GB,
+  BATCH_WEAKEN_SCRIPT_NAME,
+  BATCHER_SCRIPT_NAME,
   freshSaveHomeWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
   homeWorkerFileNames,
@@ -42,8 +49,19 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
   }
 });
 
-/** What isn't a worker beside the Agent on home: the Agent, `boot.js`, and the loop, which runs on other servers. */
-const NOT_HOME_WORKERS = ["agent.js", "boot.js", "hack-loop.js"];
+/**
+ * What isn't a worker beside the Agent on home: the Agent, `boot.js`, the loop, which runs on other servers, and the
+ * batcher and its operation scripts (#204), whose place the Agent chooses by RAM (#205).
+ */
+const NOT_HOME_WORKERS = [
+  "agent.js",
+  "boot.js",
+  "hack-loop.js",
+  BATCHER_SCRIPT_NAME,
+  BATCH_HACK_SCRIPT_NAME,
+  BATCH_GROW_SCRIPT_NAME,
+  BATCH_WEAKEN_SCRIPT_NAME,
+];
 
 test("the Agent's budget plus its largest fresh-save home worker's fits in a fresh save's 8 GB home", () => {
   // Every bundle is one or the other, so a new worker can't be left out of the sum (#134).
@@ -58,4 +76,10 @@ test("the Agent's budget plus its largest fresh-save home worker's fits in a fre
 
 test("the loop's budget is core's, by which the brain counts a host's threads (#187)", () => {
   expect(budgets["hack-loop.js"]).toBe(HACK_LOOP_RAM_BUDGET_GB);
+});
+
+test("the batch operation scripts' budgets are core's, by which the batcher and its plan count threads (#204)", () => {
+  expect(budgets[BATCH_HACK_SCRIPT_NAME]).toBe(BATCH_HACK_RAM_GB);
+  expect(budgets[BATCH_GROW_SCRIPT_NAME]).toBe(BATCH_GROW_RAM_GB);
+  expect(budgets[BATCH_WEAKEN_SCRIPT_NAME]).toBe(BATCH_WEAKEN_RAM_GB);
 });

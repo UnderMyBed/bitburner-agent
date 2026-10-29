@@ -1,7 +1,10 @@
 // The dashboard's status (#93): everything the page shows, read from the store whenever it's asked for. The alerts are
 // rules over the same reads (alerts.ts), so nothing here keeps state.
 import {
+  type EffectorBackend,
+  type FactionState,
   type FastSnapshotData,
+  factionReadingOf,
   type GameInfo,
   gameDrift,
   type MediumSnapshotData,
@@ -11,6 +14,7 @@ import {
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
+import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { reportedRefusal } from "../record-channel-events.ts";
@@ -25,6 +29,8 @@ export const RECENT_EVENT_COUNT = 50;
 /** The newest gaps listed; the count and total cover them all. */
 export const LISTED_GAP_COUNT = 20;
 const RECENT_RELAUNCH_COUNT = 10;
+/** How many slow snapshots back an unread streak is followed for its start (#197): a day's, at one a minute. */
+const UNREAD_STREAK_LOOKBACK = 24 * 60;
 /** The event the brain records as it starts: everything stored after it is this run of the brain. */
 export const BRAIN_STARTED_EVENT_KIND = "brainStarted";
 
@@ -94,6 +100,21 @@ export interface DashboardStatus {
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
   work: WorkView;
+  /**
+   * The faction state (#197) in the newest slow snapshot, from any run of the brain: when it arrived, what it is (read;
+   * read, but the page not put back; unread; skipped; or absent, from an older Agent), the backend, the state, the
+   * problem or why it was skipped, the pages the page's reader opened for it, and how many slow snapshots in a row are
+   * unread; null with no slow snapshot.
+   */
+  factions: {
+    receivedAtMs: number;
+    kind: SlowFactionStatus["kind"];
+    backend: EffectorBackend | null;
+    state: FactionState | null;
+    problem: string | null;
+    opened: string[] | null;
+    unreadInARow: number;
+  } | null;
   /** The hacking ceiling now, and what hacking earned over the last 10 minutes (#196). */
   hacking: HackingView;
 }
@@ -155,6 +176,19 @@ export function buildDashboardStatus({
   ) as Record<SnapshotTier, ReturnType<TelemetryStore["latestSnapshot"]>>;
   const fast = latestOfTier.fast?.data as FastSnapshotData | undefined;
   const medium = latestOfTier.medium?.data as MediumSnapshotData | undefined;
+  const slow = latestOfTier.slow;
+  const factionReading = slow ? factionReadingOf(slow.data) : null;
+  const factionStatus = slow ? factionStatusOf(slow.data) : null;
+  // The newest slow snapshots unread in a row (#197), the streak's first one too, as far back as a day's: a skipped one
+  // neither ends the streak nor adds to it.
+  const unreadInARow: { receivedAtMs: number; status: SlowFactionStatus }[] = [];
+  for (const each of store.latestSnapshots({ environment, tier: "slow", limit: UNREAD_STREAK_LOOKBACK })) {
+    const status = factionStatusOf(each.data);
+    if (status.kind === "skipped") continue;
+    if (status.kind !== "unread") break;
+    unreadInARow.push({ receivedAtMs: each.receivedAtMs, status });
+  }
+  const newestUnread = unreadInARow[0]?.status;
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -235,6 +269,15 @@ export function buildDashboardStatus({
       income,
       cloudServerProblem: cloudServers.problem,
       refusedMessage: reportedRefusal(fast),
+      factionState:
+        newestUnread !== undefined
+          ? {
+              sinceMs: unreadInARow.at(-1)?.receivedAtMs ?? 0,
+              unreadInARow: unreadInARow.length,
+              backend: newestUnread.backend,
+              problem: newestUnread.problem ?? "",
+            }
+          : null,
       backdoorsDue,
     }),
     events: store
@@ -260,6 +303,17 @@ export function buildDashboardStatus({
     cloudServers,
     intents,
     work,
+    factions: slow
+      ? {
+          receivedAtMs: slow.receivedAtMs,
+          kind: factionStatus?.kind ?? "absent",
+          backend: factionReading?.backend ?? null,
+          state: factionReading?.state ?? null,
+          problem: factionStatus?.problem ?? null,
+          opened: factionReading?.opened ?? null,
+          unreadInARow: unreadInARow.length,
+        }
+      : null,
     hacking: hackingView({
       store,
       environment,

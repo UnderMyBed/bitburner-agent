@@ -3,7 +3,8 @@
 // any person, so each is checked over servers and players that differ in every figure it reads, multipliers and
 // intelligence included; the security a thread and the scripts' RAM come from the base NS API and the game's own RAM
 // calculator. Then the batcher ceiling stands above a whole-thread HWGW batch sized with the game's own grow threads
-// (`formulas.hacking.growThreads`), at every share, and the hacking ceiling above that.
+// (`formulas.hacking.growThreads`), at every share, and the hacking ceiling above that. The batcher's grow threads
+// (#204, core's `growThreads`) are checked against the same.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   batcherIncomePerGigabyteSecond,
@@ -11,6 +12,7 @@ import {
   GROW_SCRIPT_RAM_GB,
   GROW_SECURITY_PER_THREAD,
   GROW_TIME_PER_HACK_TIME,
+  growThreads,
   growthLogPerThread,
   HACK_SCRIPT_RAM_GB,
   HACK_SECURITY_PER_THREAD,
@@ -131,6 +133,12 @@ for (const [serverIndex, figures] of servers.entries()) {
     close(hackMs * WEAKEN_TIME_PER_HACK_TIME, game.weakenMs, "weaken time");
     close(growthLogPerThread(server, player) * coreBonus(game.cores), Math.log(game.growPercent), "growth log");
     close(WEAKEN_SECURITY_PER_THREAD * coreBonus(game.cores), game.weakenEffect, "weaken");
+    // The batcher's grow threads (#204, core's growThreads) are the game's, from what each share's hack leaves.
+    for (const { hackThreads, growThreads: theirs } of game.batches) {
+      const left = server.moneyMax * (1 - Math.min(1, hackThreads * game.percent));
+      const growthLog = growthLogPerThread(server, player) * coreBonus(game.cores);
+      expect(growThreads(left, server.moneyMax, server.moneyMax, growthLog), `grow threads, ${label}`).toBe(theirs);
+    }
 
     // At their minimum, the batcher ceiling stands above a whole-thread HWGW batch at every share (its threads all
     // committed, a failed hack's included), as the game sizes its grow; the hacking ceiling above that.
