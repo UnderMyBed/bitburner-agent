@@ -343,6 +343,13 @@ export async function freshGame(
  * (which closes on a game timer, so stays while game time stands still) can lie over it.
  */
 export async function typeCommand(page: Page, command: string): Promise<void> {
+  // As a player types: once the Terminal is on the page. The Agent's faction state read (#197) can have it on Factions
+  // or Augmentations mid-round, and game time stands still between a test's steps, so it's moved on until the Terminal
+  // is back (#212). With it there, no time passes.
+  await advanceUntil(page, async () => (await page.locator(TERMINAL_INPUT).count()) === 1, {
+    realTimeoutMs: 30_000,
+    gameTimeoutMs: 5_000,
+  });
   await page.locator(TERMINAL_INPUT).focus();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");

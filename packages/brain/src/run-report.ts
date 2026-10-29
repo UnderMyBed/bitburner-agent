@@ -28,7 +28,7 @@ import {
 } from "./gap-report.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
 import { HackingFold } from "./hacking-ceiling.ts";
-import { WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
+import { RESTART_FELL_BACK_EVENT_KIND, WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
 
@@ -48,13 +48,19 @@ const RESTART_EVENT_KINDS = [
   RELAUNCH_EVENT_KIND,
   "agentDisconnected",
   "agentConnected",
+  RESTART_FELL_BACK_EVENT_KIND,
   "deployed",
   "deployFailed",
   "supervisionFailed",
   SUPERVISION_GAVE_UP_EVENT_KIND,
 ];
 /** The events that are failures in themselves. */
-const FAILURE_EVENT_KINDS = ["deployFailed", "versionDrift", SUPERVISION_GAVE_UP_EVENT_KIND];
+const FAILURE_EVENT_KINDS = [
+  "deployFailed",
+  "versionDrift",
+  SUPERVISION_GAVE_UP_EVENT_KIND,
+  RESTART_FELL_BACK_EVENT_KIND,
+];
 
 export interface RunWindow {
   environment: Environment;
@@ -510,6 +516,11 @@ function describeEvent({ kind, detail }: StoredEvent): string {
       return fields.failure === undefined
         ? `save backup ${displayValue(fields.file)} (${Math.round(Number(fields.sizeBytes) / 1024)} KB)`
         : `save backup FAILED: ${displayValue(fields.failure)}`;
+    case RESTART_FELL_BACK_EVENT_KIND:
+      return (
+        `restart after a reset couldn't type run /agent/boot.js: ${displayValue(fields.reason)}; ` +
+        (fields.outcome === "reloading" ? "it saved and reloaded the game" : "it gave up")
+      );
     case "saveBackupRotationFailed":
       return `old save backups not removed: ${displayValue(fields.failure)}`;
     case "supervisionFailed":
@@ -885,7 +896,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
 
   lines.push(...disconnectLines(facts, failures));
 
-  lines.push("  deploy failures, version drift, supervision given up:");
+  lines.push("  deploy failures, version drift, supervision given up, restarts that couldn't type (#212):");
   const failureEvents = facts.events.filter((event) => FAILURE_EVENT_KINDS.includes(event.kind));
   for (const event of failureEvents) {
     const line = `${formatIsoTime(event.atMs)} ${describeEvent(event)}`;

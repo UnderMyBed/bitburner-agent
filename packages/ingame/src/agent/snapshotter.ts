@@ -19,6 +19,7 @@ import {
   type FastSnapshotData,
   type FastWorkerData,
   type IntentOutcome,
+  type RestartNote,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   type SnapshotMessage,
@@ -72,6 +73,7 @@ export function createSnapshotter(
     intentOutcomes,
     workOutcome,
     dialogReport,
+    restartNote = null,
     readFactions,
     factionsUnread = (problem) => ({ backend: "ui", state: null, problem }),
   }: {
@@ -84,6 +86,8 @@ export function createSnapshotter(
     workOutcome: () => WorkOutcome | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
+    /** A restart's note this Agent found at its start (#212): sent in the first fast snapshot, then dropped. */
+    restartNote?: RestartNote | null;
     /** The faction state, read within the deadline, for each slow snapshot (#197). */
     readFactions: (deadlineMs: number) => Promise<FactionStateReading>;
     /** The reading for a slow snapshot sent unread, the round having had no time for the read again and again. */
@@ -98,6 +102,8 @@ export function createSnapshotter(
   /** The latest slow snapshot's data, for what the Agent decides from it (Singularity, #145). */
   let lastSlowData: SlowSnapshotData | null = null;
   let staticToSend = false;
+  /** The restart's note, until the first fast snapshot carries it (#212). */
+  let restartToSend: RestartNote | null = restartNote;
   /** The slow worker's report, waiting for a round with the time for the faction state's read (#197). */
   let slowReport: WorkerReport | null = null;
   /** Rounds the slow report has waited for the time to read: at `MOST_ROUNDS_WAITING_TO_READ`, it goes unread. */
@@ -174,7 +180,9 @@ export function createSnapshotter(
         intents: intentOutcomes(),
         dialogs: dialogReport(),
         work: workOutcome(),
+        ...(restartToSend === null ? {} : { restart: restartToSend }),
       };
+      restartToSend = null;
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 
       for (const tier of ["medium", "slow"] as const) {

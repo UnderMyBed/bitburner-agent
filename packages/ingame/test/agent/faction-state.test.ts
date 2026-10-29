@@ -397,3 +397,27 @@ describe("the slow snapshot", () => {
     expect(order).not.toContain("readFactions");
   });
 });
+
+test("a restart's note (#212) goes in the first fast snapshot only", async () => {
+  const runWorker = vi.fn(
+    async (): Promise<WorkerRun> => ({ outcome: "reported", report: { workerPid: 1, gameTimeMs: 5, data: {} } }),
+  );
+  const note = { outcome: "reloading" as const, reason: "no terminal", atMs: 7 };
+  const snapshotter = createSnapshotter({ print: () => {} } as unknown as NS, {
+    deploymentId: "abcdef123456",
+    agentSessionId: "session",
+    workerRunner: { runWorker } as unknown as WorkerRunner,
+    intentOutcomes: () => [],
+    workOutcome: () => null,
+    dialogReport: () => ({ handled: [], blocking: null }),
+    restartNote: note,
+    readFactions: async () => ({ backend: "ui", state: STATE, problem: null }),
+  });
+  const sent: SnapshotMessage[] = [];
+  await snapshotter.takeRound((message) => sent.push(message));
+  await snapshotter.takeRound((message) => sent.push(message));
+  const fasts = sent
+    .filter((message) => message.tier === "fast")
+    .map((message) => message.data as { restart?: unknown });
+  expect(fasts.map((data) => data.restart)).toEqual([note, undefined]);
+});

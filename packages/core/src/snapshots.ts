@@ -131,7 +131,25 @@ export interface FastSnapshotData {
   dialogs: { handled: HandledDialog[]; blocking: string | null };
   /** How the work the brain wants went (#151): null while it wants none, or absent from an older Agent. */
   work?: WorkOutcome | null;
+  /**
+   * A restart after a reset through the page that couldn't type `run /agent/boot.js` (#212): the page timer's note,
+   * left in the page's storage, taken by the Agent it started (through the fallback's reload, or after the
+   * supervisor's relaunch), and sent once. Absent where there was none.
+   */
+  restart?: RestartNote;
 }
+
+/** How a page timer's restart ended when it couldn't type `run /agent/boot.js` (#212): reloaded, or given up. */
+export interface RestartNote {
+  outcome: "reloading" | "gaveUp";
+  /** Why it couldn't type, or why it gave up. */
+  reason: string;
+  /** The page's `Date.now()` when it ended. */
+  atMs: number;
+}
+
+/** Where the page timer leaves its note, in the page's `localStorage`: it outlives the reload (#212). */
+export const RESTART_NOTE_STORAGE_KEY = "bitburner-agent.restartNote";
 
 /** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */
 export interface HandledDialog {

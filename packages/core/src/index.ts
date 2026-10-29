@@ -261,6 +261,8 @@ export {
   type HandledDialog,
   MAX_DIALOG_TEXT_LENGTH,
   type MediumSnapshotData,
+  RESTART_NOTE_STORAGE_KEY,
+  type RestartNote,
   type SlowSnapshotData,
   type StaticSnapshotData,
   snapshotWorkerFileName,

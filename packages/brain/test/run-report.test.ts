@@ -777,6 +777,16 @@ describe("each failure is a FAIL, with its line", () => {
     ]);
   });
 
+  test("a restart after a reset that couldn't type (#212): a failure, with why and what it did", () => {
+    cleanRun();
+    event(MINUTE, "restartFellBack", { outcome: "reloading", reason: "no terminal", atMs: 1 });
+    event(2 * MINUTE, "restartFellBack", { outcome: "gaveUp", reason: "no terminal", atMs: 2 });
+    expect(verdict().failures).toEqual([
+      `${at(MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it saved and reloaded the game`,
+      `${at(2 * MINUTE)} restart after a reset couldn't type run /agent/boot.js: no terminal; it gave up`,
+    ]);
+  });
+
   test("no heartbeat at all", () => {
     event(0, "brainStarted", { release: "r" });
     event(MINUTE, "deployed", { deploymentId: "dep-b", replacedDeploymentId: null });
