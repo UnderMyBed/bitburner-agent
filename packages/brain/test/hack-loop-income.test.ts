@@ -1,7 +1,7 @@
 // The hack loop's income across a change of target (#184) and after it (#187), in the simulator: an 8 GB fresh start in
-// BN1, the brain's rules as on Steam (the loop, the programs, home RAM and cloud servers, #194, all on), run past the
-// starter rule's first move away from n00dles, which comes within reach at about hacking 150, and 45 virtual minutes
-// on.
+// BN1, the brain's rules as on Steam (the loop, the programs, home RAM and cloud servers, #194, all on; the batcher,
+// #206, off), run past the starter rule's first move away from n00dles, which comes within reach at about hacking 150,
+// and 45 virtual minutes on.
 // - #184: on Steam, `7990834`'s loop moved every host to zer0 at 4% of its money: weakening and growing it took all of
 //   them, and money stayed flat for 24 minutes until the owner stopped it. Here, on `7990834`, it moved at 45 to 48
 //   virtual minutes on each of seeds 1 to 8, and money then stayed flat for the 45 minutes the test ran on. Now the
@@ -74,7 +74,7 @@ test.each(SEEDS)(
   "seed %i: past the move from n00dles and 45 minutes on, money never goes more than 10 virtual minutes without rising",
   { timeout: 600_000 },
   async (seed) => {
-    const fresh = await freshStartOf({ withDesiredState: true, seed });
+    const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false });
     const { game, brain } = fresh;
     const samples: { atMs: number; money: number }[] = [];
     let prepareFromMs: number | null = null;

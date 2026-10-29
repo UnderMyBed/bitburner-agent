@@ -1,6 +1,6 @@
 // Augmentations and the reset (#210), in the simulator: a fresh 8 GB start in BN1 reaching its first install, the
-// brain's rules as on Steam (the hack loop, programs, home RAM, backdoors, faction work and augmentations, all on).
-// - 20 virtual minutes in, a harness edit stands in for the hours of work (A5's, #203): CyberSec joined with the
+// brain's rules as on Steam (the batcher, programs, home RAM, backdoors, faction work and augmentations, all on).
+// - 17 virtual minutes in (`EDITED_AFTER_MS`), a harness edit stands in for the hours of work (A5's, #203): CyberSec joined with the
 //   reputation for its five augmentations, NiteSec joined with none (so the decision compares, #213 review), and the
 //   money for the five, home's next RAM upgrade and a NeuroFlux Governor level.
 // - The brain chooses the install because NiteSec's next comes sooner installing first ("sooner installing"), buys
@@ -30,6 +30,12 @@ const SEEDS = augmentationSeeds(process.env.AUGMENTATION_SEEDS);
 const MINUTE = 60_000;
 /** How long each cycle runs before its hacking level is compared. */
 const COMPARED_AFTER_MS = 20 * MINUTE;
+/**
+ * When the harness edit comes. At 20 minutes with the batcher on (#206's default), the brain rightly carries on:
+ * the batcher's income and exp put NiteSec's reputation rate so high that installing (about 11 minutes to rebuild the
+ * hacking level) comes later, 3.2 h against 3.0 h. At 17 it comes sooner, 4.0 h against 5.1 h (#216's review).
+ */
+const EDITED_AFTER_MS = 17 * MINUTE;
 /** From the harness edit to the reset: the decision, five purchases a few seconds apart, the gate and its backup. */
 const INSTALLED_WITHIN_MS = 10 * MINUTE;
 /** CyberSec's five in buy order, and their money then: 70m + 125m × 1.9 + 10m × 1.9² + 7.5m × 1.9³ + 4m × 1.9⁴. */
@@ -61,8 +67,8 @@ test.each(SEEDS)(
     const hacking = (medium: MediumSnapshotData | null) =>
       (medium?.player.skills as { hacking?: number } | undefined)?.hacking ?? Number.NaN;
 
-    // The first cycle, 20 minutes in: its hacking level.
-    await game.run(COMPARED_AFTER_MS);
+    // The first cycle, until the edit: its hacking level.
+    await game.run(EDITED_AFTER_MS);
     const levelBefore = hacking(fresh.medium());
     const homeRam = () => fresh.medium()?.servers.find((server) => server.hostname === "home")?.maxRam;
     const startedAt = slow()?.resetInfo.lastAugReset as number;
@@ -164,7 +170,7 @@ test.each(SEEDS)(
     );
     expect(failures).toEqual([]);
     console.log(
-      `seed ${seed}: hacking ${levelBefore} 20 min after the start, ${levelAfter} 20 min after the install (home ` +
+      `seed ${seed}: hacking ${levelBefore} 17 min after the start, ${levelAfter} 20 min after the install (home ` +
         `${homeRamBefore} GB, then ${homeRam()} GB); ` +
         `installed ${Object.entries(installed)
           .map(([name, level]) => (level > 1 ? `${name} ${level}` : name))

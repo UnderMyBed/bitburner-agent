@@ -49,6 +49,7 @@ export type AlertName =
   | "backdoorOverdue"
   | "factionWorkStalled"
   | "batcherNotRunning"
+  | "batcherOutOfStep"
   | "augmentationNotQueued"
   | "installNotRestarted";
 
@@ -113,6 +114,11 @@ export interface AlertFacts {
    * since the first of them, and the newest's reason; null when the newest says it runs, or isn't wanted.
    */
   batcherNotRunning?: { sinceMs: number; inARow: number; problem: string } | null;
+  /**
+   * The batcher out of step in the same fast snapshots (#206, `batcherOutOfStep`): its run's desyncs, late and lost
+   * operations' rise over them, and since when; null with none.
+   */
+  batcherOutOfStep?: { sinceMs: number; target: string; desyncs: number; late: number; lost: number } | null;
   /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
   augmentationsNotQueued: NotQueued[];
   /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
@@ -131,8 +137,8 @@ export interface IncomeFacts {
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
- * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then one
- * augmentationNotQueued per purchase not queued, then installNotRestarted.
+ * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
+ * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then installNotRestarted.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -222,6 +228,18 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail:
         `the batcher isn't running, in the last ${notRunning.inARow} fast snapshots, so nothing hacks the servers the ` +
         `hack loop left to it: ${notRunning.problem}`,
+    });
+  }
+  // The batcher out of step (#206): its batches no longer land as planned, or someone else touched its target.
+  const outOfStep = facts.batcherOutOfStep;
+  if (outOfStep) {
+    alerts.push({
+      name: "batcherOutOfStep",
+      sinceMs: outOfStep.sinceMs,
+      detail:
+        `the batcher is out of step on ${outOfStep.target}: ${outOfStep.desyncs} desync${outOfStep.desyncs === 1 ? "" : "s"}, ${outOfStep.late} late, ` +
+        `${outOfStep.lost} lost lately; it stops hacking, prepares the target again and goes on, and the run report ` +
+        "fails the run",
     });
   }
   alerts.push(...augmentationAlerts(facts));

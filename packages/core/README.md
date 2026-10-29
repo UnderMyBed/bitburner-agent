@@ -73,7 +73,7 @@ With `percentMoneyHackedPerThread` and `growthLogPerThread` (`src/hack-loop.ts`,
 
 ## The batcher
 
-Built in #204 (M4 phase A slice A7a): the maths of a batch (hack, weaken, grow, weaken), pure, so the in-game batcher ([ingame: the batcher](../ingame/README.md#the-batcher)) and the brain (#206) use the same functions. `src/batcher.ts`.
+Built in #204 (M4 phase A slice A7a): the maths of a batch (hack, weaken, grow, weaken), pure, so the in-game batcher ([ingame: the batcher](../ingame/README.md#the-batcher)) and the brain ([its target and plan](../brain/README.md#the-batcher), #206) use the same functions. `src/batcher.ts`.
 
 | Function | What |
 |---|---|
@@ -83,6 +83,7 @@ Built in #204 (M4 phase A slice A7a): the maths of a batch (hack, weaken, grow, 
 | `batchPeakRamGb`, `leastSpacingMs`, `batchPlan(target, player, ramGb)` | The plan: for each count of hack threads, the least spacing (at least 80 ms) at which batches' peak RAM (each operation's threads × RAM × ⌈its hold / the spacing⌉) fits; the most income wins. Never above the batcher ceiling, and above 60% of it on 100 GB to 1 TB in the tests. |
 | `batchRamGb(hostsRamGb)`, `threadsThatFit`, `placeThreads(hosts, threads, ramGb)` | The RAM: each host's whole 1.8 GB threads, as `exec` counts them (NetscriptWorker.ts:110-117); an operation on the host with the least free RAM that holds it all, else split across the largest. |
 | `batchBounds`, `isOutsideBounds`, `hackThreadsAtLaunch`, `isTargetPrepared`, `preparationWave` | The bounds batches in step keep their target within, over every batch still landing (money at least what 1.1× the largest share leaves, security at most the minimum plus the largest hack's or grow's rise), and whether what was seen is outside them; a batch's hack threads replanned when it goes out, so the share's rise with the hacking level over a weaken's time stays within the margin (a rising-level test shows it does, and that unreplanned it doesn't); a target at its minimum security and maximum money; the next wave preparing one on some RAM, weaken first. |
+| `preparationTimeMs(target, player, now, ramGb)` | #206: how long preparing a target takes on some RAM, wave after wave as the batcher starts them, each landing a weaken's time at the security then; 0 when ready, Infinity when no wave fits or past `MOST_PREPARATION_WAVES` (50). The brain counts it in a target's worth. |
 | `BATCHER_CONFIG_PORT`, `BATCHER_DEPLOY_WORKER_NAME`, `isBatcherFile`, `BATCHER_RAM_BUDGET_GB` | The Agent's side (#205): the config's port, the deploy worker, ours to stop, and the budget the brain plans by. The desired state's `batcher` is `control-protocol.ts`'s `BatcherState`, `parseBatcherState` its check against the hack loop. |
 | `LandingWatch`, `parseLandingRecord`, `parseBatcherConfig`, `newBatcherHealth` | The checks on the landings (out of order, lost 10 s after their time; a record never expected, or a late hack's, moves nothing), the batcher's config and its health. |
 

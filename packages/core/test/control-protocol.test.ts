@@ -519,6 +519,10 @@ describe("the batcher (#205)", () => {
     expect(parsed({ batcher })).toEqual({ ok: true, message: { ...withPreparing, batcher } });
     expect(parsed({})).toEqual({ ok: true, message: withPreparing });
     expect(parsed({ batcher: null })).toEqual({ ok: true, message: withPreparing });
+    // With the next target it prepares (#206).
+    const next = { target: "joesguns", figures: batcher.config.figures, ramGb: 30 };
+    const withNext = { ...batcher, config: { ...batcher.config, next } };
+    expect(parsed({ batcher: withNext })).toEqual({ ok: true, message: { ...withPreparing, batcher: withNext } });
   });
 
   test.each([
@@ -528,6 +532,14 @@ describe("the batcher (#205)", () => {
     ["with a hostname too long", { ...batcher, config: { ...batcher.config, hosts: ["x".repeat(257)] } }, "hosts"],
     ["sharing a host with the hack loop", { ...batcher, config: { ...batcher.config, hosts: ["n00dles"] } }, "n00dles"],
     ["running on a host of the hack loop", { ...batcher, runOn: "n00dles" }, "batcher.runOn is n00dles"],
+    [
+      "with a next target's name too long (#206)",
+      {
+        ...batcher,
+        config: { ...batcher.config, next: { target: "x".repeat(257), figures: batcher.config.figures, ramGb: 30 } },
+      },
+      "batcher.config.next.target",
+    ],
     [
       "sharing a host the hack loop prepares on",
       { ...batcher, config: { ...batcher.config, hosts: ["max-hardware"] } },

@@ -107,6 +107,7 @@ export {
   leastSpacingMs,
   MAX_BATCH_SHARE,
   MIN_BATCH_SPACING_MS,
+  MOST_PREPARATION_WAVES,
   newBatcherHealth,
   operationRamGb,
   operationScriptName,
@@ -114,6 +115,7 @@ export {
   parseBatcherConfig,
   parseLandingRecord,
   placeThreads,
+  preparationTimeMs,
   preparationWave,
   threadsThatFit,
 } from "./batcher.ts";

@@ -305,6 +305,25 @@ test("batcherNotRunning (#211): sent and not running in 3 fast snapshots in a ro
   expect(names({ ...quiet, batcherNotRunning: null })).toEqual([]);
 });
 
+test("batcherOutOfStep (#206): its desyncs, late or lost rose lately, with the target and counts; after batcherNotRunning", () => {
+  const outOfStep = { sinceMs: 7_000, target: "n00dles", desyncs: 1, late: 2, lost: 0 };
+  expect(activeAlerts({ ...quiet, batcherOutOfStep: outOfStep })).toEqual([
+    {
+      name: "batcherOutOfStep",
+      sinceMs: 7_000,
+      detail:
+        "the batcher is out of step on n00dles: 1 desync, 2 late, 0 lost lately; it stops hacking, prepares the " +
+        "target again and goes on, and the run report fails the run",
+    },
+  ]);
+  const notRunning = { sinceMs: 5_000, inARow: 3, problem: "no room on joesguns" };
+  expect(names({ ...quiet, batcherNotRunning: notRunning, batcherOutOfStep: outOfStep })).toEqual([
+    "batcherNotRunning",
+    "batcherOutOfStep",
+  ]);
+  expect(names({ ...quiet, batcherOutOfStep: null })).toEqual([]);
+});
+
 describe("cloudServerProblem (#194): a cloud purchase the Agent reported done with a problem", () => {
   const problem = "buyServer(pserv-0, 64): bought as pserv-0-0: a server off the network held pserv-0";
 

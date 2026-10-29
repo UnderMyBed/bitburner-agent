@@ -119,6 +119,8 @@ async function agentLog(simulation: Simulation): Promise<string[]> {
 async function keptGame() {
   const fresh = await freshStartOf({
     withDesiredState: true,
+    // The hack loop's loops are what safe mode keeps here: the batcher (#206) would take their hosts.
+    batcher: false,
     beforeAgent: (game) => game.simulation.diagnostics.joinFactionWithReputation("Sector-12", 0),
   });
   const controller = fresh.controller();
