@@ -203,16 +203,16 @@ describe("the decision", () => {
     expect(events).toEqual([]);
   });
 
-  test("the reserve: the set the money will cover within 5 minutes of income", () => {
-    // $60m and $100k/s: $90m in 5 minutes. By value at hacking 300, Gen II (with Gen I) is past it; Gen I and BitWire
-    // ($89m) aren't, and Neurotrainer I with them would be. $60m alone covers BitWire, Synaptic and Neurotrainer I.
-    measureIncome(100_000, { reputation: 10_000 }, medium({ money: 60e6 }));
+  test("the reserve: the set the money will cover within the cloud servers' reserve horizon of income", () => {
+    // $60m and $200k/s: $72m within the minute. By value at hacking 300, Gen II (with Gen I) is past it, Gen I ($70m)
+    // isn't, and nothing more fits with it. $60m alone covers BitWire, Synaptic and Neurotrainer I.
+    measureIncome(200_000, { reputation: 10_000 }, medium({ money: 60e6 }));
     expect(rule.view().set.map((each) => each.augmentation)).toEqual([
       "BitWire",
       "Synaptic Enhancement Implant",
       "Neurotrainer I",
     ]);
-    expect(rule.reserve()).toBeCloseTo(70e6 + 10e6 * 1.9, 0);
+    expect(rule.reserve()).toBeCloseTo(70e6, 0);
   });
 
   test("the money far off carrying on: install chosen", () => {

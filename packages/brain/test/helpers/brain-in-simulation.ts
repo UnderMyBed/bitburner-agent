@@ -99,7 +99,9 @@ export function startBrainInSimulation(
   const channel = data
     ? brainChannel({ token, clock: game.clock, store: data.store, environment: "E1" })
     : new ControlChannel({ token, clock: game.clock });
-  if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
+  const logLines: string[] = [];
+  const log = (line: string) => logLines.push(line);
+  if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease, log });
   const saveBackups =
     data &&
     new SaveBackups({
@@ -109,7 +111,6 @@ export function startBrainInSimulation(
       backupsKept: SAVE_BACKUPS_KEPT,
       clock: game.clock,
     });
-  const logLines: string[] = [];
   let desiredStateController: DesiredStateController | null = null;
   if (withDesiredState) {
     if (!data) throw new Error("the desired state keeps its switches in the store: give the brain its data");

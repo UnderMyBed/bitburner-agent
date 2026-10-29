@@ -8,6 +8,7 @@ import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
+import { readCloudServersEnabled } from "./cloud-servers.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
@@ -144,6 +145,7 @@ try {
         hackLoop: desiredState.hackLoopView(),
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
+        cloudServers: desiredState.cloudServersView(),
         augmentations: desiredState.augmentationsView(),
         installAwaitingRestart: desiredState.installAwaitingRestart(),
         intents: desiredState.intentsView(),
@@ -174,6 +176,10 @@ try {
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
       log(`upgrading home RAM turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setCloudServersEnabled: (enabled) => {
+      desiredState.setCloudServersEnabled(enabled);
+      log(`buying cloud servers turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     setFactionWorkEnabled: (enabled) => {
       desiredState.setFactionWorkEnabled(enabled);
@@ -208,9 +214,9 @@ try {
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
   log(
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
-      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, faction work ` +
-      `${readFactionWorkEnabled(store) ? "on" : "off"}, buying and installing augmentations ` +
-      `${readAugmentationsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
+      `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
+      `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
   );
   log(
     supervising

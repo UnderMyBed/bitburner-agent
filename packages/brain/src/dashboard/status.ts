@@ -14,11 +14,12 @@ import {
 } from "@bitburner-agent/core";
 import type { AugmentationsView } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
-import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
+import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
+import { reportedRefusal } from "../record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
@@ -95,6 +96,8 @@ export interface DashboardStatus {
   programs: ProgramsView;
   /** Home's RAM (#138): its size, the upgrade being bought, or what it waits for. */
   homeRam: HomeRamView;
+  /** Cloud servers (#194): those owned, the purchase being made, or what it waits for, and a problem noted. */
+  cloudServers: CloudServersView;
   /**
    * Augmentations and the reset (#210): the switch, the set the money covers, the decision, what's asked for, and the
    * purchases not queued. The reserve is Infinity while committed, which JSON carries as null.
@@ -140,6 +143,8 @@ export interface DashboardStatusOptions {
   programs: ProgramsView;
   /** Home RAM's view (#138), likewise. */
   homeRam: HomeRamView;
+  /** Cloud servers' view (#194), likewise. */
+  cloudServers: CloudServersView;
   /** The augmentations' view (#210), likewise. */
   augmentations: AugmentationsView;
   /** The install out when the Agent disconnected, until the reset shows (#210): the controller's, for its alert. */
@@ -174,6 +179,7 @@ export function buildDashboardStatus({
   hackLoop,
   programs,
   homeRam,
+  cloudServers,
   augmentations,
   installAwaitingRestart,
   intents,
@@ -281,6 +287,8 @@ export function buildDashboardStatus({
       ),
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
+      cloudServerProblem: cloudServers.problem,
+      refusedMessage: reportedRefusal(fast),
       factionState:
         newestUnread !== undefined
           ? {
@@ -315,6 +323,7 @@ export function buildDashboardStatus({
     hackLoop,
     programs,
     homeRam,
+    cloudServers,
     augmentations,
     intents,
     work,

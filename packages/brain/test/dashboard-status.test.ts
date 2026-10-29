@@ -9,7 +9,7 @@ import type { AugmentationsView } from "../src/augmentations.ts";
 import type { BackdoorDue } from "../src/backdoors.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
-import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
+import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
 import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
@@ -41,6 +41,14 @@ const programs: ProgramsView = {
   waitingFor: null,
 };
 const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
+const cloudServers: CloudServersView = {
+  enabled: true,
+  waiting: false,
+  servers: [{ hostname: "pserv-0", ram: 64 }],
+  buying: null,
+  waitingFor: null,
+  problem: null,
+};
 const intents: IntentView[] = [{ id: "travel(Aevum)", source: "manual", outcome: null, waitingFor: null }];
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
 const brainStarts = () => {
@@ -61,6 +69,7 @@ const status = (
   {
     income = null,
     loop = hackLoop,
+    cloud = cloudServers,
     backdoorsDue = [],
     factionWork = QUIET_FACTIONS_VIEW,
     factionWorkStall = null,
@@ -69,6 +78,7 @@ const status = (
   }: {
     income?: IncomeFacts | null;
     loop?: HackLoopView;
+    cloud?: CloudServersView;
     backdoorsDue?: BackdoorDue[];
     factionWork?: FactionsView;
     factionWorkStall?: FactionWorkStall | null;
@@ -86,6 +96,7 @@ const status = (
     hackLoop: loop,
     programs,
     homeRam,
+    cloudServers: cloud,
     intents,
     work: { desired: null, source: null, outcome: null },
     income,
@@ -187,6 +198,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     hackLoop,
     programs,
     homeRam,
+    cloudServers,
     intents,
     work: { desired: null, source: null, outcome: null },
     factions: {
@@ -218,6 +230,16 @@ test("incomeStalled (#184): from the income watch's facts, while the hack loop i
   // Off, it isn't expected to earn.
   const off = { ...hackLoop, enabled: false, target: null, hosts: [] };
   expect(status(nowMs, { income, loop: off }).alerts).toEqual([]);
+});
+
+test("cloudServerProblem (#194): from the controller's view of cloud servers, while it has a problem noted", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const problem = "buyServer(pserv-0, 64): bought as pserv-0-0: a server off the network held pserv-0";
+  expect(status(nowMs, { cloud: { ...cloudServers, problem } }).alerts).toMatchObject([
+    { name: "cloudServerProblem", sinceMs: nowMs, detail: expect.stringContaining(problem) },
+  ]);
+  expect(status(nowMs).alerts).toEqual([]);
 });
 
 test("backdoorOverdue (#195): from the controller's backdoors due, once one has been due 5 minutes", () => {
@@ -429,6 +451,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     hackLoop,
     programs,
     homeRam,
+    cloudServers,
     intents,
     work: { desired: null, source: null, outcome: null },
     income: null,
@@ -597,4 +620,15 @@ test("the hacking rows with no snapshots: the ceiling unknown, no income", () =>
     ceilingText: "unknown: no static snapshot",
     incomeText: "— (not two slow snapshots with the money sources in the last 10 min)",
   });
+});
+
+test("messageRefused (#194's review): from the newest fast snapshot's refused message, if well formed", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  const refusedMessage = { reason: "an intent's hostname isn't valid", count: 1 };
+  recordSnapshot("fast", nowMs - 1_000, { ...fastData(1), refusedMessage });
+  expect(status(nowMs).alerts).toMatchObject([
+    { name: "messageRefused", sinceMs: nowMs - 1_000, detail: expect.stringContaining(refusedMessage.reason) },
+  ]);
+  recordSnapshot("fast", nowMs - 500, { ...fastData(1), refusedMessage: { reason: 7 } });
+  expect(status(nowMs).alerts).toEqual([]);
 });

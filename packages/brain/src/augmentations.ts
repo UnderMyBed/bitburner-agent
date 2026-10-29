@@ -36,6 +36,7 @@ import {
   type SlowSnapshotData,
   type WorkingPerson,
 } from "@bitburner-agent/core";
+import { CLOUD_SERVER_RESERVE_HORIZON_MS } from "./cloud-servers.ts";
 import { bestWorkRate, workCandidates, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
@@ -57,10 +58,8 @@ export const AUGMENTATION_CYCLE_SETTING = "augmentations.cycle";
 
 /** How long the income is measured over: the slow snapshots' money sources across 10 minutes. */
 export const AUGMENTATION_INCOME_WINDOW_MS = 10 * 60_000;
-/**
- * The reserve holds the set the income would let the money cover within this (A2's reserve horizon, #194): 5 minutes.
- */
-export const AUGMENTATION_RESERVE_HORIZON_MS = 5 * 60_000;
+/** The reserve holds the set the income would let the money cover within this: A2's reserve horizon (#194). */
+export const AUGMENTATION_RESERVE_HORIZON_MS = CLOUD_SERVER_RESERVE_HORIZON_MS;
 /**
  * Faction state reads after a purchase reported done that may miss it before it's `augmentationNotQueued`: 2. The first
  * may have been read before the purchase, in the same round (snapshots come before the intents).

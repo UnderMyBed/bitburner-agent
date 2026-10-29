@@ -275,3 +275,59 @@ test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread,
     "the faction state couldn't be read in the last 3 slow snapshots in a row: no game page to read it through",
   );
 });
+
+describe("cloudServerProblem (#194): a cloud purchase the Agent reported done with a problem", () => {
+  const problem = "buyServer(pserv-0, 64): bought as pserv-0-0: a server off the network held pserv-0";
+
+  test("holds while the controller has one noted, saying what and how to go on", () => {
+    expect(activeAlerts({ ...quiet, cloudServerProblem: problem })).toEqual([
+      {
+        name: "cloudServerProblem",
+        sinceMs: quiet.nowMs,
+        detail:
+          "a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and " +
+          `on: ${problem}`,
+      },
+    ]);
+    expect(names({ ...quiet, cloudServerProblem: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after incomeStalled, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    const stalled = {
+      hackLoopTarget: "zer0",
+      income: { money: 1, lastRiseAtMs: quiet.nowMs - INCOME_STALLED_AFTER_MS - 1 },
+    };
+    expect(names({ ...quiet, ...stalled, cloudServerProblem: problem, intentOutcomes: [stuck] })).toEqual([
+      "incomeStalled",
+      "cloudServerProblem",
+      "intentStuck",
+    ]);
+  });
+});
+
+describe("messageRefused (#194's review): the Agent refused the brain's last message", () => {
+  test("holds while the newest fast snapshot says so, with the count and the reason", () => {
+    const refusedMessage = { reason: "an intent's hostname isn't valid", count: 3 };
+    expect(activeAlerts({ ...quiet, refusedMessage })).toEqual([
+      {
+        name: "messageRefused",
+        sinceMs: quiet.lastFastSnapshotAtMs,
+        detail:
+          "the Agent refused the brain's message (3 so far), so it acts on the last one it took: an intent's " +
+          "hostname isn't valid",
+      },
+    ]);
+    expect(names({ ...quiet, refusedMessage: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after cloudServerProblem, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    const refusedMessage = { reason: "x", count: 1 };
+    expect(names({ ...quiet, cloudServerProblem: "p", refusedMessage, intentOutcomes: [stuck] })).toEqual([
+      "cloudServerProblem",
+      "messageRefused",
+      "intentStuck",
+    ]);
+  });
+});

@@ -47,6 +47,10 @@
     <h2>Home RAM</h2><div></div><button type="button">Stop upgrading home RAM</button>
     <div class="bad" id="home-ram-problem" hidden></div>
   </section>
+  <section id="cloud-servers">
+    <h2>Cloud servers</h2><div></div><button type="button">Stop buying cloud servers</button>
+    <div class="bad" id="cloud-servers-problem" hidden></div>
+  </section>
   <section id="augmentations">
     <h2>Augmentations</h2><div></div><button type="button">Stop buying and installing augmentations</button>
     <div class="bad" id="augmentations-problem" hidden></div>
@@ -56,7 +60,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>buyServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -117,6 +121,8 @@ let enableHackLoopNext = false;
 let enableProgramsNext = false;
 /** What home RAM's switch sends next (#138), likewise. */
 let enableHomeRamNext = false;
+/** What cloud servers' switch sends next (#194), likewise. */
+let enableCloudServersNext = false;
 /** What the brain's faction work's switch sends next (#203), likewise. */
 let enableFactionWorkNext = false;
 /** Whose work the Work section shows (#203): its stop button turns the brain's faction work off while it's the brain's. */
@@ -282,6 +288,33 @@ function render(status) {
   );
   document.querySelector("#home-ram button").textContent = homeRam.enabled ? "Stop upgrading home RAM" : "Start upgrading home RAM";
 
+  const cloud = status.cloudServers;
+  enableCloudServersNext = !cloud.enabled;
+  const money = (amount) => `$${Math.round(amount).toLocaleString()}`;
+  const buyingText = (buying) =>
+    buying.action === "buyServer"
+      ? `buying ${buying.hostname} with ${buying.ram} GB for ${money(buying.price)}`
+      : `upgrading ${buying.hostname} to ${buying.ram} GB for ${money(buying.price)}`;
+  const cloudText = !cloud.enabled
+    ? "not buying"
+    : cloud.waiting
+      ? "waiting for the Agent's snapshots"
+      : cloud.buying !== null
+        ? `${buyingText(cloud.buying)}, paid back in ${Math.ceil(cloud.buying.paybackMs / 60_000)} min`
+        : cloud.waitingFor !== null
+          ? `waiting for ${cloud.waitingFor}`
+          : "all at the most RAM";
+  const cloudRam = cloud.servers.reduce((total, server) => total + server.ram, 0);
+  document.querySelector("#cloud-servers div").replaceChildren(
+    element("div", `Cloud servers: ${cloudText}`, cloud.problem !== null ? "bad" : cloud.enabled ? "ok" : "muted"),
+    element(
+      "div",
+      cloud.servers.length === 0
+        ? "Owned: none"
+        : `Owned: ${cloud.servers.length}, ${cloudRam.toLocaleString()} GB: ${cloud.servers.map((server) => `${server.hostname} ${server.ram} GB`).join(", ")}`,
+    ),
+  );
+  document.querySelector("#cloud-servers button").textContent = cloud.enabled ? "Stop buying cloud servers" : "Start buying cloud servers";
   // Augmentations and the reset (#210): what the brain asks for, or the set the money covers and the decision.
   const augmentations = status.augmentations;
   enableAugmentationsNext = !augmentations.enabled;
@@ -519,6 +552,9 @@ document.querySelector("#programs button").addEventListener("click", () =>
 );
 document.querySelector("#home-ram button").addEventListener("click", () =>
   sendSwitch("/api/home-ram", { enabled: enableHomeRamNext }, "#home-ram-problem"),
+);
+document.querySelector("#cloud-servers button").addEventListener("click", () =>
+  sendSwitch("/api/cloud-servers", { enabled: enableCloudServersNext }, "#cloud-servers-problem"),
 );
 document.querySelector("#factions button").addEventListener("click", () =>
   sendSwitch("/api/faction-work", { enabled: enableFactionWorkNext }, "#faction-work-problem"),
