@@ -121,7 +121,7 @@ const orNone = (value, format = String) => (value === null || value === undefine
 const megabytes = (bytes) => `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 const dollarsPerSecond = (dollars) => `$${Math.round(dollars).toLocaleString("en-US")}/s`;
 
-/** The hacking ceiling (#196): the most the hack loop's hosts' RAM could earn a second, on which target, or why unknown. */
+/** The hacking ceiling (#196): the most the hack loop's hosts' RAM could earn a second, and where, or why unknown. */
 function hackingCeilingText(ceiling) {
   if (!ceiling.known) return `unknown: ${ceiling.reason}`;
   const servers = ceiling.hostCount === 1 ? "server" : "servers";

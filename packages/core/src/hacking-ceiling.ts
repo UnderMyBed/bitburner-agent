@@ -18,7 +18,7 @@ export const WEAKEN_SCRIPT_RAM_GB = 1.75;
 export const HACK_SECURITY_PER_THREAD = 0.002;
 /** A grow thread used adds twice that (ServerHelpers.ts:209-211). */
 export const GROW_SECURITY_PER_THREAD = 0.004;
-/** A weaken thread takes off `ServerWeakenAmount` x its host's core bonus (Constants.ts:10; ServerHelpers.ts:292-295). */
+/** A weaken thread takes off `ServerWeakenAmount` x its host's core bonus (Constants.ts:10, ServerHelpers.ts:292). */
 export const WEAKEN_SECURITY_PER_THREAD = 0.05;
 /** A grow takes 3.2 hacks' time, a weaken 4 (Hacking.ts:83-94). */
 export const GROW_TIME_PER_HACK_TIME = 3.2;
@@ -90,8 +90,8 @@ export function hackTimeSeconds(
  *   x >= f M/(M k + 1), whatever f;
  * - **weaken:** what those add, 0.002 for each successful hack thread, 1/(p M) a dollar, and 0.004 a grow thread, over
  *   0.05 x the core bonus, each `WEAKEN_SCRIPT_RAM_GB` for 4 T.
- * A batch taking a share f costs at least this a dollar; only as f goes to 0 does it get there (grow's log is convex), so
- * the best over f is this limit. It assumes continuous batching with no gaps, every operation landing at the right
+ * A batch taking a share f costs at least this a dollar, and gets there only as f goes to 0 (grow's log is convex): the
+ * best over f is this limit. It assumes continuous batching with no gaps, every operation landing at the right
  * moment, fractional threads, and security and money held at their best: an upper bound, not a plan. 0 where nothing
  * can be hacked: no money, below the hacking it needs, security 100, or no chance.
  */

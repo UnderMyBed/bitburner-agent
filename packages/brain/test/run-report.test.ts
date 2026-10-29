@@ -369,9 +369,9 @@ describe("the sections", () => {
 });
 
 /**
- * A run with what the ceiling needs (#196): zer0 rooted with 16 GB at hacking 150, a medium snapshot every 10 s with the
- * player's skills and multipliers, and hacking earning `ofCeiling` of the ceiling, by the slow snapshots' money sources
- * every minute. Returns the ceiling, $ a second.
+ * A run with what the ceiling needs (#196): zer0 rooted with 16 GB at hacking 150, a medium snapshot every 10 s with
+ * the player's skills and multipliers, and hacking earning `ofCeiling` of the ceiling, by the slow snapshots' money
+ * sources every minute. Returns the ceiling, $ a second.
  */
 function hackingRun(ofCeiling: number): number {
   const servers: StaticSnapshotData = {
