@@ -1,13 +1,18 @@
 // The brain's side of the hack loop (#134, M3's first slice): its switch, and the starter rules for its target and the
 // servers it runs on, over the connected Agent's snapshots, until the planner (M4) decides, and the move from one
-// target to the next without a stop in income (#184). The dashboard's switch turns it on and off; on is the default
+// target to the next without a stop in income (#184), and the threads each host hacks with, so the hosts together never
+// hack a target dry (#187). The dashboard's switch turns it on and off; on is the default
 // (owner decision 34). `DesiredStateController` (desired-state.ts) sends it.
 import {
+  growthLogPerThread,
+  HACK_LOOP_RAM_BUDGET_GB,
+  HACK_LOOP_SECURITY_MARGIN,
   type HackLoopState,
   isHackLoopReady,
   MAX_FIELD_LENGTH,
   MAX_HACK_LOOP_HOSTS,
   type MediumSnapshotData,
+  percentMoneyHackedPerThread,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { readSwitch } from "./switches.ts";
@@ -171,6 +176,8 @@ export interface LastHackTarget {
  *   last time stay while they still hold half and leave some to earn, so a larger host rooted since doesn't stop a
  *   weaken or grow under way. Once a medium snapshot shows `best` ready, all move to it. A single host holds all the
  *   RAM, so it prepares, and nothing earns meanwhile; with no host, nothing is prepared.
+ * - `hackThreads` (#187): each host's count of hack threads, the earning hosts' against `current` (or `best`), the
+ *   preparing hosts' against `best` (`hackThreadsOf`); absent with no host.
  */
 export function planHackLoop(
   staticData: StaticSnapshotData | null,
@@ -190,7 +197,7 @@ export function planHackLoop(
   if (current === best || ready(best) || !currentEarns) {
     const earning = current === best ? currentEarns : ready(best);
     return {
-      hackLoop: { target: best.hostname, hosts },
+      hackLoop: { target: best.hostname, hosts, ...hackThreadsOf(best, hostsWithRam, mediumData) },
       lastSet: { target: best.hostname, earning, preparingHosts: [] },
     };
   }
@@ -198,14 +205,101 @@ export function planHackLoop(
   const preparing = hosts.filter((hostname) => preparingHosts.has(hostname));
   const lastSetNow = { target: current.hostname, earning: true, preparingHosts: preparing };
   // No host to prepare on (none rooted with RAM): nothing prepared, rather than "preparing on 0 servers".
-  if (preparing.length === 0) return { hackLoop: { target: current.hostname, hosts }, lastSet: lastSetNow };
+  if (preparing.length === 0) {
+    return {
+      hackLoop: { target: current.hostname, hosts, ...hackThreadsOf(current, hostsWithRam, mediumData) },
+      lastSet: lastSetNow,
+    };
+  }
+  const earningWithRam = hostsWithRam.filter(([hostname]) => !preparingHosts.has(hostname));
+  const preparingWithRam = hostsWithRam.filter(([hostname]) => preparingHosts.has(hostname));
+  const earningThreads = hackThreadsOf(current, earningWithRam, mediumData).hackThreads ?? {};
+  const preparingThreads = hackThreadsOf(best, preparingWithRam, mediumData).hackThreads ?? {};
   return {
     hackLoop: {
       target: current.hostname,
-      hosts: hosts.filter((hostname) => !preparingHosts.has(hostname)),
+      hosts: earningWithRam.map(([hostname]) => hostname),
       preparing: { target: best.hostname, hosts: preparing },
+      hackThreads: { ...earningThreads, ...preparingThreads },
     },
     lastSet: lastSetNow,
+  };
+}
+
+/**
+ * How many rounds of the hosts' grows may bring back what a round of their hacks takes (#187). Tuned in the
+ * simulator (hack-loop-income.test.ts, over 8 seeds): at 2, no seed's money went 8 minutes without rising, and they
+ * earned 14% more than with all threads hacking. At 3 or more the cap no longer binds on max-hardware at the move (one
+ * thread's share, about 0.2%, is under 3 threads' log of growth), and seed 4 went 11 minutes without a rise; at 0.5,
+ * with nearly every hack capped, they earned about half.
+ */
+export const HACK_REGROW_ROUNDS = 2;
+
+/**
+ * Each host's hack threads against `target` (#187): so many that a round of hacks by every host takes no more than
+ * `HACK_REGROW_ROUNDS` rounds of their grows bring back. The loop hacks once money is at 75% of the maximum, so every
+ * host's loop hacks at about the same time: with all their threads, they took max-hardware from $124m to $111 in the
+ * simulator, and its growth of 30 took 25 minutes to bring it back. n00dles (growth 3000) is still hacked with all
+ * their threads.
+ * - **A round of grows** multiplies the target's money by e^g, g being the hosts' threads (their RAM over the loop's
+ *   budget) times one thread's log of growth at the target's minimum security plus 5, the slowest the loop lets it
+ *   grow (core's `growthLogPerThread`).
+ * - **A host's hack** with t threads keeps 1 - t x p of what the hosts before it left, p being one thread's share at
+ *   the target's minimum security, the most it ever is (core's `percentMoneyHackedPerThread`). Each host's part of the
+ *   rounds' growth, `HACK_REGROW_ROUNDS` x g, is its part of the RAM, G_i, and its threads are the most whose hack
+ *   keeps at least e^-G_i: t <= (1 - e^-G_i) / p. Together the hosts' hacks keep at least e^-(rounds x g).
+ * - **Each host's count** is at least 1, then rounded down to a power of two, so the share's slow rise with the
+ *   hacking level changes a host's count, and restarts its loop, only now and then; then at most the threads its RAM
+ *   holds by the loop's budget (n00dles's, all of them), still at least 1. A count over the loop's threads, the deploy
+ *   worker caps.
+ * The player's multipliers are 1 where the snapshot doesn't say. None (absent) with no host; 1 each without the
+ * target's minimum security, when a thread takes nothing, or when the inputs give no finite count (an infinite
+ * multiplier, say, which the game can't produce). The BitNode's `ServerGrowthRate` is taken as 1 (core's
+ * `growthLogPerThread`): in BN2, BN3 and BN11 that makes the counts up to 5x too generous, the unsafe side; to revisit
+ * when BitNode multipliers come to core. BN1 is exact.
+ */
+function hackThreadsOf(
+  target: StaticServer,
+  hostsWithRam: [string, number][],
+  mediumData: MediumSnapshotData,
+): { hackThreads?: Record<string, number> } {
+  if (hostsWithRam.length === 0) return {};
+  const player = mediumData.player as {
+    skills?: { hacking?: unknown };
+    mults?: { hacking_money?: unknown; hacking_grow?: unknown };
+  };
+  const numberOr1 = (value: unknown) => (typeof value === "number" ? value : 1);
+  const hacking = typeof player.skills?.hacking === "number" ? player.skills.hacking : 0;
+  const { minDifficulty, requiredHackingSkill, serverGrowth } = target;
+  const hackSharePerThread =
+    typeof minDifficulty === "number"
+      ? percentMoneyHackedPerThread(
+          { hackDifficulty: minDifficulty, requiredHackingSkill: requiredHackingSkill ?? 0 },
+          { skills: { hacking }, mults: { hacking_money: numberOr1(player.mults?.hacking_money) } },
+        )
+      : 0;
+  const growthLogPerHostThread =
+    typeof minDifficulty === "number"
+      ? growthLogPerThread(
+          { serverGrowth: serverGrowth ?? 0, hackDifficulty: minDifficulty + HACK_LOOP_SECURITY_MARGIN },
+          { mults: { hacking_grow: numberOr1(player.mults?.hacking_grow) } },
+        )
+      : 0;
+  const hostThreads = hostsWithRam.reduce((total, [, ram]) => total + Math.floor(ram / HACK_LOOP_RAM_BUDGET_GB), 0);
+  const roundsGrowthLog = HACK_REGROW_ROUNDS * growthLogPerHostThread * hostThreads;
+  const totalRam = hostsWithRam.reduce((total, [, ram]) => total + ram, 0);
+  return {
+    hackThreads: Object.fromEntries(
+      hostsWithRam.map(([hostname, ram]) => {
+        // 1 - e^-G_i: the most of what it finds this host's hack may take.
+        const share = -Math.expm1((-roundsGrowthLog * ram) / totalRam);
+        const count = Math.floor(share / hackSharePerThread);
+        const threads = hackSharePerThread > 0 && Number.isFinite(count) ? Math.max(1, count) : 1;
+        // Rounded, then at most the threads its RAM holds: n00dles's 128 on a 64 GB host is its 26.
+        const ramThreads = Math.floor(ram / HACK_LOOP_RAM_BUDGET_GB);
+        return [hostname, Math.max(1, Math.min(2 ** Math.floor(Math.log2(threads)), ramThreads))];
+      }),
+    ),
   };
 }
 

@@ -1,7 +1,12 @@
 // Every in-game script's static RAM, measured with the game's own calculator, is within its budget (architecture R4).
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { freshSaveHomeWorkerFileNames, homeWorkerFileNames, singularityWorkerFileNames } from "@bitburner-agent/core";
+import {
+  freshSaveHomeWorkerFileNames,
+  HACK_LOOP_RAM_BUDGET_GB,
+  homeWorkerFileNames,
+  singularityWorkerFileNames,
+} from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { NEW_GAME, useInGameBuild, useSimulations } from "./helpers/simulation.ts";
 
@@ -49,4 +54,8 @@ test("the Agent's budget plus its largest fresh-save home worker's fits in a fre
     ...freshSaveHomeWorkerFileNames().map((fileName) => budgets[fileName] as number),
   );
   expect((budgets["agent.js"] as number) + largestWorkerBudget).toBeLessThanOrEqual(8);
+});
+
+test("the loop's budget is core's, by which the brain counts a host's threads (#187)", () => {
+  expect(budgets["hack-loop.js"]).toBe(HACK_LOOP_RAM_BUDGET_GB);
 });

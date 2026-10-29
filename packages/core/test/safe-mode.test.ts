@@ -21,6 +21,15 @@ test.each<SafeModeState>([
   { ...kept, hackLoop: { enabled: false, target: null, hosts: [] } },
   // Preparing the next target (#184).
   { ...kept, hackLoop: { ...kept.hackLoop, preparing: { target: "zer0", hosts: ["max-hardware"] } } },
+  // Each host's hack threads (#187).
+  {
+    ...kept,
+    hackLoop: {
+      ...kept.hackLoop,
+      preparing: { target: "zer0", hosts: ["max-hardware"] },
+      hackThreads: { n00dles: 2, "max-hardware": 8 },
+    },
+  },
   { ...kept, work: { kind: "crime", crime: "Shoplift", focus: false } },
   // A save older than lastAugReset's migration can hold -1 (SaveDataMigrationUtils.ts:432).
   { ...kept, lastAugReset: -1 },
@@ -37,7 +46,7 @@ test("only the known fields, so nothing else written there (intents, say) comes 
   expect(parseSafeModeState(text)).toEqual({ ok: true, message: kept });
 });
 
-test("a file from before #184, with no preparing, still parses: none", () => {
+test("a file from before #184 and #187, with no preparing and no hack threads, still parses: none", () => {
   const older =
     '{"hackLoop":{"enabled":true,"target":"n00dles","hosts":["n00dles"]},"work":null,"ttlMs":43200000,' +
     '"heardAtMs":1767225600000,"lastAugReset":1767220000000}';
@@ -59,6 +68,10 @@ describe("refused, each with a reason", () => {
     [
       "preparing on an earning host",
       JSON.stringify({ ...kept, hackLoop: { ...kept.hackLoop, preparing: { target: "zer0", hosts: ["n00dles"] } } }),
+    ],
+    [
+      "hack threads for a host it doesn't name",
+      JSON.stringify({ ...kept, hackLoop: { ...kept.hackLoop, hackThreads: { "max-hardware": 4 } } }),
     ],
     ["work of an unknown kind", JSON.stringify({ ...kept, work: { kind: "gardening", focus: true } })],
     ["a ttlMs of 0", JSON.stringify({ ...kept, ttlMs: 0 })],

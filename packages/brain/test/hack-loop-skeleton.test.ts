@@ -36,6 +36,8 @@ const NO_PORT_SERVERS = [
 const IDLE_SCRIPT_SOURCE = "export async function main(ns) { for (;;) await ns.sleep(60000); }";
 const OWNER_SCRIPT = "owner.js";
 const OWNER_THREADS = 2;
+/** n00dles's most money (the game's). */
+const N00DLES_MAX_MONEY = 1_750_000;
 
 /**
  * An 8 GB fresh start (helpers/fresh-start.ts), with the owner's idle script on home, and what the hack loop's tests
@@ -108,7 +110,8 @@ test("on by default: the Agent roots the no-port servers, runs the loop on them 
   const running = await loop.loopsRunning();
   expect(running.map((each) => each.hostname).sort()).toEqual(NO_PORT_SERVERS);
   for (const each of running) {
-    expect(each, each.hostname).toMatchObject({ filename: loop.loopFile, args: ["n00dles"] });
+    // n00dles grows back from anything at once (#187): every thread hacks it.
+    expect(each, each.hostname).toMatchObject({ filename: loop.loopFile, args: ["n00dles", each.threads] });
   }
   // The owner's script is still there, and the loop has only the RAM it left: (16 - 2 × 1.6) / 2.4 = 5 threads.
   expect((await simulation.ps("foodnstuff")).filter((process) => process.filename === OWNER_SCRIPT)).toEqual([
@@ -277,8 +280,70 @@ test("each host its own target (#184): some earn, some prepare the next; a loop 
   const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
   const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("agent: hack loop: on"));
-  expect(lines[0]).toMatch(/on, \d+ threads on 5 servers, against n00dles; preparing joesguns on 2 servers$/);
-  expect(lines.at(-1)).toMatch(/on, \d+ threads on 7 servers, against joesguns$/);
+  expect(lines[0]).toMatch(
+    /on, \d+ threads \(\d+ hacking\) on 5 servers, against n00dles; preparing joesguns on 2 servers \(\d+ hacking\)$/,
+  );
+  expect(lines.at(-1)).toMatch(/on, \d+ threads \(\d+ hacking\) on 7 servers, against joesguns$/);
+});
+
+test("each host's hack threads (#187): capped at its loop's threads, a change restarts that loop alone, and the loops hack with them", async () => {
+  const loop = await freshStart({ withDesiredState: false });
+  const { simulation, game, brain } = loop;
+  const desire = (hackThreads: Record<string, number>) =>
+    brain.channel.setDesiredState({
+      hackLoop: { enabled: true, target: "n00dles", hosts: NO_PORT_SERVERS, hackThreads },
+      intents: [],
+    });
+  // n00dles's money, of its maximum, in each medium snapshot.
+  const n00dlesMoney: number[] = [];
+  brain.channel.subscribe((event) => {
+    if (event.type !== "snapshotReceived" || event.snapshot.tier !== "medium") return;
+    const n00dles = (event.snapshot.data as MediumSnapshotData).servers.find((each) => each.hostname === "n00dles");
+    if (typeof n00dles?.moneyAvailable === "number") n00dlesMoney.push(n00dles.moneyAvailable / N00DLES_MAX_MONEY);
+  });
+  // 1 each, but joesguns, 1000: more than its loop's threads. n00dles isn't named: all its threads.
+  const hackThreads = Object.fromEntries(
+    NO_PORT_SERVERS.filter((hostname) => hostname !== "n00dles").map((hostname) => [hostname, 1]),
+  );
+  desire({ ...hackThreads, joesguns: 1_000 });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  const argsByHost = async () =>
+    Object.fromEntries((await loop.loopsRunning()).map((each) => [each.hostname, [each.args, each.threads, each.pid]]));
+  const before = await argsByHost();
+  const threadsOn = (hostname: string) => before[hostname]?.[1] as number;
+  expect(Object.keys(before).sort()).toEqual(NO_PORT_SERVERS);
+  expect(before.foodnstuff?.[0]).toEqual(["n00dles", 1]);
+  expect(before.joesguns?.[0]).toEqual(["n00dles", threadsOn("joesguns")]);
+  expect(threadsOn("joesguns")).toBeLessThan(1_000);
+  expect(before.n00dles?.[0]).toEqual(["n00dles"]);
+
+  // foodnstuff's count changes, and n00dles, uncapped, gets one (as when an older safe-mode file's state gives way to
+  // this brain's): those two loops alone are stopped and started. The others, unchanged, keep their pids.
+  desire({ ...hackThreads, joesguns: 1_000, foodnstuff: 2, n00dles: 1 });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  const after = await argsByHost();
+  expect(after.foodnstuff?.[0]).toEqual(["n00dles", 2]);
+  expect(after.foodnstuff?.[2]).not.toBe(before.foodnstuff?.[2]);
+  expect(after.n00dles?.[0]).toEqual(["n00dles", 1]);
+  expect(after.n00dles?.[2]).not.toBe(before.n00dles?.[2]);
+  for (const hostname of NO_PORT_SERVERS.filter((each) => each !== "foodnstuff" && each !== "n00dles")) {
+    expect(after[hostname], hostname).toEqual(before[hostname]);
+  }
+  // The Agent's log gives the threads that hack: 1 on each of four hosts and on n00dles (its one),
+  // 2 on foodnstuff, and all of joesguns'.
+  const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  if (!agent) throw new Error("no Agent on home");
+  const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("agent: hack loop: on"));
+  const hacking = 4 + 1 + 2 + threadsOn("joesguns");
+  expect(lines.at(-1)).toMatch(new RegExp(`on, \\d+ threads \\(${hacking} hacking\\) on 7 servers, against n00dles$`));
+
+  // The loops hack with those threads (`hack`'s `threads` option, in the game's own code): once n00dles is at 75%, the
+  // hosts' hacks, 13 threads (4 + 2, joesguns' 6, n00dles' 1) at 0.41% each, never take it below 75% x (1 - 13 x
+  // 0.41%), 71%. With all their threads, 37, they would take it to 64%.
+  await game.run(10 * 60_000);
+  const ready = n00dlesMoney.findIndex((fraction) => fraction >= 0.75);
+  expect(ready).toBeGreaterThanOrEqual(0);
+  expect(Math.min(...n00dlesMoney.slice(ready))).toBeGreaterThan(0.7);
 });
 
 test("a purchase the page can't make (#136, #141): the Agent logs why and when it tries again, and never runs two workers at once", async () => {

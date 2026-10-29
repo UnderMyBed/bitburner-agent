@@ -57,8 +57,31 @@ export interface HackLoopView {
   /** The target it earns on, and its hosts. */
   target: string | null;
   hosts: string[];
-  /** The next target, being prepared on these hosts while the others earn (#184), or null. */
-  preparing: { target: string; hosts: string[] } | null;
+  /**
+   * At most how many of their threads hack at once (#187): the brain's count for each host added up (a host's loop may
+   * have fewer threads), or null when it gives none, so all hack.
+   */
+  hackThreads: number | null;
+  /** The next target, being prepared on these hosts while the others earn (#184), or null, with its hack threads. */
+  preparing: { target: string; hosts: string[]; hackThreads: number | null } | null;
+}
+
+/**
+ * The hosts' hack threads added up, for the dashboard (#187), or null when a host hacks with all its threads: the state
+ * gives no counts, or none for that host (which the brain's plan never leaves out, but the protocol allows).
+ */
+export function hackThreadsAddedUp(
+  hackThreads: Record<string, number> | null | undefined,
+  hosts: string[],
+): number | null {
+  if (!hackThreads) return null;
+  let total = 0;
+  for (const host of hosts) {
+    const count = hackThreads[host];
+    if (count === undefined) return null;
+    total += count;
+  }
+  return total;
 }
 
 /** What the dashboard shows of the hacking programs. */
@@ -325,12 +348,15 @@ export class DesiredStateController {
   hackLoopView(): HackLoopView {
     const enabled = readHackLoopEnabled(this.#store);
     const hackLoop = this.#desired?.hackLoop;
+    const hackThreadsOn = (hosts: string[]) => hackThreadsAddedUp(hackLoop?.hackThreads, hosts);
+    const preparing = enabled ? (hackLoop?.preparing ?? null) : null;
     return {
       enabled,
       waiting: enabled && this.#desired === null,
       target: enabled ? (hackLoop?.target ?? null) : null,
       hosts: enabled ? (hackLoop?.hosts ?? []) : [],
-      preparing: enabled ? (hackLoop?.preparing ?? null) : null,
+      hackThreads: enabled ? hackThreadsOn(hackLoop?.hosts ?? []) : null,
+      preparing: preparing === null ? null : { ...preparing, hackThreads: hackThreadsOn(preparing.hosts) },
     };
   }
 

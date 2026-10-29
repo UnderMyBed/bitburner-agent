@@ -35,7 +35,7 @@ export function createHackLoop(
   /** The worker's report, or null with the reason logged. */
   async function runHackLoopWorker(
     workerName: string,
-    workerArguments: (string | boolean)[],
+    workerArguments: (string | boolean | number)[],
     deadlineMs: number,
   ): Promise<unknown> {
     const workerFile = deployedFilePath(deploymentId, workerName);
@@ -96,14 +96,21 @@ export function createHackLoop(
 }
 
 /**
- * What runs, for the change log: "on, N threads on M servers, against T", and "; preparing P on K servers" while part
- * of the hosts prepare the next target (#184).
+ * What runs, for the change log: "on, N threads (H hacking) on M servers, against T", and "; preparing P on K servers
+ * (H hacking)" while part of the hosts prepare the next target (#184). H is the threads that hack at once (#187).
  */
 function runningText(deployed: HackLoopDeployReport, target: string, preparing: string | null): string {
   const runningAgainst = (targetHostname: string) =>
-    deployed.byTarget.find((running) => running.target === targetHostname) ?? { serversRunning: 0, threadsRunning: 0 };
+    deployed.byTarget.find((running) => running.target === targetHostname) ?? {
+      serversRunning: 0,
+      threadsRunning: 0,
+      hackThreadsRunning: 0,
+    };
   const earning = runningAgainst(target);
-  const text = `on, ${earning.threadsRunning} threads on ${earning.serversRunning} servers, against ${target}`;
+  const text =
+    `on, ${earning.threadsRunning} threads (${earning.hackThreadsRunning} hacking) on ${earning.serversRunning} ` +
+    `servers, against ${target}`;
   if (preparing === null) return text;
-  return `${text}; preparing ${preparing} on ${runningAgainst(preparing).serversRunning} servers`;
+  const prepared = runningAgainst(preparing);
+  return `${text}; preparing ${preparing} on ${prepared.serversRunning} servers (${prepared.hackThreadsRunning} hacking)`;
 }
