@@ -29,6 +29,11 @@ test("the price is the game's in BN1: $55,000 a GB at every size (ServerPurchase
   expect(cloudServerPrice(2 ** 20)).toBe(57_671_680_000);
 });
 
+/** The static snapshot: home (purchased, as the game has it) and n00dles, the game's. */
+const NETWORK: StaticSnapshotData = {
+  servers: [staticServer("home", { purchasedByPlayer: true, moneyMax: 0 }), staticServer("n00dles")],
+};
+
 describe("HackLoopIncome: money's rises over the hosts' RAM × time, across the window", () => {
   /** A medium snapshot with `money`, and one rooted host with `ram` GB (n00dles, 16 GB, unless said). */
   const medium = (money: number, ram = 16) => {
@@ -40,61 +45,83 @@ describe("HackLoopIncome: money's rises over the hosts' RAM × time, across the 
 
   test("nothing until the snapshots span the window, then per second and per GB a second", () => {
     const income = new HackLoopIncome();
-    income.add(0, medium(1_000));
-    income.add(5 * MINUTE, medium(31_000));
+    income.add(0, NETWORK, medium(1_000));
+    income.add(5 * MINUTE, NETWORK, medium(31_000));
     expect(income.rate()).toBeNull();
-    income.add(CLOUD_SERVER_INCOME_WINDOW_MS, medium(61_000));
+    income.add(CLOUD_SERVER_INCOME_WINDOW_MS, NETWORK, medium(61_000));
     // $60,000 in 600 s on 16 GB: $100 a second, $6.25 a GB a second. Home's RAM isn't the loop's.
     expect(income.rate()).toEqual({ perSecond: 100, perGbSecond: 6.25 });
   });
 
   test("a fall in money (a purchase) isn't income; the rises around it are", () => {
     const income = new HackLoopIncome();
-    income.add(0, medium(100_000));
-    income.add(5 * MINUTE, medium(160_000));
-    income.add(6 * MINUTE, medium(10_000));
-    income.add(10 * MINUTE, medium(70_000));
+    income.add(0, NETWORK, medium(100_000));
+    income.add(5 * MINUTE, NETWORK, medium(160_000));
+    income.add(6 * MINUTE, NETWORK, medium(10_000));
+    income.add(10 * MINUTE, NETWORK, medium(70_000));
     expect(income.rate()?.perSecond).toBe(120_000 / 600);
   });
 
   test("each stretch counts at the RAM the snapshot that starts it shows: a host bought mid-window counts from then", () => {
     const income = new HackLoopIncome();
-    income.add(0, medium(0, 16));
-    income.add(5 * MINUTE, medium(48_000, 48));
-    income.add(10 * MINUTE, medium(96_000 + 48_000, 48));
+    income.add(0, NETWORK, medium(0, 16));
+    income.add(5 * MINUTE, NETWORK, medium(48_000, 48));
+    income.add(10 * MINUTE, NETWORK, medium(96_000 + 48_000, 48));
     // 16 GB for 300 s and 48 GB for 300 s: 19,200 GB-seconds, for $144,000.
     expect(income.rate()?.perGbSecond).toBe(144_000 / 19_200);
   });
 
   test("only the last window counts: older snapshots are dropped, but for the one at its start", () => {
     const income = new HackLoopIncome();
-    income.add(0, medium(0));
-    income.add(10 * MINUTE, medium(1_000_000));
-    income.add(15 * MINUTE, medium(1_030_000));
+    income.add(0, NETWORK, medium(0));
+    income.add(10 * MINUTE, NETWORK, medium(1_000_000));
+    income.add(15 * MINUTE, NETWORK, medium(1_030_000));
     // The window from 10 minutes: the snapshot at its start, then 15 and 20.
-    income.add(20 * MINUTE, medium(1_060_000));
+    income.add(20 * MINUTE, NETWORK, medium(1_060_000));
     expect(income.rate()).toEqual({ perSecond: 60_000 / 600, perGbSecond: 60_000 / (600 * 16) });
   });
 
   test("a snapshot without a money that is a number is skipped; cleared, it starts again; no RAM, no rate", () => {
     const income = new HackLoopIncome();
-    income.add(0, medium(0));
-    income.add(5 * MINUTE, { ...medium(0), player: { money: "lots" } } as unknown as MediumSnapshotData);
-    income.add(10 * MINUTE, medium(60_000));
+    income.add(0, NETWORK, medium(0));
+    income.add(5 * MINUTE, NETWORK, { ...medium(0), player: { money: "lots" } } as unknown as MediumSnapshotData);
+    income.add(10 * MINUTE, NETWORK, medium(60_000));
     expect(income.rate()?.perSecond).toBe(100);
     income.clear();
     expect(income.rate()).toBeNull();
     const noHosts = new HackLoopIncome();
-    noHosts.add(0, mediumData(1, { home: true }, { money: 0 }));
-    noHosts.add(10 * MINUTE, mediumData(1, { home: true }, { money: 60_000 }));
+    noHosts.add(0, NETWORK, mediumData(1, { home: true }, { money: 0 }));
+    noHosts.add(10 * MINUTE, NETWORK, mediumData(1, { home: true }, { money: 60_000 }));
     expect(noHosts.rate()).toBeNull();
+  });
+
+  test("a medium snapshot before the static one is skipped: the hosts aren't known yet", () => {
+    const income = new HackLoopIncome();
+    income.add(0, null, medium(0));
+    income.add(5 * MINUTE, NETWORK, medium(0));
+    income.add(10 * MINUTE, NETWORK, medium(60_000));
+    expect(income.rate()).toBeNull();
+    income.add(15 * MINUTE, NETWORK, medium(120_000));
+    expect(income.rate()).toEqual({ perSecond: 200, perGbSecond: 12.5 });
+  });
+
+  test("an owner's cloud server isn't a host, so its RAM doesn't count; the brain's does", () => {
+    const withOwners = (money: number) => {
+      const data = mediumData(1, { home: true, n00dles: true, "owners-box": true, "pserv-0": true }, { money });
+      return data;
+    };
+    const income = new HackLoopIncome();
+    income.add(0, NETWORK, withOwners(0));
+    income.add(10 * MINUTE, NETWORK, withOwners(96_000));
+    // n00dles and pserv-0, 16 GB each, for 600 s.
+    expect(income.rate()?.perGbSecond).toBe(96_000 / (32 * 600));
   });
 });
 
 describe("cloudServersOf and nextCloudServerName", () => {
   const network: StaticSnapshotData = {
     servers: [
-      staticServer("home", { moneyMax: 0 }),
+      staticServer("home", { purchasedByPlayer: true, moneyMax: 0 }),
       staticServer("n00dles"),
       staticServer("pserv-0", { purchasedByPlayer: true, moneyMax: 0 }),
       staticServer("hacknet-server-0", { purchasedByPlayer: true }),
@@ -117,6 +144,16 @@ describe("cloudServersOf and nextCloudServerName", () => {
     ]);
   });
 
+  test("a RAM that isn't a positive number, or an entry that isn't a server, isn't one", () => {
+    const medium = mediumData(1, { "pserv-0": true, "pserv-1": true, "pserv-2": true });
+    for (const server of medium.servers) {
+      if (server.hostname === "pserv-0") server.maxRam = 0;
+      if (server.hostname === "pserv-1") server.maxRam = -8;
+    }
+    (medium.servers as unknown[]).push(undefined, { hostname: 7, maxRam: 8 });
+    expect(cloudServersOf(network, medium)).toEqual([{ hostname: "pserv-2", ram: 16 }]);
+  });
+
   test("the least pserv-<n> no server is named, or named after with a '-'", () => {
     expect(nextCloudServerName([])).toBe("pserv-0");
     expect(nextCloudServerName(["home", "pserv-0", "pserv-2"])).toBe("pserv-1");
@@ -128,7 +165,7 @@ describe("cloudServersOf and nextCloudServerName", () => {
 });
 
 describe("chooseCloudServerPurchase: the largest that money allows and pays back in time", () => {
-  const network: StaticSnapshotData = { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] };
+  const network = NETWORK;
   /** n00dles rooted, the player's money, and cloud servers `pserv-<i>` with these RAMs. */
   const medium = (money: number, cloudRams: number[] = []) => {
     const data = mediumData(
@@ -234,6 +271,53 @@ describe("chooseCloudServerPurchase: the largest that money allows and pays back
     // All at the most: nothing more, and nothing to wait for.
     const most = Array.from({ length: CLOUD_SERVER_LIMIT }, () => 2 ** 20);
     expect(choose(medium(1e300, most))).toMatchObject({ next: null, waitingFor: null });
+  });
+
+  /** `medium(money, rams)` with the owner's own cloud servers too, by name and RAM. */
+  const withOwners = (money: number, rams: number[], owners: Record<string, number>) => {
+    const data = medium(money, rams);
+    for (const [hostname, ram] of Object.entries(owners)) {
+      data.servers.push({ ...(data.servers.at(-1) as MediumSnapshotData["servers"][number]), hostname, maxRam: ram });
+    }
+    return data;
+  };
+
+  test("the owner's cloud servers count toward the limit, but only the brain's are upgraded", () => {
+    // 24 of the brain's at 64 GB, and the owner's 8 GB server, the smallest: at the limit, a pserv is upgraded.
+    const rams = Array.from({ length: 24 }, () => 64);
+    expect(choose(withOwners(10e6, rams, { "owners box": 8 })).next).toMatchObject({
+      action: "upgradeServer",
+      hostname: "pserv-0",
+    });
+    // 24 in all: under the limit, a new one.
+    expect(choose(withOwners(10e6, rams.slice(1), { "owners box": 8 })).next).toMatchObject({
+      action: "buyServer",
+      hostname: "pserv-23",
+    });
+    // All 25 the owner's: nothing to upgrade, saying why.
+    const owners = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`box-${index}`, 8]));
+    expect(choose(withOwners(10e6, [], owners))).toMatchObject({
+      next: null,
+      waitingFor: "room: the game's limit of 25 cloud servers is reached with your own",
+    });
+  });
+
+  test("a server of the brain's at a RAM the game doesn't sell (the Agent's word) is never upgraded from", () => {
+    // pserv-0 at 3 GB is counted but not upgraded: the next of the brain's, pserv-1, is.
+    const rams = [3, ...Array.from({ length: 24 }, () => 64)];
+    expect(choose(medium(10e6, rams)).next).toMatchObject({ action: "upgradeServer", hostname: "pserv-1" });
+  });
+
+  test("a buy kept in flight goes once the limit is reached: the smallest is upgraded instead", () => {
+    const previous: CloudServerPurchase = {
+      action: "buyServer",
+      hostname: "pserv-25",
+      ram: 8,
+      price: 440_000,
+      paybackMs: PAYBACK_MS,
+    };
+    const rams = Array.from({ length: 25 }, () => 64);
+    expect(choose(medium(10e6, rams), { previous }).next).toMatchObject({ action: "upgradeServer" });
   });
 
   test("a purchase in flight is kept while still to do and allowed, at today's price and income", () => {

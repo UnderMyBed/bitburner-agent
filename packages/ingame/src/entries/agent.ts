@@ -27,8 +27,10 @@ import {
   encodeControlMessage,
   gameDrift,
   isValidDeploymentId,
+  MAX_REFUSED_REASON_LENGTH,
   parseAgentConfig,
   parseBrainMessage,
+  type RefusedBrainMessage,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import { createDialogWatcher } from "../agent/dialog-watcher.ts";
@@ -45,7 +47,11 @@ const FIRST_RECONNECT_DELAY_MS = 1_000;
 const LONGEST_RECONNECT_DELAY_MS = 30_000;
 
 /** What the socket's handlers tell the main loop. */
-type SocketEvent = { kind: "opened" } | { kind: "message"; message: BrainMessage } | { kind: "closed"; code: number };
+type SocketEvent =
+  | { kind: "opened" }
+  | { kind: "message"; message: BrainMessage }
+  | { kind: "refused"; reason: string }
+  | { kind: "closed"; code: number };
 
 /** A queue the socket's handlers fill and the main loop drains, waiting on a plain promise (no `ns` call). */
 function createEventQueue() {
@@ -104,6 +110,9 @@ export async function main(ns: NS): Promise<void> {
   const intentRunner = createIntentRunner(ns, { effectorRunner });
   const workActivity = createWorkActivity(ns, { effectorRunner });
   const dialogWatcher = createDialogWatcher(ns);
+  /** The brain's last message refused, until a desired state is taken again, and the count this connection (#194). */
+  let refused: RefusedBrainMessage | null = null;
+  let refusedCount = 0;
   const snapshotter = createSnapshotter(ns, {
     deploymentId,
     agentSessionId,
@@ -111,6 +120,7 @@ export async function main(ns: NS): Promise<void> {
     intentOutcomes: () => intentRunner.outcomes(),
     workOutcome: () => workActivity.outcome(),
     dialogReport: () => dialogWatcher.takeReport(),
+    refusedMessage: () => refused,
   });
   singularityAvailable = () => snapshotter.singularityAvailable();
   const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });
@@ -185,12 +195,19 @@ export async function main(ns: NS): Promise<void> {
     connection.onopen = () => events.push({ kind: "opened" });
     connection.onmessage = (event) => {
       const parsed = parseBrainMessage(String(event.data));
-      if (parsed.ok) events.push({ kind: "message", message: parsed.message });
+      // A message that isn't valid is refused, loudly (#194's review): logged, and reported in the fast snapshot until
+      // a desired state is taken again, so the brain alerts. The Agent goes on with the last state it took.
+      events.push(
+        parsed.ok ? { kind: "message", message: parsed.message } : { kind: "refused", reason: parsed.reason },
+      );
     };
     connection.onclose = (event) => events.push({ kind: "closed", code: event.code });
 
     let closeCode = 0;
     let welcomed = false;
+    // Counted per connection: a new brain starts from none.
+    refusedCount = 0;
+    refused = null;
     while (closeCode === 0) {
       // Welcomed, or connecting while safe mode keeps a state: rounds go on, and socket events queue meanwhile.
       const event = welcomed || safeMode.keepsState() ? events.takeIfAny() : await events.next();
@@ -213,6 +230,10 @@ export async function main(ns: NS): Promise<void> {
             },
           }),
         );
+      } else if (event.kind === "refused") {
+        refusedCount += 1;
+        refused = { reason: event.reason.slice(0, MAX_REFUSED_REASON_LENGTH), count: refusedCount };
+        ns.print(`agent: refused a message from the brain (${refusedCount} so far): ${refused.reason}`);
       } else if (event.kind === "message") {
         if (event.message.type === "welcome") {
           reconnectDelayMs = FIRST_RECONNECT_DELAY_MS;
@@ -226,6 +247,8 @@ export async function main(ns: NS): Promise<void> {
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;
         } else if (event.message.type === "desiredState") {
+          if (refused !== null) ns.print("agent: took the brain's desired state again");
+          refused = null;
           hackLoop.desire(event.message.hackLoop);
           intentRunner.desire(event.message.intents);
           workActivity.desire(event.message.work ?? null);

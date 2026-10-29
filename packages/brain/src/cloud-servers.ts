@@ -5,6 +5,9 @@
 // controller's (desired-state.ts).
 import {
   CLOUD_SERVER_MAX_RAM,
+  CLOUD_SERVER_NAME_PREFIX,
+  isBrainCloudServerName,
+  isCloudServerRam,
   isHacknetServerName,
   type MediumSnapshotData,
   type SlowSnapshotData,
@@ -25,8 +28,6 @@ export function readCloudServersEnabled(store: TelemetryStore): boolean {
 export const CLOUD_SERVER_PRICE_PER_GB = 55_000;
 /** BN1's limit on cloud servers: 25 × `CloudServerLimit` (1) (`Server/ServerPurchases.ts:96-98`). */
 export const CLOUD_SERVER_LIMIT = 25;
-/** The names the brain buys under: `pserv-0`, `pserv-1`, … */
-export const CLOUD_SERVER_NAME_PREFIX = "pserv-";
 /**
  * The least RAM the brain buys a server with: 8 GB holds three of the loop's 2.4 GB threads, 90% of it used. A 4 GB
  * server holds one, 60%; a 2 GB, none.
@@ -40,21 +41,22 @@ export const MIN_CLOUD_SERVER_RAM = 8;
 export const CLOUD_SERVER_INCOME_WINDOW_MS = 10 * 60_000;
 /**
  * The longest a purchase may take to pay for itself at the hack loop's income per GB (#194). Tuned in the simulator
- * (cloud-servers-income.test.ts's runs, 8 seeds of 3 hours; the brain README's cloud server suite has the table): at
- * 15 minutes the runs earned 2.9 times as much as without cloud servers, and ended with 2.3 times the money. At 30 to
- * 240 minutes they earned 1.7 to 3.1 times as much but spent more than the extra on servers that hadn't paid back by
- * the end: the income per GB is the hosts' average, and a GB more earns less than the average, on the same targets.
+ * (cloud-servers-income.test.ts's runs, 8 seeds of 3 hours; the brain README's cloud server suite has the tables): at
+ * 15 minutes the runs earned 2.8 times as much as without cloud servers ($12b more even less what the servers cost),
+ * and ended with 1.9 times the money. At 30 to 240 minutes (measured with the reserve on the whole price) they earned
+ * about as much but spent more than the extra on servers that hadn't paid back by the end: the income per GB is the
+ * hosts' average, and a GB more earns less than the average, on the same targets.
  */
 export const CLOUD_SERVER_PAYBACK_LIMIT_MS = 15 * 60_000;
 /**
  * The next program or home RAM upgrade waiting for money is held back from cloud servers when the hack loop's income
- * would cover its price within this (#194): it's nearly there, so it's bought first. One further off isn't: cloud
- * servers raise the income that brings it nearer. Tuned with the payback limit: at 5 minutes the programs up to
- * HTTPWorm.exe came when they did without cloud servers, and SQLInject.exe and home's larger upgrades about 10 minutes
- * later; at 15 minutes all came on time, but the runs earned 14% less, as money waited for home RAM, which the hack
- * loop doesn't run on, and at 30 and 60 minutes less again.
+ * would cover what's still short of its price within this (#194): it's nearly there, so it's bought first. One further
+ * off isn't: cloud servers raise the income that brings it nearer. Tuned with the payback limit: at 1 minute the
+ * programs up to HTTPWorm.exe came when they did without cloud servers, home's 1 TB a minute later and SQLInject.exe
+ * about 13 minutes later; at 5 and 15 minutes the runs earned 7% and 21% less, as money waited for home RAM, which the
+ * hack loop doesn't run on, and at 5 one seed's money went 11 minutes without rising.
  */
-export const CLOUD_SERVER_RESERVE_HORIZON_MS = 5 * 60_000;
+export const CLOUD_SERVER_RESERVE_HORIZON_MS = 1 * 60_000;
 
 /**
  * What `ram` GB of cloud server costs in BN1, as the game works it out (`Server/ServerPurchases.ts:23-42`): ram ×
@@ -81,11 +83,15 @@ export interface HackLoopIncomeRate {
 export class HackLoopIncome {
   #samples: { atMs: number; money: number; hostsRam: number }[] = [];
 
-  /** A medium snapshot, received at `atMs`: one whose money isn't a number is skipped. */
-  add(atMs: number, mediumData: MediumSnapshotData): void {
+  /**
+   * A medium snapshot, received at `atMs`, with the static snapshot that says which servers are the game's: one whose
+   * money isn't a number, or with no static snapshot yet, is skipped.
+   */
+  add(atMs: number, staticData: StaticSnapshotData | null, mediumData: MediumSnapshotData): void {
     const money = mediumData?.player?.money;
-    if (typeof money !== "number" || !Number.isFinite(money)) return;
-    const hostsRam = hackLoopHosts(mediumData).reduce((total, host) => total + host.ram, 0);
+    // Without the static snapshot, the hosts aren't known: the Agent's first round sends it after the medium one.
+    if (staticData === null || typeof money !== "number" || !Number.isFinite(money)) return;
+    const hostsRam = hackLoopHosts(staticData, mediumData).reduce((total, host) => total + host.ram, 0);
     this.#samples.push({ atMs, money, hostsRam });
     // Keep the newest sample at or before the window's start, and those after it.
     const windowStart = atMs - CLOUD_SERVER_INCOME_WINDOW_MS;
@@ -149,9 +155,11 @@ export interface MoneyReserve {
 }
 
 /**
- * The player's cloud servers: the medium snapshot's servers that aren't home, a Hacknet server, or one of the game's
- * own (the static snapshot's, not purchased), with their RAM, by name. The medium snapshot scans every 10 s, so it has
- * a server bought since the static one; the slow snapshot's list is the game's word, but a minute behind.
+ * The player's cloud servers, the brain's and the owner's: the medium snapshot's servers that aren't home, a Hacknet
+ * server, or one of the game's own (the static snapshot's, not purchased), with their RAM (a positive number), by name.
+ * They all count toward the game's limit; the brain upgrades only its own (`isBrainCloudServerName`). The medium
+ * snapshot scans every 10 s, so it has a server bought since the static one; the slow snapshot's list is the game's
+ * word, but a minute behind.
  */
 export function cloudServersOf(staticData: StaticSnapshotData, mediumData: MediumSnapshotData): CloudServer[] {
   const gameServers = new Set(
@@ -166,7 +174,8 @@ export function cloudServersOf(staticData: StaticSnapshotData, mediumData: Mediu
         server.hostname !== "home" &&
         !isHacknetServerName(server.hostname) &&
         !gameServers.has(server.hostname) &&
-        typeof server.maxRam === "number",
+        typeof server.maxRam === "number" &&
+        server.maxRam > 0,
     )
     .map((server) => ({ hostname: server.hostname, ram: server.maxRam }))
     .sort((a, b) => (a.hostname < b.hostname ? -1 : 1));
@@ -179,9 +188,16 @@ export function cloudServersOf(staticData: StaticSnapshotData, mediumData: Mediu
  */
 export function nextCloudServerName(hostnames: string[]): string {
   const taken = (name: string) => hostnames.some((hostname) => hostname === name || hostname.startsWith(`${name}-`));
-  let n = 0;
-  while (taken(`${CLOUD_SERVER_NAME_PREFIX}${n}`)) n++;
-  return `${CLOUD_SERVER_NAME_PREFIX}${n}`;
+  let index = 0;
+  while (taken(`${CLOUD_SERVER_NAME_PREFIX}${index}`)) index++;
+  return `${CLOUD_SERVER_NAME_PREFIX}${index}`;
+}
+
+/** The medium snapshot's hostnames, the strings only: the Agent's word. */
+function hostnamesOf(mediumData: MediumSnapshotData): string[] {
+  return (Array.isArray(mediumData?.servers) ? mediumData.servers : [])
+    .map((server) => server?.hostname)
+    .filter((hostname): hostname is string => typeof hostname === "string");
 }
 
 const formatMoney = (money: number) => `$${Math.ceil(money).toLocaleString("en-US")}`;
@@ -189,8 +205,9 @@ const formatMinutes = (ms: number) => `${Math.ceil(ms / 60_000).toLocaleString("
 
 /**
  * The next cloud server purchase (#194), or why there's none:
- * - **Where:** under the limit of 25, a new server, `pserv-<n>` (`nextCloudServerName`); at it, the smallest server
- *   (ties to the first name), upgraded; all at the most RAM, nothing.
+ * - **Where:** under the limit of 25 (the owner's cloud servers count), a new server, `pserv-<n>`
+ *   (`nextCloudServerName`); at it, the smallest of the brain's own (ties to the first name), upgraded, never the
+ *   owner's; all of its own at the most RAM, or none, nothing.
  * - **How much:** the largest power of two of RAM, at least 8 GB for a new server, whose price money covers less the
  *   `reserve`, and whose payback is within `CLOUD_SERVER_PAYBACK_LIMIT_MS`: its price over the RAM it adds times the
  *   hack loop's income per GB a second. In BN1 a GB costs the same at every size, so the payback is too: the rule buys
@@ -225,8 +242,13 @@ export function chooseCloudServerPurchase({
   if (slowData === null) return plan("the Agent's slow snapshot (which BitNode)");
   const currentNode = (slowData.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined)?.currentNode;
   if (currentNode !== 1) return plan(`the cloud server prices in BitNode ${String(currentNode)} (not known yet)`);
-  const smallest = [...servers].sort((a, b) => a.ram - b.ram)[0];
+  // The brain's own, at a RAM the game sells: an upgrade doubles it from there.
+  const own = servers.filter((server) => isBrainCloudServerName(server.hostname) && isCloudServerRam(server.ram));
+  const smallest = [...own].sort((a, b) => a.ram - b.ram)[0];
   const atTheLimit = servers.length >= CLOUD_SERVER_LIMIT;
+  if (atTheLimit && smallest === undefined) {
+    return plan(`room: the game's limit of ${CLOUD_SERVER_LIMIT} cloud servers is reached with your own`);
+  }
   if (atTheLimit && smallest !== undefined && smallest.ram >= CLOUD_SERVER_MAX_RAM) return plan(null);
   const minutes = formatMinutes(CLOUD_SERVER_INCOME_WINDOW_MS);
   if (income === null) return plan(`the hack loop's income over ${minutes} (measured from the medium snapshots)`);
@@ -238,7 +260,7 @@ export function chooseCloudServerPurchase({
     purchase.price <= spendable && purchase.paybackMs <= CLOUD_SERVER_PAYBACK_LIMIT_MS;
 
   // The purchase in flight, at today's price and income.
-  const kept = previous === null ? null : stillToDo(previous, servers, mediumData);
+  const kept = previous === null ? null : stillToDo(previous, servers, own, mediumData);
   if (previous !== null && kept !== null) {
     const price = cloudServerPrice(previous.ram) - cloudServerPrice(kept.fromRam);
     const refreshed = { ...previous, price, paybackMs: paybackMs(price, previous.ram - kept.fromRam) };
@@ -247,9 +269,7 @@ export function chooseCloudServerPurchase({
 
   // Every size this purchase can be, smallest first: a new server from 8 GB, or the smallest one from twice its RAM.
   const fromRam = atTheLimit ? (smallest as CloudServer).ram : 0;
-  const hostname = atTheLimit
-    ? (smallest as CloudServer).hostname
-    : nextCloudServerName((Array.isArray(mediumData.servers) ? mediumData.servers : []).map((each) => each?.hostname));
+  const hostname = atTheLimit ? (smallest as CloudServer).hostname : nextCloudServerName(hostnamesOf(mediumData));
   const sizes: CloudServerPurchase[] = [];
   for (let ram = atTheLimit ? fromRam * 2 : MIN_CLOUD_SERVER_RAM; ram <= CLOUD_SERVER_MAX_RAM; ram *= 2) {
     const price = cloudServerPrice(ram) - (atTheLimit ? cloudServerPrice(fromRam) : 0);
@@ -278,18 +298,19 @@ export function chooseCloudServerPurchase({
 
 /**
  * Whether `purchase` is still to do, as the snapshots show, and the RAM it adds to (0 for a new server), or null: a new
- * server whose name is still the next and under the limit, or a server not yet at its RAM.
+ * server whose name is still the next and under the limit, or one of the brain's own (`own`) not yet at its RAM.
  */
 function stillToDo(
   purchase: CloudServerPurchase,
   servers: CloudServer[],
+  own: CloudServer[],
   mediumData: MediumSnapshotData,
 ): { fromRam: number } | null {
   if (purchase.action === "upgradeServer") {
-    const server = servers.find((each) => each.hostname === purchase.hostname);
+    const server = own.find((each) => each.hostname === purchase.hostname);
     return server !== undefined && server.ram < purchase.ram ? { fromRam: server.ram } : null;
   }
-  const hostnames = (Array.isArray(mediumData.servers) ? mediumData.servers : []).map((each) => each?.hostname);
-  const next = servers.length < CLOUD_SERVER_LIMIT && nextCloudServerName(hostnames) === purchase.hostname;
+  const next =
+    servers.length < CLOUD_SERVER_LIMIT && nextCloudServerName(hostnamesOf(mediumData)) === purchase.hostname;
   return next ? { fromRam: 0 } : null;
 }

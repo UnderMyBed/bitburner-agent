@@ -13,6 +13,18 @@ export const RESERVED_HOSTNAME_PREFIXES = ["hacknet-node-", "hacknet-server-"];
 /** Home worker: buys one cloud server through the NS API, with or without Singularity. */
 export const BUY_SERVER_WORKER_NAME = "buy-server.js";
 
+/** The names the brain buys cloud servers under (#194): `pserv-0`, `pserv-1`, … */
+export const CLOUD_SERVER_NAME_PREFIX = "pserv-";
+
+/**
+ * Whether `hostname` is a name the brain buys a cloud server under (#194): `pserv-<n>`, n a whole number without
+ * leading zeros. The hack loop runs only on these of the player's cloud servers, and the brain upgrades only these:
+ * the owner's own, under any other name, are left to the owner.
+ */
+export function isBrainCloudServerName(hostname: unknown): hostname is string {
+  return typeof hostname === "string" && /^pserv-(0|[1-9][0-9]*)$/.test(hostname);
+}
+
 /** Home worker: upgrades one cloud server's RAM through the NS API, with or without Singularity (#194). */
 export const UPGRADE_SERVER_WORKER_NAME = "upgrade-server.js";
 

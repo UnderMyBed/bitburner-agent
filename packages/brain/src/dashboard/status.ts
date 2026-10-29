@@ -13,6 +13,7 @@ import type { BackdoorDue } from "../backdoors.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
+import { reportedRefusal } from "../record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
@@ -233,6 +234,7 @@ export function buildDashboardStatus({
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
       cloudServerProblem: cloudServers.problem,
+      refusedMessage: reportedRefusal(fast),
       backdoorsDue,
     }),
     events: store

@@ -58,6 +58,7 @@ export function createSnapshotter(
     intentOutcomes,
     workOutcome,
     dialogReport,
+    refusedMessage = () => null,
   }: {
     deploymentId: string;
     agentSessionId: string;
@@ -68,6 +69,8 @@ export function createSnapshotter(
     workOutcome: () => WorkOutcome | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
+    /** The brain's last message refused, while the Agent hasn't taken a desired state since (#194's review). */
+    refusedMessage?: () => FastSnapshotData["refusedMessage"];
   },
 ) {
   const lastSequenceNumbers: Record<SnapshotTier, number> = { static: 0, slow: 0, medium: 0, fast: 0 };
@@ -147,6 +150,7 @@ export function createSnapshotter(
         intents: intentOutcomes(),
         dialogs: dialogReport(),
         work: workOutcome(),
+        refusedMessage: refusedMessage(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 

@@ -34,6 +34,7 @@ export type AlertName =
   | "intentStuck"
   | "incomeStalled"
   | "cloudServerProblem"
+  | "messageRefused"
   | "backdoorOverdue";
 
 export interface Alert {
@@ -41,7 +42,8 @@ export interface Alert {
   /**
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
-   * first watched); for `cloudServerProblem`, now; for the others, the event or give-up that raised it.
+   * first watched); for `cloudServerProblem`, now; for `messageRefused`, the newest fast snapshot that shows it; for
+   * the others, the event or give-up that raised it.
    */
   sinceMs: number;
   detail: string;
@@ -75,6 +77,11 @@ export interface AlertFacts {
    * null. Optional for the callers that don't watch cloud servers.
    */
   cloudServerProblem?: string | null;
+  /**
+   * The brain's last message the Agent refused, in the newest fast snapshot (#194's review), or null. Optional for the
+   * callers that don't read it.
+   */
+  refusedMessage?: { reason: string; count: number } | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
   backdoorsDue: BackdoorDue[];
 }
@@ -90,8 +97,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, cloudServerProblem, then one intentStuck per stuck intent, then one backdoorOverdue
- * per overdue backdoor.
+ * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, then one intentStuck per stuck intent, then one
+ * backdoorOverdue per overdue backdoor.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -139,6 +146,15 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail:
         `a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and on: ` +
         facts.cloudServerProblem,
+    });
+  }
+  if (facts.refusedMessage) {
+    alerts.push({
+      name: "messageRefused",
+      sinceMs: facts.lastFastSnapshotAtMs ?? facts.nowMs,
+      detail:
+        `the Agent refused the brain's message (${facts.refusedMessage.count} so far), so it acts on the last one it ` +
+        `took: ${facts.refusedMessage.reason}`,
     });
   }
   for (const outcome of facts.intentOutcomes) {

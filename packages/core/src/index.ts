@@ -66,6 +66,8 @@ export {
 export {
   BUY_SERVER_WORKER_NAME,
   CLOUD_SERVER_MAX_RAM,
+  CLOUD_SERVER_NAME_PREFIX,
+  isBrainCloudServerName,
   isCloudServerHostname,
   isCloudServerRam,
   isHacknetServerName,
@@ -197,7 +199,9 @@ export {
   type FastWorkerData,
   type HandledDialog,
   MAX_DIALOG_TEXT_LENGTH,
+  MAX_REFUSED_REASON_LENGTH,
   type MediumSnapshotData,
+  type RefusedBrainMessage,
   type SlowSnapshotData,
   type StaticSnapshotData,
   snapshotWorkerFileName,

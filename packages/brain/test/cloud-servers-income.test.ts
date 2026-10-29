@@ -3,8 +3,9 @@
 // switched off, as `main` was before #194. The brain buys cloud servers by its payback rule, the hack loop runs on
 // them, and the run earns more. CI runs seed 1; `CLOUD_SERVER_SEEDS` (`1,2,3,4,5,6,7,8`, say) runs others (the brain
 // README's cloud server suite says how). Each seed prints what each run earned and ended with, and the servers bought.
-import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
+import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
+import { CLOUD_SERVER_PRICE_PER_GB } from "../src/cloud-servers.ts";
 import { hackLoopHosts } from "../src/hack-loop.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -21,6 +22,8 @@ function cloudServerSeeds(text: string | undefined): number[] {
 }
 
 const freshStartOf = useFreshStarts();
+/** Each seed's earnings without cloud servers, and with them less what they cost, for the check over the seeds. */
+const seedsRun: { offEarned: number; onEarnedLessSpent: number }[] = [];
 const SEEDS = cloudServerSeeds(process.env.CLOUD_SERVER_SEEDS);
 /** The virtual time each run takes. */
 const RUN_MS = Number(process.env.CLOUD_SERVER_RUN_MINUTES ?? 180) * 60_000;
@@ -69,7 +72,10 @@ async function run(seed: number, cloudServers: boolean) {
     money: samples.at(-1)?.money ?? 0,
     purchases,
     cloud: fresh.controller().cloudServersView(),
-    hostsRam: hackLoopHosts(medium).reduce((total, host) => total + host.ram, 0),
+    hostsRam: hackLoopHosts(fresh.latest<StaticSnapshotData>("static"), medium).reduce(
+      (total, host) => total + host.ram,
+      0,
+    ),
     // Earning on the target, or preparing the next (the largest hosts, #184).
     hosts: [...fresh.controller().hackLoopView().hosts, ...(fresh.controller().hackLoopView().preparing?.hosts ?? [])],
     outcomes,
@@ -104,6 +110,11 @@ test.each(SEEDS)(
     // No cloud purchase stuck.
     expect(on.outcomes.filter((outcome) => !outcome.done && outcome.tries >= 5)).toEqual([]);
     expect(on.earned).toBeGreaterThan(off.earned);
+    // What the servers cost (every one is the brain's, at BN1's price a GB, whatever its upgrades), for the check over
+    // the seeds below.
+    const spent = on.cloud.servers.reduce((total, server) => total + server.ram, 0) * CLOUD_SERVER_PRICE_PER_GB;
+    console.log(`seed ${seed}: spent on servers ${millions(spent)}, earned less that ${millions(on.earned - spent)}`);
+    seedsRun.push({ offEarned: off.earned, onEarnedLessSpent: on.earned - spent });
     // The run report over the run with them: each purchase with its RAM and price, the hosts' RAM, and PASS.
     const report = runReport(on.fresh.data.store, {
       environment: "E1",
@@ -118,3 +129,11 @@ test.each(SEEDS)(
     expect(report.failures).toEqual([]);
   },
 );
+
+test("over the seeds run, the runs with cloud servers earned more than without even less what the servers cost", () => {
+  // One seed may not (seeds 4 and 5 of 8 didn't): the servers bought last haven't paid back by the end.
+  expect(seedsRun).toHaveLength(SEEDS.length);
+  const total = (each: (seed: (typeof seedsRun)[number]) => number) =>
+    seedsRun.reduce((sum, seed) => sum + each(seed), 0);
+  expect(total((seed) => seed.onEarnedLessSpent)).toBeGreaterThan(total((seed) => seed.offEarned));
+});

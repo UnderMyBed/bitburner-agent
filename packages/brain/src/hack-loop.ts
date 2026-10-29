@@ -1,7 +1,7 @@
 // The brain's side of the hack loop (#134, M3's first slice): its switch, and the starter rules for its target and the
 // servers it runs on, over the connected Agent's snapshots, until the planner (M4) decides, and the move from one
 // target to the next without a stop in income (#184), and the threads each host hacks with, so the hosts together never
-// hack a target dry (#187), and the hosts it runs on, the player's cloud servers among them (#194). The dashboard's
+// hack a target dry (#187), and the hosts it runs on, the brain's cloud servers among them (#194). The dashboard's
 // switch turns it on and off; on is the default (owner decision 34). `DesiredStateController` (desired-state.ts)
 // sends it.
 import {
@@ -9,8 +9,8 @@ import {
   HACK_LOOP_RAM_BUDGET_GB,
   HACK_LOOP_SECURITY_MARGIN,
   type HackLoopState,
+  isBrainCloudServerName,
   isHackLoopReady,
-  isHacknetServerName,
   MAX_FIELD_LENGTH,
   MAX_HACK_LOOP_HOSTS,
   type MediumSnapshotData,
@@ -107,23 +107,27 @@ export interface HackLoopHost {
 }
 
 /**
- * Where the loop runs, the one place that says (#194): every rooted server with RAM in the medium snapshot, sorted by
- * name, but home, which is the Agent's, and the Hacknet servers (the game's reserved names, `Cloud.ts:46`), whose RAM
- * makes hashes. So the player's cloud servers are hosts from the first medium snapshot after they're bought, with
- * their RAM after an upgrade: the medium snapshot scans afresh every 10 s, where the static one is the Agent's start.
- * The owner's own cloud servers are hosts too: the deploy worker uses only RAM left free, and never touches another
- * script (#134). The hack loop's plan, the cloud server rule (cloud-servers.ts) and the run report read it, and A1's
- * hacking ceiling (#191) is to. None without a medium snapshot.
+ * Where the loop runs, the one place that says (#194): the rooted servers with RAM in the medium snapshot, sorted by
+ * name, that are the game's own (the static snapshot's, not purchased: never home, which is the Agent's, nor a Hacknet
+ * server) or the brain's cloud servers (core's `isBrainCloudServerName`, `pserv-<n>`). Those are hosts from the first
+ * medium snapshot after they're bought, at their RAM after an upgrade: the medium snapshot scans afresh every 10 s,
+ * where the static one is the Agent's start. The owner's own cloud servers, under other names, are left to the owner
+ * (#134), and so are the owner's scripts on the brain's. The hack loop's plan, the cloud server rule (cloud-servers.ts)
+ * and the run report read it, and so does A1's hacking ceiling (#196). None without both snapshots.
  */
-export function hackLoopHosts(mediumData: MediumSnapshotData | null): HackLoopHost[] {
-  if (!Array.isArray(mediumData?.servers)) return [];
-  return mediumData.servers
+export function hackLoopHosts(
+  staticData: StaticSnapshotData | null,
+  mediumData: MediumSnapshotData | null,
+): HackLoopHost[] {
+  const snapshots = usableSnapshots(staticData, mediumData);
+  if (snapshots === null) return [];
+  const gameServerNames = new Set(gameServers(snapshots.staticData).map((server) => server.hostname));
+  return snapshots.mediumData.servers
     .filter(
       (server) =>
         server?.hasAdminRights === true &&
         isProtocolHostname(server.hostname) &&
-        server.hostname !== "home" &&
-        !isHacknetServerName(server.hostname) &&
+        (gameServerNames.has(server.hostname) || isBrainCloudServerName(server.hostname)) &&
         typeof server.maxRam === "number" &&
         server.maxRam > 0,
     )
@@ -133,13 +137,19 @@ export function hackLoopHosts(mediumData: MediumSnapshotData | null): HackLoopHo
 }
 
 /** `hackLoopHosts`'s hostnames. */
-export function chooseHackHosts(mediumData: MediumSnapshotData | null): string[] {
-  return hackLoopHosts(mediumData).map(({ hostname }) => hostname);
+export function chooseHackHosts(
+  staticData: StaticSnapshotData | null,
+  mediumData: MediumSnapshotData | null,
+): string[] {
+  return hackLoopHosts(staticData, mediumData).map(({ hostname }) => hostname);
 }
 
 /** `hackLoopHosts` as pairs, as the plan below reads them. */
-function hackHostsWithRam(mediumData: MediumSnapshotData | null): [string, number][] {
-  return hackLoopHosts(mediumData).map(({ hostname, ram }) => [hostname, ram]);
+function hackHostsWithRam(
+  staticData: StaticSnapshotData | null,
+  mediumData: MediumSnapshotData | null,
+): [string, number][] {
+  return hackLoopHosts(staticData, mediumData).map(({ hostname, ram }) => [hostname, ram]);
 }
 
 /**
@@ -203,7 +213,7 @@ export function planHackLoop(
   lastSet: LastHackTarget | null,
 ): { hackLoop: Omit<HackLoopState, "enabled">; lastSet: LastHackTarget | null } {
   const candidates = hackTargetCandidates(staticData, mediumData);
-  const hostsWithRam = hackHostsWithRam(mediumData);
+  const hostsWithRam = hackHostsWithRam(staticData, mediumData);
   const hosts = hostsWithRam.map(([hostname]) => hostname);
   const best = candidates[0];
   if (best === undefined || mediumData === null) return { hackLoop: { target: null, hosts }, lastSet: null };

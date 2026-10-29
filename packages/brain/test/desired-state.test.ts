@@ -1614,12 +1614,12 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     expect(controller.cloudServersView()).toMatchObject({ buying: null, waitingFor: "FTPCrack.exe first" });
   });
 
-  test("the next program waiting for money is held back if the income covers it within 5 minutes; one further off isn't", () => {
+  test("the next program waiting for money is held back if the income covers it within a minute; one further off isn't", () => {
     // SQLInject.exe ($250m) is further off: nothing is held back.
     const far = earning(1e6, { programs: PORT_OPENER_PROGRAMS.slice(0, 4) });
     expect(sentPurchases(far.connection)).toEqual([buyServer("pserv-0", 16)]);
     far.connection.dropFromGameSide();
-    // At $4,096 a second (on 32 GB), 5 minutes bring $1,228,800: BruteSSH.exe ($500k), short at $400,000, is held back.
+    // At $4,096 a second (on 32 GB), a minute brings $245,760: BruteSSH.exe ($500k), $100,000 short, is held back.
     const near = earning(0, { programs: [], noodlesRam: 32 }, { perSecond: 4_096, endMoney: 400_000 });
     expect(sentPurchases(near.connection)).toEqual([]);
     expect(near.controller.cloudServersView().waitingFor).toBe(
@@ -1629,7 +1629,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
 
   test("of a program and home RAM both waiting, the cheaper is what's held back", () => {
     // FTPCrack.exe ($1.5m) and home RAM from 2 GB to 4 GB ($101,120), neither affordable at $100,000: the upgrade,
-    // within the 5 minutes' $153,600.
+    // within the minute's $30,720.
     const { controller, connection } = earning(0, { programs: ["BruteSSH.exe"], homeRam: 2 }, { endMoney: 100_000 });
     expect(sentPurchases(connection)).toEqual([]);
     expect(controller.cloudServersView().waitingFor).toBe(
@@ -1688,6 +1688,80 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     expect(controller.cloudServersView().problem).toBeNull();
     // The renamed one's name is passed over.
     expect(sentPurchases(connection)).toEqual([buyServer("pserv-1", 128)]);
+  });
+
+  test("the reserve looks at what's short: a $250m program $20,000 away is held back, however far its whole price", () => {
+    // SQLInject.exe ($250m), short by $20,000, less than a minute of $512 a second ($30,720).
+    const { controller, connection } = earning(
+      0,
+      { programs: PORT_OPENER_PROGRAMS.slice(0, 4) },
+      { endMoney: 249_980_000 },
+    );
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      "money for pserv-0 with 8 GB ($440,000, beyond $250,000,000 held for SQLInject.exe)",
+    );
+  });
+
+  test("a program or home RAM switched off holds nothing back", () => {
+    const programs = earning(0, { programs: [], noodlesRam: 32 }, { perSecond: 4_096, endMoney: 450_000 });
+    expect(sentPurchases(programs.connection)).toEqual([]);
+    programs.controller.setProgramsEnabled(false);
+    expect(sentPurchases(programs.connection)).toEqual([buyServer("pserv-0", 8)]);
+    programs.connection.dropFromGameSide();
+    const homeRam = earning(0, { programs: PORT_OPENER_PROGRAMS, homeRam: 2 }, { endMoney: 100_000 });
+    expect(homeRam.controller.cloudServersView().waitingFor).toMatch(/held for home RAM to 4 GB/);
+    homeRam.controller.setHomeRamEnabled(false);
+    expect(homeRam.controller.cloudServersView().waitingFor).toBe("money for pserv-0 with 8 GB ($440,000)");
+  });
+
+  test("a cloud purchase not done, with a problem (not enough money, say), is no problem noted: it's tried again", () => {
+    const { controller, connection } = earning(10e6);
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: false, tries: 1, problem: "not enough money", backend: "ui" }],
+    });
+    expect(controller.cloudServersView().problem).toBeNull();
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+  });
+
+  test("the switch turned on again, without off, keeps a problem noted", () => {
+    const { controller, connection } = earning(10e6);
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: true, tries: 1, problem: "bought as pserv-0-0", backend: "ui" }],
+    });
+    controller.setCloudServersEnabled(true);
+    expect(controller.cloudServersView().problem).toBe("buyServer(pserv-0, 128): bought as pserv-0-0");
+  });
+
+  test("a new connection forgets the purchase in flight: chosen afresh at the money then", () => {
+    const { connection } = earning(10e6);
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    connection.dropFromGameSide();
+    const again = connectAgent("session-2");
+    send(again, "static", network, "session-2");
+    send(again, "slow", slowData(), "session-2");
+    for (let minute = 0; minute <= 10; minute++) {
+      if (minute > 0) clock.advance(MINUTE);
+      send(again, "medium", medium(100e6 + minute * 60 * 512), "session-2");
+    }
+    // $100.3m covers 1 TB ($56.3m), not 2 TB.
+    expect(sentPurchases(again)).toEqual([buyServer("pserv-0", 1_024)]);
+  });
+
+  test("the owner's cloud servers are never hosts, nor upgraded; they count toward the limit", () => {
+    const owners = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`box-${index}`, 8]));
+    const { controller, connection } = earning(10e6, { cloud: owners });
+    expect(controller.hackLoopView().hosts).toEqual(["n00dles"]);
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      "room: the game's limit of 25 cloud servers is reached with your own",
+    );
   });
 
   test("a disconnect forgets the income: 10 more minutes of it before the next", () => {

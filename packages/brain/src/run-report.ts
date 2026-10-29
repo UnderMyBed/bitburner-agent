@@ -26,7 +26,7 @@ import {
 } from "./gap-report.ts";
 import { hackLoopHosts, readHackLoopEnabled } from "./hack-loop.ts";
 import { HackingFold } from "./hacking-ceiling.ts";
-import { WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
+import { MESSAGE_REFUSED_EVENT_KIND, WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
 
@@ -52,7 +52,12 @@ const RESTART_EVENT_KINDS = [
   SUPERVISION_GAVE_UP_EVENT_KIND,
 ];
 /** The events that are failures in themselves. */
-const FAILURE_EVENT_KINDS = ["deployFailed", "versionDrift", SUPERVISION_GAVE_UP_EVENT_KIND];
+const FAILURE_EVENT_KINDS = [
+  "deployFailed",
+  "versionDrift",
+  SUPERVISION_GAVE_UP_EVENT_KIND,
+  MESSAGE_REFUSED_EVENT_KIND,
+];
 
 export interface RunWindow {
   environment: Environment;
@@ -210,7 +215,9 @@ export interface CloudServerChange {
 
 /**
  * Each cloud server bought or upgraded in the window, in order: one of `cloudServers` (the slow snapshots' lists, the
- * game's word) that a medium snapshot shows first after the window's first, or with more RAM than the one before.
+ * game's word) that a medium snapshot shows first after the window's first, or with more RAM than the one before. One
+ * a medium snapshot no longer shows is forgotten: an install deletes them (`Prestige.ts:72-74`), so one bought again
+ * after it is bought again.
  */
 class CloudServerChanges {
   readonly changes: CloudServerChange[] = [];
@@ -223,6 +230,7 @@ class CloudServerChanges {
   }
 
   add(atMs: number, data: MediumSnapshotData): void {
+    const seen = new Set<string>();
     for (const server of Array.isArray(data?.servers) ? data.servers : []) {
       if (typeof server?.hostname !== "string" || !this.#cloudServers.has(server.hostname)) continue;
       if (!isNumber(server.maxRam)) continue;
@@ -233,7 +241,9 @@ class CloudServerChanges {
         this.changes.push({ atMs, hostname: server.hostname, fromRam: before, toRam: server.maxRam });
       }
       this.#ram.set(server.hostname, server.maxRam);
+      seen.add(server.hostname);
     }
+    for (const hostname of [...this.#ram.keys()]) if (!seen.has(hostname)) this.#ram.delete(hostname);
     this.#first = false;
   }
 }
@@ -254,6 +264,8 @@ interface RunFacts extends RunWindow {
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
+  /** The newest static snapshot by the window's end (before it, if none in it): which servers are the game's. */
+  staticLast: StaticSnapshotData | undefined;
   /** Cloud servers bought or upgraded (#194). */
   cloudServerChanges: CloudServerChange[];
   /** The dashboard's switch, now: the store keeps no history of it. */
@@ -281,9 +293,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
     if (isObject(staticBefore?.data))
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+    // The newest static snapshot, for which servers are the game's: the hack loop's hosts (#194).
+    let staticLast = isObject(staticBefore?.data) ? (staticBefore.data as StaticSnapshotData) : undefined;
     const backdoors = new BackdoorTimeline();
     for (const { atMs, data } of ofTier<StaticSnapshotData>("static")) {
       snapshotCount++;
+      staticLast = data;
       hacking.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
@@ -351,6 +366,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowLast,
       snapshotCount,
       playersServers,
+      staticLast,
       cloudServerChanges: cloudServerChanges.changes,
       hackLoopEnabled: readHackLoopEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
@@ -485,6 +501,8 @@ function describeEvent({ kind, detail }: StoredEvent): string {
       return `supervisor's check failed (${displayValue(fields.cause)}): ${displayValue(fields.failure)}`;
     case SUPERVISION_GAVE_UP_EVENT_KIND:
       return `supervisor GAVE UP: ${JSON.stringify(detail)}`;
+    case MESSAGE_REFUSED_EVENT_KIND:
+      return `the Agent REFUSED the brain's message (${displayValue(fields.count)} so far): ${displayValue(fields.reason)}`;
     case "connectionRejected":
       return `connection rejected (${displayValue(fields.reason)}): ${displayValue(fields.detail)}`;
     default:
@@ -549,9 +567,10 @@ function progressSection(facts: RunFacts): string[] {
         (server) => server?.hasAdminRights === true && !facts.playersServers.has(server.hostname),
       ).length;
     lines.push(`  the game's servers rooted: ${describeChange(String(rooted(first)), String(rooted(last)))}`);
-    // The hack loop's hosts as its rule has them (#194), the cloud servers among them.
+    // The hack loop's hosts as its rule has them (#194), the brain's cloud servers among them.
     const hosts = (data: MediumSnapshotData) => {
-      const each = hackLoopHosts(data);
+      if (facts.staticLast === undefined) return "unknown (no static snapshot)";
+      const each = hackLoopHosts(facts.staticLast, data);
       const ram = each.reduce((total, host) => total + host.ram, 0);
       return `${formatGigabytes(ram)} on ${each.length} ${each.length === 1 ? "server" : "servers"}`;
     };
@@ -800,6 +819,10 @@ function cloudServerLines(facts: RunFacts): string[] {
       `    in all: ${bought} bought, ${upgraded} upgraded${currentNode === 1 ? `, ${formatMoney(total)}` : ""}`,
     );
   }
+  // The brain's rule waits outside BN1 (cloud-servers.ts): said here, so a run with none bought isn't a mystery.
+  if (isNumber(currentNode) && currentNode !== 1) {
+    lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in BN1`);
+  }
   return lines;
 }
 
@@ -827,16 +850,16 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
 
   // Done, but not as asked (#194): a server bought under another name.
   lines.push("  cloud server purchases done with a problem:");
-  let wrong = 0;
+  let withProblem = 0;
   for (const { id, outcome } of intentEpisodes(facts)) {
     if (!outcome.done || outcome.problem === null) continue;
     if (!id.startsWith("buyServer(") && !id.startsWith("upgradeServer(")) continue;
-    wrong++;
+    withProblem++;
     const line = `cloud server purchase done with a problem: ${id}: ${outcome.problem}`;
     lines.push(`    ${line}`);
     failures.push(line);
   }
-  if (wrong === 0) lines.push("    none");
+  if (withProblem === 0) lines.push("    none");
 
   lines.push("  dialogs left blocking the page:");
   const blocking = blockingEpisodes(facts);
@@ -851,7 +874,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
 
   lines.push(...disconnectLines(facts, failures));
 
-  lines.push("  deploy failures, version drift, supervision given up:");
+  lines.push("  deploy failures, version drift, supervision given up, brain messages the Agent refused:");
   const failureEvents = facts.events.filter((event) => FAILURE_EVENT_KINDS.includes(event.kind));
   for (const event of failureEvents) {
     const line = `${formatIsoTime(event.atMs)} ${describeEvent(event)}`;

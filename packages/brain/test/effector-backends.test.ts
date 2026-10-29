@@ -785,6 +785,28 @@ test("upgrading a server (its worker, #194): on a fresh save's 8 GB home beside 
   await upgradedOnceAndRefused(await forServers(1e10, { sim: false, singularity: false }), "ui");
 });
 
+test("a desired state the Agent refuses (#194's review): logged by both, reported, stored once, and cleared by the next it takes", async () => {
+  const fresh = await forServers(1e10, { sim: true, singularity: false });
+  await fresh.game.runUntil(() => fresh.money() !== null, 10_000);
+  // A name the game allows but the protocol doesn't: the whole state is refused, and the Agent keeps the last one.
+  const bad = { action: "upgradeServer", args: { hostname: "bad name", ram: 64 }, id: "upgradeServer(bad name, 64)" };
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [bad as Intent] });
+  const refused = () => fresh.latest<FastSnapshotData>("fast")?.refusedMessage ?? null;
+  await fresh.game.runUntil(() => refused() !== null, 10_000);
+  expect(refused()).toEqual({ reason: expect.stringContaining("upgradeServer's hostname isn't"), count: 1 });
+  await fresh.game.run(4_000);
+  const events = fresh.data.store.events({ environment: "E1" }).filter((event) => event.kind === "messageRefused");
+  expect(events.map((event) => event.detail)).toEqual([refused()]);
+  expect(fresh.brain.logLines.filter((line) => line.includes("REFUSED"))).toHaveLength(1);
+  const [agent] = (await fresh.simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  const agentLines = async () => (await fresh.simulation.logs(agent?.pid as number)).join("\n");
+  expect(await agentLines()).toContain("agent: refused a message from the brain (1 so far): desiredState's intent:");
+  // The next state, valid, is taken: the report clears.
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [server("pserv-0")] });
+  await fresh.game.runUntil(() => refused() === null, 10_000);
+  expect(await agentLines()).toContain("agent: took the brain's desired state again");
+});
+
 /**
  * The player's crime, focus and progress on it (ms), and their karma, as the game saves them: `null` for no crime. A
  * crime started again loses its progress (`Work/CrimeWork.ts`, `unitCompleted`).

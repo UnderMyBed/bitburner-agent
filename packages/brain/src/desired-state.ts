@@ -281,7 +281,6 @@ export class DesiredStateController {
         // Counted on the last Agent's snapshots: every gate starts again, and the income is measured afresh.
         this.#gates.forget();
         this.#income.clear();
-        this.#lastCloudPurchase = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' and the work's outcomes: for the views, and the manual intents done. Anything else changes
         // nothing to send.
@@ -292,7 +291,7 @@ export class DesiredStateController {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
-        this.#income.add(event.atMs, this.#mediumData);
+        this.#income.add(event.atMs, this.#staticData, this.#mediumData);
         this.#mediumAtMs = event.atMs;
         this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
@@ -536,8 +535,10 @@ export class DesiredStateController {
   #chooseCloudServer(other: Intent | null): Intent | null {
     const enabled = readCloudServersEnabled(this.#store);
     if (this.#staticData === null || this.#mediumData === null) {
+      // No Agent, or a new one's snapshots not in yet: the purchase in flight, if any, is chosen afresh.
       this.#cloudServersPlan = null;
       this.#waitingFor.cloudServers = null;
+      this.#lastCloudPurchase = null;
       return null;
     }
     const income = this.#income.rate();
@@ -575,7 +576,7 @@ export class DesiredStateController {
   /**
    * The money held back from cloud servers (#194): the price of the program or home RAM upgrade bought next (the
    * cheaper, among those switched on) while it waits for money, if the hack loop's income (`perSecond`) would cover
-   * it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none.
+   * what's still short of it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none.
    */
   #reserveForOtherPurchase(perSecond: number): MoneyReserve | null {
     const waiting: MoneyReserve[] = [];
@@ -590,7 +591,9 @@ export class DesiredStateController {
     }
     const cheaper = waiting.sort((a, b) => a.amount - b.amount)[0];
     if (cheaper === undefined) return null;
-    return cheaper.amount <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
+    const money = this.#mediumData?.player?.money;
+    const shortfall = cheaper.amount - (typeof money === "number" ? money : 0);
+    return shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
   }
 
   /** The next program or home RAM upgrade, as an intent: one at a time, cheapest first, among those switched on. */

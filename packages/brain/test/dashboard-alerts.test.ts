@@ -184,3 +184,29 @@ describe("cloudServerProblem (#194): a cloud purchase the Agent reported done wi
     ]);
   });
 });
+
+describe("messageRefused (#194's review): the Agent refused the brain's last message", () => {
+  test("holds while the newest fast snapshot says so, with the count and the reason", () => {
+    const refusedMessage = { reason: "an intent's hostname isn't valid", count: 3 };
+    expect(activeAlerts({ ...quiet, refusedMessage })).toEqual([
+      {
+        name: "messageRefused",
+        sinceMs: quiet.lastFastSnapshotAtMs,
+        detail:
+          "the Agent refused the brain's message (3 so far), so it acts on the last one it took: an intent's " +
+          "hostname isn't valid",
+      },
+    ]);
+    expect(names({ ...quiet, refusedMessage: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after cloudServerProblem, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    const refusedMessage = { reason: "x", count: 1 };
+    expect(names({ ...quiet, cloudServerProblem: "p", refusedMessage, intentOutcomes: [stuck] })).toEqual([
+      "cloudServerProblem",
+      "messageRefused",
+      "intentStuck",
+    ]);
+  });
+});

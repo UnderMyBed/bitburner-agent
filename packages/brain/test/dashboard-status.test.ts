@@ -504,3 +504,14 @@ test("the hacking rows with no snapshots: the ceiling unknown, no income", () =>
     incomeText: "— (not two slow snapshots with the money sources in the last 10 min)",
   });
 });
+
+test("messageRefused (#194's review): from the newest fast snapshot's refused message, if well formed", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  const refusedMessage = { reason: "an intent's hostname isn't valid", count: 1 };
+  recordSnapshot("fast", nowMs - 1_000, { ...fastData(1), refusedMessage });
+  expect(status(nowMs).alerts).toMatchObject([
+    { name: "messageRefused", sinceMs: nowMs - 1_000, detail: expect.stringContaining(refusedMessage.reason) },
+  ]);
+  recordSnapshot("fast", nowMs - 500, { ...fastData(1), refusedMessage: { reason: 7 } });
+  expect(status(nowMs).alerts).toEqual([]);
+});
