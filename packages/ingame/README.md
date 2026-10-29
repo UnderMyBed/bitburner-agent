@@ -173,10 +173,11 @@ While the new-game tutorial runs, finished scripts never free their RAM (archite
 ## The hack loop
 
 The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/134), owner decision 34). The brain decides; the Agent carries it out (`src/agent/hack-loop.ts`). It's the thinnest version of the reconciler (architecture §5.3), and its first activity:
-- **What the brain sends:** `desiredState { hackLoop: { enabled, target, hosts, preparing? } }` ([protocol](../../docs/bridge/protocol.md#brain--agent)).
+- **What the brain sends:** `desiredState { hackLoop: { enabled, target, hosts, preparing?, hackThreads? } }` ([protocol](../../docs/bridge/protocol.md#brain--agent)).
   - It's on unless the owner turns it off on the dashboard.
   - `target` and `hosts` come from the brain's starter rules ([packages/brain](../brain/README.md#the-hack-loop)). The hosts are the game's rooted servers, never home and never the player's own purchased or Hacknet servers.
   - `preparing` (#184), when there is one, is the next target and the hosts it runs on, the largest. The loop there weakens and grows that target while the others earn on `target`, so a change of target never stops income ([packages/brain](../brain/README.md#the-hack-loop)).
+  - `hackThreads` (#187), when there are some, is the threads each host's loop hacks with, by hostname: so many that the hosts' hacks together never take more of the target's money than their grows bring back. Without it, or for a host it doesn't name, the loop hacks with all its threads, as before ([packages/brain](../brain/README.md#the-hack-loop)).
 - **Only from the brain it's connected to, or with none, [safe mode](#safe-mode).** While connected, the Agent acts only on what that brain sent. Without a state from it (just welcomed, or a brain that holds), it does nothing, and loops already running keep running. With no brain, it converges on the last state a brain sent, until its `ttlMs` passes.
 - **When it acts:**
   - On a change, at once.
@@ -184,18 +185,18 @@ The Agent's first action, M3's first slice ([#134](https://github.com/UnderMyBed
   - Off, it stops every loop once, then does nothing until the state changes.
 - **How:** after the round's snapshots, within the round's time, it runs two home workers, one after the other. They share the snapshot workers' runner ([`run-worker.ts`](src/agent/run-worker.ts)), so home never holds two at once, nor two copies of one. A worker that can't start, or doesn't report, is tried again next round; a retry doesn't root again. The Agent logs why.
   1. **`hack-loop-root.js`** (only when on): for every server but home that it doesn't have root on, it opens the ports it can with the programs on home, then runs NUKE if that's enough. Rooting is what any player does first.
-  2. **`hack-loop-deploy.js`**, with whether the loop should run, then each host followed by its target (core's `hackLoopDeployArguments`, #184): `target` for `hosts`, the one being prepared for `preparing.hosts`. On every rooted server but home, it stops **only our loops**, any deployment's `agent/<id>/hack-loop.js` in a folder the deployer generated (12 hex digits, never a player's own `agent/<name>/`), that shouldn't run there:
+  2. **`hack-loop-deploy.js`**, with whether the loop should run, then each host followed by its target (core's `hackLoopDeployArguments`, #184) and its hack threads (0 for all, #187): `target` for `hosts`, the one being prepared for `preparing.hosts`. On every rooted server but home, it stops **only our loops**, any deployment's `agent/<id>/hack-loop.js` in a folder the deployer generated (12 hex digits, never a player's own `agent/<name>/`), that shouldn't run there:
      - another deployment's;
-     - one whose target isn't this host's;
+     - one whose target isn't this host's, or whose hack threads aren't (#187);
      - on a server that isn't a host;
      - or every one, when off.
 
-     On each host where the loop isn't running, it copies this deployment's `hack-loop.js` there and runs it against the host's target, with the threads the free RAM allows. A host whose target hasn't changed keeps its loop. It never touches any other script. It reports the servers and threads running, in all and per target, or a problem (no deployment folder, no loop script on home) rather than failing silently.
-- **The loop itself**, `hack-loop.js` with the target as its argument: weaken while security is more than 5 over the minimum, grow while money is under 75% of the maximum, hack otherwise. The thresholds are core's (`HACK_LOOP_SECURITY_MARGIN`, `HACK_LOOP_MONEY_FRACTION`), which the brain's rule for a ready target uses too (#184).
+     On each host where the loop isn't running, it copies this deployment's `hack-loop.js` there and runs it against the host's target, with the threads the free RAM allows, and its hack threads, at most those. A host whose target and hack threads haven't changed keeps its loop: the brain rounds a host's hack threads down to a power of two, so they change only now and then. It never touches any other script. It reports the servers and threads running, in all and per target with the threads that hack at once, or a problem (no deployment folder, no loop script on home) rather than failing silently.
+- **The loop itself**, `hack-loop.js` with the target and its hack threads as its arguments: weaken while security is more than 5 over the minimum, grow while money is under 75% of the maximum, hack otherwise, with its hack threads (`hack`'s `threads` option, #187; the script's other threads wait out the hack). Without a count, it hacks with all its threads. The thresholds are core's (`HACK_LOOP_SECURITY_MARGIN`, `HACK_LOOP_MONEY_FRACTION`), which the brain's rule for a ready target uses too (#184).
 - **RAM:** the loop uses only RAM left free when it starts, then holds it, so a script the owner starts there later may not fit; stop the loop first. Home is left alone: a fresh save's no-port servers have about 100 GB between them, while home has about 1 GB beside the Agent (architecture Q1).
 - **Saved scripts:** the loops aren't temporary, so a reload brings them back by itself, and they keep running while the brain is down.
 
-The Agent logs what it does when that changes: the servers it rooted, and the loop's threads, servers and target, and the target being prepared and its servers ("on, 92 threads on 21 servers, against n00dles; preparing zer0 on 7 servers", #184). The brain's [hack loop suite](../brain/README.md#the-hack-loop) tests it in an 8 GB fresh start, and E2 checks n00dles runs it in the real game.
+The Agent logs what it does when that changes: the servers it rooted, and the loop's threads, servers and target, and the target being prepared and its servers ("on, 92 threads (92 hacking) on 21 servers, against n00dles; preparing zer0 on 7 servers (31 hacking)", #184, #187). The brain's [hack loop suite](../brain/README.md#the-hack-loop) tests it in an 8 GB fresh start, and E2 checks n00dles runs it in the real game.
 
 ## Intents
 

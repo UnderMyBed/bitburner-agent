@@ -57,8 +57,13 @@ export interface HackLoopView {
   /** The target it earns on, and its hosts. */
   target: string | null;
   hosts: string[];
-  /** The next target, being prepared on these hosts while the others earn (#184), or null. */
-  preparing: { target: string; hosts: string[] } | null;
+  /**
+   * At most how many of their threads hack at once (#187): the brain's count for each host added up (a host's loop may
+   * have fewer threads), or null when it gives none, so all hack.
+   */
+  hackThreads: number | null;
+  /** The next target, being prepared on these hosts while the others earn (#184), or null, with its hack threads. */
+  preparing: { target: string; hosts: string[]; hackThreads: number | null } | null;
 }
 
 /** What the dashboard shows of the hacking programs. */
@@ -325,12 +330,20 @@ export class DesiredStateController {
   hackLoopView(): HackLoopView {
     const enabled = readHackLoopEnabled(this.#store);
     const hackLoop = this.#desired?.hackLoop;
+    // The hosts' hack threads added up (#187), or null where the state gives none: all their threads.
+    const hackThreadsOn = (hosts: string[]) => {
+      const hackThreads = hackLoop?.hackThreads;
+      if (!hackThreads) return null;
+      return hosts.reduce((total, host) => total + (hackThreads[host] ?? 0), 0);
+    };
+    const preparing = enabled ? (hackLoop?.preparing ?? null) : null;
     return {
       enabled,
       waiting: enabled && this.#desired === null,
       target: enabled ? (hackLoop?.target ?? null) : null,
       hosts: enabled ? (hackLoop?.hosts ?? []) : [],
-      preparing: enabled ? (hackLoop?.preparing ?? null) : null,
+      hackThreads: enabled ? hackThreadsOn(hackLoop?.hosts ?? []) : null,
+      preparing: preparing === null ? null : { ...preparing, hackThreads: hackThreadsOn(preparing.hosts) },
     };
   }
 

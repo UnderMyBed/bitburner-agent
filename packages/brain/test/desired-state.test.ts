@@ -71,13 +71,15 @@ const send = (connection: MemoryConnection, tier: SnapshotTier, data: unknown, a
       data,
     }),
   );
+/** The desired states sent, without the hack loop's hack threads (#187): "each host's hack threads" checks those. */
 const desiredStates = (connection: MemoryConnection) =>
   connection
     .sentMessages()
     .filter((message) => message.type === "desiredState")
     .map((message) => {
       const { hackLoop, intents } = message as unknown as DesiredState;
-      return { hackLoop, intents };
+      const { hackThreads: _hackThreads, ...targetsAndHosts } = hackLoop;
+      return { hackLoop: targetsAndHosts, intents };
     });
 const network: StaticSnapshotData = { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] };
 const loopOn = { enabled: true, target: "n00dles", hosts: ["n00dles"] };
@@ -91,7 +93,14 @@ const upgradeHomeRam = (fromRam: number, vendor = "Alpha Enterprises") =>
 test("on: nothing until the connected Agent's own static and medium snapshots, then the target and hosts", () => {
   const controller = new DesiredStateController({ channel, store });
   const connection = connectAgent();
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [], preparing: null });
+  expect(controller.hackLoopView()).toEqual({
+    enabled: true,
+    waiting: true,
+    target: null,
+    hosts: [],
+    hackThreads: null,
+    preparing: null,
+  });
   send(connection, "static", network);
   expect(desiredStates(connection)).toEqual([]);
   // Nothing rooted yet: on, with no target, so the Agent roots what it can.
@@ -106,6 +115,8 @@ test("on: nothing until the connected Agent's own static and medium snapshots, t
     waiting: false,
     target: "n00dles",
     hosts: ["n00dles"],
+    // Growth 10 at hacking 1: 1 thread (hack-loop.test.ts has the rule).
+    hackThreads: 1,
     preparing: null,
   });
 });
@@ -149,7 +160,21 @@ describe("the move to the next target (#184): prepared while the current one ear
     send(connection, "static", twoTargets);
     send(connection, "medium", at(100, 7_500_000));
     send(connection, "medium", at(150, 7_500_000));
-    expect(controller.hackLoopView()).toEqual({ ...preparing, waiting: false });
+    // Each host's hack threads (#187), added up per target: bravo hacks n00dles with all 6 of its threads, alpha zer0
+    // with 16.
+    expect(controller.hackLoopView()).toEqual({
+      ...preparing,
+      waiting: false,
+      hackThreads: 6,
+      preparing: { ...preparing.preparing, hackThreads: 16 },
+    });
+    expect(
+      connection
+        .sentMessages()
+        .filter((message) => message.type === "desiredState")
+        .map((message) => (message as unknown as DesiredState).hackLoop.hackThreads)
+        .at(-1),
+    ).toEqual({ bravo: 6, alpha: 16 });
     send(connection, "medium", at(150, 100_000_000));
     send(connection, "medium", at(150, 140_625_000));
     // Hacked below 75% again: zer0 is current now, so it stays.
@@ -267,6 +292,7 @@ test("the hack loop's switch: off is sent at once, kept in the store; on again s
     waiting: false,
     target: null,
     hosts: [],
+    hackThreads: null,
     preparing: null,
   });
   controller.setHackLoopEnabled(true);
@@ -286,7 +312,14 @@ test("a disconnect forgets the Agent's snapshots: the views show waiting", () =>
   send(connection, "static", network);
   send(connection, "medium", mediumData(1, { n00dles: true }));
   connection.dropFromGameSide();
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [], preparing: null });
+  expect(controller.hackLoopView()).toEqual({
+    enabled: true,
+    waiting: true,
+    target: null,
+    hosts: [],
+    hackThreads: null,
+    preparing: null,
+  });
   expect(controller.programsView()).toMatchObject({ enabled: true, waiting: true });
 });
 

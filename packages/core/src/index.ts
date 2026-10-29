@@ -109,17 +109,21 @@ export {
 export { FACTION_ENEMIES, FACTION_NAMES, JOIN_FACTION_WORKER_NAME } from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
+  growthLogPerThread,
   HACK_LOOP_DEPLOY_WORKER_NAME,
   HACK_LOOP_MONEY_FRACTION,
+  HACK_LOOP_RAM_BUDGET_GB,
   HACK_LOOP_ROOT_WORKER_NAME,
   HACK_LOOP_SCRIPT_NAME,
   HACK_LOOP_SECURITY_MARGIN,
   type HackLoopDeployReport,
   type HackLoopRootReport,
+  type HostHackLoop,
   hackLoopDeployArguments,
-  hackLoopTargetsByHost,
+  hackLoopsByHost,
   isHackLoopFile,
   isHackLoopReady,
+  percentMoneyHackedPerThread,
 } from "./hack-loop.ts";
 export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";

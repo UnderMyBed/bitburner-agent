@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   chooseHackHosts,
   chooseHackTarget,
+  HACK_REGROW_ROUNDS,
   type LastHackTarget,
   planHackLoop,
   readHackLoopEnabled,
@@ -166,7 +167,11 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
     earning: true,
     preparingHosts,
   });
-  const plan = (...args: Parameters<typeof planHackLoop>) => planHackLoop(...args).hackLoop;
+  /** The plan's targets and hosts: its hack threads (#187) are the next describe's. */
+  const plan = (...args: Parameters<typeof planHackLoop>) => {
+    const { hackThreads: _hackThreads, ...targetsAndHosts } = planHackLoop(...args).hackLoop;
+    return targetsAndHosts;
+  };
   const lastSetAfter = (...args: Parameters<typeof planHackLoop>) => planHackLoop(...args).lastSet;
 
   test("what it notes: the target set, whether it earns (once a snapshot shows it ready), and the preparing hosts", () => {
@@ -340,6 +345,91 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
     expect(plan(network, medium(150, { ram: {} }), earningOn("n00dles"))).toEqual({ target: "n00dles", hosts: [] });
     expect(plan(network, mediumData(150, { alpha: true }), null)).toEqual({ target: null, hosts: ["alpha"] });
     expect(plan(null, medium(150), earningOn("n00dles"))).toEqual({ target: null, hosts: [] });
+  });
+
+  describe("each host's hack threads (#187): a round of hacks takes no more than two rounds of grows bring back", () => {
+    const hackThreadsOf = (...args: Parameters<typeof planHackLoop>) => planHackLoop(...args).hackLoop.hackThreads;
+    /** Every host on zer0, ready, at `hacking`. */
+    const onZer0 = (hacking: number, changes: Parameters<typeof medium>[1] = {}) =>
+      hackThreadsOf(network, medium(hacking, { zer0: ZER0_READY, ...changes }), earningOn("n00dles"));
+
+    test("a slow grower (zer0, growth 40): each host's part of two rounds' growth, over one thread's share", () => {
+      expect(HACK_REGROW_ROUNDS).toBe(2);
+      // One thread takes 0.9 x 76/150 / 240 = 0.19% at security 10 (its minimum); one grows log1p(0.03/15) x 0.4 =
+      // 0.0008 at 15 (minimum + 5). The hosts' 26 + 13 + 6 + 6 threads, twice: 0.0815. alpha's half: 1 - e^-0.0408 =
+      // 4.0%, 21 threads, so 16; bravo 10.6, so 8; charlie and delta 5.3, so 4.
+      expect(onZer0(150)).toEqual({ alpha: 16, bravo: 8, charlie: 4, delta: 4 });
+    });
+
+    test("n00dles (growth 3000) grows back from anything: every host hacks with all the threads its RAM holds", () => {
+      // 1 - e^-5.3 of what it finds, 241 threads, so 128; alpha's 64 GB holds 26.
+      expect(hackThreadsOf(network, medium(100), earningOn("n00dles"))).toEqual({
+        alpha: 26,
+        bravo: 13,
+        charlie: 6,
+        delta: 6,
+      });
+    });
+
+    test("in proportion to RAM, and at least 1: a 2 GB host (no thread of the loop's) still gets 1", () => {
+      const withEcho = { servers: [...network.servers, staticServer("echo", { moneyMax: 0 })] };
+      const ram = { alpha: 64, bravo: 32, charlie: 16, delta: 16, echo: 2 };
+      expect(hackThreadsOf(withEcho, medium(150, { ram, zer0: ZER0_READY }), earningOn("n00dles"))).toEqual({
+        alpha: 16,
+        bravo: 8,
+        charlie: 4,
+        delta: 4,
+        echo: 1,
+      });
+    });
+
+    test("rounded down to a power of two: the count holds while the hacking level rises, then halves", () => {
+      // alpha's 21 at hacking 150 is 16.0 at 220 (the share per thread rises with the level), and 15.7 at 230.
+      for (const hacking of [150, 160, 180, 200, 220]) {
+        expect(onZer0(hacking), `hacking ${hacking}`).toEqual({ alpha: 16, bravo: 8, charlie: 4, delta: 4 });
+      }
+      expect(onZer0(230)).toEqual({ alpha: 8, bravo: 4, charlie: 2, delta: 2 });
+    });
+
+    test("the player's multipliers: twice the money per thread, half the threads; twice the growth, twice", () => {
+      const withMults = (mults: Record<string, number>) => {
+        const data = medium(150, { zer0: ZER0_READY });
+        data.player = { ...data.player, mults };
+        return hackThreadsOf(network, data, earningOn("n00dles"));
+      };
+      expect(withMults({ hacking_money: 2, hacking_grow: 1 })).toEqual({ alpha: 8, bravo: 4, charlie: 2, delta: 2 });
+      // 32, 16, 8 and 8, but at most the threads their RAM holds: 26, 13, 6 and 6.
+      expect(withMults({ hacking_money: 1, hacking_grow: 2 })).toEqual({ alpha: 26, bravo: 13, charlie: 6, delta: 6 });
+      // Ones that aren't numbers count as 1.
+      expect(withMults({ hacking_money: "lots" as unknown as number })).toEqual(onZer0(150));
+    });
+
+    test("while preparing: the earning hosts' against the target they earn on, the preparing hosts' against theirs", () => {
+      // n00dles on bravo, charlie and delta (all their threads); zer0 on alpha alone: its 26 threads' growth, twice,
+      // all alpha's: 21.4, so 16.
+      expect(hackThreadsOf(network, medium(150), earningOn("n00dles"))).toEqual({
+        bravo: 13,
+        charlie: 6,
+        delta: 6,
+        alpha: 16,
+      });
+    });
+
+    test("none with no host or no target; 1 each without the target's minimum security", () => {
+      expect(hackThreadsOf(network, medium(150, { ram: {} }), earningOn("n00dles"))).toBeUndefined();
+      expect(hackThreadsOf(network, mediumData(150, { alpha: true }), null)).toBeUndefined();
+      const noMinimum = {
+        servers: network.servers.map((server) =>
+          server.hostname === "zer0" ? { ...server, minDifficulty: undefined } : server,
+        ),
+      };
+      expect(hackThreadsOf(noMinimum, medium(150, { zer0: ZER0_READY }), earningOn("zer0"))).toEqual({
+        alpha: 1,
+        bravo: 1,
+        charlie: 1,
+        delta: 1,
+      });
+    });
   });
 });
 

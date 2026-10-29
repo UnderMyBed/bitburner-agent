@@ -335,6 +335,53 @@ describe("rejected, each with a reason", () => {
     );
   });
 
+  test("each host's hack threads (#187): carried; absent, null or empty, none, as an older brain's state", () => {
+    const at = (fields: unknown) => parseBrainMessage(JSON.stringify({ ...desiredState, hackLoop: fields }));
+    const preparing = { target: "zer0", hosts: ["max-hardware"] };
+    const hackThreads = { foodnstuff: 4, "max-hardware": 16 };
+    expect(at({ ...hackLoop, preparing, hackThreads })).toEqual({
+      ok: true,
+      message: { ...desiredState, hackLoop: { ...hackLoop, preparing, hackThreads } },
+    });
+    // Some hosts only: the others hack with all their threads.
+    expect(at({ ...hackLoop, hackThreads: { foodnstuff: 1 } })).toEqual({
+      ok: true,
+      message: { ...desiredState, hackLoop: { ...hackLoop, hackThreads: { foodnstuff: 1 } } },
+    });
+    for (const none of [undefined, null, {}]) {
+      expect(at({ ...hackLoop, hackThreads: none })).toEqual({ ok: true, message: desiredState });
+    }
+  });
+
+  test("hack threads refused, each with its own reason (#187)", () => {
+    const reasonOf = (hackThreads: unknown, fields: object = hackLoop) => {
+      const result = parseBrainMessage(JSON.stringify({ ...desiredState, hackLoop: { ...fields, hackThreads } }));
+      return result.ok ? null : result.reason;
+    };
+    for (const notAnObject of [4, "4", [4], true]) {
+      expect(reasonOf(notAnObject)).toBe("desiredState's hackLoop.hackThreads isn't an object");
+    }
+    expect(reasonOf({ joesguns: 4 })).toBe('desiredState\'s hackLoop.hackThreads names "joesguns", not a host');
+    // A preparing host counts only while preparing is there.
+    expect(reasonOf({ "max-hardware": 4 })).toBe(
+      'desiredState\'s hackLoop.hackThreads names "max-hardware", not a host',
+    );
+    expect(
+      reasonOf({ "max-hardware": 4 }, { ...hackLoop, preparing: { target: "zer0", hosts: ["max-hardware"] } }),
+    ).toBe(null);
+    for (const [threads, described] of [
+      [0, "0"],
+      [-1, "-1"],
+      [1.5, "1.5"],
+      ["4", '"4"'],
+      [null, "null"],
+    ] as const) {
+      expect(reasonOf({ foodnstuff: threads })).toBe(
+        `desiredState's hackLoop.hackThreads of "foodnstuff" is ${described}`,
+      );
+    }
+  });
+
   test("a desired state keeps only its known fields", () => {
     const extras = JSON.stringify({
       ...desiredState,

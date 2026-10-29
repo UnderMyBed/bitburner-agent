@@ -78,6 +78,7 @@ const BUSY_STATUS: DashboardStatus = {
     waiting: false,
     target: "n00dles",
     hosts: ["foodnstuff", "joesguns", "n00dles"],
+    hackThreads: null,
     preparing: null,
   },
   programs: {
@@ -125,7 +126,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     brainStartedAtMs,
     brainStartedEventId,
     supervising: true,
-    hackLoop: { enabled: true, waiting: true, target: null, hosts: [], preparing: null },
+    hackLoop: { enabled: true, waiting: true, target: null, hosts: [], hackThreads: null, preparing: null },
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
     intents: [],
@@ -364,7 +365,7 @@ test("the hack loop's button (#134) sends its switch, the other way from the sta
         ...BUSY_STATUS,
         hackLoop: enabled
           ? BUSY_STATUS.hackLoop
-          : { enabled, waiting: false, target: null, hosts: [], preparing: null },
+          : { enabled, waiting: false, target: null, hosts: [], hackThreads: null, preparing: null },
       };
       return { status: 200, body: { enabled } };
     }
@@ -388,12 +389,12 @@ test("the hack loop's button (#134) sends its switch, the other way from the sta
 test.each([
   [
     "waiting for the Agent's snapshots",
-    { enabled: true, waiting: true, target: null, hosts: [], preparing: null },
+    { enabled: true, waiting: true, target: null, hosts: [], hackThreads: null, preparing: null },
     "on, waiting for the Agent's snapshots",
   ],
   [
     "no target yet",
-    { enabled: true, waiting: false, target: null, hosts: [], preparing: null },
+    { enabled: true, waiting: false, target: null, hosts: [], hackThreads: null, preparing: null },
     "on, rooting servers; no target yet",
   ],
   [
@@ -403,9 +404,23 @@ test.each([
       waiting: false,
       target: "n00dles",
       hosts: ["foodnstuff", "joesguns", "n00dles"],
-      preparing: { target: "zer0", hosts: ["max-hardware", "omega-net"] },
+      hackThreads: null,
+      preparing: { target: "zer0", hosts: ["max-hardware", "omega-net"], hackThreads: null },
     },
     "on, against n00dles, on 3 servers; preparing zer0 on 2 servers",
+  ],
+  [
+    "with each host's hack threads (#187)",
+    {
+      enabled: true,
+      waiting: false,
+      target: "max-hardware",
+      hosts: ["foodnstuff", "joesguns", "n00dles"],
+      hackThreads: 96,
+      preparing: { target: "phantasy", hosts: ["omega-net"], hackThreads: 16 },
+    },
+    "on, against max-hardware, on 3 servers, hacking with at most 96 threads; preparing phantasy on 1 servers, " +
+      "hacking with at most 16 threads",
   ],
 ])("the hack loop on, %s, says so", async (_description, hackLoop, text) => {
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, hackLoop } }));
