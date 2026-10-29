@@ -8,7 +8,7 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { BITNODE_COUNT, PINNED_GAME } from "@bitburner-agent/core";
 import { buildEngine } from "../src/engine/build.ts";
-import type { GameAugmentation, GameNumber } from "../src/protocol.ts";
+import type { GameAugmentation } from "../src/protocol.ts";
 import { Simulation } from "../src/simulation.ts";
 
 const CORE = new URL("../../core/src/", import.meta.url);
@@ -21,15 +21,14 @@ const header = (what: string) =>
   "// packages/sim/scripts/generate-game-data.ts (#193). Don't edit it; rerun that. packages/sim/test/game-data.test.ts\n" +
   "// checks it against the engine.\n";
 
-/** A value as TypeScript: JSON, with the game's infinite costs as `Infinity`. */
+/** A value as TypeScript: JSON, with the engine's infinite numbers (`GameNumber`'s "Infinity") as `Infinity`. */
 const literal = (value: unknown) => JSON.stringify(value, null, 2).replace(/: "Infinity"/g, ": Infinity");
-const cost = (value: GameNumber) => (value === "Infinity" ? "Infinity" : value);
 
 function coreAugmentation(augmentation: GameAugmentation) {
   const random = augmentation.name === RANDOM_MULTIPLIERS;
   return {
-    baseMoneyCost: cost(augmentation.baseMoneyCost),
-    baseRepCost: cost(augmentation.baseRepCost),
+    baseMoneyCost: augmentation.baseMoneyCost,
+    baseRepCost: augmentation.baseRepCost,
     factions: augmentation.factions,
     prereqs: augmentation.prereqs,
     multipliers: random ? {} : augmentation.multipliers,

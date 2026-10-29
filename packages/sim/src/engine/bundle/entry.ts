@@ -315,9 +315,13 @@ export function gameData(): GameData {
     baseRepCost: gameNumber(aug.baseRepRequirement),
     factions: [...aug.factions],
     prereqs: [...aug.prereqs],
-    multipliers: Object.fromEntries(Object.entries(aug.mults).filter(([, value]) => value !== 1)),
+    multipliers: Object.fromEntries(
+      Object.entries(aug.mults)
+        .filter(([, value]) => value !== 1)
+        .map(([key, value]) => [key, gameNumber(value)]),
+    ),
     isSpecial: aug.isSpecial,
-    startingMoney: aug.startingMoney,
+    startingMoney: gameNumber(aug.startingMoney),
     programs: [...aug.programs],
   }));
   const factions = Object.values(FactionName).map((name) => {

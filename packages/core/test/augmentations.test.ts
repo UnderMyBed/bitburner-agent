@@ -21,8 +21,10 @@ import {
   SHADOWS_OF_ANARCHY_REPUTATION_GROWTH,
   SOURCE_FILE_11_PRICE_GROWTH_DISCOUNT,
 } from "../src/augmentations.ts";
+import { BITNODE_COUNT } from "../src/bitnodes.ts";
 import { FACTIONS } from "../src/faction-data.ts";
 import { daedalusAugmentationsRequired, FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
+import { PINNED_GAME } from "../src/game-version.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -80,8 +82,17 @@ describe("the generated data", () => {
     expect(FACTIONS.CyberSec?.inviteRequirements).toEqual([{ type: "backdoorInstalled", server: "CSEC" }]);
   });
 
+  test("the generated files name the pinned game's version: a bump without regenerating shows", () => {
+    for (const file of ["augmentation-data.ts", "faction-data.ts"]) {
+      const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+      expect(source, file).toMatch(
+        new RegExp(`^// .*: generated from the pinned game \\(v${PINNED_GAME.versionString}\\) by\n`),
+      );
+    }
+  });
+
   test("the BitNode multipliers on augmentations: a row for each BitNode", () => {
-    expect(Object.keys(AUGMENTATION_BITNODE_MULTIPLIERS)).toHaveLength(15);
+    expect(Object.keys(AUGMENTATION_BITNODE_MULTIPLIERS)).toHaveLength(BITNODE_COUNT);
     expect(AUGMENTATION_BITNODE_MULTIPLIERS[1]).toEqual({
       AugmentationMoneyCost: 1,
       AugmentationRepCost: 1,
@@ -168,7 +179,17 @@ describe("augmentationCost: the game's `getAugCost`", () => {
     }
     for (const value of [0, -1, Number.NaN, Infinity]) {
       const bitNodeMultipliers = { AugmentationMoneyCost: 1, AugmentationRepCost: value };
-      expect(() => augmentationCost("BitWire", { ...BN1, bitNodeMultipliers })).toThrow(/AugmentationRepCost/);
+      expect(() => augmentationCost("BitWire", { ...BN1, bitNodeMultipliers })).toThrow(
+        /AugmentationRepCost must be finite and above 0/,
+      );
+    }
+    // Every branch: Shadows of Anarchy's check the SF11 level too, and an installed level is a whole number from 1.
+    const soa = "SoA - Beauty of Aphrodite";
+    expect(() => augmentationCost(soa, { ...BN1, sourceFile11Level: 4 })).toThrow(/SF11 level/);
+    for (const level of [0, -1, 1.5, Number.NaN]) {
+      const installed = { [NEUROFLUX_GOVERNOR]: level };
+      expect(() => augmentationCost(NEUROFLUX_GOVERNOR, { ...BN1, installed })).toThrow(/installed level/);
+      expect(() => augmentationCost(soa, { ...BN1, installed })).toThrow(/installed level/);
     }
   });
 });
@@ -198,7 +219,10 @@ describe("buying", () => {
     expect(purchaseSequenceCost([], BN1)).toEqual({ purchases: [], money: 0 });
   });
 
-  test("purchaseSequenceCost refuses what the game wouldn't sell: owned already, or a prerequisite missing", () => {
+  test("purchaseSequenceCost refuses what the game wouldn't sell: owned already, sold by none, a prerequisite missing", () => {
+    for (const unsold of ["BigD's Big ... Brain", "Z.O.Ë.", "violet Congruity Implant", "The W1ngs of Icarus"]) {
+      expect(() => purchaseSequenceCost([unsold], BN1)).toThrow(`no faction sells ${unsold}`);
+    }
     expect(() => purchaseSequenceCost(["BitWire", "BitWire"], BN1)).toThrow(/BitWire is owned already/);
     expect(() => purchaseSequenceCost(["BitWire"], { ...BN1, installed: { BitWire: 1 } })).toThrow(/owned already/);
     expect(() => purchaseSequenceCost(["BitWire"], { ...BN1, queued: ["BitWire"] })).toThrow(/owned already/);
@@ -219,7 +243,7 @@ describe("buying", () => {
   });
 
   test("augmentationsSoldBy: the faction's, in the game's order; no Red Pill at Daedalus in BN15", () => {
-    expect(augmentationsSoldBy("CyberSec", 1)).toEqual([
+    expect(augmentationsSoldBy("CyberSec", 1, null)).toEqual([
       NEUROFLUX_GOVERNOR,
       "BitWire",
       "Synaptic Enhancement Implant",
@@ -227,10 +251,13 @@ describe("buying", () => {
       "Cranial Signal Processors - Gen II",
       "Neurotrainer I",
     ]);
-    expect(augmentationsSoldBy("Daedalus", 1)).toContain("The Red Pill");
-    expect(augmentationsSoldBy("Daedalus", 15)).not.toContain("The Red Pill");
-    expect(augmentationsSoldBy("Daedalus", 15).length).toBe(augmentationsSoldBy("Daedalus", 1).length - 1);
-    expect(augmentationsSoldBy("Nobody", 1)).toEqual([]);
+    expect(augmentationsSoldBy("Daedalus", 1, null)).toContain("The Red Pill");
+    expect(augmentationsSoldBy("Daedalus", 15, null)).not.toContain("The Red Pill");
+    expect(augmentationsSoldBy("Daedalus", 15, null).length).toBe(augmentationsSoldBy("Daedalus", 1, null).length - 1);
+    expect(augmentationsSoldBy("Nobody", 1, null)).toEqual([]);
+    // A gang's faction sells by a seeded draw, which isn't modelled: asking throws rather than answer wrongly.
+    expect(() => augmentationsSoldBy("Slum Snakes", 2, "Slum Snakes")).toThrow(/gang's faction/);
+    expect(augmentationsSoldBy("CyberSec", 2, "Slum Snakes")).toEqual(augmentationsSoldBy("CyberSec", 2, null));
   });
 });
 

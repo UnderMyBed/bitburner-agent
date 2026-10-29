@@ -175,11 +175,11 @@ function bumpSteps(report: WatchReport): string[] {
     // The submodule is a shallow clone: a plain `fetch origin stable` pulls in years of history behind it.
     `1. Point the submodule at it: \`git -C vendor/bitburner-src fetch --depth 1 origin ${sha}\`, then \`git -C vendor/bitburner-src checkout FETCH_HEAD\`, and commit the new gitlink.`,
     "2. Update `PINNED_GAME` in `packages/core/src/game-version.ts` (version string, `VersionNumber`, commit). Its contract test checks it against the submodule.",
-    "3. Run `npm run setup:engine` (the game's lockfile may have changed), then `npm run check`.",
+    "3. Run `npm run setup:engine` (the game's lockfile may have changed), then regenerate core's game data with `node packages/sim/scripts/generate-game-data.ts` and review its diff (#193), then `npm run check`.",
     `4. Re-audit the simulator's browser parity: [the checklist](${REPO}/docs/sim/parity.md#re-auditing-after-a-version-bump).`,
     `5. Run the heavy suites ([releasing](${REPO}/docs/releasing.md) step 2) and, once they exist, the smoke checks.`,
     "6. Update the mechanics docs that the API, RAM cost and watched-source sections below touch.",
-    `7. Update the other mentions of the pinned version: search the repository for \`${old[0]}\` and \`${old[1]}\` (the README, CLAUDE.md, the architecture and mechanics docs).`,
+    `7. Update the other mentions of the pinned version: search the repository for \`${old[0]}\` and \`${old[1]}\` (the README, CLAUDE.md, the architecture and mechanics docs). Skip \`packages/core/src/augmentation-data.ts\` and \`faction-data.ts\`: step 3's generator writes their headers.`,
     "8. Open the bump PR as a normal PR (CI and the three-pass review), closing this issue.",
     "",
   ];

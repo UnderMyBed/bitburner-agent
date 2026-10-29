@@ -6,8 +6,12 @@
  * game's price rules.
  */
 import { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
+import { THE_RED_PILL } from "./bitnodes.ts";
 
-/** Every augmentation, by the name the game uses. */
+/**
+ * Every augmentation, by the name the game uses. The keys of `AUGMENTATIONS` too (a test holds them equal); kept apart
+ * so in-game bundles, which check names, never carry the generated data.
+ */
 export const AUGMENTATION_NAMES = [
   "NeuroFlux Governor",
   "Augmented Targeting I",
@@ -162,28 +166,36 @@ export function neuroFluxLevel(installedLevel: number, ownedNames: readonly stri
 }
 
 /**
- * An augmentation, as the pinned game defines it (#193, `Augmentation/Augmentation.ts:173-226`): `AUGMENTATIONS`, in
+ * An augmentation, as the pinned game defines it (#193, `Augmentation/Augmentation.ts:173-235`): `AUGMENTATIONS`, in
  * augmentation-data.ts, generated from the simulator's engine (`packages/sim/scripts/generate-game-data.ts`).
  */
 export interface AugmentationData {
-  /** `baseCost`: the money before any multiplier. Infinity for one never sold. */
+  /** `baseCost`: the money before any multiplier. Infinity for BigD's Big ... Brain. */
   baseMoneyCost: number;
-  /** `baseRepRequirement`: the faction reputation before any multiplier. Infinity for one never sold. */
+  /**
+   * `baseRepRequirement`: the faction reputation before any multiplier. Infinity for BigD's Big ... Brain, violet
+   * Congruity Implant and Z.O.Ë., which no faction sells.
+   */
   baseRepCost: number;
-  /** The factions that sell it (a gang's faction sells nearly all, which this doesn't cover). */
+  /** The factions that sell it; none for some (the darknet's, Z.O.Ë., …). A gang's faction isn't listed. */
   factions: readonly string[];
   /** Each must be installed or queued before it can be bought (`FactionHelpers.tsx:56-58,88-95`). */
   prereqs: readonly string[];
   /** Its multipliers that aren't 1, by the game's names (`hacking`, `faction_rep`, `hacking_money`, …). */
   multipliers: Readonly<Record<string, number>>;
-  /** The game's `isSpecial`: not in BN1's shops as such (Bladeburner's, Stanek's, SoA's, NeuroFlux Governor, …). */
+  /**
+   * The game's `isSpecial`. It keeps one out of a gang's shop (`FactionHelpers.tsx:178`), grafting
+   * (`GraftingHelpers.ts:13-15`) and sleeves (`Sleeve.ts:103`), not out of a faction's own: NeuroFlux Governor is special
+   * and sold by 31 factions.
+   */
   isSpecial: boolean;
   /** What an install of it gives: money, and programs (`Prestige.ts`). */
   startingMoney: number;
   programs: readonly string[];
   /**
-   * Unstable Circadian Modulator's: one of seven sets drawn by the game's clock, again at each install
-   * (`Augmentation/CircadianModulator.ts:113`, `Prestige.ts:119`), so `multipliers` is empty.
+   * Unstable Circadian Modulator's: one of seven sets drawn by the game's clock (`CircadianModulator.ts:113`) when the
+   * game loads (`Augmentations.ts:1963`) and again at each install and BitNode reset (`Prestige.ts:119,272`), so
+   * `multipliers` is empty.
    */
   randomMultipliers?: true;
 }
@@ -254,10 +266,17 @@ export function augmentationPriceGrowth(sourceFile11Level: number): number {
 }
 
 function checkState(state: AugmentationPurchaseState): void {
-  for (const name of [...Object.keys(state.installed), ...state.queued]) augmentationData(name);
+  for (const name of state.queued) augmentationData(name);
+  for (const [name, level] of Object.entries(state.installed)) {
+    augmentationData(name);
+    if (!Number.isInteger(level) || level < 1) {
+      throw new RangeError(`${name}'s installed level must be a whole number from 1, not ${level}`);
+    }
+  }
+  augmentationPriceGrowth(state.sourceFile11Level);
   for (const [key, value] of Object.entries(state.bitNodeMultipliers)) {
     if (!Number.isFinite(value) || value <= 0)
-      throw new RangeError(`the BitNode's ${key} must be above 0, not ${value}`);
+      throw new RangeError(`the BitNode's ${key} must be finite and above 0, not ${value}`);
   }
 }
 
@@ -315,8 +334,8 @@ export interface AugmentationPurchase extends AugmentationCost {
 /**
  * Buying `names` in that order (#193): each one's price when its turn comes, each queued before the next, and the money
  * in all. Each must be one the game would sell then: not owned already (NeuroFlux Governor excepted, a level each
- * time), and its prerequisites installed, queued or bought earlier in the sequence (`FactionHelpers.tsx:75-95`).
- * Otherwise it throws. The money and reputation themselves aren't checked.
+ * time), sold by some faction, and its prerequisites installed, queued or bought earlier in the sequence
+ * (`FactionHelpers.tsx:68-95`). Otherwise it throws. The money and reputation themselves aren't checked.
  */
 export function purchaseSequenceCost(
   names: readonly string[],
@@ -329,6 +348,7 @@ export function purchaseSequenceCost(
     if (name !== NEUROFLUX_GOVERNOR && (Object.hasOwn(state.installed, name) || queued.includes(name))) {
       throw new RangeError(`${name} is owned already: the game sells it once`);
     }
+    if (augmentationData(name).factions.length === 0) throw new RangeError(`no faction sells ${name}`);
     const missing = missingPrerequisites(name, now);
     if (missing.length > 0) throw new RangeError(`${name} needs ${missing.join(", ")} first`);
     purchases.push({ name, ...augmentationCost(name, now) });
@@ -339,13 +359,16 @@ export function purchaseSequenceCost(
 
 /**
  * The augmentations `faction` sells, in the game's order (`Faction/Factions.ts:14-21`), less The Red Pill at Daedalus
- * in BN15 (`FactionHelpers.tsx:204-207`). A gang's faction sells nearly all (`:173-202`), which this doesn't cover.
+ * in BN15 (`FactionHelpers.tsx:204-207`): there it's a darknet labyrinth's reward (`DarkNet/effects/labyrinth.ts:420-423`).
+ * A gang's faction sells nearly all, drawn by a seeded RNG (`FactionHelpers.tsx:173-202`), which this doesn't model:
+ * `gangFaction` is the player's gang's faction, or null, and asking for it throws.
  */
-export function augmentationsSoldBy(faction: string, bitNode: number): string[] {
-  return AUGMENTATION_NAMES.filter(
+export function augmentationsSoldBy(faction: string, bitNode: number, gangFaction: string | null): string[] {
+  if (faction === gangFaction) throw new RangeError(`${faction} is the gang's faction: its shop isn't modelled`);
+  return Object.keys(AUGMENTATIONS).filter(
     (name) =>
       AUGMENTATIONS[name]?.factions.includes(faction) &&
-      !(bitNode === 15 && faction === "Daedalus" && name === "The Red Pill"),
+      !(bitNode === 15 && faction === "Daedalus" && name === THE_RED_PILL),
   );
 }
 

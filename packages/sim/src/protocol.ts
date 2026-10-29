@@ -342,7 +342,7 @@ export interface GameDiagnostics {
 /** A number the game may make infinite, as the host sends it: JSON, which carries IPC, has no Infinity. */
 export type GameNumber = number | "Infinity";
 
-/** An augmentation, as the game defines it (`Augmentation/Augmentation.ts:173-226`): the game's own numbers. */
+/** An augmentation, as the game defines it (`Augmentation/Augmentation.ts:173-235`): the game's own numbers. */
 export interface GameAugmentation {
   name: string;
   /** `baseCost` and `baseRepRequirement`, before any multiplier. */
@@ -351,10 +351,10 @@ export interface GameAugmentation {
   factions: string[];
   prereqs: string[];
   /** Its multipliers that aren't 1, by the game's names (`mults`). */
-  multipliers: Record<string, number>;
+  multipliers: Record<string, GameNumber>;
   isSpecial: boolean;
   /** What an install of it gives: money, and programs. */
-  startingMoney: number;
+  startingMoney: GameNumber;
   programs: string[];
 }
 

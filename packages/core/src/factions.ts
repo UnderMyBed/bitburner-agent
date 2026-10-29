@@ -8,7 +8,10 @@
 import { augmentationBitNodeMultipliers } from "./augmentations.ts";
 import type { FactionWorkType } from "./work.ts";
 
-/** Every faction, by the name the game uses. */
+/**
+ * Every faction, by the name the game uses. The keys of `FACTIONS` too (a test holds them equal); kept apart so in-game
+ * bundles, which check names, never carry the generated data.
+ */
 export const FACTION_NAMES = [
   "Illuminati",
   "Daedalus",
@@ -46,7 +49,10 @@ export const FACTION_NAMES = [
   "Shadows of Anarchy",
 ];
 
-/** Each faction that has enemies, and them, in the game's order: the six city factions. */
+/**
+ * Each faction that has enemies, and them, in the game's order: the six city factions. `FACTIONS`' enemies too (a test
+ * holds them equal); kept apart for the in-game bundles, as `FACTION_NAMES` is.
+ */
 export const FACTION_ENEMIES: Record<string, string[]> = {
   Aevum: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"],
   Chongqing: ["Sector-12", "Aevum", "Volhaven"],
