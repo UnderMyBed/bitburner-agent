@@ -316,10 +316,15 @@ Real-time loops that are configured by the brain and never decide strategy.
 - **Hot configuration:** each reflex re-reads its config (a file or port written by the reconciler) every loop. Script arguments only identify the instance, so a config change never restarts a reflex or drops batches in flight.
 - **Health out:** each reflex publishes its metrics (rates, errors, loop latency) to a port the snapshotter reads. That feeds `Activity.health` and the fast-model fidelity metric.
 - **Legacy reflexes** (from the retired fork, run through `legacy/` adapters) are launched with their self-launching of helper scripts disabled. Only the reconciler decides which processes exist.
+- **The batcher is our own** (M4 phase A slice A7, [#204](https://github.com/UnderMyBed/bitburner-agent/issues/204), not legacy `daemon.js`, which picks its own targets and buys servers, schedules nothing on an 8 GB home, and hides misfires by default; the comparison is in #204). Built in three steps: #204 the batch and the in-game batcher, run on the engine in the simulator; #205 the Agent runs it from the desired state; #206 the brain chooses its plan, and its score against the batcher ceiling (§4.3).
+  - **The batch:** hack, weaken, grow, weaken, landing in that order 20 ms apart, whole threads at 1 core, grow sized for 1.1× the hack's share; core's `batchPlan` picks the hack threads and the spacing whose peak RAM fits the hosts (`packages/core/src/batcher.ts`).
+  - **Timing:** each operation script lands itself: it reads its operation's time and calls it in the same turn with `additionalMsec` = landing − now − that time, so a start's lag or a high security when it's called doesn't move the landing; one started too late says so, and a hack then doesn't run. The batcher starts each operation just in time, its time plus a 200 ms lead (plus what security at its bounds adds) before it lands, so RAM is held about as long as the operation runs.
+  - **Checked, loudly:** each landing is recorded on a port; one before a landing already recorded (out of order) or the target outside the bounds a batch in step keeps it within, at a hack, is a desync: the batcher stops hacking, lets what's in flight land, prepares the target again and goes on. Late and lost landings are counted too, in its health (a port and its log).
+  - **Where:** the batcher is about 3.85 GB and runs anywhere; its operations run on the hosts it's given. The simulator suite has it at 55–57% of the batcher ceiling on a fresh start's no-port servers, against the hack loop's 18–20% at best ([`packages/ingame`](../packages/ingame/README.md#the-batcher)).
 
 | Reflex | Why it's in game | Source |
 |---|---|---|
-| HWGW batcher | Millisecond landing precision | Legacy `daemon.js` first; possible rewrite later (§13) |
+| HWGW batcher | Millisecond landing precision | **Our own** (#204, below), not legacy `daemon.js` |
 | Stock trader | Reacts on stock ticks | Legacy `stockmaster.js` |
 | Gang ticker | Territory tick (~20 s) swap trick | Legacy `gangs.js` (includes the upstream v3 fix) |
 | Bladeburner loop | Action completion events | Legacy `bladeburner.js` |
@@ -607,7 +612,7 @@ vendor/         bitburner-src submodule (pinned, read-only)
 ### 12.3 Migration from the fork (strangler pattern)
 The fork is retired and does **not** play the campaign; the agent plays from BN1.1. The fork's proven parts live on in three ways:
 1. **Baseline:** the fork (autopilot + daemon) runs in the simulator as the benchmark the planner must beat (M4 phase B's exit), compared at fixed checkpoints (4, 8 and 12 virtual hours), since a full-length run costs hours per seed ([ADR 0011](decisions/0011-checkpointed-simulator-comparisons.md)). The fork needs a human without SF4, so the fair comparison starts both from the **same BN1 state with SF1.1 and SF4.3** ([owner decisions log](decisions/owner-decisions.md) #28): the least a player can hold along with SF4.3, since earning SF4 means destroying BN1 first. The game makes it BN1.2, and SF1 starts home at 32 GB, so the fork runs unattended from the start, as a player starts it (`autopilot.js --disable-casino`). Every state is one a player can reach ([baselines](sim/baselines.md)). For BN1.1 itself (no SF4) the agent is held to absolute targets instead: time-to-destroy and pass rate.
-2. **Legacy reflexes:** fork managers (batcher, stocks, gang, Bladeburner) run under the agent through `legacy/` adapters, while the brain owns strategy.
+2. **Legacy reflexes:** fork managers (stocks, gang, Bladeburner) run under the agent through `legacy/` adapters, while the brain owns strategy. The batcher is the exception: ours from the start (#204, §5.5), since `daemon.js` decides strategy itself and can't run on an 8 GB start; phase B's fork baseline still runs it in the simulator, so the two can be compared.
 3. **Replacement:** legacy reflexes are replaced one by one, each only when the simulator shows the replacement is at least as good.
 
 ### 12.4 Version management
