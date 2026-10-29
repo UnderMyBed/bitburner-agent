@@ -4,8 +4,8 @@
 // - Not committed: each update, the set the money covers of the augmentations reached (a joined seller's reputation
 //   covers them), and core's `installDecision` against the next one worth installing at the joined factions. Install
 //   chosen: committed, kept in the store until the game resets, so a restarted brain carries on.
-// - Committed, one intent at a time: the set's next purchase (recomputed from what's queued), then home's RAM, which an
-//   install keeps (`Server/ServerHelpers.ts:224-237`), then NeuroFlux Governor a level at a time, then, once every
+// - Committed, one intent at a time: the set's next purchase (recomputed from what's queued), then home's RAM, which
+//   an install keeps (`Server/ServerHelpers.ts:224-237`), then NeuroFlux Governor a level at a time, then, once every
 //   purchase the Agent reported done shows in the faction state's queue, the install (the controller's gate and backup).
 //   Once the install is asked for, nothing more is bought, so the gate's count isn't restarted by a purchase.
 // - Fail loudly: a purchase reported done that two faction state reads after it don't show queued is

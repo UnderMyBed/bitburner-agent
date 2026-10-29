@@ -1,9 +1,10 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136) or home's RAM (#138), the next backdoor for the hacker factions
-// (#195, ./backdoors.ts), and the owner's manual queue. Irreversible intents wait for their guard and a save backup
-// first (#147). Each state carries how long the Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
-// back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
+// (#195, ./backdoors.ts), the augmentations' purchases and install (#210, ./augmentations.ts), and the owner's manual
+// queue. Irreversible intents wait for their guard and a save backup first (#147). Each state carries how long the
+// Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the
+// BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type DesiredState,
@@ -228,7 +229,7 @@ export class DesiredStateController {
   #augmentationsCommitted = false;
   /** Who gets the rules' events (#210): the store, through main.ts. */
   readonly #listeners = new Set<(event: AugmentationEvent) => void>();
-  /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows the reset. */
+  /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
   #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
   /** The intents left out to keep to the protocol's 100, as last logged (#195 review): logged on a change. */
@@ -336,7 +337,7 @@ export class DesiredStateController {
     return this.#augmentations.reserve();
   }
 
-  /** The purchases reported done that the faction state never showed queued (#210): the `augmentationNotQueued` alert's. */
+  /** The purchases reported done that the faction state never showed queued (#210): `augmentationNotQueued`'s. */
   augmentationsNotQueued(): NotQueued[] {
     return this.#augmentations.notQueued();
   }
@@ -356,7 +357,8 @@ export class DesiredStateController {
     const parsed = parseIntentRequest(request);
     if (!parsed.ok) return parsed;
     const queue = readManualIntents(this.#store);
-    // Room for the purchase and the backdoor: a desired state over the protocol's limit would be refused by the Agent.
+    // Room for the purchase, the backdoor and the augmentation's (#210): a desired state over the protocol's limit
+    // would be refused by the Agent.
     if (!queue.some((each) => each.id === parsed.message.id)) {
       if (queue.length >= MANUAL_QUEUE_LIMIT) {
         return { ok: false, reason: `the manual queue is full: ${MANUAL_QUEUE_LIMIT} intents at most` };

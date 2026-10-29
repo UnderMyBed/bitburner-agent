@@ -71,6 +71,7 @@ The package's other tests (`test/*.test.ts`: the static server, the build's chec
 
 - **Saves come from the simulator.** That's allowed: saves only flow from Steam into test environments, never back.
 - **The game's settings live in the save**, so a test sets the RFA port or autoexec by making the save with them.
+- **The brain's augmentation rule is off** in `effectors.e2.test.ts`'s brains (`augmentations.enabled` false, unless a test's `brainSettings` say otherwise, #210): on by default, it would buy and install around a test's own augmentations.
 - **Reloads aren't blocked.** A production build over `http` asks before unloading (`vendor/bitburner-src/src/index.tsx:53-58`), and the browser shows that prompt once the page has been used (typed in, clicked). With no dialog listener, Playwright's own navigations go through it. `test/game.e2.test.ts` checks the prompt is armed, then reloads. A test that adds a `dialog` listener must accept that prompt itself.
 - **A load that fails says why.** If the game doesn't load (in `gameFromSave`, `freshGame`, or `waitForTerminal` after a reload), the error adds:
   - the page's visible text, up to 1,500 characters, or why it couldn't be read (a timeout means a hung page, anything else a crashed or closed one);

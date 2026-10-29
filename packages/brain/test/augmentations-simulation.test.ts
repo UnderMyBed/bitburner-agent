@@ -1,9 +1,9 @@
 // Augmentations and the reset (#210), in the simulator: a fresh 8 GB start in BN1 reaching its first install, the
-// brain's rules as on Steam (the hack loop, programs, home RAM, backdoors and augmentations, all on). 20 virtual minutes
-// in, a harness edit stands in for the hours of CyberSec's work (A5's, #203): CyberSec joined with the reputation for
-// its five augmentations, and the money for them. The brain chooses the install (nothing else is worth installing at
-// the joined factions), buys the five in buy order through the Agent's `sim` effector, then NeuroFlux Governor with what
-// money is left, and installs through the gate and a save backup; the game starts boot.js after the reset, and the next
+// brain's rules as on Steam (the hack loop, programs, home RAM, backdoors and augmentations, all on). 20 virtual
+// minutes in, a harness edit stands in for the hours of CyberSec's work (A5's, #203): CyberSec joined with the
+// reputation for its five augmentations, and the money for them. The brain chooses the install (nothing else is worth
+// installing at the joined factions), buys the five in buy order through the Agent's `sim` effector, then NeuroFlux
+// Governor with what money is left, and installs through the gate and a save backup; the game starts boot.js after the reset, and the next
 // Agent connects. 20 minutes after the reset, the hacking level is above where it was 20 minutes after the start. CI
 // runs seed 1; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
 import type { MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";

@@ -286,6 +286,14 @@ describe("committed", () => {
       mediumData: medium({ money, homeRam: 256 }),
       doneIds: new Set([homeRam.intent?.id as string]),
     });
+    // Reported done again, the medium snapshot not yet showing it: logged once.
+    const again = update({
+      slowData: slow({ reputation: 18_750, queued: queue }),
+      mediumData: medium({ money, homeRam: 256 }),
+      doneIds: new Set([homeRam.intent?.id as string]),
+    });
+    expect(again.intent).toEqual(homeRam.intent);
+    expect(lines.filter((line) => line.endsWith("done, before the install (home's RAM stays)"))).toHaveLength(1);
     // Home at 1024 GB (as if bought twice), $300m left: NeuroFlux Governor level 1, at 750k × 1.9⁵ = $18.6m.
     money = 300e6;
     const neuroFlux = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money }) });
@@ -317,15 +325,14 @@ describe("committed", () => {
     ).toEqual({ intent: null, install: true, committed: true });
   });
 
-  test("home's RAM switch off: none bought before the install", () => {
+  test("home's RAM switch off: none bought before the install, NeuroFlux Governor next", () => {
     committed();
-    const queue = [...FIVE];
     const ask = update({
-      slowData: slow({ reputation: 18_750, queued: queue }),
-      mediumData: medium({ money: 1e6, homeRam: 8 }),
+      slowData: slow({ reputation: 18_750, queued: [...FIVE] }),
+      mediumData: medium({ money: 1e9, homeRam: 8 }),
       homeRamEnabled: false,
     });
-    expect(ask.install).toBe(true);
+    expect(ask.intent).toEqual(purchaseIntent("CyberSec", NFG, 1));
   });
 
   test("a NeuroFlux Governor level needs a seller's reputation as well as the money", () => {
@@ -466,6 +473,12 @@ describe("the store and the figures", () => {
   });
 
   test("the income needs a full window, and starts again at a reset", () => {
+    // Five minutes of it: not yet.
+    for (let minute = 0; minute <= 5; minute += 1) {
+      gameTimeMs += MINUTE;
+      update({ slowData: slow({ reputation: 10_000, earned: minute * 60_000 }) });
+    }
+    expect(rule.view().waitingFor).toMatch(/^the income/);
     measureIncome(1_000, { reputation: 10_000 });
     expect(rule.view().waitingFor).not.toMatch(/^the income/);
     gameTimeMs += MINUTE;

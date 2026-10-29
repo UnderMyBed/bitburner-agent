@@ -106,8 +106,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue per
- * overdue backdoor, then one augmentationNotQueued per purchase not queued, then installNotRestarted.
+ * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue
+ * per overdue backdoor, then one augmentationNotQueued per purchase not queued, then installNotRestarted.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];

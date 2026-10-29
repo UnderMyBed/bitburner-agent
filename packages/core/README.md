@@ -29,6 +29,20 @@ Generated from the pinned game by the simulator's engine, never typed by hand: `
 
 `state` is what the brain has: `installed` is `resetInfo.ownedAugs`; `queued` is the queued augmentations in order, one entry per NeuroFlux Governor level; `sourceFile11Level` is `resetInfo.ownedSF["11"] ?? 0` (the game has already applied the BitNode options' overrides); and `bitNodeMultipliers` is `augmentationBitNodeMultipliers(resetInfo.currentNode, resetInfo.ownedSF)`. An unknown augmentation, an installed level that isn't a whole number from 1, an SF11 level outside 0-3, or a multiplier that isn't finite and above 0 throws.
 
+## Augmentations and the reset
+
+`src/augmentation-plan.ts` (#210, M4 phase A slice A6): which augmentations the brain buys, in what order, and whether installing them now beats carrying on. The functions are pure and use the game's formulas. The brain's rule (`packages/brain/src/augmentations.ts`) feeds them what the snapshots say. An augmentation's worth is A5's `hackingValue` (`src/faction-work.ts`, #203).
+
+| Function | What |
+|---|---|
+| `isWorthInstalling(name)` | A hacking value above 0, and not NeuroFlux Governor, which is bought last with what money is left. |
+| `installGains(names)` | Each hacking multiplier's product over `names`, a NeuroFlux Governor copy each time it's listed. |
+| `augmentationBuyOrder(names)` | The order to buy them in: each time, the dearest whose prerequisites in `names` are bought (one not in `names` is taken as owned), ties to the game's order. Each purchase multiplies the next one's price by 1.9 (`Constants.ts:41`), so falling prices cost least. |
+| `chooseAugmentationsToBuy(reached, state, money)` | The set to buy, of the augmentations whose reputation a joined seller has. By hacking value, each with its prerequisites not yet owned (all of them reached), it's kept while the whole set's `purchaseSequenceCost`, in buy order, is within the money. Only augmentations worth installing count. |
+| `hackingExpForLevel(level, multiplier)` | The game's `calculateExp` (`PersonObjects/formulas/skill.ts`), never below 0. |
+| `rebuildTimeMs({ sinceResetMs, hackingLevel, hackingExp, gains })` | How long getting back to the hacking level takes after the install, this cycle's pace replayed. It's the time since the last install, times the experience the level needs at the multiplier after the install over this cycle's experience, divided by the exp and speed gains. The multiplier now is the one the level and experience imply (the BitNode's is in it). |
+| `installDecision(inputs)` | Install when the next augmentation worth installing comes sooner by installing first (the rebuild, then it from scratch, at the rate times the install's `faction_rep`, its price with nothing queued, from no money) than by carrying on (its reputation still needed, and the set's money and its own less the money now). It also installs when no candidate is left, and only with something to install. With candidates and no income measured, it waits. Its figures come back for the dashboard and the events. |
+
 ## The hacking ceilings
 
 Built in #196 (M4 phase A slice A1): "how good is our hacking" as a number. `src/hacking-ceiling.ts`; the brain applies them to the snapshots ([brain: the hacking ceiling](../brain/README.md#the-hacking-ceiling)).

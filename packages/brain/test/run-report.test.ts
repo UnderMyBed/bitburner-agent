@@ -1007,7 +1007,7 @@ describe("backdoors for the hacker factions (#195)", () => {
 describe("augmentations and the reset (#210)", () => {
   /**
    * A run: the brain's events, `installedAtMs` the first slow snapshot with another `lastAugReset` (BitWire and two
-   * NeuroFlux Governor levels installed), or none.
+   * more NeuroFlux Governor levels installed), or none.
    */
   function augmentationRun({
     events: augmentationEvents,
@@ -1023,7 +1023,8 @@ describe("augmentations and the reset (#210)", () => {
     }
     for (let offsetMs = 30 * SECOND; offsetMs <= RUN_MS; offsetMs += MINUTE) {
       const installed = installedAtMs !== null && offsetMs >= installedAtMs;
-      const data = slowData([], installed ? { BitWire: 1, "NeuroFlux Governor": 2 } : {});
+      // NeuroFlux Governor at level 1 before (installed in an earlier cycle), 3 after: two levels this install.
+      const data = slowData([], installed ? { BitWire: 1, "NeuroFlux Governor": 3 } : { "NeuroFlux Governor": 1 });
       if (installed) data.resetInfo.lastAugReset = T0 + installedAtMs;
       snapshot("slow", offsetMs, data);
     }

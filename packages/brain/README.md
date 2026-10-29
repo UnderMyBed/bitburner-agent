@@ -112,7 +112,7 @@ The brain backs up the game's save over the Remote File API (`getSaveFile`; arch
 
 ## The dashboard
 
-A local page showing whether the skeleton is healthy, its alerts, and its switches: supervision, the hack loop, buying the hacking programs and upgrading home's RAM ([#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
+A local page showing whether the skeleton is healthy, its alerts, and its switches: supervision, the hack loop, buying the hacking programs, upgrading home's RAM, and buying and installing augmentations (#210; [#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
 
 - **What it shows,** refreshed every 2 s from the store:
   - **Alerts:** the ones holding now (below).
@@ -123,8 +123,9 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - **Supervision:** off, running, paused, or gave up; the supervisor's recent relaunches; and the switch (hidden when off).
   - **Hack loop:** on or off; on, whether the brain is waiting for the Agent's snapshots, has no target yet (while servers are being rooted), or runs it against a target on so many servers, and the next target it prepares on so many more ("on, against n00dles, on 21 servers, hacking with at most 92 threads; preparing zer0 on 7 servers, hacking with at most 48 threads", #184, #187: the hosts' hack threads added up, "at most" as a host's loop may have fewer threads than its RAM holds); and its switch ([the hack loop](#the-hack-loop)).
   - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, travel, or a cheaper home RAM upgrade first); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
+  - **Augmentations** (#210): on or off; what the brain asks for once an install is chosen ("install chosen: buying BitWire from CyberSec for $10,000,000"), or why it doesn't install yet, with the set the money covers and its money, and the next augmentation worth installing, how long it takes carrying on and installing first, and the rebuild; each purchase not queued, in red; and its switch ([augmentations and the reset](#augmentations-and-the-reset)).
   - **Home RAM:** on or off; on, the size the upgrade being bought brings home to, or what it waits for (the Agent's snapshots, money for the next size, travel, a cheaper program first, or the BitNode's price), or that home is at its limit; home's RAM; and its switch ([home RAM](#home-ram)).
-  - **Intents:** each intent sent, in order, with its source (the manual queue, a purchase, or a backdoor, #195) and how it went in the game: not reported yet, done, or its tries and last problem. An irreversible one the gate holds, or one queued after an install, says why instead ("not sent: waiting for a save backup", #147, #164). A manual one has a Cancel button, and a form queues a new one: an action and its arguments as JSON ([intents](#intents)).
+  - **Intents:** each intent sent, in order, with its source (the manual queue, a purchase, a backdoor, #195, or an augmentation's purchase or install, #210) and how it went in the game: not reported yet, done, or its tries and last problem. An irreversible one the gate holds, or one queued after an install, says why instead ("not sent: waiting for a save backup", #147, #164). A manual one has a Cancel button, and a form queues a new one: an action and its arguments as JSON ([intents](#intents)).
   - **Work** (#151, #153, #156, #158): the work the brain manages, focused or not, and how the Agent last reported it (with the latest promotion it took, #155), or "Not managed"; a form sets faction work (a faction and a work type), another company work (a company and a job field, Noodle Bar and Waiter to start with), a third a crime, a fourth a class (a university or gym, Rothman University to start with, and a course or stat), and **Stop managing work** clears it.
   - **Factions** (#197): from the newest slow snapshot, each joined faction's reputation and favour, the invitations and the queued augmentations (NeuroFlux Governor's levels counted, "NeuroFlux Governor ×2"), when they were read and through which backend; or why they couldn't be read, in red ([the faction state](#the-faction-state)).
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
@@ -149,6 +150,8 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   | `factionStateUnread` | The faction state couldn't be read in the newest 3 slow snapshots in a row or more (#197, `FACTION_STATE_UNREAD_AFTER`: about 3 minutes; a single miss is an event and a log line; a skipped one neither ends nor adds to the run), with the backend and the newest unread's problem, since the run's first (followed back as far as a day's slow snapshots). A skipped reading (no sidebar on the page), one read with the page not put back, and an older Agent's slow snapshot (no reading) aren't unread | When a slow snapshot's is read, skipped or from an older Agent |
   | `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
   | `backdoorOverdue` | One of the hacker factions' servers rooted, at its hacking level and not backdoored for 5 minutes or more (`BACKDOOR_OVERDUE_AFTER_MS`, #195), by the connected Agent's medium snapshots: one alert per server, from the controller's `backdoorsDue()`, which judges each medium snapshot as the rule does. The brain asks for it at once and it takes seconds, so this is the rule or the backdoor failing; a backdoor with no intent can't be `intentStuck` | When it's backdoored, or the Agent disconnects |
+  | `augmentationNotQueued` | A purchase the Agent reported done that 2 faction state reads since don't show queued (#210): one alert per purchase, from the augmentation rule's `notQueued()`. The game's own state says it wasn't bought, or the reader missed it: check the Augmentations page | When the game resets (an install), as the rule forgets that game's purchases |
+  | `installNotRestarted` | An install out when the Agent disconnected, with no slow snapshot showing the reset 5 minutes later (`INSTALL_NOT_RESTARTED_AFTER_MS`, #210), from the controller's `installAwaitingRestart()`. The install's restart (boot.js, #164, #167) takes seconds | When a slow snapshot shows the reset |
 
   The route-stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
 - **Security** (owner decision 14, localhost only):
@@ -160,7 +163,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
 - **The API** (the page's; a script must follow the same rules):
   - `GET /api/status` gives the status as JSON (`src/dashboard/status.ts`, `DashboardStatus`).
   - `POST /api/supervision` with `{"paused": true}` or `{"paused": false}` sets the switch, and answers with the same. A script must send `Origin: http://127.0.0.1:12527` (with the dashboard's port) and `Content-Type: application/json`.
-  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), and `POST /api/home-ram` home RAM's (#138).
+  - `POST /api/hack-loop` with `{"enabled": true}` or `{"enabled": false}` sets the hack loop's switch, the same way, `POST /api/programs` the hacking programs' (#136), `POST /api/home-ram` home RAM's (#138), and `POST /api/augmentations` buying and installing augmentations' (#210).
   - `POST /api/intents` with `{"action": …, "args": {…}}` queues an intent (#141), answered with `{"id": …}`, or 400 with why it isn't valid. `POST /api/intents/cancel` with `{"id": …}` takes one off the queue, or 404 if it isn't there. Both the same way as the switches.
   - `POST /api/work` with `{"work": {"faction": …, "workType": …}}` sets the work (#151), or `{"work": {"kind": "company", "company": …, "field": …}}` company work (#153), or `{"work": {"kind": "crime", "crime": …}}` a crime (#156), or `{"work": {"kind": "class", "location": …, "classType": …}}` a class (#158), or with `{"work": null}` stops managing it; 400 with why for one that isn't valid.
   - Refusals:
@@ -388,14 +391,85 @@ M4 phase A's third slice ([#195](https://github.com/UnderMyBed/bitburner-agent/i
 
 `test/backdoors-simulation.test.ts`: an 8 GB fresh start in BN1, the brain as on Steam (the hack loop, the programs and home RAM on). The brain buys BruteSSH.exe, the hack loop roots CSEC, and once the hacking level reaches CSEC's the brain asks for its backdoor once; the simulator's `sim` effector types it, and the brain logs it backdoored and stops asking. The save then holds CyberSec's invitation, the terminal is home, and the run report lists the backdoor (through `sim`) and passes. The simulator has no page, so no invitation dialog: the report says "no invitation from CyberSec seen". CI runs seed 1 (about 4 s); `BACKDOOR_SEEDS=1,2,3,4,5,6,7,8` runs others. On seeds 1 to 8, CSEC (needing 52 to 60) was asked for at the medium snapshot where the level reached it, and backdoored between 12.9 and 14.9 virtual minutes.
 
+## Augmentations and the reset
+
+M4 phase A's sixth slice ([#210](https://github.com/UnderMyBed/bitburner-agent/issues/210), epic #191): the brain buys the augmentations worth installing and installs them, the run's reset cycle. Its choices are computed from the game's formulas (owner decision 46), in core's `augmentation-plan.ts` ([`packages/core`](../core/README.md#augmentations-and-the-reset)). The rule, as the controller runs it, is `src/augmentations.ts`; what the run report reads of it is `src/augmentation-report.ts`. **It's on by default, so a live run resets** (owner decision 48). The dashboard's Augmentations switch (`augmentations.enabled`, `POST /api/augmentations`) turns it off.
+
+- **What it reads:**
+  - from the slow snapshot: the faction state (#197: each joined faction's reputation and favour, and the queue), the reset info (the installed augmentations, the BitNode, the Source-Files, `lastAugReset`), its game time, and the money sources since the install (`moneySources`, for the income);
+  - from the medium snapshot: the player (skills, hacking experience, money, `faction_rep`) and home's RAM.
+
+  Without one of them it waits, saying which. Nothing is decided on a guess.
+- **Not committed, each update:**
+  - **Reached:** each augmentation a joined faction sells (not NeuroFlux Governor), neither installed nor queued, whose reputation a joined seller has.
+  - **The set:** core's `chooseAugmentationsToBuy`, the most hacking value (A5's `hackingValue`, #203) the money covers. It's chosen greedily, each augmentation with its prerequisites, in buy order: the dearest first, prerequisites before what needs them, since each purchase makes the next 1.9 times dearer (`Constants.ts:41`).
+    - Only augmentations worth installing count: those with a hacking, speed, money, growth, chance, exp or faction reputation multiplier.
+    - So no combat or charisma augmentations, and no The Red Pill (A8's).
+  - **The next one:** each augmentation worth installing at a joined faction that offers work. It isn't owned or in the set, and its prerequisites are owned or in the set (A5's candidates, with money). Two things decide when it comes:
+    - its reputation, at the faction's best work rate (core's `factionReputationPerSecond`, focused: decision 37's focus or the implant gains the same);
+    - its money: the set's and its own, in buy order, at the income.
+  - **The decision:** core's `installDecision`. It installs when there's something to install, and either the next one comes sooner by installing first than by carrying on, or none is left to work for at the joined factions.
+    - **Installing first** is the rebuild, then the next one from scratch: its whole reputation at the rate times the set's `faction_rep`, and its price with nothing queued, from no money.
+    - **The rebuild** is this cycle's pace replayed. It's the time since the last install, times the hacking experience the level needs at the multiplier after the install (`PersonObjects/formulas/skill.ts`) over this cycle's experience, divided by the set's exp and speed multipliers.
+    - **Favour is left out** (conservative).
+    - **The income** is the rise in `moneySources.sinceInstall`'s earnings (hacking, work, crime, Hacknet, contracts, infiltration) over 10 minutes of slow snapshots. Until it's measured, a decision with candidates waits.
+  - **Chosen:** the commit is kept in the store (`augmentations.cycle`, the `lastAugReset` it was chosen in) until a slow snapshot shows another, so a restarted brain carries on. The choice is an `augmentationInstallChosen` event and a log line: "augmentations: install chosen, 7.0 h since the last: buying …, nothing else worth installing at the joined factions".
+- **Committed, one intent at a time,** each with its source `augmentation` in the intents list:
+  1. **The set's next purchase** (`purchaseAugmentation`, #149), from the joined seller with the most reputation. The set is recomputed from the queue each time.
+  2. **Home's RAM,** an upgrade at a time while the money covers it and its switch is on. An install keeps it (`Server/ServerHelpers.ts:224-237`).
+  3. **NeuroFlux Governor,** a level at a time, while the money and a seller's reputation cover it.
+  4. **The install** (`installAugmentations`, #164), once the faction state shows every purchase the Agent reported done.
+     - It's queued after the owner's whole queue, through the gate (its guard: nothing before it undone; two medium snapshots; a save backup) and the reset note ([intents](#intents)).
+     - Once it's asked for, nothing more is bought, so a purchase never restarts its gate's count.
+     - An install the owner queued has the same id, so it goes once, as the owner's.
+
+  Meanwhile:
+  - the programs rule stands down, as an install loses the programs;
+  - the controller's `augmentationReserve()` is Infinity;
+  - a purchase reported done counts as queued until a faction state read shows it, so the next goes at once (the fast snapshot that reports it triggers the update);
+  - if nothing was bought (the money went elsewhere), the cycle is called off: an `augmentationCycleCalledOff` event.
+- **The reserve, for cloud servers** (A2, #194): `augmentationReserve()`.
+  - Not committed: the money of the set the money covers within 5 minutes of income (A2's reserve horizon).
+  - Committed: Infinity. With the switch off: 0.
+  - A2's purchases spend only what's above it. Whichever of A2 and A6 merges second wires it into A2's `#reserveForOtherPurchase`.
+- **Purchases aren't irreversible intents** (core's `isIrreversibleIntent`): they spend money, as a program's purchase does, so they have no gate. The install is irreversible.
+- **Fail loudly:**
+  - **Not queued:** a purchase the Agent reported done, which `NOT_QUEUED_AFTER_READS` (2) faction state reads since don't show queued. A skipped read doesn't count, and the first read may have been taken before the purchase. It's an `augmentationNotQueued` event, a log line ("augmentations: BitWire NOT QUEUED: …"), the dashboard's `augmentationNotQueued` alert, and a run report failure.
+  - **No restart:** an install was out when the Agent disconnected, and no slow snapshot shows the reset 5 minutes later (`INSTALL_NOT_RESTARTED_AFTER_MS`). That's the dashboard's `installNotRestarted` alert. The run report fails an install sent with no reset seen within 5 minutes.
+  - A purchase or the install that fails is `intentStuck` after 5 tries, as for any intent.
+- **Switched off:** nothing is bought or installed, the reserve is 0, and a cycle under way is called off. What's bought stays queued, for the owner.
+  - The E2 tests' brains have it off (`effectors.e2.test.ts`).
+  - So do the simulator suites that queue augmentations by hand: the install, destroy, backend and safe mode suites.
+
+### The augmentation suite
+
+`test/augmentations-simulation.test.ts`:
+- **The start:** an 8 GB fresh start in BN1, the brain as on Steam (the hack loop, programs, home RAM, backdoors and augmentations on).
+- **The edit:** 20 virtual minutes in, a harness edit stands in for the hours of CyberSec's work (A5's): CyberSec joined with 18,750 reputation, and $449m.
+- **The install:**
+  - the brain chooses the install, with nothing else worth installing at the joined factions;
+  - it buys Cranial Signal Processors Gen I and Gen II, BitWire, Synaptic Enhancement Implant and Neurotrainer I, in that order, through the `sim` effector;
+  - it installs through the gate and a save backup;
+  - the game starts boot.js, and the next Agent connects.
+- **After the reset:**
+  - 20 minutes after it, the hacking level is above the first cycle's at 20 minutes;
+  - the hacking multiplier is the five's (×1.18);
+  - the run report lists the decision, the purchases, the install sent and the install seen (the multipliers gained, the Agent away a few seconds), and passes.
+- **Seeds:** CI runs seed 1 (about 6 s); `AUGMENTATION_SEEDS=1,2,3,4,5` runs others.
+- **On seeds 1 to 5:**
+  - 82 s from the edit to the reset;
+  - the hacking level was 85 to 88 after 20 minutes of the first cycle, and 130 to 140 after 20 minutes of the second;
+  - home's RAM was 32 GB in both.
+
 ## Intents
 
 M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam`, `travel`, `joinFaction` (#147), `purchaseAugmentation` (#149), `buyServer` (#159), `backdoor` (#162), `installAugmentations` (#164) and `destroyBitNode` (#175) so far. Core validates them (`parseIntentRequest`) and says which are irreversible (`isIrreversibleIntent`).
 
 - **Where they come from,** in this order:
-  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result (but for an install or a destroy, below): that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 98 at most, leaving room in the protocol's 100 for the purchase and the backdoor. The dashboard lists the queue even with no Agent connected, so it can be cancelled.
+  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result (but for an install or a destroy, below): that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 97 at most, leaving room in the protocol's 100 for the purchase, the backdoor and the augmentation's (#210). The dashboard lists the queue even with no Agent connected, so it can be cancelled.
   2. **The purchase rules:** [the hacking programs](#the-hacking-programs) and [home RAM](#home-ram), one purchase at a time, the cheaper first. If the owner queued the same purchase, it goes once, as the owner's.
-  3. **The backdoor** for a hacker faction (#195, [above](#backdoors-for-the-hacker-factions)), likewise.
+  3. **The augmentations** (#210, [above](#augmentations-and-the-reset)): a purchase after the purchase rules', and the install right after the owner's queue, through the gate.
+  4. **The backdoor** for a hacker faction (#195, [above](#backdoors-for-the-hacker-factions)), likewise.
 - **When they go:** with the hack loop, in the one desired state. With the hack loop off, the manual queue goes before any snapshot: each intent checks the game first, so a stale one does nothing. While the brain holds, none go.
 - **Irreversible ones** (R8, #147; so far, joining one of the six city factions, which bans its enemies, installing augmentations, #164, and destroying the BitNode, #175) go only past a gate (`src/irreversible-gate.ts`):
   1. the guard holds on two consecutive medium snapshots from the connected Agent, received after it was queued: for a join, none of the faction's enemies joined; for an install or a destroy (core's `resetsTheGame`), nothing queued before it undone (it resets the game, so what was queued before it was for this game; the augmentations queued can't be an install's guard, as no NS call shows them without Singularity); for a destroy, then, w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`): among the medium snapshot's servers (reachable only once The Red Pill is installed), rooted there, and the hacking level at its required level, from the static snapshot (3000 times the BitNode's `WorldDaemonDifficulty`). The game also lets every Black Op done destroy it (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count that route, the conservative direction;
@@ -509,6 +583,8 @@ npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [
   - **stuck intents:** an intent whose latest outcome in the window is not done after `INTENT_STUCK_AFTER_TRIES` (5) tries or more, as the dashboard's `intentStuck`. Intents are tracked per episode: the same id seen not done after it was done, or with fewer tries, was given again (after a reset, say), and is listed again.
   - **backdoors overdue** (#195): a stretch of `BACKDOOR_OVERDUE_AFTER_MS` (5 minutes, `dashboard/alerts.ts`, the same as the `backdoorOverdue` alert) or more in which the medium snapshots showed one of the hacker factions' servers rooted, at its level (from the newest static snapshot before it) and not backdoored. The brain asks for it with the next medium snapshot, and it takes seconds, so this is the brain's rule or the backdoor failing. One still due at the last medium snapshot says so. A gap in the medium snapshots (over 30 s) ends a stretch: the gap is a failure of its own. With no static snapshot in the window it can't judge any, and says so (give `--since` an Agent's start).
   - **backdoors asked for again** (#195): a `backdoor` intent on one of them whose episode starts while the medium snapshots show that server backdoored. Not one the window's first fast snapshot already holds (asked for before the window), nor one asked for after a reset took the backdoor away, nor one that follows a not-done episode of the same id: an Agent that reconnects, or a reload, forgets its intents, and the brain gives it the same one again, from no tries. The store can't say whose a backdoor was, so the line says it was the brain's rule or the owner's queue.
+  - **augmentations not queued** (#210): each `augmentationNotQueued` event, a purchase the Agent reported done that 2 faction state reads since didn't show queued, as the dashboard's alert.
+  - **installs not seen done** (#210): each `augmentationsInstallSent` event (the brain's install, or the owner's, as it went out) with no slow snapshot showing another `lastAugReset` within `INSTALL_NOT_RESTARTED_AFTER_MS` (5 minutes, `dashboard/alerts.ts`). One sent less than 5 minutes before the window's end isn't judged. A disconnect with no reconnect within 60 s fails on its own, too.
   - **blocking dialogs:** each stretch a `dialogs.blocking` text was shown, in a row, with when it was first and last seen.
   - **disconnects:** an `agentDisconnected` with no `agentConnected` within 60 s. A connect in the same millisecond counts (a replaced session). Not one under 60 s before the window ends (there's no telling yet), nor one that's the run's last record (the run ended there). The line names what was recorded meanwhile, as for gaps.
   - **the faction state unread** (#197): each stretch of 3 or more slow snapshots in a row (`FACTION_STATE_UNREAD_AFTER`) whose faction state couldn't be read, whatever each one's reason, with when, how many, the backend and the latest reason. A shorter stretch is listed, "not counted". Skipped readings, ones read with the page not put back, and an older Agent's slow snapshots (no reading) are counted on a line of their own, never a failure; a skipped one doesn't end a stretch.
@@ -517,6 +593,7 @@ npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [
 - **Values the snapshots don't have**, or have malformed, read as "unknown".
 - **The faction state** (#197), in Progress: each faction's reputation and favour at its first and last reading in the window ("CyberSec: reputation 100 → 1,235, favour 0 (unchanged)"), each invitation with when it was first seen, and the augmentations queued, first reading → last ("none → NeuroFlux Governor ×2, BitWire"); "never read" where none was.
 - **The hack loop's target** is inferred, and says so: the game's servers (not home or purchased ones) whose money or security changed between consecutive medium snapshots, in stretches. Only scripts change them, so the owner's own would show too.
+- **The augmentations** (#210), in section 3, in time order (`src/augmentation-report.ts`): each install the brain chose and why (its set and its money, the time since the last install, and the next augmentation's times installing first and carrying on), each purchase (its price and the queue's length), each install sent (the brain's or the owner's, and what was queued), each cycle called off, and each install the slow snapshots show (another `lastAugReset`): what `ownedAugs` gained, NeuroFlux Governor's levels counted, the hacking multipliers gained from core's data, and how long the Agent was away around it. The rule's events are left out of section 1's timeline.
 - **The backdoors** (#195), in section 3: for each of the hacker factions' servers, whether it was backdoored at the window's start, when the medium snapshots first showed it backdoored (or not, after a reset), and its faction's invitation: a `gameDialog` event of kind `factionInvitation` naming the faction, or "no invitation from … seen" for one backdoored in the window. A joined faction, or invitations suppressed in the game's options (`Faction/FactionHelpers.tsx:30`), show no dialog.
 - **Exit codes:** 0 on PASS, 1 on FAIL, 2 when it couldn't run (no store, no brain start without `--since`, a window that ends before it starts, or one with nothing recorded).
 - **Tests:** `test/run-report.test.ts` builds a store and checks each section, each failure and the command's exit codes and default window; `test/hacking-ceiling-simulation.test.ts` reads section 5 over 90 virtual minutes ([the ceiling suite](#the-ceiling-suite)); `test/run-report-simulation.test.ts` reads a 20-virtual-minute fresh start's store in the simulator (the hack loop on n00dles, TOR, two programs and home RAM bought) and gets PASS; [the backdoor suite](#the-backdoor-suite) reads its store too.
@@ -638,6 +715,8 @@ The `ui` backend's destroy (the terminal, the BitVerse page, the restart) is E2'
 | `src/irreversible-gate.ts` | The gate before an irreversible intent (#147, #164, #175): its guard on medium snapshots, then a save backup |
 | `src/manual-intents.ts` | The owner's manual intents queue, and the note of a reset's intent sent (#175), in the store |
 | `src/home-ram.ts` | Upgrading home's RAM: the switch, the price, the next upgrade |
+| `src/augmentations.ts` | Augmentations and the reset (#210): the rule, its commit, its events and log lines, the reserve |
+| `src/augmentation-report.ts` | What the run report reads of augmentations (#210): the installs the slow snapshots show, the rule's events, the failures |
 | `src/backdoors.ts` | The backdoors for the hacker factions (#195): the rule, its log lines, and what the run report reads of them |
 | `src/switches.ts` | The dashboard's on/off switches, as settings in the store |
 | `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |

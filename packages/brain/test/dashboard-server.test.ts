@@ -397,6 +397,7 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { method: "GET", path: "/api/hack-loop" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/programs" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/home-ram" })).status).toBe(405);
+  expect((await send(port, { method: "GET", path: "/api/augmentations" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/intents" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/intents/cancel" })).status).toBe(405);
 });

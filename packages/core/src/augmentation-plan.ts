@@ -35,7 +35,7 @@ export function isWorthInstalling(name: string): boolean {
   return name !== NEUROFLUX_GOVERNOR && hackingValue(name) > 0;
 }
 
-/** The multipliers an install brings, each the product over `names` (a NeuroFlux Governor copy each time it's listed). */
+/** The multipliers an install brings, each the product over `names` (each NeuroFlux Governor copy listed counts). */
 export type InstallGains = Record<(typeof HACKING_MULTIPLIERS)[number], number>;
 
 export function installGains(names: readonly string[]): InstallGains {
@@ -49,8 +49,8 @@ export function installGains(names: readonly string[]): InstallGains {
 
 /**
  * `names` in the order to buy them: the dearest first, since each purchase multiplies the next one's price by 1.9
- * (`Constants.ts:41`), so falling prices cost least; but a prerequisite before what needs it (`FactionHelpers.tsx:88-95`).
- * Each time, the dearest whose prerequisites in `names` are bought (one not in `names` is taken as owned). Ties go to
+ * (`Constants.ts:41`), so falling prices cost least; but a prerequisite before what needs it
+ * (`FactionHelpers.tsx:88-95`). Each time, the dearest whose prerequisites in `names` are bought (one not in `names` is taken as owned). Ties go to
  * the game's order. The base price decides: every other factor of `getAugCost` is the same for all but NeuroFlux
  * Governor and Shadows of Anarchy's, which the brain never puts in a set.
  */
@@ -137,9 +137,9 @@ export function hackingExpForLevel(level: number, multiplier: number): number {
 }
 
 /**
- * How long getting back to `hackingLevel` takes after the install (#210): this cycle's pace replayed. The experience the
- * level needs at the hacking multiplier after the install, over the experience it took this cycle, times the time since
- * the last install, over the install's experience and speed multipliers (each hack, grow and weaken is that much
+ * How long getting back to `hackingLevel` takes after the install (#210): this cycle's pace replayed. The experience
+ * the level needs at the hacking multiplier after the install, over the experience it took this cycle, times the time
+ * since the last install, over the install's experience and speed multipliers (each hack, grow and weaken is that much
  * quicker and gives that much more). The multiplier now is the one the level and experience imply (`skill.ts:13`, so
  * the BitNode's is in it), the level being floored: at most 1/level off. With no experience yet, nothing to rebuild.
  */
