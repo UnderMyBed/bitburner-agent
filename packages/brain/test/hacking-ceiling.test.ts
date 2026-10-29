@@ -386,11 +386,12 @@ describe("the run report's section (#196)", () => {
   });
 
   test("a server whose money rose takes nothing off another's fall", () => {
+    const both = medium(150, { zer0: true, foodnstuff: true });
     const fold = foldOf({
       runMs: 10 * MINUTE,
       mediumAt: (offsetMs) => ({
-        ...small,
-        servers: small.servers.map((server) =>
+        ...both,
+        servers: both.servers.map((server) =>
           server.hostname === "zer0"
             ? { ...server, moneyAvailable: 1_000 - offsetMs / 1_000 }
             : { ...server, moneyAvailable: offsetMs },
@@ -398,7 +399,7 @@ describe("the run report's section (#196)", () => {
       }),
       hackingAt: (offsetMs) => offsetMs,
     });
-    // zer0 fell by 600; home rose, and is the player's anyway; nothing else moved.
+    // zer0 fell by 600; foodnstuff rose by 600,000, which takes nothing off it (home rose too, and is the player's).
     expect(fold.serversMoneyFell()).toBe(600);
   });
 
