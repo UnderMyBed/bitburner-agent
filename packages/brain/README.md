@@ -118,13 +118,13 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   - **Alerts:** the ones holding now (below).
   - **Agent:** connected or not, and since when, as of this run of the brain; its deployment and session; the game's version, and whether it's the pinned one.
   - **Last snapshot per tier:** when each tier last arrived, and how long ago.
-  - **Game:** from the latest fast and medium snapshots: money, hacking level, home RAM used of its total, scripts on home, the page's heap, and the tiers the Agent is skipping (`degradedTiers`).
+  - **Game:** from the latest fast and medium snapshots: money, hacking level, home RAM used of its total, scripts on home, the page's heap, and the tiers the Agent is skipping (`degradedTiers`); and the hacking ceiling and hacking's income over the last 10 minutes (#196, [the hacking ceiling](#the-hacking-ceiling)).
   - **Gaps in the last 24 h:** the gap report over the fast snapshots, from 24 h before now: how many gaps and their total time, with the newest 20 listed. Any time without snapshots in the window counts: from the window's start to the first snapshot with a new store, or while the brain or the Agent was down.
   - **Supervision:** off, running, paused, or gave up; the supervisor's recent relaunches; and the switch (hidden when off).
   - **Hack loop:** on or off; on, whether the brain is waiting for the Agent's snapshots, has no target yet (while servers are being rooted), or runs it against a target on so many servers, and the next target it prepares on so many more ("on, against n00dles, on 21 servers, hacking with at most 92 threads; preparing zer0 on 7 servers, hacking with at most 48 threads", #184, #187: the hosts' hack threads added up, "at most" as a host's loop may have fewer threads than its RAM holds); and its switch ([the hack loop](#the-hack-loop)).
   - **Hacking programs:** on or off; on, the item being bought, or what it waits for (the Agent's snapshots, money for the next item, travel, or a cheaper home RAM upgrade first); what's owned; and its switch ([the hacking programs](#the-hacking-programs)).
   - **Home RAM:** on or off; on, the size the upgrade being bought brings home to, or what it waits for (the Agent's snapshots, money for the next size, travel, a cheaper program first, or the BitNode's price), or that home is at its limit; home's RAM; and its switch ([home RAM](#home-ram)).
-  - **Intents:** each intent sent, in order, with its source (the manual queue or a purchase) and how it went in the game: not reported yet, done, or its tries and last problem. An irreversible one the gate holds, or one queued after an install, says why instead ("not sent: waiting for a save backup", #147, #164). A manual one has a Cancel button, and a form queues a new one: an action and its arguments as JSON ([intents](#intents)).
+  - **Intents:** each intent sent, in order, with its source (the manual queue, a purchase, or a backdoor, #195) and how it went in the game: not reported yet, done, or its tries and last problem. An irreversible one the gate holds, or one queued after an install, says why instead ("not sent: waiting for a save backup", #147, #164). A manual one has a Cancel button, and a form queues a new one: an action and its arguments as JSON ([intents](#intents)).
   - **Work** (#151, #153, #156, #158): the work the brain manages, focused or not, and how the Agent last reported it (with the latest promotion it took, #155), or "Not managed"; a form sets faction work (a faction and a work type), another company work (a company and a job field, Noodle Bar and Waiter to start with), a third a crime, a fourth a class (a university or gym, Rothman University to start with, and a course or stat), and **Stop managing work** clears it.
   - **Factions** (#197): from the newest slow snapshot, each joined faction's reputation and favour, the invitations and the queued augmentations (NeuroFlux Governor's levels counted, "NeuroFlux Governor ×2"), when they were read and through which backend; or why they couldn't be read, in red ([the faction state](#the-faction-state)).
   - **Recent events:** the last 50, newest first, including rejected connections and their origin.
@@ -148,6 +148,7 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   | `incomeStalled` | The hack loop is on with a target, and the player's money in the medium snapshots hasn't risen for over 10 minutes (`INCOME_STALLED_AFTER_MS`, #184), with how long, the money and the target. A purchase lowers money, which isn't a rise. The 10 minutes count from the last rise, or from when the watch began: the Agent's connection, a medium snapshot that finds the loop off or without a target, or the switch flipped on the dashboard. The brain logs a line as it starts and as it ends | When money rises, the loop goes off or loses its target, or the Agent disconnects or connects again |
   | `factionStateUnread` | The faction state couldn't be read in the newest 3 slow snapshots in a row (#197, `FACTION_STATE_UNREAD_AFTER`: about 3 minutes; a single miss is an event and a log line), with the backend and the newest's problem, since the first of them. A skipped reading (no sidebar on the page), one read with the page not put back, and an older Agent's slow snapshot (no reading) aren't unread | When a slow snapshot's is read, skipped or from an older Agent |
   | `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
+  | `backdoorOverdue` | One of the hacker factions' servers rooted, at its hacking level and not backdoored for 5 minutes or more (`BACKDOOR_OVERDUE_AFTER_MS`, #195), by the connected Agent's medium snapshots: one alert per server, from the controller's `backdoorsDue()`, which judges each medium snapshot as the rule does. The brain asks for it at once and it takes seconds, so this is the rule or the backdoor failing; a backdoor with no intent can't be `intentStuck` | When it's backdoored, or the Agent disconnects |
 
   The route-stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
 - **Security** (owner decision 14, localhost only):
@@ -192,7 +193,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - **Each count** is at least 1, then rounded down to a power of two, so the share's slow rise with the hacking level changes it, and restarts that host's loop, only now and then. Then it's at most the threads the host's RAM holds (n00dles's count is all of them), still at least 1. A count over the loop's threads (RAM used by other scripts), the deploy worker caps.
   - **BitNode multipliers** aren't in core yet: `ScriptHackMoney` and `ServerGrowthRate` are taken as 1. That's exact in BN1. Elsewhere both are at most 1 (BitNode.tsx): the share per thread is then overestimated (fewer hack threads, safe), and so is the growth. In BN2 (0.8), BN3 and BN11 (0.2) that makes the counts up to 5× too generous, the unsafe side; it's to revisit when BitNode multipliers come to core. The player's `hacking_money` and `hacking_grow` multipliers come from the medium snapshot, 1 where it doesn't say.
   - **Why 2:** see [the income suite](#the-income-suite).
-- **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #151 it also sends [work](#work); since #141 it also sends [intents](#intents): [the hacking programs](#the-hacking-programs), [home's RAM](#home-ram) and the owner's manual queue) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
+- **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #151 it also sends [work](#work); since #141 it also sends [intents](#intents): [the hacking programs](#the-hacking-programs), [home's RAM](#home-ram), [the backdoors](#backdoors-for-the-hacker-factions) and the owner's manual queue) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
   - **Off** is sent at once, to each Agent as it connects too.
   - **On** waits for that Agent's own static and medium snapshots, which come in its first round, then sends the target (or none yet, while the servers get rooted) and the hosts. It never sends the last brain's or the last game's view:
     - a brain that restarts sends the running Agent the same state, which changes nothing;
@@ -200,7 +201,7 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - It keeps the target it last set, whether it earns, and the hosts preparing the next one, for the move to the next target (#184): across the Agent's connections while `lastAugReset` is unchanged. It forgets them on a reset or the switch off; a new brain starts without them.
   - The channel sends each connection a state once, then again on a change. It sends only to a welcomed Agent running the deployed code. While the brain holds, it sends only what starts nothing new: the hack loop off, or as last sent, and no intents or work ([protocol](../../docs/bridge/protocol.md#rules)).
   - The dashboard shows the controller's own view: on or off, waiting for the snapshots, the target and the number of hosts, and the target being prepared with its number of hosts, each with its hosts' hack threads added up (#187).
-- **Wiring:** `main.ts` makes the controller before the control channel listens, with the save backups it asks before an irreversible intent. The simulator suite wires it the same way through `test/helpers/brain-in-simulation.ts` (`withDesiredState`). `brain-process.test.ts` doesn't cover it.
+- **Wiring:** `main.ts` makes the controller before the control channel listens, with the save backups it asks before an irreversible intent, and the brain's log for the backdoors' lines (#195). The simulator suite wires it the same way through `test/helpers/brain-in-simulation.ts` (`withDesiredState`). `brain-process.test.ts` doesn't cover it.
 - **The suite** (`test/hack-loop-skeleton.test.ts`), in an 8 GB fresh start in the simulator:
   - The Agent roots the no-port servers and runs the loop on each against the brain's target (n00dles). The money grows by over $500,000 in 10 virtual minutes.
   - An owner's script already on foodnstuff is untouched, and the loop there has only the RAM it left.
@@ -249,6 +250,100 @@ Seed 1 prepares from 48 minutes, moves to max-hardware at 90, and goes 7.7 minut
 - **`HACK_REGROW_ROUNDS`, tuned here:** at 0.5, nearly every hack capped, they earned about half; at 2, the table; at 3, the cap doesn't bind on max-hardware at the move, and seed 4 went 11.0 minutes without a rise.
 - **Money at the end swings with purchase timing:** a purchase just before the end takes most of it (seed 2's $58m). In a trial with the rounds at 8, where it never binds on max-hardware, seeds 1 and 5 to 8 matched `3d6e5a6` to the dollar, while seeds 2 and 4, on a different path, ended lower ($474m and $77m) though they earned more ($1.93b and $1.63b).
 
+## The hacking ceiling
+
+"How good is our hacking" as a number (#196, M4 phase A slice A1): the most hacking income a second that RAM could earn at the player's hacking now, from the game's formulas, against what hacking actually earned. Two ceilings, both upper bounds:
+
+- **The batcher ceiling, the score** the batcher (A7) is judged on: a batcher (HWGW) commits its grow and weaken threads before it knows whether the hack lands, so a failed hack wastes them.
+- **The hacking ceiling,** reached only by a reactive hacker that grows and weakens just what a landed hack took. Nothing passes it.
+
+**Per GB-second** (core's `batcherIncomePerGigabyteSecond` and `hackingIncomePerGigabyteSecond`, `packages/core/src/hacking-ceiling.ts`). On a target at its minimum security and maximum money M, where every figure is at its best, each dollar hacked costs at least:
+- **hack:** 1/(c·p·M) threads of a 1.7 GB script for T, failed hacks included. c is the chance (`hackChance`, Hacking.ts:9-24), p one thread's share (`percentMoneyHackedPerThread`, Hacking.ts:44-57), and T the hack time (`hackTimeSeconds`, Hacking.ts:60-80).
+- **grow:** 1/(M·k + 1) threads of a 1.75 GB script for 3.2T, k being one thread's growth log with the core bonus (`growthLogPerThread`, grow.ts:8-29; ServerHelpers.ts:287-290). Growing a share f back takes x threads with (M(1 − f) + x)·e^(kx) = M (grow.ts:38-58). With u = x/M − f, that is kx = −log(1 + u) ≥ −u, so x·(k + 1/M) ≥ f, with equality only as f → 0.
+- **weaken:** removes what the hack adds (0.002 a successful thread) and what the grow adds (0.004 a thread) (Constants.ts:9; ServerHelpers.ts:209-211), at 0.05 × the core bonus a thread (Constants.ts:10), with a 1.75 GB script for 4T.
+
+**Why the limit is the best over f:** the hack and its weaken cost the same per dollar at any share f, and grow costs more as f grows, so the cheapest batch is the one at f → 0.
+
+**The batcher ceiling** divides the grow and weaken terms by c too. On zer0 at hacking 150 that is about 68% of the hacking ceiling. A whole-thread HWGW batch at f = 5–10% comes within 15% of the batcher ceiling, and never above it.
+
+The script RAM is the game's (RamCostGenerator.ts:11-20). A host's usable RAM counts whole threads (`usableRamGb`): floor(RAM/1.7) threads at 1.75 GB each, at most its RAM, so a 2 GB host gives 1.75 GB.
+
+**What both assume, and so ignore:**
+- continuous batching with no gaps, every operation landing on time, and fractional threads within a host;
+- security and money held at their best;
+- the hosts' whole RAM free, and the best cores among them applied to all of it (loose where cores differ);
+- one target at a time;
+- the hacking level as the snapshot has it.
+
+**BitNode multipliers** are taken as 1. That is exact in BN1. Elsewhere `ScriptHackMoney`, `ScriptHackMoneyGain`, `ServerGrowthRate` and `HackingSpeedMultiplier` are at most 1, so the ceilings err high, the safe side. BN11's `ServerWeakenRate` of 2 errs low (BitNode.tsx:896).
+
+**Over the snapshots** (`hackingCeiling`, `src/hacking-ceiling.ts`). The targets are the game's servers rooted, with money:
+- **The score** uses the RAM the brain's hacking uses: the hack loop's hosts (`chooseHackHosts`; A2's `hackLoopHosts` and A7's later). It gives the best target's batcher ceiling, and beside it the hacking ceiling.
+- **The bound** uses all the RAM a script could run on: every rooted server, including home and the cloud and Hacknet servers. It gives the best target's hacking ceiling. The owner's scripts, a terminal `hack`, or A7 on home all count in what hacking earns, so all that RAM counts here.
+- **Unknown, with the reason,** when either snapshot is missing, or the player's skills (`hacking`, `intelligence`) or multipliers (`hacking_chance`, `hacking_speed`, `hacking_money`, `hacking_grow`).
+
+**What hacking earned:** the slow snapshot's `moneySources` (#196), which is `ns.getMoneySources().sinceInstall`. Its `hacking` field counts every hack's money (NetscriptHelpers.tsx:599).
+- **Between slow snapshots** it is the rise in that count.
+- **After an install** (`resetInfo.lastAugReset` changed; the install resets the count), what the count says is what was earned since.
+- **A fall with no install** is a relaunch, which loads the save's older count. That interval counts as nothing earned.
+- **Why not money's rises:** they would count crime and work, and purchases would hide hacking.
+
+**The dashboard's rows:** "Hacking ceiling" and "Hacking income". The income row shows the last 10 minutes as percentages of both ceilings now. The brain sends their text, the same words the run report uses.
+
+**The run report's section 5** (`HackingFold`, fed by the run report's own pass over the store: static, slow, then medium snapshots):
+- **The ceilings:** each medium snapshot's ceilings, with the static snapshot in force then, stepped across each interval between slow snapshots. A window that starts after the Agent's static snapshot takes the one before it (`latestSnapshotBefore`).
+- **The headline is the best 10 minutes:** hacking's percentage of the batcher ceiling, the stretch A7 is judged on. Preparing a target and switching between targets mean no run comes near 100% over a whole window.
+- **Then the window and each hour** against both ceilings, and the ceilings now.
+- **Not judged:** intervals where the ceilings were unknown; the section says for how long.
+- **A failure:** hacking earned more over the window than the bound's $ allow. The bound's $ are the ceiling on all rooted RAM, plus what the game's servers' money fell by between relaunches and installs (money they held at the start, hacked and not grown back, which no RAM paid for). This means the formula, or the measure, is wrong.
+- **Not allowed for, known slack:** security left above where it started, which is the same kind of debt; and hacks finishing early in the window that started before it, a few minutes' worth.
+- **No floor yet:** A7 sets one.
+
+**Tests:**
+- **`packages/core/test/hacking-ceiling.test.ts`:**
+  - chance, time, the bonuses and both per-dollar costs by hand on zer0, and their edges;
+  - each multiplier and the cores;
+  - a batch at shares from 0.9 to 0.0001 always below the hacking ceiling, rising towards it;
+  - whole-thread HWGW batches at 5–10% below the batcher ceiling and within 15% of it;
+  - `usableRamGb`.
+- **`test/hacking-ceiling-parity.test.ts`:** in the simulator, with Formulas.exe bought through the simulator's own effectors:
+  - core's chance, share, times, growth log and weaken against `ns.formulas.hacking`, over four servers and two players;
+  - the security per thread and the scripts' RAM against the game's own;
+  - the batcher ceiling above whole-thread HWGW batches sized with the game's own `growThreads`.
+- **`test/hacking-ceiling.test.ts`:**
+  - the score's hosts and the bound's rooted servers, cores, multipliers and unknowns;
+  - income rises, relaunches and installs;
+  - the step across medium snapshots;
+  - the section's lines and the best 10 minutes;
+  - the failure and its allowance, split at relaunches;
+  - no time judged, and the order the snapshots are fed in.
+- **`test/run-report.test.ts`, `test/dashboard-status.test.ts`, `test/dashboard-page.test.ts`, `test/telemetry-store.test.ts`:** the section, its FAIL, a relaunch that isn't one, a window after the static snapshot, and the rows.
+
+### The ceiling suite
+
+`test/hacking-ceiling-simulation.test.ts` (#196) runs the brain from an 8 GB fresh start in BN1, with the loop, the programs and home RAM on, for 90 virtual minutes, past the loop's move from n00dles.
+- **The run report's section 5** gives the best 10 minutes, the window and the hours, with no failure.
+- **Read directly:** hacking never earns more than the hacking ceiling on the loop's hosts, over the run, each hour or each 10 minutes; the batcher ceiling ≤ the hacking ceiling ≤ the bound.
+- **In CI** it runs seed 1, in about 10 s.
+
+**The hack loop's percentages,** the baseline the batcher (A7) must beat. Set `HACKING_CEILING_SEEDS` to `1,2,3,4,5,6,7,8`, as for the income suite; it takes about 75 s.
+
+| Seed | Over the run, of the batcher ceiling | Over the run, of the hacking ceiling | Best 10 min, of the batcher ceiling (of the hacking ceiling) | Ceilings at the end (batcher / hacking / bound) |
+|---|---|---|---|---|
+| 1 | **1.8%** | 1.2% | **19.8%** (15.6%) | $2.74m/s / $3.81m/s on 1500 GB / $4.14m/s on 1628 GB |
+| 2 | **5.3%** | 3.8% | **19.9%** (15.7%) | $3.19m/s / $4.39m/s on 1596 GB / $5.10m/s |
+| 3 | **2.8%** | 2.0% | **19.0%** (15.0%) | $2.48m/s / $3.44m/s on 1316 GB / $4.12m/s |
+| 4 | **5.2%** | 3.7% | **19.7%** (15.7%) | $3.62m/s / $4.96m/s on 1740 GB / $5.69m/s |
+| 5 | **5.5%** | 3.9% | **19.3%** (15.2%) | $3.53m/s / $4.85m/s on 1748 GB / $5.57m/s |
+| 6 | **4.9%** | 3.4% | **19.6%** (15.5%) | $2.64m/s / $3.66m/s on 1420 GB / $4.32m/s |
+| 7 | **1.7%** | 1.2% | **18.3%** (14.4%) | $2.42m/s / $3.37m/s on 1324 GB / $3.69m/s |
+| 8 | **2.0%** | 1.4% | **18.7%** (14.8%) | $1.90m/s / $2.64m/s on 1012 GB / $2.97m/s |
+
+**Reading the table:**
+- **Over the run,** the loop reaches 1.7% to 5.5% of the batcher ceiling.
+- **Its best 10 minutes, 18% to 20%,** always come in the first minutes, on n00dles with a few small hosts.
+- **The batcher's best target is phantasy** at the end of every seed.
+- **Why the loop is so far below:** it hacks at 75% of max money and up to 5 over min security, with a 2.4 GB script whose threads mostly wait, and it prepares every target from 4% of its money.
 ## The hacking programs
 
 M3's second slice ([#136](https://github.com/UnderMyBed/bitburner-agent/issues/136)): the brain tells the Agent which hacking program to buy next, and the Agent buys it through the game's page ([`packages/ingame`](../ingame/README.md#the-hacking-programs)). The code is `src/programs.ts`.
@@ -275,13 +370,32 @@ M3's third slice ([#138](https://github.com/UnderMyBed/bitburner-agent/issues/13
 - **The dashboard** shows home's RAM, the upgrade being bought, or what it waits for (money, travel, the cheaper purchase, the BitNode).
 - **Sent as an intent** (#141): `upgradeHomeRam { fromRam, vendor }`, with the programs' purchase or instead of it.
 
+## Backdoors for the hacker factions
+
+M4 phase A's third slice ([#195](https://github.com/UnderMyBed/bitburner-agent/issues/195), epic #191): the brain asks for a backdoor on CSEC, avmnite-02h, I.I.I.I and run4theh111z as soon as each can be installed, so CyberSec, NiteSec, The Black Hand and BitRunners invite the player: each faction's only invitation requirement is its server's backdoor (`Faction/FactionInfo.tsx:489`, `:464-466`, `:419`, `:402`). Joining them is slice A5's. The code is `src/backdoors.ts`; the four, with their factions, are core's `HACKER_FACTION_SERVERS`.
+
+- **The rule** (`chooseBackdoor`), from the connected Agent's static snapshot (each server's `requiredHackingSkill`) and medium snapshot (`hasAdminRights`, `backdoorInstalled`, the hacking level): the first of the four, in that order, that's rooted and not backdoored, with the hacking level at or above its required level, as the terminal's `backdoor` checks (`Terminal/commands/backdoor.ts:23-32`). The order is the game's: each needs more ports (1 to 4) and a higher level (51–60, 202–220, 340–365, 505–550, rolled per game). One that can't go yet is passed over, so it never holds up a later one; what the snapshots don't say as expected (a server missing, no level) fails closed.
+- **One at a time,** sent as the `backdoor` intent (#162) after the owner's queue and the purchase, so a `buy` never waits behind its terminal action. If the owner queued the same backdoor, it goes once, as the owner's. The intents list shows its source as `backdoor`.
+- **Asked for until the connected Agent reports it done,** not only until a medium snapshot shows it installed: a backdoor longer than the Agent's 2 s round goes on alone, and the try that finds it installed sends the terminal `home` (decision 42). Done, the Agent never runs it again while it's sent, so it's never sent twice; after a disconnect, the next Agent's worker finds it installed and only sends the terminal home.
+- **How long:** a quarter of the server's hacking time (`Terminal/Terminal.ts:233-243`), `5 × (2.5 × required × security + 500) / (hacking + 50)` s over the speed multipliers (`Hacking.ts:60-80`). These four start at security 1: their data's 0 is skipped as falsy (`Server/ServerHelpers.ts:367`), so the server's default applies (`Server/Server.ts:79-83`). That's about 8 s for CSEC at hacking 55, and 4 to 5 s for the others at their levels; about 3.3 times that in BN14 (`HackingSpeedMultiplier` 0.3).
+- **Known limit:** a brain restarted between a backdoor's end and the Agent's try that sends the terminal home leaves the terminal on that server (decision 42): no snapshot says which server the terminal is on, so the new brain can't tell.
+- **No switch:** a backdoor costs no money and changes nothing a later choice depends on (#162). The hack loop roots the servers (#134); with it off, a server nothing else roots waits for root.
+- **After an install** the game recreates the servers (`Prestige.ts:74`, `:98`), so the four are backdoored again.
+- **The brain's log:** "backdoor: asking for CSEC (hacking 55, needs 55), for CyberSec's invitation", then "backdoor: CSEC backdoored, 10 s after it was asked for" (between medium snapshots). "backdoor REPEATED: asking for CSEC again, though the game showed it backdoored at …, since its last reset" if a server it saw backdoored in this game (the same `lastAugReset`) shows not backdoored again: only a save loaded over the game, or a bug, would do that. Not before the connected Agent's slow snapshot says the reset, since after an install the next Agent's medium snapshot can come first. Another `lastAugReset` also forgets the backdoor asked for (refused at the BitVerse, say, then the destroy). A snapshot that doesn't show the server isn't taken for a reset.
+- **The run report** lists each server's backdoor, and the invitation that followed (a `gameDialog` event of kind `factionInvitation` naming the faction), and fails on a backdoor overdue or asked for again ([the run report](#the-run-report)). A backdoor that fails is an intent not done, tried every 30 s: after 5 tries, `intentStuck`. One due for 5 minutes, asked for or not, is the dashboard's `backdoorOverdue` alert: the controller notes, for each server, the first medium snapshot in a row that showed it due (`backdoorsDue()`).
+
+### The backdoor suite
+
+`test/backdoors-simulation.test.ts`: an 8 GB fresh start in BN1, the brain as on Steam (the hack loop, the programs and home RAM on). The brain buys BruteSSH.exe, the hack loop roots CSEC, and once the hacking level reaches CSEC's the brain asks for its backdoor once; the simulator's `sim` effector types it, and the brain logs it backdoored and stops asking. The save then holds CyberSec's invitation, the terminal is home, and the run report lists the backdoor (through `sim`) and passes. The simulator has no page, so no invitation dialog: the report says "no invitation from CyberSec seen". CI runs seed 1 (about 4 s); `BACKDOOR_SEEDS=1,2,3,4,5,6,7,8` runs others. On seeds 1 to 8, CSEC (needing 52 to 60) was asked for at the medium snapshot where the level reached it, and backdoored between 12.9 and 14.9 virtual minutes.
+
 ## Intents
 
 M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141)): one-shot actions the Agent does at most once, sent in the desired state as `intents` ([protocol](../../docs/bridge/protocol.md#brain--agent), [`packages/ingame`](../ingame/README.md#intents)). Each is an action and its arguments, with an id made from them ("travel(Aevum)"): `buyTor`, `buyProgram`, `upgradeHomeRam`, `travel`, `joinFaction` (#147), `purchaseAugmentation` (#149), `buyServer` (#159), `backdoor` (#162), `installAugmentations` (#164) and `destroyBitNode` (#175) so far. Core validates them (`parseIntentRequest`) and says which are irreversible (`isIrreversibleIntent`).
 
 - **Where they come from,** in this order:
-  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result (but for an install or a destroy, below): that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 99 at most, leaving room in the protocol's 100 for the purchase. The dashboard lists the queue even with no Agent connected, so it can be cancelled.
+  1. **The owner's manual queue** (`src/manual-intents.ts`), in the order added. It's queued on the dashboard, or with `POST /api/intents`, and kept in the store (`intents.manual`), so it survives restarts of the brain. Any action may be queued, irreversible ones too, with no confirmation (owner decision 36). A queued intent leaves the queue once the connected Agent reports it done, or when it's cancelled. Not when a snapshot shows its result (but for an install or a destroy, below): that can change again (a travel there and back would lose its last leg). Queued twice, it's queued once; one that isn't valid is refused with why; and the queue holds 98 at most, leaving room in the protocol's 100 for the purchase and the backdoor. The dashboard lists the queue even with no Agent connected, so it can be cancelled.
   2. **The purchase rules:** [the hacking programs](#the-hacking-programs) and [home RAM](#home-ram), one purchase at a time, the cheaper first. If the owner queued the same purchase, it goes once, as the owner's.
+  3. **The backdoor** for a hacker faction (#195, [above](#backdoors-for-the-hacker-factions)), likewise.
 - **When they go:** with the hack loop, in the one desired state. With the hack loop off, the manual queue goes before any snapshot: each intent checks the game first, so a stale one does nothing. While the brain holds, none go.
 - **Irreversible ones** (R8, #147; so far, joining one of the six city factions, which bans its enemies, installing augmentations, #164, and destroying the BitNode, #175) go only past a gate (`src/irreversible-gate.ts`):
   1. the guard holds on two consecutive medium snapshots from the connected Agent, received after it was queued: for a join, none of the faction's enemies joined; for an install or a destroy (core's `resetsTheGame`), nothing queued before it undone (it resets the game, so what was queued before it was for this game; the augmentations queued can't be an install's guard, as no NS call shows them without Singularity); for a destroy, then, w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`): among the medium snapshot's servers (reachable only once The Red Pill is installed), rooted there, and the hacking level at its required level, from the static snapshot (3000 times the BitNode's `WorldDaemonDifficulty`). The game also lets every Black Op done destroy it (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count that route, the conservative direction;
@@ -388,20 +502,24 @@ npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [
 ```
 
 - **The window:** `--since` defaults to the newest `brainStarted` event, `--until` to now. Times need a `Z` or an offset, as for the gap report. The newest `brainStarted` includes the brain runner's own restart after a crash, so a run spanning a restart needs `--since`; section 1 notes a `brainStarted` in the 24 h before the window.
-- **What it reads** (nothing new is recorded): the fast, medium, slow and static snapshots and the events in the window, through `iterateSnapshotsInWindow` and `eventsInWindow`, and the hack loop's switch. The snapshots are folded one row at a time (a day's are hundreds of MB once parsed), and every read is in one read transaction (`readTransaction`). It opens the store read-only, so it's safe while the brain runs.
+- **What it reads** (nothing new is recorded): the fast, medium, slow and static snapshots and the events in the window (section 5 recomputes the hacking ceiling from them, #196), through `iterateSnapshotsInWindow` and `eventsInWindow`, and the hack loop's switch. The snapshots are folded one row at a time (a day's are hundreds of MB once parsed), and every read is in one read transaction (`readTransaction`). It opens the store read-only, so it's safe while the brain runs.
 - **The checks** (`src/run-report.ts`), each a line under FAIL:
   - **gaps** over 6 s in the fast snapshots (`findGaps`, as `npm run gaps`), from the first fast snapshot to the run's last record (its newest fast snapshot or event): the silence before the Agent first reports, and after the run stops, is shown, not counted. A window with no fast snapshot at all fails. Each gap names the restart events recorded in it (`brainStarted`, `relaunch`, `agentDisconnected`, `agentConnected`, deploys, supervision) and an `installAugmentations` or `destroyBitNode` intent the Agent held at the last fast snapshot before it: a restart is still a FAIL, but a self-explaining one.
   - **income stalls:** each stretch of `INCOME_STALLED_AFTER_MS` (10 minutes, `dashboard/alerts.ts`, the same as #184's `incomeStalled` alert) or more, after money first rose, in which the medium snapshots' money didn't rise. A drop (a purchase) isn't a rise. A stretch still going at the last snapshot says so, and one over a heartbeat gap names the gap. While the hack loop's switch (`hackLoop.enabled`, as it is now: the store keeps no history of it) is off, stalls are shown, not counted.
   - **stuck intents:** an intent whose latest outcome in the window is not done after `INTENT_STUCK_AFTER_TRIES` (5) tries or more, as the dashboard's `intentStuck`. Intents are tracked per episode: the same id seen not done after it was done, or with fewer tries, was given again (after a reset, say), and is listed again.
+  - **backdoors overdue** (#195): a stretch of `BACKDOOR_OVERDUE_AFTER_MS` (5 minutes, `dashboard/alerts.ts`, the same as the `backdoorOverdue` alert) or more in which the medium snapshots showed one of the hacker factions' servers rooted, at its level (from the newest static snapshot before it) and not backdoored. The brain asks for it with the next medium snapshot, and it takes seconds, so this is the brain's rule or the backdoor failing. One still due at the last medium snapshot says so. A gap in the medium snapshots (over 30 s) ends a stretch: the gap is a failure of its own. With no static snapshot in the window it can't judge any, and says so (give `--since` an Agent's start).
+  - **backdoors asked for again** (#195): a `backdoor` intent on one of them whose episode starts while the medium snapshots show that server backdoored. Not one the window's first fast snapshot already holds (asked for before the window), nor one asked for after a reset took the backdoor away, nor one that follows a not-done episode of the same id: an Agent that reconnects, or a reload, forgets its intents, and the brain gives it the same one again, from no tries. The store can't say whose a backdoor was, so the line says it was the brain's rule or the owner's queue.
   - **blocking dialogs:** each stretch a `dialogs.blocking` text was shown, in a row, with when it was first and last seen.
   - **disconnects:** an `agentDisconnected` with no `agentConnected` within 60 s. A connect in the same millisecond counts (a replaced session). Not one under 60 s before the window ends (there's no telling yet), nor one that's the run's last record (the run ended there). The line names what was recorded meanwhile, as for gaps.
   - **the faction state unread** (#197): each stretch of 3 or more slow snapshots in a row (`FACTION_STATE_UNREAD_AFTER`) whose faction state couldn't be read, whatever each one's reason, with when, how many, the backend and the latest reason. A shorter stretch is listed, "not counted". Skipped readings, ones read with the page not put back, and an older Agent's slow snapshots (no reading) are counted on a line of their own, never a failure.
   - `deployFailed`, `versionDrift` and `supervisionGaveUp` events.
+  - **hacking income above what all the rooted RAM could earn** (#196), section 5: what hacking earned over the window, more than the hacking ceiling on every rooted server's RAM plus what the game's servers' money fell by ([the hacking ceiling](#the-hacking-ceiling)).
 - **Values the snapshots don't have**, or have malformed, read as "unknown".
 - **The faction state** (#197), in Progress: each faction's reputation and favour at its first and last reading in the window ("CyberSec: reputation 100 → 1,235, favour 0 (unchanged)"), each invitation with when it was first seen, and the augmentations queued, first reading → last ("none → NeuroFlux Governor ×2, BitWire"); "never read" where none was.
 - **The hack loop's target** is inferred, and says so: the game's servers (not home or purchased ones) whose money or security changed between consecutive medium snapshots, in stretches. Only scripts change them, so the owner's own would show too.
+- **The backdoors** (#195), in section 3: for each of the hacker factions' servers, whether it was backdoored at the window's start, when the medium snapshots first showed it backdoored (or not, after a reset), and its faction's invitation: a `gameDialog` event of kind `factionInvitation` naming the faction, or "no invitation from … seen" for one backdoored in the window. A joined faction, or invitations suppressed in the game's options (`Faction/FactionHelpers.tsx:30`), show no dialog.
 - **Exit codes:** 0 on PASS, 1 on FAIL, 2 when it couldn't run (no store, no brain start without `--since`, a window that ends before it starts, or one with nothing recorded).
-- **Tests:** `test/run-report.test.ts` builds a store and checks each section, each failure and the command's exit codes and default window; `test/run-report-simulation.test.ts` reads a 20-virtual-minute fresh start's store in the simulator (the hack loop on n00dles, TOR, two programs and home RAM bought) and gets PASS.
+- **Tests:** `test/run-report.test.ts` builds a store and checks each section, each failure and the command's exit codes and default window; `test/hacking-ceiling-simulation.test.ts` reads section 5 over 90 virtual minutes ([the ceiling suite](#the-ceiling-suite)); `test/run-report-simulation.test.ts` reads a 20-virtual-minute fresh start's store in the simulator (the hack loop on n00dles, TOR, two programs and home RAM bought) and gets PASS; [the backdoor suite](#the-backdoor-suite) reads its store too.
 
 ## The lockstep driver
 
@@ -512,19 +630,24 @@ The `ui` backend's destroy (the terminal, the BitVerse page, the restart) is E2'
 | `src/dashboard/` | The dashboard: `server.ts` (HTTP), `status.ts` (what it shows), `alerts.ts` (the rules), `page.html` (the page) |
 | `src/supervision.ts` | The supervision switch, in the store's settings |
 | `src/hack-loop.ts` | The hack loop's switch and rules (target and hosts, the move to the next target, #184, and each host's hack threads, #187) |
+| `src/hacking-ceiling.ts` | The hacking ceiling over the snapshots, what hacking earned, the dashboard's rows and the run report's section 5 (#196) |
 | `src/income-watch.ts` | The money's last rise over the medium snapshots, for `incomeStalled`, and the brain's log lines as a stall starts and ends (#184) |
 | `src/programs.ts` | Buying the hacking programs: the switch, the next item, the prices and vendors |
-| `src/desired-state.ts` | The controller that sends the hack loop, the intents (purchases, the manual queue) and the work as one desired state |
+| `src/desired-state.ts` | The controller that sends the hack loop, the intents (purchases, backdoors, the manual queue) and the work as one desired state |
 | `src/work.ts` | The work the owner sets (#151, #153, #156, #158): kept in the store, its focus, and the Agent's outcome read, its promotion (#155) included |
 | `src/irreversible-gate.ts` | The gate before an irreversible intent (#147, #164, #175): its guard on medium snapshots, then a save backup |
 | `src/manual-intents.ts` | The owner's manual intents queue, and the note of a reset's intent sent (#175), in the store |
 | `src/home-ram.ts` | Upgrading home's RAM: the switch, the price, the next upgrade |
+| `src/backdoors.ts` | The backdoors for the hacker factions (#195): the rule, its log lines, and what the run report reads of them |
 | `src/switches.ts` | The dashboard's on/off switches, as settings in the store |
 | `src/supervisor.ts`, `src/windows-game-process.ts` | The supervisor, and the game's process on Windows |
 | `src/release.ts` | The brain's release, from `git describe` |
 | `test/skeleton.test.ts` | The skeleton suite |
 | `test/hack-loop-skeleton.test.ts` | The simulator suite for the hack loop and the intents |
 | `test/hack-loop-income.test.ts` | The [income suite](#the-income-suite) (#184, #187) |
+| `test/hacking-ceiling-simulation.test.ts` | The [ceiling suite](#the-ceiling-suite) (#196) |
+| `test/hacking-ceiling-parity.test.ts` | The ceiling's formulas against the game's `ns.formulas.hacking` (#196) |
+| `test/backdoors.test.ts`, `test/backdoors-simulation.test.ts` | The backdoors' rule and log, and the [backdoor suite](#the-backdoor-suite) (#195) |
 | `test/income-watch.test.ts` | The money's last rise, and the log lines, through a real control channel (#184) |
 | `test/safe-mode.test.ts` | The simulator chaos suite for safe mode (#160): the brain down for an hour with a reload, expiry, a reset, a new deployment |
 | `test/effector-backends.test.ts` | The simulator suite for the Effectors' `sim` and `singularity` backends (#145), and for the `ui` worker that needs no page (#159): each action with money and without, and in BN1 with SF4.3. Faction work (#151) in Sector-12: with `sim`, started focused, unfocused, switched, and left alone with none wanted; with `singularity`, started focused, unfocused and switched; and, with `sim`, not converged where a joined faction (CyberSec) doesn't offer it. Company work (#153), a Waiter at Noodle Bar: with `sim`, after a travel to New Tokyo, focused then unfocused, and worked again from Sector-12 as the job is held; not converged from Sector-12 (not in its city), where the player doesn't qualify (Software at MegaCorp), or where the company offers only later jobs (Business at DeltaOne); with `singularity`, from Sector-12 (Singularity doesn't ask the city), started unfocused, then focused, and not qualified likewise. Promotions (#155), an IT Intern at Carmichael Security (`diagnostics.employWithReputation`, hacking 168): with `sim`, from Aevum, the start's check takes nothing without the reputation; given 7,000, nothing 8 minutes on, then the check 10 minutes after the first makes them IT Analyst, the work focused and not restarted (its cycles carry on), the outcome naming the promotion; with `singularity`, nothing at the start, then, qualified, a change of focus checks at once and `applyToCompany` promotes. A Systems Administrator there qualified for Head of Engineering (`gainCharismaExp`, 800,000 reputation) keeps the title through both, the work converged: a promotion stays in the field. Crime (#156): with `sim`, shoplifting focused, unfocused, then mugging, still the work 20 s on (a crime repeats); with `singularity`, unfocused, focused, then a switch to homicide. Classes (#158): with `sim`, Computer Science at Rothman University unfocused, then focused without starting it again, a gym in Aevum and Data Structures with $1,000 held back with their reasons, then Data Structures with the money, kept once the money is gone, then Iron Gym's strength training and Powerhouse Gym's, told apart by the location, as the page can't; with `singularity`, the same course, then Iron Gym's, then Powerhouse Gym's, held back under its $1.44m guard and then started, its focus still set with the money gone, and a gym in another city held back. Each focus change is shown not to start the class again (its game cycles keep counting), and the guard's problems are core's own words (`classStartProblem`). Buying augmentations (#149) from CyberSec, set up with reputation: through each backend, NeuroFlux a level at a time, nothing paid twice, and a level out of turn or no money not done. Joining Sector-12 (#147) through each, past the gate: sent only after two medium snapshots and a save backup; then, with `sim`, Chongqing held by the guard, and CyberSec (no enemies) sent at once but not done without an invitation. Buying a cloud server (#159), with `sim` and with its NS worker (`buy-server.js`, the `ui` backend, the simulator's effectors taken away), on a fresh save's 8 GB home: `pserv-0` bought once and, sent again at 8 or 64 GB, done with nothing paid; `n00dles` refused with no money spent; not enough money refused, and neither bought in the next medium snapshot. At the limit of 25 (the owner's servers, bought before the Agent starts), refused by `sim` and by the worker, which with SF4.3 is still the same worker, reported `ui`. Backdoors (#162), on nectar-net (the owner's NUKE.exe, `gainHackingExp(500)`): with `sim`, the first try says "installing … s left" and a program purchase queued with it "terminal busy"; it's not installed 15 s on, then all are done and the terminal is home; sent again, done at its first try with nothing typed. The refusals (no root, the level, home, a cloud server, no server), each with its reason and nothing typed. With `singularity` (SF4.3), installed through its worker, the terminal left home, and the same refusals; and on a 16 GB home, while its worker holds 8 GB, crime work uses the page rather than a Singularity worker that couldn't start, then Singularity once the backdoor is in |

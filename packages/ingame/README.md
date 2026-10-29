@@ -65,7 +65,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (2.7) |
 | `agent.js` | `run` (1.0 GB), `isRunning`, `getScriptRam` (0.1 GB each), `getServerMaxRam`, `getServerUsedRam` (0.05 GB each, with `getScriptRam`, for whether a Singularity worker fits home beside the Agent, and in its free RAM now, #162); `read`, `write`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.9 GB (3.0) |
 | `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
-| `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
+| `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB), `getMoneySources` (1.0 GB, #196) | 4.65 GB (4.65) |
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB), `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB) | 4.45 GB (4.45) |
 | `snapshot-fast.js` | `ps` (0.2 GB), `getServerMoneyAvailable` (0.1 GB; on home it gives the player's money, where `getPlayer` costs 0.5), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.0 GB (2.0) |
 | `hack-loop-root.js` | `scan` (0.2 GB), `fileExists`, `getServerNumPortsRequired` (0.1 GB each), `hasRootAccess`, `nuke` and the five port openers (0.05 GB each) | 2.35 GB (2.35) |
@@ -104,7 +104,7 @@ The Singularity workers' figures are at SF4.3 or in BN4, where the test measures
 
 `buy-server.js` (#159, 4.5 GB) is a fresh-save worker: its NS calls need no Singularity. So is `backdoor.js` (#162, 4.0 GB).
 
-The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.55 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
+The workers write to a port (`writePort`, free). The Agent plus the largest home workers a fresh save runs (`hack-loop-deploy.js`, 4.65 GB, and since #196 `snapshot-slow.js`, as large) is 7.55 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
 ## Deploy layout
 
@@ -209,7 +209,7 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 
 ## Intents
 
-M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, its next backdoor for a hacker faction (#195), and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
 - **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects (never into [safe mode](#safe-mode): one-shot actions need the brain), and runs each through its effector:
   - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
   - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time, with the backend ("travel to Aevum (ui): not done: …; trying again in 30 s");
@@ -348,7 +348,7 @@ The page reader's choices, steps and checks are tested on a stand-in page in jsd
 
 ## Backdoors
 
-[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`.
+[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`. Since #195 the brain asks for it itself on the hacker factions' servers, CSEC to run4theh111z, until the Agent reports it done ([`packages/brain`](../brain/README.md#backdoors-for-the-hacker-factions)).
 - **Checked first, by every backend** (`src/workers/backdoor-standing.ts`, `getServer`): installed, with the terminal not on the server, is done. Refused with why, as the terminal's `backdoor` would refuse it (`Terminal/commands/backdoor.ts`): "no server …", "… is the player's own" (home, a cloud server), "no root access on … (NUKE.exe first)", "hacking level 22: hong-fang-tea needs 30", or "no way from home to …". Core refuses an IP address, which `connect` would take but `scan` never lists. Only then does a backend find the terminal busy.
 - **`backdoor.js`**, with the server and a deadline:
   1. The Terminal page (unfocusing work first, and focusing it again after, as every page effector does).

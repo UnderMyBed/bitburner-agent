@@ -190,6 +190,28 @@ export class TelemetryStore {
   }
 
   /**
+   * The newest snapshot of a tier received before `beforeMs`, or null if there's none: the run report's static snapshot
+   * for a window that starts after it (#196).
+   */
+  latestSnapshotBefore({
+    environment,
+    tier,
+    beforeMs,
+  }: {
+    environment: Environment;
+    tier: string;
+    beforeMs: number;
+  }): (RecordContext & StoredSnapshot) | null {
+    const row = this.#database
+      .prepare(
+        `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? AND received_at_ms < ?
+          ORDER BY received_at_ms DESC, id DESC LIMIT 1`,
+      )
+      .get(environment, tier, beforeMs) as Record<string, string | number> | undefined;
+    return row ? snapshotOfRow(row) : null;
+  }
+
+  /**
    * The highest sequence number stored for each tier of an Agent session (#119): the control channel carries on from
    * them after a brain restart. By number, not order, from any release. `{}` for a session with none.
    */

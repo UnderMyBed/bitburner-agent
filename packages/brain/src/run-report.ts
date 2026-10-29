@@ -6,6 +6,7 @@ import {
   type FactionState,
   type FastSnapshotData,
   factionStateOf,
+  HACKER_FACTION_SERVERS,
   type HandledDialog,
   type IntentOutcome,
   type MediumSnapshotData,
@@ -13,7 +14,8 @@ import {
   type StaticSnapshotData,
   type WorkOutcome,
 } from "@bitburner-agent/core";
-import { INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
+import { BackdoorTimeline } from "./backdoors.ts";
+import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
 import {
@@ -25,6 +27,7 @@ import {
   type Gap,
 } from "./gap-report.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
+import { HackingFold } from "./hacking-ceiling.ts";
 import { WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
@@ -277,6 +280,8 @@ interface RunFacts extends RunWindow {
   /** The medium snapshots' money, where it's a number. */
   money: MoneyPoint[];
   targets: MovedServers[];
+  /** The hacker factions' servers' backdoors over the medium snapshots (#195). */
+  backdoors: BackdoorTimeline;
   slowFirst: SlowSnapshotData | undefined;
   slowLast: SlowSnapshotData | undefined;
   /** The faction state over the slow snapshots (#197). */
@@ -288,6 +293,8 @@ interface RunFacts extends RunWindow {
   hackLoopEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
   earlierBrainStartMs: number | null;
+  /** Hacking income against the ceiling (#196). */
+  hacking: HackingFold;
 }
 
 const isObject = (data: unknown): data is object => data !== null && typeof data === "object";
@@ -302,8 +309,16 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let snapshotCount = 0;
     // The player's servers first, from the static and slow snapshots, so the medium ones can be read in one pass.
     const playersServers = new Set(["home"]);
-    for (const { data } of ofTier<StaticSnapshotData>("static")) {
+    const hacking = new HackingFold(playersServers);
+    // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
+    const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
+    if (isObject(staticBefore?.data))
+      hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+    const backdoors = new BackdoorTimeline();
+    for (const { atMs, data } of ofTier<StaticSnapshotData>("static")) {
       snapshotCount++;
+      hacking.addStatic(atMs, data);
+      backdoors.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
       }
@@ -313,6 +328,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const factionState = new FactionStateFolding();
     for (const { atMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
+      hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
       factionState.add(atMs, data);
@@ -329,6 +345,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       const playerMoney = playerOf(data).money;
       if (typeof playerMoney === "number") money.push({ atMs, money: playerMoney });
       inference.add(atMs, data);
+      hacking.addMedium(atMs, data);
+      backdoors.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
@@ -357,6 +375,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       mediumLast,
       money,
       targets: inference.stretches,
+      backdoors,
       slowFirst,
       slowLast,
       factionState,
@@ -364,6 +383,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       playersServers,
       hackLoopEnabled: readHackLoopEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
+      hacking,
     };
   });
 }
@@ -397,6 +417,8 @@ export function runReport(
     ...actionsSection(facts),
     "",
     ...healthSection(facts, gapThresholdMs, failures),
+    "",
+    ...facts.hacking.section(failures),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
     ...failures.map((failure) => `  ${failure}`),
@@ -710,6 +732,93 @@ function actionsSection(facts: RunFacts): string[] {
     );
   }
   if (dialogs.length === 0) lines.push("    none");
+  lines.push(...backdoorLines(facts));
+  return lines;
+}
+
+/**
+ * The hacker factions' servers (#195): when the medium snapshots first showed each backdoored (or gone again, after a
+ * reset), and the invitation that followed, where the Agent handled its dialog: a `gameDialog` event of kind
+ * `factionInvitation` naming the faction ("Would you like to join CyberSec?").
+ */
+function backdoorLines(facts: RunFacts): string[] {
+  const lines = ["  backdoors (the hacker factions' servers, for their invitations):"];
+  const { backdoors } = facts;
+  if (backdoors.firstMediumAtMs === null) return [...lines, "    no medium snapshot"];
+  const invitations = facts.events.filter((event) => {
+    const dialog = fieldsOf(event.detail);
+    return event.kind === "gameDialog" && dialog.kind === "factionInvitation" && typeof dialog.text === "string";
+  });
+  for (const { hostname, faction } of HACKER_FACTION_SERVERS) {
+    const changes = backdoors
+      .changesOf(hostname)
+      .map(({ atMs, installed }) =>
+        atMs === backdoors.firstMediumAtMs
+          ? installed
+            ? "backdoored at the window's start"
+            : "not backdoored at the window's start"
+          : installed
+            ? `backdoored by ${formatIsoTime(atMs)}`
+            : `not backdoored from ${formatIsoTime(atMs)} (a reset)`,
+      );
+    const invited = invitations
+      .filter((event) => (fieldsOf(event.detail).text as string).includes(faction))
+      .map((event) => `${faction}'s invitation at ${formatIsoTime(event.atMs)}`);
+    const backdooredInWindow = backdoors
+      .changesOf(hostname)
+      .some((change) => change.installed && change.atMs !== backdoors.firstMediumAtMs);
+    if (invited.length === 0 && backdooredInWindow) invited.push(`no invitation from ${faction} seen`);
+    const said = [...changes, ...invited];
+    lines.push(`    ${hostname}: ${said.length === 0 ? "not in the medium snapshots" : said.join("; ")}`);
+  }
+  return lines;
+}
+
+/**
+ * Backdoors overdue (#195): a stretch of `BACKDOOR_OVERDUE_AFTER_MS` or more in which the medium snapshots showed one
+ * of the hacker factions' servers rooted, at its level and not backdoored: the brain asks for it at once, and it takes
+ * seconds; a gap in the medium snapshots ends a stretch, as it's a failure of its own. With no static snapshot in the
+ * window (the servers' levels), none can be judged, and it says so. And backdoors asked for again: a `backdoor` intent
+ * on one of them first seen while the medium snapshots showed it backdoored. Not one the window's first fast snapshot
+ * holds (asked for before), nor one that follows a not-done episode of the same id: an Agent that reconnected, or a
+ * reload, forgets the intents it held, and the brain gives it the same one again, from no tries (#195 review). The
+ * store can't say whose it was: the brain's rule, or the owner's queue.
+ */
+function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
+  const lines = [
+    "  backdoors overdue (one of the hacker factions' servers rooted, at its level and not backdoored for " +
+      `${formatDuration(BACKDOOR_OVERDUE_AFTER_MS)} or more):`,
+  ];
+  if (!facts.backdoors.judged && facts.backdoors.firstMediumAtMs !== null) {
+    lines.push("    not judged: no static snapshot (the servers' levels) in the window: give --since an Agent's start");
+  }
+  const overdue = facts.backdoors.due.filter((stretch) => stretch.toMs - stretch.fromMs >= BACKDOOR_OVERDUE_AFTER_MS);
+  for (const { hostname, fromMs, toMs, ongoing } of overdue) {
+    const line =
+      `backdoor overdue: ${hostname} due from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} ` +
+      `(${formatDuration(toMs - fromMs)}), not backdoored${ongoing ? "; still due at the last medium snapshot" : ""}`;
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (overdue.length === 0) lines.push("    none");
+  lines.push("  backdoors asked for again (on one of the hacker factions' servers already backdoored):");
+  const firstFastMs = facts.fast[0]?.atMs;
+  let repeated = 0;
+  const lastEpisodeDone = new Map<string, boolean>();
+  for (const { id, firstSeenMs, outcome } of intentEpisodes(facts)) {
+    const followsNotDone = lastEpisodeDone.get(id) === false;
+    lastEpisodeDone.set(id, outcome.done);
+    const hostname = HACKER_FACTION_SERVERS.find((server) => id === `backdoor(${server.hostname})`)?.hostname;
+    if (hostname === undefined || firstSeenMs === firstFastMs || followsNotDone) continue;
+    if (!facts.backdoors.installedAt(hostname, firstSeenMs)) continue;
+    repeated++;
+    const line =
+      `backdoor repeated: ${id} first seen ${formatIsoTime(firstSeenMs)}, with ${hostname} backdoored ` +
+      `(the brain's rule, or the owner's queue)`;
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (repeated === 0) lines.push("    none");
   return lines;
 }
 
@@ -733,6 +842,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
     failures.push(line);
   }
   if (stuck === 0) lines.push("    none");
+  lines.push(...backdoorHealthLines(facts, failures));
 
   lines.push("  dialogs left blocking the page:");
   const blocking = blockingEpisodes(facts);

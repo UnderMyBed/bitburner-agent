@@ -2,6 +2,7 @@
 // there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
+import type { BackdoorDue } from "../backdoors.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
@@ -14,6 +15,13 @@ export const INTENT_STUCK_AFTER_TRIES = 5;
  * more. The run report (#185) uses the same threshold for its income stalls.
  */
 export const INCOME_STALLED_AFTER_MS = 10 * 60_000;
+/**
+ * One of the hacker factions' servers due a backdoor this long (rooted, at its level, not backdoored) is
+ * `backdoorOverdue` (#195), and a run report failure: 5 minutes. The brain asks for it with the next medium snapshot
+ * (10 s), the Agent tries it at once and every 30 s, and it takes seconds (../backdoors.ts): about 6 times the worst
+ * real path. An overdue one may have no intent (the rule broken), so `intentStuck` can't say.
+ */
+export const BACKDOOR_OVERDUE_AFTER_MS = 5 * 60_000;
 
 /** How much of a blocking dialog's text the alert quotes. */
 const BLOCKING_DIALOG_QUOTE_LENGTH = 200;
@@ -26,7 +34,8 @@ export type AlertName =
   | "dialogBlocking"
   | "intentStuck"
   | "incomeStalled"
-  | "factionStateUnread";
+  | "factionStateUnread"
+  | "backdoorOverdue";
 
 export interface Alert {
   name: AlertName;
@@ -69,6 +78,8 @@ export interface AlertFacts {
    * skipped, or from an older Agent, or there's no slow snapshot.
    */
   factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
+  /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
+  backdoorsDue: BackdoorDue[];
 }
 
 /**
@@ -82,7 +93,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent.
+ * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue per
+ * overdue backdoor.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -142,6 +154,7 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail: `${outcome.id}: ${outcome.tries} tries, not done${outcome.problem === null ? "" : `: ${outcome.problem}`}`,
     });
   }
+  alerts.push(...backdoorOverdueAlerts(facts));
   return alerts;
 }
 
@@ -188,4 +201,20 @@ function gaveUpDetail(detail: unknown): string {
     "the supervisor stopped, but its cause wasn't recorded (too many launches, or checks that kept failing: see the " +
     `brain's log and the supervisionFailed events): ${resume}`
   );
+}
+
+/**
+ * `backdoorOverdue` (#195), one per server: one of the hacker factions' servers due a backdoor (rooted, at its level,
+ * not backdoored) for `BACKDOOR_OVERDUE_AFTER_MS` or more, by the connected Agent's medium snapshots.
+ */
+export function backdoorOverdueAlerts({ nowMs, backdoorsDue }: Pick<AlertFacts, "nowMs" | "backdoorsDue">): Alert[] {
+  return backdoorsDue
+    .filter((due) => nowMs - due.sinceMs >= BACKDOOR_OVERDUE_AFTER_MS)
+    .map((due) => ({
+      name: "backdoorOverdue",
+      sinceMs: due.sinceMs,
+      detail:
+        `${due.hostname} has been rooted, at its hacking level and not backdoored for ` +
+        `${Math.floor((nowMs - due.sinceMs) / 60_000)} min: the brain asks for it at once, and it takes seconds`,
+    }));
 }

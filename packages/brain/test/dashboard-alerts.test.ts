@@ -21,6 +21,7 @@ const quiet: AlertFacts = {
   hackLoopTarget: null,
   income: null,
   factionState: null,
+  backdoorsDue: [],
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 

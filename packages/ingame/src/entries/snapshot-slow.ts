@@ -1,5 +1,6 @@
-// agent/<deploymentId>/snapshot-slow.js: the slow tier's worker (#89). The reset info and the purchased servers.
-// RAM: `getResetInfo` 1.0 + `cloud.getServerNames` 1.05 (ram-budget.json).
+// agent/<deploymentId>/snapshot-slow.js: the slow tier's worker (#89). The reset info, the purchased servers, and the
+// money made by source since the last install (#196: hacking's, for the run report's hacking ceiling).
+// RAM: `getResetInfo` 1.0 + `cloud.getServerNames` 1.05 + `getMoneySources` 1.0 (ram-budget.json).
 import type { SlowSnapshotData } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { reportToAgent } from "../workers/report-to-agent.ts";
@@ -21,6 +22,7 @@ export function main(ns: NS): void {
       },
     },
     purchasedServers: ns.cloud.getServerNames(),
+    moneySources: { ...ns.getMoneySources().sinceInstall },
   };
   reportToAgent(ns, data);
 }

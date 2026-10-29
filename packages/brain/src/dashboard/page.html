@@ -173,6 +173,9 @@ function render(status) {
   fillTable(document.querySelector("#values table"), [
     ["Money", orNone(values.money, (money) => `$${Math.round(money).toLocaleString()}`)],
     ["Hacking level", orNone(values.hackingLevel)],
+    // The hacking rows (#196): the brain's own words, as the run report has them.
+    ["Hacking ceiling", status.hacking.ceilingText],
+    ["Hacking income", status.hacking.incomeText],
     ["Home RAM", values.homeRamUsed === null ? "—" : `${values.homeRamUsed} of ${values.homeMaxRam} GB`],
     ["Scripts on home", orNone(values.homeScripts)],
     ["Page heap", orNone(values.pageHeapUsedBytes, megabytes)],
