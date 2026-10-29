@@ -1332,6 +1332,7 @@ describe("augmentations and the reset (#210)", () => {
       ].join("\n"),
     );
     expect(report.text).toContain("  augmentation purchases reported done and never queued:\n    none");
+    expect(report.text).toContain("  installs reported done with no reset in the next slow snapshot:\n    none");
     expect(report.text).toContain(
       "  installs sent and not seen done (a slow snapshot with another reset) within 5 min:\n    none",
     );
@@ -1380,6 +1381,29 @@ describe("augmentations and the reset (#210)", () => {
     );
     expect(report.text).toContain(
       `${at(6 * MINUTE + SECOND)}  install cycle called off: the Augmentations switch turned off`,
+    );
+  });
+
+  test("an install reported done with no reset after it: a failure, once (#213 re-review)", () => {
+    const report = augmentationRun({
+      events: [
+        [6 * MINUTE, "augmentationInstallSent", { source: "brain", queued: ["BitWire"] }],
+        [7 * MINUTE, "augmentationInstallNotReset", { queued: ["BitWire"] }],
+        [
+          7 * MINUTE,
+          "augmentationCycleCalledOff",
+          { reason: "the install was reported done but the game didn't reset" },
+        ],
+      ],
+    });
+    expect(report.failures.filter((failure) => /install/.test(failure))).toEqual([
+      `install reported done but the game didn't reset: at ${at(7 * MINUTE)}, with the faction state's queue BitWire`,
+    ]);
+    expect(report.text).toContain(
+      `    install sent at ${at(6 * MINUTE)}, reported done with no reset at ${at(7 * MINUTE)}: the failure above`,
+    );
+    expect(report.text).toContain(
+      `${at(7 * MINUTE)}  install reported done but the game didn't reset (queue: BitWire)`,
     );
   });
 

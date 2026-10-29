@@ -1262,6 +1262,47 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([buy(FIVE[1] as string).id]);
     });
 
+    test("purchases reported done after the medium snapshot: their money taken off it (#213 re-review)", () => {
+      const { controller, connection, sentIds } = connectedWithLoopOff();
+      // The game's times: the medium snapshot at 1,000, each purchase reported done in a fast snapshot after it.
+      const at = (tier: SnapshotTier, data: unknown, gameTimeMs: number) =>
+        connection.receive(
+          encodeControlMessage({
+            protocolVersion: CONTROL_PROTOCOL_VERSION,
+            type: "snapshot",
+            agentSessionId: "session-1",
+            tier,
+            sequenceNumber: ++sequenceNumber,
+            gameTimeMs,
+            data,
+          }),
+        );
+      const fastAt = (id: string, gameTimeMs: number) =>
+        at(
+          "fast",
+          {
+            degradedTiers: [],
+            pageHeapUsedBytes: null,
+            game: null,
+            intents: [{ id, done: true, tries: 1, problem: null, backend: "sim" }],
+          },
+          gameTimeMs,
+        );
+      send(connection, "slow", slowWith());
+      // $447,170,900: the five exactly.
+      send(connection, "medium", richMedium(447_170_900));
+      for (const [index, name] of FIVE.entries()) {
+        expect(sentIds()).toEqual([buy(name).id]);
+        fastAt(buy(name).id, 2_000 + index);
+      }
+      // Nothing left: no NeuroFlux Governor on money already spent; waiting for the faction state to show the five.
+      expect(sentIds()).toEqual([]);
+      expect(controller.augmentationsView().waitingFor).toMatch(/^the faction state to show /);
+      // A medium snapshot taken after them is the money: $30m, NeuroFlux Governor level 1 ($18.6m).
+      at("medium", richMedium(30e6), 10_000);
+      expect(sentIds()).toEqual([buy("NeuroFlux Governor").id]);
+    });
+
     test("not committed: the rule's purchases don't hold the programs back", () => {
       const { controller, connection, sentIds } = connectedWithLoopOff();
       send(connection, "slow", {
@@ -1317,6 +1358,45 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.intentsView()).toEqual([]);
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("the install reported done with no reset in the next slow snapshot: withdrawn, alerted (#213 re-review)", async () => {
+      const { controller, connection, sentIds, settleBackup } = connectedWithLoopOff();
+      const sent: { type: string }[] = [];
+      controller.subscribe((event) => sent.push(event));
+      send(connection, "slow", slowWith(FIVE));
+      // Chosen on the first medium snapshot; the gate's two after it.
+      for (let each = 0; each < 3; each += 1) send(connection, "medium", richMedium(0));
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // The game had nothing to install: done, and the next slow snapshot (the game's time on) shows no reset.
+      reportedDone(connection, INSTALL.id);
+      expect(controller.installAwaitingRestart()).toBeNull();
+      connection.receive(
+        encodeControlMessage({
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "snapshot",
+          agentSessionId: "session-1",
+          tier: "slow",
+          sequenceNumber: ++sequenceNumber,
+          gameTimeMs: 61_000,
+          data: slowWith(FIVE),
+        }),
+      );
+      expect(controller.installAwaitingRestart()).toEqual({
+        id: INSTALL.id,
+        sinceMs: expect.any(Number),
+        doneNotReset: true,
+      });
+      expect(controller.intentsView()).toEqual([]);
+      expect(controller.augmentationsView()).toMatchObject({ committed: false });
+      expect(controller.augmentationReserve()).toBe(0);
+      expect(sent.map((event) => event.type)).toEqual([
+        "augmentationInstallChosen",
+        "augmentationInstallSent",
+        "augmentationInstallNotReset",
+        "augmentationCycleCalledOff",
+      ]);
     });
 
     test("a restarted brain awaits an install's restart from when it went out, until the Agent connects", () => {

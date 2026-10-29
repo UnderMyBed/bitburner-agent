@@ -72,6 +72,20 @@ describe("augmentations (#210)", () => {
     ]);
     expect(names({ ...facts, installAwaitingRestart: { ...awaiting, sinceMs: sinceMs + 1 } })).toEqual([]);
   });
+
+  test("an install reported done that the game didn't reset: at once (#213 re-review)", () => {
+    const awaiting = { id: "installAugmentations()", sinceMs: quiet.nowMs - 1, doneNotReset: true };
+    expect(activeAlerts({ ...quiet, installAwaitingRestart: awaiting })).toEqual([
+      {
+        name: "installNotRestarted",
+        sinceMs: quiet.nowMs - 1,
+        detail:
+          "installAugmentations(): install reported done but the game didn't reset: the faction state's queue isn't " +
+          "the game's. The install cycle is called off, and no other is chosen until a reset (or the brain restarts): " +
+          "check the Augmentations page",
+      },
+    ]);
+  });
 });
 
 test("with everything well, no alerts", () => {

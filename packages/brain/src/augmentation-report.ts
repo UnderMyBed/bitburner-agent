@@ -1,11 +1,12 @@
 // Augmentations in the run report (#210): the installs the slow snapshots show, and the augmentation rule's events (its
-// decisions, purchases, installs sent and cycles called off), with the failures: a purchase not queued, and an install
-// sent with no reset seen after it.
+// decisions, purchases, installs sent and cycles called off), with the failures: a purchase not queued, an install
+// sent with no reset seen after it, and an install reported done with no reset after it.
 import { type InstallReason, installGains, NEUROFLUX_GOVERNOR, type SlowSnapshotData } from "@bitburner-agent/core";
 import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   describeReason,
@@ -21,6 +22,7 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
+  AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
 ];
 
 /** An install the slow snapshots show: another `lastAugReset`, and what `ownedAugs` gained. */
@@ -140,6 +142,12 @@ export class AugmentationTimeline {
         });
       } else if (kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) {
         entries.push({ atMs, text: `install cycle called off: ${String(fields.reason)}` });
+      } else if (kind === AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND) {
+        const queued = Array.isArray(fields.queued) ? fields.queued.map(String) : [];
+        entries.push({
+          atMs,
+          text: `install reported done but the game didn't reset (queue: ${describeAugmentations(queued)})`,
+        });
       }
     }
     for (const install of this.installs) {
@@ -163,9 +171,10 @@ export class AugmentationTimeline {
   }
 
   /**
-   * Section 4's lines, each failure added to `failures`: a purchase not queued (the rule's event), and an install sent
-   * with no slow snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first, nor
-   * where the cycle was called off meanwhile: withdrawn).
+   * Section 4's lines, each failure added to `failures`: a purchase not queued (the rule's event); an install reported
+   * done with no reset in the next slow snapshot (the rule's event, #213 re-review); and an install sent with no slow
+   * snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first, nor where the
+   * cycle was called off meanwhile: withdrawn; one reported done with no reset is the failure above).
    */
   healthLines(
     events: readonly StoredEvent[],
@@ -188,6 +197,17 @@ export class AugmentationTimeline {
       failures.push(line);
     }
     if (notQueued.length === 0) lines.push("    none");
+    lines.push("  installs reported done with no reset in the next slow snapshot:");
+    const notReset = events.filter((event) => event.kind === AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND);
+    for (const { atMs, detail } of notReset) {
+      const queued = fieldsOf(detail).queued;
+      const line =
+        `install reported done but the game didn't reset: at ${formatTime(atMs)}, with the faction state's queue ` +
+        `${describeAugmentations(Array.isArray(queued) ? queued.map(String) : [])}`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
+    if (notReset.length === 0) lines.push("    none");
     lines.push(`  installs sent and not seen done (a slow snapshot with another reset) within ${formatEta(withinMs)}:`);
     let notSeen = 0;
     for (const sent of events.filter((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND)) {
@@ -198,6 +218,14 @@ export class AugmentationTimeline {
           reset.atMs > sent.atMs && reset.atMs <= sent.atMs + withinMs && reset.lastAugReset !== before?.lastAugReset,
       );
       if (seen) continue;
+      const reportedDone = notReset.find((event) => event.atMs >= sent.atMs && event.atMs <= sent.atMs + withinMs);
+      if (reportedDone !== undefined) {
+        lines.push(
+          `    install sent at ${formatTime(sent.atMs)}, reported done with no reset at ` +
+            `${formatTime(reportedDone.atMs)}: the failure above`,
+        );
+        continue;
+      }
       // Withdrawn: the cycle called off (the switch turned off) before the reset was due.
       const calledOff = events.find(
         (event) =>

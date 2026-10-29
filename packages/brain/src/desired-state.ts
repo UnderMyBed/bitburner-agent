@@ -25,10 +25,12 @@ import {
   TOR_ROUTER,
 } from "@bitburner-agent/core";
 import {
+  AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   type AugmentationEvent,
   AugmentationRule,
   type AugmentationsView,
+  type InstallAwaitingRestart,
   type NotQueued,
   readAugmentationsEnabled,
   writeAugmentationsEnabled,
@@ -298,6 +300,9 @@ export class DesiredStateController {
   readonly #listeners = new Set<(event: FactionWorkEvent | AugmentationEvent) => void>();
   /** When the connected Agent's latest medium and slow snapshots arrived, or null. */
   #mediumAtMs: number | null = null;
+  /** The game's time of the connected Agent's latest medium and fast snapshots (their `gameTimeMs`), or null (#213). */
+  #mediumGameTimeMs: number | null = null;
+  #fastGameTimeMs: number | null = null;
   #slowAtMs: number | null = null;
   /** The game's time in the connected Agent's latest slow snapshot (its `gameTimeMs`), or null (#210). */
   #slowGameTimeMs: number | null = null;
@@ -347,6 +352,8 @@ export class DesiredStateController {
         this.#staticData = null;
         this.#mediumData = null;
         this.#mediumAtMs = null;
+        this.#mediumGameTimeMs = null;
+        this.#fastGameTimeMs = null;
         this.#slowData = null;
         this.#slowGameTimeMs = null;
         this.#slowAtMs = null;
@@ -365,6 +372,7 @@ export class DesiredStateController {
         // The intents' and the work's outcomes: for the views, and the manual intents done, or the augmentation
         // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
+        this.#fastGameTimeMs = event.snapshot.gameTimeMs;
         // A batcher sent but not running, logged when that changes (#211); the dashboard and the run report say more.
         const notRunning = batcherNotRunning(this.#fastData?.batcherDeploy);
         if (notRunning !== this.#batcherNotRunning) {
@@ -382,6 +390,7 @@ export class DesiredStateController {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
         this.#income.add(event.atMs, this.#staticData, this.#mediumData);
         this.#mediumAtMs = event.atMs;
+        this.#mediumGameTimeMs = event.snapshot.gameTimeMs;
         this.#gates.mediumSnapshot(this.#mediumData, this.#gatedQueue(), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
@@ -482,9 +491,13 @@ export class DesiredStateController {
 
   /**
    * The install out when the Agent disconnected (or, for a restarted brain, when it went out), and since when, until a
-   * slow snapshot shows the reset or the Agent connects again (#210): the `installNotRestarted` alert's. Null with none.
+   * slow snapshot shows the reset or the Agent connects again (#210): the `installNotRestarted` alert's. Or an install
+   * reported done with no reset in the next slow snapshot (`doneNotReset`, #213 re-review), until a reset. Null with
+   * neither.
    */
-  installAwaitingRestart(): { id: string; sinceMs: number } | null {
+  installAwaitingRestart(): InstallAwaitingRestart | null {
+    const notReset = this.#augmentations.installNotReset();
+    if (notReset !== null) return { id: INSTALL_INTENT.id, sinceMs: notReset.atMs, doneNotReset: true };
     const sent = this.#resetSent;
     if (sent === null || sent.field !== "lastAugReset" || this.#installDisconnectedAtMs === null) return null;
     return { id: sent.id, sinceMs: this.#installDisconnectedAtMs };
@@ -950,10 +963,11 @@ export class DesiredStateController {
     // Augmentations and the reset (#210) first: an install chosen holds the programs back.
     const augmentations = this.#augmentations.update({
       mediumData: this.#mediumData,
-      mediumAtMs: this.#mediumAtMs,
+      mediumGameTimeMs: this.#mediumGameTimeMs,
       slowData: this.#slowData,
       slowGameTimeMs: this.#slowGameTimeMs,
       doneIds: this.#doneIds(),
+      fastGameTimeMs: this.#fastGameTimeMs,
       nowMs: this.#lastEventAtMs,
       enabled: readAugmentationsEnabled(this.#store),
       homeRamEnabled: readHomeRamEnabled(this.#store),
@@ -1058,11 +1072,7 @@ export class DesiredStateController {
 }
 
 /** The install of augmentations (#164), as the brain's rule asks for it (#210): the owner's would have the same id. */
-const INSTALL_INTENT: Intent = {
-  id: intentId("installAugmentations", {}),
-  action: "installAugmentations",
-  args: {},
-};
+const INSTALL_INTENT: Intent = AUGMENTATION_INSTALL_INTENT;
 /** A program or home RAM purchase, for the dashboard: "BruteSSH.exe", "the TOR router", "home RAM to 16 GB". */
 function describePurchase(intent: Intent): string {
   if (intent.action === "buyTor") return "the TOR router";

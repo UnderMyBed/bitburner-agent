@@ -12,7 +12,7 @@ import {
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import type { AugmentationsView } from "../augmentations.ts";
+import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { type BatcherView, batcherNotRunning } from "../batcher.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
@@ -156,7 +156,7 @@ export interface DashboardStatusOptions {
   /** The augmentations' view (#210), likewise. */
   augmentations: AugmentationsView;
   /** The install out when the Agent disconnected, until the reset shows (#210): the controller's, for its alert. */
-  installAwaitingRestart: { id: string; sinceMs: number } | null;
+  installAwaitingRestart: InstallAwaitingRestart | null;
   /** The intents' view (#141), likewise. */
   intents: IntentView[];
   /** The work's view (#151), likewise. */

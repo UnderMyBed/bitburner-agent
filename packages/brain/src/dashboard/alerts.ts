@@ -2,7 +2,7 @@
 // there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
-import type { NotQueued } from "../augmentations.ts";
+import type { InstallAwaitingRestart, NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
@@ -116,7 +116,7 @@ export interface AlertFacts {
   /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
   augmentationsNotQueued: NotQueued[];
   /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
-  installAwaitingRestart: { id: string; sinceMs: number } | null;
+  installAwaitingRestart: InstallAwaitingRestart | null;
 }
 
 /**
@@ -231,7 +231,8 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
 /**
  * The augmentations' alerts (#210): `augmentationNotQueued`, one per purchase the Agent reported done that two faction
  * state reads since didn't show queued; and `installNotRestarted`, an install out when the Agent disconnected with no
- * slow snapshot showing the reset `INSTALL_NOT_RESTARTED_AFTER_MS` later.
+ * slow snapshot showing the reset `INSTALL_NOT_RESTARTED_AFTER_MS` later, or at once for an install reported done
+ * that the next slow snapshot didn't show reset (#213 re-review).
  */
 export function augmentationAlerts({
   nowMs,
@@ -247,7 +248,19 @@ export function augmentationAlerts({
         : `${notQueued.augmentation} `) +
       "was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
   }));
-  if (installAwaitingRestart !== null && nowMs - installAwaitingRestart.sinceMs >= INSTALL_NOT_RESTARTED_AFTER_MS) {
+  if (installAwaitingRestart?.doneNotReset === true) {
+    alerts.push({
+      name: "installNotRestarted",
+      sinceMs: installAwaitingRestart.sinceMs,
+      detail:
+        `${installAwaitingRestart.id}: install reported done but the game didn't reset: the faction state's queue ` +
+        "isn't the game's. The install cycle is called off, and no other is chosen until a reset (or the brain " +
+        "restarts): check the Augmentations page",
+    });
+  } else if (
+    installAwaitingRestart !== null &&
+    nowMs - installAwaitingRestart.sinceMs >= INSTALL_NOT_RESTARTED_AFTER_MS
+  ) {
     const minutes = Math.floor((nowMs - installAwaitingRestart.sinceMs) / 60_000);
     alerts.push({
       name: "installNotRestarted",

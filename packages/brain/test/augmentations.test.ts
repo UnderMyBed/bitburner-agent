@@ -8,6 +8,7 @@ import type { FactionState, MediumSnapshotData, SlowSnapshotData } from "@bitbur
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   AUGMENTATION_CYCLE_SETTING,
+  AUGMENTATION_INSTALL_INTENT,
   type AugmentationEvent,
   type AugmentationInputs,
   AugmentationRule,
@@ -27,6 +28,7 @@ const FIVE = [GEN_I, GEN_II, "BitWire", "Synaptic Enhancement Implant", "Neurotr
 const FIVE_COST = 447_170_900;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+const NOTHING_QUEUED = "nothing queued to install (the faction state's queue is empty)";
 
 let directory: string;
 let store: TelemetryStore;
@@ -99,11 +101,15 @@ let gameTimeMs = 7 * HOUR;
 beforeEach(() => {
   gameTimeMs = 7 * HOUR;
 });
-/** An update; the medium snapshot arrived with it (`mediumAtMs` its `nowMs`) unless said: its money is fresh. */
+/**
+ * An update; the fast and medium snapshots taken at the game's time `nowMs` unless said (the medium's then not before
+ * the fast's): its money is fresh.
+ */
 function update(fields: Partial<AugmentationInputs> & { slowData?: SlowSnapshotData | null } = {}) {
   return rule.update({
     mediumData: medium(),
-    mediumAtMs: fields.nowMs ?? 1_000,
+    mediumGameTimeMs: fields.nowMs ?? 1_000,
+    fastGameTimeMs: fields.nowMs ?? 1_000,
     slowData: slow(),
     slowGameTimeMs: gameTimeMs,
     doneIds: new Set(),
@@ -257,6 +263,80 @@ describe("the decision", () => {
     });
     if (chosen?.type !== "augmentationInstallChosen") throw new Error("no decision");
     expect(chosen.with?.ms as number).toBeLessThan(chosen.without?.ms as number);
+  });
+
+  /** CyberSec's five reached, and NiteSec's next far off: the money's wait the reason to install, as above. */
+  const FAR_OFF = [
+    { name: "CyberSec", reputation: 18_750, favor: 0 },
+    { name: "NiteSec", reputation: 6_250, favor: 0 },
+  ];
+  /** Nothing reached yet (CyberSec at 0): the income measured with no install to choose. */
+  const NOTHING_REACHED = [
+    { name: "CyberSec", reputation: 0, favor: 0 },
+    { name: "NiteSec", reputation: 6_250, favor: 0 },
+  ];
+  /** `minutes` of slow snapshots a minute apart, earning `perSecond`, from `earned`; returns the earned at the end. */
+  function earn(minutes: number, perSecond: number, earned: number, joined = NOTHING_REACHED, money = FIVE_COST) {
+    let total = earned;
+    for (let minute = 0; minute < minutes; minute += 1) {
+      gameTimeMs += MINUTE;
+      total += perSecond * 60;
+      update({ slowData: slow({ joined, earned: total }), mediumData: medium({ money }) });
+    }
+    return total;
+  }
+
+  test("the money's side: the higher of the window and the cycle's average (#213 re-review)", () => {
+    // As the reserve's test: CyberSec's five reached, NiteSec joined, $435m. 20 minutes at $28k/s, then 10 at $12k/s:
+    // steady (over half the average, $22.7k/s). At the average, the five are covered within 15 minutes ($455m), so
+    // their money is held back; at the window's $12k/s, they wouldn't be ($446m).
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 0, favor: 0 },
+    ];
+    const earned = earn(21, 28_000, 0, joined, 435e6);
+    earn(10, 12_000, earned, joined, 435e6);
+    expect(rule.view()).toMatchObject({ committed: false, decision: { install: false } });
+    expect(rule.reserve()).toBeCloseTo(FIVE_COST, 0);
+    expect(events).toEqual([]);
+  });
+
+  test("$1 a second after a high average: income unsteady, no install on it, logged (#213 re-review)", () => {
+    // 20 minutes at $10k/s, then 11 at $1/s: the window's $1/s, the cycle's average $6,250/s. On the window alone the
+    // money's wait looked like for ever, so installing was sooner.
+    let earned = earn(21, 10_000, 0);
+    earned = earn(11, 1, earned);
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ joined: FAR_OFF, earned: earned + 60 }), mediumData: medium({ money: FIVE_COST }) });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(events).toEqual([]);
+    expect(rule.view().waitingFor).toMatch(
+      /^a steady income: \$1 a second over the last 10 minutes is under half this cycle's average \(\$6,/,
+    );
+    expect(rule.view().decision).toMatchObject({ install: false, reason: "sooner installing" });
+    expect(rule.reserve()).toBe(0);
+    // Logged when it starts, not each update.
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ joined: FAR_OFF, earned: earned + 120 }), mediumData: medium({ money: FIVE_COST }) });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(lines.filter((line) => line.startsWith("augmentations: income unsteady: no install on it"))).toHaveLength(1);
+  });
+
+  test("an offline gap: the income measured afresh, so no install on what was earned across it (#213 re-review)", () => {
+    // 10 minutes at $10k/s, the game closed for an hour (offline, it earned a little), then CyberSec's five reached.
+    const earned = earn(11, 10_000, 0);
+    gameTimeMs += HOUR;
+    update({ slowData: slow({ joined: FAR_OFF, earned: earned + 1_000 }), mediumData: medium({ money: FIVE_COST }) });
+    expect(lines.at(-1)).toBe(
+      "augmentations: a gap of 1.0 h between slow snapshots: the income is measured afresh, over the next 10 minutes",
+    );
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view().waitingFor).toBe("the income, measured over 10 minutes of slow snapshots");
+    // Steady, ten minutes on: decided as before.
+    earn(10, 10_000, earned + 1_000, FAR_OFF);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "augmentationInstallChosen", reason: "sooner installing" }),
+    ]);
   });
 });
 
@@ -419,6 +499,7 @@ describe("committed", () => {
   });
 
   test("the money spent since the medium snapshot is taken off its money: no phantom money (#213 review)", () => {
+    // The game's times: the medium snapshot taken at 1,000, each purchase reported done in a fast one after it.
     // $447,170,900 covers the five exactly. Bought, with the medium snapshot from before them still the latest, nothing
     // is left: no NeuroFlux Governor ($18.6m) on money already spent.
     update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: FIVE_COST }) });
@@ -428,14 +509,14 @@ describe("committed", () => {
       const ask = update({
         slowData: slow({ reputation: 18_750, queued: [...queue] }),
         mediumData: medium({ money: FIVE_COST }),
-        mediumAtMs: 1_000,
+        mediumGameTimeMs: 1_000,
         nowMs,
       });
       expect(ask.intent).toEqual(purchaseIntent("CyberSec", name, 1));
       update({
         slowData: slow({ reputation: 18_750, queued: [...queue] }),
         mediumData: medium({ money: FIVE_COST }),
-        mediumAtMs: 1_000,
+        mediumGameTimeMs: 1_000,
         nowMs,
         doneIds: new Set([ask.intent?.id as string]),
       });
@@ -444,7 +525,7 @@ describe("committed", () => {
     const stale = update({
       slowData: slow({ reputation: 18_750, queued: queue }),
       mediumData: medium({ money: FIVE_COST }),
-      mediumAtMs: 1_000,
+      mediumGameTimeMs: 1_000,
       nowMs: 3_000,
     });
     // Not NeuroFlux Governor: waiting for the faction state to show the five, with nothing left to buy.
@@ -458,13 +539,13 @@ describe("committed", () => {
       slowData: slow({ reputation: 18_750 }),
       mediumData: medium({ money: 1e9 }),
       nowMs: 2_000,
-      mediumAtMs: 1_000,
+      mediumGameTimeMs: 1_000,
     });
     update({
       slowData: slow({ reputation: 18_750 }),
       mediumData: medium({ money: 1e9 }),
       nowMs: 2_000,
-      mediumAtMs: 1_000,
+      mediumGameTimeMs: 1_000,
       doneIds: new Set([first.intent?.id as string]),
     });
     // The newer snapshot shows $377,170,900 left: Gen II and the rest exactly, nothing more taken off it.
@@ -472,7 +553,7 @@ describe("committed", () => {
       slowData: slow({ reputation: 18_750, queued: [GEN_I] }),
       mediumData: medium({ money: 377_170_900 }),
       nowMs: 3_000,
-      mediumAtMs: 3_000,
+      mediumGameTimeMs: 3_000,
     });
     expect(ask.intent).toEqual(purchaseIntent("CyberSec", GEN_II, 1));
   });
@@ -614,8 +695,99 @@ describe("committed", () => {
     });
     expect(events.at(-1)).toMatchObject({
       type: "augmentationCycleCalledOff",
-      reason: "nothing was bought to install",
+      reason: NOTHING_QUEUED,
     });
+  });
+
+  test("every purchase a false done: no install of nothing, called off, and none chosen again (#213 re-review)", () => {
+    // Committed with $70m: a purchase reported done, and two reads since that don't show it queued, $0 left.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    const fields = { reputation: 18_750 };
+    const ask = update({ slowData: slow(fields), mediumData: medium({ money: 70e6 }) });
+    expect(ask.intent?.action).toBe("purchaseAugmentation");
+    update({
+      slowData: slow(fields),
+      mediumData: medium({ money: 70e6 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    for (let read = 0; read < 2; read += 1) {
+      gameTimeMs += MINUTE;
+      update({ slowData: slow(fields), mediumData: medium({ money: 0, homeRam: 2 ** 20 }) });
+    }
+    expect(rule.notQueued()).toHaveLength(1);
+    expect(events.filter((event) => event.type === "augmentationCycleCalledOff")).toEqual([
+      expect.objectContaining({ reason: NOTHING_QUEUED }),
+    ]);
+    // Never the install; and with nothing really queued, no install chosen again, update after update.
+    for (let again = 0; again < 3; again += 1) {
+      expect(update({ slowData: slow(fields), mediumData: medium({ money: 0, homeRam: 2 ** 20 }) })).toEqual({
+        intent: null,
+        install: false,
+        committed: false,
+      });
+    }
+    expect(events.filter((event) => event.type === "augmentationInstallChosen")).toHaveLength(0);
+  });
+
+  test("a restarted brain with the install asked for checks the queue first: empty, called off (#213 re-review)", () => {
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, installing: true }));
+    rule = newRule();
+    expect(update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 0 }) })).toEqual({
+      intent: null,
+      install: false,
+      committed: false,
+    });
+    expect(events).toEqual([{ type: "augmentationCycleCalledOff", atMs: 1_000, reason: NOTHING_QUEUED }]);
+  });
+
+  test("an install reported done that the next slow snapshot doesn't show reset: called off, alerted (#213 re-review)", () => {
+    committed();
+    const fields = { reputation: 18_750, queued: [...FIVE] };
+    expect(update({ slowData: slow(fields), mediumData: medium({ money: 0 }) }).install).toBe(true);
+    const done = new Set([AUGMENTATION_INSTALL_INTENT.id]);
+    expect(rule.askedDone(done)).toBe(true);
+    // Reported done: the next slow snapshot should show the reset. This one is the same snapshot again.
+    expect(update({ slowData: slow(fields), mediumData: medium({ money: 0 }), doneIds: done }).install).toBe(true);
+    expect(lines.at(-1)).toBe("augmentations: the install reported done: the next slow snapshot should show the reset");
+    expect(rule.installNotReset()).toBeNull();
+    // An update with that slow snapshot still the latest: not judged yet.
+    expect(update({ slowData: slow(fields), mediumData: medium({ money: 0 }), doneIds: done }).install).toBe(true);
+    expect(rule.installNotReset()).toBeNull();
+    // The next, with no reset: the cycle called off, the event, the alert's.
+    gameTimeMs += MINUTE;
+    const after = update({ slowData: slow(fields), mediumData: medium({ money: 0 }), doneIds: done, nowMs: 61_000 });
+    expect(after).toEqual({ intent: null, install: false, committed: false });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.installNotReset()).toEqual({ atMs: 61_000, queued: FIVE });
+    expect(events.slice(-2)).toEqual([
+      { type: "augmentationInstallNotReset", atMs: 61_000, queued: FIVE },
+      {
+        type: "augmentationCycleCalledOff",
+        atMs: 61_000,
+        reason: "the install was reported done but the game didn't reset",
+      },
+    ]);
+    expect(lines.some((line) => line.includes("INSTALL REPORTED DONE BUT THE GAME DIDN'T RESET"))).toBe(true);
+    // No install chosen again until a reset: the faction state's queue isn't the game's.
+    gameTimeMs += MINUTE;
+    expect(update({ slowData: slow(fields), mediumData: medium({ money: 1e9 }) }).committed).toBe(false);
+    expect(rule.view().waitingFor).toMatch(/^a reset: an install was reported done but the game didn't reset/);
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ lastAugReset: 9 * HOUR }) });
+    expect(rule.installNotReset()).toBeNull();
+  });
+
+  test("an install reported done, then the reset in the next slow snapshot: no failure", () => {
+    committed();
+    const fields = { reputation: 18_750, queued: [...FIVE] };
+    update({ slowData: slow(fields), mediumData: medium({ money: 0 }) });
+    const done = new Set([AUGMENTATION_INSTALL_INTENT.id]);
+    update({ slowData: slow(fields), mediumData: medium({ money: 0 }), doneIds: done });
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ lastAugReset: 9 * HOUR, ownedAugs: { BitWire: 1 } }), doneIds: done });
+    expect(rule.installNotReset()).toBeNull();
+    expect(events.map((event) => event.type)).not.toContain("augmentationInstallNotReset");
+    expect(events.map((event) => event.type)).not.toContain("augmentationCycleCalledOff");
   });
 });
 
