@@ -62,6 +62,8 @@ test.each(SEEDS)(
     // No longer asked for, and nothing else is due yet (avmnite-02h needs 2 ports and hacking 202 or more).
     const intents = fresh.latest<FastSnapshotData>("fast")?.intents ?? [];
     expect(intents.filter((outcome) => outcome.id.startsWith("backdoor("))).toEqual([]);
+    // Nothing due, so no backdoorOverdue alert.
+    expect(fresh.controller().backdoorsDue()).toEqual([]);
 
     // The game: CyberSec's invitation, and the terminal back home.
     const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));

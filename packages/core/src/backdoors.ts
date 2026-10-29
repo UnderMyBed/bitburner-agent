@@ -11,7 +11,7 @@ export const BACKDOOR_WORKER_NAME = "backdoor.js";
  * The hacker factions' servers (#195, `Server/data/SpecialServers.ts:5-8`), in the order the brain backdoors them: the
  * ports and hacking level each needs go up (`Server/data/servers.ts:1430-1517`: 1 port and level 51-60 for CSEC, 2 and
  * 202-220, 3 and 340-365, 4 and 505-550). Each faction invites the player once its server is backdoored, and asks
- * nothing else (`Faction/FactionInfo.tsx:402`, `:419`, `:464-466`, `:489`).
+ * nothing else (`Faction/FactionInfo.tsx:489`, `:464-466`, `:419`, `:402`).
  */
 export const HACKER_FACTION_SERVERS: readonly { hostname: string; faction: string }[] = [
   { hostname: "CSEC", faction: "CyberSec" },

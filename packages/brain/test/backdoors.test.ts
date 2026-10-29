@@ -232,4 +232,64 @@ describe("BackdoorRule: the controller's side, and the brain's log", () => {
     expect(again.intent(inputs(medium(58), 60, 2))).toEqual(backdoorIntent("CSEC"));
     expect(lines.filter((line) => line.includes("REPEATED"))).toEqual([]);
   });
+
+  test("REPEATED for one backdoored before the brain started, first seen before the slow snapshot said the game", () => {
+    const lines: string[] = [];
+    const rule = new BackdoorRule((line) => lines.push(line));
+    // The brain's first medium snapshot comes before its first slow one: seen with no reset, then given it.
+    rule.intent(inputs(medium(58, { backdoored: ["CSEC"] }), 0, null));
+    rule.intent(inputs(medium(58, { backdoored: ["CSEC"] }), 0.5, 1));
+    expect(rule.intent(inputs(medium(58), 5, 1))).toEqual(CSEC);
+    expect(lines).toEqual([
+      "backdoor: asking for CSEC (hacking 58, needs 54), for CyberSec's invitation",
+      "backdoor REPEATED: asking for CSEC again, though the game showed it backdoored at 2026-10-28T00:00:00.000Z, " +
+        "since its last reset",
+    ]);
+  });
+
+  test("not REPEATED when neither the sighting nor now has a reset: no telling which game", () => {
+    const lines: string[] = [];
+    const rule = new BackdoorRule((line) => lines.push(line));
+    rule.intent(inputs(medium(58, { backdoored: ["CSEC"] }), 0, null));
+    expect(rule.intent(inputs(medium(58), 60, null))).toEqual(CSEC);
+    expect(lines.filter((line) => line.includes("REPEATED"))).toEqual([]);
+  });
+
+  test("another lastAugReset forgets what was asked for: refused at the BitVerse, then the destroy", () => {
+    const lines: string[] = [];
+    const rule = new BackdoorRule((line) => lines.push(line));
+    rule.intent(inputs(medium(58), 0, 1));
+    // The next BitNode: CSEC due again, asked for afresh (and logged), never seen installed.
+    expect(rule.intent(inputs(medium(58), 60, 2))).toEqual(CSEC);
+    expect(lines.filter((line) => line.startsWith("backdoor: asking for CSEC"))).toHaveLength(2);
+  });
+
+  test("a snapshot that doesn't show the server isn't a reset: still asked for until the Agent says done", () => {
+    const rule = new BackdoorRule();
+    rule.intent(inputs(medium(58), 0));
+    rule.intent(inputs(medium(58, { backdoored: ["CSEC"] }), 1));
+    const withoutCsec = medium(58, { backdoored: ["CSEC"] });
+    withoutCsec.servers = withoutCsec.servers.filter((server) => server.hostname !== "CSEC");
+    expect(rule.intent(inputs(withoutCsec, 1.5))).toEqual(CSEC);
+    expect(rule.intent(inputs(medium(58, { backdoored: ["CSEC"] }), 2, 1, [CSEC.id]))).toBeNull();
+  });
+
+  test("due(): each server due since its first medium snapshot in a row; none without the Agent's snapshots", () => {
+    const rule = new BackdoorRule();
+    rule.intent(inputs(medium(53), 0));
+    expect(rule.due()).toEqual([]);
+    rule.intent(inputs(medium(54), 1));
+    rule.intent(inputs(medium(60), 2));
+    expect(rule.due()).toEqual([{ hostname: "CSEC", sinceMs: at(1) }]);
+    // At 207 avmnite-02h is due too, from then.
+    rule.intent(inputs(medium(207), 3));
+    expect(rule.due()).toEqual([
+      { hostname: "CSEC", sinceMs: at(1) },
+      { hostname: "avmnite-02h", sinceMs: at(3) },
+    ]);
+    rule.intent(inputs(medium(207, { backdoored: ["CSEC"] }), 4));
+    expect(rule.due()).toEqual([{ hostname: "avmnite-02h", sinceMs: at(3) }]);
+    rule.intent({ ...inputs(medium(207), 5), mediumData: null, mediumAtMs: null });
+    expect(rule.due()).toEqual([]);
+  });
 });

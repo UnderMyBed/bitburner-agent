@@ -12,8 +12,8 @@ import {
   type StaticSnapshotData,
   type WorkOutcome,
 } from "@bitburner-agent/core";
-import { BACKDOOR_OVERDUE_AFTER_MS, BackdoorTimeline } from "./backdoors.ts";
-import { INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
+import { BackdoorTimeline } from "./backdoors.ts";
+import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import {
   DEFAULT_GAP_THRESHOLD_MS,
@@ -647,7 +647,8 @@ function backdoorLines(facts: RunFacts): string[] {
       .changesOf(hostname)
       .some((change) => change.installed && change.atMs !== backdoors.firstMediumAtMs);
     if (invited.length === 0 && backdooredInWindow) invited.push(`no invitation from ${faction} seen`);
-    lines.push(`    ${hostname}: ${[...changes, ...invited].join("; ")}`);
+    const said = [...changes, ...invited];
+    lines.push(`    ${hostname}: ${said.length === 0 ? "not in the medium snapshots" : said.join("; ")}`);
   }
   return lines;
 }
@@ -655,14 +656,21 @@ function backdoorLines(facts: RunFacts): string[] {
 /**
  * Backdoors overdue (#195): a stretch of `BACKDOOR_OVERDUE_AFTER_MS` or more in which the medium snapshots showed one
  * of the hacker factions' servers rooted, at its level and not backdoored: the brain asks for it at once, and it takes
- * seconds. And backdoors asked for again: a `backdoor` intent on one of them first seen while the medium snapshots
- * showed it backdoored (not the window's first fast snapshot's, which may be from before).
+ * seconds; a gap in the medium snapshots ends a stretch, as it's a failure of its own. With no static snapshot in the
+ * window (the servers' levels), none can be judged, and it says so. And backdoors asked for again: a `backdoor` intent
+ * on one of them first seen while the medium snapshots showed it backdoored. Not one the window's first fast snapshot
+ * holds (asked for before), nor one that follows a not-done episode of the same id: an Agent that reconnected, or a
+ * reload, forgets the intents it held, and the brain gives it the same one again, from no tries (#195 review). The
+ * store can't say whose it was: the brain's rule, or the owner's queue.
  */
 function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
   const lines = [
     "  backdoors overdue (one of the hacker factions' servers rooted, at its level and not backdoored for " +
       `${formatDuration(BACKDOOR_OVERDUE_AFTER_MS)} or more):`,
   ];
+  if (!facts.backdoors.judged && facts.backdoors.firstMediumAtMs !== null) {
+    lines.push("    not judged: no static snapshot (the servers' levels) in the window: give --since an Agent's start");
+  }
   const overdue = facts.backdoors.due.filter((stretch) => stretch.toMs - stretch.fromMs >= BACKDOOR_OVERDUE_AFTER_MS);
   for (const { hostname, fromMs, toMs, ongoing } of overdue) {
     const line =
@@ -675,12 +683,17 @@ function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
   lines.push("  backdoors asked for again (on one of the hacker factions' servers already backdoored):");
   const firstFastMs = facts.fast[0]?.atMs;
   let repeated = 0;
-  for (const { id, firstSeenMs } of intentEpisodes(facts)) {
+  const lastEpisodeDone = new Map<string, boolean>();
+  for (const { id, firstSeenMs, outcome } of intentEpisodes(facts)) {
+    const followsNotDone = lastEpisodeDone.get(id) === false;
+    lastEpisodeDone.set(id, outcome.done);
     const hostname = HACKER_FACTION_SERVERS.find((server) => id === `backdoor(${server.hostname})`)?.hostname;
-    if (hostname === undefined || firstSeenMs === firstFastMs) continue;
+    if (hostname === undefined || firstSeenMs === firstFastMs || followsNotDone) continue;
     if (!facts.backdoors.installedAt(hostname, firstSeenMs)) continue;
     repeated++;
-    const line = `backdoor repeated: ${id} first seen ${formatIsoTime(firstSeenMs)}, with ${hostname} backdoored`;
+    const line =
+      `backdoor repeated: ${id} first seen ${formatIsoTime(firstSeenMs)}, with ${hostname} backdoored ` +
+      `(the brain's rule, or the owner's queue)`;
     lines.push(`    ${line}`);
     failures.push(line);
   }

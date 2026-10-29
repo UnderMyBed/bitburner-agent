@@ -1,10 +1,17 @@
 // Backdoors for the hacker factions (#195, M4 phase A slice A3): the brain asks for a backdoor on CSEC, avmnite-02h,
 // I.I.I.I and run4theh111z (core's `HACKER_FACTION_SERVERS`) as soon as each can be installed, so CyberSec, NiteSec,
-// The Black Hand and BitRunners invite the player (`Faction/FactionInfo.tsx:402`, `:419`, `:464-466`, `:489`). Sent as
-// the `backdoor` intent (#162). Joining them is slice A5's. Also what the run report reads of them (#185).
+// The Black Hand and BitRunners invite the player (`Faction/FactionInfo.tsx:489`, `:464-466`, `:419`, `:402`). Sent as
+// the `backdoor` intent (#162). Joining them is slice A5's. Also what the dashboard's `backdoorOverdue` alert and the
+// run report (#185) read of them.
 // - The game's terms (`Terminal/commands/backdoor.ts:23-32`): root, and the hacking level at the server's required
 //   level. An install recreates the servers (`Prestige.ts:74`, `:98`), so after one they're backdoored again.
 // - No switch: a backdoor costs no money and changes nothing a later choice depends on (#162).
+// - How long: a quarter of the hacking time (`Terminal/Terminal.ts:233-243`), `5 × (2.5 × required × security + 500) /
+//   (hacking + 50)` s over the speed multipliers (`Hacking.ts:60-80`). These four start at security 1 (their data's 0
+//   is skipped as falsy, `Server/ServerHelpers.ts:367`, so `Server/Server.ts:79-83` gives 1): about 8 s for CSEC at
+//   hacking 55, 4 to 5 s for the others at their levels, about 3.3 times that in BN14 (`HackingSpeedMultiplier` 0.3).
+// - Known limit: a brain restarted between a backdoor's end and the Agent's try that sends the terminal home leaves the
+//   terminal on that server (decision 42), as no snapshot says which server the terminal is on.
 import {
   HACKER_FACTION_SERVERS,
   type Intent,
@@ -31,12 +38,29 @@ export interface BackdoorPlan {
   waitingFor: string | null;
 }
 
+/** A server's backdoor due since a medium snapshot, for the dashboard's `backdoorOverdue` alert. */
+export interface BackdoorDue {
+  hostname: string;
+  sinceMs: number;
+}
+
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
 /** The player's hacking level in a medium snapshot, or null: it's the Agent's word. */
 function hackingLevelOf(mediumData: MediumSnapshotData): number | null {
   const level = (mediumData.player?.skills as { hacking?: unknown } | undefined)?.hacking;
   return isNumber(level) ? level : null;
+}
+
+/** The medium snapshot's server named `hostname`, or undefined. */
+function mediumServerOf(mediumData: MediumSnapshotData, hostname: string) {
+  return (Array.isArray(mediumData.servers) ? mediumData.servers : []).find((server) => server?.hostname === hostname);
+}
+
+/** Whether the medium snapshot shows `hostname` backdoored, or null when it doesn't say (no server, no field). */
+function backdoorInstalledIn(mediumData: MediumSnapshotData, hostname: string): boolean | null {
+  const installed = mediumServerOf(mediumData, hostname)?.backdoorInstalled;
+  return typeof installed === "boolean" ? installed : null;
 }
 
 /** Where one server's backdoor stands: installed, due (the terminal would take it), or not yet, with why. */
@@ -52,19 +76,18 @@ type Standing =
  */
 function standingOf(hostname: string, staticData: StaticSnapshotData, mediumData: MediumSnapshotData): Standing {
   const notYet = (waitingFor: string) => ({ installed: false as const, due: false as const, waitingFor });
-  const known = (Array.isArray(staticData.servers) ? staticData.servers : []).find(
+  const staticServer = (Array.isArray(staticData.servers) ? staticData.servers : []).find(
     (server) => server?.hostname === hostname,
   );
-  const now = (Array.isArray(mediumData.servers) ? mediumData.servers : []).find(
-    (server) => server?.hostname === hostname,
-  );
-  if (now?.backdoorInstalled === true) return { installed: true };
-  const required = known?.requiredHackingSkill;
-  if (now === undefined || now.backdoorInstalled !== false || !isNumber(required)) {
+  const mediumServer = mediumServerOf(mediumData, hostname);
+  const installed = backdoorInstalledIn(mediumData, hostname);
+  if (installed === true) return { installed: true };
+  const required = staticServer?.requiredHackingSkill;
+  if (mediumServer === undefined || installed === null || !isNumber(required)) {
     return notYet(`${hostname} in the Agent's snapshots`);
   }
-  if (now.hasAdminRights !== true) {
-    const ports = known?.numOpenPortsRequired;
+  if (mediumServer.hasAdminRights !== true) {
+    const ports = staticServer?.numOpenPortsRequired;
     return notYet(
       `root on ${hostname}` +
         (isNumber(ports) ? ` (the hack loop roots it with ${ports} port opener${ports === 1 ? "" : "s"})` : ""),
@@ -116,12 +139,15 @@ export interface BackdoorInputs {
 }
 
 /**
- * The rule as the desired state's controller runs it: the intent to send, and the brain's log as it asks for a
- * backdoor and as a medium snapshot shows it installed. Called on every update, so it logs only on a change.
+ * The rule as the desired state's controller runs it: the intent to send, the brain's log as it asks for a backdoor
+ * and as a medium snapshot shows it installed, and since when each is due (the `backdoorOverdue` alert). Called on
+ * every update, so it logs only on a change.
  * - Asked for until the connected Agent reports it done, as the owner's queue is (#141), not only until a medium
- *   snapshot shows it installed: a backdoor longer than the Agent's round goes on alone, and the try after it, which
- *   finds it installed, types `home` (#162, decision 42). Done, the Agent never runs it again while it's sent; a new
- *   Agent's worker finds it installed and only sends the terminal home. Never asked for twice.
+ *   snapshot shows it installed: every backdoor outlasts the Agent's 2 s round and goes on alone, and the try after it,
+ *   which finds it installed, types `home` (#162, decision 42). Done, the Agent never runs it again while it's sent; a
+ *   new Agent's worker finds it installed and only sends the terminal home. Never asked for twice.
+ * - A server asked for, seen installed, then shown not backdoored (`false`, not just missing from a snapshot) is gone:
+ *   a reset, asked for afresh. Another `lastAugReset` forgets what was asked for too (a destroy after a refused try).
  * - A REPEATED line when it asks for a server it saw backdoored since the game's last reset (`lastAugReset`): only a
  *   save loaded over the game, or a bug, would undo one. Not before the connected Agent's slow snapshot says the reset:
  *   after an install, the next Agent's first medium snapshot can come first.
@@ -132,6 +158,10 @@ export class BackdoorRule {
   readonly #seen = new Map<string, { atMs: number; resetAt: number | null }>();
   /** The server asked for, when, and when a medium snapshot first showed it installed (or null), or null. */
   #asked: { hostname: string; atMs: number; installedAtMs: number | null } | null = null;
+  /** The last `lastAugReset` the rule was given, or null. */
+  #lastResetAt: number | null = null;
+  /** Each server whose backdoor is due, since the first medium snapshot in a row that showed it due. */
+  readonly #dueSince = new Map<string, number>();
   #plan: BackdoorPlan | null = null;
 
   constructor(log: (line: string) => void = () => {}) {
@@ -143,17 +173,32 @@ export class BackdoorRule {
     return this.#plan;
   }
 
+  /** Each server whose backdoor is due, and since when, in the four's order: none without the Agent's snapshots. */
+  due(): BackdoorDue[] {
+    return [...this.#dueSince].map(([hostname, sinceMs]) => ({ hostname, sinceMs }));
+  }
+
   /** The backdoor to send now, or null: none due, or no snapshots from the connected Agent yet. */
   intent({ staticData, mediumData, mediumAtMs, resetAt, doneIds }: BackdoorInputs): Intent | null {
     if (staticData === null || mediumData === null || mediumAtMs === null) {
       this.#plan = null;
+      this.#dueSince.clear();
       return null;
     }
     const plan = chooseBackdoor(staticData, mediumData);
     this.#plan = plan;
-    // Seen before another reset: that game's, not this one's.
-    for (const [hostname, seen] of this.#seen) {
-      if (resetAt !== null && seen.resetAt !== null && seen.resetAt !== resetAt) this.#seen.delete(hostname);
+    for (const { hostname } of HACKER_FACTION_SERVERS) {
+      const standing = standingOf(hostname, staticData, mediumData);
+      if (standing.installed || !standing.due) this.#dueSince.delete(hostname);
+      else if (!this.#dueSince.has(hostname)) this.#dueSince.set(hostname, mediumAtMs);
+    }
+    if (resetAt !== null) {
+      // Another game: what was asked for in the last one is forgotten, and what it saw installed.
+      if (this.#lastResetAt !== null && this.#lastResetAt !== resetAt) this.#asked = null;
+      this.#lastResetAt = resetAt;
+      for (const [hostname, seen] of this.#seen) {
+        if (seen.resetAt !== null && seen.resetAt !== resetAt) this.#seen.delete(hostname);
+      }
     }
     for (const hostname of plan.installed) {
       const seen = this.#seen.get(hostname);
@@ -172,8 +217,10 @@ export class BackdoorRule {
       if (!doneIds.has(intent.id)) return intent;
       this.#asked = null;
     } else if (asked?.installedAtMs != null) {
-      // Seen installed, and gone again: a reset. Asked for afresh when it's due.
-      this.#asked = null;
+      // Seen installed, and shown not backdoored now: a reset. Asked for afresh when it's due. Kept while a snapshot
+      // doesn't say.
+      if (backdoorInstalledIn(mediumData, asked.hostname) === false) this.#asked = null;
+      else return backdoorIntent(asked.hostname);
     }
     const { next } = plan;
     if (next === null) return null;
@@ -198,11 +245,10 @@ export class BackdoorRule {
 // --- What the run report reads (#185) ---------------------------------------------------------------------------------
 
 /**
- * A backdoor due this long and not installed is overdue, a run report failure: the brain asks for it with the next
- * medium snapshot (10 s), the Agent tries it within a round and again every 30 s, and these four take seconds
- * (hacking time / 4, `Terminal/Terminal.ts:233-243`, at security 0: `2500 / (hacking + 50)` s, `Hacking.ts:60-80`).
+ * Medium snapshots (every 10 s) further apart than this are a gap: a due stretch ends there, as the heartbeat's gap
+ * is a failure of its own.
  */
-export const BACKDOOR_OVERDUE_AFTER_MS = 5 * 60_000;
+export const MEDIUM_SNAPSHOT_GAP_MS = 30_000;
 
 /** A stretch in which a server's backdoor was due, from the first medium snapshot that showed it to the last. */
 export interface DueStretch {
@@ -215,42 +261,56 @@ export interface DueStretch {
 
 /**
  * The hacker factions' servers over a run's snapshots, folded one at a time for the run report: each server's
- * `backdoorInstalled` as it changed, and the stretches its backdoor was due. Each medium snapshot is judged against
- * the newest static snapshot before it (an install rolls the servers' required levels again), or the first.
+ * `backdoorInstalled` as it changed, and the stretches its backdoor was due, each ended by a gap in the medium
+ * snapshots. Each medium snapshot is judged against the newest static snapshot before it (an install rolls the
+ * servers' required levels again), or the window's first; with none in the window, none is judged.
  */
 export class BackdoorTimeline {
   readonly #statics: { atMs: number; data: StaticSnapshotData }[] = [];
   /** Per server, each change of `backdoorInstalled`, in order: the first medium snapshot that showed it. */
   readonly #changes = new Map<string, { atMs: number; installed: boolean }[]>();
-  readonly #dueFrom = new Map<string, DueStretch>();
+  readonly #openStretches = new Map<string, DueStretch>();
   readonly due: DueStretch[] = [];
   #firstMediumAtMs: number | null = null;
+  #lastMediumAtMs: number | null = null;
 
   /** Static snapshots come first, all of them, in time order. */
   addStatic(atMs: number, data: StaticSnapshotData): void {
     this.#statics.push({ atMs, data });
   }
 
+  /** Whether there was a static snapshot to judge the medium snapshots by: without one, nothing is due. */
+  get judged(): boolean {
+    return this.#statics.length > 0;
+  }
+
   /** Medium snapshots, in time order. */
   addMedium(atMs: number, data: MediumSnapshotData): void {
     this.#firstMediumAtMs ??= atMs;
-    const known = this.#statics.findLast((each) => each.atMs <= atMs) ?? this.#statics[0];
+    if (this.#lastMediumAtMs !== null && atMs - this.#lastMediumAtMs > MEDIUM_SNAPSHOT_GAP_MS) {
+      for (const openStretch of this.#openStretches.values()) openStretch.ongoing = false;
+      this.#openStretches.clear();
+    }
+    this.#lastMediumAtMs = atMs;
+    const staticSnapshot = this.#statics.findLast((each) => each.atMs <= atMs) ?? this.#statics[0];
     for (const { hostname } of HACKER_FACTION_SERVERS) {
-      const standing = standingOf(hostname, known?.data ?? { servers: [] }, data);
+      const installed = backdoorInstalledIn(data, hostname);
       const changes = this.#changes.get(hostname) ?? [];
-      if (changes.at(-1)?.installed !== standing.installed) changes.push({ atMs, installed: standing.installed });
+      // A snapshot that doesn't say changes nothing.
+      if (installed !== null && changes.at(-1)?.installed !== installed) changes.push({ atMs, installed });
       this.#changes.set(hostname, changes);
-      const open = this.#dueFrom.get(hostname);
+      const standing = standingOf(hostname, staticSnapshot?.data ?? { servers: [] }, data);
+      const openStretch = this.#openStretches.get(hostname);
       if (!standing.installed && standing.due) {
-        if (open) open.toMs = atMs;
+        if (openStretch) openStretch.toMs = atMs;
         else {
           const stretch = { hostname, fromMs: atMs, toMs: atMs, ongoing: true };
-          this.#dueFrom.set(hostname, stretch);
+          this.#openStretches.set(hostname, stretch);
           this.due.push(stretch);
         }
-      } else if (open) {
-        open.ongoing = false;
-        this.#dueFrom.delete(hostname);
+      } else if (openStretch) {
+        openStretch.ongoing = false;
+        this.#openStretches.delete(hostname);
       }
     }
   }

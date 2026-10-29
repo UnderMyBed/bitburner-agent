@@ -607,23 +607,29 @@ describe("backdoors for the hacker factions (#195)", () => {
   const INVITED = "You received a faction invitation.Would you like to join CyberSec?";
   /**
    * A run with CSEC (needing 54) and avmnite-02h (207) in the snapshots, at hacking 60, money rising: `csec(offsetMs)`
-   * says whether CSEC is rooted and backdoored, and `intents(offsetMs)` what the Agent holds.
+   * says whether CSEC is rooted and backdoored, and `intents(offsetMs)` what the Agent holds. The static snapshot comes at
+   * `staticAtMs` (or none, for null), and `skipMedium` leaves medium snapshots out.
    */
   function hackerRun({
     csec,
     intents = () => [],
+    staticAtMs = 10 * SECOND,
+    skipMedium = () => false,
   }: {
     csec: (offsetMs: number) => { rooted: boolean; backdoored: boolean };
     intents?: (offsetMs: number) => IntentOutcome[];
+    staticAtMs?: number | null;
+    skipMedium?: (offsetMs: number) => boolean;
   }) {
     event(0, "brainStarted", { release: "r" });
-    snapshot("static", 10 * SECOND, {
-      servers: [
-        ...staticData().servers,
-        staticServer("CSEC", { moneyMax: 0, requiredHackingSkill: 54, numOpenPortsRequired: 1 }),
-        staticServer("avmnite-02h", { moneyMax: 0, requiredHackingSkill: 207, numOpenPortsRequired: 2 }),
-      ],
-    });
+    if (staticAtMs !== null)
+      snapshot("static", staticAtMs, {
+        servers: [
+          ...staticData().servers,
+          staticServer("CSEC", { moneyMax: 0, requiredHackingSkill: 54, numOpenPortsRequired: 1 }),
+          staticServer("avmnite-02h", { moneyMax: 0, requiredHackingSkill: 207, numOpenPortsRequired: 2 }),
+        ],
+      });
     for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData({ intents: intents(offsetMs) }));
     for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
       const data = mediumData({ money: offsetMs, hacking: 60 });
@@ -638,7 +644,7 @@ describe("backdoors for the hacker factions (#195)", () => {
         hackDifficulty: 0,
       });
       data.servers.push(server("CSEC", rooted, backdoored), server("avmnite-02h", true, false));
-      snapshot("medium", offsetMs, data);
+      if (!skipMedium(offsetMs)) snapshot("medium", offsetMs, data);
     }
   }
 
@@ -658,8 +664,8 @@ describe("backdoors for the hacker factions (#195)", () => {
         `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; CyberSec's invitation at ` +
         `${at(55 * SECOND)}\n` +
         "    avmnite-02h: not backdoored at the window's start\n" +
-        "    I.I.I.I: not backdoored at the window's start\n" +
-        "    run4theh111z: not backdoored at the window's start\n",
+        "    I.I.I.I: not in the medium snapshots\n" +
+        "    run4theh111z: not in the medium snapshots\n",
     );
     expect(text).toContain(`    ${BACKDOOR_CSEC}: done after 2 tries (sim); done by ${at(50 * SECOND)}`);
     expect(text).toContain("or more):\n    none\n  backdoors asked for again");
@@ -722,7 +728,8 @@ describe("backdoors for the hacker factions (#195)", () => {
       intents: (offsetMs) => (offsetMs >= 5 * MINUTE ? [intent(BACKDOOR_CSEC)] : []),
     });
     expect(report().failures).toEqual([
-      `backdoor repeated: ${BACKDOOR_CSEC} first seen ${at(5 * MINUTE)}, with CSEC backdoored`,
+      `backdoor repeated: ${BACKDOOR_CSEC} first seen ${at(5 * MINUTE)}, with CSEC backdoored (the brain's rule, or ` +
+        "the owner's queue)",
     ]);
   });
 
@@ -747,6 +754,52 @@ describe("backdoors for the hacker factions (#195)", () => {
       `    CSEC: backdoored at the window's start; not backdoored from ${at(10 * MINUTE)} (a reset); backdoored by ` +
         `${at(11 * MINUTE)}; no invitation from CyberSec seen`,
     );
+  });
+
+  test("not asked for again: given again to an Agent that reconnected before it reported it done (no tries again)", () => {
+    hackerRun({
+      csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= 50 * SECOND }),
+      intents: (offsetMs) =>
+        offsetMs < 40 * SECOND
+          ? []
+          : offsetMs < MINUTE
+            ? [intent(BACKDOOR_CSEC, { tries: 1 })]
+            : offsetMs < 70 * SECOND
+              ? [intent(BACKDOOR_CSEC, { tries: 0 })]
+              : [intent(BACKDOOR_CSEC, { done: true })],
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain("already backdoored):\n    none");
+  });
+
+  test("a medium snapshot before the window's first static one is judged by that one", () => {
+    hackerRun({
+      staticAtMs: 30 * SECOND,
+      csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= 6 * MINUTE }),
+    });
+    expect(report().failures).toEqual([
+      `backdoor overdue: CSEC due from ${at(10 * SECOND)} to ${at(6 * MINUTE - 10 * SECOND)} (5 min 40 s), not ` +
+        "backdoored",
+    ]);
+  });
+
+  test("with no static snapshot in the window, overdue can't be judged, and it says so", () => {
+    hackerRun({ staticAtMs: null, csec: () => ({ rooted: true, backdoored: false }) });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      "or more):\n    not judged: no static snapshot (the servers' levels) in the window: give --since an Agent's start\n" +
+        "    none\n",
+    );
+  });
+
+  test("a gap in the medium snapshots ends a due stretch: the gap isn't counted as overdue", () => {
+    hackerRun({
+      csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= 7 * MINUTE }),
+      skipMedium: (offsetMs) => offsetMs > 3 * MINUTE && offsetMs < 4 * MINUTE,
+    });
+    expect(report().failures).toEqual([]);
   });
 
   test("no medium snapshot: said so", () => {

@@ -326,6 +326,37 @@ test("a save that starts at the BitVerse (w0r1d_d43m0n backdoored, no portal pic
   await expectDestroyedOnce(fresh, resetAt, 3);
 });
 
+test("at the BitVerse (#195), the simulator's backdoor sends no terminal home from a server it backdoored: no sidebar there", async () => {
+  const effectors = `globalThis.${AGENT_SIM_EFFECTORS_GLOBAL}`;
+  const fresh = await freshStart({
+    withDesiredState: false,
+    // Singularity's `connect`, for the owner's terminal at the BitVerse.
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const,
+    beforeAgent: async (game) => {
+      await toTheRedPill(game);
+      // CSEC backdoored by the simulator's own effector: its terminal left there until a try sends it home.
+      await ownerRunsOnHome(
+        game,
+        `export async function main(ns) { ns.brutessh("CSEC"); ns.nuke("CSEC"); ${effectors}.backdoorServer("CSEC"); }`,
+      );
+      await game.game.run(30_000);
+      await ownerRunsOnHome(game, `export async function main(ns) { ${effectors}.backdoorServer("${DAEMON}"); }`);
+      await game.game.run(10_000);
+      expect((await game.simulation.diagnostics.game()).page).toBe("BitVerse");
+    },
+  });
+  // The owner's terminal on CSEC again, at the BitVerse.
+  await ownerRunsOnHome(fresh, 'export async function main(ns) { ns.singularity.connect("CSEC"); }');
+  const savedPlayer = async () =>
+    JSON.parse(JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8")).data.PlayerSave).data as {
+      currentServer: string;
+    };
+  expect((await savedPlayer()).currentServer).toBe("CSEC");
+  const typedBefore = await typedSoFar(fresh.simulation);
+  await ownerRunsOnHome(fresh, `export async function main(ns) { ${effectors}.backdoorServer("CSEC"); }`);
+  expect(await typedSoFar(fresh.simulation)).toEqual(typedBefore);
+  expect((await savedPlayer()).currentServer).toBe("CSEC");
+});
 test("into BN6 (sim): the Bladeburner cinematic left as its Continue does, so the next Agent starts on the Terminal", async () => {
   const fresh = await readyToDestroy();
   expect(fresh.controller().addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 6 } })).toMatchObject({

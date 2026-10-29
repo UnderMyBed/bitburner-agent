@@ -141,6 +141,7 @@ try {
         intents: desiredState.intentsView(),
         work: desiredState.workView(),
         income: incomeWatch.facts(),
+        backdoorsDue: desiredState.backdoorsDue(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {

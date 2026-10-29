@@ -206,7 +206,7 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 
 ## Intents
 
-M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, its next backdoor for a hacker faction (#195), and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
 - **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects (never into [safe mode](#safe-mode): one-shot actions need the brain), and runs each through its effector:
   - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
   - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time, with the backend ("travel to Aevum (ui): not done: …; trying again in 30 s");

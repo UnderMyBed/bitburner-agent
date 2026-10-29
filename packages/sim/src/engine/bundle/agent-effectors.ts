@@ -559,8 +559,7 @@ const effectors = {
    * engine counts its action down (hacking time / 4, `Terminal/Terminal.ts:233-243`, `engine.tsx:96`) as on the page,
    * the terminal busy meanwhile; the try that finds it installed, the terminal still there, types `home`. At the
    * BitVerse nothing is typed (#195): the page has no sidebar there (`ui/GameRoot.tsx:315-317`), so the `ui` worker
-   * can't open the Terminal. Not
-   * named `installBackdoor`, which is an NS function.
+   * can't open the Terminal. Not named `installBackdoor`, which is an NS function.
    */
   backdoorServer(hostname: string): EffectorResult {
     const server = GetServer(hostname);

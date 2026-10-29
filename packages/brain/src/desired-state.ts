@@ -1,9 +1,8 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136) or home's RAM (#138), the next backdoor for the hacker factions
-// (#195, ./backdoors.ts), and the owner's manual queue. Irreversible
-// intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
-// brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
+// (#195, ./backdoors.ts), and the owner's manual queue. Irreversible intents wait for their guard and a save backup
+// first (#147). Each state carries how long the Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
 // back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
@@ -20,7 +19,7 @@ import {
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { BackdoorRule } from "./backdoors.ts";
+import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
@@ -144,9 +143,9 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
  * - Intents go in order: the owner's manual queue first, as added, then the purchase, then the backdoor (#195), asked
- *   for until the connected Agent reports it done. A manual intent leaves the queue
- *   once the connected Agent reports it done: the game's state can change again (a travel there and back), so a
- *   snapshot can't say it was done.
+ *   for until the connected Agent reports it done. A manual intent leaves the queue once the connected Agent reports
+ *   it done: the game's state can change again (a travel there and back), so a snapshot can't say it was done. Never
+ *   more than the protocol's 100: a queue stored under the old limit (99) leaves the rules' intents out, logged.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
  *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
  *   intents after it go on without it: a held join doesn't hold up a travel queued later.
@@ -200,6 +199,9 @@ export class DesiredStateController {
   #backdoor: Intent | null = null;
   /** When the connected Agent's latest medium snapshot arrived, or null. */
   #mediumAtMs: number | null = null;
+  readonly #log: (line: string) => void;
+  /** The intents left out to keep to the protocol's 100, as last logged (#195 review): logged on a change. */
+  #leftOut = "";
 
   /** `log` is the brain's: the backdoors' lines (#195). */
   constructor({
@@ -215,6 +217,7 @@ export class DesiredStateController {
   }) {
     this.#channel = channel;
     this.#store = store;
+    this.#log = log;
     this.#backdoors = new BackdoorRule(log);
     this.#resetSent = readResetSentNote(store);
     this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
@@ -359,6 +362,11 @@ export class DesiredStateController {
         );
       })
       .map(({ id, done, tries, problem, backend }) => ({ id, done, tries, problem, backend: backend ?? null }));
+  }
+
+  /** Each of the hacker factions' servers due a backdoor, and since when (#195): the `backdoorOverdue` alert's. */
+  backdoorsDue(): BackdoorDue[] {
+    return this.#backdoors.due();
   }
 
   hackLoopView(): HackLoopView {
@@ -524,6 +532,18 @@ export class DesiredStateController {
       ...notManual(this.#purchase),
       ...notManual(this.#backdoor),
     ];
+    // A queue stored under the old limit (99, before #195) would make the state too long, and the Agent would refuse it
+    // whole: the rules' intents wait for room, the last first.
+    const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
+    if (leftOut.join() !== this.#leftOut) {
+      this.#leftOut = leftOut.join();
+      if (leftOut.length > 0) {
+        this.#log(
+          `intents: the manual queue holds ${manual.length}, over its ${MANUAL_QUEUE_LIMIT}: ${leftOut.join(", ")} ` +
+            `wait for room in the protocol's ${MAX_INTENTS} (cancel one)`,
+        );
+      }
+    }
     // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says
     // whether the implant is in, so the focus never flips on a connect. None set: not managed.
     const work = this.#slowData === null ? null : this.workView().desired;

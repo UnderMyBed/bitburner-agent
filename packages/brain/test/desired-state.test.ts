@@ -736,6 +736,68 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toEqual([]);
   });
 
+  test("an Agent that reconnects while it's installed but not reported done is given it again, until it says done", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    send(connection, "medium", csecAt(60));
+    send(connection, "medium", csecAt(60, { backdoored: true }));
+    connection.dropFromGameSide();
+    const again = connectAgent("session-2");
+    send(again, "static", withCsec, "session-2");
+    send(again, "medium", csecAt(60, { backdoored: true }), "session-2");
+    expect(lastIntents(again)).toEqual([BACKDOOR_CSEC]);
+    expect(controller.backdoorsDue()).toEqual([]);
+    send(
+      again,
+      "fast",
+      {
+        degradedTiers: [],
+        pageHeapUsedBytes: null,
+        game: null,
+        intents: [{ id: BACKDOOR_CSEC.id, done: true, tries: 1, problem: null, backend: "ui" }],
+        dialogs: { handled: [], blocking: null },
+      },
+      "session-2",
+    );
+    send(again, "medium", csecAt(60, { backdoored: true }), "session-2");
+    expect(lastIntents(again)).toEqual([]);
+  });
+
+  test("backdoorsDue(): the servers due and since when, for the backdoorOverdue alert; none once disconnected", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    send(connection, "medium", csecAt(60));
+    expect(controller.backdoorsDue()).toEqual([{ hostname: "CSEC", sinceMs: expect.any(Number) }]);
+    connection.dropFromGameSide();
+    expect(controller.backdoorsDue()).toEqual([]);
+  });
+
+  test("a queue stored under the old limit (99) leaves the backdoor out, logged once, so the state stays at 100", () => {
+    const lines: string[] = [];
+    const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
+    const queue = Array.from({ length: 99 }, (_, index) =>
+      intent({
+        action: "upgradeHomeRam",
+        args: { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] as string },
+      }),
+    );
+    store.setSetting("intents.manual", JSON.stringify(queue));
+    store.setSetting("homeRam.enabled", "false");
+    new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    send(connection, "slow", slowData());
+    send(connection, "medium", csecAt(60, { money: 2_000_000 }));
+    send(connection, "medium", csecAt(61, { money: 2_000_000 }));
+    expect(lastIntents(connection)).toHaveLength(100);
+    expect(lastIntents(connection)?.at(-1)).toEqual(buyProgram("FTPCrack.exe"));
+    expect(lines.filter((line) => line.startsWith("intents:"))).toEqual([
+      "intents: the manual queue holds 99, over its 98: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
+    ]);
+  });
+
   test("after the purchase, so a `buy` never waits for its terminal action; once if the owner queued it too", () => {
     store.setSetting("homeRam.enabled", "false");
     const controller = new DesiredStateController({ channel, store });
