@@ -6,6 +6,7 @@ import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  AUGMENTATION_NAMES,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -22,7 +23,7 @@ import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
-import { readManualIntents, writeResetSentNote } from "../src/manual-intents.ts";
+import { readManualIntents, readResetSentNote, writeResetSentNote } from "../src/manual-intents.ts";
 import { readProgramsEnabled } from "../src/programs.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -582,18 +583,18 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
   });
 
-  test("full at 96: room for the purchase, the backdoor (#195), the join (#203), the augmentation's (#210)", () => {
+  test("full at 95: room for the purchase, the backdoor, the join, the augmentation's and the destroy (#215)", () => {
     const controller = new DesiredStateController({ channel, store });
     const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
-    for (let index = 0; index < 96; index += 1) {
+    for (let index = 0; index < 95; index += 1) {
       const args = { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] };
       expect(controller.addManualIntent({ action: "upgradeHomeRam", args })).toMatchObject({ ok: true });
     }
     expect(controller.addManualIntent({ action: "travel", args: { city: "Aevum" } })).toEqual({
       ok: false,
-      reason: "the manual queue is full: 96 intents at most",
+      reason: "the manual queue is full: 95 intents at most",
     });
-    expect(readManualIntents(store)).toHaveLength(96);
+    expect(readManualIntents(store)).toHaveLength(95);
   });
 
   test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
@@ -796,7 +797,7 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toHaveLength(100);
     expect(lastIntents(connection)?.at(-1)).toEqual(buyProgram("FTPCrack.exe"));
     expect(lines.filter((line) => line.startsWith("intents:"))).toEqual([
-      "intents: the manual queue holds 99, over its 96: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
+      "intents: the manual queue holds 99, over its 95: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
     ]);
   });
 
@@ -1408,6 +1409,67 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.installAwaitingRestart()).toBeNull();
     });
 
+    /** `richMedium` at hacking `hacking`, with home's RAM `homeRam` and w0r1d_d43m0n rooted if said. */
+    const lateMedium = (money: number, { hacking = 3000, homeRam = 2 ** 20, daemon = false } = {}) => {
+      const medium = richMedium(money);
+      const servers = medium.servers.map((server) =>
+        server.hostname === "home" ? { ...server, maxRam: homeRam } : server,
+      );
+      return {
+        ...medium,
+        player: { ...medium.player, skills: { ...medium.player.skills, hacking } },
+        servers: daemon
+          ? [...servers, { ...(servers[0] as (typeof servers)[number]), hostname: "w0r1d_d43m0n", maxRam: 0 }]
+          : servers,
+      };
+    };
+
+    test("the World Daemon's destroy goes before the brain's install (#215 review): an install drops its level", () => {
+      store.setSetting("augmentations.cycle", JSON.stringify({ lastAugReset: 1_000, installing: true }));
+      const { controller, connection } = connectedWithLoopOff();
+      send(connection, "static", {
+        servers: [
+          ...network.servers,
+          staticServer("w0r1d_d43m0n", { requiredHackingSkill: 3000, numOpenPortsRequired: 5 }),
+        ],
+      });
+      const slow = slowWith(FIVE);
+      send(connection, "slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } } });
+      send(connection, "medium", lateMedium(0, { daemon: true }));
+      expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+        ["destroyBitNode(1)", "worldDaemon"],
+        [INSTALL.id, "augmentation"],
+      ]);
+    });
+
+    test("The Red Pill installed, the destroy on: no ordinary install chosen (#215 review)", () => {
+      const { controller, connection } = connectedWithLoopOff();
+      const slow = slowWith();
+      send(connection, "slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } } });
+      send(connection, "medium", lateMedium(1e9, { hacking: 300 }));
+      expect(controller.augmentationsView()).toMatchObject({ committed: false });
+      expect(controller.augmentationsView().waitingFor).toMatch(/^the BitNode's destroy: The Red Pill is installed/);
+      // Off, ordinary installs go on: CyberSec's five.
+      controller.setWorldDaemonEnabled(false);
+      expect(controller.augmentationsView()).toMatchObject({ committed: true });
+    });
+
+    test("Daedalus's $100b held from home RAM too (#215 review)", () => {
+      const thirty = Object.fromEntries(
+        AUGMENTATION_NAMES.filter((name) => name !== "The Red Pill" && name !== "NeuroFlux Governor")
+          .slice(0, 30)
+          .map((name) => [name, 1]),
+      );
+      const { controller, connection } = connectedWithLoopOff();
+      const slow = slowWith();
+      send(connection, "slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: thirty } });
+      // $101b: home's next upgrade (1 TB to 2 TB, about $3b) would take it under $100b.
+      send(connection, "medium", lateMedium(101e9, { hacking: 2600, homeRam: 1024 }));
+      expect(controller.homeRamView().waitingFor).toBe(
+        "money above the $100,000,000,000 held for Daedalus's invitation",
+      );
+    });
+
     test("the owner's install queued too: one install, the owner's", () => {
       const { controller, connection } = connectedWithLoopOff();
       controller.addManualIntent({ action: "installAugmentations", args: {} });
@@ -1499,11 +1561,23 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         ]);
       });
 
+      test("a restarted brain keeps its destroy's note, asking again until the reset shows (#215 review)", () => {
+        writeResetSentNote(store, { id: BRAINS.id, field: "lastNodeReset", resetAt: 1_000, sentAtMs: 5 });
+        const controller = new DesiredStateController({ channel, store });
+        expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([[BRAINS.id, "worldDaemon"]]);
+        expect(readResetSentNote(store)).toMatchObject({ id: BRAINS.id, resetAt: 1_000 });
+        const connection = connectAgent();
+        send(connection, "slow", slowAt(1_000, 2_000));
+        expect(controller.intentsView()).toEqual([]);
+        expect(readResetSentNote(store)).toBeNull();
+      });
+
       test("the owner's destroy wins, whatever BitNode it enters; the switch off, none of the brain's", () => {
         const { controller, daemonMedium } = withTheRedPill();
         controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
         daemonMedium();
         expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([[DESTROY.id, "manual"]]);
+        expect(controller.worldDaemonView()).toMatchObject({ destroying: true, ownersDestroy: true });
         expect(controller.cancelManualIntent(DESTROY.id)).toBe(true);
         controller.setWorldDaemonEnabled(false);
         expect(store.getSetting("worldDaemon.enabled")).toBe("false");
@@ -1515,6 +1589,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
 
     test("its guard: what's queued before it first, then w0r1d_d43m0n's preconditions, each saying why, before any backup", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, daemonMedium, releaseDestroy } = readyToDestroy();
+      const stored: unknown[] = [];
+      controller.subscribe((event) => stored.push(event));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
       controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
       controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
@@ -1538,6 +1614,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([]);
       await releaseDestroy();
       expect(sentIds()).toEqual([DESTROY.id]);
+      // Stored as it goes out (#215): the owner's, into their BitNode.
+      expect(stored).toEqual([
+        { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "manual", nextBitNode: 2 },
+      ]);
       expect(waitingFor(VOLHAVEN.id)).toBe(AFTER_DESTROY);
       // Once out, still judged: the level short again (an augmentation's multiplier gone), it's withdrawn.
       daemonMedium(10);

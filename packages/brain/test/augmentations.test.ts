@@ -82,6 +82,7 @@ function slow({
   lastAugReset = 0,
   ownedAugs = {} as Record<string, number>,
   reading = "read" as "read" | "skipped" | "unread",
+  currentNode = 1,
 } = {}): SlowSnapshotData {
   const state: FactionState = {
     joined: joined ?? [{ name: "CyberSec", reputation, favor: 0 }],
@@ -89,7 +90,7 @@ function slow({
     queuedAugmentations: queued,
   };
   return {
-    resetInfo: { lastAugReset, lastNodeReset: 0, currentNode: 1, ownedAugs, ownedSF: {}, bitNodeOptions: {} },
+    resetInfo: { lastAugReset, lastNodeReset: 0, currentNode, ownedAugs, ownedSF: {}, bitNodeOptions: {} },
     purchasedServers: [],
     moneySources: { hacking: earned, servers: -5e9, other: 1e12 },
     factions:
@@ -121,6 +122,7 @@ function update(fields: Partial<AugmentationInputs> & { slowData?: SlowSnapshotD
     nowMs: 1_000,
     enabled: true,
     homeRamEnabled: true,
+    destroyWanted: false,
     ...fields,
   });
 }
@@ -890,10 +892,85 @@ describe("The Red Pill and Daedalus first (#215)", () => {
     expect(readAugmentationCycle(store)).not.toBeNull();
   });
 
-  test("The Red Pill installed: Daedalus is done with, ordinary installs go on", () => {
+  test("The Red Pill installed, the destroy wanted: no install, logged once; not wanted, ordinary installs go on", () => {
     const fields = { reputation: 18_750, ownedAugs: { ...THIRTY, [RED_PILL]: 1 } };
+    const why =
+      "the BitNode's destroy: The Red Pill is installed, and an install would reset the hacking level w0r1d_d43m0n " +
+      "needs (the destroy switched on)";
+    for (let again = 0; again < 2; again += 1) {
+      update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 50e9 }), destroyWanted: true });
+    }
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view()).toMatchObject({ waitingFor: why, reserve: 0 });
+    expect(lines).toEqual([`augmentations: no install, waiting for ${why}`]);
     update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 50e9 }) });
     expect(readAugmentationCycle(store)).not.toBeNull();
+  });
+
+  test("The Red Pill bought, never queued: the cycle called off, no install without it, none chosen again (R2)", () => {
+    const joined = [{ name: "Daedalus", reputation: 2.5e6, favor: 0 }];
+    const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }) });
+    expect(ask.intent).toEqual(purchaseIntent("Daedalus", RED_PILL, 1));
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: 0 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    for (let read = 0; read < 2; read += 1) {
+      gameTimeMs += MINUTE;
+      expect(update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }) }).install).toBe(false);
+    }
+    expect(rule.notQueued()).toEqual([expect.objectContaining({ augmentation: RED_PILL })]);
+    expect(events.map((event) => event.type)).toEqual([
+      "augmentationInstallChosen",
+      "augmentationBought",
+      "augmentationNotQueued",
+      "augmentationCycleCalledOff",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      reason: "The Red Pill reported bought but never queued: no install without it",
+    });
+    for (let again = 0; again < 3; again += 1) {
+      gameTimeMs += MINUTE;
+      expect(update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }) })).toEqual({
+        intent: null,
+        install: false,
+        committed: false,
+      });
+    }
+    expect(events).toHaveLength(4);
+    expect(rule.view().waitingFor).toMatch(/^The Red Pill reported bought but not in the faction state's queue/);
+  });
+
+  test("committed for Daedalus's way, The Red Pill not bought: no install of the rest", () => {
+    // Committed (an ordinary cycle, say), Daedalus joined short of The Red Pill: the five, then no install.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "Daedalus", reputation: 1e6, favor: 0 },
+    ];
+    const ask = update({ slowData: slow({ joined, queued: [...FIVE] }), mediumData: medium({ money: 0 }) });
+    expect(ask).toEqual({ intent: null, install: false, committed: true });
+    expect(rule.view().waitingFor).toBe("The Red Pill bought and shown queued, before the install");
+  });
+
+  test("BN15: Daedalus doesn't sell The Red Pill (a labyrinth's reward), so no hold for its invitation", () => {
+    update({
+      slowData: slow({ reputation: 18_750, ownedAugs: THIRTY, currentNode: 15 }),
+      mediumData: medium({ hacking: 2600, money: 150e9 }),
+    });
+    expect(rule.daedalusHold()).toBe(0);
+    expect(rule.view().waitingFor ?? "").not.toMatch(/^Daedalus's invitation/);
+  });
+
+  test("Daedalus's hold is home RAM's too: $100b while it holds, 0 otherwise", () => {
+    const fields = { reputation: 18_750, ownedAugs: THIRTY };
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 150e9 }) });
+    expect(rule.daedalusHold()).toBe(100e9);
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2600, money: 150e9 }), enabled: false });
+    expect(rule.daedalusHold()).toBe(0);
+    update({ slowData: slow(fields), mediumData: medium({ hacking: 2000, money: 150e9 }) });
+    expect(rule.daedalusHold()).toBe(0);
   });
 });
 

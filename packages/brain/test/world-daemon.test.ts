@@ -11,6 +11,9 @@ import {
   describeWorldDaemonPath,
   HackingExpRate,
   hackingEtaSeconds,
+  nextBitNodeProblem,
+  RED_PILL_INSTALL_STALLED_AFTER_MS,
+  RED_PILL_REPUTATION_STALLED_AFTER_MS,
   WORLD_DAEMON_DESTROY_INTENT,
   WORLD_DAEMON_STALLED_AFTER_MS,
   type WorldDaemonEvent,
@@ -60,9 +63,10 @@ function slow({
   invited = false,
   queued = [] as string[],
   lastNodeReset = 0,
+  ownedSF = {} as Record<string, number>,
 } = {}): SlowSnapshotData {
   return {
-    resetInfo: { lastAugReset: 0, lastNodeReset, currentNode: 1, ownedAugs, ownedSF: {}, bitNodeOptions: {} },
+    resetInfo: { lastAugReset: 0, lastNodeReset, currentNode: 1, ownedAugs, ownedSF, bitNodeOptions: {} },
     purchasedServers: [],
     factions: {
       backend: "sim",
@@ -275,22 +279,92 @@ describe("stalls", () => {
       step: "daedalus",
       detail: "Daedalus's requirements met, not joined (invited)",
     });
-    // Joined: that's over; The Red Pill reached starts its own.
+    // Joined: that's over; The Red Pill reached starts its own, 15 minutes for A6's whole commit (#215 review).
+    const reachedAt = 2 * WORLD_DAEMON_STALLED_AFTER_MS;
+    update({ ...met, slowData: slow({ ownedAugs: THIRTY, daedalus: 2.5e6 }), nowMs: reachedAt });
+    expect(rule.stall()).toBeNull();
     update({
       ...met,
       slowData: slow({ ownedAugs: THIRTY, daedalus: 2.5e6 }),
-      nowMs: 2 * WORLD_DAEMON_STALLED_AFTER_MS,
+      nowMs: reachedAt + RED_PILL_INSTALL_STALLED_AFTER_MS - 1,
     });
     expect(rule.stall()).toBeNull();
     update({
       ...met,
       slowData: slow({ ownedAugs: THIRTY, daedalus: 2.5e6 }),
-      nowMs: 3 * WORLD_DAEMON_STALLED_AFTER_MS,
+      nowMs: reachedAt + RED_PILL_INSTALL_STALLED_AFTER_MS,
     });
     expect(rule.stall()).toMatchObject({ step: "redPill", detail: "The Red Pill reached, not installed" });
     expect(events.map((event) => (event.type === "worldDaemonStalled" ? event.step : event.type))).toEqual([
       "daedalus",
       "redPill",
     ]);
+  });
+
+  test("The Red Pill short, Daedalus's reputation not rising 10 minutes: loud, as A6 holds every install meanwhile", () => {
+    expect(RED_PILL_REPUTATION_STALLED_AFTER_MS).toBe(10 * MINUTE);
+    expect(RED_PILL_INSTALL_STALLED_AFTER_MS).toBe(15 * MINUTE);
+    const at = (reputation: number, nowMs: number) =>
+      update({
+        mediumData: medium({ hacking: 2600 }),
+        slowData: slow({ ownedAugs: THIRTY, daedalus: reputation }),
+        nowMs,
+      });
+    at(1e6, 0);
+    at(1e6, RED_PILL_REPUTATION_STALLED_AFTER_MS - 1);
+    expect(rule.stall()).toBeNull();
+    // Risen: watched from then.
+    at(1.1e6, RED_PILL_REPUTATION_STALLED_AFTER_MS - 1);
+    at(1.1e6, 2 * RED_PILL_REPUTATION_STALLED_AFTER_MS - 2);
+    expect(rule.stall()).toBeNull();
+    at(1.1e6, 2 * RED_PILL_REPUTATION_STALLED_AFTER_MS - 1);
+    const detail =
+      "The Red Pill's reputation at Daedalus not rising (1,100,000 of 2,500,000): no install is chosen meanwhile, so " +
+      "nothing earning it stalls A6";
+    expect(rule.stall()).toEqual({
+      step: "redPillReputation",
+      sinceMs: RED_PILL_REPUTATION_STALLED_AFTER_MS - 1,
+      detail,
+    });
+    expect(events).toEqual([
+      {
+        type: "worldDaemonStalled",
+        atMs: 2 * RED_PILL_REPUTATION_STALLED_AFTER_MS - 1,
+        step: "redPillReputation",
+        sinceMs: RED_PILL_REPUTATION_STALLED_AFTER_MS - 1,
+        detail,
+      },
+    ]);
+    // Rising again: over, and a later stall is stored afresh.
+    at(1.2e6, 2 * RED_PILL_REPUTATION_STALLED_AFTER_MS);
+    expect(rule.stall()).toBeNull();
+  });
+
+  test("Source-File 1 at 3: BitNode 1 gives nothing more, so no destroy; logged once and loud at once", () => {
+    expect(nextBitNodeProblem({ 1: 2 })).toBeNull();
+    const problem = nextBitNodeProblem({ 1: 3 });
+    expect(problem).toBe(
+      "Source-File 1 is at level 3, so BitNode 1 gives nothing more: the next BitNode is yours (turn the switch off " +
+        "and queue destroyBitNode)",
+    );
+    const atThree = { slowData: slow({ ownedSF: { 1: 3 } }) };
+    expect(update({ ...atThree, nowMs: 0 })).toBe(false);
+    expect(update({ ...atThree, nowMs: 1 })).toBe(false);
+    expect(lines).toEqual([`world daemon: STALLED 0 min: the BitNode not destroyed: ${problem}`]);
+    expect(rule.stall()).toEqual({ step: "nextBitNode", sinceMs: 0, detail: `the BitNode not destroyed: ${problem}` });
+    // Off, it's the owner's: quiet.
+    update({ ...atThree, enabled: false });
+    expect(rule.stall()).toBeNull();
+  });
+});
+
+describe("a restarted brain", () => {
+  test("its destroy restored from the reset note: held with no snapshots, over at another lastNodeReset", () => {
+    rule.restore(0);
+    expect(update({ staticData: null, mediumData: null, slowData: null })).toBe(true);
+    expect(update({ slowData: slow({ lastNodeReset: 0 }), mediumData: medium({ hacking: 1 }) })).toBe(true);
+    expect(
+      update({ slowData: slow({ ownedAugs: {}, lastNodeReset: 5_000 }), mediumData: medium({ hacking: 1 }) }),
+    ).toBe(false);
   });
 });

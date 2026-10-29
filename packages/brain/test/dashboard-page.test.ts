@@ -112,6 +112,7 @@ const BUSY_STATUS: DashboardStatus = {
       "The Red Pill: Daedalus's reputation 1,000,000 of 2,500,000 at 40.0/s: about 10.4 h",
     ],
     destroying: false,
+    ownersDestroy: false,
     stall: null,
   },
   intents: [
@@ -795,10 +796,29 @@ test.each([
     "STALLED: w0r1d_d43m0n at its level, the BitNode not destroyed",
   ],
   ["with no path yet", { lines: [] }, "Waiting for the Agent's snapshots"],
+  [
+    "the owner's destroy queued",
+    { destroying: true, ownersDestroy: true },
+    "yours is queued, and goes instead of the brain's",
+  ],
 ])("the World Daemon, %s, says so", async (_description, changes, text) => {
   const worldDaemon = { ...(BUSY_STATUS.worldDaemon as NonNullable<DashboardStatus["worldDaemon"]>), ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, worldDaemon } }));
   expect(textOf(document, "#world-daemon")).toContain(text);
+});
+
+test("the World Daemon from a brain that doesn't give it: said, and its button does nothing (#215 review)", async () => {
+  const { document, requests } = await openPage((request) =>
+    request.method === "POST"
+      ? { status: 200, body: {} }
+      : { status: 200, body: { ...BUSY_STATUS, worldDaemon: null } },
+  );
+  expect(textOf(document, "#world-daemon")).toContain("Not given by this brain");
+  const button = document.querySelector("#world-daemon button") as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  button.click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST")).toEqual([]);
 });
 
 test("the augmentations' button (#210) sends its switch, and each state reads plainly", async () => {

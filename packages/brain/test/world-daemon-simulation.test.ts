@@ -10,7 +10,14 @@
 //   3000, and $1t). The brain buys the port openers, the hack loop roots it, and the World Daemon rule destroys BN1
 //   into BN1 through the gate and a backup; the game starts boot.js, and the next Agent connects in BN1 with SF1.1.
 // CI runs seed 1; `WORLD_DAEMON_SEEDS` (`1,2,3`, say) runs others.
-import { AUGMENTATION_NAMES, isWorthInstalling, type SlowSnapshotData } from "@bitburner-agent/core";
+import {
+  AUGMENTATION_NAMES,
+  augmentationsSoldBy,
+  isWorthInstalling,
+  type MediumSnapshotData,
+  PORT_OPENER_PROGRAMS,
+  type SlowSnapshotData,
+} from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
 import { runReport } from "../src/run-report.ts";
@@ -34,8 +41,13 @@ const MINUTE = 60_000;
 const RED_PILL = "The Red Pill";
 /** Hacking experience past level 3000 at any multiplier from 1 (`calculateSkill`: 32 × ln(exp + 534.6) − 200). */
 const PAST_3000_EXP = 1e44;
-/** Thirty augmentations worth installing, given installed: Daedalus's count in BN1 (`FactionInfo.tsx:141-142`). */
-const THIRTY = AUGMENTATION_NAMES.filter((name) => isWorthInstalling(name)).slice(0, 30);
+/** CyberSec's shop: joined with its reputation, so an ordinary install would be chosen but for Daedalus's hold. */
+const CYBERSEC = augmentationsSoldBy("CyberSec", 1, null);
+/**
+ * Thirty augmentations worth installing, none of CyberSec's, given installed: Daedalus's count in BN1
+ * (`FactionInfo.tsx:141-142`).
+ */
+const THIRTY = AUGMENTATION_NAMES.filter((name) => isWorthInstalling(name) && !CYBERSEC.includes(name)).slice(0, 30);
 /** Each stage's bound: a join, a reputation's last stretch, purchases, an install or a destroy through the gate. */
 const STAGE_MS = 15 * MINUTE;
 
@@ -57,6 +69,8 @@ test.each(SEEDS)(
         for (const augmentation of THIRTY) await simulation.diagnostics.giveInstalledAugmentation(augmentation);
         await simulation.diagnostics.gainHackingExp(PAST_3000_EXP);
         await simulation.diagnostics.setMoney(200e9);
+        // CyberSec's five within its reputation: without the hold, A6 would install them at once.
+        await simulation.diagnostics.joinFactionWithReputation("CyberSec", 18_750);
       },
     });
     const { game, brain, simulation } = fresh;
@@ -67,8 +81,15 @@ test.each(SEEDS)(
         .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() })
         .filter((event) => event.kind === kind);
 
-    // Daedalus invites (the game's check, every 2 s), and A5 joins it; A6 holds ordinary installs meanwhile.
-    await game.runUntil(() => joined().some((faction) => faction.name === "Daedalus"), STAGE_MS);
+    // Daedalus invites (the game's check, every 2 s), and A5 joins it; A6 holds the install CyberSec's five would have
+    // meanwhile, saying why.
+    const holds = new Set<string>();
+    await game.runUntil(() => {
+      const waitingFor = fresh.controller().augmentationsView().waitingFor;
+      if (waitingFor !== null) holds.add(waitingFor.replace(/ \(.*$/, ""));
+      return joined().some((faction) => faction.name === "Daedalus");
+    }, STAGE_MS);
+    expect(holds).toContain("Daedalus's invitation");
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
 
     // Just short of The Red Pill: A5's work for it, A6 holding ordinary installs.
@@ -93,7 +114,16 @@ test.each(SEEDS)(
     const backupsBefore = brain.saveBackupEvents.length;
     await simulation.diagnostics.gainHackingExp(PAST_3000_EXP);
     await simulation.diagnostics.setMoney(1e12);
-    await game.runUntil(() => (slow()?.resetInfo.lastNodeReset ?? nodeResetBefore) !== nodeResetBefore, STAGE_MS);
+    // Watched as it goes: the port openers bought, and w0r1d_d43m0n rooted, before the destroy.
+    let openers = false;
+    let rooted = false;
+    await game.runUntil(() => {
+      const medium: MediumSnapshotData | null = fresh.medium();
+      openers ||= PORT_OPENER_PROGRAMS.every((program) => medium?.programs.includes(program));
+      rooted ||= medium?.servers.some((server) => server.hostname === "w0r1d_d43m0n" && server.hasAdminRights) === true;
+      return (slow()?.resetInfo.lastNodeReset ?? nodeResetBefore) !== nodeResetBefore;
+    }, STAGE_MS);
+    expect({ openers, rooted }).toEqual({ openers: true, rooted: true });
 
     // BN1 again, with SF1.1; the next Agent back, the destroy off the queue.
     expect(slow()?.resetInfo).toMatchObject({ currentNode: 1, ownedSF: { 1: 1 }, ownedAugs: {} });

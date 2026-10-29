@@ -258,6 +258,11 @@ export interface AugmentationInputs {
   nowMs: number | null;
   enabled: boolean;
   homeRamEnabled: boolean;
+  /**
+   * The BitNode's destroy wanted once The Red Pill is installed (#215 review): the World Daemon's switch on, and its
+   * next BitNode allowed. Then no ordinary install is chosen: it would reset the hacking level w0r1d_d43m0n needs.
+   */
+  destroyWanted: boolean;
 }
 
 /** What the rule asks of the controller. */
@@ -384,6 +389,13 @@ export function purchaseIntent(faction: string, augmentation: string, level: num
   return { id: intentId("purchaseAugmentation", args), action: "purchaseAugmentation", args };
 }
 
+/** The Red Pill's way, before an ordinary install is chosen (#215): `AugmentationRule`'s `#endgame`. */
+type HoldReason = "destroy" | "redPillNotQueued" | "redPill" | "daedalus";
+type Endgame =
+  | { kind: "redPill" }
+  | { kind: "hold"; why: HoldReason; waitingFor: string; reserve: number }
+  | { kind: "none" };
+
 /** The augmentation rule (#210), as the controller runs it. */
 export class AugmentationRule {
   readonly #store: TelemetryStore;
@@ -421,6 +433,10 @@ export class AugmentationRule {
   #spent: { gameTimeMs: number; price: number }[] = [];
   /** The install asked for: nothing more is bought. Kept in the commit's note too. */
   #installing = false;
+  /** Why no install is chosen on The Red Pill's way (#215), as last logged: logged as it starts. */
+  #holding: HoldReason | null = null;
+  /** Daedalus's $100b, held back for its invitation (#215), or 0: home RAM keeps it too (#215 review). */
+  #daedalusHold = 0;
   /** The install reported done, and the latest slow snapshot's game time then: the next one should show the reset. */
   #installDone: { slowGameTimeMs: number | null } | null = null;
   /**
@@ -468,6 +484,14 @@ export class AugmentationRule {
     return this.#installing || readAugmentationCycle(this.#store)?.installing === true;
   }
 
+  /**
+   * The money held for Daedalus's invitation (#215): $100b while it holds for it, else 0 (each update starts at 0, so
+   * the switch off is 0 too). Home RAM keeps it too.
+   */
+  daedalusHold(): number {
+    return this.#daedalusHold;
+  }
+
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
   installNotReset(): { atMs: number; queued: string[] } | null {
     return this.#installNotReset === null ? null : { ...this.#installNotReset };
@@ -494,7 +518,8 @@ export class AugmentationRule {
 
   update(inputs: AugmentationInputs): AugmentationAsk {
     const { mediumData, mediumGameTimeMs, slowData, slowGameTimeMs, doneIds, fastGameTimeMs, nowMs } = inputs;
-    const { enabled, homeRamEnabled } = inputs;
+    const { enabled, homeRamEnabled, destroyWanted } = inputs;
+    this.#daedalusHold = 0;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
     // Nothing asked for now; the last purchase asked for is kept, so its done is recorded when it's reported (after a
@@ -532,7 +557,17 @@ export class AugmentationRule {
     }
     // What core doesn't know (an augmentation, a BitNode: another game version) throws: nothing, saying so.
     try {
-      return this.#decide({ state, resetInfo, player, slowData, mediumData, slowGameTimeMs, atMs, homeRamEnabled });
+      return this.#decide({
+        state,
+        resetInfo,
+        player,
+        slowData,
+        mediumData,
+        slowGameTimeMs,
+        atMs,
+        homeRamEnabled,
+        destroyWanted,
+      });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
     }
@@ -719,6 +754,7 @@ export class AugmentationRule {
     slowGameTimeMs,
     atMs,
     homeRamEnabled,
+    destroyWanted,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -728,6 +764,7 @@ export class AugmentationRule {
     slowGameTimeMs: number | null;
     atMs: number;
     homeRamEnabled: boolean;
+    destroyWanted: boolean;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -847,10 +884,25 @@ export class AugmentationRule {
       const chosen = decide(money, 0);
       const { installing } = chosen;
       let { decision } = chosen;
-      const endgame = this.#endgame({ resetInfo, player, purchaseState, installable, shops, reputationOf });
+      const endgame = this.#endgame({
+        resetInfo,
+        player,
+        purchaseState,
+        installable,
+        queue,
+        shops,
+        reputationOf,
+        destroyWanted,
+      });
+      const holding = endgame.kind === "hold" ? endgame.why : null;
+      if (holding !== null && holding !== this.#holding) {
+        this.#log(`augmentations: no install, waiting for ${endgame.kind === "hold" ? endgame.waitingFor : ""}`);
+      }
+      this.#holding = holding;
       if (endgame.kind === "redPill") {
         decision = { ...decision, install: true, waitingFor: null, reason: "The Red Pill" };
       } else if (endgame.kind === "hold") {
+        if (endgame.why === "daedalus") this.#daedalusHold = endgame.reserve;
         return this.#ask(null, {
           set: setView,
           setCost: set.money,
@@ -972,6 +1024,20 @@ export class AugmentationRule {
           waitingFor: `the faction state to show ${unconfirmed.join(", ")} queued, before the install`,
         });
       }
+      // Daedalus's path chosen (a joined seller of The Red Pill, not installed): never an install without it (#215
+      // review). Reported bought and never queued (`augmentationNotQueued`, alerted), the cycle is called off, and
+      // `#endgame` holds the next; not bought yet (its reputation fell short), it waits.
+      const redPillSold = [...shops.values()].some((shop) => shop.includes(THE_RED_PILL));
+      if (redPillSold && !Object.hasOwn(ownedAugs, THE_RED_PILL) && !installable.includes(THE_RED_PILL)) {
+        if (queue.includes(THE_RED_PILL)) {
+          this.#callOff(atMs, `${THE_RED_PILL} reported bought but never queued: no install without it`);
+          return this.#ask(null, { committed: false, reserve: 0, waitingFor: null });
+        }
+        return this.#ask(null, {
+          ...committedView,
+          waitingFor: `${THE_RED_PILL} bought and shown queued, before the install`,
+        });
+      }
     }
     // Never an install of nothing (#213 re-review): the game would report it done, with no reset. Checked on a
     // restarted brain's way too, its install already asked for.
@@ -1006,34 +1072,65 @@ export class AugmentationRule {
    *   requirement met: only money, held at the game's check, is missing, so its $100b is held back from cloud servers
    *   (an install would reset the money and the hacking level). With the skill short, ordinary installs go on: they
    *   raise the hacking multiplier.
-   * - `none`: installed already, not sold in this BitNode (BN15), or Daedalus's count not reached.
+   * - Installed, with the destroy wanted (#215 review): `hold`, as an install would reset the hacking level
+   *   w0r1d_d43m0n needs (and drop its root), with `lastNodeReset` unmoved, so the destroy would wait hours.
+   * - Reported bought and never queued (`augmentationNotQueued`, #215 review): `hold`, as R2 counts it owned for the
+   *   plan; an install without it would install the rest and lose Daedalus's reputation.
+   * - `none`: installed already (the destroy not wanted), not sold in this BitNode (BN15), or Daedalus's count not
+   *   reached.
    */
   #endgame({
     resetInfo,
     player,
     purchaseState,
     installable,
+    queue,
     shops,
     reputationOf,
+    destroyWanted,
   }: {
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
     player: NonNullable<ReturnType<typeof playerOf>>;
     purchaseState: AugmentationPurchaseState;
+    /** What an install would install, and the queue the plan counts (with each `augmentationNotQueued`). */
     installable: string[];
+    queue: string[];
     shops: Map<string, string[]>;
     reputationOf: (faction: string) => number;
-  }): { kind: "redPill" } | { kind: "hold"; waitingFor: string; reserve: number } | { kind: "none" } {
+    destroyWanted: boolean;
+  }): Endgame {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
-    if (Object.hasOwn(ownedAugs, THE_RED_PILL)) return { kind: "none" };
+    const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+    if (Object.hasOwn(ownedAugs, THE_RED_PILL)) {
+      if (!destroyWanted) return { kind: "none" };
+      return {
+        kind: "hold",
+        why: "destroy",
+        reserve: 0,
+        waitingFor:
+          `the BitNode's destroy: ${THE_RED_PILL} is installed, and an install would reset the hacking level ` +
+          "w0r1d_d43m0n needs (the destroy switched on)",
+      };
+    }
     if (installable.includes(THE_RED_PILL)) return { kind: "redPill" };
+    if (queue.includes(THE_RED_PILL)) {
+      return {
+        kind: "hold",
+        why: "redPillNotQueued",
+        reserve: 0,
+        waitingFor:
+          `${THE_RED_PILL} reported bought but not in the faction state's queue (the augmentationNotQueued alert): ` +
+          "no install without it",
+      };
+    }
     const needed = augmentationCost(THE_RED_PILL, purchaseState).reputation;
     const sellers = [...shops].filter(([, shop]) => shop.includes(THE_RED_PILL)).map(([faction]) => faction);
     if (sellers.some((faction) => reputationOf(faction) >= needed)) return { kind: "redPill" };
     if (sellers.length > 0) {
-      const best = sellers.reduce((a, b) => (reputationOf(b) > reputationOf(a) ? b : a));
-      const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+      const best = sellers.reduce((most, each) => (reputationOf(each) > reputationOf(most) ? each : most));
       return {
         kind: "hold",
+        why: "redPill",
         reserve: 0,
         waitingFor:
           `${THE_RED_PILL}: ${best}'s reputation ${count(reputationOf(best))} of ${count(needed)} (an install now ` +
@@ -1045,11 +1142,12 @@ export class AugmentationRule {
     const skills = player.person.skills;
     const figures = { augmentations: Object.keys(ownedAugs).length, money: player.money, skills };
     const missing = daedalusMissing(figures, required);
+    // Held only with nothing but the money missing: a count or a skill short is missing too.
     const onlyMoney = missing.length === 0 || (missing.length === 1 && figures.money < required.money);
-    // Only the money missing (the count short is missing too): held.
     if (!onlyMoney) return { kind: "none" };
     return {
       kind: "hold",
+      why: "daedalus",
       reserve: required.money,
       waitingFor:
         `${DAEDALUS}'s invitation (${missing.join(", ") || "the game's next check"}): an install now would reset the ` +
