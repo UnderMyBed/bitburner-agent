@@ -123,6 +123,11 @@ function runAfterReset(callbackScript: string): void {
  * `AGENT_SIM_EFFECTORS_GLOBAL`); the effector-backends suite checks the wording, and fails if the two drift.
  */
 const TERMINAL_BUSY = "terminal busy";
+/**
+ * What the `ui` backdoor worker says at the BitVerse, which has no sidebar (#195): the page's `openSidebarPage`
+ * ("Terminal"), its words copied (`ingame/src/page/game-page.ts`, `clickWhenThere`).
+ */
+const NO_TERMINAL_IN_THE_SIDEBAR = 'no "Terminal" in the sidebar (is its section collapsed?)';
 
 /**
  * The hostnames to `connect` to, in turn, from home to `hostname`, breadth-first as the `ui` worker's `scan` finds:
@@ -578,8 +583,9 @@ const effectors = {
    * A backdoor (#162) as the `ui` worker types it: the same checks and problems first (`commands/backdoor.ts`),
    * then the terminal's own commands (`Terminal.executeCommands`): `home`, `connect` along the way, `backdoor`. The
    * engine counts its action down (hacking time / 4, `Terminal/Terminal.ts:233-243`, `engine.tsx:96`) as on the page,
-   * the terminal busy meanwhile; the try that finds it installed, the terminal still there, types `home`. Not named
-   * `installBackdoor`, which is an NS function.
+   * the terminal busy meanwhile; the try that finds it installed, the terminal still there, types `home`. At the
+   * BitVerse nothing is typed (#195): the page has no sidebar there (`ui/GameRoot.tsx:315-317`), so the `ui` worker
+   * can't open the Terminal. Not named `installBackdoor`, which is an NS function.
    */
   backdoorServer(hostname: string): EffectorResult {
     const server = GetServer(hostname);
@@ -591,8 +597,9 @@ const effectors = {
     // Read afresh each time: the terminal's commands start and end its action.
     const action = (): { timeLeft: number } | null => Terminal.action;
     if (installed() && !server.isConnectedTo) return result(true, "");
-    // In the `ui` worker's order: its refusals come first, and only the typing finds the terminal busy.
+    // In the `ui` worker's order: its refusals come first, and only the typing finds the BitVerse or the terminal busy.
     if (installed()) {
+      if (bitVerseFlume() !== null) return result(false, NO_TERMINAL_IN_THE_SIDEBAR);
       if (action() !== null) return result(false, TERMINAL_BUSY);
       Terminal.executeCommands("home");
       return result(!server.isConnectedTo, `the terminal is still on ${hostname}`);
@@ -607,6 +614,7 @@ const effectors = {
     }
     const route = routeFromHome(hostname);
     if (route === null) return result(false, `no way from home to ${hostname}`);
+    if (bitVerseFlume() !== null) return result(false, NO_TERMINAL_IN_THE_SIDEBAR);
     if (action() !== null) return result(false, TERMINAL_BUSY);
     if (Player.currentServer !== "home") Terminal.executeCommands("home");
     for (const hop of route) {

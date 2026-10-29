@@ -30,7 +30,7 @@
   "singularity-upgrade-home-ram.js": 4.65,
   "snapshot-fast.js": 2.0,
   "snapshot-medium.js": 4.45,
-  "snapshot-slow.js": 3.65,
+  "snapshot-slow.js": 4.65,
   "snapshot-static.js": 3.8,
   "travel.js": 2.1,
   "upgrade-home-ram.js": 1.65,

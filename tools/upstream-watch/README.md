@@ -20,11 +20,11 @@ It compares the pinned game (`vendor/bitburner-src`'s gitlink) with an upstream 
 The stable watcher's report leads with **bump steps**, when `stable` is ahead of the pinned commit:
 1. the shallow fetch and checkout of the new commit;
 2. `PINNED_GAME`;
-3. `setup:engine` and `npm run check`;
+3. `setup:engine`, regenerating core's game data (`generate-game-data.ts`, #193), and `npm run check`;
 4. the parity re-audit;
 5. the heavy suites;
 6. the mechanics docs;
-7. a search for the old version and commit;
+7. a search for the old version and commit, skipping the generated game data;
 8. the bump PR.
 
 If `stable` differs without being ahead (a rewound branch, or a test ref), it says so instead.

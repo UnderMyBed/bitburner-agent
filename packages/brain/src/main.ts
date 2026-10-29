@@ -68,7 +68,8 @@ try {
     clock: systemClock,
   });
   // What the brain wants running in the game (#134): set before the channel listens, so the first Agent is given it.
-  const desiredState = new DesiredStateController({ channel, store, saveBackups });
+  // It logs the backdoors it asks for, and sees installed (#195).
+  const desiredState = new DesiredStateController({ channel, store, saveBackups, log });
   // The money's last rise (#184), for the incomeStalled alert, logged as a stall starts and ends: after the controller,
   // so each snapshot's hack loop target is set when it looks.
   const incomeWatch = new IncomeWatch({
@@ -142,6 +143,7 @@ try {
         intents: desiredState.intentsView(),
         work: desiredState.workView(),
         income: incomeWatch.facts(),
+        backdoorsDue: desiredState.backdoorsDue(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {

@@ -2,6 +2,8 @@
 // (tsconfig.bundle.json, README "Typecheck boundary"), not by the repo's tsc. Keep it minimal; its exports must match
 // EngineApi (../api.ts), which the typecheck checks at the end of this file.
 
+import { getAugCost } from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
+import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
 import { PlayerOwnedAugmentation } from "../../../../../vendor/bitburner-src/src/Augmentation/PlayerOwnedAugmentation";
 import { getBitNodeMultipliers } from "../../../../../vendor/bitburner-src/src/BitNode/BitNode";
@@ -17,6 +19,7 @@ import { save as saveToIndexedDb } from "../../../../../vendor/bitburner-src/src
 import { Engine } from "../../../../../vendor/bitburner-src/src/engine";
 import { FactionName } from "../../../../../vendor/bitburner-src/src/Faction/Enums";
 import { joinFaction } from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
+import { FactionInfos } from "../../../../../vendor/bitburner-src/src/Faction/FactionInfo";
 import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
 import { ITutorial, iTutorialEnd } from "../../../../../vendor/bitburner-src/src/InteractiveTutorial";
 import { killWorkerScriptByPid } from "../../../../../vendor/bitburner-src/src/Netscript/killWorkerScript";
@@ -45,7 +48,17 @@ import { isSimplePage, Page } from "../../../../../vendor/bitburner-src/src/ui/R
 import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src/src/ui/UIEventEmitter";
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
-import type { GameEvent, GameSettingsOverride, ProcessInfo, RunResult, ScriptArg, Tutorial } from "../../protocol.ts";
+import type {
+  GameAugmentationCost,
+  GameData,
+  GameEvent,
+  GameNumber,
+  GameSettingsOverride,
+  ProcessInfo,
+  RunResult,
+  ScriptArg,
+  Tutorial,
+} from "../../protocol.ts";
 import type { EngineApi } from "../api.ts";
 import { answerPrompts, captureUi, installPageGlobals } from "./page.ts";
 import { bitVerseFlume, mountRouter, routerPages } from "./router.ts";
@@ -281,6 +294,62 @@ export function page(): string {
 
 export function bitNodeMultipliers(n: number, level: number): Record<string, number> {
   return { ...getBitNodeMultipliers(n, level) };
+}
+
+/** A number as the host can send it: JSON has no Infinity, which three augmentations cost (#193). */
+function gameNumber(value: number): GameNumber {
+  if (value === Number.POSITIVE_INFINITY) return "Infinity";
+  if (!Number.isFinite(value)) throw new RangeError(`the game has a number JSON can't carry: ${value}`);
+  return value;
+}
+
+/**
+ * The game's augmentations (`Augmentation/Augmentations.ts`, in `AugmentationName`'s order) and factions (`FactionInfo`,
+ * in `FactionName`'s order), read from its own objects: core's generated data and its parity test (#193). The
+ * invitation requirements are as `ns.singularity.getFactionInviteRequirements` gives them (`Singularity.ts:759-764`).
+ */
+export function gameData(): GameData {
+  const augmentations = Object.values(Augmentations).map((aug) => ({
+    name: aug.name,
+    baseMoneyCost: gameNumber(aug.baseCost),
+    baseRepCost: gameNumber(aug.baseRepRequirement),
+    factions: [...aug.factions],
+    prereqs: [...aug.prereqs],
+    multipliers: Object.fromEntries(
+      Object.entries(aug.mults)
+        .filter(([, value]) => value !== 1)
+        .map(([key, value]) => [key, gameNumber(value)]),
+    ),
+    isSpecial: aug.isSpecial,
+    startingMoney: gameNumber(aug.startingMoney),
+    programs: [...aug.programs],
+  }));
+  const factions = Object.values(FactionName).map((name) => {
+    const info = FactionInfos[name];
+    const workTypes = [
+      info.offerHackingWork && "hacking",
+      info.offerFieldWork && "field",
+      info.offerSecurityWork && "security",
+    ].filter((type): type is string => typeof type === "string");
+    return {
+      name,
+      enemies: [...info.enemies],
+      inviteRequirements: [...info.inviteReqs].map((condition) => condition.toJSON()),
+      workTypes,
+      keepOnInstall: info.keep,
+    };
+  });
+  return { augmentations, factions };
+}
+
+/** Every augmentation's price now, by the game's own `getAugCost` (`AugmentationHelpers.ts:127-161`): #193's parity. */
+export function augmentationCosts(): Record<string, GameAugmentationCost> {
+  return Object.fromEntries(
+    Object.values(Augmentations).map((aug) => {
+      const { moneyCost, repCost } = getAugCost(aug);
+      return [aug.name, { moneyCost: gameNumber(moneyCost), repCost: gameNumber(repCost) }];
+    }),
+  );
 }
 
 let report: (event: GameEvent) => void = () => {};

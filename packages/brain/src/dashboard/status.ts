@@ -7,9 +7,12 @@ import {
   type MediumSnapshotData,
   SNAPSHOT_TIERS,
   type SnapshotTier,
+  type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import type { BackdoorDue } from "../backdoors.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
+import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
@@ -90,6 +93,8 @@ export interface DashboardStatus {
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
   work: WorkView;
+  /** The hacking ceiling now, and what hacking earned over the last 10 minutes (#196). */
+  hacking: HackingView;
 }
 
 export interface DashboardStatusOptions {
@@ -115,6 +120,8 @@ export interface DashboardStatusOptions {
   work: WorkView;
   /** The money's last rise (#184), from the brain's `IncomeWatch`, for the `incomeStalled` alert. */
   income: IncomeFacts | null;
+  /** The backdoors due and since when (#195), the controller's, for the `backdoorOverdue` alert. */
+  backdoorsDue: BackdoorDue[];
   nowMs: number;
 }
 
@@ -138,6 +145,7 @@ export function buildDashboardStatus({
   intents,
   work,
   income,
+  backdoorsDue,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -225,6 +233,7 @@ export function buildDashboardStatus({
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
       cloudServerProblem: cloudServers.problem,
+      backdoorsDue,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -249,5 +258,12 @@ export function buildDashboardStatus({
     cloudServers,
     intents,
     work,
+    hacking: hackingView({
+      store,
+      environment,
+      nowMs,
+      staticData: latestOfTier.static?.data as StaticSnapshotData | undefined,
+      mediumData: medium,
+    }),
   };
 }

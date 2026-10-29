@@ -1,12 +1,30 @@
+export { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
 export {
   AUGMENTATION_NAMES,
+  AUGMENTATION_PRICE_GROWTH,
+  type AugmentationBitNodeMultipliers,
+  type AugmentationCost,
+  type AugmentationData,
+  type AugmentationPurchase,
+  type AugmentationPurchaseState,
+  augmentationBitNodeMultipliers,
+  augmentationCost,
+  augmentationPriceGrowth,
   augmentationProblems,
+  augmentationsSoldBy,
   BUY_AUGMENTATION_WORKER_NAME,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
+  missingPrerequisites,
   NEUROFLUX_GOVERNOR,
+  NEUROFLUX_LEVEL_GROWTH,
   neuroFluxLevel,
+  purchaseSequenceCost,
+  SHADOWS_OF_ANARCHY_AUGMENTATIONS,
+  SHADOWS_OF_ANARCHY_MONEY_GROWTH,
+  SHADOWS_OF_ANARCHY_REPUTATION_GROWTH,
+  SOURCE_FILE_11_PRICE_GROWTH_DISCOUNT,
 } from "./augmentations.ts";
-export { BACKDOOR_WORKER_NAME, isServerHostname } from "./backdoors.ts";
+export { BACKDOOR_WORKER_NAME, HACKER_FACTION_SERVERS, isServerHostname } from "./backdoors.ts";
 export {
   AGENT_SIM_EFFECTORS_GLOBAL,
   SINGULARITY_BACKDOOR_WORKER_NAME,
@@ -108,7 +126,15 @@ export {
   parseAgentConfig,
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
-export { FACTION_ENEMIES, FACTION_NAMES, JOIN_FACTION_WORKER_NAME } from "./factions.ts";
+export { FACTIONS } from "./faction-data.ts";
+export {
+  daedalusAugmentationsRequired,
+  FACTION_ENEMIES,
+  FACTION_NAMES,
+  type FactionData,
+  JOIN_FACTION_WORKER_NAME,
+  type PlayerRequirement,
+} from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   growthLogPerThread,
@@ -127,6 +153,25 @@ export {
   isHackLoopReady,
   percentMoneyHackedPerThread,
 } from "./hack-loop.ts";
+export {
+  batcherIncomePerGigabyteSecond,
+  coreBonus,
+  GROW_SCRIPT_RAM_GB,
+  GROW_SECURITY_PER_THREAD,
+  GROW_TIME_PER_HACK_TIME,
+  HACK_SCRIPT_RAM_GB,
+  HACK_SECURITY_PER_THREAD,
+  type HackingPlayer,
+  type HackingTarget,
+  hackChance,
+  hackingIncomePerGigabyteSecond,
+  hackTimeSeconds,
+  intelligenceBonus,
+  usableRamGb,
+  WEAKEN_SCRIPT_RAM_GB,
+  WEAKEN_SECURITY_PER_THREAD,
+  WEAKEN_TIME_PER_HACK_TIME,
+} from "./hacking-ceiling.ts";
 export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
