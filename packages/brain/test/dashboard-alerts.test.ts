@@ -6,6 +6,7 @@ import {
   type AlertFacts,
   activeAlerts,
   INCOME_STALLED_AFTER_MS,
+  INSTALL_NOT_RESTARTED_AFTER_MS,
 } from "../src/dashboard/alerts.ts";
 
 const STARTED_AT_MS = 1_000_000;
@@ -22,8 +23,54 @@ const quiet: AlertFacts = {
   income: null,
   factionState: null,
   backdoorsDue: [],
+  augmentationsNotQueued: [],
+  installAwaitingRestart: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
+
+describe("augmentations (#210)", () => {
+  test("a purchase not queued: one alert each, since it was bought", () => {
+    const alerts = activeAlerts({
+      ...quiet,
+      augmentationsNotQueued: [
+        { augmentation: "BitWire", level: 1, boughtAtMs: 5 },
+        { augmentation: "NeuroFlux Governor", level: 3, boughtAtMs: 6 },
+      ],
+    });
+    expect(alerts).toEqual([
+      {
+        name: "augmentationNotQueued",
+        sinceMs: 5,
+        detail:
+          "BitWire was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
+      },
+      {
+        name: "augmentationNotQueued",
+        sinceMs: 6,
+        detail:
+          "NeuroFlux Governor (level 3) was reported bought, but the faction state's queue doesn't show it: check the " +
+          "Augmentations page",
+      },
+    ]);
+  });
+
+  test("an install not restarted: from 5 minutes after the disconnect, not before", () => {
+    const sinceMs = quiet.nowMs - INSTALL_NOT_RESTARTED_AFTER_MS;
+    const awaiting = { id: "installAugmentations()", sinceMs };
+    // The Agent silent too, at that age: both say so.
+    const facts = { ...quiet, lastFastSnapshotAtMs: quiet.nowMs, installAwaitingRestart: awaiting };
+    expect(activeAlerts(facts)).toEqual([
+      {
+        name: "installNotRestarted",
+        sinceMs,
+        detail:
+          "installAugmentations() went out and the Agent disconnected 5 min ago, and no slow snapshot has shown the " +
+          "reset: is the game at the Terminal, and did boot.js run?",
+      },
+    ]);
+    expect(names({ ...facts, installAwaitingRestart: { ...awaiting, sinceMs: sinceMs + 1 } })).toEqual([]);
+  });
+});
 
 test("with everything well, no alerts", () => {
   expect(activeAlerts(quiet)).toEqual([]);

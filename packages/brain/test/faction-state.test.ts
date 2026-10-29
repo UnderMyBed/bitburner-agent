@@ -13,6 +13,7 @@ import { buildDashboardStatus } from "../src/dashboard/status.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
+import { idleAugmentations } from "./helpers/snapshot-fixtures.ts";
 
 const freshStart = useFreshStarts();
 const HACK_LOOP_OFF: DesiredState["hackLoop"] = { enabled: false, target: null, hosts: [] };
@@ -65,6 +66,8 @@ const dashboard = (fresh: Awaited<ReturnType<typeof freshStart>>) =>
     work: { desired: null, outcome: null },
     income: null,
     backdoorsDue: [],
+    augmentations: idleAugmentations,
+    installAwaitingRestart: null,
     nowMs: fresh.game.clock.now(),
   });
 

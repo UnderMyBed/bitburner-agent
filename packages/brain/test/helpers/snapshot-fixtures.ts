@@ -1,5 +1,6 @@
 // Snapshot data for the brain's rule and controller tests (#134, #136, #138), in the shape the Agent's workers send.
 import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import type { AugmentationsView } from "../../src/augmentations.ts";
 
 type StaticServer = StaticSnapshotData["servers"][number];
 
@@ -61,3 +62,17 @@ export const slowData = (currentNode = 1, bitNodeOptions: Record<string, unknown
   purchasedServers: [],
   factions: { backend: "sim", state: { joined: [], invitations: [], queuedAugmentations: [] }, problem: null },
 });
+
+/** The augmentations' view (#210) with nothing to show: on, waiting for the snapshots. */
+export const idleAugmentations: AugmentationsView = {
+  enabled: true,
+  waiting: true,
+  committed: false,
+  asking: null,
+  set: [],
+  setCost: 0,
+  decision: null,
+  waitingFor: null,
+  notQueued: [],
+  reserve: 0,
+};

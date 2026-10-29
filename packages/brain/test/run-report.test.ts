@@ -1004,6 +1004,134 @@ describe("backdoors for the hacker factions (#195)", () => {
   });
 });
 
+describe("augmentations and the reset (#210)", () => {
+  /**
+   * A run: the brain's events, `installedAtMs` the first slow snapshot with another `lastAugReset` (BitWire and two
+   * NeuroFlux Governor levels installed), or none.
+   */
+  function augmentationRun({
+    events: augmentationEvents,
+    installedAtMs = null,
+  }: {
+    events: [number, string, unknown][];
+    installedAtMs?: number | null;
+  }) {
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      snapshot("medium", offsetMs, mediumData({ money: offsetMs }));
+    }
+    for (let offsetMs = 30 * SECOND; offsetMs <= RUN_MS; offsetMs += MINUTE) {
+      const installed = installedAtMs !== null && offsetMs >= installedAtMs;
+      const data = slowData([], installed ? { BitWire: 1, "NeuroFlux Governor": 2 } : {});
+      if (installed) data.resetInfo.lastAugReset = T0 + installedAtMs;
+      snapshot("slow", offsetMs, data);
+    }
+    for (const [offsetMs, kind, detail] of augmentationEvents) event(offsetMs, kind, detail);
+    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + RUN_MS });
+  }
+  const CHOSEN = {
+    set: [{ augmentation: "BitWire", price: 10e6 }],
+    cost: 10e6,
+    queued: [],
+    sinceResetMs: 2 * 3_600_000,
+    rebuildMs: 3_600_000,
+    without: null,
+    with: null,
+  };
+
+  test("each decision, purchase, install sent and install seen, in time order; nothing failing", () => {
+    const report = augmentationRun({
+      events: [
+        [5 * MINUTE, "augmentationInstallChosen", CHOSEN],
+        [
+          6 * MINUTE,
+          "augmentationBought",
+          { augmentation: "BitWire", faction: "CyberSec", level: 1, price: 10e6, queueLength: 1 },
+        ],
+        [
+          6 * MINUTE + SECOND,
+          "augmentationBought",
+          { augmentation: "NeuroFlux Governor", faction: "CyberSec", level: 2, price: 1_425_000, queueLength: 3 },
+        ],
+        [
+          8 * MINUTE,
+          "augmentationsInstallSent",
+          { source: "brain", queued: ["BitWire", "NeuroFlux Governor", "NeuroFlux Governor"] },
+        ],
+        [8 * MINUTE + 5 * SECOND, "agentDisconnected", { agentSessionId: "session-1" }],
+        [8 * MINUTE + 8 * SECOND, "agentConnected", { agentSessionId: "session-2" }],
+      ],
+      installedAtMs: 8 * MINUTE + 30 * SECOND,
+    });
+    expect(report.text).toContain(
+      [
+        "  augmentations (the brain's install decisions and purchases, and the installs):",
+        `    ${at(5 * MINUTE)}  install chosen, 2.0 h since the last: buying BitWire ($10,000,000); nothing else worth installing at the joined factions`,
+        `    ${at(6 * MINUTE)}  bought BitWire from CyberSec for $10,000,000 (queue 1)`,
+        `    ${at(6 * MINUTE + SECOND)}  bought NeuroFlux Governor (level 2) from CyberSec for $1,425,000 (queue 3)`,
+        `    ${at(8 * MINUTE)}  install sent (the brain's): BitWire, NeuroFlux Governor ×2`,
+        `    ${at(8 * MINUTE + 30 * SECOND)}  installed (seen in a slow snapshot): BitWire, NeuroFlux Governor ×2; ` +
+          "hacking ×1.071, hacking_speed ×1.020, hacking_money ×1.020, hacking_grow ×1.020, hacking_chance ×1.020, " +
+          `hacking_exp ×1.020, faction_rep ×1.020; the Agent disconnected at ${at(8 * MINUTE + 5 * SECOND)} and was back 3 s later`,
+      ].join("\n"),
+    );
+    expect(report.text).toContain("  augmentation purchases reported done and never queued:\n    none");
+    expect(report.text).toContain(
+      "  installs sent and not seen done (a slow snapshot with another reset) within 5 min:\n    none",
+    );
+    expect(report.failures.filter((failure) => /augmentation|install/.test(failure))).toEqual([]);
+    // In section 3, not section 1's timeline.
+    expect(report.text).not.toContain("augmentationBought:");
+  });
+
+  test("none: said so", () => {
+    expect(augmentationRun({ events: [] }).text).toContain(
+      "  augmentations (the brain's install decisions and purchases, and the installs):\n    none",
+    );
+  });
+
+  test("a purchase not queued, and an install sent with no reset within 5 minutes: each a failure", () => {
+    const report = augmentationRun({
+      events: [
+        [
+          5 * MINUTE,
+          "augmentationNotQueued",
+          { augmentation: "NeuroFlux Governor", level: 3, boughtAtMs: T0 + 3 * MINUTE },
+        ],
+        [6 * MINUTE, "augmentationsInstallSent", { source: "manual", queued: ["BitWire"] }],
+        [6 * MINUTE + SECOND, "augmentationCycleCalledOff", { reason: "the Augmentations switch turned off" }],
+      ],
+    });
+    expect(report.failures).toContain(
+      `augmentation not queued: NeuroFlux Governor (level 3), reported bought at ${at(3 * MINUTE)}, not in the ` +
+        `faction state's queue by ${at(5 * MINUTE)}`,
+    );
+    expect(report.failures).toContain(
+      `install not seen done: sent at ${at(6 * MINUTE)}, no slow snapshot with another reset 5 min on`,
+    );
+    expect(report.text).toContain(`${at(6 * MINUTE)}  install sent (yours): BitWire`);
+    expect(report.text).toContain(
+      `${at(6 * MINUTE + SECOND)}  install cycle called off: the Augmentations switch turned off`,
+    );
+  });
+
+  test("an install sent too near the window's end isn't judged; one the reset follows within 5 minutes passes", () => {
+    const late = augmentationRun({
+      events: [[RUN_MS - 4 * MINUTE, "augmentationsInstallSent", { source: "brain", queued: [] }]],
+    });
+    expect(late.failures.filter((failure) => failure.startsWith("install not seen done"))).toEqual([]);
+  });
+
+  test("a reset more than 5 minutes after the install was sent is a failure all the same", () => {
+    const report = augmentationRun({
+      events: [[2 * MINUTE, "augmentationsInstallSent", { source: "brain", queued: [] }]],
+      installedAtMs: 8 * MINUTE,
+    });
+    expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
+  });
+});
+
 test("a window that ends before it starts, or with nothing in it, can't be reported", () => {
   expect(() => runReport(store, { ...window, untilMs: T0 })).toThrow(RangeError);
   expect(() => runReport(store, window)).toThrow("nothing recorded (E0) from 2026-10-26T00:00:00.000Z");

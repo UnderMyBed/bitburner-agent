@@ -2,6 +2,7 @@
 // there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
+import type { NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 
@@ -22,6 +23,12 @@ export const INCOME_STALLED_AFTER_MS = 10 * 60_000;
  * real path. An overdue one may have no intent (the rule broken), so `intentStuck` can't say.
  */
 export const BACKDOOR_OVERDUE_AFTER_MS = 5 * 60_000;
+/**
+ * An install out when the Agent disconnected, with no slow snapshot showing the reset this long after, is
+ * `installNotRestarted` (#210), and a run report failure: 5 minutes. The game starts boot.js 500 ms after the reset,
+ * or the page timer types it (#164, #167), and the next Agent's first slow snapshot comes in its first round: seconds.
+ */
+export const INSTALL_NOT_RESTARTED_AFTER_MS = 5 * 60_000;
 
 /** How much of a blocking dialog's text the alert quotes. */
 const BLOCKING_DIALOG_QUOTE_LENGTH = 200;
@@ -35,7 +42,9 @@ export type AlertName =
   | "intentStuck"
   | "incomeStalled"
   | "factionStateUnread"
-  | "backdoorOverdue";
+  | "backdoorOverdue"
+  | "augmentationNotQueued"
+  | "installNotRestarted";
 
 export interface Alert {
   name: AlertName;
@@ -80,6 +89,10 @@ export interface AlertFacts {
   factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
   backdoorsDue: BackdoorDue[];
+  /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
+  augmentationsNotQueued: NotQueued[];
+  /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
+  installAwaitingRestart: { id: string; sinceMs: number } | null;
 }
 
 /**
@@ -94,7 +107,7 @@ export interface IncomeFacts {
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue per
- * overdue backdoor.
+ * overdue backdoor, then one augmentationNotQueued per purchase not queued, then installNotRestarted.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -155,6 +168,37 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     });
   }
   alerts.push(...backdoorOverdueAlerts(facts));
+  alerts.push(...augmentationAlerts(facts));
+  return alerts;
+}
+
+/**
+ * The augmentations' alerts (#210): `augmentationNotQueued`, one per purchase the Agent reported done that two faction
+ * state reads since didn't show queued; and `installNotRestarted`, an install out when the Agent disconnected with no
+ * slow snapshot showing the reset `INSTALL_NOT_RESTARTED_AFTER_MS` later.
+ */
+export function augmentationAlerts({
+  nowMs,
+  augmentationsNotQueued,
+  installAwaitingRestart,
+}: Pick<AlertFacts, "nowMs" | "augmentationsNotQueued" | "installAwaitingRestart">): Alert[] {
+  const alerts: Alert[] = augmentationsNotQueued.map((notQueued) => ({
+    name: "augmentationNotQueued",
+    sinceMs: notQueued.boughtAtMs,
+    detail:
+      `${notQueued.augmentation}${notQueued.augmentation === "NeuroFlux Governor" ? ` (level ${notQueued.level})` : ""} ` +
+      "was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
+  }));
+  if (installAwaitingRestart !== null && nowMs - installAwaitingRestart.sinceMs >= INSTALL_NOT_RESTARTED_AFTER_MS) {
+    alerts.push({
+      name: "installNotRestarted",
+      sinceMs: installAwaitingRestart.sinceMs,
+      detail:
+        `${installAwaitingRestart.id} went out and the Agent disconnected ` +
+        `${Math.floor((nowMs - installAwaitingRestart.sinceMs) / 60_000)} min ago, and no slow snapshot has shown the ` +
+        "reset: is the game at the Terminal, and did boot.js run?",
+    });
+  }
   return alerts;
 }
 

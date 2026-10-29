@@ -143,6 +143,8 @@ export function startBrainInSimulation(
   } as const;
   if (data) recordEvents(deployer, data.store, deployerReleaseContext);
   if (data && saveBackups) recordEvents(saveBackups, data.store, deployerReleaseContext);
+  // The augmentation rule's events (#210), as main.ts records them.
+  if (data && desiredStateController) recordEvents(desiredStateController, data.store, deployerReleaseContext);
   const openConnections: Connection[] = [];
   let stopped = false;
   const brain: BrainInSimulation = {

@@ -19,6 +19,7 @@ const WRITE_PATHS = [
   "/api/hack-loop",
   "/api/programs",
   "/api/home-ram",
+  "/api/augmentations",
   "/api/intents",
   "/api/intents/cancel",
   "/api/work",
@@ -36,6 +37,8 @@ export interface DashboardServerOptions {
   setProgramsEnabled(enabled: boolean): void;
   /** Home RAM's switch (#138). */
   setHomeRamEnabled(enabled: boolean): void;
+  /** Buying and installing augmentations' switch (#210). */
+  setAugmentationsEnabled(enabled: boolean): void;
   /** The manual intents queue (#141): adds `{ action, args }`. */
   addIntent(request: unknown): AddedIntent;
   /** Takes an intent off the manual queue by id; false if it isn't there. */
@@ -107,6 +110,8 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "enabled", options.setProgramsEnabled);
       case "POST /api/home-ram":
         return handleSwitch(request, response, origin, "enabled", options.setHomeRamEnabled);
+      case "POST /api/augmentations":
+        return handleSwitch(request, response, origin, "enabled", options.setAugmentationsEnabled);
       case "POST /api/intents": {
         const added = options.addIntent(await readJsonWrite(request, origin));
         if (!added.ok) throw new RequestError(400, added.reason);

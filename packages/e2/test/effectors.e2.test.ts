@@ -98,7 +98,7 @@ const allOwned = (medium: MediumSnapshotData | null) =>
 
 /**
  * A save with money and the brain's Remote File API and autoexec in its settings; the brain deploys, with
- * `brainSettings` in its store; past an autosave and a reload, autoexec starts the Agent. The reload's "Offline for…"
+ * `brainSettings` in its store (buying and installing augmentations off unless they say); past an autosave and a reload, autoexec starts the Agent. The reload's "Offline for…"
  * alert is closed, unless `keepOfflineAlert`; then `beforeAgent` runs on the page, before the Agent's first round.
  */
 async function moneyedGameWithAgent({
@@ -126,7 +126,9 @@ async function moneyedGameWithAgent({
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
-  const brain = await startBrain({ dataDirectory, ports, allowedOrigin: e2.server.origin, settings: brainSettings });
+  // Buying and installing augmentations (#210) off in every test here: their purchases and installs are their own.
+  const settings = { "augmentations.enabled": "false", ...brainSettings };
+  const brain = await startBrain({ dataDirectory, ports, allowedOrigin: e2.server.origin, settings });
   started.brains.push(brain);
   onTestFailed(() => console.log(`The brain's log (${dataDirectory}):\n${brain.log.join("\n")}`));
   const save = withGameSettings(

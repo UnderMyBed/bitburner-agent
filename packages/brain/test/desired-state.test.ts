@@ -580,18 +580,18 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
   });
 
-  test("full at 98, leaving room for the purchase and the backdoor (#195) in the protocol's 100: the 99th is refused", () => {
+  test("full at 97, leaving room for the purchase, the backdoor (#195) and the augmentation's (#210): the 98th is refused", () => {
     const controller = new DesiredStateController({ channel, store });
     const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
-    for (let index = 0; index < 98; index += 1) {
+    for (let index = 0; index < 97; index += 1) {
       const args = { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] };
       expect(controller.addManualIntent({ action: "upgradeHomeRam", args })).toMatchObject({ ok: true });
     }
     expect(controller.addManualIntent({ action: "travel", args: { city: "Aevum" } })).toEqual({
       ok: false,
-      reason: "the manual queue is full: 98 intents at most",
+      reason: "the manual queue is full: 97 intents at most",
     });
-    expect(readManualIntents(store)).toHaveLength(98);
+    expect(readManualIntents(store)).toHaveLength(97);
   });
 
   test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
@@ -794,7 +794,7 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toHaveLength(100);
     expect(lastIntents(connection)?.at(-1)).toEqual(buyProgram("FTPCrack.exe"));
     expect(lines.filter((line) => line.startsWith("intents:"))).toEqual([
-      "intents: the manual queue holds 99, over its 98: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
+      "intents: the manual queue holds 99, over its 97: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
     ]);
   });
 
@@ -1193,6 +1193,144 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([]);
       send(connection, "slow", slowAt(90_000));
       expect(controller.intentsView().map((view) => view.id)).toEqual([INSTALL.id]);
+    });
+  });
+
+  describe("augmentations and the reset (#210)", () => {
+    const INSTALL = intent({ action: "installAugmentations", args: {} });
+    const AEVUM = intent({ action: "travel", args: { city: "Aevum" } });
+    const FIVE = [
+      "Cranial Signal Processors - Gen I",
+      "Cranial Signal Processors - Gen II",
+      "BitWire",
+      "Synaptic Enhancement Implant",
+      "Neurotrainer I",
+    ];
+    const buy = (augmentation: string, level = 1) =>
+      intent({ action: "purchaseAugmentation", args: { faction: "CyberSec", augmentation, level } });
+    /** A slow snapshot with CyberSec joined at the reputation for its five, `queued` bought. */
+    const slowWith = (queued: string[] = [], lastAugReset = 1_000) => ({
+      ...slowData(),
+      resetInfo: { ...slowData().resetInfo, lastAugReset },
+      factions: {
+        backend: "sim",
+        state: {
+          joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }],
+          invitations: [],
+          queuedAugmentations: queued,
+        },
+        problem: null,
+      },
+    });
+    /** A medium snapshot with what the rule reads of the player: hacking 300, and `money`. */
+    const richMedium = (money: number) => ({
+      ...mediumData(300, { home: true }, { money, homeRam: 2 ** 20, hasTorRouter: true }),
+      player: {
+        skills: { hacking: 300, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+        exp: { hacking: 6_106_794 },
+        mults: { faction_rep: 1, hacking: 1 },
+        money,
+        city: "Sector-12",
+        factions: ["CyberSec"],
+      },
+    });
+    const reportedDone = (connection: MemoryConnection, id: string) =>
+      send(connection, "fast", {
+        degradedTiers: [],
+        pageHeapUsedBytes: null,
+        game: null,
+        intents: [{ id, done: true, tries: 1, problem: null, backend: "sim" }],
+      });
+
+    test("the install chosen: its purchases as the source `augmentation`, one at a time, the next at once; programs held", () => {
+      const { controller, connection, sentIds } = connectedWithLoopOff();
+      send(connection, "slow", slowWith());
+      send(connection, "medium", richMedium(1e9));
+      expect(sentIds()).toEqual([buy(FIVE[0] as string).id]);
+      expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+        [buy(FIVE[0] as string).id, "augmentation"],
+      ]);
+      expect(controller.programsView().waitingFor).toBe(
+        "the install of augmentations chosen (the augmentation rule buys for it)",
+      );
+      expect(controller.augmentationReserve()).toBe(Number.POSITIVE_INFINITY);
+      expect(controller.augmentationsView()).toMatchObject({ committed: true });
+      // Reported done: the next goes at once, from the fast snapshot.
+      reportedDone(connection, buy(FIVE[0] as string).id);
+      expect(sentIds()).toEqual([buy(FIVE[1] as string).id]);
+    });
+
+    test("not committed: the rule's purchases don't hold the programs back", () => {
+      const { controller, connection, sentIds } = connectedWithLoopOff();
+      send(connection, "slow", {
+        ...slowWith(),
+        factions: { ...slowWith().factions, state: { joined: [], invitations: [], queuedAugmentations: [] } },
+      });
+      send(connection, "medium", richMedium(1e9));
+      expect(sentIds()).toEqual([buyProgram("BruteSSH.exe").id]);
+      expect(controller.augmentationsView()).toMatchObject({ committed: false });
+      expect(controller.augmentationReserve()).toBe(0);
+    });
+
+    test("the install: after the owner's queue, through the gate and a backup, as the source `augmentation`, stored as sent", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+      const sent: unknown[] = [];
+      controller.subscribe((event) => sent.push(event));
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      // All five bought already, no money left: the install is what's left.
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      send(connection, "medium", richMedium(0));
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+      expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+        [AEVUM.id, "manual"],
+        [INSTALL.id, "augmentation"],
+      ]);
+      expect(sentIds()).toEqual([AEVUM.id]);
+      reportedDone(connection, AEVUM.id);
+      send(connection, "medium", richMedium(0));
+      send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+      expect(sent).toEqual([
+        expect.objectContaining({ type: "augmentationInstallChosen" }),
+        { type: "augmentationsInstallSent", atMs: expect.any(Number), source: "brain", queued: FIVE },
+      ]);
+      // The install kills the Agent: awaiting its restart until a slow snapshot shows the reset.
+      expect(controller.installAwaitingRestart()).toBeNull();
+      connection.dropFromGameSide();
+      expect(controller.installAwaitingRestart()).toEqual({ id: INSTALL.id, sinceMs: expect.any(Number) });
+      const again = connectAgent("session-2");
+      send(again, "static", network, "session-2");
+      send(
+        again,
+        "slow",
+        { ...slowWith([], 90_000), resetInfo: { ...slowWith([], 90_000).resetInfo, ownedAugs: { BitWire: 1 } } },
+        "session-2",
+      );
+      expect(controller.installAwaitingRestart()).toBeNull();
+      expect(controller.intentsView()).toEqual([]);
+      expect(controller.augmentationsView()).toMatchObject({ committed: false });
+      expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("the owner's install queued too: one install, the owner's", () => {
+      const { controller, connection } = connectedWithLoopOff();
+      controller.addManualIntent({ action: "installAugmentations", args: {} });
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([[INSTALL.id, "manual"]]);
+    });
+
+    test("the switch: kept in the store; off, nothing is bought or installed", () => {
+      const { controller, connection, sentIds } = connectedWithLoopOff();
+      controller.setAugmentationsEnabled(false);
+      expect(store.getSetting("augmentations.enabled")).toBe("false");
+      send(connection, "slow", slowWith());
+      send(connection, "medium", richMedium(1e9));
+      expect(sentIds()).toEqual([buyProgram("BruteSSH.exe").id]);
+      expect(controller.augmentationsView()).toMatchObject({ enabled: false, committed: false });
     });
   });
 

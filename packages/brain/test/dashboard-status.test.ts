@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import type { AugmentationsView } from "../src/augmentations.ts";
 import type { BackdoorDue } from "../src/backdoors.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
@@ -12,6 +13,7 @@ import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src
 import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { idleAugmentations } from "./helpers/snapshot-fixtures.ts";
 
 const STARTED_AT_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60_000;
@@ -59,7 +61,15 @@ const status = (
     income = null,
     loop = hackLoop,
     backdoorsDue = [],
-  }: { income?: IncomeFacts | null; loop?: HackLoopView; backdoorsDue?: BackdoorDue[] } = {},
+    augmentations = idleAugmentations,
+    installAwaitingRestart = null,
+  }: {
+    income?: IncomeFacts | null;
+    loop?: HackLoopView;
+    backdoorsDue?: BackdoorDue[];
+    augmentations?: AugmentationsView;
+    installAwaitingRestart?: { id: string; sinceMs: number } | null;
+  } = {},
 ) =>
   buildDashboardStatus({
     store,
@@ -75,6 +85,8 @@ const status = (
     work: { desired: null, outcome: null },
     income,
     backdoorsDue,
+    augmentations,
+    installAwaitingRestart,
     nowMs,
   });
 
@@ -218,6 +230,16 @@ test("backdoorOverdue (#195): from the controller's backdoors due, once one has 
   expect(status(nowMs + 1, { backdoorsDue: [avmnite] }).alerts.map((alert) => alert.name)).toEqual(["backdoorOverdue"]);
   expect(status(nowMs).alerts).toEqual([]);
 });
+test("the augmentations (#210): the controller's view shown, its purchases not queued and an install not restarted alerts", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const augmentations = { ...idleAugmentations, notQueued: [{ augmentation: "BitWire", level: 1, boughtAtMs: 7 }] };
+  const installAwaitingRestart = { id: "installAugmentations()", sinceMs: nowMs - 10 * 60_000 };
+  const built = status(nowMs, { augmentations, installAwaitingRestart });
+  expect(built.augmentations).toBe(augmentations);
+  expect(built.alerts.map((alert) => alert.name)).toEqual(["augmentationNotQueued", "installNotRestarted"]);
+});
+
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
   const nowMs = STARTED_AT_MS + DAY_MS;
   // One heartbeat from before the window (not counted), then the last 10 minutes every 2 s, but for 100 s.
@@ -389,6 +411,8 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     work: { desired: null, outcome: null },
     income: null,
     backdoorsDue: [],
+    augmentations: idleAugmentations,
+    installAwaitingRestart: null,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

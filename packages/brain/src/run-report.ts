@@ -14,8 +14,14 @@ import {
   type StaticSnapshotData,
   type WorkOutcome,
 } from "@bitburner-agent/core";
+import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline } from "./augmentation-report.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
-import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
+import {
+  BACKDOOR_OVERDUE_AFTER_MS,
+  INCOME_STALLED_AFTER_MS,
+  INSTALL_NOT_RESTARTED_AFTER_MS,
+  INTENT_STUCK_AFTER_TRIES,
+} from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
 import {
@@ -288,6 +294,8 @@ interface RunFacts extends RunWindow {
   slowLast: SlowSnapshotData | undefined;
   /** The faction state over the slow snapshots (#197). */
   factionState: FactionStateFolding;
+  /** The installs over the slow snapshots (#210), for the augmentation rule's events. */
+  augmentations: AugmentationTimeline;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -328,12 +336,14 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
     const factionState = new FactionStateFolding();
+    const augmentations = new AugmentationTimeline();
     for (const { atMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
       factionState.add(atMs, data);
+      augmentations.addSlow(atMs, data);
       for (const name of namesOf(data.purchasedServers)) playersServers.add(name);
     }
     let mediumFirst: MediumSnapshotData | undefined;
@@ -381,6 +391,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowFirst,
       slowLast,
       factionState,
+      augmentations,
       snapshotCount,
       playersServers,
       hackLoopEnabled: readHackLoopEnabled(store),
@@ -465,9 +476,9 @@ function windowSection(facts: RunFacts): string[] {
         "restart, give --since",
     );
   }
-  const timeline = facts.events.filter(
-    (event) => event.kind !== "gameDialog" && event.kind !== WORK_PROMOTION_EVENT_KIND,
-  );
+  // Section 3's: the actions, with the augmentation rule's events (#210).
+  const actions = ["gameDialog", WORK_PROMOTION_EVENT_KIND, ...AUGMENTATION_EVENT_KINDS];
+  const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event)}`);
   if (timeline.length === 0) lines.push("  no events from the brain or the Agent");
   const count = (kind: string) => timeline.filter((event) => event.kind === kind).length;
@@ -735,6 +746,7 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (dialogs.length === 0) lines.push("    none");
   lines.push(...backdoorLines(facts));
+  lines.push(...facts.augmentations.actionLines(facts.events, formatIsoTime));
   return lines;
 }
 
@@ -845,6 +857,14 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
   }
   if (stuck === 0) lines.push("    none");
   lines.push(...backdoorHealthLines(facts, failures));
+  lines.push(
+    ...facts.augmentations.healthLines(facts.events, {
+      untilMs: facts.untilMs,
+      withinMs: INSTALL_NOT_RESTARTED_AFTER_MS,
+      failures,
+      formatTime: formatIsoTime,
+    }),
+  );
 
   lines.push("  dialogs left blocking the page:");
   const blocking = blockingEpisodes(facts);

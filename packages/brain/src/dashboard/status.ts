@@ -12,6 +12,7 @@ import {
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import type { AugmentationsView } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
@@ -93,6 +94,11 @@ export interface DashboardStatus {
   programs: ProgramsView;
   /** Home's RAM (#138): its size, the upgrade being bought, or what it waits for. */
   homeRam: HomeRamView;
+  /**
+   * Augmentations and the reset (#210): the switch, the set the money covers, the decision, what's asked for, and the
+   * purchases not queued. The reserve is Infinity while committed, which JSON carries as null.
+   */
+  augmentations: AugmentationsView;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -131,6 +137,10 @@ export interface DashboardStatusOptions {
   programs: ProgramsView;
   /** Home RAM's view (#138), likewise. */
   homeRam: HomeRamView;
+  /** The augmentations' view (#210), likewise. */
+  augmentations: AugmentationsView;
+  /** The install out when the Agent disconnected, until the reset shows (#210): the controller's, for its alert. */
+  installAwaitingRestart: { id: string; sinceMs: number } | null;
   /** The intents' view (#141), likewise. */
   intents: IntentView[];
   /** The work's view (#151), likewise. */
@@ -158,6 +168,8 @@ export function buildDashboardStatus({
   hackLoop,
   programs,
   homeRam,
+  augmentations,
+  installAwaitingRestart,
   intents,
   work,
   income,
@@ -271,6 +283,8 @@ export function buildDashboardStatus({
             }
           : null,
       backdoorsDue,
+      augmentationsNotQueued: augmentations.notQueued,
+      installAwaitingRestart,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -292,6 +306,7 @@ export function buildDashboardStatus({
     hackLoop,
     programs,
     homeRam,
+    augmentations,
     intents,
     work,
     factions: slow

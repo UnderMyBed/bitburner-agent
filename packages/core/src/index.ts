@@ -1,5 +1,19 @@
 export { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
 export {
+  type AugmentationSet,
+  augmentationBuyOrder,
+  chooseAugmentationsToBuy,
+  hackingExpForLevel,
+  type InstallCandidate,
+  type InstallDecision,
+  type InstallDecisionInputs,
+  type InstallGains,
+  installDecision,
+  installGains,
+  isWorthInstalling,
+  rebuildTimeMs,
+} from "./augmentation-plan.ts";
+export {
   AUGMENTATION_NAMES,
   AUGMENTATION_PRICE_GROWTH,
   type AugmentationBitNodeMultipliers,
@@ -138,6 +152,16 @@ export {
   type JoinedFaction,
   parseFactionState,
 } from "./faction-state.ts";
+export {
+  FACTION_WORK_CYCLES_PER_SECOND,
+  factionReputationPerCycle,
+  factionReputationPerSecond,
+  HACKING_MULTIPLIERS,
+  hackingValue,
+  MAX_SKILL_LEVEL,
+  UNFOCUSED_WORK_BONUS,
+  type WorkingPerson,
+} from "./faction-work.ts";
 export {
   daedalusAugmentationsRequired,
   FACTION_ENEMIES,

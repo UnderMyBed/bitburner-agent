@@ -47,6 +47,10 @@
     <h2>Home RAM</h2><div></div><button type="button">Stop upgrading home RAM</button>
     <div class="bad" id="home-ram-problem" hidden></div>
   </section>
+  <section id="augmentations">
+    <h2>Augmentations</h2><div></div><button type="button">Stop buying and installing augmentations</button>
+    <div class="bad" id="augmentations-problem" hidden></div>
+  </section>
   <section id="intents">
     <h2>Intents</h2><table></table>
     <form>
@@ -109,6 +113,8 @@ let enableHackLoopNext = false;
 let enableProgramsNext = false;
 /** What home RAM's switch sends next (#138), likewise. */
 let enableHomeRamNext = false;
+/** What the augmentations' switch sends next (#210), likewise. */
+let enableAugmentationsNext = false;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -267,6 +273,48 @@ function render(status) {
     element("div", `Home: ${orNone(homeRam.ram, (ram) => `${ram} GB`)}`),
   );
   document.querySelector("#home-ram button").textContent = homeRam.enabled ? "Stop upgrading home RAM" : "Start upgrading home RAM";
+
+  // Augmentations and the reset (#210): what the brain asks for, or the set the money covers and the decision.
+  const augmentations = status.augmentations;
+  enableAugmentationsNext = !augmentations.enabled;
+  const dollars = (money) => `$${Math.round(money).toLocaleString("en-US")}`;
+  const eta = (way) =>
+    way === null || way.ms === null || !Number.isFinite(way.ms)
+      ? "never"
+      : way.ms < 3_600_000
+        ? `${Math.round(way.ms / 60_000)} min`
+        : `${(way.ms / 3_600_000).toFixed(1)} h`;
+  const augmentationsText = !augmentations.enabled
+    ? "not buying or installing"
+    : augmentations.waiting
+      ? "waiting for the Agent's snapshots"
+      : augmentations.asking !== null
+        ? `install chosen: ${augmentations.asking}`
+        : augmentations.waitingFor !== null
+          ? `${augmentations.committed ? "install chosen: " : ""}waiting for ${augmentations.waitingFor}`
+          : "nothing to do";
+  const decision = augmentations.decision;
+  document.querySelector("#augmentations div").replaceChildren(
+    element("div", `Augmentations: ${augmentationsText}`, augmentations.enabled ? "ok" : "muted"),
+    element(
+      "div",
+      `The set the money covers: ${augmentations.set.length === 0 ? "none" : `${augmentations.set.map((each) => each.augmentation).join(", ")} (${dollars(augmentations.setCost)})`}`,
+    ),
+    ...(decision === null || decision.without === null
+      ? []
+      : [
+          element(
+            "div",
+            `The next worth installing: ${decision.without.augmentation} at ${decision.without.faction}, ${eta(decision.without)} carrying on, ${eta(decision.with)} installing first (rebuild ${eta({ ms: decision.rebuildMs })})`,
+          ),
+        ]),
+    ...augmentations.notQueued.map((each) =>
+      element("div", `NOT QUEUED: ${each.augmentation}, reported bought, not in the faction state's queue`, "bad"),
+    ),
+  );
+  document.querySelector("#augmentations button").textContent = augmentations.enabled
+    ? "Stop buying and installing augmentations"
+    : "Start buying and installing augmentations";
 
   // With the backend of the last try (#145), unless an older Agent didn't say.
   const via = (outcome) => (outcome.backend === null || outcome.backend === undefined ? "" : ` via ${outcome.backend}`);
@@ -430,6 +478,9 @@ document.querySelector("#programs button").addEventListener("click", () =>
 );
 document.querySelector("#home-ram button").addEventListener("click", () =>
   sendSwitch("/api/home-ram", { enabled: enableHomeRamNext }, "#home-ram-problem"),
+);
+document.querySelector("#augmentations button").addEventListener("click", () =>
+  sendSwitch("/api/augmentations", { enabled: enableAugmentationsNext }, "#augmentations-problem"),
 );
 document.querySelector("#intents form").addEventListener("submit", (event) => {
   event.preventDefault();

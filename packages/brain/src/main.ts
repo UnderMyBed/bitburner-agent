@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
+import { readAugmentationsEnabled } from "./augmentations.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
@@ -98,6 +99,9 @@ try {
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
   const stopRecordingBackups = recordEvents(saveBackups, store, deployerReleaseContext);
+  // The augmentation rule's decisions and purchases, and the installs sent (#210), for the run report. None comes
+  // before an Agent's snapshots, and none of those before this: the control server's listen resolves first.
+  const stopRecordingAugmentations = recordEvents(desiredState, store, deployerReleaseContext);
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
@@ -138,6 +142,8 @@ try {
         hackLoop: desiredState.hackLoopView(),
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
+        augmentations: desiredState.augmentationsView(),
+        installAwaitingRestart: desiredState.installAwaitingRestart(),
         intents: desiredState.intentsView(),
         work: desiredState.workView(),
         income: incomeWatch.facts(),
@@ -156,6 +162,10 @@ try {
     setProgramsEnabled: (enabled) => {
       desiredState.setProgramsEnabled(enabled);
       log(`buying hacking programs turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setAugmentationsEnabled: (enabled) => {
+      desiredState.setAugmentationsEnabled(enabled);
+      log(`buying and installing augmentations turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
@@ -190,7 +200,8 @@ try {
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
   log(
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
-      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying and installing augmentations ` +
+      `${readAugmentationsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
   );
   log(
     supervising
@@ -208,6 +219,7 @@ try {
     stopRecordingDeploys();
     stopLoggingDeploys();
     stopRecordingBackups();
+    stopRecordingAugmentations();
     stopLoggingBackups();
     await dashboardServer.close();
     await remoteFileApiServer.close();
