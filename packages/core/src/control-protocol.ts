@@ -269,7 +269,9 @@ function parseIntents(intents: unknown): ParsedMessage<Intent[]> {
 }
 /**
  * A desired state's `hackLoop`: its known fields only, or why it isn't valid. Safe mode's file uses it too (#160).
- * `preparing` absent and null are the same (#184): only one with hosts to prepare on is carried.
+ * `preparing` (#184), checked in the order the protocol's docs give: its shape (a target, and a list of hostnames); none
+ * when absent, null or with no hosts; then only with the loop on and a target, another target than that, no host of
+ * `hosts`, and both lists together within `MAX_HACK_LOOP_HOSTS`.
  */
 export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
   if (typeof hackLoop !== "object" || hackLoop === null) return { ok: false, reason: "hackLoop isn't an object" };
@@ -284,19 +286,24 @@ export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
   }
   if (typeof preparing !== "object") return { ok: false, reason: "hackLoop.preparing isn't an object" };
   const { target: preparingTarget, hosts: preparingHosts } = preparing as JsonObject;
-  if (!enabled || target === null) return { ok: false, reason: "hackLoop.preparing with the loop off or no target" };
   if (!isShortNonEmptyString(preparingTarget)) {
     return { ok: false, reason: `hackLoop.preparing.target is ${describeValue(preparingTarget)}` };
   }
-  if (!isHostList(preparingHosts) || hosts.length + preparingHosts.length > MAX_HACK_LOOP_HOSTS) {
-    return { ok: false, reason: "hackLoop.preparing.hosts isn't a list of hostnames" };
-  }
+  if (!isHostList(preparingHosts)) return { ok: false, reason: "hackLoop.preparing.hosts isn't a list of hostnames" };
+  if (preparingHosts.length === 0) return { ok: true, message: { enabled, target, hosts: [...hosts] } };
+  if (!enabled || target === null) return { ok: false, reason: "hackLoop.preparing with the loop off or no target" };
+  if (preparingTarget === target) return { ok: false, reason: "hackLoop.preparing.target is the target it earns on" };
   // One target per host: the deploy worker would otherwise start one and stop it on the next round.
   const earningHosts = new Set(hosts);
   if (preparingHosts.some((host) => earningHosts.has(host))) {
     return { ok: false, reason: "hackLoop.preparing.hosts names a host of hackLoop.hosts" };
   }
-  if (preparingHosts.length === 0) return { ok: true, message: { enabled, target, hosts: [...hosts] } };
+  if (hosts.length + preparingHosts.length > MAX_HACK_LOOP_HOSTS) {
+    return {
+      ok: false,
+      reason: `hackLoop.hosts and hackLoop.preparing.hosts together are over ${MAX_HACK_LOOP_HOSTS}`,
+    };
+  }
   return {
     ok: true,
     message: { enabled, target, hosts: [...hosts], preparing: { target: preparingTarget, hosts: [...preparingHosts] } },

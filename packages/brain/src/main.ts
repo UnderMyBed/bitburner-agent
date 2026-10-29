@@ -149,6 +149,7 @@ try {
     setHackLoopEnabled: (enabled) => {
       desiredState.setHackLoopEnabled(enabled);
       log(`hack loop turned ${enabled ? "on" : "off"} from the dashboard`);
+      incomeWatch.hackLoopSwitched(systemClock.now());
     },
     setProgramsEnabled: (enabled) => {
       desiredState.setProgramsEnabled(enabled);

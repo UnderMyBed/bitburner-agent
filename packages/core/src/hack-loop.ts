@@ -46,7 +46,7 @@ export interface HackLoopDeployReport {
   /** Servers running the loop afterwards, and their threads in all. */
   serversRunning: number;
   threadsRunning: number;
-  /** The same, per target, in the order first met (#184): the one earning, and the one being prepared. */
+  /** The same, per target (#184): the one earning, and the one being prepared, in the order the scan met them. */
   byTarget: { target: string; serversRunning: number; threadsRunning: number }[];
   /** Why it couldn't do its job (no deployment folder, no loop script on home), or null. */
   problem: string | null;

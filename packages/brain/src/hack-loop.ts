@@ -138,47 +138,104 @@ function isReady(server: StaticServer, mediumData: MediumSnapshotData): boolean 
   );
 }
 
-/** The target last set for the connected Agent, and whether it earns: a medium snapshot has shown it ready since. */
-export interface HackTargetNote {
+/**
+ * A server's money as a fresh start has it, of its maximum: 1/25 (Server.ts:74-75). A target with more has been grown
+ * since, so it's being worked.
+ */
+const STARTING_MONEY_FRACTION = 1 / 25;
+
+/** The target last set for the connected Agent, for the next plan (#184). */
+export interface LastHackTarget {
   target: string;
+  /** A medium snapshot has shown it ready since it was set: the loop hacks it. */
   earning: boolean;
+  /** The hosts preparing the next target, kept while they still hold at least half the RAM. */
+  preparingHosts: string[];
 }
 
 /**
  * The hack loop while on (#184): the target it earns on, its hosts, and the next target being prepared on the rest,
- * with the note for the next time.
- * - `best` is the starter rule's choice (`chooseHackTarget`). `current` is `last`'s target, the one last set for this
- *   Agent, while it's still a candidate. Otherwise (a brain restart, or a reset that took it away) it's the best
- *   candidate that's ready, or `best` if none is.
- * - `current` earns once a medium snapshot has shown it ready since it became the target: the loop hacks it then.
+ * with what to remember for the next plan.
+ * - `best` is the starter rule's choice (`chooseHackTarget`). `current` is `lastSet`'s target, the one last set for
+ *   this Agent, while it's still a candidate. With none set (a brain restart, the switch turned on, or a reset that took
+ *   it away), it's the best candidate that's ready; else the one with the most of its money, if more than a fresh
+ *   start's 4% (it's being worked: a server caught between a hack and its weaken isn't ready, but beats one at 4%);
+ *   else `best`.
+ * - `current` earns once a medium snapshot has shown it ready since it became the target, or when it was taken as the
+ *   one being worked.
  * - `best` is `current`, or ready, or `current` doesn't earn yet: every host on `best`, as nothing earning is given up.
  *   A move from a target that earns to one that isn't ready would earn nothing for the 35 to 45 minutes its weakening
  *   and growing take: `7990834` on Steam, n00dles to zer0 at hacking 150.
  * - Otherwise every host keeps earning on `current` but the largest, which prepare `best` (the same loop: it weakens
- *   and grows it, and hacks once it's ready) until they hold at least half the hosts' RAM. Once a medium snapshot shows
- *   `best` ready, all move to it. A single host holds all the RAM, so it prepares, and nothing earns meanwhile.
+ *   and grows it, and hacks once it's ready) until they hold at least half the hosts' RAM. The hosts that prepared it
+ *   last time stay while they still hold half and leave some to earn, so a larger host rooted since doesn't stop a
+ *   weaken or grow under way. Once a medium snapshot shows `best` ready, all move to it. A single host holds all the
+ *   RAM, so it prepares, and nothing earns meanwhile; with no host, nothing is prepared.
  */
 export function planHackLoop(
   staticData: StaticSnapshotData | null,
   mediumData: MediumSnapshotData | null,
-  last: HackTargetNote | null,
-): { hackLoop: Omit<HackLoopState, "enabled">; note: HackTargetNote | null } {
+  lastSet: LastHackTarget | null,
+): { hackLoop: Omit<HackLoopState, "enabled">; lastSet: LastHackTarget | null } {
   const candidates = hackTargetCandidates(staticData, mediumData);
   const hostsWithRam = hackHostsWithRam(staticData, mediumData);
   const hosts = hostsWithRam.map(([hostname]) => hostname);
   const best = candidates[0];
-  if (best === undefined || mediumData === null) return { hackLoop: { target: null, hosts }, note: null };
+  if (best === undefined || mediumData === null) return { hackLoop: { target: null, hosts }, lastSet: null };
   const ready = (server: StaticServer) => isReady(server, mediumData);
-  const kept = candidates.find((server) => server.hostname === last?.target);
-  const current = kept ?? candidates.find(ready) ?? best;
-  const currentEarns = (kept !== undefined && last?.earning === true) || ready(current);
+  const kept = candidates.find((server) => server.hostname === lastSet?.target);
+  const mostWorked = mostOfItsMoney(candidates, mediumData);
+  const current = kept ?? candidates.find(ready) ?? mostWorked ?? best;
+  const currentEarns = (kept !== undefined ? lastSet?.earning === true : current === mostWorked) || ready(current);
   if (current === best || ready(best) || !currentEarns) {
     const earning = current === best ? currentEarns : ready(best);
-    return { hackLoop: { target: best.hostname, hosts }, note: { target: best.hostname, earning } };
+    return {
+      hackLoop: { target: best.hostname, hosts },
+      lastSet: { target: best.hostname, earning, preparingHosts: [] },
+    };
   }
-  // The largest hosts first, ties by name, until they hold at least half the RAM. With two hosts or more, some are left
-  // to earn: the largest n - 1 of n hold at least half.
+  const preparingHosts = splitForPreparing(hostsWithRam, lastSet?.preparingHosts ?? []);
+  const preparing = hosts.filter((hostname) => preparingHosts.has(hostname));
+  const lastSetNow = { target: current.hostname, earning: true, preparingHosts: preparing };
+  // No host to prepare on (none rooted with RAM): nothing prepared, rather than "preparing on 0 servers".
+  if (preparing.length === 0) return { hackLoop: { target: current.hostname, hosts }, lastSet: lastSetNow };
+  return {
+    hackLoop: {
+      target: current.hostname,
+      hosts: hosts.filter((hostname) => !preparingHosts.has(hostname)),
+      preparing: { target: best.hostname, hosts: preparing },
+    },
+    lastSet: lastSetNow,
+  };
+}
+
+/** The candidate with the most of its money, of its maximum, if more than a fresh start's: the first such, best first. */
+function mostOfItsMoney(candidates: StaticServer[], mediumData: MediumSnapshotData): StaticServer | undefined {
+  let most: { server: StaticServer; fraction: number } | undefined;
+  for (const server of candidates) {
+    const moneyAvailable = mediumData.servers.find((each) => each?.hostname === server.hostname)?.moneyAvailable;
+    if (typeof moneyAvailable !== "number") continue;
+    const fraction = moneyAvailable / (server.moneyMax as number);
+    if (fraction > STARTING_MONEY_FRACTION && (most === undefined || fraction > most.fraction)) {
+      most = { server, fraction };
+    }
+  }
+  return most?.server;
+}
+
+/**
+ * The hosts to prepare the next target on: those that prepared it last time, while they still hold at least half the
+ * RAM and leave some to earn; otherwise the largest first, ties by name, until they hold at least half. With two hosts
+ * or more, some are left to earn: the largest n - 1 of n hold at least half.
+ */
+function splitForPreparing(hostsWithRam: [string, number][], lastPreparing: string[]): Set<string> {
   const totalRam = hostsWithRam.reduce((total, [, ram]) => total + ram, 0);
+  const ramOf = new Map(hostsWithRam);
+  const stillThere = lastPreparing.filter((hostname) => ramOf.has(hostname));
+  const stillThereRam = stillThere.reduce((total, hostname) => total + (ramOf.get(hostname) ?? 0), 0);
+  if (stillThere.length > 0 && stillThere.length < hostsWithRam.length && stillThereRam * 2 >= totalRam) {
+    return new Set(stillThere);
+  }
   const preparingHosts = new Set<string>();
   let preparingRam = 0;
   for (const [hostname, ram] of [...hostsWithRam].sort(([a, ramA], [b, ramB]) => ramB - ramA || (a < b ? -1 : 1))) {
@@ -186,12 +243,5 @@ export function planHackLoop(
     preparingHosts.add(hostname);
     preparingRam += ram;
   }
-  return {
-    hackLoop: {
-      target: current.hostname,
-      hosts: hosts.filter((hostname) => !preparingHosts.has(hostname)),
-      preparing: { target: best.hostname, hosts: hosts.filter((hostname) => preparingHosts.has(hostname)) },
-    },
-    note: { target: current.hostname, earning: true },
-  };
+  return preparingHosts;
 }

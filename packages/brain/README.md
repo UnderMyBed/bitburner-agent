@@ -144,10 +144,10 @@ A local page showing whether the skeleton is healthy, its alerts, and its switch
   | `deployFailed` | The last deploy since the brain started failed | When a deploy succeeds, or a connection finds the deployment already in place (`deploymentCurrent`), or the brain restarts |
   | `supervisionGaveUp` | The supervisor stopped (#94): after 3 launches in an hour, or after 10 failed checks in a row with the last failure (#127) | When supervision is resumed |
   | `dialogBlocking` | A dialog the Agent leaves for the owner (a script's prompt, one the owner opened) is open, in the newest fast snapshot (#143), quoting its text: nothing is done on the page while it's open | When it's closed |
-  | `incomeStalled` | The hack loop is on with a target, and the player's money in the medium snapshots hasn't risen for over 10 minutes (`INCOME_STALLED_AFTER_MS`, #184), with how long, the money and the target. A purchase lowers money, which isn't a rise. The 10 minutes count from the last rise, or from when the watch began: the Agent's connection, or the loop coming on with a target. The brain logs a line as it starts and as it ends | When money rises, the loop goes off or loses its target, or the Agent disconnects or connects again |
+  | `incomeStalled` | The hack loop is on with a target, and the player's money in the medium snapshots hasn't risen for over 10 minutes (`INCOME_STALLED_AFTER_MS`, #184), with how long, the money and the target. A purchase lowers money, which isn't a rise. The 10 minutes count from the last rise, or from when the watch began: the Agent's connection, a medium snapshot that finds the loop off or without a target, or the switch flipped on the dashboard. The brain logs a line as it starts and as it ends | When money rises, the loop goes off or loses its target, or the Agent disconnects or connects again |
   | `intentStuck` | An intent tried 5 times (2 minutes) and still not done, in the newest fast snapshot (#141); one alert per intent, with its last problem | When it's done, or leaves the list |
 
-  The stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
+  The route-stall alert (no progress on the route's critical path) needs a route, so it comes with the planner (M4).
 - **Security** (owner decision 14, localhost only):
   - it listens on `127.0.0.1` only;
   - it refuses (403) a request whose `Host` isn't `127.0.0.1:<port>` or `localhost:<port>`, so a web page can't reach it by DNS rebinding;
@@ -178,18 +178,18 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
   - Growth counts because the loop hacks only once a server's money is back at 75% of its maximum, and servers start at 4%. Over an 8 GB fresh start's first virtual hour, n00dles (growth 3000) earned $15m. foodnstuff, joesguns and sigma-cosmetics, with more money but growth 5–20, earned nothing.
 - **The hosts** (`chooseHackHosts`): the game's rooted servers with RAM. Never home, which is the Agent's, and never the player's own purchased or Hacknet servers.
 - **The move to the next target** (`planHackLoop`, [#184](https://github.com/UnderMyBed/bitburner-agent/issues/184)): on Steam, `7990834`'s loop moved every host from n00dles to zer0 when hacking reached 150, with zer0 at 4% of its money. The loop hacks only at 75% of the maximum and within 5 of the minimum security, so every thread weakened and grew it, and money stayed flat for 24 minutes until the owner stopped it. Now:
-  - `best` is the starter rule's target. `current` is the target last set for the connected Agent while it's still a candidate. With none (a brain restart, a new connection, the switch turned on, or a reset that took it away), it's the best candidate that's **ready**, or `best` if none is.
+  - `best` is the starter rule's target. `current` is the target last set while it's still a candidate, across the Agent's reconnects while the game hasn't reset (the slow snapshot's `lastAugReset`). With none (a brain restart, the switch turned on, or a reset), it's the best candidate that's **ready**; else the one with the most of its money, of its maximum, if more than a fresh start's 4% (Server.ts:74-75): that's the one being worked, caught between a hack and its weaken; else `best`. Judged afresh on a reconnect, a target between a hack and its weaken isn't ready, and every host would have moved to the next target, the Steam stall again (#184 review).
   - **Ready** is the loop's own thresholds, in core (`isHackLoopReady`, `HACK_LOOP_MONEY_FRACTION`, `HACK_LOOP_SECURITY_MARGIN`), which `hack-loop.js` uses too: the medium snapshot's money at least 75% of the maximum, and security at most the minimum + 5.
-  - `current` **earns** once a medium snapshot has shown it ready since it became the target: the loop has hacked it.
+  - `current` **earns** once a medium snapshot has shown it ready since it became the target (the loop has hacked it), or when it was taken as the one being worked.
   - `best` is `current`, or ready, or `current` doesn't earn yet: every host goes on `best`. Nothing earning is given up.
-  - Otherwise `current` keeps earning on most hosts, and the largest, in RAM order (ties by name), **prepare** `best` until they hold at least half the hosts' RAM. Preparing is the same loop: it weakens and grows `best`, and hacks once it's ready. With two hosts or more, some are always left to earn. The next medium snapshot that shows `best` ready moves every host to it.
+  - Otherwise `current` keeps earning on most hosts, and the largest, in RAM order (ties by name), **prepare** `best` until they hold at least half the hosts' RAM. Preparing is the same loop: it weakens and grows `best`, and hacks once it's ready. With two hosts or more, some are always left to earn. The hosts that prepared last time stay while they still hold at least half the RAM and leave some to earn, so a larger host rooted since doesn't stop a weaken or grow under way. With no host at all, nothing is prepared. The next medium snapshot that shows `best` ready moves every host to it.
   - The rule may move on while a target is prepared. In the simulator, zer0 was still being prepared when max-hardware became `best` at about hacking 160, and the loop moved from n00dles to max-hardware.
 - **The controller** (`DesiredStateController`, `src/desired-state.ts`; since #151 it also sends [work](#work); since #141 it also sends [intents](#intents): [the hacking programs](#the-hacking-programs), [home's RAM](#home-ram) and the owner's manual queue) keeps the control channel's desired state in step with the switches and the connected Agent's snapshots:
   - **Off** is sent at once, to each Agent as it connects too.
   - **On** waits for that Agent's own static and medium snapshots, which come in its first round, then sends the target (or none yet, while the servers get rooted) and the hosts. It never sends the last brain's or the last game's view:
     - a brain that restarts sends the running Agent the same state, which changes nothing;
     - an Agent after a reset is never given a target its game can't hack.
-  - It keeps the target it last set for the connected Agent, and whether it earns, for the move to the next one (#184). It forgets them on a connect, a disconnect or the switch off.
+  - It keeps the target it last set, whether it earns, and the hosts preparing the next one, for the move to the next target (#184): across the Agent's connections while `lastAugReset` is unchanged. It forgets them on a reset or the switch off; a new brain starts without them.
   - The channel sends each connection a state once, then again on a change. It sends only to a welcomed Agent running the deployed code. While the brain holds, it sends only what starts nothing new: the hack loop off, or as last sent, and no intents or work ([protocol](../../docs/bridge/protocol.md#rules)).
   - The dashboard shows the controller's own view: on or off, waiting for the snapshots, the target and the number of hosts, and the target being prepared with its number of hosts.
 - **Wiring:** `main.ts` makes the controller before the control channel listens, with the save backups it asks before an irreversible intent. The simulator suite wires it the same way through `test/helpers/brain-in-simulation.ts` (`withDesiredState`). `brain-process.test.ts` doesn't cover it.
@@ -209,14 +209,22 @@ M3's first slice ([#134](https://github.com/UnderMyBed/bitburner-agent/issues/13
 
 ### The income suite
 
-`test/hack-loop-income.test.ts` (#184): an 8 GB fresh start in BN1 with the brain's rules as on Steam (the loop, the programs and home RAM, all on). It runs until the loop leaves n00dles for a better target (within 3 virtual hours), then 45 virtual minutes more. Then:
-- From money's first rise, money never goes more than 10 virtual minutes without rising (`INCOME_STALLED_AFTER_MS`). This is the loud failure.
-- The brain never logs an income stall.
+`test/hack-loop-income.test.ts` (#184) starts from an 8 GB fresh start in BN1, with the brain's rules as on Steam: the loop, the programs and home RAM, all on. It runs until the loop leaves n00dles for a better target, within 3 virtual hours. It reproduced the Steam stall on `7990834`: the move to zer0 came at 45 to 48 virtual minutes on each of seeds 1 to 8, and money stayed flat for the 45 minutes after.
+
+**In CI** (seed 1, about 10 s), it checks the move. It runs on 15 virtual minutes past the move, so a stall that starts there shows its whole length, and then:
+- Money never goes more than 10 virtual minutes without rising (`INCOME_STALLED_AFTER_MS`) in any stretch that overlaps the window, from the prepare's start to 10 minutes after the move.
+- The brain logs no income stall by then.
 - The loop stays off n00dles.
 
-It reproduced the Steam stall on `7990834`: the move to zer0 came at 45 to 48 virtual minutes on each of seeds 1 to 8, and money stayed flat for the 45 minutes after.
+Seed 1 prepares from 48 minutes, moves to max-hardware at 90, and goes 8.0 minutes at most without a rise.
 
-CI runs seed 1, which takes about 10 s: the move, to max-hardware, comes at 90 minutes, and money goes 8.0 minutes at most without a rise. To run seeds 1 to 8, each printing its longest stretch, set `HACK_LOOP_INCOME_SEEDS` to `1,2,3,4,5,6,7,8` (in PowerShell, `$env:HACK_LOOP_INCOME_SEEDS = "1,2,3,4,5,6,7,8"`), then `npm test -- packages/brain/test/hack-loop-income.test.ts --silent=false` (about 95 s). **Seeds 2 to 4 fail it now** (28, 13 and 24 minutes), after the move, for a reason other than the move. Once every host hacks max-hardware, the loops all see 75% at once and hack it together. Its money falls to almost nothing (seed 2: $124m to $111 at 96 minutes), and takes over 20 minutes to grow back. That's the loop's design, not the move: [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187) fixes it, with this run over seeds 1 to 8 (each run to the move from n00dles and 45 virtual minutes on) as its failing test. Meanwhile `incomeStalled` reports it.
+**The whole run, over several seeds:** #187's failing test. Set `HACK_LOOP_INCOME_SEEDS` to the seeds, `1,2,3,4,5,6,7,8`. In PowerShell that's `$env:HACK_LOOP_INCOME_SEEDS = "1,2,3,4,5,6,7,8"`; afterwards run `Remove-Item Env:HACK_LOOP_INCOME_SEEDS`, as it stays set for the session. Then run `npm test -- packages/brain/test/hack-loop-income.test.ts --silent=false`, which takes about 95 s.
+- **What it checks:** each seed runs 45 virtual minutes past the move, and the check covers the whole run, from money's first rise.
+- **What it prints:** each seed's prepare start, its move, and its longest stretch around the move and over the run.
+- **Bad input fails loudly:** an empty entry, or one that isn't a whole number from 1.
+- **Today:** the longest stretch around the move is 4.2 to 8.2 minutes on every seed. **Seeds 2 to 4 fail the whole run** (28, 13 and 24 minutes), after the move, for a reason other than the move.
+- **Why:** once every host hacks max-hardware, the loops all see 75% at once and hack it together. Its money falls to almost nothing (seed 2: $124m to $111 at 96 minutes), and takes over 20 minutes to grow back.
+- **What's next:** that's the loop's design. [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187) fixes it, and `incomeStalled` reports it meanwhile.
 
 ## The hacking programs
 

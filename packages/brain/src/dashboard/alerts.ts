@@ -1,6 +1,6 @@
 // The dashboard's alerts (#93, architecture §7): rules over what the store holds, evaluated whenever status is read, so
-// there's no alert state to keep in sync. The stall alert (no progress on the route's critical path) needs a route, so
-// it comes with the planner (M4).
+// there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
+// route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
@@ -9,7 +9,8 @@ export const AGENT_SILENT_AFTER_MS = 60_000;
 export const INTENT_STUCK_AFTER_TRIES = 5;
 /**
  * Money not risen for this long, with the hack loop on against a target, is `incomeStalled` (#184): 10 minutes. The
- * loop earns every few seconds once it hacks, and a target being prepared never holds every host.
+ * loop earns every few seconds once it hacks, and a target being prepared never holds every host when there are two or
+ * more.
  */
 export const INCOME_STALLED_AFTER_MS = 10 * 60_000;
 

@@ -121,12 +121,13 @@ describe("the move to the next target (#184): prepared while the current one ear
       staticServer("bravo", { moneyMax: 0 }),
     ],
   };
-  const at = (hacking: number, zer0Money: number) => {
+  /** At `hacking`, zer0 at `zer0Money`, n00dles ready unless `n00dles` says otherwise. */
+  const at = (hacking: number, zer0Money: number, n00dles = { moneyAvailable: 1_750_000, hackDifficulty: 1 }) => {
     const data = mediumData(hacking, { home: true, n00dles: true, zer0: true, alpha: true, bravo: true });
     for (const server of data.servers) {
       if (server.hostname === "alpha") server.maxRam = 64;
       if (server.hostname === "n00dles" || server.hostname === "zer0") server.maxRam = 0;
-      if (server.hostname === "n00dles") server.moneyAvailable = 1_750_000;
+      if (server.hostname === "n00dles") Object.assign(server, n00dles);
       if (server.hostname === "zer0") Object.assign(server, { moneyAvailable: zer0Money, hackDifficulty: 10 });
     }
     return data;
@@ -139,6 +140,8 @@ describe("the move to the next target (#184): prepared while the current one ear
     preparing: { target: "zer0", hosts: ["alpha"] },
   };
   const moved = { enabled: true, target: "zer0", hosts: ["alpha", "bravo"] };
+  /** n00dles being worked, caught between a hack and its weaken: 60% of its money, security min + 5.1. */
+  const WORKED = { moneyAvailable: 1_050_000, hackDifficulty: 6.1 };
 
   test("earning on n00dles, zer0 is prepared on the largest host, then everything moves once it's ready", () => {
     const controller = new DesiredStateController({ channel, store });
@@ -154,18 +157,51 @@ describe("the move to the next target (#184): prepared while the current one ear
     expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([earning, preparing, moved]);
   });
 
-  test("a brain restart, or an Agent connecting again, starts from the targets that are ready", () => {
+  test("an Agent connecting again within the same reset keeps the target: n00dles caught mid-weaken isn't given up", () => {
     new DesiredStateController({ channel, store });
     const connection = connectAgent();
     send(connection, "static", twoTargets);
-    send(connection, "medium", at(150, 140_625_000));
-    // zer0 ready from the start: no need to prepare it.
-    expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([moved]);
+    send(connection, "slow", slowData());
+    send(connection, "medium", at(150, 7_500_000));
+    expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([preparing]);
+    // A reload: the same game, n00dles caught between a hack and its weaken (60%, security min + 5.1, not ready), zer0
+    // grown to 70%, not ready either. Judged afresh, zer0 (the more of its money, and best) would take every host, and
+    // income would stop as on Steam.
     const again = connectAgent();
     send(again, "static", twoTargets);
-    send(again, "medium", at(150, 7_500_000));
-    // n00dles is the ready one: it earns, and zer0 is prepared again.
+    send(again, "slow", slowData());
+    send(again, "medium", at(150, 131_250_000, WORKED));
     expect(desiredStates(again).map((state) => state.hackLoop)).toEqual([preparing]);
+  });
+
+  test("after a reset (another lastAugReset), the target is judged afresh", () => {
+    new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "slow", slowData());
+    send(connection, "medium", at(150, 7_500_000));
+    const afterReset = connectAgent("session-2");
+    send(afterReset, "static", twoTargets, "session-2");
+    send(afterReset, "slow", { ...slowData(), resetInfo: { ...slowData().resetInfo, lastAugReset: 5 } }, "session-2");
+    // n00dles back at a fresh start's 4%: nothing is worked, so zer0, best, has both hosts.
+    send(afterReset, "medium", at(150, 7_500_000, { moneyAvailable: 70_000, hackDifficulty: 1 }), "session-2");
+    expect(desiredStates(afterReset).map((state) => state.hackLoop)).toEqual([moved]);
+  });
+
+  test("a brain restart mid-prepare: the target with the most of its money is the one being worked, and earns on", () => {
+    const first = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(150, 7_500_000));
+    expect(first.hackLoopView()).toMatchObject(preparing);
+    // A new brain on a new channel: nothing set. n00dles mid-weaken at 60%, zer0 grown to 30%.
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    new DesiredStateController({ channel, store });
+    const restarted = connectAgent();
+    send(restarted, "static", twoTargets);
+    send(restarted, "medium", at(150, 56_250_000, WORKED));
+    expect(desiredStates(restarted).map((state) => state.hackLoop)).toEqual([preparing]);
   });
 
   test("off forgets the last target: on again starts from the ready ones", () => {

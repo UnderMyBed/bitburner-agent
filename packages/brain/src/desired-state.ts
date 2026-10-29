@@ -19,7 +19,7 @@ import {
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { HACK_LOOP_ENABLED_SETTING, type HackTargetNote, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
+import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
 import {
@@ -146,10 +146,14 @@ export class DesiredStateController {
   #fastData: FastSnapshotData | null = null;
   #desired: DesiredState | null = null;
   /**
-   * The hack loop's target last set for the connected Agent, and whether it earns, or null (#184): kept while the next
-   * one is prepared. None after a connect, a disconnect or the switch off: the rule then starts from the ready targets.
+   * The hack loop's target last set, whether it earns, and the hosts preparing the next one, or null (#184). Kept across
+   * the Agent's connections while the game hasn't reset: a reconnect mid-prepare judged afresh could find the target
+   * between a hack and its weaken, not ready, and move every host to the next one, the Steam stall again. None after the
+   * switch off or a brain restart: the rule then starts from the targets that are ready, or being worked.
    */
-  #hackTarget: HackTargetNote | null = null;
+  #lastSetHackTarget: LastHackTarget | null = null;
+  /** The game's `lastAugReset` (the slow snapshot's) when it was set, or null if no slow snapshot had said. */
+  #lastSetHackTargetResetAt: number | null = null;
   /** The purchase the brain's rules ask for now, or null. */
   #purchase: Intent | null = null;
   /** From the connected Agent's latest medium snapshot, or null. */
@@ -182,7 +186,6 @@ export class DesiredStateController {
         this.#mediumData = null;
         this.#slowData = null;
         this.#fastData = null;
-        this.#hackTarget = null;
         // Counted on the last Agent's snapshots: every gate starts again.
         this.#gates.forget();
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
@@ -470,13 +473,19 @@ export class DesiredStateController {
     // Every state, so the Agent's safe mode keeps it (#160).
     const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };
     if (!hackLoopEnabled) {
-      this.#hackTarget = null;
+      this.#lastSetHackTarget = null;
       this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...workAndTtl };
     } else if (this.#staticData === null || this.#mediumData === null) {
       this.#desired = null;
     } else {
-      const { hackLoop, note } = planHackLoop(this.#staticData, this.#mediumData, this.#hackTarget);
-      this.#hackTarget = note;
+      // One set before a reset (another `lastAugReset`) was that game's, not this one's.
+      const resetAt = resetTimeOf(this.#slowData, "lastAugReset");
+      if (resetAt !== null && this.#lastSetHackTargetResetAt !== null && resetAt !== this.#lastSetHackTargetResetAt) {
+        this.#lastSetHackTarget = null;
+      }
+      const { hackLoop, lastSet } = planHackLoop(this.#staticData, this.#mediumData, this.#lastSetHackTarget);
+      this.#lastSetHackTarget = lastSet;
+      this.#lastSetHackTargetResetAt = resetAt ?? this.#lastSetHackTargetResetAt;
       this.#desired = { hackLoop: { enabled: true, ...hackLoop }, intents, ...workAndTtl };
     }
     this.#channel.setDesiredState(this.#desired);

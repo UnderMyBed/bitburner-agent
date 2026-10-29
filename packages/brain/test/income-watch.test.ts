@@ -129,3 +129,21 @@ test("a disconnect ends a stall, and the next Agent is watched afresh", () => {
   expect(watch.facts()).toEqual({ money: 1_000, lastRiseAtMs: clock.now() });
   expect(lines).toHaveLength(2);
 });
+
+test("the switch turned off and on between two medium snapshots: the 10 minutes start again from the switch", () => {
+  const connection = connectAgent();
+  flatFor(connection, INCOME_STALLED_AFTER_MS + 2 * MEDIUM_MS, 1_000);
+  expect(lines).toHaveLength(1);
+  // Off and on again within the medium period: no snapshot saw it off.
+  clock.advance(MEDIUM_MS / 2);
+  watch.hackLoopSwitched(clock.now());
+  const switchedAtMs = clock.now();
+  expect(lines[1]).toBe("income stall over: the hack loop was switched off or on");
+  expect(watch.facts()?.lastRiseAtMs).toBe(switchedAtMs);
+  flatFor(connection, INCOME_STALLED_AFTER_MS - MEDIUM_MS, 1_000);
+  expect(lines).toHaveLength(2);
+  // Before any snapshot, nothing to restart.
+  const fresh = new IncomeWatch({ channel, hackLoopTarget: () => target });
+  fresh.hackLoopSwitched(clock.now());
+  expect(fresh.facts()).toBeNull();
+});

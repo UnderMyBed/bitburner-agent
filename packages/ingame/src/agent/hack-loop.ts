@@ -100,9 +100,10 @@ export function createHackLoop(
  * of the hosts prepare the next target (#184).
  */
 function runningText(deployed: HackLoopDeployReport, target: string, preparing: string | null): string {
-  const of = (each: string) =>
-    deployed.byTarget.find((running) => running.target === each) ?? { serversRunning: 0, threadsRunning: 0 };
-  const earning = of(target);
+  const runningAgainst = (targetHostname: string) =>
+    deployed.byTarget.find((running) => running.target === targetHostname) ?? { serversRunning: 0, threadsRunning: 0 };
+  const earning = runningAgainst(target);
   const text = `on, ${earning.threadsRunning} threads on ${earning.serversRunning} servers, against ${target}`;
-  return preparing === null ? text : `${text}; preparing ${preparing} on ${of(preparing).serversRunning} servers`;
+  if (preparing === null) return text;
+  return `${text}; preparing ${preparing} on ${runningAgainst(preparing).serversRunning} servers`;
 }

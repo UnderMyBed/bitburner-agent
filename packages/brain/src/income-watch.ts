@@ -10,6 +10,7 @@ export class IncomeWatch {
   #income: IncomeFacts | null = null;
   /** The alert as of the last medium snapshot: its start and end are logged once each. */
   #stalled: Alert | null = null;
+  readonly #log: (line: string) => void;
 
   /**
    * `hackLoopTarget` is the hack loop's target while it's on, or null (the controller's view: it's subscribed to the
@@ -24,9 +25,11 @@ export class IncomeWatch {
     hackLoopTarget: () => string | null;
     log?: (line: string) => void;
   }) {
+    this.#log = log;
     channel.subscribe((event) => {
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
-        // Another Agent, or the same one after a reload, is watched afresh: a stall is the agentSilent alert's meanwhile.
+        // Another Agent, or the same one after a reload, is watched afresh. Meanwhile, a silent Agent is agentSilent's
+        // to report.
         if (this.#stalled !== null)
           log(`income stall over: the Agent ${event.type === "agentConnected" ? "connected" : "disconnected"}`);
         this.#income = null;
@@ -53,6 +56,17 @@ export class IncomeWatch {
       }
       this.#stalled = stalled;
     });
+  }
+
+  /**
+   * The hack loop's switch flipped on the dashboard, at `atMs`: the 10 minutes start again from now, as they do when a
+   * medium snapshot finds it off. Off and on again between two snapshots, none would.
+   */
+  hackLoopSwitched(atMs: number): void {
+    if (this.#income === null) return;
+    this.#income = { ...this.#income, lastRiseAtMs: atMs };
+    if (this.#stalled !== null) this.#log("income stall over: the hack loop was switched off or on");
+    this.#stalled = null;
   }
 
   /** The money and its last rise, as of the newest medium snapshot, or null before one since the Agent connected. */
