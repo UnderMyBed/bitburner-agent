@@ -54,7 +54,21 @@ const TERMINAL_INPUT_XPATH = "//*[@id='terminal-input']";
 const TERMINAL_BUSY = "terminal busy";
 
 /** The Work page's button that unfocuses the player. */
-const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
+export const UNFOCUS_XPATH = "//button[normalize-space()='Do something else simultaneously']";
+/** Every sidebar item: list buttons labelled with their page's name (`Sidebar/ui/SidebarItem.tsx`). */
+const SIDEBAR_ITEMS_XPATH = "//div[@role='button' and .//p]";
+/** A faction's own page: its Back button, then its name (`Faction/ui/FactionRoot.tsx:108-111`). */
+const FACTION_PAGE_NAME_XPATH = "//button[normalize-space()='Back']/following-sibling::h4[1]";
+
+/**
+ * The page the player is on, as far as the way back needs it (#197): the sidebar's active item (`SidebarItem.tsx:33`,
+ * its `active` prop, `SidebarAccordion.tsx:91`), and, where that's Factions but its list isn't shown, the faction whose
+ * own page it is.
+ */
+export interface FoundPage {
+  item: string;
+  faction: string | null;
+}
 
 /** React's props on a rendered element: the key React gives it starts with `__reactProps`. */
 export function reactPropsOf(element: Element): Record<string, unknown> | null {
@@ -120,6 +134,12 @@ export function pageDocument(): Document | null {
 /** The first element `xpath` finds in `page`, or null. */
 export const findOnPage = (page: Document, xpath: string): Element | null =>
   page.evaluate(xpath, page, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
+
+/** Every element `xpath` finds in `page`, in the page's order. */
+function findAllOnPage(page: Document, xpath: string): Element[] {
+  const found = page.evaluate(xpath, page, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  return Array.from({ length: found.snapshotLength }, (_, index) => found.snapshotItem(index) as Element);
+}
 
 /** The sidebar's item for one of the game's pages: a list button with its name (`Sidebar/ui/SidebarItem.tsx`). */
 export const sidebarItemXpath = (pageName: string) => `//div[@role='button' and .//p[normalize-space()='${pageName}']]`;
@@ -201,11 +221,11 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     /** The element if it's in the page now, without waiting, or null. */
     findElementNow: findElement,
 
+    /** Every element `xpath` finds in the page now, in the page's order (#197). */
+    findAllNow: (xpath: string): Element[] => findAllOnPage(gamePage, xpath),
+
     /** Every dialog open now, in the page's order (MUI's `Modal` roots, `ui/React/Modal.tsx`). */
-    openDialogs(): Element[] {
-      const found = gamePage.evaluate(OPEN_DIALOG_XPATH, gamePage, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-      return Array.from({ length: found.snapshotLength }, (_, index) => found.snapshotItem(index) as Element);
-    },
+    openDialogs: (): Element[] => findAllOnPage(gamePage, OPEN_DIALOG_XPATH),
 
     /** Clicks `element`, `what`, as a player would. */
     clickElement: click,
@@ -274,6 +294,33 @@ export function openGamePage(ns: NS, deadlineMs: number) {
 
     /** Back to the Terminal, with the time kept for it: the last step of anything that moved the page. */
     returnToTerminal: () => openSidebarPage("Terminal", deadlineMs),
+
+    /** The page the player is on now (`FoundPage`), or null where the sidebar names none (it's hidden, say). */
+    foundPage(): FoundPage | null {
+      for (const item of findAllOnPage(gamePage, SIDEBAR_ITEMS_XPATH)) {
+        const props = reactPropsAbove(item, "key_");
+        if (props?.active !== true || typeof props.key_ !== "string") continue;
+        const factionsList = findElement("//span[contains(concat(' ', @class, ' '), ' factions-joined ')]");
+        const factionName =
+          props.key_ === "Factions" && factionsList === null ? findElement(FACTION_PAGE_NAME_XPATH) : null;
+        return { item: props.key_, faction: factionName === null ? null : (factionName.textContent ?? "").trim() };
+      }
+      return null;
+    },
+
+    /**
+     * Back to `found`, with the time kept for it: its sidebar item, then, for a faction's own page, "Details" on its row
+     * of the Factions page (#197).
+     */
+    async returnTo(found: FoundPage): Promise<string | null> {
+      const opened = await openSidebarPage(found.item, deadlineMs);
+      if (opened !== null || found.faction === null) return opened;
+      return clickWhenThere(
+        factionRowButtonXpath("factions-joined", found.faction, "Details"),
+        `"Details" on ${found.faction}'s row of the Factions page`,
+        deadlineMs,
+      );
+    },
 
     /**
      * Focused on the current work again, with the time kept for it: the overview's "Focus"

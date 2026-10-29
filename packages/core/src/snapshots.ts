@@ -5,6 +5,7 @@
  * `ns.getPlayer`).
  */
 import type { SnapshotTier } from "./control-protocol.ts";
+import type { FactionStateReading } from "./faction-state.ts";
 import type { IntentOutcome } from "./intents.ts";
 import type { WorkOutcome } from "./work.ts";
 
@@ -48,7 +49,10 @@ export interface StaticSnapshotData {
   }[];
 }
 
-/** slow: every 60 s. `ns.getResetInfo()` (its Maps as objects), the purchased servers, and the money by source. */
+/**
+ * slow: every 60 s. `ns.getResetInfo()` (its Maps as objects), the purchased servers, and the money by source, from the
+ * slow worker; and the faction state (#197), read after it by the Agent's faction state reader.
+ */
 export interface SlowSnapshotData {
   resetInfo: {
     lastAugReset: number;
@@ -61,6 +65,11 @@ export interface SlowSnapshotData {
     bitNodeOptions: Record<string, unknown>;
   };
   purchasedServers: string[];
+  /**
+   * Each joined faction's reputation and favour, the invitations and the queued augmentations (#197), or why they
+   * couldn't be read. Absent from an older Agent, and from the slow worker's own report (the Agent adds it).
+   */
+  factions?: FactionStateReading;
   /**
    * `ns.getMoneySources().sinceInstall` (#196): money made (and spent, as negatives) by source since the last install,
    * which resets it (PlayerObjectGeneralMethods.ts:128). `hacking` is every hack's money. Absent from an older Agent.

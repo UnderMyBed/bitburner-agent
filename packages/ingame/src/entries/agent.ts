@@ -1,6 +1,7 @@
 // agent/<deploymentId>/agent.js: the always-running in-game Agent (architecture §5.1). It holds the control channel to
 // the brain (docs/bridge/protocol.md): says hello, is welcomed or told to restart, and reconnects with backoff. While
-// welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), converges the hack loop on the brain's
+// welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), the slow one with the faction state
+// (../agent/faction-state.ts, #197), converges the hack loop on the brain's
 // desired state when that's due (../agent/hack-loop.ts, #134), does the brain's intents through their effectors
 // (../agent/intent-runner.ts, #141), converges the work last (../agent/work.ts, #151), and sleeps in between. Before
 // the hack loop, the intents and the work, it handles the game's routine dialogs (../agent/dialog-watcher.ts, #143).
@@ -33,6 +34,7 @@ import {
 } from "@bitburner-agent/core";
 import { createDialogWatcher } from "../agent/dialog-watcher.ts";
 import { createEffectorRunner } from "../agent/effector-runner.ts";
+import { createFactionStateReader } from "../agent/faction-state.ts";
 import { createHackLoop } from "../agent/hack-loop.ts";
 import { createIntentRunner } from "../agent/intent-runner.ts";
 import { createWorkerRunner } from "../agent/run-worker.ts";
@@ -104,6 +106,12 @@ export async function main(ns: NS): Promise<void> {
   const intentRunner = createIntentRunner(ns, { effectorRunner });
   const workActivity = createWorkActivity(ns, { effectorRunner });
   const dialogWatcher = createDialogWatcher(ns);
+  const factionStateReader = createFactionStateReader(ns, {
+    effectorRunner,
+    handleDialogs: (deadlineMs) => dialogWatcher.handle(deadlineMs),
+    invitationsAnswered: () => dialogWatcher.invitationsAnswered(),
+    augmentationsBought: () => intentRunner.augmentationsBought(),
+  });
   const snapshotter = createSnapshotter(ns, {
     deploymentId,
     agentSessionId,
@@ -111,6 +119,8 @@ export async function main(ns: NS): Promise<void> {
     intentOutcomes: () => intentRunner.outcomes(),
     workOutcome: () => workActivity.outcome(),
     dialogReport: () => dialogWatcher.takeReport(),
+    readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
+    factionsUnread: (problem) => factionStateReader.unread(problem),
   });
   singularityAvailable = () => snapshotter.singularityAvailable();
   const hackLoop = createHackLoop(ns, { deploymentId, workerRunner });

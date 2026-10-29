@@ -93,6 +93,7 @@
     </form>
     <div class="bad" id="work-problem" hidden></div>
   </section>
+  <section id="factions"><h2>Factions</h2><div></div><table></table></section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -319,6 +320,52 @@ function render(status) {
             (workOutcome.problem === null ? "" : ` (${workOutcome.problem})`) +
             (workOutcome.promotion ? `; promoted from ${workOutcome.promotion.from} to ${workOutcome.promotion.to}` : ""));
   document.querySelector("#work div").replaceChildren(element("div", workText, desired === null ? "muted" : "ok"));
+
+  // The faction state (#197): each joined faction's reputation and favour, the invitations and the queued
+  // augmentations, from the newest slow snapshot; or why they couldn't be read.
+  const factions = status.factions;
+  const queueText = (queue) => {
+    const counts = new Map();
+    for (const name of queue) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return queue.length === 0 ? "none" : [...counts].map(([name, count]) => (count === 1 ? name : `${name} ×${count}`)).join(", ");
+  };
+  const factionLines =
+    factions === null
+      ? [element("div", "No slow snapshot yet.", "muted")]
+      : [
+          element("div", `Read ${time(factions.receivedAtMs)}${factions.backend === null ? "" : ` via ${factions.backend}`}` +
+            (factions.opened === null ? "." : factions.opened.length === 0 ? ", with no page opened." : `, opening ${factions.opened.join(" and ")}.`), "muted"),
+          ...(factions.kind === "absent"
+            ? [element("div", "Not read by this Agent: its slow snapshot comes from an older one.", "muted")]
+            : factions.kind === "skipped"
+              ? [element("div", `Skipped this time: ${factions.problem}`, "muted")]
+              : factions.kind === "readPageNotRestored"
+                ? [element("div", `Read, but the page wasn't put back as found: ${factions.problem}`, "bad")]
+                : factions.kind === "unread"
+                  ? [element("div", `Couldn't be read (${factions.unreadInARow} in a row): ${factions.problem}`, "bad")]
+                  : []),
+          ...(factions.state === null
+            ? []
+            : [
+                element("div", `Invitations: ${factions.state.invitations.length === 0 ? "none" : factions.state.invitations.join(", ")}`),
+                element("div", `Queued augmentations: ${queueText(factions.state.queuedAugmentations)}`),
+              ]),
+        ];
+  document.querySelector("#factions div").replaceChildren(...factionLines);
+  const joined = factions?.state?.joined ?? [];
+  document.querySelector("#factions table").replaceChildren(
+    ...(factions?.state && joined.length === 0
+      ? [element("tr", "No faction joined.")]
+      : joined.map((faction) => {
+          const row = element("tr");
+          row.append(
+            element("td", faction.name),
+            element("td", `${Math.round(faction.reputation).toLocaleString()} rep`),
+            element("td", `${faction.favor.toLocaleString(undefined, { maximumFractionDigits: 2 })} favour`),
+          );
+          return row;
+        })),
+  );
 
   const events = document.querySelector("#events table");
   events.replaceChildren(

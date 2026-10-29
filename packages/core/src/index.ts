@@ -35,6 +35,7 @@ export {
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
   SINGULARITY_DESTROY_BITNODE_WORKER_NAME,
+  SINGULARITY_FACTION_STATE_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
@@ -125,6 +126,18 @@ export {
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
 export { FACTIONS } from "./faction-data.ts";
+export {
+  FACTION_STATE_WORKER_NAME,
+  type FactionReadingKind,
+  type FactionState,
+  type FactionStateReading,
+  type FactionStateReport,
+  factionReadingKind,
+  factionReadingOf,
+  factionStateOf,
+  type JoinedFaction,
+  parseFactionState,
+} from "./faction-state.ts";
 export {
   daedalusAugmentationsRequired,
   FACTION_ENEMIES,

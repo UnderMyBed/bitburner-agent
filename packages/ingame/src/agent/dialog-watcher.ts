@@ -83,6 +83,8 @@ function blockingIn(gamePage: GamePage): string | null {
 export function createDialogWatcher(ns: NS) {
   let handled: HandledDialog[] = [];
   let blocking: string | null = null;
+  /** Faction invitations answered, all told: the faction state's reader opens Factions after one (#197). */
+  let invitationsAnswered = 0;
 
   return {
     /** Handles the dialogs open now, in the page's order, within `deadlineMs`; then notes any left open. */
@@ -102,6 +104,7 @@ export function createDialogWatcher(ns: NS) {
           break;
         }
         handled.push({ kind: action.kind, text });
+        if (action.kind === "factionInvitation") invitationsAnswered += 1;
         if (handled.length > MOST_DIALOGS_KEPT) handled.shift();
         // The next in the game's queue takes its place, or it fades out: either way, it isn't seen again.
         await gamePage.waitUntilGoneOrChanged(dialog, () => (isClosing(dialog) ? "" : textOf(dialog)), text);
@@ -109,6 +112,9 @@ export function createDialogWatcher(ns: NS) {
       // Looked at afresh, after what was handled: a dialog left open now, if any.
       blocking = unclickable ?? blockingIn(gamePage);
     },
+
+    /** How many faction invitations it has answered, all told (#197). */
+    invitationsAnswered: () => invitationsAnswered,
 
     /** What's been handled since the last report (the latest 100), and what's left open: for the fast snapshot. */
     takeReport(): { handled: HandledDialog[]; blocking: string | null } {

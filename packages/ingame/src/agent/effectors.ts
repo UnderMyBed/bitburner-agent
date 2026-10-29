@@ -1,5 +1,6 @@
 // The Effectors (#141, #145, #147, #149, #151, #153, #155, #156, #158, #159, #162, #164, #175, architecture §5.6): for
-// each action an intent can name, and for the work activity's work, how each backend does it.
+// each action an intent can name, for the work activity's work, and for the faction state's reading (#197), how each
+// backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
@@ -20,7 +21,9 @@ import {
   classLabel,
   DESTROY_BITNODE_WORKER_NAME,
   type EffectorReport,
+  FACTION_STATE_WORKER_NAME,
   FACTION_WORK_WORKER_NAME,
+  type FactionStateReport,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
   type Intent,
   JOIN_FACTION_WORKER_NAME,
@@ -33,6 +36,7 @@ import {
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
   SINGULARITY_DESTROY_BITNODE_WORKER_NAME,
+  SINGULARITY_FACTION_STATE_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME,
   SINGULARITY_JOIN_FACTION_WORKER_NAME,
@@ -61,6 +65,7 @@ export interface SimEffectors {
   convergeClassWork(location: string, classType: string, focus: boolean): EffectorReport;
   installQueuedAugmentations(callbackScript: string): EffectorReport;
   destroyWorldDaemon(nextBitNode: number, callbackScript: string): EffectorReport;
+  readFactionState(): FactionStateReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -214,5 +219,19 @@ export function workEffectorFor(work: Work, { checkPromotion = false } = {}): Ef
     ui: { workerName: FACTION_WORK_WORKER_NAME, workerArguments },
     singularity: { workerName: SINGULARITY_FACTION_WORK_WORKER_NAME, workerArguments },
     sim: (effectors) => effectors.convergeFactionWork(faction, workType, focus),
+  };
+}
+
+/**
+ * The faction state's reader (#197): each joined faction's reputation and favour, the invitations and the queued
+ * augmentations, with each slow snapshot. Its report is a `FactionStateReport`. The page's worker gets `context`, the
+ * last reading and the Agent's news since, as JSON (../page/faction-state-page.ts, `FactionReadContext`).
+ */
+export function factionStateReader(context = ""): Effector {
+  return {
+    description: "read the faction state",
+    ui: { workerName: FACTION_STATE_WORKER_NAME, workerArguments: [context] },
+    singularity: { workerName: SINGULARITY_FACTION_STATE_WORKER_NAME, workerArguments: [] },
+    sim: (effectors) => effectors.readFactionState(),
   };
 }
