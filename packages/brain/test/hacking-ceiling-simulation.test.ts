@@ -1,10 +1,10 @@
 // The hacking ceilings (#196) against the hack loop, in the simulator: an 8 GB fresh start in BN1, the brain's rules
-// as on Steam (the loop, the programs and home RAM, all on), for a bounded stretch of virtual time. The run report reads
-// the store as after a live run: what hacking earned (the slow snapshots' money sources) never passes the hacking
-// ceiling (the most any hacker could earn with the loop's hosts' RAM, from the game's formulas), over the run, each
-// hour, or each 10 minutes. The percentages the loop reaches, of the batcher ceiling over the run and in its best 10
-// minutes, are the baseline the batcher (A7) must beat; each seed prints them. CI runs seed 1;
-// `HACKING_CEILING_SEEDS` (`1,2,3,4`, say) runs others (the brain README's ceiling suite says how).
+// as on Steam (the loop, the programs and home RAM, all on; the batcher off, #206), for a bounded stretch of virtual
+// time. The run report reads the store as after a live run: what hacking earned (the slow snapshots' money sources)
+// never passes the hacking ceiling (the most any hacker could earn with the loop's hosts' RAM, from the game's
+// formulas), over the run, each hour, or each 10 minutes. The percentages the loop reaches, of the batcher ceiling over
+// the run and in its best 10 minutes, are the baseline the batcher (A7) must beat; each seed prints them. CI runs seed
+// 1; `HACKING_CEILING_SEEDS` (`1,2,3,4`, say) runs others (the brain README's ceiling suite says how).
 import type { SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { HackingFold } from "../src/hacking-ceiling.ts";
@@ -40,7 +40,7 @@ test.each(SEEDS)(
   "seed %i: 90 virtual minutes from a fresh start, hacking never earns more than the ceilings allow, which the report shows",
   { timeout: 600_000 },
   async (seed) => {
-    const fresh = await freshStartOf({ withDesiredState: true, seed });
+    const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false });
     await fresh.game.run(RUN_MS);
     const window = { environment: "E1" as const, sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() };
     const { text, failures } = runReport(fresh.data.store, window);

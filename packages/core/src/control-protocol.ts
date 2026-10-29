@@ -382,8 +382,11 @@ export function parseBatcherState(batcher: unknown, hackLoop: HackLoopState): Pa
   if (!isShortNonEmptyString(runOn)) return { ok: false, reason: `batcher.runOn is ${describeValue(runOn)}` };
   const parsedConfig = parseBatcherConfig(config);
   if (!parsedConfig.ok) return { ok: false, reason: `batcher's ${parsedConfig.reason.replace(/^the /, "")}` };
-  const { target, hosts } = parsedConfig.config;
+  const { target, hosts, next } = parsedConfig.config;
   if (!isShortNonEmptyString(target)) return { ok: false, reason: `batcher.config.target is ${describeValue(target)}` };
+  if (next !== undefined && !isShortNonEmptyString(next.target)) {
+    return { ok: false, reason: `batcher.config.next.target is ${describeValue(next.target)}` };
+  }
   if (!isHostList(hosts)) return { ok: false, reason: "batcher.config.hosts isn't a list of hostnames" };
   if (!hackLoop.enabled) return { ok: false, reason: "batcher with the hack loop off" };
   const loopHosts = new Set([...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])]);

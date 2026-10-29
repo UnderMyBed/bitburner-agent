@@ -1,17 +1,24 @@
-// The brain's side of the batcher (#205, M4 phase A slice A7b): its dashboard switch, off by default, and a fixed plan
-// while it's on: core's `batchPlan` (#204) on the hack loop's target and hosts, at the hacking level of the latest
-// medium snapshot. The brain's own choice of target, share and spacing comes in #206; until then the batcher batches
-// what the hack loop would hack, on the servers it would hack from, which the hack loop then leaves to it (it still
-// roots). `DesiredStateController` (desired-state.ts) sends it.
+// The brain's side of the batcher (#205 and #206, M4 phase A slices A7b and A7c): its dashboard switch, on by default
+// since #206, and its plan while it's on, on the servers the hack loop would hack from, which the hack loop then leaves
+// to it (it still roots): the target worth most over the next minutes, counting the time to prepare it
+// (`chooseBatcher`), the next target prepared beside the batches, and core's `batchPlan` (#204) for the share and the
+// spacing, at the hacking level of the latest medium snapshot, so the plan follows the level as it rises. The
+// dashboard's lines, its alerts' facts and the run report's section 6 read what comes back. `DesiredStateController`
+// (desired-state.ts) sends it.
 import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BatcherState,
+  batcherIncomePerGigabyteSecond,
   batchPlan,
   batchRamGb,
   type HackingPlayer,
   type HackingTarget,
+  hackChance,
+  hackSharePerThread,
   type MediumSnapshotData,
+  operationTimeMs,
+  preparationTimeMs,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { readSwitch } from "./switches.ts";
@@ -19,9 +26,12 @@ import type { TelemetryStore } from "./telemetry-store.ts";
 
 export const BATCHER_ENABLED_SETTING = "batcher.enabled";
 
-/** The dashboard's switch: off unless the owner turned it on (#205), as the hack loop stays the default until #206. */
+/**
+ * The dashboard's switch: on unless the owner turned it off (#206). Off by default in #205; on since #206's score, the
+ * batcher ahead of the hack loop on A1's measure on every seed of its suite (batcher-score.test.ts).
+ */
 export function readBatcherEnabled(store: TelemetryStore): boolean {
-  return readSwitch(store, BATCHER_ENABLED_SETTING, false);
+  return readSwitch(store, BATCHER_ENABLED_SETTING, true);
 }
 
 /**
@@ -67,7 +77,8 @@ export function planBatcher(
   target: string,
   hosts: string[],
   current: string | null = null,
-): { batcher: BatcherState } | { batcher: null; why: string } {
+  ramShare = 1,
+): { batcher: BatcherState; incomePerSecond: number; ramGb: number } | { batcher: null; why: string } {
   const player = hackingPlayerOf(mediumData.player);
   if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
   const figures = figuresOf(staticData, target);
@@ -90,9 +101,12 @@ export function planBatcher(
   const runOn = current !== null && holds(current) ? current : onHome ? "home" : largest;
   if (runOn === undefined) return { batcher: null, why: "no host holds the batcher" };
   const operationsRam = hostsRam.map(([host, ram]) => (host === runOn ? ram - BATCHER_RAM_BUDGET_GB : ram));
-  const plan = batchPlan(figures, player, batchRamGb(operationsRam));
+  const ramGb = batchRamGb(operationsRam) * ramShare;
+  const plan = batchPlan(figures, player, ramGb);
   if (plan === null) return { batcher: null, why: `no batch on ${target} fits the hosts' RAM, or it can't be hacked` };
   return {
+    incomePerSecond: plan.incomePerSecond,
+    ramGb,
     batcher: {
       runOn,
       config: {
@@ -106,6 +120,163 @@ export function planBatcher(
     },
   };
 }
+
+/** How many targets, best by A1's batcher ceiling, `chooseBatcher` plans: a plan is costlier than a ceiling. */
+export const BATCHER_TARGETS_PLANNED = 5;
+/**
+ * How far ahead `chooseBatcher` weighs a target's income (#206): what it earns in this long, less the time to prepare
+ * it and for its first batch to land. A1's score is the best 10 minutes.
+ */
+export const BATCHER_TARGET_HORIZON_MS = 15 * 60_000;
+/** How much more a new target must be worth over the horizon than the one batched to move to it: a move costs. */
+export const BATCHER_MOVE_GAIN = 1.25;
+/** The part of the hosts' RAM the next target is prepared on, while the batches have the rest. */
+export const BATCHER_NEXT_RAM_SHARE = 0.2;
+
+/** A target `chooseBatcher` weighed: its plan's income, how long until it earns, and so its worth over the horizon. */
+export interface BatcherTargetWorth {
+  target: string;
+  incomePerSecond: number;
+  /** To prepare it from its money and security in the medium snapshot, then for a batch to land; 0 if batched now. */
+  untilEarningMs: number;
+  worth: number;
+}
+
+/**
+ * The batcher's desired state with the brain's own target (#206), or why there's none. The candidates are the game's
+ * servers rooted with money that the player can hack (`batcherTargetsOf`), the `BATCHER_TARGETS_PLANNED` best by A1's
+ * batcher ceiling, and the one batched now. Each is planned (`planBatcher`) on the hosts, and its worth is its plan's
+ * income over `BATCHER_TARGET_HORIZON_MS` less the time until it earns: preparing it (core's `preparationTimeMs`, from
+ * its money and security in the medium snapshot, on the hosts' RAM), then a weaken's time for its first batch. The
+ * target batched now (`batching`, from the batcher's health) earns at once. The worthiest wins; the one batched now is
+ * kept unless another is worth `BATCHER_MOVE_GAIN` times it.
+ */
+export function chooseBatcher(
+  staticData: StaticSnapshotData,
+  mediumData: MediumSnapshotData,
+  hosts: string[],
+  current: BatcherState | null,
+  batching: string | null,
+): { batcher: BatcherState; worths: BatcherTargetWorth[] } | { batcher: null; why: string } {
+  const player = hackingPlayerOf(mediumData.player);
+  if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
+  const targets = batcherTargetsOf(staticData, mediumData, player);
+  if (targets.length === 0) return { batcher: null, why: "no rooted server with money the player can hack" };
+  const byCeiling = targets
+    .map(({ hostname, figures }) => ({
+      hostname,
+      figures,
+      ceiling: batcherIncomePerGigabyteSecond(figures, player, 1),
+    }))
+    .sort((a, b) => b.ceiling - a.ceiling || (a.hostname < b.hostname ? -1 : 1));
+  const sent = current?.config.target ?? null;
+  const weighed = byCeiling.filter(
+    (each, index) => index < BATCHER_TARGETS_PLANNED || each.hostname === batching || each.hostname === sent,
+  );
+  const nowOf = new Map(
+    mediumData.servers
+      .filter((server) => typeof server?.hostname === "string")
+      .map((server) => [server.hostname, server] as const),
+  );
+  let firstWhy: string | null = null;
+  const planned: {
+    state: BatcherState;
+    figures: HackingTarget;
+    ramGb: number;
+    preparable: boolean;
+    worth: BatcherTargetWorth;
+  }[] = [];
+  for (const { hostname, figures } of weighed) {
+    const plan = planBatcher(staticData, mediumData, hostname, hosts, current?.runOn ?? null);
+    if (plan.batcher === null) {
+      firstWhy ??= plan.why;
+      continue;
+    }
+    const { incomePerSecond, ramGb } = plan;
+    const server = nowOf.get(hostname);
+    const now = {
+      money: isNumber(server?.moneyAvailable) ? server.moneyAvailable : 0,
+      security: isNumber(server?.hackDifficulty) ? server.hackDifficulty : figures.minDifficulty * 3,
+    };
+    const untilEarningMs =
+      hostname === batching
+        ? 0
+        : preparationTimeMs(figures, player, now, ramGb) + operationTimeMs("weaken1", figures, player);
+    const worth = incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - untilEarningMs);
+    planned.push({
+      state: plan.batcher,
+      figures,
+      ramGb,
+      // Prepared beside the batches, on their part of the RAM, within the horizon: worth preparing as the next.
+      preparable: preparationTimeMs(figures, player, now, ramGb * BATCHER_NEXT_RAM_SHARE) <= BATCHER_TARGET_HORIZON_MS,
+      worth: { target: hostname, incomePerSecond, untilEarningMs, worth },
+    });
+  }
+  // Of those alike, or with none earning within the horizon, the soonest to earn.
+  const worthiest = [...planned].sort(
+    (a, b) => b.worth.worth - a.worth.worth || a.worth.untilEarningMs - b.worth.untilEarningMs,
+  )[0];
+  if (worthiest === undefined) return { batcher: null, why: firstWhy ?? "no target can be planned" };
+  const kept = planned.find((each) => each.worth.target === sent);
+  // Kept while nothing is worth the move; one worth nothing gives way to the worthiest (or, of those worth nothing,
+  // the soonest to earn): nothing is less than 0.
+  const chosen = kept !== undefined && worthiest.worth.worth < kept.worth.worth * BATCHER_MOVE_GAIN ? kept : worthiest;
+  const worths = planned.map((each) => each.worth);
+  // The next target: the one whose plan earns most, once prepared, if that's worth a move.
+  const richest = planned
+    .filter((each) => each.preparable && each !== chosen)
+    .sort((a, b) => b.worth.incomePerSecond - a.worth.incomePerSecond)[0];
+  if (richest === undefined || richest.worth.incomePerSecond < chosen.worth.incomePerSecond * BATCHER_MOVE_GAIN) {
+    return { batcher: chosen.state, worths };
+  }
+  const rest = planBatcher(
+    staticData,
+    mediumData,
+    chosen.worth.target,
+    hosts,
+    current?.runOn ?? null,
+    1 - BATCHER_NEXT_RAM_SHARE,
+  );
+  if (rest.batcher === null) return { batcher: chosen.state, worths };
+  const next = {
+    target: richest.worth.target,
+    figures: richest.figures,
+    ramGb: richest.ramGb * BATCHER_NEXT_RAM_SHARE,
+  };
+  return { batcher: { ...rest.batcher, config: { ...rest.batcher.config, next } }, worths };
+}
+
+/**
+ * The batcher's possible targets (#206): the game's servers (not purchased: never home, nor a cloud or Hacknet server)
+ * rooted in the medium snapshot, with money and their figures in the static snapshot, that a hack takes something
+ * from at the player's level (a share and a chance above 0).
+ */
+export function batcherTargetsOf(
+  staticData: StaticSnapshotData,
+  mediumData: MediumSnapshotData,
+  player: HackingPlayer,
+): { hostname: string; figures: HackingTarget }[] {
+  const rooted = new Set(
+    mediumData.servers
+      .filter((server) => server?.hasAdminRights === true && typeof server.hostname === "string")
+      .map((server) => server.hostname),
+  );
+  const targets: { hostname: string; figures: HackingTarget }[] = [];
+  for (const server of staticData.servers) {
+    const hostname = server?.hostname;
+    if (typeof hostname !== "string" || server.purchasedByPlayer !== false || !rooted.has(hostname)) continue;
+    const figures = figuresOf(staticData, hostname);
+    if (figures === null || !(figures.moneyMax > 0)) continue;
+    if (!(hackSharePerThread(figures, player) > 0) || !(hackChance(atMinimumOf(figures), player) > 0)) continue;
+    targets.push({ hostname, figures });
+  }
+  return targets;
+}
+
+const atMinimumOf = (figures: HackingTarget) => ({
+  hackDifficulty: figures.minDifficulty,
+  requiredHackingSkill: figures.requiredHackingSkill,
+});
 
 /** The batcher on the dashboard (#205): the switch, what the brain sent, why nothing, and the health last reported. */
 export interface BatcherView {
@@ -158,6 +329,48 @@ export function batcherNotRunning(deploy: unknown): string | null {
   const { running, problem } = deploy as Record<string, unknown>;
   if (typeof problem === "string") return problem;
   return typeof running === "string" ? null : "it isn't running";
+}
+
+/**
+ * The batcher out of step lately (#206), from fast snapshots' health, newest first: what its run's desyncs, late and
+ * lost operations rose by over them, and the first snapshot that showed a rise; null with no rise. Only the newest
+ * snapshot's run counts (a new run starts from 0). The Agent's word, so checked as it's read.
+ */
+export function batcherOutOfStep(
+  newestFirst: { receivedAtMs: number; health: unknown }[],
+): { sinceMs: number; target: string; desyncs: number; late: number; lost: number } | null {
+  const countsOf = (health: unknown) => {
+    const { runName, target, desyncs, late, lost } = (health ?? {}) as Record<string, unknown>;
+    if (typeof runName !== "string" || ![desyncs, late, lost].every(isNumber)) return null;
+    return { runName, target: typeof target === "string" ? target : "", desyncs, late, lost } as {
+      runName: string;
+      target: string;
+      desyncs: number;
+      late: number;
+      lost: number;
+    };
+  };
+  const newest = countsOf(newestFirst[0]?.health);
+  if (newest === null) return null;
+  const sum = (each: typeof newest) => each.desyncs + each.late + each.lost;
+  let oldest = newest;
+  let oldestAtMs = newestFirst[0]?.receivedAtMs ?? 0;
+  let sinceMs: number | null = null;
+  for (const { receivedAtMs, health } of newestFirst) {
+    const each = countsOf(health);
+    if (each === null || each.runName !== newest.runName) break;
+    // A rise between this one and the newer one before it: the newer showed it first, going back.
+    if (sum(each) < sum(oldest)) sinceMs = oldestAtMs;
+    oldest = each;
+    oldestAtMs = receivedAtMs;
+  }
+  const rise = {
+    desyncs: newest.desyncs - oldest.desyncs,
+    late: newest.late - oldest.late,
+    lost: newest.lost - oldest.lost,
+  };
+  if (sinceMs === null || rise.desyncs + rise.late + rise.lost <= 0) return null;
+  return { sinceMs, target: newest.target, ...rise };
 }
 
 /** The batcher's hosts (#205): all the hack loop's, its preparing ones included, which the hack loop then leaves. */

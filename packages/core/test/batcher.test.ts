@@ -29,6 +29,7 @@ import {
   leastSpacingMs,
   MAX_BATCH_SHARE,
   MIN_BATCH_SPACING_MS,
+  MOST_PREPARATION_WAVES,
   newBatcherHealth,
   operationRamGb,
   operationScriptName,
@@ -36,6 +37,7 @@ import {
   parseBatcherConfig,
   parseLandingRecord,
   placeThreads,
+  preparationTimeMs,
   preparationWave,
   threadsThatFit,
 } from "../src/batcher.ts";
@@ -585,5 +587,96 @@ describe("isBatcherFile (#205)", () => {
     expect(isBatcherFile("agent/mine/batcher.js")).toBe(false);
     expect(isBatcherFile("agent/0123456789ab/hack-loop.js")).toBe(false);
     expect(isBatcherFile("batcher.js")).toBe(false);
+  });
+});
+
+describe("preparationTimeMs (#206)", () => {
+  test("0 when ready; one wave's weaken time and lead when one wave does it", () => {
+    expect(preparationTimeMs(n00dles, player(50), { money: n00dles.moneyMax, security: 1 }, 100)).toBe(0);
+    // n00dles from a fresh start's 4%, at its minimum: one grow wave fits 100 GB.
+    const now = { money: n00dles.moneyMax / 25, security: 1 };
+    expect(preparationWave(n00dles, player(50), now, Number.POSITIVE_INFINITY)).toEqual(
+      preparationWave(n00dles, player(50), now, 100),
+    );
+    expect(preparationTimeMs(n00dles, player(50), now, 100)).toBe(
+      operationTimeMs("weaken1", n00dles, player(50), 1) + BATCH_LAUNCH_LEAD_MS,
+    );
+  });
+
+  test("wave after wave, each at the security the last left: the first slow, at three times the minimum", () => {
+    const now = { money: joesguns.moneyMax / 25, security: 15 };
+    const ram = 400;
+    const first = operationTimeMs("weaken1", joesguns, player(100), 15) + BATCH_LAUNCH_LEAD_MS;
+    const atMinimum = operationTimeMs("weaken1", joesguns, player(100)) + BATCH_LAUNCH_LEAD_MS;
+    const total = preparationTimeMs(joesguns, player(100), now, ram);
+    // Its waves: the first at 15, the rest at 5, so the total is the first and a whole number of the rest.
+    const rest = (total - first) / atMinimum;
+    expect(rest).toBeGreaterThan(1);
+    expect(Math.abs(rest - Math.round(rest))).toBeLessThan(1e-6);
+    // More RAM, fewer waves.
+    expect(preparationTimeMs(joesguns, player(100), now, 4 * ram)).toBeLessThan(total);
+  });
+
+  test("Infinity where no wave fits, or past MOST_PREPARATION_WAVES", () => {
+    expect(preparationTimeMs(joesguns, player(100), { money: 0, security: 5 }, 1)).toBe(Number.POSITIVE_INFINITY);
+    // joesguns from nothing on 20 GB: thousands of grow threads, eleven a wave.
+    expect(preparationTimeMs(joesguns, player(100), { money: 0, security: 5 }, 20)).toBe(Number.POSITIVE_INFINITY);
+    expect(MOST_PREPARATION_WAVES).toBe(50);
+  });
+});
+
+describe("the config's next target (#206)", () => {
+  const config = {
+    target: "joesguns",
+    figures: joesguns,
+    player: { intelligence: 0, mults: player(1).mults },
+    hosts: ["foodnstuff"],
+    hackShare: 0.05,
+    spacingMs: 5_000,
+  };
+  const next = { target: "n00dles", figures: n00dles, ramGb: 30 };
+
+  test("taken as given; none when absent or null", () => {
+    expect(parseBatcherConfig({ ...config, next })).toEqual({ ok: true, config: { ...config, next } });
+    expect(parseBatcherConfig({ ...config, next: null })).toEqual({ ok: true, config });
+  });
+
+  test.each([
+    [{ ...next, target: "" }, "next has no target"],
+    [{ ...next, figures: { ...n00dles, moneyMax: undefined } }, "next figures have no moneyMax"],
+    [{ ...next, ramGb: 0 }, "next has no RAM above 0"],
+    [{ ...next, ramGb: "30" }, "next has no RAM above 0"],
+  ])("refused: %j (%s)", (value, reason) => {
+    const parsed = parseBatcherConfig({ ...config, next: value });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.reason).toContain(reason);
+  });
+
+  test("a new batcher's health has no next yet", () => {
+    expect(newBatcherHealth("joesguns", "r1", 5).next).toBeNull();
+  });
+});
+
+describe("LandingWatch.takeLostIds (#206)", () => {
+  test("the parts lost, by id, forgotten", () => {
+    const watch = new LandingWatch();
+    watch.expect("a", 1_000);
+    watch.expect("b", 5_000);
+    expect(watch.takeLostIds(1_001 + LANDING_LOST_AFTER_MS)).toEqual(["a"]);
+    expect(watch.takeLostIds(1_001 + LANDING_LOST_AFTER_MS)).toEqual([]);
+    expect(watch.inFlight()).toBe(1);
+  });
+});
+
+describe("batchHoldsMs with other batches (#206)", () => {
+  test("a small batch's leads cover the security a larger one still landing may leave", () => {
+    const small = batchThreads(zer0, player(100), 1);
+    const large = batchThreads(zer0, player(100), 50);
+    const alone = batchHoldsMs(zer0, player(100), small);
+    const beside = batchHoldsMs(zer0, player(100), small, [large]);
+    expect(beside).toEqual(batchHoldsMs(zer0, player(100), large));
+    for (const operation of BATCH_OPERATIONS) expect(beside[operation]).toBeGreaterThan(alone[operation]);
+    // A smaller one beside it changes nothing.
+    expect(batchHoldsMs(zer0, player(100), large, [small])).toEqual(batchHoldsMs(zer0, player(100), large));
   });
 });

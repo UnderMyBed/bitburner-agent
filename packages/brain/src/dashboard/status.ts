@@ -13,7 +13,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
-import { type BatcherView, batcherNotRunning } from "../batcher.ts";
+import { type BatcherView, batcherNotRunning, batcherOutOfStep } from "../batcher.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
@@ -208,11 +208,19 @@ export function buildDashboardStatus({
   const newestUnread = unreadInARow[0]?.status;
   // The newest fast snapshots in a row with the batcher wanted and not running (#211).
   const notRunningInARow: { receivedAtMs: number; problem: string }[] = [];
-  for (const each of store.latestSnapshots({ environment, tier: "fast", limit: BATCHER_NOT_RUNNING_LOOKBACK })) {
+  const latestFast = store.latestSnapshots({ environment, tier: "fast", limit: BATCHER_NOT_RUNNING_LOOKBACK });
+  for (const each of latestFast) {
     const problem = batcherNotRunning((each.data as Partial<FastSnapshotData> | null)?.batcherDeploy);
     if (problem === null) break;
     notRunningInARow.push({ receivedAtMs: each.receivedAtMs, problem });
   }
+  // The batcher out of step over the same fast snapshots (#206).
+  const outOfStep = batcherOutOfStep(
+    latestFast.map((each) => ({
+      receivedAtMs: each.receivedAtMs,
+      health: (each.data as Partial<FastSnapshotData> | null)?.batcher,
+    })),
+  );
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -312,6 +320,7 @@ export function buildDashboardStatus({
               inARow: notRunningInARow.length,
               problem: notRunningInARow[0]?.problem ?? "",
             },
+      batcherOutOfStep: outOfStep,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })

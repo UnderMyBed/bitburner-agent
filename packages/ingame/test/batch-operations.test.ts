@@ -268,7 +268,7 @@ test("a new batcher ignores the records of the one before it, still landing, and
   expect(second.hacksLanded).toBeGreaterThan(0);
 });
 
-test("with no argument, it reads its config from its port (#205): none yet is a problem; a new target drains first", async () => {
+test("with no argument, it reads its config from its port (#205): none yet is a problem; a new target is a move (#206)", async () => {
   const simulation = await gameWithScripts();
   await simulation.diagnostics.gainHackingExp(2_000);
   const { pid, error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
@@ -297,17 +297,27 @@ test("with no argument, it reads its config from its port (#205): none yet is a 
   const onNewHosts = await healthOf(simulation);
   expect(onNewHosts).toMatchObject({ batchesShort: batching.batchesShort, desyncs: 0, problem: null });
   expect((await simulation.ps("joesguns")).some((process) => process.filename.includes("batch-"))).toBe(true);
-  // A new target: what's in flight lands, then it prepares the new one; no desync, nothing lost.
+  // A new target, a move (#206): it prepares the new one beside the batches out, on the RAM they leave, and they
+  // still land, hacks and all; no desync, nothing lost or skipped.
   const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const before = await healthOf(simulation);
+  expect(before.batchesPending).toBeGreaterThan(0);
   await simulation.run("home", "set-port.js", {
     args: [BATCHER_CONFIG_PORT, JSON.stringify({ ...newHosts, target: "foodnstuff", figures: foodnstuff })],
   });
   // Read at once: the write wakes it (#211), so it doesn't wait for its next landing or launch.
-  expect(await healthOf(simulation)).toMatchObject({ state: "recovering", target: "foodnstuff" });
+  const moving = await healthOf(simulation);
+  expect(moving).toMatchObject({ state: "preparing", target: "foodnstuff" });
+  expect(moving.hacksSkipped).toBe(before.hacksSkipped);
   await simulation.advance(5 * 60_000);
   const moved = await healthOf(simulation);
   expect(moved).toMatchObject({ state: "preparing", target: "foodnstuff", desyncs: 0, lost: 0, outOfOrder: 0 });
-  expect(moved.wavesStarted).toBeGreaterThan(batching.wavesStarted);
+  expect(moved.hacksSkipped).toBe(before.hacksSkipped);
+  // Its waves take the RAM the batches out leave: started by now.
+  expect(moved.wavesStarted).toBeGreaterThan(before.wavesStarted);
+  // Each batch planned on n00dles hacked it after the move: none left, every one landed.
+  expect(moved.batchesPending).toBe(0);
+  expect(moved.hacksLanded).toBeGreaterThanOrEqual(before.hacksLanded + before.batchesPending);
   expect((await simulation.ps("home")).some((process) => process.pid === pid)).toBe(true);
 });
 
@@ -402,4 +412,74 @@ test("batcher-deploy.js (#205): ours on runOn once, another deployment's and ext
   // Off: none.
   expect(await deploy([])).toMatchObject({ running: null, started: false, problem: null });
   expect(await batchers()).toEqual([]);
+});
+
+/** The threads of the operations in flight against `target`, on the operation hosts. */
+async function threadsAgainst(simulation: Simulation, target: string): Promise<number> {
+  let threads = 0;
+  for (const host of OPERATION_HOSTS) {
+    for (const process of await simulation.ps(host)) {
+      if (process.filename.includes("batch-") && process.args[0] === target) threads += process.threads;
+    }
+  }
+  return threads;
+}
+
+test("the next target (#206): prepared beside the target on at most its RAM, so a move to it batches at once", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  // foodnstuff (growth 5) prepared on the hosts, slowly; n00dles, the next, on at most 7.2 GB: 4 threads.
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const config = {
+    ...n00dlesConfig(),
+    target: "foodnstuff",
+    figures: foodnstuff,
+    next: { target: "n00dles", figures: N00DLES, ramGb: 7.2 },
+  };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  await simulation.advance(2_000);
+  expect((await healthOf(simulation)).next).toEqual({ target: "n00dles", wavesStarted: 1, ready: false });
+  for (let waited = 0; (await healthOf(simulation)).next?.ready !== true; waited += 10_000) {
+    expect(waited, "n00dles prepared within 60 virtual minutes").toBeLessThan(60 * 60_000);
+    expect(await threadsAgainst(simulation, "n00dles")).toBeLessThanOrEqual(4);
+    await simulation.advance(10_000);
+  }
+  const ready = await healthOf(simulation);
+  expect(ready).toMatchObject({ state: "preparing", target: "foodnstuff", desyncs: 0, lost: 0, late: 0 });
+  expect(ready.next?.wavesStarted).toBeGreaterThan(1);
+  // The move: n00dles prepared, it batches at once, with no wave of its own.
+  const { next: _next, ...rest } = config;
+  await simulation.run("home", "set-port.js", {
+    args: [BATCHER_CONFIG_PORT, JSON.stringify({ ...rest, target: "n00dles", figures: N00DLES })],
+  });
+  await simulation.advance(2_000);
+  const moved = await healthOf(simulation);
+  expect(moved).toMatchObject({ state: "batching", target: "n00dles", next: null, desyncs: 0 });
+  await simulation.advance(3 * 60_000);
+  const batching = await healthOf(simulation);
+  expect(batching).toMatchObject({ state: "batching", desyncs: 0, lost: 0, late: 0, outOfBounds: 0 });
+  expect(batching.hacksLanded).toBeGreaterThan(0);
+});
+
+test("a last wave on a target at its minimum, with room beside it, starts the batches at once (#206)", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // n00dles from a fresh start's 4%, at its minimum security already: one grow wave; on six hosts, room for batches.
+  const hosts = [...OPERATION_HOSTS, "joesguns", "nectar-net", "hong-fang-tea", "harakiri-sushi"];
+  const plan = batchPlan(N00DLES, { skills: { hacking: 50, intelligence: 0 }, mults: MULTS }, batchRamGb([16]));
+  const config = { ...n00dlesConfig(), hosts, spacingMs: plan?.spacingMs ?? 0 };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  await simulation.advance(1_000);
+  const started = await healthOf(simulation);
+  // The wave out, and batching already: the batches' hacks land a hack's time after the wave, not a weaken's.
+  expect(started).toMatchObject({ state: "batching", wavesStarted: 1 });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 1_000) {
+    expect(waited, "a hack within a weaken's time and a hack's").toBeLessThan(6 * 60_000);
+    await simulation.advance(1_000);
+  }
+  const landed = await healthOf(simulation);
+  expect(landed).toMatchObject({ desyncs: 0, late: 0, lost: 0, outOfBounds: 0, batchesShort: 0 });
 });

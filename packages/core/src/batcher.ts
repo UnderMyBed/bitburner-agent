@@ -282,13 +282,19 @@ export function launchLeadMs(
   return BATCH_LAUNCH_LEAD_MS + Math.max(0, slower);
 }
 
-/** Each operation of a batch: when it's started, before its landing, ms, and so how long it holds its RAM. */
+/**
+ * Each operation of a batch: when it's started, before its landing, ms, and so how long it holds its RAM. Its lead
+ * covers the security the largest of its batch and `others` (the batches still landing on the target) may leave: a
+ * small batch's operation started just after a larger one's grow landed takes longer (#206: a plan grown with the
+ * RAM made one 12 ms late).
+ */
 export function batchHoldsMs(
   target: HackingTarget,
   player: HackingPlayer,
   threads: BatchThreads,
+  others: BatchThreads[] = [],
 ): Record<BatchOperation, number> {
-  const { securityCeiling } = batchBounds(target, player, [threads]);
+  const { securityCeiling } = batchBounds(target, player, [threads, ...others]);
   const holds = {} as Record<BatchOperation, number>;
   for (const operation of BATCH_OPERATIONS) {
     holds[operation] =
@@ -469,6 +475,39 @@ export function preparationWave(
   return { weaken1, grow: growCount, weaken2: growCount > 0 ? weakenFor(growCount) : 0 };
 }
 
+/** The most preparation waves `preparationTimeMs` counts: past them, a target is out of reach of the RAM. */
+export const MOST_PREPARATION_WAVES = 50;
+
+/**
+ * How long preparing a target takes from `now` on `ramGb` (#206), ms: `preparationWave` after wave, as the batcher
+ * starts them (one when the last has landed), each landing a weaken's time at the security then, plus the lead. After
+ * a wave, security is down by its weaken1 (its weaken2 takes off what its grow adds) and money is grown by its grow at
+ * the security weaken1 left (grow.ts:38-58). 0 when it's ready; Infinity when the RAM holds none of a wave, or it would
+ * take more than `MOST_PREPARATION_WAVES`: a slow grower from a fresh start's 4% on a fresh start's RAM (#204's build).
+ */
+export function preparationTimeMs(
+  target: HackingTarget,
+  player: HackingPlayer,
+  now: { money: number; security: number },
+  ramGb: number,
+): number {
+  let state = { ...now };
+  let totalMs = 0;
+  for (let waves = 0; waves < MOST_PREPARATION_WAVES; waves++) {
+    const wave = preparationWave(target, player, state, ramGb);
+    if (wave === null) return totalMs;
+    if (wave.weaken1 + wave.grow === 0) return Number.POSITIVE_INFINITY;
+    totalMs += operationTimeMs("weaken1", target, player, state.security) + BATCH_LAUNCH_LEAD_MS;
+    const security = Math.max(target.minDifficulty, state.security - wave.weaken1 * WEAKEN_SECURITY_PER_THREAD);
+    const growthLog = growthLogPerThread({ serverGrowth: target.serverGrowth, hackDifficulty: security }, player);
+    const grown = (Math.max(state.money, 0) + wave.grow) * Math.exp(growthLog * wave.grow);
+    state = { security, money: Math.min(target.moneyMax, grown) };
+    // Grown to within a part in a million, as the game's grow threads do with their rounding up: ready.
+    if (state.money >= target.moneyMax * (1 - 1e-6)) state.money = target.moneyMax;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
 /** What each operation script writes to the landing port as it lands (#204). */
 export interface LandingRecord {
   /** The batcher's name for the operation's part. */
@@ -534,11 +573,16 @@ export class LandingWatch {
 
   /** The parts not recorded long after their time, forgotten now: how many. */
   takeLost(nowMs: number): number {
-    let lost = 0;
+    return this.takeLostIds(nowMs).length;
+  }
+
+  /** The parts not recorded long after their time, forgotten now: their ids (#206: a wave waits for its own). */
+  takeLostIds(nowMs: number): string[] {
+    const lost: string[] = [];
     for (const [id, landAt] of this.#expected) {
       if (landAt + LANDING_LOST_AFTER_MS < nowMs) {
         this.#expected.delete(id);
-        lost += 1;
+        lost.push(id);
       }
     }
     return lost;
@@ -594,6 +638,20 @@ export interface BatcherConfig {
   hosts: string[];
   hackShare: number;
   spacingMs: number;
+  /**
+   * The next target (#206), prepared beside the batches on at most `ramGb` of the hosts' RAM, so a move to it starts
+   * batching at once; absent with none.
+   */
+  next?: { target: string; figures: HackingTarget; ramGb: number };
+}
+
+/** A target's figures, or the first missing (the config is the brain's word, checked as it's read). */
+function figuresProblem(figures: unknown): string | null {
+  const fields = (figures ?? {}) as Record<string, unknown>;
+  for (const field of ["moneyMax", "minDifficulty", "requiredHackingSkill", "serverGrowth"]) {
+    if (!isFiniteNumber(fields[field])) return field;
+  }
+  return null;
 }
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -624,6 +682,17 @@ export function parseBatcherConfig(
   if (!isFiniteNumber(spacingMs) || spacingMs < MIN_BATCH_SPACING_MS) {
     return { ok: false, reason: `the config's spacing isn't at least ${MIN_BATCH_SPACING_MS} ms` };
   }
+  const { next } = value as Record<string, unknown>;
+  let parsedNext: BatcherConfig["next"];
+  if (next !== undefined && next !== null) {
+    const { target: nextTarget, figures: nextFigures, ramGb } = next as Record<string, unknown>;
+    if (typeof nextTarget !== "string" || nextTarget === "")
+      return { ok: false, reason: "the config's next has no target" };
+    const missing = figuresProblem(nextFigures);
+    if (missing !== null) return { ok: false, reason: `the config's next figures have no ${missing}` };
+    if (!isFiniteNumber(ramGb) || ramGb <= 0) return { ok: false, reason: "the config's next has no RAM above 0" };
+    parsedNext = { target: nextTarget, figures: nextFigures as HackingTarget, ramGb };
+  }
   return {
     ok: true,
     config: {
@@ -633,6 +702,7 @@ export function parseBatcherConfig(
       hosts: hosts as string[],
       hackShare,
       spacingMs,
+      ...(parsedNext === undefined ? {} : { next: parsedNext }),
     },
   };
 }
@@ -684,6 +754,11 @@ export interface BatcherHealth {
    * one: how close a start's lag came to making one late. A lead (`BATCH_LAUNCH_LEAD_MS`) of 200 ms less it is the lag.
    */
   leastSlackMs: number | null;
+  /**
+   * The next target it prepares beside its batches (#206, the config's `next`): its preparation waves started, and
+   * whether it was ready when it last looked; null with none. Absent from an older batcher.
+   */
+  next?: { target: string; wavesStarted: number; ready: boolean } | null;
   /** The game's clock when this was written. */
   atMs: number;
 }
@@ -713,6 +788,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     inFlight: 0,
     latestLandAt: null,
     leastSlackMs: null,
+    next: null,
     atMs,
   };
 }

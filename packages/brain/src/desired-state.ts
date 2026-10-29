@@ -31,7 +31,7 @@ import {
   batcherHostsOf,
   batcherNotRunning,
   batcherViewOf,
-  planBatcher,
+  chooseBatcher,
   readBatcherEnabled,
 } from "./batcher.ts";
 import {
@@ -242,6 +242,8 @@ export class DesiredStateController {
   #lastSetHackTargetResetAt: number | null = null;
   /** Why no batcher is sent while its switch is on (#205), or null. */
   #batcherWhy: string | null = null;
+  /** The mode, the batcher's target and next as last logged (#206), or null before any. */
+  #batcherMode: string | null = null;
   /** Why the batcher sent isn't running, as the last fast snapshot said, or null (#211). */
   #batcherNotRunning: string | null = null;
   /** The purchase the brain's rules ask for now, or null. */
@@ -788,11 +790,29 @@ export class DesiredStateController {
   }
 
   /**
-   * The hack loop as planned, and the batcher with its switch on (#205): on the hack loop's target and all its hosts,
-   * which the hack loop then leaves (it still roots). With the switch off, or no batcher to plan (the reason kept for
-   * the dashboard), the hack loop as planned.
+   * The hack loop as planned, and the batcher with its switch on (#205) on all the hack loop's hosts, which the hack
+   * loop then leaves (it still roots), with the brain's own target (#206, `chooseBatcher`). The mode switch, from the
+   * RAM: the batcher when a host holds it and a plan on the hosts' RAM earns; otherwise (the switch off, or no batcher
+   * to plan, the reason kept for the dashboard) the hack loop as planned. Logged when it changes, and when the target
+   * or the next target does.
    */
   #withBatcher(hackLoop: DesiredState["hackLoop"]): Pick<DesiredState, "hackLoop" | "batcher"> {
+    const result = this.#chooseMode(hackLoop);
+    const sent = result.batcher;
+    const mode =
+      sent === undefined || sent === null
+        ? `batcher: the hack loop hacks${this.#batcherWhy === null ? "" : `, not the batcher: ${this.#batcherWhy}`}`
+        : `batcher: batches ${sent.config.target}` +
+          (sent.config.next === undefined ? "" : `, preparing ${sent.config.next.target} next`);
+    if (mode !== this.#batcherMode) {
+      // Not before the switch is first on: the hack loop is the default's mode then.
+      if (this.#batcherMode !== null || (sent !== undefined && sent !== null)) this.#log(mode);
+      this.#batcherMode = mode;
+    }
+    return result;
+  }
+
+  #chooseMode(hackLoop: DesiredState["hackLoop"]): Pick<DesiredState, "hackLoop" | "batcher"> {
     this.#batcherWhy = null;
     if (!readBatcherEnabled(this.#store) || this.#staticData === null || this.#mediumData === null) return { hackLoop };
     if (hackLoop.target === null) {
@@ -800,9 +820,11 @@ export class DesiredStateController {
       return { hackLoop };
     }
     const hosts = batcherHostsOf(hackLoop);
-    // Where it runs now, kept while it still fits (#211), so a larger host doesn't restart it.
-    const runOn = this.#desired?.batcher?.runOn ?? null;
-    const planned = planBatcher(this.#staticData, this.#mediumData, hackLoop.target, hosts, runOn);
+    // Where it runs now, kept while it still fits (#211), so a larger host doesn't restart it; the target it batches,
+    // kept unless another is worth the move (#206).
+    const health = this.#fastData?.batcher;
+    const batching = health?.state === "batching" ? health.target : null;
+    const planned = chooseBatcher(this.#staticData, this.#mediumData, hosts, this.#desired?.batcher ?? null, batching);
     if (planned.batcher === null) {
       this.#batcherWhy = planned.why;
       return { hackLoop };
