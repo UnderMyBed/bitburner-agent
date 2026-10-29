@@ -311,7 +311,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   /** Reads the config: applied if it's new, its problem shown while there's none or it can't be read. */
   const readAndApplyConfig = () => {
     const read = readConfig();
-    if (read !== null && read.ok) {
+    if (read?.ok) {
       applyConfig(read.config);
       if (health.problem === NO_CONFIG || health.problem?.startsWith(UNREADABLE_CONFIG)) setProblem(lastingProblem);
     } else {
