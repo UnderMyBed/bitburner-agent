@@ -33,6 +33,8 @@ export interface DashboardServerOptions {
   setSupervisionPaused(paused: boolean): void;
   /** The hack loop's switch (#134). */
   setHackLoopEnabled(enabled: boolean): void;
+  /** The batcher's switch (#205). */
+  setBatcherEnabled(enabled: boolean): void;
   /** The hacking programs' switch (#136). */
   setProgramsEnabled(enabled: boolean): void;
   /** Home RAM's switch (#138). */
@@ -108,6 +110,8 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "paused", options.setSupervisionPaused);
       case "POST /api/hack-loop":
         return handleSwitch(request, response, origin, "enabled", options.setHackLoopEnabled);
+      case "POST /api/batcher":
+        return handleSwitch(request, response, origin, "enabled", options.setBatcherEnabled);
       case "POST /api/programs":
         return handleSwitch(request, response, origin, "enabled", options.setProgramsEnabled);
       case "POST /api/home-ram":

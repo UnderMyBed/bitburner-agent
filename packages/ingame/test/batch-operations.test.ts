@@ -4,6 +4,7 @@
 // operation of its own wrote (a previous batcher's) and one never written (lost), loudly; a late hack's record, written
 // before its time, makes nothing out of order.
 import {
+  BATCHER_CONFIG_PORT,
   BATCHER_HEALTH_PORT,
   BATCHER_LANDING_PORT,
   BATCHER_SCRIPT_NAME,
@@ -13,6 +14,7 @@ import {
   batchRamGb,
   LANDING_LOST_AFTER_MS,
   type LandingRecord,
+  WORKER_REPORT_PORT,
 } from "@bitburner-agent/core";
 import type { Simulation } from "@bitburner-agent/sim";
 import { expect, test } from "vitest";
@@ -30,7 +32,11 @@ const READ_PORT = `export async function main(ns) {
 }`;
 /** Logs a port's first entry, leaving it there. */
 const PEEK_PORT = "export async function main(ns) { ns.print(JSON.stringify(ns.peek(ns.args[0]))); }";
+/** Copies a script from home to a server (the deployer's folders are on home). */
+const COPY_TO = "export async function main(ns) { ns.scp(ns.args[1], ns.args[0], 'home'); }";
 /** Writes its arguments, parsed from JSON, to a port. */
+/** Replaces a port's contents with its argument, parsed from JSON: the Agent's config write (#205). */
+const SET_PORT = `export async function main(ns) { ns.clearPort(ns.args[0]); ns.writePort(ns.args[0], JSON.parse(ns.args[1])); }`;
 const WRITE_PORT = `export async function main(ns) {
   for (const each of ns.args.slice(1)) ns.writePort(ns.args[0], JSON.parse(each));
 }`;
@@ -43,6 +49,7 @@ async function gameWithScripts(): Promise<Simulation> {
   }
   await simulation.writeFile("home", "read-port.js", READ_PORT);
   await simulation.writeFile("home", "write-port.js", WRITE_PORT);
+  await simulation.writeFile("home", "set-port.js", SET_PORT);
   await simulation.writeFile("home", "peek-port.js", PEEK_PORT);
   expect((await simulation.run("home", `${FOLDER}hack-loop-root.js`)).error).toBeUndefined();
   await simulation.advance(1_000);
@@ -77,7 +84,7 @@ test("an operation lands at the moment named, started early, at any security, an
   expect(record).toMatchObject({ id: "7.weaken1.0", landAt, late: false });
   expect((record as LandingRecord).landedAt - landAt).toBeGreaterThanOrEqual(0);
   expect((record as LandingRecord).landedAt - landAt).toBeLessThanOrEqual(1);
-  // Two threads' 0.05 each (Constants.ts:10).
+  // Two threads' 0.05 each (Server/data/Constants.ts:10).
   expect((record as LandingRecord).result).toBeCloseTo(0.1, 9);
 });
 
@@ -249,7 +256,150 @@ test("a new batcher ignores the records of the one before it, still landing, and
   expect(second.runName).not.toBe(first.runName);
   // The first one's operations landed and wrote their records: counted, never trusted.
   expect(second.unexpected).toBeGreaterThan(0);
-  // Its first batches may be short of RAM the first one's operations still hold: #205 starts a new batcher after them.
-  expect(second).toMatchObject({ outOfOrder: 0, lost: 0, desyncs: 0, state: "batching", problem: null });
+  // It waited for the first one's latest landing (#205), so none of its batches was short of RAM those still held.
+  expect(second).toMatchObject({
+    outOfOrder: 0,
+    lost: 0,
+    desyncs: 0,
+    batchesShort: 0,
+    state: "batching",
+    problem: null,
+  });
   expect(second.hacksLanded).toBeGreaterThan(0);
+});
+
+test("with no argument, it reads its config from its port (#205): none yet is a problem; a new target drains first", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const { pid, error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  await simulation.advance(2_000);
+  expect(await healthOf(simulation)).toMatchObject({ problem: "no config on its port yet", target: "" });
+  // A config it can't read: said so.
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify({ target: "n00dles" })] });
+  await simulation.advance(2_000);
+  expect((await healthOf(simulation)).problem).toContain("its config can't be read");
+  // A config: the problem gone, and it prepares and batches.
+  const config = n00dlesConfig();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 5_000) {
+    expect(waited, "batching within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  await simulation.advance(2 * 60_000);
+  const batching = await healthOf(simulation);
+  expect(batching).toMatchObject({ target: "n00dles", problem: null, desyncs: 0 });
+  expect(batching.hacksLanded).toBeGreaterThan(0);
+  // New hosts, hot: they get the operation scripts, and the batches go on there, none short.
+  const newHosts = { ...config, hosts: ["joesguns", "hong-fang-tea"] };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(newHosts)] });
+  await simulation.advance(3 * 60_000);
+  const onNewHosts = await healthOf(simulation);
+  expect(onNewHosts).toMatchObject({ batchesShort: batching.batchesShort, desyncs: 0, problem: null });
+  expect((await simulation.ps("joesguns")).some((process) => process.filename.includes("batch-"))).toBe(true);
+  // A new target: what's in flight lands, then it prepares the new one; no desync, nothing lost.
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  await simulation.run("home", "set-port.js", {
+    args: [BATCHER_CONFIG_PORT, JSON.stringify({ ...newHosts, target: "foodnstuff", figures: foodnstuff })],
+  });
+  // Read at once: the write wakes it (#211), so it doesn't wait for its next landing or launch.
+  expect(await healthOf(simulation)).toMatchObject({ state: "recovering", target: "foodnstuff" });
+  await simulation.advance(5 * 60_000);
+  const moved = await healthOf(simulation);
+  expect(moved).toMatchObject({ state: "preparing", target: "foodnstuff", desyncs: 0, lost: 0, outOfOrder: 0 });
+  expect(moved.wavesStarted).toBeGreaterThan(batching.wavesStarted);
+  expect((await simulation.ps("home")).some((process) => process.pid === pid)).toBe(true);
+});
+
+test("one started while another waits waits too (#211): on, off, on, off, on, and none of its batches short", async () => {
+  const simulation = await gameWithScripts();
+  const firstPid = await batchingBatcher(simulation);
+  const first = await healthOf(simulation);
+  const latestInFlight = Math.max(...(await inFlight(simulation)).map((each) => each.landAt));
+  await simulation.kill(firstPid);
+  const second = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, {
+    args: [JSON.stringify(n00dlesConfig())],
+  });
+  await simulation.advance(1_000);
+  const waiting = await healthOf(simulation);
+  expect(waiting.runName).not.toBe(first.runName);
+  // It publishes the time it waits for, so a batcher started now waits for it too.
+  expect(waiting.latestLandAt).toBeGreaterThanOrEqual(latestInFlight);
+  await simulation.kill(second.pid);
+  await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(n00dlesConfig())] });
+  await simulation.advance(5 * 60_000);
+  const third = await healthOf(simulation);
+  expect(third.runName).not.toBe(waiting.runName);
+  expect(third).toMatchObject({ state: "batching", batchesShort: 0, desyncs: 0, lost: 0, problem: null });
+  expect(third.hacksLanded).toBeGreaterThan(0);
+});
+
+test("batcher-deploy.js (#205): ours on runOn once, another deployment's and extra copies stopped, none when off", async () => {
+  const simulation = await gameWithScripts();
+  const { source } = await build();
+  const ours = "agent/0123456789ab/";
+  const older = "agent/fedcba987654/";
+  for (const folder of [ours, older]) {
+    for (const name of [
+      BATCHER_SCRIPT_NAME,
+      "batch-hack.js",
+      "batch-grow.js",
+      "batch-weaken.js",
+      "hack-loop-root.js",
+    ]) {
+      await simulation.writeFile("home", folder + name, source(name));
+    }
+  }
+  await simulation.writeFile("home", `${ours}batcher-deploy.js`, source("batcher-deploy.js"));
+  await simulation.writeFile("home", "copy-to.js", COPY_TO);
+  // Another deployment's batcher on foodnstuff and on sigma-cosmetics, and two copies of ours on sigma-cosmetics.
+  await simulation.run("home", "copy-to.js", { args: ["foodnstuff", `${older}${BATCHER_SCRIPT_NAME}`] });
+  await simulation.run("home", "copy-to.js", { args: ["sigma-cosmetics", `${ours}${BATCHER_SCRIPT_NAME}`] });
+  await simulation.run("home", "copy-to.js", { args: ["sigma-cosmetics", `${older}${BATCHER_SCRIPT_NAME}`] });
+  await simulation.advance(1_000);
+  await simulation.run("foodnstuff", `${older}${BATCHER_SCRIPT_NAME}`);
+  // Another deployment's, on the host ours is wanted on too: never taken for ours.
+  await simulation.run("sigma-cosmetics", `${older}${BATCHER_SCRIPT_NAME}`);
+  await simulation.run("sigma-cosmetics", `${ours}${BATCHER_SCRIPT_NAME}`);
+  // A second copy needs other arguments to run beside the first: a config, which it keeps.
+  const second = await simulation.run("sigma-cosmetics", `${ours}${BATCHER_SCRIPT_NAME}`, {
+    args: [JSON.stringify(n00dlesConfig())],
+  });
+  expect(second.error).toBeUndefined();
+  await simulation.advance(1_000);
+  const batchers = async () => {
+    const found: string[] = [];
+    for (const host of ["home", "foodnstuff", "sigma-cosmetics", "joesguns"]) {
+      for (const process of await simulation.ps(host)) {
+        if (process.filename.endsWith(`/${BATCHER_SCRIPT_NAME}`)) found.push(`${host}:${process.filename}`);
+      }
+    }
+    return found.sort();
+  };
+  const deploy = async (args: string[]) => {
+    await simulation.run("home", `${ours}batcher-deploy.js`, { args });
+    await simulation.advance(500);
+    // What the deploy worker reported, as the Agent reads it.
+    const reports = await readPort<{ data: unknown }>(simulation, WORKER_REPORT_PORT);
+    return reports.at(-1)?.data;
+  };
+  expect(await deploy(["sigma-cosmetics"])).toEqual({
+    running: "sigma-cosmetics",
+    started: false,
+    stopped: 3,
+    problem: null,
+  });
+  expect(await batchers()).toEqual([`sigma-cosmetics:${ours}${BATCHER_SCRIPT_NAME}`]);
+  // Moved: copied to joesguns and started there, the one on sigma-cosmetics stopped.
+  expect(await deploy(["joesguns"])).toEqual({ running: "joesguns", started: true, stopped: 1, problem: null });
+  expect(await batchers()).toEqual([`joesguns:${ours}${BATCHER_SCRIPT_NAME}`]);
+  // A host it can't run on: said so.
+  expect(await deploy(["CSEC"])).toMatchObject({
+    running: null,
+    started: false,
+    problem: expect.stringContaining("CSEC"),
+  });
+  // Off: none.
+  expect(await deploy([])).toMatchObject({ running: null, started: false, problem: null });
+  expect(await batchers()).toEqual([]);
 });

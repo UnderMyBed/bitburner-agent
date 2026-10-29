@@ -22,6 +22,6 @@ export async function landOperation(
   const late = additionalMsec < 0;
   const skipped = late && !runLate;
   const result = skipped ? 0 : await call(target, { additionalMsec: Math.max(0, additionalMsec) });
-  const record: LandingRecord = { id, landAt, landedAt: Date.now(), result, late, skipped };
+  const record: LandingRecord = { id, landAt, landedAt: Date.now(), result, late, skipped, slackMs: additionalMsec };
   ns.writePort(port, record);
 }

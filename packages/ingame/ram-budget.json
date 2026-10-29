@@ -4,6 +4,7 @@
   "batch-grow.js": 1.8,
   "batch-hack.js": 1.75,
   "batch-weaken.js": 1.8,
+  "batcher-deploy.js": 4.4,
   "batcher.js": 3.85,
   "boot.js": 2.7,
   "buy-augmentation.js": 2.6,

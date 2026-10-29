@@ -26,6 +26,15 @@ import {
 } from "@bitburner-agent/core";
 import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
 import {
+  BATCHER_ENABLED_SETTING,
+  type BatcherView,
+  batcherHostsOf,
+  batcherNotRunning,
+  batcherViewOf,
+  planBatcher,
+  readBatcherEnabled,
+} from "./batcher.ts";
+import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
   type CloudServer,
@@ -231,6 +240,10 @@ export class DesiredStateController {
   #lastSetHackTarget: LastHackTarget | null = null;
   /** The game's `lastAugReset` (the slow snapshot's) when it was set, or null if no slow snapshot had said. */
   #lastSetHackTargetResetAt: number | null = null;
+  /** Why no batcher is sent while its switch is on (#205), or null. */
+  #batcherWhy: string | null = null;
+  /** Why the batcher sent isn't running, as the last fast snapshot said, or null (#211). */
+  #batcherNotRunning: string | null = null;
   /** The purchase the brain's rules ask for now, or null. */
   #purchase: Intent | null = null;
   /** From the connected Agent's latest medium snapshot, or null. */
@@ -315,6 +328,14 @@ export class DesiredStateController {
         // The intents' and the work's outcomes: for the views, and the manual intents done. Anything else changes
         // nothing to send.
         this.#fastData = event.snapshot.data as FastSnapshotData;
+        // A batcher sent but not running, logged when that changes (#211); the dashboard and the run report say more.
+        const notRunning = batcherNotRunning(this.#fastData?.batcherDeploy);
+        if (notRunning !== this.#batcherNotRunning) {
+          this.#log(
+            notRunning === null ? "batcher: running, or no longer wanted" : `batcher: sent, not running: ${notRunning}`,
+          );
+          this.#batcherNotRunning = notRunning;
+        }
         const problemNoted = this.#noteCloudServerProblem();
         if (!this.#dropDoneManualIntents() && !problemNoted) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
@@ -340,6 +361,22 @@ export class DesiredStateController {
   setHackLoopEnabled(enabled: boolean): void {
     writeSwitch(this.#store, HACK_LOOP_ENABLED_SETTING, enabled);
     this.#update();
+  }
+
+  /** The batcher's switch (#205), likewise; off by default. */
+  setBatcherEnabled(enabled: boolean): void {
+    writeSwitch(this.#store, BATCHER_ENABLED_SETTING, enabled);
+    this.#update();
+  }
+
+  /** The batcher (#205): its switch, what was sent or why not, and the connected Agent's last report of its health. */
+  batcherView(): BatcherView {
+    return batcherViewOf(
+      readBatcherEnabled(this.#store),
+      this.#desired?.batcher ?? null,
+      this.#batcherWhy,
+      this.#fastData?.batcher,
+    );
   }
 
   /** The hacking programs' switch, likewise. */
@@ -750,6 +787,29 @@ export class DesiredStateController {
     return true;
   }
 
+  /**
+   * The hack loop as planned, and the batcher with its switch on (#205): on the hack loop's target and all its hosts,
+   * which the hack loop then leaves (it still roots). With the switch off, or no batcher to plan (the reason kept for
+   * the dashboard), the hack loop as planned.
+   */
+  #withBatcher(hackLoop: DesiredState["hackLoop"]): Pick<DesiredState, "hackLoop" | "batcher"> {
+    this.#batcherWhy = null;
+    if (!readBatcherEnabled(this.#store) || this.#staticData === null || this.#mediumData === null) return { hackLoop };
+    if (hackLoop.target === null) {
+      this.#batcherWhy = "no target yet";
+      return { hackLoop };
+    }
+    const hosts = batcherHostsOf(hackLoop);
+    // Where it runs now, kept while it still fits (#211), so a larger host doesn't restart it.
+    const runOn = this.#desired?.batcher?.runOn ?? null;
+    const planned = planBatcher(this.#staticData, this.#mediumData, hackLoop.target, hosts, runOn);
+    if (planned.batcher === null) {
+      this.#batcherWhy = planned.why;
+      return { hackLoop };
+    }
+    return { hackLoop: { enabled: true, target: hackLoop.target, hosts: [] }, batcher: planned.batcher };
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     this.#purchase = this.#choosePurchase();
@@ -811,8 +871,11 @@ export class DesiredStateController {
     const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };
     if (!hackLoopEnabled) {
       this.#lastSetHackTarget = null;
+      // The batcher batches what the hack loop would: with the hack loop off, it isn't sent (#211).
+      this.#batcherWhy = readBatcherEnabled(this.#store) ? "it needs the hack loop on" : null;
       this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...workAndTtl };
     } else if (this.#staticData === null || this.#mediumData === null) {
+      this.#batcherWhy = null;
       this.#desired = null;
     } else {
       // One set before a reset (another `lastAugReset`) was that game's, not this one's.
@@ -823,7 +886,7 @@ export class DesiredStateController {
       const { hackLoop, lastSet } = planHackLoop(this.#staticData, this.#mediumData, this.#lastSetHackTarget);
       this.#lastSetHackTarget = lastSet;
       this.#lastSetHackTargetResetAt = resetAt ?? this.#lastSetHackTargetResetAt;
-      this.#desired = { hackLoop: { enabled: true, ...hackLoop }, intents, ...workAndTtl };
+      this.#desired = { ...this.#withBatcher({ enabled: true, ...hackLoop }), intents, ...workAndTtl };
     }
     this.#channel.setDesiredState(this.#desired);
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).

@@ -13,6 +13,7 @@ import {
   type FastSnapshotData,
   INTENT_ACTIONS,
   JOB_FIELDS,
+  newBatcherHealth,
 } from "@bitburner-agent/core";
 import { JSDOM } from "jsdom";
 import { afterAll, afterEach, describe, expect, test } from "vitest";
@@ -82,6 +83,7 @@ const BUSY_STATUS: DashboardStatus = {
     hackThreads: null,
     preparing: null,
   },
+  batcher: { enabled: false, sent: null, why: null, health: null },
   programs: {
     enabled: true,
     waiting: false,
@@ -173,6 +175,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     brainStartedEventId,
     supervising: true,
     hackLoop: { enabled: true, waiting: true, target: null, hosts: [], hackThreads: null, preparing: null },
+    batcher: { enabled: false, sent: null, why: null, health: null },
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
     cloudServers: { enabled: true, waiting: true, servers: [], buying: null, waitingFor: null, problem: null },
@@ -991,4 +994,52 @@ test.each([
   expect(textOf(document, "#factions")).toContain(readLine);
   if (said !== null) expect(textOf(document, "#factions")).toContain(said);
   expect(textOf(document, "#factions")).not.toContain("Couldn't be read");
+});
+
+test("the batcher's button (#205) sends its switch; off, on with nothing sent, and on with its health read plainly", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") return { status: 200, body: {} };
+    return { status: 200, body: current };
+  });
+  expect(textOf(document, "#batcher")).toContain("Batcher: off: the hack loop hacks");
+  expect(textOf(document, "#batcher")).toContain("Its health: not reported");
+  expect(textOf(document, "#batcher button")).toBe("Start the batcher");
+  (document.querySelector("#batcher button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/batcher", '{"enabled":true}']],
+  );
+
+  current = { ...BUSY_STATUS, batcher: { enabled: true, sent: null, why: "no target yet", health: null } };
+  (document.querySelector("#batcher button") as HTMLButtonElement).click();
+  await settle();
+  expect(textOf(document, "#batcher")).toContain("Batcher: on, nothing sent: no target yet");
+  expect(textOf(document, "#batcher button")).toBe("Stop the batcher");
+
+  const health = {
+    ...newBatcherHealth("n00dles", "r1", 0),
+    state: "batching" as const,
+    batchesStarted: 12,
+    hacksLanded: 30,
+    desyncs: 1,
+    outOfBounds: 1,
+  };
+  current = {
+    ...BUSY_STATUS,
+    batcher: {
+      enabled: true,
+      sent: { runOn: "foodnstuff", target: "n00dles", hosts: 6, hackShare: 0.132, spacingMs: 26_876 },
+      why: null,
+      health,
+    },
+  };
+  (document.querySelector("#batcher button") as HTMLButtonElement).click();
+  await settle();
+  expect(textOf(document, "#batcher")).toContain(
+    "Batcher: on foodnstuff, against n00dles, on 6 servers: 13.2% a batch, one every 27 s",
+  );
+  expect(textOf(document, "#batcher")).toContain("Its health: batching, 12 batches, 30 hacks landed");
+  expect(textOf(document, "#batcher")).toContain("1 desyncs (0 out of order, 1 out of bounds)");
+  expect(document.querySelector("#batcher div div:last-child")?.className).toBe("bad");
 });

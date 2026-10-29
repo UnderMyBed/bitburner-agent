@@ -6,6 +6,7 @@ import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { BackdoorDue } from "../src/backdoors.ts";
+import type { BatcherView } from "../src/batcher.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
@@ -39,6 +40,8 @@ const programs: ProgramsView = {
   buying: "BruteSSH.exe",
   waitingFor: null,
 };
+/** The batcher's view (#205), off. */
+const batcher: BatcherView = { enabled: false, sent: null, why: null, health: null };
 const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
 const cloudServers: CloudServersView = {
   enabled: true,
@@ -89,6 +92,7 @@ const status = (
     brainStartedEventId,
     supervising: true,
     hackLoop: loop,
+    batcher,
     programs,
     homeRam,
     cloudServers: cloud,
@@ -189,6 +193,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     alerts: [],
     supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
     hackLoop,
+    batcher,
     programs,
     homeRam,
     cloudServers,
@@ -432,6 +437,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     brainStartedEventId,
     supervising: false,
     hackLoop,
+    batcher,
     programs,
     homeRam,
     cloudServers,
@@ -600,6 +606,33 @@ test("the hacking rows with no snapshots: the ceiling unknown, no income", () =>
     incomePerSecond: null,
     ceilingText: "unknown: no static snapshot",
     incomeText: "— (not two slow snapshots with the money sources in the last 10 min)",
+  });
+});
+
+test("batcherNotRunning (#211): the newest fast snapshots in a row with the batcher sent and not running, 3 or more", () => {
+  const nowMs = STARTED_AT_MS + 300_000;
+  const down = { running: null, started: false, stopped: 0, problem: "no room on joesguns" };
+  const up = { running: "joesguns", started: true, stopped: 0, problem: null };
+  const fastWith = (batcherDeploy: unknown) => ({ ...fastData(1), batcherDeploy });
+  for (const [second, deploy] of [
+    [10, down],
+    [12, down],
+    [14, down],
+    [16, up],
+    [18, down],
+    [20, down],
+  ] as const) {
+    recordSnapshot("fast", STARTED_AT_MS + second * 1000, fastWith(deploy));
+  }
+  // Two in a row at the newest: the older three before a running one don't count.
+  expect(status(nowMs - 270_000).alerts.map((alert) => alert.name)).not.toContain("batcherNotRunning");
+  recordSnapshot("fast", STARTED_AT_MS + 22_000, fastWith(down));
+  expect(status(nowMs - 270_000).alerts).toContainEqual({
+    name: "batcherNotRunning",
+    sinceMs: STARTED_AT_MS + 18_000,
+    detail:
+      "the batcher isn't running, in the last 3 fast snapshots, so nothing hacks the servers the hack loop left to " +
+      "it: no room on joesguns",
   });
 });
 
