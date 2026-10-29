@@ -54,6 +54,7 @@ try {
       AugmentationMoneyCost: all.AugmentationMoneyCost as number,
       AugmentationRepCost: all.AugmentationRepCost as number,
       DaedalusAugsRequirement: all.DaedalusAugsRequirement as number,
+      FactionWorkRepGain: all.FactionWorkRepGain as number,
     };
   }
 
@@ -68,7 +69,7 @@ try {
           data.augmentations.map((augmentation) => [augmentation.name, coreAugmentation(augmentation)]),
         ),
       )};\n\n` +
-      "/** Each BitNode's multipliers on augmentations, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */\n" +
+      "/** Each BitNode's multipliers on augmentations and faction work, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */\n" +
       `export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNodeMultipliers> = ${literal(bitNodes)};\n`,
   );
 

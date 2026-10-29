@@ -32,6 +32,8 @@ export type IntentRequest =
   | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } }
   /** A cloud server named `hostname` with `ram` GB (#159): done once the player has one of that name. */
   | { action: "buyServer"; args: { hostname: string; ram: number } }
+  /** The player's cloud server `hostname` with at least `ram` GB (#194): done once it has. */
+  | { action: "upgradeServer"; args: { hostname: string; ram: number } }
   /** A backdoor on `hostname`, through the terminal (#162): done once it's installed, the terminal not left on it. */
   | { action: "backdoor"; args: { hostname: string } }
   /** Installs every augmentation queued (#164): irreversible, and done once nothing is left to install. */
@@ -51,6 +53,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   joinFaction: true,
   purchaseAugmentation: true,
   buyServer: true,
+  upgradeServer: true,
   backdoor: true,
   installAugmentations: true,
   destroyBitNode: true,
@@ -75,7 +78,8 @@ export interface EffectorReport {
 
 /**
  * The ways the Agent can carry out an intent or converge the work (#145, #151, architecture §5.6). `ui` is a home
- * worker without Singularity: the page's, or NS calls alone where the API needs no Singularity (`buyServer`, #159).
+ * worker without Singularity: the page's, or NS calls alone where the API needs no Singularity (`buyServer`, #159;
+ * `upgradeServer`, #194).
  */
 export const EFFECTOR_BACKENDS = ["sim", "singularity", "ui"] as const;
 export type EffectorBackend = (typeof EFFECTOR_BACKENDS)[number];
@@ -161,6 +165,21 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
       }
       if (!isCloudServerRam(args.ram)) {
         return { ok: false, reason: `buyServer's ram isn't a power of two GB from 1 to ${CLOUD_SERVER_MAX_RAM}` };
+      }
+      return { ok: true, message: { action, args: { hostname: args.hostname, ram: args.ram } } };
+    case "upgradeServer":
+      // Any name `buyServer` takes: the worker checks it's one of the player's cloud servers.
+      if (!isCloudServerHostname(args.hostname)) {
+        return {
+          ok: false,
+          reason:
+            `upgradeServer's hostname isn't 1 to ${MAX_CLOUD_SERVER_HOSTNAME_LENGTH} letters, digits, '.', '_' or ` +
+            `'-' (not an IP address, hacknet-…, nor ${WORLD_DAEMON})`,
+        };
+      }
+      // 1 GB is the least a server has, so never an upgrade.
+      if (!isCloudServerRam(args.ram) || args.ram < 2) {
+        return { ok: false, reason: `upgradeServer's ram isn't a power of two GB from 2 to ${CLOUD_SERVER_MAX_RAM}` };
       }
       return { ok: true, message: { action, args: { hostname: args.hostname, ram: args.ram } } };
     case "backdoor":

@@ -4,6 +4,7 @@
 import type { IntentOutcome } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
+import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
 export const AGENT_SILENT_AFTER_MS = 60_000;
@@ -34,15 +35,19 @@ export type AlertName =
   | "dialogBlocking"
   | "intentStuck"
   | "incomeStalled"
+  | "cloudServerProblem"
+  | "messageRefused"
   | "factionStateUnread"
-  | "backdoorOverdue";
+  | "backdoorOverdue"
+  | "factionWorkStalled";
 
 export interface Alert {
   name: AlertName;
   /**
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
-   * first watched); for `factionStateUnread`, the first of the unread slow snapshots in a row; for the others, the event or give-up that
+   * first watched); for `cloudServerProblem`, now; for `messageRefused`, the newest fast snapshot that shows it; for
+   * `factionStateUnread`, the first of the unread slow snapshots in a row; for the others, the event or give-up that
    * raised it.
    */
   sinceMs: number;
@@ -73,6 +78,16 @@ export interface AlertFacts {
   /** The player's money in the medium snapshots, and when it last rose (#184): ./income-watch.ts. */
   income: IncomeFacts | null;
   /**
+   * A cloud purchase the Agent reported done with a problem (#194), as the controller noted it ("<id>: <problem>"), or
+   * null. Optional for the callers that don't watch cloud servers.
+   */
+  cloudServerProblem?: string | null;
+  /**
+   * The brain's last message the Agent refused, in the newest fast snapshot (#194's review), or null. Optional for the
+   * callers that don't read it.
+   */
+  refusedMessage?: { reason: string; count: number } | null;
+  /**
    * The faction state unread in the newest slow snapshots (#197): how many in a row (skipped ones neither end nor add
    * to it), since the first of them, and the newest's backend and problem; null where the newest was read, skipped,
    * or from an older Agent, or there's no slow snapshot.
@@ -80,6 +95,8 @@ export interface AlertFacts {
   factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
   backdoorsDue: BackdoorDue[];
+  /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
+  factionWorkStall: FactionWorkStall | null;
 }
 
 /**
@@ -93,8 +110,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue per
- * overdue backdoor.
+ * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
+ * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -135,6 +152,24 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   }
   const incomeStalled = incomeStalledAlert(facts);
   if (incomeStalled !== null) alerts.push(incomeStalled);
+  if (facts.cloudServerProblem) {
+    alerts.push({
+      name: "cloudServerProblem",
+      sinceMs: facts.nowMs,
+      detail:
+        `a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and on: ` +
+        facts.cloudServerProblem,
+    });
+  }
+  if (facts.refusedMessage) {
+    alerts.push({
+      name: "messageRefused",
+      sinceMs: facts.lastFastSnapshotAtMs ?? facts.nowMs,
+      detail:
+        `the Agent refused the brain's message (${facts.refusedMessage.count} so far), so it acts on the last one it ` +
+        `took: ${facts.refusedMessage.reason}`,
+    });
+  }
   // Only once it's unread in a row: a single miss (a dialog flood, the owner acting mid-read) is a log line and an event.
   if (facts.factionState !== null && facts.factionState.unreadInARow >= FACTION_STATE_UNREAD_AFTER) {
     const { sinceMs, unreadInARow, backend, problem } = facts.factionState;
@@ -155,7 +190,32 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     });
   }
   alerts.push(...backdoorOverdueAlerts(facts));
+  const factionWorkStalled = factionWorkStalledAlert(facts);
+  if (factionWorkStalled !== null) alerts.push(factionWorkStalled);
   return alerts;
+}
+
+/**
+ * `factionWorkStalled` (#203), or null: the brain's faction work is sent, and its faction's reputation has risen under
+ * half the work's rate over the last `FACTION_WORK_STALLED_AFTER_MS` of the connected Agent's slow snapshots
+ * (../factions.ts, `underRateSince`). The work isn't converged (the Agent's problem says why), or the game credits it
+ * elsewhere (another faction's work under way, say). With no reading in the window at all, it says that instead.
+ */
+export function factionWorkStalledAlert({
+  nowMs,
+  factionWorkStall,
+}: Pick<AlertFacts, "nowMs" | "factionWorkStall">): Alert | null {
+  if (factionWorkStall === null || nowMs - factionWorkStall.sinceMs < FACTION_WORK_STALLED_AFTER_MS) return null;
+  const { faction, sinceMs, lastReadingAtMs } = factionWorkStall;
+  const minutes = (fromMs: number) => Math.floor((nowMs - fromMs) / 60_000);
+  // No reading in the window at all: the snapshots stopped, or each was skipped, so the rate can't be blamed.
+  const detail =
+    nowMs - lastReadingAtMs >= FACTION_WORK_STALLED_AFTER_MS
+      ? `no reading of ${faction}'s reputation for ${minutes(lastReadingAtMs)} min, with the brain's faction work for ` +
+        "it: no slow snapshot, or each one's faction state skipped (see the Factions section)"
+      : `${faction}'s reputation has risen under half the work's rate for ${minutes(sinceMs)} min, with the brain's ` +
+        "faction work for it: see the Work section's outcome";
+  return { name: "factionWorkStalled", sinceMs, detail };
 }
 
 /**

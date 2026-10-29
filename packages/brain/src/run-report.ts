@@ -15,9 +15,18 @@ import {
   type WorkOutcome,
 } from "@bitburner-agent/core";
 import { BackdoorTimeline } from "./backdoors.ts";
+import { cloudServerPrice } from "./cloud-servers.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
+import {
+  describeChoice,
+  FACTION_WORK_CHOSEN_EVENT_KIND,
+  FACTION_WORK_STALLED_AFTER_MS,
+  FACTION_WORK_STOPPED_EVENT_KIND,
+  FactionWorkTimeline,
+  SLOW_SNAPSHOT_GAP_MS,
+} from "./factions.ts";
 import {
   DEFAULT_GAP_THRESHOLD_MS,
   describePageHeap,
@@ -26,9 +35,13 @@ import {
   formatSeconds,
   type Gap,
 } from "./gap-report.ts";
-import { readHackLoopEnabled } from "./hack-loop.ts";
+import { hackLoopHosts, readHackLoopEnabled } from "./hack-loop.ts";
 import { HackingFold } from "./hacking-ceiling.ts";
-import { RESTART_FELL_BACK_EVENT_KIND, WORK_PROMOTION_EVENT_KIND } from "./record-channel-events.ts";
+import {
+  MESSAGE_REFUSED_EVENT_KIND,
+  RESTART_FELL_BACK_EVENT_KIND,
+  WORK_PROMOTION_EVENT_KIND,
+} from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
 
@@ -60,6 +73,7 @@ const FAILURE_EVENT_KINDS = [
   "versionDrift",
   SUPERVISION_GAVE_UP_EVENT_KIND,
   RESTART_FELL_BACK_EVENT_KIND,
+  MESSAGE_REFUSED_EVENT_KIND,
 ];
 
 export interface RunWindow {
@@ -279,6 +293,49 @@ interface FastPoint {
   work: WorkOutcome | null | undefined;
 }
 
+/** A cloud server bought (`fromRam` null) or upgraded (#194), as the medium snapshots show it. */
+export interface CloudServerChange {
+  atMs: number;
+  hostname: string;
+  fromRam: number | null;
+  toRam: number;
+}
+
+/**
+ * Each cloud server bought or upgraded in the window, in order: one of `cloudServers` (the slow snapshots' lists, the
+ * game's word) that a medium snapshot shows first after the window's first, or with more RAM than the one before. One
+ * a medium snapshot no longer shows is forgotten: an install deletes them (`Prestige.ts:72-74`), so one bought again
+ * after it is bought again.
+ */
+class CloudServerChanges {
+  readonly changes: CloudServerChange[] = [];
+  readonly #ram = new Map<string, number>();
+  #first = true;
+  readonly #cloudServers: ReadonlySet<string>;
+
+  constructor(cloudServers: ReadonlySet<string>) {
+    this.#cloudServers = cloudServers;
+  }
+
+  add(atMs: number, data: MediumSnapshotData): void {
+    const seen = new Set<string>();
+    for (const server of Array.isArray(data?.servers) ? data.servers : []) {
+      if (typeof server?.hostname !== "string" || !this.#cloudServers.has(server.hostname)) continue;
+      if (!isNumber(server.maxRam)) continue;
+      const before = this.#ram.get(server.hostname);
+      if (before === undefined && !this.#first) {
+        this.changes.push({ atMs, hostname: server.hostname, fromRam: null, toRam: server.maxRam });
+      } else if (before !== undefined && server.maxRam > before) {
+        this.changes.push({ atMs, hostname: server.hostname, fromRam: before, toRam: server.maxRam });
+      }
+      this.#ram.set(server.hostname, server.maxRam);
+      seen.add(server.hostname);
+    }
+    for (const hostname of [...this.#ram.keys()]) if (!seen.has(hostname)) this.#ram.delete(hostname);
+    this.#first = false;
+  }
+}
+
 /** What the report reads from the store for a window, folded as it's read. */
 interface RunFacts extends RunWindow {
   events: StoredEvent[];
@@ -294,9 +351,15 @@ interface RunFacts extends RunWindow {
   slowLast: SlowSnapshotData | undefined;
   /** The faction state over the slow snapshots (#197). */
   factionState: FactionStateFolding;
+  /** The joins and the brain's faction work (#203), over the events and the medium and slow snapshots. */
+  factionWork: FactionWorkTimeline;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
+  /** The newest static snapshot by the window's end (before it, if none in it): which servers are the game's. */
+  staticLast: StaticSnapshotData | undefined;
+  /** Cloud servers bought or upgraded (#194). */
+  cloudServerChanges: CloudServerChange[];
   /** The dashboard's switch, now: the store keeps no history of it. */
   hackLoopEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
@@ -322,17 +385,23 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
     if (isObject(staticBefore?.data))
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+    // The newest static snapshot, for which servers are the game's: the hack loop's hosts (#194).
+    let staticLast = isObject(staticBefore?.data) ? (staticBefore.data as StaticSnapshotData) : undefined;
     const backdoors = new BackdoorTimeline();
     for (const { atMs, data } of ofTier<StaticSnapshotData>("static")) {
       snapshotCount++;
+      staticLast = data;
       hacking.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
       }
     }
+    const events = store.eventsInWindow(window);
+    const factionWork = new FactionWorkTimeline(events, BRAIN_STARTED_EVENT_KIND);
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
+    const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     for (const { atMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
@@ -340,12 +409,17 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowFirst ??= data;
       slowLast = data;
       factionState.add(atMs, data);
-      for (const name of namesOf(data.purchasedServers)) playersServers.add(name);
+      factionWork.addSlow(atMs, data);
+      for (const name of namesOf(data.purchasedServers)) {
+        playersServers.add(name);
+        cloudServers.add(name);
+      }
     }
     let mediumFirst: MediumSnapshotData | undefined;
     let mediumLast: MediumSnapshotData | undefined;
     const money: MoneyPoint[] = [];
     const inference = new HackTargetInference(playersServers);
+    const cloudServerChanges = new CloudServerChanges(cloudServers);
     for (const { atMs, data } of ofTier<MediumSnapshotData>("medium")) {
       snapshotCount++;
       mediumFirst ??= data;
@@ -353,8 +427,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       const playerMoney = playerOf(data).money;
       if (typeof playerMoney === "number") money.push({ atMs, money: playerMoney });
       inference.add(atMs, data);
+      cloudServerChanges.add(atMs, data);
       hacking.addMedium(atMs, data);
       backdoors.addMedium(atMs, data);
+      factionWork.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
@@ -377,7 +453,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       .filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
     return {
       ...window,
-      events: store.eventsInWindow(window),
+      events,
       fast,
       mediumFirst,
       mediumLast,
@@ -387,8 +463,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowFirst,
       slowLast,
       factionState,
+      factionWork,
       snapshotCount,
       playersServers,
+      staticLast,
+      cloudServerChanges: cloudServerChanges.changes,
       hackLoopEnabled: readHackLoopEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
       hacking,
@@ -461,7 +540,10 @@ const quote = (value: string, length: number) =>
 
 // --- 1. The window ----------------------------------------------------------------------------------------------------
 
-/** The events of the brain, the Agent's sessions and the save backups, in order; dialogs and promotions are actions. */
+/**
+ * The events of the brain, the Agent's sessions and the save backups, in order; dialogs, promotions and the brain's
+ * faction work (#203) are actions.
+ */
 function windowSection(facts: RunFacts): string[] {
   const lines = ["1. The window"];
   if (facts.earlierBrainStartMs !== null) {
@@ -471,9 +553,13 @@ function windowSection(facts: RunFacts): string[] {
         "restart, give --since",
     );
   }
-  const timeline = facts.events.filter(
-    (event) => event.kind !== "gameDialog" && event.kind !== WORK_PROMOTION_EVENT_KIND,
-  );
+  const actions = [
+    "gameDialog",
+    WORK_PROMOTION_EVENT_KIND,
+    FACTION_WORK_CHOSEN_EVENT_KIND,
+    FACTION_WORK_STOPPED_EVENT_KIND,
+  ];
+  const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event)}`);
   if (timeline.length === 0) lines.push("  no events from the brain or the Agent");
   const count = (kind: string) => timeline.filter((event) => event.kind === kind).length;
@@ -527,6 +613,8 @@ function describeEvent({ kind, detail }: StoredEvent): string {
       return `supervisor's check failed (${displayValue(fields.cause)}): ${displayValue(fields.failure)}`;
     case SUPERVISION_GAVE_UP_EVENT_KIND:
       return `supervisor GAVE UP: ${JSON.stringify(detail)}`;
+    case MESSAGE_REFUSED_EVENT_KIND:
+      return `the Agent REFUSED the brain's message (${displayValue(fields.count)} so far): ${displayValue(fields.reason)}`;
     case "connectionRejected":
       return `connection rejected (${displayValue(fields.reason)}): ${displayValue(fields.detail)}`;
     default:
@@ -591,6 +679,14 @@ function progressSection(facts: RunFacts): string[] {
         (server) => server?.hasAdminRights === true && !facts.playersServers.has(server.hostname),
       ).length;
     lines.push(`  the game's servers rooted: ${describeChange(String(rooted(first)), String(rooted(last)))}`);
+    // The hack loop's hosts as its rule has them (#194), the brain's cloud servers among them.
+    const hosts = (data: MediumSnapshotData) => {
+      if (facts.staticLast === undefined) return "unknown (no static snapshot)";
+      const each = hackLoopHosts(facts.staticLast, data);
+      const ram = each.reduce((total, host) => total + host.ram, 0);
+      return `${formatGigabytes(ram)} on ${each.length} ${each.length === 1 ? "server" : "servers"}`;
+    };
+    lines.push(`  the hack loop's hosts' RAM: ${describeChange(hosts(first), hosts(last))}`);
     const [playerFirst, playerLast] = [playerOf(first), playerOf(last)];
     lines.push(`  city: ${describeChange(displayValue(playerFirst.city), displayValue(playerLast.city))}`);
     lines.push(
@@ -695,9 +791,8 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
 function describeIntent(outcome: IntentOutcome): string {
   const backend = outcome.backend === null ? "" : ` (${outcome.backend})`;
   const tries = `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${backend}`;
-  return outcome.done
-    ? `done after ${tries}`
-    : `not done, ${tries}${outcome.problem === null ? "" : `: ${outcome.problem}`}`;
+  const problem = outcome.problem === null ? "" : `: ${outcome.problem}`;
+  return outcome.done ? `done after ${tries}${problem}` : `not done, ${tries}${problem}`;
 }
 
 function actionsSection(facts: RunFacts): string[] {
@@ -708,6 +803,8 @@ function actionsSection(facts: RunFacts): string[] {
     lines.push(`    ${id}: ${describeIntent(outcome)}; ${when}`);
   }
   if (episodes.length === 0) lines.push("    none");
+
+  lines.push(...cloudServerLines(facts));
 
   lines.push("  work, as it changed:");
   let previous: string | undefined;
@@ -746,6 +843,57 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (dialogs.length === 0) lines.push("    none");
   lines.push(...backdoorLines(facts));
+  lines.push(...factionLines(facts));
+  return lines;
+}
+
+/**
+ * The joins and the brain's faction work (#203): the factions the medium snapshots showed joined, the invitations left
+ * to the owner (a faction with enemies), each choice of work and why, or its end, and the reputation each faction
+ * gained while the brain's work was on it.
+ */
+function factionLines({ factionWork }: RunFacts): string[] {
+  const lines = ["  factions (joins, and the brain's faction work):"];
+  const joined = [...factionWork.joined].map(([faction, atMs]) =>
+    atMs === null ? `${faction} (at the window's start)` : `${faction} by ${formatIsoTime(atMs)}`,
+  );
+  lines.push(`    joined: ${joined.length === 0 ? "none" : joined.join(", ")}`);
+  const left = [...factionWork.leftToOwner].map(([faction, atMs]) => `${faction} (first seen ${formatIsoTime(atMs)})`);
+  lines.push(`    invitations left to you (factions with enemies): ${left.length === 0 ? "none" : left.join(", ")}`);
+  lines.push("    the brain's faction work, as chosen:");
+  for (const record of factionWork.records) {
+    lines.push(
+      `      ${formatIsoTime(record.atMs)}  ${record.kind === "chosen" ? describeChoice(record.choice) : `stopped (${record.reason})`}`,
+    );
+  }
+  if (factionWork.records.length === 0) lines.push("      none");
+  const gained = [...factionWork.gained].map(([faction, reputation]) => `${faction} +${formatReputation(reputation)}`);
+  lines.push(`    reputation gained with the brain's work on it: ${gained.length === 0 ? "none" : gained.join(", ")}`);
+  return lines;
+}
+
+/**
+ * The brain's faction work stalled (#203): a stretch of `FACTION_WORK_STALLED_AFTER_MS` or more, with its choice in
+ * force, in which its faction's reputation rose under half the work's rate over each 10-minute window of slow snapshots
+ * (a faction not being worked gains a little passively; skipped readings left out); a gap of over
+ * `SLOW_SNAPSHOT_GAP_MS` in them starts the readings again, as it's a failure of its own.
+ */
+function factionWorkHealthLines({ factionWork }: RunFacts, failures: string[]): string[] {
+  const lines = [
+    `  faction work stalled (the brain's choice, its faction's reputation rising under half the work's rate for ` +
+      `${formatDuration(FACTION_WORK_STALLED_AFTER_MS)} or more, no slow snapshot gap over ` +
+      `${formatDuration(SLOW_SNAPSHOT_GAP_MS)}):`,
+  ];
+  for (const { faction, workType, reputationPerSecond, fromMs, toMs, ongoing } of factionWork.stalls) {
+    const line =
+      `faction work stalled: ${faction}'s reputation rose under half the ${workType} work's ` +
+      `${reputationPerSecond.toFixed(2)}/s from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} ` +
+      `(${formatDuration(toMs - fromMs)}), with the brain's work for it` +
+      (ongoing ? "; still under it at the last slow snapshot" : "");
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (factionWork.stalls.length === 0) lines.push("    none");
   return lines;
 }
 
@@ -835,6 +983,42 @@ function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
   return lines;
 }
 
+/**
+ * The cloud servers bought or upgraded (#194), each with its RAM and price, and the total. The price is BN1's (the
+ * brain's rule knows no other yet): in another BitNode, unknown.
+ */
+function cloudServerLines(facts: RunFacts): string[] {
+  const lines = ["  cloud servers bought or upgraded (from the medium snapshots):"];
+  const currentNode = facts.slowLast?.resetInfo?.currentNode;
+  const priceOf = ({ fromRam, toRam }: CloudServerChange) =>
+    currentNode === 1 ? cloudServerPrice(toRam) - (fromRam === null ? 0 : cloudServerPrice(fromRam)) : null;
+  let total = 0;
+  for (const change of facts.cloudServerChanges) {
+    const price = priceOf(change);
+    total += price ?? 0;
+    const what =
+      change.fromRam === null
+        ? `${change.hostname} bought, ${formatGigabytes(change.toRam)}`
+        : `${change.hostname} upgraded, ${formatGigabytes(change.fromRam)} → ${formatGigabytes(change.toRam)}`;
+    const cost = price === null ? `price unknown in BitNode ${displayValue(currentNode)}` : formatMoney(price);
+    lines.push(`    ${formatIsoTime(change.atMs)}  ${what}, ${cost}`);
+  }
+  if (facts.cloudServerChanges.length === 0) {
+    lines.push("    none");
+  } else {
+    const bought = facts.cloudServerChanges.filter((change) => change.fromRam === null).length;
+    const upgraded = facts.cloudServerChanges.length - bought;
+    lines.push(
+      `    in all: ${bought} bought, ${upgraded} upgraded${currentNode === 1 ? `, ${formatMoney(total)}` : ""}`,
+    );
+  }
+  // The brain's rule waits outside BN1 (cloud-servers.ts): said here, so a run with none bought isn't a mystery.
+  if (isNumber(currentNode) && currentNode !== 1) {
+    lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in BN1`);
+  }
+  return lines;
+}
+
 // --- 4. Health --------------------------------------------------------------------------------------------------------
 
 /** Each check prints what it found, and adds a line to `failures` for each failure. */
@@ -856,6 +1040,20 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
   }
   if (stuck === 0) lines.push("    none");
   lines.push(...backdoorHealthLines(facts, failures));
+  lines.push(...factionWorkHealthLines(facts, failures));
+
+  // Done, but not as asked (#194): a server bought under another name.
+  lines.push("  cloud server purchases done with a problem:");
+  let withProblem = 0;
+  for (const { id, outcome } of intentEpisodes(facts)) {
+    if (!outcome.done || outcome.problem === null) continue;
+    if (!id.startsWith("buyServer(") && !id.startsWith("upgradeServer(")) continue;
+    withProblem++;
+    const line = `cloud server purchase done with a problem: ${id}: ${outcome.problem}`;
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (withProblem === 0) lines.push("    none");
 
   lines.push("  dialogs left blocking the page:");
   const blocking = blockingEpisodes(facts);
@@ -896,7 +1094,10 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
 
   lines.push(...disconnectLines(facts, failures));
 
-  lines.push("  deploy failures, version drift, supervision given up, restarts that couldn't type (#212):");
+  lines.push(
+    "  deploy failures, version drift, supervision given up, brain messages the Agent refused, restarts that couldn't " +
+      "type (#212):",
+  );
   const failureEvents = facts.events.filter((event) => FAILURE_EVENT_KINDS.includes(event.kind));
   for (const event of failureEvents) {
     const line = `${formatIsoTime(event.atMs)} ${describeEvent(event)}`;

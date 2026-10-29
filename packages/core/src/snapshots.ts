@@ -137,7 +137,22 @@ export interface FastSnapshotData {
    * supervisor's relaunch), and sent once. Absent where there was none.
    */
   restart?: RestartNote;
+  /**
+   * The brain's last message the Agent refused as not valid (#194's review), with why, and how many it has refused
+   * since it connected: it acts on the last one it took meanwhile. Null once a desired state is taken again, or absent
+   * from an older Agent.
+   */
+  refusedMessage?: RefusedBrainMessage | null;
 }
+
+/** A brain message the Agent refused (#194's review): `parseBrainMessage`'s reason, and the count so far. */
+export interface RefusedBrainMessage {
+  reason: string;
+  count: number;
+}
+
+/** How much of a refused message's reason the Agent reports. */
+export const MAX_REFUSED_REASON_LENGTH = 500;
 
 /** How a page timer's restart ended when it couldn't type `run /agent/boot.js` (#212): reloaded, or given up. */
 export interface RestartNote {

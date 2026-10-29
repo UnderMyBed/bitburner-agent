@@ -1,8 +1,8 @@
 // Backdoors for the hacker factions (#195, M4 phase A slice A3): the brain asks for a backdoor on CSEC, avmnite-02h,
 // I.I.I.I and run4theh111z (core's `HACKER_FACTION_SERVERS`) as soon as each can be installed, so CyberSec, NiteSec,
 // The Black Hand and BitRunners invite the player (`Faction/FactionInfo.tsx:489`, `:464-466`, `:419`, `:402`). Sent as
-// the `backdoor` intent (#162). Joining them is slice A5's. Also what the dashboard's `backdoorOverdue` alert and the
-// run report (#185) read of them.
+// the `backdoor` intent (#162). Joining them is slice A5's (#203, ./factions.ts). Also what the dashboard's
+// `backdoorOverdue` alert and the run report (#185) read of them.
 // - The game's terms (`Terminal/commands/backdoor.ts:23-32`): root, and the hacking level at the server's required
 //   level. An install recreates the servers (`Prestige.ts:74`, `:98`), so after one they're backdoored again.
 // - No switch: a backdoor costs no money and changes nothing a later choice depends on (#162).

@@ -47,7 +47,7 @@ export interface BrainInSimulation {
   desiredState: DesiredStateController | null;
   /** With the controller, the money's last rise (#184), as main.ts has it. */
   incomeWatch: IncomeWatch | null;
-  /** What the brain logged, in order: the income watch's lines (#184), and the backdoors' (#195). */
+  /** What the brain logged, in order: the income watch's lines (#184), the backdoors' (#195), the factions' (#203). */
   logLines: string[];
   /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
@@ -99,7 +99,9 @@ export function startBrainInSimulation(
   const channel = data
     ? brainChannel({ token, clock: game.clock, store: data.store, environment: "E1" })
     : new ControlChannel({ token, clock: game.clock });
-  if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease });
+  const logLines: string[] = [];
+  const log = (line: string) => logLines.push(line);
+  if (data) recordChannelEvents(channel, data.store, { environment: "E1", brainRelease: data.brainRelease, log });
   const saveBackups =
     data &&
     new SaveBackups({
@@ -109,7 +111,6 @@ export function startBrainInSimulation(
       backupsKept: SAVE_BACKUPS_KEPT,
       clock: game.clock,
     });
-  const logLines: string[] = [];
   let desiredStateController: DesiredStateController | null = null;
   if (withDesiredState) {
     if (!data) throw new Error("the desired state keeps its switches in the store: give the brain its data");
@@ -143,6 +144,8 @@ export function startBrainInSimulation(
   } as const;
   if (data) recordEvents(deployer, data.store, deployerReleaseContext);
   if (data && saveBackups) recordEvents(saveBackups, data.store, deployerReleaseContext);
+  // The brain's faction work's events (#203), as main.ts records them.
+  if (data && desiredStateController) recordEvents(desiredStateController, data.store, deployerReleaseContext);
   const openConnections: Connection[] = [];
   let stopped = false;
   const brain: BrainInSimulation = {

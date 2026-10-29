@@ -253,6 +253,9 @@ describe("the sections", () => {
       "  TOR router: no → yes",
       "  port openers: none → BruteSSH.exe",
       "  the game's servers rooted: 1 → 2",
+      // n00dles and pserv-0, then foodnstuff too (#194).
+      // n00dles and the brain's pserv-0: foodnstuff isn't among the static snapshot's servers.
+      "  the hack loop's hosts' RAM: 12 GB on 2 servers (unchanged)",
       "  city: Sector-12 (unchanged)",
       "  factions: none → CyberSec",
       "  jobs: none (unchanged)",
@@ -273,6 +276,8 @@ describe("the sections", () => {
     for (const line of [
       `    buyTor(Alpha Enterprises): done after 2 tries (ui); done by ${at(60 * SECOND)}`,
       `    ${at(10 * SECOND)}  none wanted`,
+      // pserv-0 was there from the first medium snapshot: not bought in the window (#194).
+      "  cloud servers bought or upgraded (from the medium snapshots):\n    none",
       `    ${at(30 * SECOND)}  not converged (sim): busy`,
       `    ${at(40 * SECOND)}  converged (sim)`,
       `    ${at(12 * MINUTE)}  Noodle Bar: Waiter → Head Waiter`,
@@ -324,6 +329,8 @@ describe("the sections", () => {
       "  hacking: unknown (unchanged)",
       "  home RAM: unknown (unchanged)",
       "  home RAM used: 4.5 GB → unknown",
+      // No static snapshot: which servers are the game's isn't known (#194).
+      "  the hack loop's hosts' RAM: unknown (no static snapshot) (unchanged)",
       "  city: unknown (unchanged)",
     ]) {
       expect(text).toContain(line);
@@ -403,6 +410,99 @@ describe("the sections", () => {
   });
 });
 
+describe("cloud servers (#194)", () => {
+  /**
+   * A run whose medium snapshots show pserv-1 from 5 minutes at 8 GB, and at 64 GB from 12 minutes; with `gone`, none
+   * from 15 to 16 minutes (an install deleted it), then again at 8 GB.
+   */
+  function withPurchases(currentNode = 1, { gone = false } = {}) {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("static", 10 * SECOND, staticData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 2 * SECOND) snapshot("fast", offsetMs, fastData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({ money: 1_000 + offsetMs });
+      const deleted = gone && offsetMs >= 15 * MINUTE && offsetMs < 16 * MINUTE;
+      if (offsetMs >= 5 * MINUTE && !deleted) {
+        data.servers.push({ ...(data.servers.at(-1) as MediumSnapshotData["servers"][number]), hostname: "pserv-1" });
+        const bigger = offsetMs >= 12 * MINUTE && !(gone && offsetMs >= 15 * MINUTE);
+        (data.servers.at(-1) as { maxRam: number }).maxRam = bigger ? 64 : 8;
+      }
+      snapshot("medium", offsetMs, data);
+    }
+    const slow = slowData(["pserv-0", "pserv-1"]);
+    snapshot("slow", RUN_MS, { ...slow, resetInfo: { ...slow.resetInfo, currentNode } });
+  }
+
+  test("each bought or upgraded, when, its RAM and BN1's price, and the total; the hosts' RAM", () => {
+    withPurchases();
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      "  cloud servers bought or upgraded (from the medium snapshots):\n" +
+        `    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, $440,000\n` +
+        `    ${at(12 * MINUTE)}  pserv-1 upgraded, 8 GB → 64 GB, $3,080,000\n` +
+        "    in all: 1 bought, 1 upgraded, $3,520,000",
+    );
+    expect(text).toContain("  the hack loop's hosts' RAM: 12 GB on 2 servers → 76 GB on 3 servers");
+  });
+
+  test("outside BN1, the price is unknown", () => {
+    withPurchases(2);
+    const { text } = report();
+    expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 2`);
+    expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
+    expect(text).toContain("    the brain buys none in BitNode 2: cloud server prices are known only in BN1\n");
+  });
+
+  test("in BN1, no word of other BitNodes' prices", () => {
+    withPurchases(1);
+    expect(report().text).not.toContain("the brain buys none");
+  });
+
+  test("a cloud server gone from the snapshots (an install deletes them) and bought again is bought again", () => {
+    withPurchases(1, { gone: true });
+    expect(report().text).toContain(
+      `    ${at(16 * MINUTE)}  pserv-1 bought, 8 GB, $440,000\n    in all: 2 bought, 1 upgraded, $3,960,000`,
+    );
+  });
+
+  test("a cloud purchase not done, with a problem (not enough money), isn't one done with a problem", () => {
+    cleanRun({
+      fast: () => fastData({ intents: [intent("buyServer(pserv-1, 8)", { problem: "not enough money" })] }),
+    });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("a brain message the Agent refused is a failure, with its reason and count (#194's review)", () => {
+    cleanRun();
+    event(2 * MINUTE, "messageRefused", { reason: "an intent's hostname isn't valid", count: 2 });
+    const { text, failures } = report();
+    const line = `${at(2 * MINUTE)} the Agent REFUSED the brain's message (2 so far): an intent's hostname isn't valid`;
+    expect(failures).toEqual([line]);
+    expect(text).toContain(
+      `  deploy failures, version drift, supervision given up, brain messages the Agent refused:\n    ${line}`,
+    );
+  });
+
+  test("a cloud purchase done with a problem is a failure, with its problem; another intent's isn't one", () => {
+    const problem = "bought as pserv-1-0: a server off the network held pserv-1";
+    cleanRun({
+      fast: () =>
+        fastData({
+          intents: [
+            intent("buyServer(pserv-1, 8)", { done: true, problem }),
+            intent("travel(Aevum)", { done: true, problem: "odd" }),
+          ],
+        }),
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([`cloud server purchase done with a problem: buyServer(pserv-1, 8): ${problem}`]);
+    expect(text).toContain(`    buyServer(pserv-1, 8): done after 1 try (sim): ${problem}; done by ${at(10 * SECOND)}`);
+    expect(text).toContain(
+      "  cloud server purchases done with a problem:\n    cloud server purchase done with a problem: buyServer(pserv-1, 8)",
+    );
+  });
+});
 /**
  * A run with what the ceilings need (#196): zer0 rooted with 16 GB at hacking 150, a medium snapshot every 10 s with
  * the player's skills and multipliers, and hacking earning `earning` $ a second, by the slow snapshots' money sources
@@ -1011,6 +1111,146 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(report().text).toContain(
       "  backdoors (the hacker factions' servers, for their invitations):\n    no medium snapshot",
     );
+  });
+});
+
+describe("factions and their work (#203)", () => {
+  const CHOICE = {
+    faction: "CyberSec",
+    workType: "hacking",
+    augmentation: "Neurotrainer I",
+    reputation: 2,
+    reputationNeeded: 1_000,
+    reputationPerSecond: 0.5,
+    etaSeconds: 1_996,
+  };
+  /**
+   * A 20-minute run: the brain's work for CyberSec chosen at 1 min (unless `chosenAtMs` is null), CyberSec joined at 30 s,
+   * and a slow snapshot each minute (but those `skipSlow` leaves out) with CyberSec's reputation `reputation(minute)`.
+   */
+  function factionRun({
+    reputation,
+    chosenAtMs = MINUTE,
+    skipSlow = () => false,
+    invitations = [],
+  }: {
+    reputation: (minute: number) => number;
+    chosenAtMs?: number | null;
+    skipSlow?: (minute: number) => boolean;
+    invitations?: string[];
+  }) {
+    event(0, "brainStarted", { release: "r" });
+    if (chosenAtMs !== null) event(chosenAtMs, "factionWorkChosen", CHOICE);
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      snapshot(
+        "medium",
+        offsetMs,
+        mediumData({ money: offsetMs, factions: offsetMs >= 30 * SECOND ? ["CyberSec"] : [] }),
+      );
+    }
+    for (let minute = 1; minute <= RUN_MS / MINUTE; minute++) {
+      if (skipSlow(minute)) continue;
+      const joined = [{ name: "CyberSec", reputation: reputation(minute), favor: 0 }];
+      snapshot("slow", minute * MINUTE, slowData([], {}, {}, factionState({ joined, invitations })));
+    }
+  }
+
+  test("the joins, the invitations left, each choice and why, and the reputation gained: PASS", () => {
+    // 0.5/s is 30 a minute: on track.
+    factionRun({ reputation: (minute) => 2 + (minute - 1) * 30, invitations: ["Sector-12"] });
+    event(10 * MINUTE + 1, "factionWorkChosen", {
+      ...CHOICE,
+      augmentation: "BitWire",
+      reputation: 1_000,
+      etaSeconds: 5_500,
+    });
+    event(15 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    const { text, failures } = report();
+    expect(text).toContain(
+      "  factions (joins, and the brain's faction work):\n" +
+        `    joined: CyberSec by ${at(30 * SECOND)}\n` +
+        `    invitations left to you (factions with enemies): Sector-12 (first seen ${at(MINUTE)})\n` +
+        "    the brain's faction work, as chosen:\n" +
+        `      ${at(MINUTE)}  hacking for CyberSec, for Neurotrainer I (reputation 2 of 1,000, 0.50/s: about 33 min)\n` +
+        `      ${at(10 * MINUTE + 1)}  hacking for CyberSec, for BitWire (reputation 1,000 of 1,000, 0.50/s: about 1.5 h)\n` +
+        `      ${at(15 * MINUTE + 1)}  stopped (your work on the dashboard)\n` +
+        // Minutes 1 to 15: 14 rises of 30, the work on.
+        "    reputation gained with the brain's work on it: CyberSec +420\n",
+    );
+    expect(text).toContain("no slow snapshot gap over 3 min):\n    none");
+    // Actions, not the window's events.
+    expect(text).not.toContain("factionWorkChosen");
+    expect(text).not.toContain("factionWorkStopped");
+    expect(failures).toEqual([]);
+  });
+
+  test("none chosen, none joined: said so", () => {
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    snapshot("medium", 10 * SECOND, mediumData({ money: 1 }));
+    const { text } = report();
+    expect(text).toContain(
+      "    joined: none\n    invitations left to you (factions with enemies): none\n" +
+        "    the brain's faction work, as chosen:\n      none\n    reputation gained with the brain's work on it: none",
+    );
+  });
+
+  test("stalled: under half the work's rate over 10 minutes, from the first such window's start: FAIL", () => {
+    // On track to minute 4, then 10 a minute (under 15, half of 30), to the end: the window from minute 2 is the first
+    // under it (60 to 200 by minute 12, under 150).
+    factionRun({ reputation: (minute) => (minute <= 4 ? minute * 30 : 120 + (minute - 4) * 10) });
+    const { text, failures } = report();
+    const line =
+      `faction work stalled: CyberSec's reputation rose under half the hacking work's 0.50/s from ${at(2 * MINUTE)} to ` +
+      `${at(20 * MINUTE)} (18 min), with the brain's work for it; still under it at the last slow snapshot`;
+    expect(text).toContain(`    ${line}`);
+    expect(failures).toEqual([line]);
+  });
+
+  test("not stalled: a 4-minute dip in work that's otherwise on track, as each 10 minutes still earns half its rate", () => {
+    // 30 a minute (0.5/s), but nothing from minute 8 to 11: 180 over any 10 minutes, over the 150 that counts.
+    factionRun({ reputation: (minute) => 30 * (minute - Math.max(0, Math.min(minute, 11) - 7)) });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not stalled with no choice stored (the owner's work, or the switch off)", () => {
+    factionRun({ reputation: () => 5, chosenAtMs: null });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not stalled across a gap in the slow snapshots, which starts the clock again", () => {
+    // Flat throughout, but a 5-minute gap at minutes 8 to 12: 7 minutes flat before, 8 after.
+    factionRun({ reputation: () => 5, skipSlow: (minute) => minute >= 8 && minute <= 12 });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("stale readings that jump at the page's 10-minute refresh are a stall all the same", () => {
+    factionRun({ reputation: (minute) => 100 + 25 * Math.floor(minute / 10) });
+    expect(report().failures).toEqual([expect.stringContaining(`from ${at(MINUTE)} to ${at(20 * MINUTE)}`)]);
+  });
+
+  test("the stretch starts where the first window under the rate starts: work that stops at minute 10, from minute 6", () => {
+    // On track to minute 10, then 1 a minute: the window from minute 5 (150) to 15 (305) still earns 155; the one from
+    // minute 6 (180 to 306) is the first under 150.
+    factionRun({ reputation: (minute) => (minute <= 10 ? minute * 30 : 300 + (minute - 10)) });
+    expect(report().failures).toEqual([
+      expect.stringContaining(`from ${at(6 * MINUTE)} to ${at(20 * MINUTE)} (14 min)`),
+    ]);
+  });
+
+  test("not stalled across a stop and a choice again: the clock starts with the new choice", () => {
+    // Flat from minute 1 to 14: 13 minutes, but stopped and chosen again at 5 min, so 8 from the next slow snapshot.
+    factionRun({ reputation: () => 5, skipSlow: (minute) => minute > 14 });
+    event(5 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    event(5 * MINUTE + 2, "factionWorkChosen", CHOICE);
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not stalled across a brain start, which ends the brain's choice", () => {
+    factionRun({ reputation: () => 5 });
+    event(6 * MINUTE, "brainStarted", { release: "r" });
+    expect(report().failures).toEqual([]);
   });
 });
 

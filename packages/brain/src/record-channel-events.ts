@@ -1,5 +1,11 @@
 import { type Clock, ControlChannel } from "@bitburner-agent/bridge";
-import { type FastSnapshotData, type HandledDialog, MAX_DIALOG_TEXT_LENGTH } from "@bitburner-agent/core";
+import {
+  type FastSnapshotData,
+  type HandledDialog,
+  MAX_DIALOG_TEXT_LENGTH,
+  MAX_REFUSED_REASON_LENGTH,
+  type RefusedBrainMessage,
+} from "@bitburner-agent/core";
 import { FACTION_STATE_READ_EVENT_KIND, FACTION_STATE_UNREAD_EVENT_KIND, factionStatusOf } from "./faction-state.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 import { reportedPromotion } from "./work.ts";
@@ -21,6 +27,16 @@ function restartNoteIn(data: unknown): { outcome: string; reason: string; atMs: 
     return null;
   }
   return { outcome, reason: reason.slice(0, MAX_DIALOG_TEXT_LENGTH), atMs };
+}
+
+/** The event a brain message the Agent refused is stored as (#194's review): its reason and count. */
+export const MESSAGE_REFUSED_EVENT_KIND = "messageRefused";
+
+/** The brain's last message the Agent refused, from a fast snapshot, if well formed (the Agent's word), else null. */
+export function reportedRefusal(data: unknown): RefusedBrainMessage | null {
+  const refused = (data as Partial<FastSnapshotData> | null)?.refusedMessage;
+  if (typeof refused?.reason !== "string" || !Number.isSafeInteger(refused.count)) return null;
+  return { reason: refused.reason.slice(0, MAX_REFUSED_REASON_LENGTH), count: refused.count };
 }
 
 /**
@@ -64,7 +80,9 @@ export function brainChannel({
  * Stores everything the control channel reports: snapshots in their table, the rest as events, and each of the game's
  * dialogs a fast snapshot says the Agent handled as a `gameDialog` event (#143). A promotion a fast snapshot's work
  * reports (#155) is a `workPromotion` event, and a line for `log`, once: the work outcome carries the latest one
- * snapshot after snapshot, so one already stored, after a brain restart too, isn't stored again. Each record's release
+ * snapshot after snapshot, so one already stored, after a brain restart too, isn't stored again. A brain message the
+ * Agent refused (#194's review) is a `messageRefused` event and a line for `log`, once each: the fast snapshot carries
+ * the last one, with its count, until the Agent takes a desired state again. Each record's release
  * is the brain's own plus the deployment of the Agent connected when it arrived, or `none` while no Agent is
  * (architecture §7). A slow snapshot whose faction state couldn't be read (#197) is a `factionStateUnread` event, and a
  * line for `log`, each time the problem changes, and `factionStateRead` once it's read again; after a brain restart, the
@@ -82,6 +100,7 @@ export function recordChannelEvents(
   let connectedDeploymentId = "none";
   const [lastStored] = store.recentEvents({ environment, limit: 1, kinds: [WORK_PROMOTION_EVENT_KIND] });
   let lastPromotion = JSON.stringify(reportedPromotion(lastStored?.detail));
+  let lastRefusal = "null";
   const [lastFactionEvent] = store.recentEvents({
     environment,
     limit: 1,
@@ -93,7 +112,10 @@ export function recordChannelEvents(
       ? String((lastFactionEvent.detail as { problem?: unknown } | null)?.problem)
       : null;
   channel.subscribe((event) => {
-    if (event.type === "agentConnected") connectedDeploymentId = event.deploymentId;
+    if (event.type === "agentConnected") {
+      connectedDeploymentId = event.deploymentId;
+      lastRefusal = "null";
+    }
     const context = { environment, release: `${brainRelease}+${connectedDeploymentId}` };
     if (event.type === "snapshotReceived") {
       const { agentSessionId, tier, sequenceNumber, gameTimeMs, data } = event.snapshot;
@@ -123,6 +145,15 @@ export function recordChannelEvents(
           store.recordEvent(context, { atMs: event.atMs, kind: WORK_PROMOTION_EVENT_KIND, detail: promotion });
           log(`the Agent took a promotion at ${promotion.company}: ${promotion.from} to ${promotion.to}`);
         }
+        const refusal = reportedRefusal(data);
+        if (refusal !== null && JSON.stringify(refusal) !== lastRefusal) {
+          store.recordEvent(context, { atMs: event.atMs, kind: MESSAGE_REFUSED_EVENT_KIND, detail: refusal });
+          log(
+            `the Agent REFUSED the brain's message (${refusal.count} so far), so it acts on the last one it took: ` +
+              refusal.reason,
+          );
+        }
+        lastRefusal = JSON.stringify(refusal);
       }
       if (tier === "slow") {
         // Only unread changes it: one read (or read with the page not put back) clears it; one skipped, or from an

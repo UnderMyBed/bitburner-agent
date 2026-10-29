@@ -15,15 +15,14 @@
 import { type FactionState, NEUROFLUX_GOVERNOR } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import {
-  casinoShown,
   type FactionGameFacts,
   type FactionPageMemory,
   type FactionReadContext,
-  factionStatePageProblems,
-  focusedOnWork,
+  pageMustStayProblem,
   readFactionStateOnPage,
   readMovesThePage,
   sidebarFacts,
+  withWorkedReputation,
   workedFactionReputation,
 } from "../page/faction-state-page.ts";
 import { openGamePage } from "../page/game-page.ts";
@@ -65,16 +64,13 @@ export async function main(ns: NS): Promise<void> {
     return reportToAgent(ns, { done: read.state !== null, problem, ...reportAlso() });
   }
   // Skipped, which isn't a problem: no sidebar to reach a page by, or the casino, where leaving loses a hand.
-  const skipped =
-    gamePage === null || facts === null
-      ? null
-      : casinoShown(gamePage)
-        ? factionStatePageProblems.casino
-        : !facts.sidebar && !focusedOnWork(gamePage)
-          ? factionStatePageProblems.noSidebar
-          : null;
+  const skipped = gamePage === null || facts === null ? null : pageMustStayProblem(gamePage);
   if (skipped !== null) {
-    return reportToAgent(ns, { done: false, problem: null, skipped, state: context.memory?.state ?? null });
+    // The last reading, with the worked faction's reputation from its prop where the page shows it (#203 review): a
+    // skipped read mustn't freeze it, or the brain's faction work would look stalled.
+    const last = context.memory?.state ?? null;
+    const state = last === null ? null : { ...last, joined: withWorkedReputation(last.joined, worked) };
+    return reportToAgent(ns, { done: false, problem: null, skipped, state });
   }
   await reportPageEffect(ns, deadlineMs, {
     isDone: () => read.state !== null,

@@ -7,6 +7,7 @@ import {
   activeAlerts,
   INCOME_STALLED_AFTER_MS,
 } from "../src/dashboard/alerts.ts";
+import { FACTION_WORK_STALLED_AFTER_MS } from "../src/factions.ts";
 
 const STARTED_AT_MS = 1_000_000;
 const quiet: AlertFacts = {
@@ -22,6 +23,7 @@ const quiet: AlertFacts = {
   income: null,
   factionState: null,
   backdoorsDue: [],
+  factionWorkStall: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 
@@ -156,6 +158,54 @@ describe("incomeStalled (#184): the hack loop on against a target, and money not
   });
 });
 
+describe("factionWorkStalled (#203): the brain's faction work under half its rate for 10 minutes", () => {
+  const NOW = STARTED_AT_MS + 60 * 60_000;
+  test("at 10 minutes, not before, saying the faction and for how long", () => {
+    const stall = (sinceMs: number) =>
+      activeAlerts({
+        ...quiet,
+        nowMs: NOW,
+        lastFastSnapshotAtMs: NOW,
+        factionWorkStall: { faction: "CyberSec", sinceMs, lastReadingAtMs: NOW - 30_000 },
+      });
+    expect(stall(NOW - FACTION_WORK_STALLED_AFTER_MS + 1)).toEqual([]);
+    expect(stall(NOW - FACTION_WORK_STALLED_AFTER_MS)).toEqual([
+      {
+        name: "factionWorkStalled",
+        sinceMs: NOW - FACTION_WORK_STALLED_AFTER_MS,
+        detail:
+          "CyberSec's reputation has risen under half the work's rate for 10 min, with the brain's faction work for " +
+          "it: see the Work section's outcome",
+      },
+    ]);
+    expect(activeAlerts({ ...quiet, nowMs: NOW, lastFastSnapshotAtMs: NOW })).toEqual([]);
+  });
+
+  test("no reading of its reputation in the window (slow snapshots stopped, or each skipped): says so, not the rate", () => {
+    const stall = { faction: "CyberSec", sinceMs: NOW - 11 * 60_000, lastReadingAtMs: NOW - 11 * 60_000 };
+    expect(activeAlerts({ ...quiet, nowMs: NOW, lastFastSnapshotAtMs: NOW, factionWorkStall: stall })).toEqual([
+      {
+        name: "factionWorkStalled",
+        sinceMs: NOW - 11 * 60_000,
+        detail:
+          "no reading of CyberSec's reputation for 11 min, with the brain's faction work for it: no slow snapshot, or " +
+          "each one's faction state skipped (see the Factions section)",
+      },
+    ]);
+  });
+
+  test("last in the order, after backdoorOverdue", () => {
+    const names = activeAlerts({
+      ...quiet,
+      nowMs: NOW,
+      lastFastSnapshotAtMs: NOW,
+      backdoorsDue: [{ hostname: "CSEC", sinceMs: STARTED_AT_MS }],
+      factionWorkStall: { faction: "CyberSec", sinceMs: STARTED_AT_MS, lastReadingAtMs: NOW - 30_000 },
+    }).map((alert) => alert.name);
+    expect(names.slice(-2)).toEqual(["backdoorOverdue", "factionWorkStalled"]);
+  });
+});
+
 test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread, since the first of them", () => {
   const sinceMs = STARTED_AT_MS + 5_000;
   const unread = (unreadInARow: number, backend: string | null = "ui") => ({
@@ -177,4 +227,60 @@ test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread,
   expect(activeAlerts(unread(3, null))[0]?.detail).toBe(
     "the faction state couldn't be read in the last 3 slow snapshots in a row: no game page to read it through",
   );
+});
+
+describe("cloudServerProblem (#194): a cloud purchase the Agent reported done with a problem", () => {
+  const problem = "buyServer(pserv-0, 64): bought as pserv-0-0: a server off the network held pserv-0";
+
+  test("holds while the controller has one noted, saying what and how to go on", () => {
+    expect(activeAlerts({ ...quiet, cloudServerProblem: problem })).toEqual([
+      {
+        name: "cloudServerProblem",
+        sinceMs: quiet.nowMs,
+        detail:
+          "a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and " +
+          `on: ${problem}`,
+      },
+    ]);
+    expect(names({ ...quiet, cloudServerProblem: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after incomeStalled, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    const stalled = {
+      hackLoopTarget: "zer0",
+      income: { money: 1, lastRiseAtMs: quiet.nowMs - INCOME_STALLED_AFTER_MS - 1 },
+    };
+    expect(names({ ...quiet, ...stalled, cloudServerProblem: problem, intentOutcomes: [stuck] })).toEqual([
+      "incomeStalled",
+      "cloudServerProblem",
+      "intentStuck",
+    ]);
+  });
+});
+
+describe("messageRefused (#194's review): the Agent refused the brain's last message", () => {
+  test("holds while the newest fast snapshot says so, with the count and the reason", () => {
+    const refusedMessage = { reason: "an intent's hostname isn't valid", count: 3 };
+    expect(activeAlerts({ ...quiet, refusedMessage })).toEqual([
+      {
+        name: "messageRefused",
+        sinceMs: quiet.lastFastSnapshotAtMs,
+        detail:
+          "the Agent refused the brain's message (3 so far), so it acts on the last one it took: an intent's " +
+          "hostname isn't valid",
+      },
+    ]);
+    expect(names({ ...quiet, refusedMessage: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after cloudServerProblem, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    const refusedMessage = { reason: "x", count: 1 };
+    expect(names({ ...quiet, cloudServerProblem: "p", refusedMessage, intentOutcomes: [stuck] })).toEqual([
+      "cloudServerProblem",
+      "messageRefused",
+      "intentStuck",
+    ]);
+  });
 });

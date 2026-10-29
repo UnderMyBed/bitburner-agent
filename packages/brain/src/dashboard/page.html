@@ -47,12 +47,16 @@
     <h2>Home RAM</h2><div></div><button type="button">Stop upgrading home RAM</button>
     <div class="bad" id="home-ram-problem" hidden></div>
   </section>
+  <section id="cloud-servers">
+    <h2>Cloud servers</h2><div></div><button type="button">Stop buying cloud servers</button>
+    <div class="bad" id="cloud-servers-problem" hidden></div>
+  </section>
   <section id="intents">
     <h2>Intents</h2><table></table>
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>buyServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -93,7 +97,11 @@
     </form>
     <div class="bad" id="work-problem" hidden></div>
   </section>
-  <section id="factions"><h2>Factions</h2><div></div><table></table></section>
+  <section id="factions">
+    <h2>Factions</h2><div id="faction-rule"></div><button type="button">Stop the brain's faction work</button>
+    <div class="bad" id="faction-work-problem" hidden></div>
+    <div id="faction-state"></div><table></table>
+  </section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -109,6 +117,12 @@ let enableHackLoopNext = false;
 let enableProgramsNext = false;
 /** What home RAM's switch sends next (#138), likewise. */
 let enableHomeRamNext = false;
+/** What cloud servers' switch sends next (#194), likewise. */
+let enableCloudServersNext = false;
+/** What the brain's faction work's switch sends next (#203), likewise. */
+let enableFactionWorkNext = false;
+/** Whose work the Work section shows (#203): its stop button turns the brain's faction work off while it's the brain's. */
+let workSource = null;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -268,6 +282,34 @@ function render(status) {
   );
   document.querySelector("#home-ram button").textContent = homeRam.enabled ? "Stop upgrading home RAM" : "Start upgrading home RAM";
 
+  const cloud = status.cloudServers;
+  enableCloudServersNext = !cloud.enabled;
+  const money = (amount) => `$${Math.round(amount).toLocaleString()}`;
+  const buyingText = (buying) =>
+    buying.action === "buyServer"
+      ? `buying ${buying.hostname} with ${buying.ram} GB for ${money(buying.price)}`
+      : `upgrading ${buying.hostname} to ${buying.ram} GB for ${money(buying.price)}`;
+  const cloudText = !cloud.enabled
+    ? "not buying"
+    : cloud.waiting
+      ? "waiting for the Agent's snapshots"
+      : cloud.buying !== null
+        ? `${buyingText(cloud.buying)}, paid back in ${Math.ceil(cloud.buying.paybackMs / 60_000)} min`
+        : cloud.waitingFor !== null
+          ? `waiting for ${cloud.waitingFor}`
+          : "all at the most RAM";
+  const cloudRam = cloud.servers.reduce((total, server) => total + server.ram, 0);
+  document.querySelector("#cloud-servers div").replaceChildren(
+    element("div", `Cloud servers: ${cloudText}`, cloud.problem !== null ? "bad" : cloud.enabled ? "ok" : "muted"),
+    element(
+      "div",
+      cloud.servers.length === 0
+        ? "Owned: none"
+        : `Owned: ${cloud.servers.length}, ${cloudRam.toLocaleString()} GB: ${cloud.servers.map((server) => `${server.hostname} ${server.ram} GB`).join(", ")}`,
+    ),
+  );
+  document.querySelector("#cloud-servers button").textContent = cloud.enabled ? "Stop buying cloud servers" : "Start buying cloud servers";
+
   // With the backend of the last try (#145), unless an older Agent didn't say.
   const via = (outcome) => (outcome.backend === null || outcome.backend === undefined ? "" : ` via ${outcome.backend}`);
   const outcomeText = (outcome) =>
@@ -310,16 +352,22 @@ function render(status) {
         : work.kind === "class"
           ? className(work)
           : `${work.workType} work for ${work.faction}`;
+  // Whose work it is (#203): the owner's, or the brain's faction work (the Factions section says why).
+  const whose = status.work.source === "brain" ? "The brain's: " : "Yours: ";
   const workText =
     desired === null
       ? "Not managed: the game's work is left as it is."
-      : `${workName(desired)}, ${desired.focus ? "focused" : "unfocused"}: ` +
+      : `${whose}${workName(desired)}, ${desired.focus ? "focused" : "unfocused"}: ` +
         (workOutcome === null
           ? "not reported yet"
           : `${workOutcome.converged ? "converged" : "not converged"}${via(workOutcome)}` +
             (workOutcome.problem === null ? "" : ` (${workOutcome.problem})`) +
             (workOutcome.promotion ? `; promoted from ${workOutcome.promotion.from} to ${workOutcome.promotion.to}` : ""));
   document.querySelector("#work div").replaceChildren(element("div", workText, desired === null ? "muted" : "ok"));
+  // Clearing your work would hand it to the brain's faction work, so while that's showing, the button stops it instead.
+  workSource = status.work.source;
+  document.querySelector("#stop-work").textContent =
+    workSource === "brain" ? "Stop the brain's faction work" : "Stop managing work";
 
   // The faction state (#197): each joined faction's reputation and favour, the invitations and the queued
   // augmentations, from the newest slow snapshot; or why they couldn't be read.
@@ -351,7 +399,34 @@ function render(status) {
                 element("div", `Queued augmentations: ${queueText(factions.state.queuedAugmentations)}`),
               ]),
         ];
-  document.querySelector("#factions div").replaceChildren(...factionLines);
+  document.querySelector("#faction-state").replaceChildren(...factionLines);
+
+  // The brain's joins and faction work (#203): the join under way, the invitations left to you, and its choice and why.
+  const rule = status.factionWork;
+  enableFactionWorkNext = !rule.enabled;
+  const eta = (seconds) =>
+    seconds < 90 ? `${Math.max(1, Math.round(seconds))} s` : seconds < 5400 ? `${Math.round(seconds / 60)} min` : `${(seconds / 3600).toFixed(1)} h`;
+  const choiceText = (choice) =>
+    `${choice.workType} for ${choice.faction}, for ${choice.augmentation} (reputation ` +
+    `${Math.round(choice.reputation).toLocaleString()} of ${Math.round(choice.reputationNeeded).toLocaleString()}, ` +
+    `${choice.reputationPerSecond.toFixed(2)}/s: about ${eta(choice.etaSeconds)})`;
+  const workLine = rule.waiting
+    ? "waiting for the Agent's snapshots"
+    : rule.choice !== null && rule.sent
+      ? choiceText(rule.choice)
+      : rule.choice !== null
+        ? `not sent (${rule.waitingFor}); it would be ${choiceText(rule.choice)}`
+        : `none: waiting for ${rule.waitingFor}`;
+  document.querySelector("#faction-rule").replaceChildren(
+    element("div", `The brain's faction work: ${rule.enabled ? workLine : "off"}`, rule.enabled && rule.sent ? "ok" : "muted"),
+    element("div", `Joining: ${rule.joining ?? "none"}`),
+    ...rule.leftToOwner.map((left) =>
+      element("div", `${left.faction}'s invitation is left to you: joining it bans ${left.bans.join(", ")}`, "muted"),
+    ),
+  );
+  document.querySelector("#factions button").textContent = rule.enabled
+    ? "Stop the brain's faction work"
+    : "Start the brain's faction work";
   const joined = factions?.state?.joined ?? [];
   document.querySelector("#factions table").replaceChildren(
     ...(factions?.state && joined.length === 0
@@ -431,6 +506,12 @@ document.querySelector("#programs button").addEventListener("click", () =>
 document.querySelector("#home-ram button").addEventListener("click", () =>
   sendSwitch("/api/home-ram", { enabled: enableHomeRamNext }, "#home-ram-problem"),
 );
+document.querySelector("#cloud-servers button").addEventListener("click", () =>
+  sendSwitch("/api/cloud-servers", { enabled: enableCloudServersNext }, "#cloud-servers-problem"),
+);
+document.querySelector("#factions button").addEventListener("click", () =>
+  sendSwitch("/api/faction-work", { enabled: enableFactionWorkNext }, "#faction-work-problem"),
+);
 document.querySelector("#intents form").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -470,7 +551,9 @@ document.querySelector("#class-work").addEventListener("submit", (event) => {
   sendWrite("/api/work", { work }, "#work-problem", "Not set");
 });
 document.querySelector("#stop-work").addEventListener("click", () =>
-  sendWrite("/api/work", { work: null }, "#work-problem", "Not stopped"),
+  workSource === "brain"
+    ? sendSwitch("/api/faction-work", { enabled: false }, "#work-problem")
+    : sendWrite("/api/work", { work: null }, "#work-problem", "Not stopped"),
 );
 
 refresh();

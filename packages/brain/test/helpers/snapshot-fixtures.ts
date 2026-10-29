@@ -1,5 +1,17 @@
 // Snapshot data for the brain's rule and controller tests (#134, #136, #138), in the shape the Agent's workers send.
 import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import type { FactionsView } from "../../src/factions.ts";
+
+/** The brain's factions view with nothing to show (#203): for statuses built in tests that aren't about it. */
+export const QUIET_FACTIONS_VIEW: FactionsView = {
+  enabled: true,
+  waiting: true,
+  joining: null,
+  leftToOwner: [],
+  choice: null,
+  sent: false,
+  waitingFor: null,
+};
 
 type StaticServer = StaticSnapshotData["servers"][number];
 

@@ -7,10 +7,12 @@ import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
+import { readCloudServersEnabled } from "./cloud-servers.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { DesiredStateController } from "./desired-state.ts";
+import { readFactionWorkEnabled } from "./factions.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
 import { readHomeRamEnabled } from "./home-ram.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
@@ -67,7 +69,7 @@ try {
     clock: systemClock,
   });
   // What the brain wants running in the game (#134): set before the channel listens, so the first Agent is given it.
-  // It logs the backdoors it asks for, and sees installed (#195).
+  // It logs the backdoors it asks for, and sees installed (#195), and its joins and faction work (#203).
   const desiredState = new DesiredStateController({ channel, store, saveBackups, log });
   // The money's last rise (#184), for the incomeStalled alert, logged as a stall starts and ends: after the controller,
   // so each snapshot's hack loop target is set when it looks.
@@ -98,6 +100,9 @@ try {
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
   const stopRecordingBackups = recordEvents(saveBackups, store, deployerReleaseContext);
+  // The brain's faction work's choices and ends (#203), for the run report. None comes before an Agent's snapshots, and
+  // none of those before this: the control server's listen resolves before its first connection is handled.
+  const stopRecordingFactionWork = recordEvents(desiredState, store, deployerReleaseContext);
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
@@ -138,10 +143,13 @@ try {
         hackLoop: desiredState.hackLoopView(),
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
+        cloudServers: desiredState.cloudServersView(),
         intents: desiredState.intentsView(),
         work: desiredState.workView(),
         income: incomeWatch.facts(),
         backdoorsDue: desiredState.backdoorsDue(),
+        factionWork: desiredState.factionsView(),
+        factionWorkStall: desiredState.factionWorkStall(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -160,6 +168,14 @@ try {
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
       log(`upgrading home RAM turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setCloudServersEnabled: (enabled) => {
+      desiredState.setCloudServersEnabled(enabled);
+      log(`buying cloud servers turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setFactionWorkEnabled: (enabled) => {
+      desiredState.setFactionWorkEnabled(enabled);
+      log(`the brain's faction work turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     addIntent: (request) => {
       const added = desiredState.addManualIntent(request);
@@ -190,7 +206,9 @@ try {
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
   log(
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
-      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+      `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
+      `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"} ` +
+      "(the dashboard's switches)",
   );
   log(
     supervising
@@ -208,6 +226,7 @@ try {
     stopRecordingDeploys();
     stopLoggingDeploys();
     stopRecordingBackups();
+    stopRecordingFactionWork();
     stopLoggingBackups();
     await dashboardServer.close();
     await remoteFileApiServer.close();

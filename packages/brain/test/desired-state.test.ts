@@ -13,10 +13,12 @@ import {
   type IntentOutcome,
   type IntentRequest,
   intentId,
+  PORT_OPENER_PROGRAMS,
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
@@ -580,18 +582,18 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
   });
 
-  test("full at 98, leaving room for the purchase and the backdoor (#195) in the protocol's 100: the 99th is refused", () => {
+  test("full at 97, leaving room for the purchase, the backdoor (#195) and the join (#203) in the protocol's 100", () => {
     const controller = new DesiredStateController({ channel, store });
     const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
-    for (let index = 0; index < 98; index += 1) {
+    for (let index = 0; index < 97; index += 1) {
       const args = { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] };
       expect(controller.addManualIntent({ action: "upgradeHomeRam", args })).toMatchObject({ ok: true });
     }
     expect(controller.addManualIntent({ action: "travel", args: { city: "Aevum" } })).toEqual({
       ok: false,
-      reason: "the manual queue is full: 98 intents at most",
+      reason: "the manual queue is full: 97 intents at most",
     });
-    expect(readManualIntents(store)).toHaveLength(98);
+    expect(readManualIntents(store)).toHaveLength(97);
   });
 
   test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
@@ -794,7 +796,7 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toHaveLength(100);
     expect(lastIntents(connection)?.at(-1)).toEqual(buyProgram("FTPCrack.exe"));
     expect(lines.filter((line) => line.startsWith("intents:"))).toEqual([
-      "intents: the manual queue holds 99, over its 98: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
+      "intents: the manual queue holds 99, over its 97: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
     ]);
   });
 
@@ -1372,6 +1374,152 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
   });
 });
 
+describe("factions and their work (#203)", () => {
+  const JOIN_CYBERSEC = intent({ action: "joinFaction", args: { faction: "CyberSec" } });
+  /** A medium snapshot with every skill the work's rate reads: hacking 55, the factions joined. */
+  const withSkills = (factions: string[] = []) => {
+    const data = mediumData(55, { n00dles: true }, { factions });
+    data.player = {
+      ...data.player,
+      skills: { hacking: 55, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+      mults: { faction_rep: 1 },
+    };
+    return data;
+  };
+  /** A slow snapshot with CyberSec joined at `reputation`, or invited. */
+  const factionsSlow = ({ joined, invited = [] as string[] }: { joined?: number; invited?: string[] }) => {
+    const data = slowData(1);
+    data.factions = {
+      backend: "sim",
+      state: {
+        joined: joined === undefined ? [] : [{ name: "CyberSec", reputation: joined, favor: 0 }],
+        invitations: invited,
+        queuedAugmentations: [],
+      },
+      problem: null,
+    };
+    return data;
+  };
+  const lastState = (connection: MemoryConnection) =>
+    connection
+      .sentMessages()
+      .filter((message) => message.type === "desiredState")
+      .at(-1) as unknown as DesiredState | undefined;
+  const HACKING_FOR_CYBERSEC = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
+
+  function connected() {
+    store.setSetting("hackLoop.enabled", "false");
+    const lines: string[] = [];
+    const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const events: unknown[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    send(connection, "static", network);
+    return { controller, connection, lines, events };
+  }
+
+  test("an invitation joined, as source join, after the backdoor; until the medium snapshot shows it joined", () => {
+    const { controller, connection, lines } = connected();
+    send(connection, "slow", factionsSlow({ invited: ["CyberSec", "Sector-12"] }));
+    send(connection, "medium", withSkills());
+    expect(lastState(connection)?.intents).toEqual([JOIN_CYBERSEC]);
+    expect(controller.intentsView()).toEqual([
+      { id: JOIN_CYBERSEC.id, source: "join", outcome: null, waitingFor: null },
+    ]);
+    expect(controller.factionsView()).toMatchObject({
+      joining: "CyberSec",
+      leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+    });
+    send(connection, "medium", withSkills(["CyberSec"]));
+    expect(lastState(connection)?.intents).toEqual([]);
+    expect(lines).toContain("factions: CyberSec joined");
+    // Queued by the owner too: once, as the owner's.
+    send(connection, "slow", factionsSlow({ invited: ["NiteSec"] }));
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "NiteSec" } });
+    expect(lastState(connection)?.intents.map((each) => each.id)).toEqual(["joinFaction(NiteSec)"]);
+    expect(controller.intentsView().map(({ source }) => source)).toEqual(["manual"]);
+  });
+
+  test("the brain's work sent with none of the owner's: its view says whose, and its choice is stored", () => {
+    const { controller, connection, lines, events } = connected();
+    send(connection, "medium", withSkills(["CyberSec"]));
+    send(connection, "slow", factionsSlow({ joined: 0 }));
+    expect(lastState(connection)?.work).toEqual(HACKING_FOR_CYBERSEC);
+    expect(controller.workView()).toEqual({ desired: HACKING_FOR_CYBERSEC, source: "brain", outcome: null });
+    expect(controller.factionsView()).toMatchObject({
+      enabled: true,
+      sent: true,
+      choice: { augmentation: "Neurotrainer I" },
+    });
+    expect(events).toEqual([
+      expect.objectContaining({ type: "factionWorkChosen", faction: "CyberSec", augmentation: "Neurotrainer I" }),
+    ]);
+    expect(lines.filter((line) => line.startsWith("faction work:"))).toHaveLength(1);
+  });
+
+  test("the owner's work wins; the switch off sends none of the brain's, kept in the store; on again, sent", () => {
+    const { controller, connection, events } = connected();
+    send(connection, "medium", withSkills(["CyberSec"]));
+    send(connection, "slow", factionsSlow({ joined: 0 }));
+    controller.setWork({ kind: "crime", crime: "Shoplift" });
+    expect(lastState(connection)?.work).toEqual({ kind: "crime", crime: "Shoplift", focus: true });
+    expect(controller.workView().source).toBe("owner");
+    expect(controller.factionsView()).toMatchObject({ sent: false, waitingFor: "your work on the dashboard" });
+    controller.setWork(null);
+    expect(lastState(connection)?.work).toEqual(HACKING_FOR_CYBERSEC);
+    controller.setFactionWorkEnabled(false);
+    expect(store.getSetting("factionWork.enabled")).toBe("false");
+    expect(lastState(connection)?.work).toBeUndefined();
+    expect(controller.workView()).toEqual({ desired: null, source: null, outcome: null });
+    expect(controller.factionsView()).toMatchObject({
+      enabled: false,
+      waitingFor: "the brain's faction work is switched off",
+    });
+    // A restarted brain keeps the switch off.
+    expect(
+      new DesiredStateController({
+        channel: new ControlChannel({ token: TOKEN, clock: new ManualClock() }),
+        store,
+      }).factionsView().enabled,
+    ).toBe(false);
+    controller.setFactionWorkEnabled(true);
+    expect(lastState(connection)?.work).toEqual(HACKING_FOR_CYBERSEC);
+    expect(
+      events.map((event) => (event as { type: string; reason?: string }).reason ?? (event as { type: string }).type),
+    ).toEqual([
+      "factionWorkChosen",
+      "your work on the dashboard",
+      "factionWorkChosen",
+      "the brain's faction work is switched off",
+      "factionWorkChosen",
+    ]);
+  });
+
+  test("factionWorkStall(): the faction and since when, for the alert; none once disconnected", () => {
+    const { controller, connection } = connected();
+    send(connection, "medium", withSkills(["CyberSec"]));
+    send(connection, "slow", factionsSlow({ joined: 0 }));
+    expect(controller.factionWorkStall()).toEqual({
+      faction: "CyberSec",
+      sinceMs: expect.any(Number),
+      lastReadingAtMs: expect.any(Number),
+    });
+    connection.dropFromGameSide();
+    expect(controller.factionWorkStall()).toBeNull();
+    expect(controller.factionsView()).toMatchObject({ waiting: true, sent: false });
+  });
+
+  test("none before the connected Agent's slow snapshot, and none for a player who has joined nothing", () => {
+    const { controller, connection, events } = connected();
+    send(connection, "medium", withSkills());
+    expect(lastState(connection)?.work).toBeUndefined();
+    send(connection, "slow", factionsSlow({}));
+    expect(lastState(connection)?.work).toBeUndefined();
+    expect(controller.factionsView()).toMatchObject({ choice: null, waitingFor: "a faction to join" });
+    expect(events).toEqual([]);
+  });
+});
+
 describe("work (#151, owner decision 37)", () => {
   const HACKING_FOR_CYBERSEC = { faction: "CyberSec", workType: "hacking" };
   const sentWork = (connection: MemoryConnection) =>
@@ -1405,7 +1553,7 @@ describe("work (#151, owner decision 37)", () => {
   test("none set: none sent, so the Agent leaves the game's work alone", () => {
     const { controller, connection } = connectedWithLoopOff();
     expect(sentWork(connection)).toBeUndefined();
-    expect(controller.workView()).toEqual({ desired: null, outcome: null });
+    expect(controller.workView()).toEqual({ desired: null, source: null, outcome: null });
   });
 
   test("set on the dashboard: kept in the store, sent at once, focused by default", () => {
@@ -1495,5 +1643,280 @@ describe("work (#151, owner decision 37)", () => {
     expect(controller.workView().outcome).toEqual({ converged: true, problem: null, backend: "ui" });
     send(connection, "fast", fast({ converged: "yes" }));
     expect(controller.workView().outcome).toBeNull();
+  });
+});
+
+describe("cloud servers (#194): after the programs and home RAM, by the hack loop's measured income", () => {
+  const MINUTE = 60_000;
+  let clock: ManualClock;
+  beforeEach(() => {
+    clock = new ManualClock();
+    channel = new ControlChannel({ token: TOKEN, clock });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+  });
+  const sentPurchases = (connection: MemoryConnection) =>
+    connection
+      .sentMessages()
+      .filter((message) => message.type === "desiredState")
+      .map((message) => (message as unknown as DesiredState).intents)
+      .at(-1);
+  interface Options {
+    programs?: string[];
+    homeRam?: number;
+    cloud?: Record<string, number>;
+    noodlesRam?: number;
+  }
+  /** Every program owned, unless `programs` says which; n00dles rooted, 4 GB; home at `homeRam` GB, if given. */
+  const medium = (
+    money: number,
+    { programs = PORT_OPENER_PROGRAMS, homeRam, cloud = {}, noodlesRam = 4 }: Options = {},
+  ) => {
+    const data = mediumData(
+      1,
+      { n00dles: true, ...Object.fromEntries(Object.keys(cloud).map((hostname) => [hostname, true])) },
+      { money, hasTorRouter: true, programs, ...(homeRam === undefined ? {} : { homeRam }) },
+    );
+    for (const server of data.servers) {
+      if (server.hostname in cloud) server.maxRam = cloud[server.hostname] as number;
+      if (server.hostname === "n00dles") server.maxRam = noodlesRam;
+    }
+    return data;
+  };
+  /**
+   * The Agent connected, its static and slow snapshots in, and 10 minutes of medium snapshots, a minute apart, with
+   * money rising `perSecond` ($512) from `money` on n00dles's 4 GB: $128 a GB a second, so a GB pays back in 7.2
+   * minutes. With `endMoney`, a last snapshot 10 s on with money there (spent: not income).
+   */
+  const earning = (
+    money: number,
+    options: Options = {},
+    { perSecond = 512, endMoney = null as number | null } = {},
+  ) => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    for (let minute = 0; minute <= 10; minute++) {
+      if (minute > 0) clock.advance(MINUTE);
+      send(connection, "medium", medium(money + minute * 60 * perSecond, options));
+    }
+    if (endMoney !== null) {
+      clock.advance(10_000);
+      send(connection, "medium", medium(endMoney, options));
+    }
+    return { controller, connection, money: endMoney ?? money + 10 * 60 * perSecond };
+  };
+  const buyServer = (hostname: string, ram: number) => intent({ action: "buyServer", args: { hostname, ram } });
+  const upgradeServer = (hostname: string, ram: number) => intent({ action: "upgradeServer", args: { hostname, ram } });
+
+  test("nothing until the income spans 10 minutes; then the largest server money allows, and the view says so", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    send(connection, "medium", medium(10e6));
+    clock.advance(9 * MINUTE);
+    send(connection, "medium", medium(10e6 + 9 * 60 * 512));
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView()).toMatchObject({
+      enabled: true,
+      waiting: false,
+      buying: null,
+      waitingFor: "the hack loop's income over 10 min (measured from the medium snapshots)",
+    });
+    clock.advance(MINUTE);
+    send(connection, "medium", medium(10e6 + 10 * 60 * 512));
+    // $10.3m covers 128 GB ($7.04m).
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    expect(controller.cloudServersView()).toEqual({
+      enabled: true,
+      waiting: false,
+      servers: [],
+      buying: { action: "buyServer", hostname: "pserv-0", ram: 128, price: 7_040_000, paybackMs: 429_687.5 },
+      waitingFor: null,
+      problem: null,
+    });
+    expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+      ["buyServer(pserv-0, 128)", "purchase"],
+    ]);
+  });
+
+  test("bought, it's listed and a host; the next is the next name; at the limit, the smallest is upgraded", () => {
+    const { connection, controller, money } = earning(10e6);
+    clock.advance(10_000);
+    send(connection, "medium", medium(money - 7_040_000, { cloud: { "pserv-0": 128 } }));
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-1", 32)]);
+    expect(controller.cloudServersView().servers).toEqual([{ hostname: "pserv-0", ram: 128 }]);
+    expect(controller.hackLoopView().hosts).toEqual(["n00dles", "pserv-0"]);
+    const full = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`pserv-${index}`, 64]));
+    clock.advance(10_000);
+    send(connection, "medium", medium(10e6, { cloud: { ...full, "pserv-4": 8 } }));
+    expect(sentPurchases(connection)).toEqual([upgradeServer("pserv-4", 128)]);
+  });
+
+  test("a program or home RAM upgrade the money covers goes first; the cloud server waits, saying so", () => {
+    const { connection, controller } = earning(10e6, { programs: ["BruteSSH.exe"] });
+    expect(sentPurchases(connection)).toEqual([buyProgram("FTPCrack.exe")]);
+    expect(controller.cloudServersView()).toMatchObject({ buying: null, waitingFor: "FTPCrack.exe first" });
+  });
+
+  test("the next program waiting for money is held back if the income covers it within a minute; one further off isn't", () => {
+    // SQLInject.exe ($250m) is further off: nothing is held back.
+    const far = earning(1e6, { programs: PORT_OPENER_PROGRAMS.slice(0, 4) });
+    expect(sentPurchases(far.connection)).toEqual([buyServer("pserv-0", 16)]);
+    far.connection.dropFromGameSide();
+    // At $4,096 a second (on 32 GB), a minute brings $245,760: BruteSSH.exe ($500k), $100,000 short, is held back.
+    const near = earning(0, { programs: [], noodlesRam: 32 }, { perSecond: 4_096, endMoney: 400_000 });
+    expect(sentPurchases(near.connection)).toEqual([]);
+    expect(near.controller.cloudServersView().waitingFor).toBe(
+      "money for pserv-0 with 8 GB ($440,000, beyond $500,000 held for BruteSSH.exe)",
+    );
+  });
+
+  test("of a program and home RAM both waiting, the cheaper is what's held back", () => {
+    // FTPCrack.exe ($1.5m) and home RAM from 2 GB to 4 GB ($101,120), neither affordable at $100,000: the upgrade,
+    // within the minute's $30,720.
+    const { controller, connection } = earning(0, { programs: ["BruteSSH.exe"], homeRam: 2 }, { endMoney: 100_000 });
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      "money for pserv-0 with 8 GB ($440,000, beyond $101,120 held for home RAM to 4 GB)",
+    );
+  });
+
+  test("the hack loop off, or the switch off: none, saying why; the switch is kept in the store", () => {
+    const { controller, connection } = earning(10e6);
+    controller.setCloudServersEnabled(false);
+    expect(readCloudServersEnabled(store)).toBe(false);
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView()).toMatchObject({ enabled: false, buying: null, waitingFor: null });
+    controller.setCloudServersEnabled(true);
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    controller.setHackLoopEnabled(false);
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe("the hack loop, switched off: cloud servers only run it");
+  });
+
+  test("a purchase in flight keeps its id as money rises, so a failing one reaches intentStuck", () => {
+    const { connection, money } = earning(10e6);
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    clock.advance(10_000);
+    send(connection, "medium", medium(money + 20e6));
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+  });
+
+  test("a cloud purchase done with a problem: noted, in the view, none bought until the switch goes off and on", () => {
+    const { controller, connection, money } = earning(10e6);
+    const problem = "bought as pserv-0-0: a server off the network held pserv-0";
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: true, tries: 1, problem, backend: "ui" }],
+    });
+    expect(controller.cloudServersView().problem).toBe(`buyServer(pserv-0, 128): ${problem}`);
+    expect(sentPurchases(connection)).toEqual([]);
+    clock.advance(10_000);
+    send(connection, "medium", medium(money, { cloud: { "pserv-0-0": 128 } }));
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      `you to look at buyServer(pserv-0, 128): ${problem}, then turn cloud servers off and on again`,
+    );
+    controller.setCloudServersEnabled(false);
+    controller.setCloudServersEnabled(true);
+    expect(controller.cloudServersView().problem).toBeNull();
+    // A fast snapshot from before the Agent had the new state, still showing it: not noted again.
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: true, tries: 1, problem, backend: "ui" }],
+    });
+    expect(controller.cloudServersView().problem).toBeNull();
+    // The renamed one's name is passed over.
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-1", 128)]);
+  });
+
+  test("the reserve looks at what's short: a $250m program $20,000 away is held back, however far its whole price", () => {
+    // SQLInject.exe ($250m), short by $20,000, less than a minute of $512 a second ($30,720).
+    const { controller, connection } = earning(
+      0,
+      { programs: PORT_OPENER_PROGRAMS.slice(0, 4) },
+      { endMoney: 249_980_000 },
+    );
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      "money for pserv-0 with 8 GB ($440,000, beyond $250,000,000 held for SQLInject.exe)",
+    );
+  });
+
+  test("a program or home RAM switched off holds nothing back", () => {
+    const programs = earning(0, { programs: [], noodlesRam: 32 }, { perSecond: 4_096, endMoney: 450_000 });
+    expect(sentPurchases(programs.connection)).toEqual([]);
+    programs.controller.setProgramsEnabled(false);
+    expect(sentPurchases(programs.connection)).toEqual([buyServer("pserv-0", 8)]);
+    programs.connection.dropFromGameSide();
+    const homeRam = earning(0, { programs: PORT_OPENER_PROGRAMS, homeRam: 2 }, { endMoney: 100_000 });
+    expect(homeRam.controller.cloudServersView().waitingFor).toMatch(/held for home RAM to 4 GB/);
+    homeRam.controller.setHomeRamEnabled(false);
+    expect(homeRam.controller.cloudServersView().waitingFor).toBe("money for pserv-0 with 8 GB ($440,000)");
+  });
+
+  test("a cloud purchase not done, with a problem (not enough money, say), is no problem noted: it's tried again", () => {
+    const { controller, connection } = earning(10e6);
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: false, tries: 1, problem: "not enough money", backend: "ui" }],
+    });
+    expect(controller.cloudServersView().problem).toBeNull();
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+  });
+
+  test("the switch turned on again, without off, keeps a problem noted", () => {
+    const { controller, connection } = earning(10e6);
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: "buyServer(pserv-0, 128)", done: true, tries: 1, problem: "bought as pserv-0-0", backend: "ui" }],
+    });
+    controller.setCloudServersEnabled(true);
+    expect(controller.cloudServersView().problem).toBe("buyServer(pserv-0, 128): bought as pserv-0-0");
+  });
+
+  test("a new connection forgets the purchase in flight: chosen afresh at the money then", () => {
+    const { connection } = earning(10e6);
+    expect(sentPurchases(connection)).toEqual([buyServer("pserv-0", 128)]);
+    connection.dropFromGameSide();
+    const again = connectAgent("session-2");
+    send(again, "static", network, "session-2");
+    send(again, "slow", slowData(), "session-2");
+    for (let minute = 0; minute <= 10; minute++) {
+      if (minute > 0) clock.advance(MINUTE);
+      send(again, "medium", medium(100e6 + minute * 60 * 512), "session-2");
+    }
+    // $100.3m covers 1 TB ($56.3m), not 2 TB.
+    expect(sentPurchases(again)).toEqual([buyServer("pserv-0", 1_024)]);
+  });
+
+  test("the owner's cloud servers are never hosts, nor upgraded; they count toward the limit", () => {
+    const owners = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`box-${index}`, 8]));
+    const { controller, connection } = earning(10e6, { cloud: owners });
+    expect(controller.hackLoopView().hosts).toEqual(["n00dles"]);
+    expect(sentPurchases(connection)).toEqual([]);
+    expect(controller.cloudServersView().waitingFor).toBe(
+      "room: the game's limit of 25 cloud servers is reached with your own",
+    );
+  });
+
+  test("a disconnect forgets the income: 10 more minutes of it before the next", () => {
+    const { connection } = earning(10e6);
+    connection.dropFromGameSide();
+    const again = connectAgent("session-2");
+    send(again, "static", network, "session-2");
+    send(again, "slow", slowData(), "session-2");
+    send(again, "medium", medium(20e6), "session-2");
+    expect(sentPurchases(again)).toEqual([]);
   });
 });

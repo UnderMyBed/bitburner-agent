@@ -119,10 +119,14 @@ export {
 export {
   BUY_SERVER_WORKER_NAME,
   CLOUD_SERVER_MAX_RAM,
+  CLOUD_SERVER_NAME_PREFIX,
+  isBrainCloudServerName,
   isCloudServerHostname,
   isCloudServerRam,
+  isHacknetServerName,
   MAX_CLOUD_SERVER_HOSTNAME_LENGTH,
   RESERVED_HOSTNAME_PREFIXES,
+  UPGRADE_SERVER_WORKER_NAME,
   WORLD_DAEMON,
 } from "./cloud-servers.ts";
 export {
@@ -190,6 +194,17 @@ export {
   type JoinedFaction,
   parseFactionState,
 } from "./faction-state.ts";
+export {
+  FACTION_WORK_CYCLES_PER_SECOND,
+  factionReputationPerCycle,
+  factionReputationPerSecond,
+  HACKING_MULTIPLIERS,
+  hackingSkillValue,
+  hackingValue,
+  MAX_SKILL_LEVEL,
+  UNFOCUSED_WORK_BONUS,
+  type WorkingPerson,
+} from "./faction-work.ts";
 export {
   daedalusAugmentationsRequired,
   FACTION_ENEMIES,
@@ -260,8 +275,10 @@ export {
   type FastWorkerData,
   type HandledDialog,
   MAX_DIALOG_TEXT_LENGTH,
+  MAX_REFUSED_REASON_LENGTH,
   type MediumSnapshotData,
   RESTART_NOTE_STORAGE_KEY,
+  type RefusedBrainMessage,
   type RestartNote,
   type SlowSnapshotData,
   type StaticSnapshotData,

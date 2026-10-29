@@ -278,6 +278,44 @@ test("the faction state unread (#197): a factionStateUnread event and a log line
   store.close();
 });
 
+test("a brain message the Agent refused (#194's review): a messageRefused event and a log line, once each", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const lines: string[] = [];
+  const channel = new ControlChannel({ token: TOKEN, clock: fixedClock });
+  recordChannelEvents(channel, store, { environment: "E2", brainRelease: "v0.2.0", log: (line) => lines.push(line) });
+  const page = connectionFromTest();
+  channel.accept(page.connection);
+  const message = (type: string, fields: object) =>
+    page.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, type, ...fields } as never));
+  message("hello", {
+    token: TOKEN,
+    deploymentId: "deployment-a",
+    agentSessionId: "session-1",
+    game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+  });
+  const first = { reason: "an intent's hostname isn't valid", count: 1 };
+  const second = { reason: "an intent's hostname isn't valid", count: 2 };
+  // None, the first refusal snapshot after snapshot, one not well formed, cleared, then a second.
+  for (const [index, refusedMessage] of [null, first, first, { reason: 7, count: 1 }, null, second].entries()) {
+    message("snapshot", {
+      agentSessionId: "session-1",
+      tier: "fast",
+      sequenceNumber: index + 1,
+      gameTimeMs: 1_000,
+      data: { degradedTiers: [], pageHeapUsedBytes: null, game: null, intents: [], refusedMessage },
+    });
+  }
+  const refused = store.events({ environment: "E2" }).filter((event) => event.kind === "messageRefused");
+  expect(refused.map((event) => event.detail)).toEqual([first, second]);
+  expect(lines).toEqual([
+    "the Agent REFUSED the brain's message (1 so far), so it acts on the last one it took: an intent's hostname isn't valid",
+    "the Agent REFUSED the brain's message (2 so far), so it acts on the last one it took: an intent's hostname isn't valid",
+  ]);
+  store.close();
+});
+
 test("a restart that couldn't type (#212): a restartFellBack event and a log line, from the fast snapshot's note", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
   directories.push(directory);
