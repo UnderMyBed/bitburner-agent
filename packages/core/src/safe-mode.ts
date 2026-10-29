@@ -4,10 +4,12 @@
  * format, so the next Agent (after a reload, an install, a new deployment) has it too. In-game code bundles this.
  */
 import {
+  type BatcherState,
   type DesiredState,
   isSafeIntegerAtLeast,
   MAX_SAFE_MODE_TTL_MS,
   type ParsedMessage,
+  parseBatcherState,
   parseHackLoop,
 } from "./control-protocol.ts";
 
@@ -19,6 +21,8 @@ import { parseWork, type Work } from "./work.ts";
 /** What's kept: the activities of the last desired state, never its intents, and when it stops counting. */
 export interface SafeModeState {
   hackLoop: DesiredState["hackLoop"];
+  /** The batcher (#205), or null: none. A file from before it has none. */
+  batcher: BatcherState | null;
   /** The work wanted, or null: the brain didn't manage it, so neither does safe mode. */
   work: Work | null;
   /** The brain's `ttlMs`: kept this long after `heardAtMs`. */
@@ -31,8 +35,8 @@ export interface SafeModeState {
 
 /** The file's text: its known fields, in a fixed order. */
 export function encodeSafeModeState(state: SafeModeState): string {
-  const { hackLoop, work, ttlMs, heardAtMs, lastAugReset } = state;
-  return JSON.stringify({ hackLoop, work, ttlMs, heardAtMs, lastAugReset });
+  const { hackLoop, batcher, work, ttlMs, heardAtMs, lastAugReset } = state;
+  return JSON.stringify({ hackLoop, batcher, work, ttlMs, heardAtMs, lastAugReset });
 }
 
 /** The file read back: its known fields only, or why it isn't valid (an older format, or someone's edit). */
@@ -49,6 +53,8 @@ export function parseSafeModeState(text: string): ParsedMessage<SafeModeState> {
   const fields = parsed as Record<string, unknown>;
   const hackLoop = parseHackLoop(fields.hackLoop);
   if (!hackLoop.ok) return hackLoop;
+  const batcher = parseBatcherState(fields.batcher, hackLoop.message);
+  if (!batcher.ok) return batcher;
   const work = parseWork(fields.work);
   if (!work.ok) return work;
   const { ttlMs, heardAtMs, lastAugReset } = fields;
@@ -65,6 +71,7 @@ export function parseSafeModeState(text: string): ParsedMessage<SafeModeState> {
     ok: true,
     message: {
       hackLoop: hackLoop.message,
+      batcher: batcher.message,
       work: work.message,
       ttlMs,
       heardAtMs,

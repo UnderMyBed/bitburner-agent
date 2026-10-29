@@ -34,6 +34,7 @@ import {
   type RefusedBrainMessage,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
+import { createBatcherActivity } from "../agent/batcher.ts";
 import { createDialogWatcher } from "../agent/dialog-watcher.ts";
 import { createEffectorRunner } from "../agent/effector-runner.ts";
 import { createFactionStateReader } from "../agent/faction-state.ts";
@@ -112,6 +113,7 @@ export async function main(ns: NS): Promise<void> {
   const intentRunner = createIntentRunner(ns, { effectorRunner });
   const workActivity = createWorkActivity(ns, { effectorRunner });
   const dialogWatcher = createDialogWatcher(ns);
+  const batcher = createBatcherActivity(ns, { deploymentId, workerRunner });
   /** The brain's last message refused, until a desired state is taken again, and the count this connection (#194). */
   let refused: RefusedBrainMessage | null = null;
   let refusedCount = 0;
@@ -127,6 +129,8 @@ export async function main(ns: NS): Promise<void> {
     workerRunner,
     intentOutcomes: () => intentRunner.outcomes(),
     workOutcome: () => workActivity.outcome(),
+    batcherHealth: () => batcher.health(),
+    batcherDeploy: () => batcher.deployReport(),
     dialogReport: () => dialogWatcher.takeReport(),
     refusedMessage: () => refused,
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
@@ -163,14 +167,21 @@ export async function main(ns: NS): Promise<void> {
       const kept = safeMode.toConverge(Date.now(), snapshotter.lastAugReset());
       if (kept === null) {
         hackLoop.forget();
+        batcher.forget();
         workActivity.forget();
       } else {
         hackLoop.desire(kept.hackLoop);
+        batcher.desire(kept.batcher);
         workActivity.desire(kept.work);
       }
     }
     await dialogWatcher.handle(roundEndsAtMs);
+    // The batcher stopped before the hack loop takes its hosts back, and started after the hack loop has left them
+    // (#211): whichever goes, its RAM is free for the other.
+    const batcherStopping = batcher.stopping();
+    if (batcherStopping) await batcher.convergeIfDue(roundEndsAtMs);
     await hackLoop.convergeIfDue(roundEndsAtMs);
+    if (!batcherStopping) await batcher.convergeIfDue(roundEndsAtMs);
     await intentRunner.runDue(roundEndsAtMs);
     await workActivity.convergeIfDue(roundEndsAtMs);
     // Clamped, so a clock that steps back can't stretch the sleep.
@@ -252,6 +263,7 @@ export async function main(ns: NS): Promise<void> {
           // Instructions come only from the brain it's connected to (#134): safe mode's kept state waits for the next
           // disconnect, and this brain sends its own.
           hackLoop.forget();
+          batcher.forget();
           workActivity.forget();
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
@@ -260,6 +272,7 @@ export async function main(ns: NS): Promise<void> {
           if (refused !== null) ns.print("agent: took the brain's desired state again");
           refused = null;
           hackLoop.desire(event.message.hackLoop);
+          batcher.desire(event.message.batcher ?? null);
           intentRunner.desire(event.message.intents);
           workActivity.desire(event.message.work ?? null);
           safeMode.heard(event.message, Date.now(), snapshotter.lastAugReset());

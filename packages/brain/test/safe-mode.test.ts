@@ -142,7 +142,14 @@ test("the brain down for an hour, with a reload in the middle: the loops and the
   // The file has the state's activities, never its intents.
   const keptText = await fileOnHome(fresh, DESIRED_STATE_FILE);
   // The raw file: the parse would drop an intents field.
-  expect(Object.keys(JSON.parse(keptText)).sort()).toEqual(["hackLoop", "heardAtMs", "lastAugReset", "ttlMs", "work"]);
+  expect(Object.keys(JSON.parse(keptText)).sort()).toEqual([
+    "batcher",
+    "hackLoop",
+    "heardAtMs",
+    "lastAugReset",
+    "ttlMs",
+    "work",
+  ]);
   const kept = parseSafeModeState(keptText);
   expect(kept).toMatchObject({
     ok: true,

@@ -11,6 +11,7 @@
 import { BUY_AUGMENTATION_WORKER_NAME, INSTALL_AUGMENTATIONS_WORKER_NAME } from "./augmentations.ts";
 import { BACKDOOR_WORKER_NAME } from "./backdoors.ts";
 import { singularityWorkerFileNames } from "./backends.ts";
+import { BATCHER_DEPLOY_WORKER_NAME } from "./batcher.ts";
 import { DESTROY_BITNODE_WORKER_NAME } from "./bitnodes.ts";
 import { BUY_SERVER_WORKER_NAME, UPGRADE_SERVER_WORKER_NAME } from "./cloud-servers.ts";
 import { SNAPSHOT_TIERS } from "./control-protocol.ts";
@@ -33,6 +34,7 @@ export function homeWorkerFileNames(): string[] {
     ...SNAPSHOT_TIERS.map(snapshotWorkerFileName),
     HACK_LOOP_ROOT_WORKER_NAME,
     HACK_LOOP_DEPLOY_WORKER_NAME,
+    BATCHER_DEPLOY_WORKER_NAME,
     BUY_PROGRAM_WORKER_NAME,
     UPGRADE_HOME_RAM_WORKER_NAME,
     TRAVEL_WORKER_NAME,

@@ -4,6 +4,7 @@
  * (packages/ingame/README.md, "RAM"). Server and player fields keep the game's own names (`ns.getServer`,
  * `ns.getPlayer`).
  */
+import type { BatcherDeployReport, BatcherHealth } from "./batcher.ts";
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { FactionStateReading } from "./faction-state.ts";
 import type { IntentOutcome } from "./intents.ts";
@@ -131,6 +132,17 @@ export interface FastSnapshotData {
   dialogs: { handled: HandledDialog[]; blocking: string | null };
   /** How the work the brain wants went (#151): null while it wants none, or absent from an older Agent. */
   work?: WorkOutcome | null;
+  /**
+   * The batcher's health (#205), as it last wrote it on its port, or null with none there; absent from an older Agent.
+   * The Agent's word for what the batcher wrote: read with care.
+   */
+  batcher?: BatcherHealth | null;
+  /**
+   * The batcher's deploy worker's last report while the brain wants it running (#211): where it runs, or why it
+   * can't; null with none wanted or no report yet, absent from an older Agent. Sent but not running is an alert, and
+   * a failure of the run report after 3 fast snapshots in a row.
+   */
+  batcherDeploy?: BatcherDeployReport | null;
   /**
    * The brain's last message the Agent refused as not valid (#194's review), with why, and how many it has refused
    * since it connected: it acts on the last one it took meanwhile. Null once a desired state is taken again, or absent

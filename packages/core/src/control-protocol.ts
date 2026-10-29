@@ -3,6 +3,7 @@
  * brain. Shared by both sides, so it has no dependencies and uses neither Node nor the DOM. In-game code bundles it,
  * so its names must not collide with NS function names (packages/ingame/README.md, "RAM").
  */
+import { type BatcherConfig, parseBatcherConfig } from "./batcher.ts";
 import { isValidDeploymentId } from "./deploy-layout.ts";
 import { type Intent, intentId, MAX_INTENTS, parseIntentRequest } from "./intents.ts";
 import { parseWork, type Work } from "./work.ts";
@@ -64,6 +65,12 @@ export interface DesiredState {
    */
   hackLoop: HackLoopState;
   /**
+   * The batcher (#205, M4 phase A slice A7b): running on `runOn`, its config hot through its port, or absent (null):
+   * none, and ours stopped wherever it runs. Only with the hack loop on, whose hosts it never shares; the hack loop
+   * still roots what it can. Absent is how an older brain, and safe mode's file from one, says none.
+   */
+  batcher?: BatcherState | null;
+  /**
    * What to do, in order, each until the game shows it done: buying the TOR router, a program or home RAM (the brain's
    * purchase rules), and anything the owner queued (the dashboard). An intent that leaves the list isn't tried again.
    */
@@ -101,6 +108,12 @@ export interface HackLoopState {
   hackThreads?: Record<string, number> | null;
 }
 
+/** The desired state's batcher (#205): the host it runs on, and its config (core's `BatcherConfig`, #204). */
+export interface BatcherState {
+  runOn: string;
+  config: BatcherConfig;
+}
+
 /** The longest `ttlMs` taken: 7 days, so a time it makes is always one a date can show (#160). */
 export const MAX_SAFE_MODE_TTL_MS = 604_800_000;
 
@@ -112,13 +125,18 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * an outdated one: only a state that starts nothing new, given `lastSent`, what that Agent was last sent (null for
  * nothing yet). No intents. The hack loop off goes as it is (stopping our own loops is always safe); on, it stays as
  * last sent, and with nothing sent yet, nothing goes. So the intents' removal gets through a hold whatever the hack
- * loop does. No work either: the Agent leaves the work as it is (#151). `ttlMs` goes as the brain set it (#160): a held
- * state starts nothing new, so safe mode keeping it starts nothing new either.
+ * loop does. The batcher (#205) likewise: off (absent) goes as it is, stopping ours; on, it stays as last sent. So
+ * turned off during a hold, nothing hacks the hosts the batcher had until the hold ends: the hack loop goes as last
+ * sent, with none of them (#211's review, finding 16). No work either: the Agent leaves the work as it is (#151).
+ * `ttlMs` goes as the brain set it (#160): a held state starts nothing new, so safe mode keeping it starts nothing new
+ * either.
  */
 export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
   const kept = state.ttlMs === undefined ? {} : { ttlMs: state.ttlMs };
   if (!state.hackLoop.enabled) return { hackLoop: state.hackLoop, intents: [], ...kept };
-  return lastSent === null ? null : { hackLoop: lastSent.hackLoop, intents: [], ...kept };
+  if (lastSent === null) return null;
+  const batcher = state.batcher ? (lastSent.batcher ?? null) : null;
+  return { hackLoop: lastSent.hackLoop, ...(batcher === null ? {} : { batcher }), intents: [], ...kept };
 }
 
 export type BrainMessage =
@@ -351,6 +369,31 @@ function parseHackThreads(hackThreads: unknown, hosts: Set<string>): ParsedMessa
   return { ok: true, message: entries.length === 0 ? null : Object.fromEntries(entries) };
 }
 
+/**
+ * A desired state's `batcher` (#205), against its hack loop: none when absent or null; else `runOn` a hostname and
+ * `config` core's `BatcherConfig` (#204), its target and hosts names the protocol takes; only with the hack loop on,
+ * and none of its hosts, nor the host it runs on, the hack loop's or the hack loop's preparing ones. Safe mode's file
+ * uses it too.
+ */
+export function parseBatcherState(batcher: unknown, hackLoop: HackLoopState): ParsedMessage<BatcherState | null> {
+  if (batcher === undefined || batcher === null) return { ok: true, message: null };
+  if (typeof batcher !== "object" || Array.isArray(batcher)) return { ok: false, reason: "batcher isn't an object" };
+  const { runOn, config } = batcher as JsonObject;
+  if (!isShortNonEmptyString(runOn)) return { ok: false, reason: `batcher.runOn is ${describeValue(runOn)}` };
+  const parsedConfig = parseBatcherConfig(config);
+  if (!parsedConfig.ok) return { ok: false, reason: `batcher's ${parsedConfig.reason.replace(/^the /, "")}` };
+  const { target, hosts } = parsedConfig.config;
+  if (!isShortNonEmptyString(target)) return { ok: false, reason: `batcher.config.target is ${describeValue(target)}` };
+  if (!isHostList(hosts)) return { ok: false, reason: "batcher.config.hosts isn't a list of hostnames" };
+  if (!hackLoop.enabled) return { ok: false, reason: "batcher with the hack loop off" };
+  const loopHosts = new Set([...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])]);
+  if (loopHosts.has(runOn)) return { ok: false, reason: `batcher.runOn is ${runOn}, a host of the hack loop` };
+  const shared = hosts.find((host) => loopHosts.has(host));
+  if (shared !== undefined)
+    return { ok: false, reason: `batcher.config.hosts names ${shared}, a host of the hack loop` };
+  return { ok: true, message: { runOn, config: parsedConfig.config } };
+}
+
 const isHostList = (hosts: unknown): hosts is string[] =>
   Array.isArray(hosts) && hosts.length <= MAX_HACK_LOOP_HOSTS && hosts.every(isShortNonEmptyString);
 
@@ -375,6 +418,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       if (!intents.ok) return intents;
       const work = parseWork(fields.work);
       if (!work.ok) return { ok: false, reason: `desiredState's ${work.reason}` };
+      const batcher = parseBatcherState(fields.batcher, hackLoop.message);
+      if (!batcher.ok) return { ok: false, reason: `desiredState's ${batcher.reason}` };
       const { ttlMs } = fields;
       if (ttlMs !== undefined && (!isSafeIntegerAtLeast(ttlMs, 0) || ttlMs > MAX_SAFE_MODE_TTL_MS)) {
         return { ok: false, reason: `desiredState's ttlMs is ${describeValue(ttlMs)}` };
@@ -385,6 +430,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
           protocolVersion: CONTROL_PROTOCOL_VERSION,
           type: "desiredState",
           hackLoop: hackLoop.message,
+          // Absent and null are the same: no batcher (#205). Only one to run is carried.
+          ...(batcher.message === null ? {} : { batcher: batcher.message }),
           intents: intents.message,
           // Absent and null are the same: no work managed. Only a work to do is carried.
           ...(work.message === null ? {} : { work: work.message }),

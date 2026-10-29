@@ -4,8 +4,9 @@
 // own count, so together they never hack a target dry (#187). On every server but home, it stops our loops that
 // shouldn't run there (another deployment's, one whose target or hack threads aren't this host's, on a server that
 // isn't a host, or all of them when off), and starts this deployment's loop on each host where it isn't running, with
-// the threads the free RAM allows, and the hack threads capped at those. It never touches any other script, and uses
-// only RAM left free.
+// the threads the free RAM allows, and the hack threads capped at those; one running beside free RAM that holds
+// another thread is started again at full size (#211). It never touches any other script, and uses only RAM
+// left free.
 // RAM: `scan` 0.2 + `hasRootAccess` 0.05 + `ps` 0.2 + `kill` 0.5 + `scp` 0.6 + `exec` 1.3 + `getScriptRam` 0.1 +
 // `getServerMaxRam` and `getServerUsedRam` 0.05 each (ram-budget.json).
 import {
@@ -49,6 +50,7 @@ export function main(ns: NS): void {
           : [loop.target, Math.min(loop.hackThreads, threads)];
     let runningThreads = 0;
     let hackThreads = 0;
+    const runningPids: number[] = [];
     for (const process of ns.ps(hostname)) {
       if (!isHackLoopFile(process.filename)) continue;
       const wanted = loopArguments(process.threads);
@@ -60,8 +62,20 @@ export function main(ns: NS): void {
       ) {
         runningThreads += process.threads;
         hackThreads += wanted.length > 1 ? (wanted[1] as number) : process.threads;
+        runningPids.push(process.pid);
       } else {
         ns.kill(process.pid);
+      }
+    }
+    // A loop started small, beside RAM that's been freed since (the batcher's operations, landed after it was turned
+    // off, #211), is started again at full size once the free RAM holds another thread: so no loop stays starved. Only
+    // RAM freed since it started can do that, so it's rare: what a restart loses is the weaken or grow under way.
+    if (runningThreads > 0 && loopRam > 0) {
+      const freeRam = ns.getServerMaxRam(hostname) - ns.getServerUsedRam(hostname);
+      if (Math.floor(freeRam / loopRam) >= 1) {
+        for (const pid of runningPids) ns.kill(pid);
+        runningThreads = 0;
+        hackThreads = 0;
       }
     }
     if (loop !== undefined && runningThreads === 0 && loopRam > 0) {
