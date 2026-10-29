@@ -126,8 +126,10 @@ export function percentMoneyHackedPerThread(
   if (server.hackDifficulty >= 100 || !(hacking > 0)) return 0;
   const difficultyMult = (100 - server.hackDifficulty) / 100;
   const skillMult = (hacking - (server.requiredHackingSkill - 1)) / hacking;
-  const share = (difficultyMult * skillMult * player.mults.hacking_money) / 240;
-  return Math.min(1, Math.max(share, 0));
+  // Not `share`: the game charges a script RAM for any name an NS function has (Script/RamCalculations.ts:407-440),
+  // and `share` is 2.4 GB, which the batcher would pay (#204).
+  const fraction = (difficultyMult * skillMult * player.mults.hacking_money) / 240;
+  return Math.min(1, Math.max(fraction, 0));
 }
 
 /**

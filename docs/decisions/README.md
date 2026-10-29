@@ -16,6 +16,7 @@ Each significant design or process decision gets a short record: context, decisi
 | [0010](0010-stable-watcher-opens-an-issue.md) | The stable watcher opens an issue, not a pull request | Accepted |
 | [0011](0011-checkpointed-simulator-comparisons.md) | The simulator compares at checkpoints; full-length runs are occasional | Accepted |
 | [0012](0012-simulator-network-in-lockstep.md) | The simulator's network: sockets to the parent, in lockstep | Accepted |
+| [0013](0013-own-batcher-not-legacy-daemon.md) | Our own batcher instead of legacy daemon.js | Accepted (flagged to the owner) |
 
 Smaller decisions by the project owner are in the [owner decisions log](owner-decisions.md).
 
