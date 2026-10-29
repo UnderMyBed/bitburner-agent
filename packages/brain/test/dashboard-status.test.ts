@@ -11,6 +11,7 @@ import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
 
 const STARTED_AT_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60_000;
@@ -71,9 +72,11 @@ const status = (
     programs,
     homeRam,
     intents,
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     income,
     backdoorsDue,
+    factionWork: QUIET_FACTIONS_VIEW,
+    factionWorkStall: null,
     nowMs,
   });
 
@@ -168,7 +171,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     programs,
     homeRam,
     intents,
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     factions: { receivedAtMs: STARTED_AT_MS + 2_000, backend: "ui", state: factionState, problem: null },
   });
   // Newest first.
@@ -377,9 +380,11 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     programs,
     homeRam,
     intents,
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     income: null,
     backdoorsDue: [],
+    factionWork: QUIET_FACTIONS_VIEW,
+    factionWorkStall: null,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

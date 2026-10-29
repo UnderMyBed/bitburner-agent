@@ -14,6 +14,7 @@ import {
 import type { BackdoorDue } from "../backdoors.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStateProblemOf } from "../faction-state.ts";
+import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
@@ -103,6 +104,8 @@ export interface DashboardStatus {
     state: FactionState | null;
     problem: string | null;
   } | null;
+  /** The brain's joins and faction work (#203): its switch, the join under way, the invitations left, and its choice. */
+  factionWork: FactionsView;
 }
 
 export interface DashboardStatusOptions {
@@ -128,6 +131,9 @@ export interface DashboardStatusOptions {
   income: IncomeFacts | null;
   /** The backdoors due and since when (#195), the controller's, for the `backdoorOverdue` alert. */
   backdoorsDue: BackdoorDue[];
+  /** The joins and the brain's faction work (#203), the controller's view, and its stall for the alert. */
+  factionWork: FactionsView;
+  factionWorkStall: FactionWorkStall | null;
   nowMs: number;
 }
 
@@ -151,6 +157,8 @@ export function buildDashboardStatus({
   work,
   income,
   backdoorsDue,
+  factionWork,
+  factionWorkStall,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -245,6 +253,7 @@ export function buildDashboardStatus({
         slow && factionProblem?.problem
           ? { atMs: slow.receivedAtMs, backend: factionProblem.backend, problem: factionProblem.problem }
           : null,
+      factionWorkStall,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -276,5 +285,6 @@ export function buildDashboardStatus({
           problem: factionProblem?.problem ?? null,
         }
       : null,
+    factionWork,
   };
 }

@@ -127,14 +127,6 @@ export {
 } from "./deploy-layout.ts";
 export { FACTIONS } from "./faction-data.ts";
 export {
-  daedalusAugmentationsRequired,
-  FACTION_ENEMIES,
-  FACTION_NAMES,
-  type FactionData,
-  JOIN_FACTION_WORKER_NAME,
-  type PlayerRequirement,
-} from "./factions.ts";
-export {
   FACTION_STATE_WORKER_NAME,
   type FactionState,
   type FactionStateReading,
@@ -144,6 +136,25 @@ export {
   type JoinedFaction,
   parseFactionState,
 } from "./faction-state.ts";
+export {
+  FACTION_WORK_CYCLES_PER_SECOND,
+  factionReputationPerCycle,
+  factionReputationPerSecond,
+  HACKING_MULTIPLIERS,
+  hackingValue,
+  intelligenceBonus,
+  MAX_SKILL_LEVEL,
+  UNFOCUSED_WORK_BONUS,
+  type WorkingPerson,
+} from "./faction-work.ts";
+export {
+  daedalusAugmentationsRequired,
+  FACTION_ENEMIES,
+  FACTION_NAMES,
+  type FactionData,
+  JOIN_FACTION_WORKER_NAME,
+  type PlayerRequirement,
+} from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   growthLogPerThread,

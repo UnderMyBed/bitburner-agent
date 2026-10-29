@@ -22,6 +22,7 @@ const quiet: AlertFacts = {
   income: null,
   backdoorsDue: [],
   factionState: null,
+  factionWorkStall: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 

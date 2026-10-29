@@ -19,6 +19,7 @@ import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
 
 const PAGE = readFileSync(new URL("../src/dashboard/page.html", import.meta.url), "utf8");
 const NOW_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
@@ -100,6 +101,7 @@ const BUSY_STATUS: DashboardStatus = {
   ],
   work: {
     desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
+    source: "owner",
     outcome: { converged: false, problem: "no CyberSec among the factions joined", backend: "ui" },
   },
   factions: {
@@ -115,6 +117,7 @@ const BUSY_STATUS: DashboardStatus = {
     },
     problem: null,
   },
+  factionWork: QUIET_FACTIONS_VIEW,
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -143,9 +146,11 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
     intents: [],
-    work: { desired: null, outcome: null },
+    work: { desired: null, source: null, outcome: null },
     income: null,
     backdoorsDue: [],
+    factionWork: QUIET_FACTIONS_VIEW,
+    factionWorkStall: null,
     nowMs: NOW_MS,
   });
   store.close();
@@ -648,7 +653,7 @@ describe("work (#151)", () => {
     );
     const unmanaged = await openPage(() => ({
       status: 200,
-      body: { ...BUSY_STATUS, work: { desired: null, outcome: null } },
+      body: { ...BUSY_STATUS, work: { desired: null, source: null, outcome: null } },
     }));
     expect(textOf(unmanaged.document, "#work div")).toBe("Not managed: the game's work is left as it is.");
   });

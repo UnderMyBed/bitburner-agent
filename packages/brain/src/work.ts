@@ -1,5 +1,6 @@
 // The work the owner wants (#151, owner decision 37): set on the dashboard, kept in the store so it survives restarts
-// of the brain, and sent in the desired state as `work`, its focus worked out here. Choosing work is M4's planner.
+// of the brain, and sent in the desired state as `work`, its focus worked out here. With none set, the brain sends its
+// own faction work (#203, ./factions.ts).
 import {
   EFFECTOR_BACKENDS,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
@@ -23,10 +24,12 @@ export type OwnersWork = OmitEach<Work, "focus">;
 /** What the dashboard shows of the work. */
 export interface WorkView {
   /**
-   * The owner's work, focus included, as the brain sends it once it has the connected Agent's slow snapshot (and not
-   * while it holds); null while no work is managed.
+   * The work, focus included, as the brain sends it once it has the connected Agent's slow snapshot (and not while it
+   * holds): the owner's, or else the brain's faction work (#203); null while no work is managed.
    */
   desired: Work | null;
+  /** Whose it is: the owner's (set on the dashboard), the brain's faction work (#203), or null with none. */
+  source: "owner" | "brain" | null;
   /** How it went, from the connected Agent's latest fast snapshot, or null. */
   outcome: WorkOutcome | null;
 }

@@ -3,6 +3,7 @@
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
+import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
 export const AGENT_SILENT_AFTER_MS = 60_000;
@@ -34,7 +35,8 @@ export type AlertName =
   | "intentStuck"
   | "incomeStalled"
   | "factionStateUnread"
-  | "backdoorOverdue";
+  | "backdoorOverdue"
+  | "factionWorkStalled";
 
 export interface Alert {
   name: AlertName;
@@ -78,6 +80,8 @@ export interface AlertFacts {
    * or there's no slow snapshot.
    */
   factionState: { atMs: number; backend: string | null; problem: string } | null;
+  /** The brain's faction work's faction and since when its reputation last rose (#203): the controller's, or null. */
+  factionWorkStall: FactionWorkStall | null;
 }
 
 /**
@@ -92,7 +96,7 @@ export interface IncomeFacts {
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue per
- * overdue backdoor.
+ * overdue backdoor, then factionWorkStalled.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -150,7 +154,29 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     });
   }
   alerts.push(...backdoorOverdueAlerts(facts));
+  const factionWorkStalled = factionWorkStalledAlert(facts);
+  if (factionWorkStalled !== null) alerts.push(factionWorkStalled);
   return alerts;
+}
+
+/**
+ * `factionWorkStalled` (#203), or null: the brain's faction work is sent, and its faction's reputation has risen under
+ * half the work's rate in the connected Agent's slow snapshots for `FACTION_WORK_STALLED_AFTER_MS` or more (../factions.ts,
+ * `onTrack`). The work isn't converged (the Agent's problem says why), or the game isn't counting it.
+ */
+export function factionWorkStalledAlert({
+  nowMs,
+  factionWorkStall,
+}: Pick<AlertFacts, "nowMs" | "factionWorkStall">): Alert | null {
+  if (factionWorkStall === null || nowMs - factionWorkStall.sinceMs < FACTION_WORK_STALLED_AFTER_MS) return null;
+  return {
+    name: "factionWorkStalled",
+    sinceMs: factionWorkStall.sinceMs,
+    detail:
+      `${factionWorkStall.faction}'s reputation has risen under half the work's rate for ` +
+      `${Math.floor((nowMs - factionWorkStall.sinceMs) / 60_000)} min, with the brain's faction work for it: see the ` +
+      "Work section's outcome",
+  };
 }
 
 /**
