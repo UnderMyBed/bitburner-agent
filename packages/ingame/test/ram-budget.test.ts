@@ -8,6 +8,7 @@ import {
   BATCH_HACK_SCRIPT_NAME,
   BATCH_WEAKEN_RAM_GB,
   BATCH_WEAKEN_SCRIPT_NAME,
+  BATCHER_RAM_BUDGET_GB,
   BATCHER_SCRIPT_NAME,
   freshSaveHomeWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
@@ -82,4 +83,6 @@ test("the batch operation scripts' budgets are core's, by which the batcher and 
   expect(budgets[BATCH_HACK_SCRIPT_NAME]).toBe(BATCH_HACK_RAM_GB);
   expect(budgets[BATCH_GROW_SCRIPT_NAME]).toBe(BATCH_GROW_RAM_GB);
   expect(budgets[BATCH_WEAKEN_SCRIPT_NAME]).toBe(BATCH_WEAKEN_RAM_GB);
+  // And the batcher's own, by which the brain plans where it runs (#205).
+  expect(budgets[BATCHER_SCRIPT_NAME]).toBe(BATCHER_RAM_BUDGET_GB);
 });

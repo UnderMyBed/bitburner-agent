@@ -32,6 +32,7 @@ import {
   parseBrainMessage,
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
+import { createBatcherActivity } from "../agent/batcher.ts";
 import { createDialogWatcher } from "../agent/dialog-watcher.ts";
 import { createEffectorRunner } from "../agent/effector-runner.ts";
 import { createFactionStateReader } from "../agent/faction-state.ts";
@@ -106,6 +107,7 @@ export async function main(ns: NS): Promise<void> {
   const intentRunner = createIntentRunner(ns, { effectorRunner });
   const workActivity = createWorkActivity(ns, { effectorRunner });
   const dialogWatcher = createDialogWatcher(ns);
+  const batcher = createBatcherActivity(ns, { deploymentId, workerRunner });
   const factionStateReader = createFactionStateReader(ns, {
     effectorRunner,
     handleDialogs: (deadlineMs) => dialogWatcher.handle(deadlineMs),
@@ -118,6 +120,7 @@ export async function main(ns: NS): Promise<void> {
     workerRunner,
     intentOutcomes: () => intentRunner.outcomes(),
     workOutcome: () => workActivity.outcome(),
+    batcherHealth: () => batcher.health(),
     dialogReport: () => dialogWatcher.takeReport(),
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
     factionsUnread: (problem) => factionStateReader.unread(problem),
@@ -153,14 +156,17 @@ export async function main(ns: NS): Promise<void> {
       const kept = safeMode.toConverge(Date.now(), snapshotter.lastAugReset());
       if (kept === null) {
         hackLoop.forget();
+        batcher.forget();
         workActivity.forget();
       } else {
         hackLoop.desire(kept.hackLoop);
+        batcher.desire(kept.batcher);
         workActivity.desire(kept.work);
       }
     }
     await dialogWatcher.handle(roundEndsAtMs);
     await hackLoop.convergeIfDue(roundEndsAtMs);
+    await batcher.convergeIfDue(roundEndsAtMs);
     await intentRunner.runDue(roundEndsAtMs);
     await workActivity.convergeIfDue(roundEndsAtMs);
     // Clamped, so a clock that steps back can't stretch the sleep.
@@ -231,12 +237,14 @@ export async function main(ns: NS): Promise<void> {
           // Instructions come only from the brain it's connected to (#134): safe mode's kept state waits for the next
           // disconnect, and this brain sends its own.
           hackLoop.forget();
+          batcher.forget();
           workActivity.forget();
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;
         } else if (event.message.type === "desiredState") {
           hackLoop.desire(event.message.hackLoop);
+          batcher.desire(event.message.batcher ?? null);
           intentRunner.desire(event.message.intents);
           workActivity.desire(event.message.work ?? null);
           safeMode.heard(event.message, Date.now(), snapshotter.lastAugReset());

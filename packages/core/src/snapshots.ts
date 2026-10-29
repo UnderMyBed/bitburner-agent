@@ -4,6 +4,7 @@
  * (packages/ingame/README.md, "RAM"). Server and player fields keep the game's own names (`ns.getServer`,
  * `ns.getPlayer`).
  */
+import type { BatcherHealth } from "./batcher.ts";
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { FactionStateReading } from "./faction-state.ts";
 import type { IntentOutcome } from "./intents.ts";
@@ -131,6 +132,11 @@ export interface FastSnapshotData {
   dialogs: { handled: HandledDialog[]; blocking: string | null };
   /** How the work the brain wants went (#151): null while it wants none, or absent from an older Agent. */
   work?: WorkOutcome | null;
+  /**
+   * The batcher's health (#205), as it last wrote it on its port, or null with none there; absent from an older Agent.
+   * The Agent's word for what the batcher wrote: read with care.
+   */
+  batcher?: BatcherHealth | null;
 }
 
 /** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */

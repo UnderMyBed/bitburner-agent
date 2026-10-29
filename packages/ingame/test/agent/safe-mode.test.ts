@@ -51,11 +51,40 @@ test("nothing kept: nothing to converge on, and no rounds needed", () => {
 test("a state heard is kept and written at once: its activities, never its intents, with when and the last reset", () => {
   const { safeMode, kept } = homeWith();
   safeMode.heard(STATE, START, RESET);
-  expect(kept()).toEqual({ hackLoop: LOOP, work: HACKING, ttlMs: HOUR, heardAtMs: START, lastAugReset: RESET });
+  expect(kept()).toEqual({
+    hackLoop: LOOP,
+    batcher: null,
+    work: HACKING,
+    ttlMs: HOUR,
+    heardAtMs: START,
+    lastAugReset: RESET,
+  });
   expect(safeMode.keepsState()).toBe(true);
   // Disconnected at once: converged on, the intents left out.
   safeMode.disconnected(START);
-  expect(safeMode.toConverge(START, RESET)).toEqual({ hackLoop: LOOP, work: HACKING });
+  expect(safeMode.toConverge(START, RESET)).toEqual({ hackLoop: LOOP, batcher: null, work: HACKING });
+});
+
+test("the batcher (#205) is kept and converged on with the hack loop, a game other than the pinned one included", () => {
+  const batcher = {
+    runOn: "joesguns",
+    config: {
+      target: "n00dles",
+      figures: { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 },
+      player: { intelligence: 0, mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 } },
+      hosts: ["joesguns", "sigma-cosmetics"],
+      hackShare: 0.1,
+      spacingMs: 20_000,
+    },
+  };
+  const hackLoop = { enabled: true, target: "n00dles", hosts: [] };
+  for (const gameDrift of [null, "another version"]) {
+    const { safeMode, kept } = homeWith(new Map(), gameDrift);
+    safeMode.heard({ hackLoop, batcher, intents: [], ttlMs: HOUR }, START, RESET);
+    expect(kept()?.batcher).toEqual(batcher);
+    safeMode.disconnected(START);
+    expect(safeMode.toConverge(START, RESET)).toMatchObject({ hackLoop, batcher });
+  }
 });
 
 test("no work managed is kept as none: safe mode leaves the work alone too", () => {
@@ -63,7 +92,7 @@ test("no work managed is kept as none: safe mode leaves the work alone too", () 
   safeMode.heard({ hackLoop: LOOP, intents: [], ttlMs: HOUR }, START, RESET);
   expect(kept()?.work).toBeNull();
   safeMode.disconnected(START);
-  expect(safeMode.toConverge(START, RESET)).toEqual({ hackLoop: LOOP, work: null });
+  expect(safeMode.toConverge(START, RESET)).toEqual({ hackLoop: LOOP, batcher: null, work: null });
 });
 
 test("a state with no ttlMs (an older brain) isn't kept, and the one kept before is dropped", () => {
@@ -150,7 +179,7 @@ test("on a game other than the pinned release, only what a hold would send: the 
   before.safeMode.disconnected(START);
   // Steam updated the game while the brain was down: the Agent that starts on it reads the same file.
   const drifted = homeWith(before.files, "versionNumber 52, pinned 51");
-  expect(drifted.safeMode.toConverge(START + 60_000, RESET)).toEqual({ hackLoop: LOOP, work: null });
+  expect(drifted.safeMode.toConverge(START + 60_000, RESET)).toEqual({ hackLoop: LOOP, batcher: null, work: null });
   expect(drifted.lines).toEqual([
     `agent: safe mode: no brain: converging on its last desired state, the hack loop only (the game differs: versionNumber 52, pinned 51), until ${new Date(START + HOUR).toISOString()}`,
   ]);
@@ -176,7 +205,7 @@ describe("a new Agent (a reload, an install's restart, a new deployment) reads t
   test("with the game's last reset unchanged, it converges on it, until the same time as before", () => {
     const { safeMode } = keptThenRestarted();
     expect(safeMode.keepsState()).toBe(true);
-    expect(safeMode.toConverge(START + 30 * 60_000, RESET)).toEqual({ hackLoop: LOOP, work: HACKING });
+    expect(safeMode.toConverge(START + 30 * 60_000, RESET)).toEqual({ hackLoop: LOOP, batcher: null, work: HACKING });
     expect(safeMode.toConverge(START + 5_000 + HOUR, RESET)).toBeNull();
   });
 
@@ -208,7 +237,11 @@ describe("a new Agent (a reload, an install's restart, a new deployment) reads t
     const other = { ...STATE, hackLoop: { ...LOOP, target: "joesguns" } };
     safeMode.heard(other, START + 10_000, null);
     safeMode.disconnected(START + 12_000);
-    expect(safeMode.toConverge(START + 12_000, null)).toEqual({ hackLoop: other.hackLoop, work: HACKING });
+    expect(safeMode.toConverge(START + 12_000, null)).toEqual({
+      hackLoop: other.hackLoop,
+      batcher: null,
+      work: HACKING,
+    });
     // Written once the reset is known.
     safeMode.connectedRound(START + 14_000, RESET);
     expect(kept()?.hackLoop.target).toBe("joesguns");
@@ -296,7 +329,7 @@ describe("properties (§9.3)", () => {
             const converging = home.safeMode.toConverge(nowMs, known);
             if (converging !== null) {
               // The last state a brain sent, its activities only (no intents), within its ttlMs, from this reset.
-              expect(converging).toEqual({ hackLoop: last?.hackLoop, work: last?.work ?? null });
+              expect(converging).toEqual({ hackLoop: last?.hackLoop, batcher: null, work: last?.work ?? null });
               expect(nowMs).toBeLessThan(lastConnectedToSenderAtMs + ttlMs);
               expect(resetSinceLast).toBe(false);
             } else {

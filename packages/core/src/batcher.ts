@@ -5,6 +5,7 @@
  * the in-game batcher (`entries/batcher.ts`) runs. Design and plan: #204; the Agent runs it in #205, the brain chooses
  * in #206. BitNode multipliers are taken as 1, as in hacking-ceiling.ts: exact in BN1.
  */
+import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
 import { growthLogPerThread, percentMoneyHackedPerThread } from "./hack-loop.ts";
 import {
   GROW_SECURITY_PER_THREAD,
@@ -39,6 +40,12 @@ export const BATCH_HACK_RAM_GB = 1.75;
 export const BATCH_GROW_RAM_GB = 1.8;
 export const BATCH_WEAKEN_RAM_GB = 1.8;
 
+/**
+ * The batcher's RAM budget, GB: ram-budget.json's `batcher.js`, which its RAM is at most (the ingame RAM test checks
+ * both). The brain plans with it (#205): where the batcher runs, its operations have that much less.
+ */
+export const BATCHER_RAM_BUDGET_GB = 3.85;
+
 /** The ms between one landing of a batch and the next (δ): hack, then weaken, grow and weaken, each δ after. */
 export const BATCH_LANDING_GAP_MS = 20;
 /** The least time between one batch's hack and the next's: its four landings, δ apart, never interleave. */
@@ -63,6 +70,34 @@ export const MAX_BATCH_SHARE = 0.9;
 /** The batcher's ports: each operation's landing record, and the batcher's health (one entry, replaced). */
 export const BATCHER_LANDING_PORT = 89_002;
 export const BATCHER_HEALTH_PORT = 89_003;
+/**
+ * The batcher's config (#205), one entry, replaced: the Agent writes the desired state's `batcher.config` there each
+ * round it's on, and the batcher re-reads it every loop, so a change starts nothing over (architecture §5.5).
+ */
+export const BATCHER_CONFIG_PORT = 89_004;
+/** Home worker (#205): starts the batcher where the desired state says, and stops ours anywhere else, or everywhere. */
+export const BATCHER_DEPLOY_WORKER_NAME = "batcher-deploy.js";
+
+/**
+ * Any deployment's batcher: `agent/<deploymentId>/batcher.js`, in a folder the deployer generated. Only these are ever
+ * stopped, never a script in a player's own `agent/<name>/`.
+ */
+export function isBatcherFile(filePath: string): boolean {
+  const deploymentId = deploymentIdOfPath(filePath);
+  return deploymentId !== null && isGeneratedDeploymentId(deploymentId) && filePath.endsWith(`/${BATCHER_SCRIPT_NAME}`);
+}
+
+/** What the batcher's deploy worker reports (#205): where ours runs afterwards, if anywhere, and what it did. */
+export interface BatcherDeployReport {
+  /** The host our batcher runs on afterwards, or null. */
+  running: string | null;
+  /** Started this time (a new one, or after one the game lost). */
+  started: boolean;
+  /** Ours stopped this time: another deployment's, one on another host, or all of them when off. */
+  stopped: number;
+  /** Why it couldn't do its job (no deployment folder, no batcher on home, no room on its host), or null. */
+  problem: string | null;
+}
 /** A landing not recorded this long after its time is lost: its script never ran, or died. */
 export const LANDING_LOST_AFTER_MS = 10_000;
 
@@ -625,6 +660,11 @@ export interface BatcherHealth {
   /** Batches planned whose hack hasn't gone out, and operation parts started and not yet recorded. */
   batchesPending: number;
   inFlight: number;
+  /**
+   * The latest landing it expects, or null: a batcher started after this one (#205) waits for it, so its first batches
+   * aren't short of the RAM this one's operations still hold.
+   */
+  latestLandAt: number | null;
   /** The game's clock when this was written. */
   atMs: number;
 }
@@ -652,6 +692,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     runName,
     batchesPending: 0,
     inFlight: 0,
+    latestLandAt: null,
     atMs,
   };
 }

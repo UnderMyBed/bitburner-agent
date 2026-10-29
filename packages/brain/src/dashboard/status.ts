@@ -13,6 +13,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
+import type { BatcherView } from "../batcher.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
@@ -89,6 +90,8 @@ export interface DashboardStatus {
   };
   /** The hack loop (#134): its switch, and what the brain has set for the Agent (its controller's view). */
   hackLoop: HackLoopView;
+  /** The batcher (#205): its switch, what the brain sent or why not, and its health as last reported. */
+  batcher: BatcherView;
   /** The hacking programs (#136): owned, being bought, or what they wait for. */
   programs: ProgramsView;
   /** Home's RAM (#138): its size, the upgrade being bought, or what it waits for. */
@@ -127,6 +130,8 @@ export interface DashboardStatusOptions {
   supervising: boolean;
   /** The hack loop's controller's view (#134): what it set, not worked out again here. */
   hackLoop: HackLoopView;
+  /** The batcher's view (#205), likewise. */
+  batcher: BatcherView;
   /** The hacking programs' view (#136), likewise. */
   programs: ProgramsView;
   /** Home RAM's view (#138), likewise. */
@@ -156,6 +161,7 @@ export function buildDashboardStatus({
   brainStartedEventId,
   supervising,
   hackLoop,
+  batcher,
   programs,
   homeRam,
   intents,
@@ -290,6 +296,7 @@ export function buildDashboardStatus({
         .map(({ atMs, detail }) => ({ atMs, detail })),
     },
     hackLoop,
+    batcher,
     programs,
     homeRam,
     intents,

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { BackdoorDue } from "../src/backdoors.ts";
+import type { BatcherView } from "../src/batcher.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
@@ -37,6 +38,8 @@ const programs: ProgramsView = {
   buying: "BruteSSH.exe",
   waitingFor: null,
 };
+/** The batcher's view (#205), off. */
+const batcher: BatcherView = { enabled: false, sent: null, why: null, health: null };
 const homeRam: HomeRamView = { enabled: true, waiting: false, ram: 8, upgradingTo: 16, waitingFor: null };
 const intents: IntentView[] = [{ id: "travel(Aevum)", source: "manual", outcome: null, waitingFor: null }];
 /** The brain starting, as main.ts records it: everything stored after this is this run. */
@@ -69,6 +72,7 @@ const status = (
     brainStartedEventId,
     supervising: true,
     hackLoop: loop,
+    batcher,
     programs,
     homeRam,
     intents,
@@ -166,6 +170,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     alerts: [],
     supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
     hackLoop,
+    batcher,
     programs,
     homeRam,
     intents,
@@ -383,6 +388,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     brainStartedEventId,
     supervising: false,
     hackLoop,
+    batcher,
     programs,
     homeRam,
     intents,

@@ -20,6 +20,13 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
+import {
+  BATCHER_ENABLED_SETTING,
+  type BatcherView,
+  batcherViewOf,
+  planBatcher,
+  readBatcherEnabled,
+} from "./batcher.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
@@ -182,6 +189,8 @@ export class DesiredStateController {
   #lastSetHackTarget: LastHackTarget | null = null;
   /** The game's `lastAugReset` (the slow snapshot's) when it was set, or null if no slow snapshot had said. */
   #lastSetHackTargetResetAt: number | null = null;
+  /** Why no batcher is sent while its switch is on (#205), or null. */
+  #batcherWhy: string | null = null;
   /** The purchase the brain's rules ask for now, or null. */
   #purchase: Intent | null = null;
   /** From the connected Agent's latest medium snapshot, or null. */
@@ -256,6 +265,22 @@ export class DesiredStateController {
   setHackLoopEnabled(enabled: boolean): void {
     writeSwitch(this.#store, HACK_LOOP_ENABLED_SETTING, enabled);
     this.#update();
+  }
+
+  /** The batcher's switch (#205), likewise; off by default. */
+  setBatcherEnabled(enabled: boolean): void {
+    writeSwitch(this.#store, BATCHER_ENABLED_SETTING, enabled);
+    this.#update();
+  }
+
+  /** The batcher (#205): its switch, what was sent or why not, and the connected Agent's last report of its health. */
+  batcherView(): BatcherView {
+    return batcherViewOf(
+      readBatcherEnabled(this.#store),
+      this.#desired?.batcher ?? null,
+      this.#batcherWhy,
+      this.#fastData?.batcher,
+    );
   }
 
   /** The hacking programs' switch, likewise. */
@@ -503,6 +528,27 @@ export class DesiredStateController {
     return true;
   }
 
+  /**
+   * The hack loop as planned, and the batcher with its switch on (#205): on the hack loop's target and all its hosts,
+   * which the hack loop then leaves (it still roots). With the switch off, or no batcher to plan (the reason kept for
+   * the dashboard), the hack loop as planned.
+   */
+  #withBatcher(hackLoop: DesiredState["hackLoop"]): Pick<DesiredState, "hackLoop" | "batcher"> {
+    this.#batcherWhy = null;
+    if (!readBatcherEnabled(this.#store) || this.#staticData === null || this.#mediumData === null) return { hackLoop };
+    if (hackLoop.target === null) {
+      this.#batcherWhy = "no target yet";
+      return { hackLoop };
+    }
+    const hosts = [...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])];
+    const planned = planBatcher(this.#staticData, this.#mediumData, hackLoop.target, hosts);
+    if (planned.batcher === null) {
+      this.#batcherWhy = planned.why;
+      return { hackLoop };
+    }
+    return { hackLoop: { enabled: true, target: hackLoop.target, hosts: [] }, batcher: planned.batcher };
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     this.#purchase = this.#choosePurchase();
@@ -563,7 +609,7 @@ export class DesiredStateController {
       const { hackLoop, lastSet } = planHackLoop(this.#staticData, this.#mediumData, this.#lastSetHackTarget);
       this.#lastSetHackTarget = lastSet;
       this.#lastSetHackTargetResetAt = resetAt ?? this.#lastSetHackTargetResetAt;
-      this.#desired = { hackLoop: { enabled: true, ...hackLoop }, intents, ...workAndTtl };
+      this.#desired = { ...this.#withBatcher({ enabled: true, ...hackLoop }), intents, ...workAndTtl };
     }
     this.#channel.setDesiredState(this.#desired);
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).

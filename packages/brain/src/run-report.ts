@@ -15,6 +15,7 @@ import {
   type WorkOutcome,
 } from "@bitburner-agent/core";
 import { BackdoorTimeline } from "./backdoors.ts";
+import { batcherSection } from "./batcher-report.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
@@ -271,6 +272,8 @@ interface FastPoint {
   blocking: unknown;
   /** Absent from an older Agent. */
   work: WorkOutcome | null | undefined;
+  /** The batcher's health (#205); absent from an older Agent. */
+  batcher: unknown;
 }
 
 /** What the report reads from the store for a window, folded as it's read. */
@@ -360,6 +363,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         intents: Array.isArray(data.intents) ? data.intents.filter((outcome) => typeof outcome?.id === "string") : [],
         blocking: data.dialogs?.blocking,
         work: data.work,
+        batcher: data.batcher,
       });
     }
     const earlierStarts = store
@@ -421,6 +425,8 @@ export function runReport(
     ...healthSection(facts, gapThresholdMs, failures),
     "",
     ...facts.hacking.section(failures),
+    "",
+    ...batcherSection(facts.fast.map(({ atMs, batcher }) => ({ atMs, health: batcher }))),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
     ...failures.map((failure) => `  ${failure}`),

@@ -39,6 +39,10 @@
     <h2>Hack loop</h2><div></div><button type="button">Stop the hack loop</button>
     <div class="bad" id="hack-loop-problem" hidden></div>
   </section>
+  <section id="batcher">
+    <h2>Batcher</h2><div></div><button type="button">Start the batcher</button>
+    <div class="bad" id="batcher-problem" hidden></div>
+  </section>
   <section id="programs">
     <h2>Hacking programs</h2><div></div><button type="button">Stop buying programs</button>
     <div class="bad" id="programs-problem" hidden></div>
@@ -105,6 +109,8 @@ const POLL_MS = 2000;
 let pauseNext = true;
 /** What the hack loop's switch sends next (#134): the other way from the status. */
 let enableHackLoopNext = false;
+/** What the batcher's switch sends next (#205), likewise. */
+let enableBatcherNext = true;
 /** What the hacking programs' switch sends next (#136), likewise. */
 let enableProgramsNext = false;
 /** What home RAM's switch sends next (#138), likewise. */
@@ -233,6 +239,31 @@ function render(status) {
     element("div", `Hack loop: ${hackLoopText}`, hackLoop.enabled ? "ok" : "muted"),
   );
   document.querySelector("#hack-loop button").textContent = hackLoop.enabled ? "Stop the hack loop" : "Start the hack loop";
+
+  // The batcher (#205): what the brain sent, or why nothing, and its health as the Agent last reported it.
+  const batcher = status.batcher;
+  enableBatcherNext = !batcher.enabled;
+  const sent = batcher.sent;
+  const batcherText = !batcher.enabled
+    ? "off: the hack loop hacks"
+    : sent === null
+      ? `on, nothing sent: ${batcher.why ?? "waiting for the Agent's snapshots"}`
+      : `on ${sent.runOn}, against ${sent.target}, on ${sent.hosts} servers: ${(sent.hackShare * 100).toFixed(1)}% a batch, ` +
+        `one every ${seconds(sent.spacingMs)}`;
+  const health = batcher.health;
+  const healthText =
+    health === null
+      ? "Its health: not reported"
+      : `Its health: ${health.state}, ${health.batchesStarted} batches, ${health.hacksLanded} hacks landed ` +
+        `(${health.hacksFailed} failed, ${health.hacksSkipped} skipped), ${health.desyncs} desyncs ` +
+        `(${health.outOfOrder} out of order, ${health.outOfBounds} out of bounds), ${health.late} late, ` +
+        `${health.lost} lost, ${health.batchesShort} short${health.problem === null ? "" : `; ${health.problem}`}`;
+  const healthBad = health !== null && (health.desyncs > 0 || health.problem !== null);
+  document.querySelector("#batcher div").replaceChildren(
+    element("div", `Batcher: ${batcherText}`, batcher.enabled ? "ok" : "muted"),
+    element("div", healthText, healthBad ? "bad" : undefined),
+  );
+  document.querySelector("#batcher button").textContent = batcher.enabled ? "Stop the batcher" : "Start the batcher";
 
   const programs = status.programs;
   enableProgramsNext = !programs.enabled;
@@ -424,6 +455,9 @@ document.querySelector("#supervision button").addEventListener("click", () =>
 );
 document.querySelector("#hack-loop button").addEventListener("click", () =>
   sendSwitch("/api/hack-loop", { enabled: enableHackLoopNext }, "#hack-loop-problem"),
+);
+document.querySelector("#batcher button").addEventListener("click", () =>
+  sendSwitch("/api/batcher", { enabled: enableBatcherNext }, "#batcher-problem"),
 );
 document.querySelector("#programs button").addEventListener("click", () =>
   sendSwitch("/api/programs", { enabled: enableProgramsNext }, "#programs-problem"),
