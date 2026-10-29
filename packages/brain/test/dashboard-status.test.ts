@@ -25,6 +25,7 @@ const hackLoop: HackLoopView = {
   waiting: false,
   target: "n00dles",
   hosts: ["foodnstuff", "n00dles"],
+  hackThreads: null,
   preparing: null,
 };
 const programs: ProgramsView = {

@@ -210,15 +210,21 @@ function render(status) {
 
   const hackLoop = status.hackLoop;
   enableHackLoopNext = !hackLoop.enabled;
+  // "hacking with at most N threads" (#187): each host's hack threads added up, where the brain caps them.
+  const hackingWith = (hackThreads) =>
+    typeof hackThreads === "number" ? `, hacking with at most ${hackThreads} threads` : "";
   const hackLoopText = !hackLoop.enabled
     ? "off"
     : hackLoop.waiting
       ? "on, waiting for the Agent's snapshots"
       : hackLoop.target === null
         ? "on, rooting servers; no target yet"
-        : `on, against ${hackLoop.target}, on ${hackLoop.hosts.length} servers` +
+        : `on, against ${hackLoop.target}, on ${hackLoop.hosts.length} servers${hackingWith(hackLoop.hackThreads)}` +
           // The next target, prepared on the largest hosts while the rest earn (#184).
-          (hackLoop.preparing ? `; preparing ${hackLoop.preparing.target} on ${hackLoop.preparing.hosts.length} servers` : "");
+          (hackLoop.preparing
+            ? `; preparing ${hackLoop.preparing.target} on ${hackLoop.preparing.hosts.length} servers` +
+              hackingWith(hackLoop.preparing.hackThreads)
+            : "");
   document.querySelector("#hack-loop div").replaceChildren(
     element("div", `Hack loop: ${hackLoopText}`, hackLoop.enabled ? "ok" : "muted"),
   );

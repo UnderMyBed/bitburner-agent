@@ -92,6 +92,13 @@ export interface HackLoopState {
    * older brain, and safe mode's file from one, says none.
    */
   preparing?: { target: string; hosts: string[] } | null;
+  /**
+   * The threads each host's loop hacks with (#187), at least 1, by hostname, or absent (null): every host hacks with
+   * all its threads, as before. Only hosts of `hosts` or `preparing.hosts`; one it doesn't name hacks with all its
+   * threads. The deploy worker caps each at the loop's threads. Absent is how an older brain, and safe mode's file
+   * from one, says none.
+   */
+  hackThreads?: Record<string, number> | null;
 }
 
 /** The longest `ttlMs` taken: 7 days, so a time it makes is always one a date can show (#160). */
@@ -271,26 +278,47 @@ function parseIntents(intents: unknown): ParsedMessage<Intent[]> {
  * A desired state's `hackLoop`: its known fields only, or why it isn't valid. Safe mode's file uses it too (#160).
  * `preparing` (#184), checked in the order the protocol's docs give: its shape (a target, and a list of hostnames); none
  * when absent, null or with no hosts; then only with the loop on and a target, another target than that, no host of
- * `hosts`, and both lists together within `MAX_HACK_LOOP_HOSTS`.
+ * `hosts`, and both lists together within `MAX_HACK_LOOP_HOSTS`. Then `hackThreads` (#187): none when absent, null or
+ * empty; else an object whose every key is a host of `hosts` or `preparing.hosts`, each with a whole number, 1 or more.
  */
 export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
   if (typeof hackLoop !== "object" || hackLoop === null) return { ok: false, reason: "hackLoop isn't an object" };
-  const { enabled, target, hosts, preparing } = hackLoop as JsonObject;
+  const { enabled, target, hosts, preparing, hackThreads } = hackLoop as JsonObject;
   if (typeof enabled !== "boolean") return { ok: false, reason: "hackLoop.enabled isn't a boolean" };
   if (target !== null && !isShortNonEmptyString(target)) {
     return { ok: false, reason: `hackLoop.target is ${describeValue(target)}` };
   }
   if (!isHostList(hosts)) return { ok: false, reason: "hackLoop.hosts isn't a list of hostnames" };
-  if (preparing === undefined || preparing === null) {
-    return { ok: true, message: { enabled, target, hosts: [...hosts] } };
-  }
+  const parsedPreparing = parsePreparing(preparing, { enabled, target, hosts });
+  if (!parsedPreparing.ok) return parsedPreparing;
+  const allHosts = new Set([...hosts, ...(parsedPreparing.message?.hosts ?? [])]);
+  const parsedHackThreads = parseHackThreads(hackThreads, allHosts);
+  if (!parsedHackThreads.ok) return parsedHackThreads;
+  return {
+    ok: true,
+    message: {
+      enabled,
+      target,
+      hosts: [...hosts],
+      ...(parsedPreparing.message === null ? {} : { preparing: parsedPreparing.message }),
+      ...(parsedHackThreads.message === null ? {} : { hackThreads: parsedHackThreads.message }),
+    },
+  };
+}
+
+/** `hackLoop.preparing` (#184), as `parseHackLoop` says: null for none. */
+function parsePreparing(
+  preparing: unknown,
+  { enabled, target, hosts }: { enabled: boolean; target: string | null; hosts: string[] },
+): ParsedMessage<{ target: string; hosts: string[] } | null> {
+  if (preparing === undefined || preparing === null) return { ok: true, message: null };
   if (typeof preparing !== "object") return { ok: false, reason: "hackLoop.preparing isn't an object" };
   const { target: preparingTarget, hosts: preparingHosts } = preparing as JsonObject;
   if (!isShortNonEmptyString(preparingTarget)) {
     return { ok: false, reason: `hackLoop.preparing.target is ${describeValue(preparingTarget)}` };
   }
   if (!isHostList(preparingHosts)) return { ok: false, reason: "hackLoop.preparing.hosts isn't a list of hostnames" };
-  if (preparingHosts.length === 0) return { ok: true, message: { enabled, target, hosts: [...hosts] } };
+  if (preparingHosts.length === 0) return { ok: true, message: null };
   if (!enabled || target === null) return { ok: false, reason: "hackLoop.preparing with the loop off or no target" };
   if (preparingTarget === target) return { ok: false, reason: "hackLoop.preparing.target is the target it earns on" };
   // One target per host: the deploy worker would otherwise start one and stop it on the next round.
@@ -304,10 +332,23 @@ export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
       reason: `hackLoop.hosts and hackLoop.preparing.hosts together are over ${MAX_HACK_LOOP_HOSTS}`,
     };
   }
-  return {
-    ok: true,
-    message: { enabled, target, hosts: [...hosts], preparing: { target: preparingTarget, hosts: [...preparingHosts] } },
-  };
+  return { ok: true, message: { target: preparingTarget, hosts: [...preparingHosts] } };
+}
+
+/** `hackLoop.hackThreads` (#187), as `parseHackLoop` says, against the hosts named: null for none. */
+function parseHackThreads(hackThreads: unknown, hosts: Set<string>): ParsedMessage<Record<string, number> | null> {
+  if (hackThreads === undefined || hackThreads === null) return { ok: true, message: null };
+  if (typeof hackThreads !== "object" || Array.isArray(hackThreads)) {
+    return { ok: false, reason: "hackLoop.hackThreads isn't an object" };
+  }
+  const entries = Object.entries(hackThreads);
+  for (const [host, threads] of entries) {
+    if (!hosts.has(host)) return { ok: false, reason: `hackLoop.hackThreads names ${describeValue(host)}, not a host` };
+    if (!isSafeIntegerAtLeast(threads, 1)) {
+      return { ok: false, reason: `hackLoop.hackThreads of ${describeValue(host)} is ${describeValue(threads)}` };
+    }
+  }
+  return { ok: true, message: entries.length === 0 ? null : Object.fromEntries(entries) };
 }
 
 const isHostList = (hosts: unknown): hosts is string[] =>

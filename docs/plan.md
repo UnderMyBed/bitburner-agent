@@ -20,7 +20,7 @@
 | 1 | First-principles mechanics reference ([`mechanics/`](mechanics/)) and [`synthesis.md`](synthesis.md) | ✅ |
 | 1b | Community research ([`research/`](research/)) | ✅ |
 | — | Architecture ([`architecture.md`](architecture.md)) and decision records ([`decisions/`](decisions/)) | ✅ draft |
-| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); M2 done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)); M3 done ([v0.3.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.3.0)) |
+| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); M2 done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)); M3 done ([v0.3.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.3.0); the owner waived its closing live run on 2026-10-28, after the first run's report failed on an income stall that [#184](https://github.com/UnderMyBed/bitburner-agent/issues/184) and [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187) fixed) |
 
 ## Tracking
 - **Work:** [GitHub milestones](https://github.com/UnderMyBed/bitburner-agent/milestones) → epics → task issues. Each task carries its own design, implementation plan and acceptance criteria ([ADR 0008](decisions/0008-work-tracking-and-reviews.md)).

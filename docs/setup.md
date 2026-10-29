@@ -16,9 +16,9 @@ How to run the agent against Bitburner on Steam, from a clone of this repository
 
 Only tagged releases go to Steam (architecture §6). Clone the repository and check out the newest release tag. `v0.3.0` is the example below (`v0.2.0` was the first with these steps).
 
-For [the owner's check](#the-owners-check) or a release's live run on Steam ([releasing](releasing.md) step 2), check out the candidate commit instead. It's recorded on the milestone's review issue. Then follow [this page as it is on `main`](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md), not the copy in your checkout: docs fixed after the candidate are only there.
+For a release's live run on Steam ([releasing](releasing.md) step 2), check out the candidate commit instead. It's recorded on the milestone's review issue. Then follow [this page as it is on `main`](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md), not the copy in your checkout: docs fixed after the candidate are only there.
 
-**Already have a clone?** Use it, except for the owner's check, which starts from a new one. Stop its brain if it's running, then follow [Upgrading to a new release](#upgrading-to-a-new-release) with the tag or commit you want. That ends with step 2's `npm run brain`, so carry on at step 3. Its `.data/`, if it has one, carries over: the config, the store and the save backups.
+**Already have a clone?** Use it. Stop its brain if it's running, then follow [Upgrading to a new release](#upgrading-to-a-new-release) with the tag or commit you want. That ends with step 2's `npm run brain`, so carry on at step 3. Its `.data/`, if it has one, carries over: the config, the store and the save backups.
 
 ```
 git clone https://github.com/UnderMyBed/bitburner-agent.git
@@ -84,9 +84,9 @@ The skeleton now runs as long as the brain does. After a reboot, run `npm run br
 
 ## Day to day
 
-- **The hack loop** (since v0.3.0) is on by default (owner decision 34). Once the Agent connects, it roots the servers it can and runs a loop on the game's servers against the target the brain picks; the dashboard's "Hack loop" line names it. When a better target comes within reach, the largest servers prepare it while the rest keep earning, and the line names that too ("preparing zer0 on 7 servers"); all move to it once it's ready. It never runs on home or on your purchased or Hacknet servers, and never touches your own scripts ([the hack loop](../packages/ingame/README.md#the-hack-loop)).
+- **The hack loop** (since v0.3.0) is on by default (owner decision 34). Once the Agent connects, it roots the servers it can and runs a loop on the game's servers against the target the brain picks; the dashboard's "Hack loop" line names it. When a better target comes within reach, the largest servers prepare it while the rest keep earning, and the line names that too ("preparing zer0 on 7 servers"); all move to it once it's ready. Each server hacks with only so many threads that, together, they never take more of a target's money than it grows back quickly, so money keeps rising: the line says how many ("hacking with at most 48 threads", #187). It never runs on home or on your purchased or Hacknet servers, and never touches your own scripts ([the hack loop](../packages/ingame/README.md#the-hack-loop)).
   - **It fills the free RAM** on the servers it runs on, so a script you start there later may not fit. A loop you kill comes back within about 30 s. To use those servers yourself, stop the loop first.
-  - **Money flat for 10 minutes** with the loop on is the dashboard's `incomeStalled` alert, with how long, the money and the target, and a line in the brain's window as it starts and ends. A purchase lowers money, which doesn't count as a rise. Until [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187), expect it now and then after a move to a slow-growing target (max-hardware, say): the loops hack it together, down to almost nothing, and it takes 20 minutes or more to grow back.
+  - **Money flat for 10 minutes** with the loop on is the dashboard's `incomeStalled` alert, with how long, the money and the target, and a line in the brain's window as it starts and ends. A purchase lowers money, which doesn't count as a rise. It shouldn't happen: if it does, `npm run report` names the stall, and it's worth an issue.
   - **To stop it,** click **"Stop the hack loop"** on the dashboard: every loop stops within a few seconds, and it stays off, across brain restarts, until you start it again.
 - **Buying the hacking programs** (since v0.3.0) is on by default too. When you can afford the next one, the Agent buys the TOR router at your city's tech vendor, then BruteSSH.exe, FTPCrack.exe, relaySMTP.exe, HTTPWorm.exe and SQLInject.exe through the terminal, so the hack loop can root more servers ([the hacking programs](../packages/ingame/README.md#the-hacking-programs)).
   - **It uses the game's page, as you would:** a few times a session you'll see the page switch to the City and back, or a `buy` typed into the terminal. However it goes, it ends on the Terminal, or, if you were focused on work, focused on it again.
@@ -117,7 +117,7 @@ Stop the brain, then:
 
 ```
 git fetch --tags
-git checkout v0.3.0                 # or the candidate commit, for a check or a live run
+git checkout v0.3.0                 # or the candidate commit, for a live run
 npm run bootstrap
 npm run brain
 ```
@@ -155,16 +155,4 @@ It prints four sections, then a verdict:
 
 ## The owner's check
 
-Before relying on it, check it on your machine, on the candidate commit (step 1). Do these checks in order, and record what you saw on [#95](https://github.com/UnderMyBed/bitburner-agent/issues/95) (checks 1–5) and [#94](https://github.com/UnderMyBed/bitburner-agent/issues/94) (check 6). Times are approximate: the supervisor looks every 30 s.
-
-1. **From a new clone:** setup steps 1 and 2, in a new folder, even if you already have a clone. Stop any other clone's brain first: the ports are fixed. The brain starts, and if the game isn't open, it launches it about 30 s later (a `relaunch` event, cause `notRunning`). Note anything you had to install or set up outside the repo: there should be nothing beyond Node, git and Steam. Note, too, how long Steam took to open the game.
-2. **Setting the game up:** setup steps 3 to 5. The game connects, and the dashboard shows the Agent reporting. Steam's origin isn't logged when it's accepted: if it connected with the default `allowedOrigins`, record `file://`; otherwise record the origin you added.
-3. **The game's version:** the dashboard's Agent table says "the pinned one" on its "Version" line, and there's no `versionDrift` alert. Note its "Game" line too.
-4. **Stopping and starting the brain:** Ctrl+C, then `npm run brain` again. The game's Remote API reconnects within a few seconds (its reconnection delay is 5 s), and the Agent reports again.
-5. **A brain crash:** in Task Manager, end the brain's own `node` process: the one whose command line has `packages\brain\src\main.ts`, not `start.ts`. To see command lines, open the Details page in the left-hand menu, right-click a column header, then Select columns → Command line. A `brain runner:` line says the brain exited and restarts in 5 s. The brain's own start lines follow, and the game reconnects.
-6. **Supervision (#94).** Checks 6.1 and 6.2 each launch the game. With the brain's launch in check 1, that's 3 launches, the most allowed in an hour, so do check 6 once, in one go. If a launch within the hour would be a 4th (a part repeated, say), the supervisor gives up instead, with a `supervisionGaveUp` alert. That's the rate limit working: click "Resume supervision", which starts the count afresh, and carry on.
-   1. **Close the game.** Within about 30 s it's relaunched (cause `notRunning`). Wait until the Agent reports again: autoexec starts it.
-   2. **Kill the Agent** in the game's terminal: `kill agent/<id>/agent.js`, where `<id>` is the "Deployment" in the dashboard's Agent table. Once the Agent has been silent for 5 minutes, the game is killed and relaunched (cause `silent`), and the Agent comes back through autoexec. That's never sooner than 10 minutes after the last launch, which leaves 5 minutes for Steam to start the game and 5 for the Agent to boot. So expect it about 10 minutes after check 6.1's relaunch, or 5 minutes after you kill the Agent, whichever is later.
-   3. **Pause supervision, then close the game.** Wait a couple of minutes: no `relaunch` event appears. Then start the game from Steam yourself, and once it's open, resume. (Resuming while it's still closed would launch it: a 4th launch if check 1 launched the game, so the supervisor would give up as above.)
-
-**Afterwards,** the dashboard should show supervision running and the Agent connected. For a release's live run, that's the time to take `<start>` from ([releasing step 2](releasing.md)).
+There isn't one any more. M2's manual checklist (a new clone, setting the game up, its version, stopping and crashing the brain, and supervision's relaunches; recorded on [#95](https://github.com/UnderMyBed/bitburner-agent/issues/95) and [#94](https://github.com/UnderMyBed/bitburner-agent/issues/94)) ended with owner decision 45: no manual checks. A live run is read back with [the run report](#after-a-run-the-run-report) instead, `npm run report`, whose first section has what that checklist looked at: the brain's starts, the game's relaunches and their causes (`notRunning`, `silent`), deploys, version drift, the Agent's connections, and the supervisor's failed checks and give-ups. Supervision's rules (a check every 30 s, at most 3 launches in an hour) are in [packages/brain](../packages/brain/README.md#supervision).
