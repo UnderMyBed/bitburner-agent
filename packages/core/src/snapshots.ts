@@ -50,8 +50,8 @@ export interface StaticSnapshotData {
 }
 
 /**
- * slow: every 60 s. `ns.getResetInfo()` (its Maps as objects) and the purchased servers, from the slow worker; and the
- * faction state (#197), read just after it by the Agent's faction state reader.
+ * slow: every 60 s. `ns.getResetInfo()` (its Maps as objects), the purchased servers and the money by source, from the
+ * slow worker; and the faction state (#197), read just after it by the Agent's faction state reader.
  */
 export interface SlowSnapshotData {
   resetInfo: {
@@ -70,6 +70,11 @@ export interface SlowSnapshotData {
    * couldn't be read. Absent from an older Agent, and from the slow worker's own report (the Agent adds it).
    */
   factions?: FactionStateReading;
+  /**
+   * `ns.getMoneySources().sinceInstall` (#196): money made (and spent, as negatives) by source since the last install,
+   * which resets it (PlayerObjectGeneralMethods.ts:128). `hacking` is every hack's money. Absent from an older Agent.
+   */
+  moneySources?: Record<string, number>;
 }
 
 /** medium: every 10 s. `ns.getPlayer()` whole, and every reachable server's RAM, cores, money, security and access. */

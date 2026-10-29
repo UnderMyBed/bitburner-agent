@@ -16,6 +16,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
+import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { findIncomeStalls, formatDuration, inferHackTargets, runReport } from "../src/run-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -377,11 +378,80 @@ describe("the sections", () => {
       "  work, as it changed:\n    not reported",
       "  promotions:\n    none",
       "  dialogs handled:\n    none",
+      "  the ceilings now: unknown: no medium snapshot",
+      "  actual: unknown: fewer than two slow snapshots in the window",
     ]) {
       expect(text).toContain(line);
     }
   });
+
+  test("5. Hacking: the best 10 minutes and the window against the ceilings, as percentages, and the ceilings now", () => {
+    const ceiling = hackingRun({ earning: (ceilings) => ceilings.batcherIncomePerSecond / 2 });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`  the ceilings now: ${describeCeiling(ceiling)}\n`);
+    expect(text).toMatch(/\n {2}the best 10 minutes: 50\.0% of the batcher ceiling \(/);
+    expect(text).toMatch(
+      /\n {2}over the window: \$[\d,]+\/s: 50\.0% of the batcher ceiling \(\$[\d,]+\/s\), [\d.]+% of the ceiling /,
+    );
+  });
+
+  test("5. Hacking: a window starting after the Agent's static snapshot still judges, from the one before it (#196)", () => {
+    hackingRun({ earning: (ceilings) => ceilings.batcherIncomePerSecond / 2 });
+    const { text } = runReport(store, { ...window, sinceMs: T0 + 5 * MINUTE });
+    expect(text).toMatch(/\n {2}over the window: \$[\d,]+\/s: 50\.0% of the batcher ceiling /);
+  });
 });
+
+/**
+ * A run with what the ceilings need (#196): zer0 rooted with 16 GB at hacking 150, a medium snapshot every 10 s with
+ * the player's skills and multipliers, and hacking earning `earning` $ a second, by the slow snapshots' money sources
+ * every minute. From `relaunchAtMs`, the count is `relaunchFall` lower, as after a relaunch from an older save.
+ * Returns the ceilings.
+ */
+function hackingRun({
+  earning,
+  relaunchAtMs = Number.POSITIVE_INFINITY,
+  relaunchFall = 0,
+}: {
+  earning: (ceilings: Extract<HackingCeiling, { known: true }>) => number;
+  relaunchAtMs?: number;
+  relaunchFall?: number;
+}): Extract<HackingCeiling, { known: true }> {
+  const servers: StaticSnapshotData = {
+    servers: [
+      { ...staticServer("home"), purchasedByPlayer: true, moneyMax: 0 },
+      staticServer("zer0", { moneyMax: 187_500_000, minDifficulty: 10, requiredHackingSkill: 75, serverGrowth: 25 }),
+    ],
+  };
+  const player = {
+    money: 0,
+    skills: { hacking: 150, intelligence: 0 },
+    mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+  };
+  const zer0 = {
+    hostname: "zer0",
+    maxRam: 16,
+    cpuCores: 1,
+    hasAdminRights: true,
+    moneyAvailable: 0,
+    hackDifficulty: 10,
+  };
+  const medium: MediumSnapshotData = { player, hasTorRouter: false, programs: [], servers: [zer0] };
+  const ceiling = hackingCeiling(servers, medium);
+  if (!ceiling.known) throw new Error(ceiling.reason);
+  event(0, "brainStarted", { release: "r" });
+  snapshot("static", 10 * SECOND, servers);
+  for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+  for (let offsetMs = 10 * SECOND; offsetMs <= 10 * SECOND + RUN_MS; offsetMs += 10 * SECOND) {
+    snapshot("medium", offsetMs, medium);
+    const count =
+      1e9 + ((offsetMs - 10 * SECOND) / 1000) * earning(ceiling) - (offsetMs >= relaunchAtMs ? relaunchFall : 0);
+    if ((offsetMs - 10 * SECOND) % MINUTE === 0)
+      snapshot("slow", offsetMs, { ...slowData(), moneySources: { hacking: count } });
+  }
+  return ceiling;
+}
 
 describe("each failure is a FAIL, with its line", () => {
   const verdict = () => {
@@ -641,6 +711,28 @@ describe("each failure is a FAIL, with its line", () => {
     expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * SECOND }).failures).toEqual([]);
     expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 61 * SECOND }).failures).toEqual([
       `Agent disconnected at ${at(RUN_MS + SECOND)} (session session-1) and never reconnected in the window; nothing recorded during it`,
+    ]);
+  });
+
+  test("a relaunch, hacking's count since the install falling to an older save's, is no income and no FAIL (#196)", () => {
+    hackingRun({
+      earning: (ceilings) => ceilings.batcherIncomePerSecond / 2,
+      relaunchAtMs: 8 * MINUTE,
+      relaunchFall: 5e8,
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toMatch(/\n {2}over the window: \$[\d,]+\/s: 4\d\.\d% of the batcher ceiling /);
+  });
+
+  test("hacking income above what all the rooted RAM could earn: its formula or the measure is wrong (#196)", () => {
+    hackingRun({ earning: (ceilings) => ceilings.boundIncomePerSecond * 1.5 });
+    const { failures, verdictLine } = verdict();
+    expect(verdictLine).toBe("Verdict: FAIL");
+    expect(failures).toEqual([
+      expect.stringMatching(
+        /^hacking income above what all the rooted RAM could earn: \$[\d,]+ earned from .*: the ceiling's formula or the measure is wrong$/,
+      ),
     ]);
   });
 

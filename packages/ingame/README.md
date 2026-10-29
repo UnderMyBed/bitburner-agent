@@ -64,7 +64,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `boot.js` | `isRunning` (0.1 GB), `run` (1.0 GB); `read`, `print`, `tprint` and the log switches cost nothing | 2.7 GB (2.7) |
 | `agent.js` | `run` (1.0 GB), `isRunning`, `getScriptRam` (0.1 GB each), `getServerMaxRam`, `getServerUsedRam` (0.05 GB each, with `getScriptRam`, for whether a Singularity worker fits home beside the Agent, and in its free RAM now, #162); `read`, `write`, `sleep`, `asleep`, `atExit`, `getPortHandle`, `getScriptName`, `ui.getGameInfo`, `print`, `tprint` and the log switches cost nothing | 2.9 GB (3.0) |
 | `snapshot-static.js` | `scan` (0.2 GB), `getServer` (2.0 GB) | 3.8 GB (3.8) |
-| `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB) | 3.65 GB (3.65) |
+| `snapshot-slow.js` | `getResetInfo` (1.0 GB), `cloud.getServerNames` (1.05 GB), `getMoneySources` (1.0 GB, #196) | 4.65 GB (4.65) |
 | `snapshot-medium.js` | `getPlayer` (0.5 GB), `scan` (0.2 GB), `getServer` (2.0 GB), `fileExists` (0.1 GB), `hasTorRouter` (0.05 GB) | 4.45 GB (4.45) |
 | `snapshot-fast.js` | `ps` (0.2 GB), `getServerMoneyAvailable` (0.1 GB; on home it gives the player's money, where `getPlayer` costs 0.5), `getServerUsedRam`, `getServerMaxRam` (0.05 GB each) | 2.0 GB (2.0) |
 | `hack-loop-root.js` | `scan` (0.2 GB), `fileExists`, `getServerNumPortsRequired` (0.1 GB each), `hasRootAccess`, `nuke` and the five port openers (0.05 GB each) | 2.35 GB (2.35) |
@@ -103,7 +103,7 @@ The Singularity workers' figures are at SF4.3 or in BN4, where the test measures
 
 `buy-server.js` (#159, 4.5 GB) is a fresh-save worker: its NS calls need no Singularity. So is `backdoor.js` (#162, 4.0 GB).
 
-The workers write to a port (`writePort`, free). The Agent plus the largest home worker a fresh save runs (`hack-loop-deploy.js`, 4.65 GB) is 7.55 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
+The workers write to a port (`writePort`, free). The Agent plus the largest home workers a fresh save runs (`hack-loop-deploy.js`, 4.65 GB, and since #196 `snapshot-slow.js`, as large) is 7.55 GB, within its 8 GB home; a test checks the budgets (7.65 GB) keep it so, over every home worker a fresh save runs (all but the Singularity ones). The brain's [skeleton suite](../brain/README.md#the-skeleton-suite) and [hack loop suite](../brain/README.md#the-hack-loop) check home's RAM while the Agent actually runs, in a simulated 8 GB fresh start, and the E2 skeleton measures each script with the game's `mem` in a real one ([`packages/e2`](../e2/README.md#the-skeleton-on-e2)).
 
 ## Deploy layout
 

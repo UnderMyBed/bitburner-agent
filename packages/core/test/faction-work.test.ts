@@ -10,7 +10,6 @@ import {
   factionReputationPerSecond,
   HACKING_MULTIPLIERS,
   hackingValue,
-  intelligenceBonus,
   MAX_SKILL_LEVEL,
   UNFOCUSED_WORK_BONUS,
   type WorkingPerson,
@@ -40,11 +39,8 @@ test("the constants are the pinned game's: 975, 200 ms a cycle, 0.8 unfocused", 
   );
 });
 
-test("intelligenceBonus: 1 + weight × intelligence^0.8 / 600", () => {
-  expect(intelligenceBonus(0)).toBe(1);
-  expect(intelligenceBonus(90)).toBeCloseTo(1 + 90 ** 0.8 / 600, 15);
-  expect(intelligenceBonus(90, 2)).toBeCloseTo(1 + (2 * 90 ** 0.8) / 600, 15);
-});
+/** The game's intelligence bonus at weight 1, as each faction work formula takes it. */
+const intelligenceBonus = (intelligence: number) => 1 + intelligence ** 0.8 / 600;
 
 test("hacking work: (hacking + intelligence/3) / 975 × faction_rep × the intelligence bonus × (1 + favour/100)", () => {
   expect(factionReputationPerCycle(FRESH, "hacking", 0, 0)).toBeCloseTo(55 / 975, 15);

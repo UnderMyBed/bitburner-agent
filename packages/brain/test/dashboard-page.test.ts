@@ -118,6 +118,22 @@ const BUSY_STATUS: DashboardStatus = {
     problem: null,
   },
   factionWork: QUIET_FACTIONS_VIEW,
+  hacking: {
+    ceiling: {
+      known: true,
+      batcherIncomePerSecond: 40_000,
+      target: "joesguns",
+      incomePerSecond: 51_234.6,
+      hostCount: 3,
+      hostRamGb: 48,
+      boundIncomePerSecond: 60_000,
+      rootedCount: 4,
+      rootedRamGb: 56,
+    },
+    incomePerSecond: 2_049.4,
+    ceilingText: "$40,000/s for a batcher on joesguns <b>(</b>$51,235/s for any hacker)",
+    incomeText: "$2,049/s over the last 10 min: 5.1% of the batcher ceiling now, 4.0% of the ceiling",
+  },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -262,6 +278,12 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#values")).toContain("4.7 of 8 GB");
   expect(textOf(document, "#values")).toContain("250 MB");
   expect(textOf(document, "#values")).toContain("Degraded tiersstatic");
+  // The hacking ceiling and income (#196).
+  // As text, never as HTML.
+  expect(textOf(document, "#values")).toContain("Hacking ceiling$40,000/s for a batcher on joesguns <b>(</b>$51,235/s");
+  expect(textOf(document, "#values")).toContain(
+    "Hacking income$2,049/s over the last 10 min: 5.1% of the batcher ceiling now, 4.0% of the ceiling",
+  );
   expect(textOf(document, "#gaps")).toContain("1800 fast snapshots");
   expect(textOf(document, "#gaps")).toContain("25 gaps, 500 s in all; the newest 1:");
   expect(textOf(document, "#gaps")).toContain("(100 s)");
@@ -393,6 +415,11 @@ test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
   expect(textOf(document, "#agent")).toContain("Connectedyes");
   expect(textOf(document, "#tiers")).toContain("mediumnone yet");
   expect(textOf(document, "#factions")).toContain("No slow snapshot yet.");
+  // No snapshots yet: the ceiling says why, and there's no income.
+  expect(textOf(document, "#values")).toContain("Hacking ceilingunknown: no static snapshot");
+  expect(textOf(document, "#values")).toContain(
+    "Hacking income— (not two slow snapshots with the money sources in the last 10 min)",
+  );
 });
 
 test("gave up, from the real builder: the Agent gone, a relaunch listed, and the switch offers Resume", async () => {

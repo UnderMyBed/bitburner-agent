@@ -10,12 +10,14 @@ import {
   type MediumSnapshotData,
   SNAPSHOT_TIERS,
   type SnapshotTier,
+  type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStateProblemOf } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
+import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
@@ -106,6 +108,8 @@ export interface DashboardStatus {
   } | null;
   /** The brain's joins and faction work (#203): its switch, the join under way, the invitations left, and its choice. */
   factionWork: FactionsView;
+  /** The hacking ceiling now, and what hacking earned over the last 10 minutes (#196). */
+  hacking: HackingView;
 }
 
 export interface DashboardStatusOptions {
@@ -286,5 +290,12 @@ export function buildDashboardStatus({
         }
       : null,
     factionWork,
+    hacking: hackingView({
+      store,
+      environment,
+      nowMs,
+      staticData: latestOfTier.static?.data as StaticSnapshotData | undefined,
+      mediumData: medium,
+    }),
   };
 }

@@ -4,6 +4,7 @@
  * simulator's tests; checked against the engine's `ns.formulas.work.factionGains` (the brain's parity suite).
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
+import { intelligenceBonus } from "./hacking-ceiling.ts";
 import type { FactionWorkType } from "./work.ts";
 
 /** `MaxSkillLevel` (`Constants.ts:16`): the skills' divisor in every faction work formula. */
@@ -25,11 +26,6 @@ export interface WorkingPerson {
     intelligence: number;
   };
   mults: { faction_rep: number };
-}
-
-/** `calculateIntelligenceBonus` (`PersonObjects/formulas/intelligence.ts:1-3`). */
-export function intelligenceBonus(intelligence: number, weight = 1): number {
-  return 1 + (weight * intelligence ** 0.8) / 600;
 }
 
 const finite = (value: number, what: string) => {
@@ -62,7 +58,8 @@ export function factionReputationPerCycle(
   // `getDarknetCharismaBonus` (`reputation.ts:54-59`): charisma × the scalar with SF15 at level 3 or more.
   const charismaBonus = (scalar: number) => (sourceFile15Level >= 3 ? skills.charisma * scalar : 0);
   const favorMult = 1 + favor / 100;
-  const intBonus = intelligenceBonus(skills.intelligence, 1);
+  // At weight 1 (`reputation.ts:20`, `:37`, `:51`): hacking-ceiling.ts's, shared.
+  const intBonus = intelligenceBonus(skills.intelligence);
   const { hacking, strength, defense, dexterity, agility, charisma, intelligence } = skills;
   if (workType === "hacking") {
     return ((hacking + intelligence / 3 + charismaBonus(0.1)) / MAX_SKILL_LEVEL) * factionRep * intBonus * favorMult;

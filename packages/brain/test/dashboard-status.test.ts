@@ -3,13 +3,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
+import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { BackdoorDue } from "../src/backdoors.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
+import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
@@ -487,4 +488,60 @@ test("factionStateUnread (#197): the newest slow snapshot's problem is the alert
   recordSnapshot("slow", STARTED_AT_MS + 66_000, { factions: { backend: "sim", state: empty, problem: null } });
   expect(status(nowMs).alerts).toEqual([]);
   expect(status(nowMs).factions).toMatchObject({ backend: "sim", state: empty, problem: null });
+});
+
+test("the hacking rows (#196): the ceiling at the newest snapshots, and hacking's income over the last 10 minutes", () => {
+  const staticData: StaticSnapshotData = {
+    servers: [
+      { hostname: "home", purchasedByPlayer: true, moneyMax: 0 },
+      {
+        hostname: "zer0",
+        purchasedByPlayer: false,
+        moneyMax: 187_500_000,
+        minDifficulty: 10,
+        requiredHackingSkill: 75,
+        serverGrowth: 25,
+      },
+    ],
+  };
+  const mediumData: MediumSnapshotData = {
+    player: {
+      skills: { hacking: 150, intelligence: 0 },
+      mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+    },
+    hasTorRouter: false,
+    programs: [],
+    servers: [{ hostname: "zer0", maxRam: 32, cpuCores: 1, hasAdminRights: true }],
+  };
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("static", STARTED_AT_MS, staticData);
+  recordSnapshot("medium", nowMs - 5_000, mediumData);
+  // A slow snapshot every minute: $1,000 a second of hacking, but for one 11 minutes ago, out of the window.
+  recordSnapshot("slow", nowMs - 11 * 60_000, { moneySources: { hacking: 0 } });
+  for (let minute = 10; minute >= 1; minute--) {
+    recordSnapshot("slow", nowMs - minute * 60_000, { moneySources: { hacking: 1e9 + (10 - minute) * 60_000 } });
+  }
+  const { hacking } = status(nowMs);
+  const ceiling = hackingCeiling(staticData, mediumData);
+  if (!ceiling.known) throw new Error(ceiling.reason);
+  expect(ceiling).toMatchObject({ target: "zer0", hostCount: 1, hostRamGb: 32 });
+  const percent = (whole: number) => `${((1_000 / whole) * 100).toFixed(1)}%`;
+  expect(hacking).toEqual({
+    ceiling,
+    incomePerSecond: 1_000,
+    // The run report's words (describeCeiling), so the page can't drift from them.
+    ceilingText: describeCeiling(ceiling),
+    incomeText:
+      `$1,000/s over the last 10 min: ${percent(ceiling.batcherIncomePerSecond)} of the batcher ceiling now, ` +
+      `${percent(ceiling.incomePerSecond)} of the ceiling`,
+  });
+});
+
+test("the hacking rows with no snapshots: the ceiling unknown, no income", () => {
+  expect(status(STARTED_AT_MS + 1_000).hacking).toEqual({
+    ceiling: { known: false, reason: "no static snapshot" },
+    incomePerSecond: null,
+    ceilingText: "unknown: no static snapshot",
+    incomeText: "— (not two slow snapshots with the money sources in the last 10 min)",
+  });
 });
