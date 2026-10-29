@@ -19,6 +19,8 @@ test.each<SafeModeState>([
   kept,
   { ...kept, work: null },
   { ...kept, hackLoop: { enabled: false, target: null, hosts: [] } },
+  // Preparing the next target (#184).
+  { ...kept, hackLoop: { ...kept.hackLoop, preparing: { target: "zer0", hosts: ["max-hardware"] } } },
   { ...kept, work: { kind: "crime", crime: "Shoplift", focus: false } },
   // A save older than lastAugReset's migration can hold -1 (SaveDataMigrationUtils.ts:432).
   { ...kept, lastAugReset: -1 },
@@ -35,6 +37,17 @@ test("only the known fields, so nothing else written there (intents, say) comes 
   expect(parseSafeModeState(text)).toEqual({ ok: true, message: kept });
 });
 
+test("a file from before #184, with no preparing, still parses: none", () => {
+  const older =
+    '{"hackLoop":{"enabled":true,"target":"n00dles","hosts":["n00dles"]},"work":null,"ttlMs":43200000,' +
+    '"heardAtMs":1767225600000,"lastAugReset":1767220000000}';
+  const parsed = parseSafeModeState(older);
+  expect(parsed).toEqual({
+    ok: true,
+    message: expect.objectContaining({ hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles"] } }),
+  });
+});
+
 describe("refused, each with a reason", () => {
   test.each([
     ["not JSON", "{"],
@@ -43,6 +56,10 @@ describe("refused, each with a reason", () => {
     ["no hack loop", JSON.stringify({ ...kept, hackLoop: undefined })],
     ["a hack loop with a bad target", JSON.stringify({ ...kept, hackLoop: { ...kept.hackLoop, target: 7 } })],
     ["hosts that aren't hostnames", JSON.stringify({ ...kept, hackLoop: { ...kept.hackLoop, hosts: [7] } })],
+    [
+      "preparing on an earning host",
+      JSON.stringify({ ...kept, hackLoop: { ...kept.hackLoop, preparing: { target: "zer0", hosts: ["n00dles"] } } }),
+    ],
     ["work of an unknown kind", JSON.stringify({ ...kept, work: { kind: "gardening", focus: true } })],
     ["a ttlMs of 0", JSON.stringify({ ...kept, ttlMs: 0 })],
     ["a fractional ttlMs", JSON.stringify({ ...kept, ttlMs: 1.5 })],

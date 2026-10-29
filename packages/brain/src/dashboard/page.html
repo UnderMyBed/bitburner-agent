@@ -216,7 +216,9 @@ function render(status) {
       ? "on, waiting for the Agent's snapshots"
       : hackLoop.target === null
         ? "on, rooting servers; no target yet"
-        : `on, against ${hackLoop.target}, on ${hackLoop.hosts.length} servers`;
+        : `on, against ${hackLoop.target}, on ${hackLoop.hosts.length} servers` +
+          // The next target, prepared on the largest hosts while the rest earn (#184).
+          (hackLoop.preparing ? `; preparing ${hackLoop.preparing.target} on ${hackLoop.preparing.hosts.length} servers` : "");
   document.querySelector("#hack-loop div").replaceChildren(
     element("div", `Hack loop: ${hackLoopText}`, hackLoop.enabled ? "ok" : "muted"),
   );

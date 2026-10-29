@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import { INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
@@ -19,7 +20,13 @@ let directory: string;
 let store: TelemetryStore;
 let brainStartedEventId: number;
 /** What the hack loop's controller shows (#134): the status passes it on as it is. */
-const hackLoop: HackLoopView = { enabled: true, waiting: false, target: "n00dles", hosts: ["foodnstuff", "n00dles"] };
+const hackLoop: HackLoopView = {
+  enabled: true,
+  waiting: false,
+  target: "n00dles",
+  hosts: ["foodnstuff", "n00dles"],
+  preparing: null,
+};
 const programs: ProgramsView = {
   enabled: true,
   waiting: false,
@@ -43,7 +50,10 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-const status = (nowMs: number) =>
+const status = (
+  nowMs: number,
+  { income = null, loop = hackLoop }: { income?: IncomeFacts | null; loop?: HackLoopView } = {},
+) =>
   buildDashboardStatus({
     store,
     environment: "E0",
@@ -51,11 +61,12 @@ const status = (nowMs: number) =>
     brainStartedAtMs: STARTED_AT_MS,
     brainStartedEventId,
     supervising: true,
-    hackLoop,
+    hackLoop: loop,
     programs,
     homeRam,
     intents,
     work: { desired: null, outcome: null },
+    income,
     nowMs,
   });
 
@@ -149,6 +160,23 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
+});
+
+test("incomeStalled (#184): from the income watch's facts, while the hack loop is on against a target", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  // The Agent heard from, so only the income alert can hold.
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const income = { money: 21_434_097, lastRiseAtMs: nowMs - INCOME_STALLED_AFTER_MS - 60_000 };
+  expect(status(nowMs, { income }).alerts).toEqual([
+    {
+      name: "incomeStalled",
+      sinceMs: income.lastRiseAtMs,
+      detail: "money hasn't risen for 11 min, at $21,434,097, with the hack loop on against n00dles",
+    },
+  ]);
+  // Off, it isn't expected to earn.
+  const off = { ...hackLoop, enabled: false, target: null, hosts: [] };
+  expect(status(nowMs, { income, loop: off }).alerts).toEqual([]);
 });
 
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
@@ -320,6 +348,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     homeRam,
     intents,
     work: { desired: null, outcome: null },
+    income: null,
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });

@@ -236,6 +236,59 @@ export class TelemetryStore {
     return rows.map((row) => row.page_heap_used_bytes);
   }
 
+  /**
+   * The snapshots of a tier that arrived in a window (both edges included), in order of arrival, one row at a time: the
+   * run report folds them as they come, since a day of fast and medium snapshots is hundreds of MB once parsed.
+   */
+  *iterateSnapshotsInWindow({
+    environment,
+    tier,
+    sinceMs,
+    untilMs,
+  }: {
+    environment: Environment;
+    tier: string;
+    sinceMs: number;
+    untilMs: number;
+  }): Generator<RecordContext & StoredSnapshot> {
+    const rows = this.#database
+      .prepare(
+        `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
+          AND received_at_ms BETWEEN ? AND ? ORDER BY received_at_ms, id`,
+      )
+      .iterate(environment, tier, sinceMs, untilMs);
+    for (const row of rows) yield snapshotOfRow(row as Record<string, string | number>);
+  }
+
+  /**
+   * Runs `read` in one read transaction (the run report): every query in it sees the store as it was at its first read,
+   * whatever the brain writes meanwhile.
+   */
+  readTransaction<Result>(read: () => Result): Result {
+    this.#database.exec("BEGIN");
+    try {
+      return read();
+    } finally {
+      this.#database.exec("COMMIT");
+    }
+  }
+
+  /** The events in a window (both edges included), in the order stored: the run report. */
+  eventsInWindow({
+    environment,
+    sinceMs,
+    untilMs,
+  }: {
+    environment: Environment;
+    sinceMs: number;
+    untilMs: number;
+  }): (RecordContext & StoredEvent)[] {
+    const rows = this.#database
+      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND at_ms BETWEEN ? AND ? ORDER BY id`)
+      .all(environment, sinceMs, untilMs) as Record<string, string | number>[];
+    return rows.map(eventOfRow);
+  }
+
   /** Every event from an environment, in the order stored. */
   events({ environment }: { environment: Environment }): (RecordContext & StoredEvent)[] {
     const rows = this.#database

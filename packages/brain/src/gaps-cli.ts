@@ -3,52 +3,20 @@
 // prints the page heap over the window (#124).
 // Exits 0 when there are none, 1 when there are gaps, 2 when it couldn't run, including for a window that checks
 // nothing (one that ends before it starts).
-import { existsSync } from "node:fs";
-import path from "node:path";
 import process from "node:process";
-import { flagValue, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
-import { DEFAULT_GAP_THRESHOLD_MS, findGaps } from "./gap-report.ts";
-import { ENVIRONMENTS, type Environment, TelemetryStore } from "./telemetry-store.ts";
-
-/** An ISO time with a `Z` or an explicit offset: without one, JavaScript reads a date-time as local time. */
-function parseIsoTime(text: string, flagName: string): number {
-  const epochMs = /(Z|[+-]\d\d:\d\d)$/.test(text) ? Date.parse(text) : Number.NaN;
-  if (Number.isNaN(epochMs)) {
-    throw new Error(`${flagName} must be an ISO time with Z or an offset, e.g. 2026-10-26T00:00:00Z; got ${text}`);
-  }
-  return epochMs;
-}
-
-const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
-const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
-const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-
-/** The page heap over the window, for a person to read: growth would show here first (architecture R10). */
-function describePageHeap(pageHeapsBytes: number[]): string {
-  const first = pageHeapsBytes[0];
-  const last = pageHeapsBytes.at(-1);
-  if (first === undefined || last === undefined) return "page heap: not reported";
-  const lowest = pageHeapsBytes.reduce((low, bytes) => Math.min(low, bytes));
-  const highest = pageHeapsBytes.reduce((high, bytes) => Math.max(high, bytes));
-  return (
-    `page heap: first ${formatMegabytes(first)}, last ${formatMegabytes(last)}, lowest ${formatMegabytes(lowest)}, ` +
-    `highest ${formatMegabytes(highest)} (${pageHeapsBytes.length} snapshot${pageHeapsBytes.length === 1 ? "" : "s"} ` +
-    "reported it)"
-  );
-}
+import { environmentFlag, existingStorePath, flagValue, parseIsoTime } from "./config.ts";
+import { DEFAULT_GAP_THRESHOLD_MS, describePageHeap, findGaps, formatIsoTime, formatSeconds } from "./gap-report.ts";
+import { TelemetryStore } from "./telemetry-store.ts";
 
 try {
   const argv = process.argv.slice(2);
-  const dataDirectory = resolveDataDirectory(argv, process.env);
-  const storePath = path.join(dataDirectory, STORE_FILE_NAME);
-  if (!existsSync(storePath)) throw new Error(`No telemetry store at ${storePath}: has the brain run there?`);
+  const storePath = existingStorePath(argv, process.env);
   const sinceText = flagValue(argv, "--since");
   if (!sinceText) throw new Error("--since <ISO time> is required");
   const sinceMs = parseIsoTime(sinceText, "--since");
   const untilText = flagValue(argv, "--until");
   const untilMs = untilText ? parseIsoTime(untilText, "--until") : Date.now();
-  const environment = (flagValue(argv, "--environment") ?? "E0") as Environment;
-  if (!ENVIRONMENTS.includes(environment)) throw new Error(`--environment must be one of ${ENVIRONMENTS.join(", ")}`);
+  const environment = environmentFlag(argv);
   const thresholdText = flagValue(argv, "--threshold-seconds");
   const thresholdMs = thresholdText ? Number(thresholdText) * 1000 : DEFAULT_GAP_THRESHOLD_MS;
   if (!(thresholdMs > 0)) throw new Error("--threshold-seconds must be a positive number");

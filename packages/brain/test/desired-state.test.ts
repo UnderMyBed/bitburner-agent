@@ -91,7 +91,7 @@ const upgradeHomeRam = (fromRam: number, vendor = "Alpha Enterprises") =>
 test("on: nothing until the connected Agent's own static and medium snapshots, then the target and hosts", () => {
   const controller = new DesiredStateController({ channel, store });
   const connection = connectAgent();
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [] });
+  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [], preparing: null });
   send(connection, "static", network);
   expect(desiredStates(connection)).toEqual([]);
   // Nothing rooted yet: on, with no target, so the Agent roots what it can.
@@ -101,7 +101,121 @@ test("on: nothing until the connected Agent's own static and medium snapshots, t
     { hackLoop: { enabled: true, target: null, hosts: [] }, intents: [] },
     { hackLoop: loopOn, intents: [] },
   ]);
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: false, target: "n00dles", hosts: ["n00dles"] });
+  expect(controller.hackLoopView()).toEqual({
+    enabled: true,
+    waiting: false,
+    target: "n00dles",
+    hosts: ["n00dles"],
+    preparing: null,
+  });
+});
+
+describe("the move to the next target (#184): prepared while the current one earns", () => {
+  // n00dles at hacking 1; zer0 (needs 75) from hacking 150, at 4% of its money until prepared. alpha is the largest host.
+  const twoTargets: StaticSnapshotData = {
+    servers: [
+      staticServer("home", { moneyMax: 0 }),
+      staticServer("n00dles", { moneyMax: 1_750_000, serverGrowth: 3_000 }),
+      staticServer("zer0", { moneyMax: 187_500_000, serverGrowth: 40, minDifficulty: 10, requiredHackingSkill: 75 }),
+      staticServer("alpha", { moneyMax: 0 }),
+      staticServer("bravo", { moneyMax: 0 }),
+    ],
+  };
+  /** At `hacking`, zer0 at `zer0Money`, n00dles ready unless `n00dles` says otherwise. */
+  const at = (hacking: number, zer0Money: number, n00dles = { moneyAvailable: 1_750_000, hackDifficulty: 1 }) => {
+    const data = mediumData(hacking, { home: true, n00dles: true, zer0: true, alpha: true, bravo: true });
+    for (const server of data.servers) {
+      if (server.hostname === "alpha") server.maxRam = 64;
+      if (server.hostname === "n00dles" || server.hostname === "zer0") server.maxRam = 0;
+      if (server.hostname === "n00dles") Object.assign(server, n00dles);
+      if (server.hostname === "zer0") Object.assign(server, { moneyAvailable: zer0Money, hackDifficulty: 10 });
+    }
+    return data;
+  };
+  const earning = { enabled: true, target: "n00dles", hosts: ["alpha", "bravo"] };
+  const preparing = {
+    enabled: true,
+    target: "n00dles",
+    hosts: ["bravo"],
+    preparing: { target: "zer0", hosts: ["alpha"] },
+  };
+  const moved = { enabled: true, target: "zer0", hosts: ["alpha", "bravo"] };
+  /** n00dles being worked, caught between a hack and its weaken: 60% of its money, security min + 5.1. */
+  const WORKED = { moneyAvailable: 1_050_000, hackDifficulty: 6.1 };
+
+  test("earning on n00dles, zer0 is prepared on the largest host, then everything moves once it's ready", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(100, 7_500_000));
+    send(connection, "medium", at(150, 7_500_000));
+    expect(controller.hackLoopView()).toEqual({ ...preparing, waiting: false });
+    send(connection, "medium", at(150, 100_000_000));
+    send(connection, "medium", at(150, 140_625_000));
+    // Hacked below 75% again: zer0 is current now, so it stays.
+    send(connection, "medium", at(150, 100_000_000));
+    expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([earning, preparing, moved]);
+  });
+
+  test("an Agent connecting again within the same reset keeps the target: n00dles caught mid-weaken isn't given up", () => {
+    new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "slow", slowData());
+    send(connection, "medium", at(150, 7_500_000));
+    expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([preparing]);
+    // A reload: the same game, n00dles caught between a hack and its weaken (60%, security min + 5.1, not ready), zer0
+    // grown to 70%, not ready either. Judged afresh, zer0 (the more of its money, and best) would take every host, and
+    // income would stop as on Steam.
+    const again = connectAgent();
+    send(again, "static", twoTargets);
+    send(again, "slow", slowData());
+    send(again, "medium", at(150, 131_250_000, WORKED));
+    expect(desiredStates(again).map((state) => state.hackLoop)).toEqual([preparing]);
+  });
+
+  test("after a reset (another lastAugReset), the target is judged afresh", () => {
+    new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "slow", slowData());
+    send(connection, "medium", at(150, 7_500_000));
+    const afterReset = connectAgent("session-2");
+    send(afterReset, "static", twoTargets, "session-2");
+    send(afterReset, "slow", { ...slowData(), resetInfo: { ...slowData().resetInfo, lastAugReset: 5 } }, "session-2");
+    // n00dles back at a fresh start's 4%: nothing is worked, so zer0, best, has both hosts.
+    send(afterReset, "medium", at(150, 7_500_000, { moneyAvailable: 70_000, hackDifficulty: 1 }), "session-2");
+    expect(desiredStates(afterReset).map((state) => state.hackLoop)).toEqual([moved]);
+  });
+
+  test("a brain restart mid-prepare: the target with the most of its money is the one being worked, and earns on", () => {
+    const first = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(150, 7_500_000));
+    expect(first.hackLoopView()).toMatchObject(preparing);
+    // A new brain on a new channel: nothing set. n00dles mid-weaken at 60%, zer0 grown to 30%.
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    new DesiredStateController({ channel, store });
+    const restarted = connectAgent();
+    send(restarted, "static", twoTargets);
+    send(restarted, "medium", at(150, 56_250_000, WORKED));
+    expect(desiredStates(restarted).map((state) => state.hackLoop)).toEqual([preparing]);
+  });
+
+  test("off forgets the last target: on again starts from the ready ones", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(150, 140_625_000));
+    controller.setHackLoopEnabled(false);
+    send(connection, "medium", at(150, 7_500_000));
+    controller.setHackLoopEnabled(true);
+    expect(controller.hackLoopView()).toMatchObject({ target: "n00dles", preparing: { target: "zer0" } });
+    controller.setHackLoopEnabled(false);
+    expect(controller.hackLoopView()).toMatchObject({ preparing: null });
+  });
 });
 
 test("every state sent carries safe mode's ttlMs (#160): 12 hours, kept by the Agent that long with the brain gone", () => {
@@ -148,7 +262,13 @@ test("the hack loop's switch: off is sent at once, kept in the store; on again s
   send(connection, "medium", mediumData(1, { n00dles: true }));
   controller.setHackLoopEnabled(false);
   expect(readHackLoopEnabled(store)).toBe(false);
-  expect(controller.hackLoopView()).toEqual({ enabled: false, waiting: false, target: null, hosts: [] });
+  expect(controller.hackLoopView()).toEqual({
+    enabled: false,
+    waiting: false,
+    target: null,
+    hosts: [],
+    preparing: null,
+  });
   controller.setHackLoopEnabled(true);
   expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([loopOn, loopOff, loopOn]);
 });
@@ -166,7 +286,7 @@ test("a disconnect forgets the Agent's snapshots: the views show waiting", () =>
   send(connection, "static", network);
   send(connection, "medium", mediumData(1, { n00dles: true }));
   connection.dropFromGameSide();
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [] });
+  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [], preparing: null });
   expect(controller.programsView()).toMatchObject({ enabled: true, waiting: true });
 });
 
