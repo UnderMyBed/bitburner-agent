@@ -836,7 +836,6 @@ export class DesiredStateController {
     const resetAt = resetTimeOf(this.#slowData, sent.field);
     if (resetAt === null || resetAt === sent.resetAt) return;
     this.#noteResetSent(null);
-    this.#installDisconnectedAtMs = null;
     writeManualIntents(
       this.#store,
       readManualIntents(this.#store).filter((each) => each.id !== sent.id),

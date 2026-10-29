@@ -412,6 +412,10 @@ describe("committed", () => {
     expect(update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 1e9 }) }).intent).toEqual(
       purchaseIntent("CyberSec", GEN_II, 1),
     );
+    // A new game: that game's purchases forgotten, the alert's list too.
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ lastAugReset: 9 * HOUR }) });
+    expect(rule.notQueued()).toEqual([]);
   });
 
   test("the money spent since the medium snapshot is taken off its money: no phantom money (#213 review)", () => {
@@ -489,6 +493,62 @@ describe("committed", () => {
     // Recorded once, though the Agent reports it done again.
     update({ slowData: slow({ reputation: 18_750, queued: [GEN_I] }), doneIds: new Set([first.intent?.id as string]) });
     expect(events.filter((event) => event.type === "augmentationBought")).toHaveLength(1);
+  });
+
+  test("NeuroFlux Governor's installed levels count: the level to buy, the queue's copies, the read that shows it", () => {
+    // The five installed, NeuroFlux Governor at level 2: the next is level 3 ($975k), then, with one copy queued, 4.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    const ownedAugs = { ...Object.fromEntries(FIVE.map((name) => [name, 1])), [NFG]: 2 };
+    const first = update({
+      slowData: slow({ reputation: 18_750, ownedAugs }),
+      mediumData: medium({ money: 1e9, homeRam: 2 ** 20 }),
+    });
+    expect(first.intent).toEqual(purchaseIntent("CyberSec", NFG, 3));
+    update({
+      slowData: slow({ reputation: 18_750, ownedAugs }),
+      mediumData: medium({ money: 1e9, homeRam: 2 ** 20 }),
+      doneIds: new Set([first.intent?.id as string]),
+    });
+    // A skipped reading carrying a state that shows the copy (not a read, so not yet confirmed): counted once, level 4.
+    gameTimeMs += MINUTE;
+    const carried = update({
+      slowData: slow({ reputation: 18_750, ownedAugs, queued: [NFG], reading: "skipped" }),
+      mediumData: medium({ money: 1e9, homeRam: 2 ** 20 }),
+    });
+    expect(carried.intent).toEqual(purchaseIntent("CyberSec", NFG, 4));
+    // Two reads showing one copy queued: level 3 confirmed, never "not queued"; the next is level 4.
+    for (let read = 0; read < 2; read += 1) {
+      gameTimeMs += MINUTE;
+      update({
+        slowData: slow({ reputation: 18_750, ownedAugs, queued: [NFG] }),
+        mediumData: medium({ money: 1e9, homeRam: 2 ** 20 }),
+      });
+    }
+    expect(rule.notQueued()).toEqual([]);
+    const next = update({
+      slowData: slow({ reputation: 18_750, ownedAugs, queued: [NFG] }),
+      mediumData: medium({ money: 1e9, homeRam: 2 ** 20 }),
+    });
+    expect(next.intent).toEqual(purchaseIntent("CyberSec", NFG, 4));
+  });
+
+  test("bought from the joined seller with the most reputation: BitWire at NiteSec (18,750), not CyberSec (10,000)", () => {
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    const joined = [
+      { name: "CyberSec", reputation: 10_000, favor: 0 },
+      { name: "NiteSec", reputation: 18_750, favor: 0 },
+    ];
+    // $10m covers BitWire alone, the most hacking value at hacking 300.
+    const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: 10e6 }) });
+    expect(ask.intent).toEqual(purchaseIntent("NiteSec", "BitWire", 1));
+  });
+
+  test("committed, then the reset with no medium snapshot yet: nothing held back from cloud servers", () => {
+    committed();
+    expect(rule.reserve()).toBe(Number.POSITIVE_INFINITY);
+    gameTimeMs += MINUTE;
+    update({ mediumData: null, slowData: slow({ lastAugReset: 9 * HOUR }) });
+    expect(rule.reserve()).toBe(0);
   });
 
   test("the game reset (another lastAugReset): the cycle over, the note gone, the purchases forgotten", () => {

@@ -84,6 +84,15 @@ describe("the buy order", () => {
     expect(augmentationBuyOrder([GEN_II, BITWIRE])).toEqual([GEN_II, BITWIRE]);
   });
 
+  test("of chains as dear, the dearer augmentation first: CashRoot Starter Kit ($125m) before Gen I ($70m, Gen II's)", () => {
+    // Both head a $125m chain; CashRoot first costs $709m, Gen I first (the game's order) $758.75m.
+    expect(augmentationBuyOrder([GEN_I, GEN_II, "CashRoot Starter Kit"])).toEqual([
+      "CashRoot Starter Kit",
+      GEN_I,
+      GEN_II,
+    ]);
+  });
+
   test("ties go to the game's order; a name listed twice is bought once", () => {
     // Both $250m.
     expect(augmentationBuyOrder(["Embedded Netburner Module", "Neural-Retention Enhancement"])).toEqual([

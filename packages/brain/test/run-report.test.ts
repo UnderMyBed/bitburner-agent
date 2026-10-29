@@ -1369,6 +1369,16 @@ describe("augmentations and the reset (#210)", () => {
     );
   });
 
+  test("called off after the 5 minutes: the install not seen done is a failure all the same", () => {
+    const report = augmentationRun({
+      events: [
+        [2 * MINUTE, "augmentationInstallSent", { source: "brain", queued: ["BitWire"] }],
+        [9 * MINUTE, "augmentationCycleCalledOff", { reason: "the Augmentations switch turned off" }],
+      ],
+    });
+    expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
+  });
+
   test("an install chosen says why: nothing reachable at a positive rate, or the next sooner installing", () => {
     const report = augmentationRun({
       events: [
