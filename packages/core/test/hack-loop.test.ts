@@ -128,7 +128,7 @@ describe("growthLogPerThread (#187): the game's calculateServerGrowthLog for one
     expect(growthLogPerThread(maxHardware, player(1.2))).toBeCloseTo(Math.log1p(0.003) * 0.3 * 1.2, 15);
   });
 
-  test("at most log1p(0.0035) before growth (Constants.ts:8): low security grows no faster", () => {
+  test("at most log1p(0.0035) before growth (Server/data/Constants.ts:8): low security grows no faster", () => {
     // n00dles (growth 3000) at security 1: log1p(0.03) would be over it.
     expect(growthLogPerThread({ serverGrowth: 3_000, hackDifficulty: 1 }, player())).toBeCloseTo(
       0.00349388925425578 * 30,

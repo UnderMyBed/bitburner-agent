@@ -317,21 +317,24 @@ test("each host's hack threads (#187): capped at its loop's threads, a change re
   expect(threadsOn("joesguns")).toBeLessThan(1_000);
   expect(before.n00dles?.[0]).toEqual(["n00dles"]);
 
-  // foodnstuff's changes: its loop alone is stopped and started. The others, unchanged, keep their pids.
-  desire({ ...hackThreads, joesguns: 1_000, foodnstuff: 2 });
+  // foodnstuff's count changes, and n00dles, uncapped, gets one (as when an older safe-mode file's state gives way to
+  // this brain's): those two loops alone are stopped and started. The others, unchanged, keep their pids.
+  desire({ ...hackThreads, joesguns: 1_000, foodnstuff: 2, n00dles: 1 });
   await game.run(2 * SNAPSHOT_ROUND_MS);
   const after = await argsByHost();
   expect(after.foodnstuff?.[0]).toEqual(["n00dles", 2]);
   expect(after.foodnstuff?.[2]).not.toBe(before.foodnstuff?.[2]);
-  for (const hostname of NO_PORT_SERVERS.filter((each) => each !== "foodnstuff")) {
+  expect(after.n00dles?.[0]).toEqual(["n00dles", 1]);
+  expect(after.n00dles?.[2]).not.toBe(before.n00dles?.[2]);
+  for (const hostname of NO_PORT_SERVERS.filter((each) => each !== "foodnstuff" && each !== "n00dles")) {
     expect(after[hostname], hostname).toEqual(before[hostname]);
   }
-  // The Agent's log gives the threads that hack: 1 on each of four hosts, 2 on foodnstuff, and all of joesguns' and
-  // n00dles'.
+  // The Agent's log gives the threads that hack: 1 on each of four hosts and on n00dles (its one),
+  // 2 on foodnstuff, and all of joesguns'.
   const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
   if (!agent) throw new Error("no Agent on home");
   const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("agent: hack loop: on"));
-  const hacking = 4 + 2 + threadsOn("joesguns") + threadsOn("n00dles");
+  const hacking = 4 + 1 + 2 + threadsOn("joesguns");
   expect(lines.at(-1)).toMatch(new RegExp(`on, \\d+ threads \\(${hacking} hacking\\) on 7 servers, against n00dles$`));
 
   // The loops hack with those threads (`hack`'s `threads` option, in the game's own code): once n00dles is at 75%, the

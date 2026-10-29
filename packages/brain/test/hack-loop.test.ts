@@ -391,7 +391,7 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
       expect(onZer0(230)).toEqual({ alpha: 8, bravo: 4, charlie: 2, delta: 2 });
     });
 
-    test("the player's multipliers: twice the money per thread, half the threads; twice the growth, twice", () => {
+    test("the player's multipliers: twice the money, half the threads; twice the growth, twice, up to what RAM holds", () => {
       const withMults = (mults: Record<string, number>) => {
         const data = medium(150, { zer0: ZER0_READY });
         data.player = { ...data.player, mults };
@@ -415,7 +415,7 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
       });
     });
 
-    test("none with no host or no target; 1 each without the target's minimum security", () => {
+    test("none with no host or no target; 1 each without the minimum security, or with no finite count", () => {
       expect(hackThreadsOf(network, medium(150, { ram: {} }), earningOn("n00dles"))).toBeUndefined();
       expect(hackThreadsOf(network, mediumData(150, { alpha: true }), null)).toBeUndefined();
       const noMinimum = {
@@ -429,6 +429,10 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
         charlie: 1,
         delta: 1,
       });
+      // An infinite grow multiplier (the game has none) on hosts with no thread of the loop's: no finite count, so 1.
+      const infinite = medium(150, { ram: { alpha: 2 }, zer0: ZER0_READY });
+      infinite.player = { ...infinite.player, mults: { hacking_grow: Number.POSITIVE_INFINITY } };
+      expect(hackThreadsOf(network, infinite, earningOn("zer0"))).toEqual({ alpha: 1 });
     });
   });
 });

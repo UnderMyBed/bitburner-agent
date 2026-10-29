@@ -176,6 +176,8 @@ export interface LastHackTarget {
  *   last time stay while they still hold half and leave some to earn, so a larger host rooted since doesn't stop a
  *   weaken or grow under way. Once a medium snapshot shows `best` ready, all move to it. A single host holds all the
  *   RAM, so it prepares, and nothing earns meanwhile; with no host, nothing is prepared.
+ * - `hackThreads` (#187): each host's count of hack threads, the earning hosts' against `current` (or `best`), the
+ *   preparing hosts' against `best` (`hackThreadsOf`); absent with no host.
  */
 export function planHackLoop(
   staticData: StaticSnapshotData | null,
@@ -251,7 +253,10 @@ export const HACK_REGROW_ROUNDS = 2;
  *   holds by the loop's budget (n00dles's, all of them), still at least 1. A count over the loop's threads, the deploy
  *   worker caps.
  * The player's multipliers are 1 where the snapshot doesn't say. None (absent) with no host; 1 each without the
- * target's minimum security, or when a thread takes nothing.
+ * target's minimum security, when a thread takes nothing, or when the inputs give no finite count (an infinite
+ * multiplier, say, which the game can't produce). The BitNode's `ServerGrowthRate` is taken as 1 (core's
+ * `growthLogPerThread`): in BN2, BN3 and BN11 that makes the counts up to 5x too generous, the unsafe side; to revisit
+ * when BitNode multipliers come to core. BN1 is exact.
  */
 function hackThreadsOf(
   target: StaticServer,
@@ -288,7 +293,8 @@ function hackThreadsOf(
       hostsWithRam.map(([hostname, ram]) => {
         // 1 - e^-G_i: the most of what it finds this host's hack may take.
         const share = -Math.expm1((-roundsGrowthLog * ram) / totalRam);
-        const threads = hackSharePerThread > 0 ? Math.max(1, Math.floor(share / hackSharePerThread)) : 1;
+        const count = Math.floor(share / hackSharePerThread);
+        const threads = hackSharePerThread > 0 && Number.isFinite(count) ? Math.max(1, count) : 1;
         // Rounded, then at most the threads its RAM holds: n00dles's 128 on a 64 GB host is its 26.
         const ramThreads = Math.floor(ram / HACK_LOOP_RAM_BUDGET_GB);
         return [hostname, Math.max(1, Math.min(2 ** Math.floor(Math.log2(threads)), ramThreads))];

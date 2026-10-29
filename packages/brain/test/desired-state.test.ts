@@ -17,7 +17,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { DesiredStateController, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
+import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
 import { readManualIntents } from "../src/manual-intents.ts";
@@ -119,6 +119,14 @@ test("on: nothing until the connected Agent's own static and medium snapshots, t
     hackThreads: 1,
     preparing: null,
   });
+});
+
+test("the dashboard's hack threads (#187): the hosts' counts added up; null when one hacks with all its threads", () => {
+  expect(hackThreadsAddedUp({ alpha: 16, bravo: 8 }, ["alpha", "bravo"])).toBe(24);
+  expect(hackThreadsAddedUp({ alpha: 16, bravo: 8 }, [])).toBe(0);
+  // A host the state doesn't name hacks with all its threads: no "at most" to give.
+  expect(hackThreadsAddedUp({ alpha: 16 }, ["alpha", "bravo"])).toBeNull();
+  for (const none of [undefined, null]) expect(hackThreadsAddedUp(none, ["alpha"])).toBeNull();
 });
 
 describe("the move to the next target (#184): prepared while the current one earns", () => {

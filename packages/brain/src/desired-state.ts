@@ -66,6 +66,24 @@ export interface HackLoopView {
   preparing: { target: string; hosts: string[]; hackThreads: number | null } | null;
 }
 
+/**
+ * The hosts' hack threads added up, for the dashboard (#187), or null when a host hacks with all its threads: the state
+ * gives no counts, or none for that host (which the brain's plan never leaves out, but the protocol allows).
+ */
+export function hackThreadsAddedUp(
+  hackThreads: Record<string, number> | null | undefined,
+  hosts: string[],
+): number | null {
+  if (!hackThreads) return null;
+  let total = 0;
+  for (const host of hosts) {
+    const count = hackThreads[host];
+    if (count === undefined) return null;
+    total += count;
+  }
+  return total;
+}
+
 /** What the dashboard shows of the hacking programs. */
 export interface ProgramsView {
   enabled: boolean;
@@ -330,12 +348,7 @@ export class DesiredStateController {
   hackLoopView(): HackLoopView {
     const enabled = readHackLoopEnabled(this.#store);
     const hackLoop = this.#desired?.hackLoop;
-    // The hosts' hack threads added up (#187), or null where the state gives none: all their threads.
-    const hackThreadsOn = (hosts: string[]) => {
-      const hackThreads = hackLoop?.hackThreads;
-      if (!hackThreads) return null;
-      return hosts.reduce((total, host) => total + (hackThreads[host] ?? 0), 0);
-    };
+    const hackThreadsOn = (hosts: string[]) => hackThreadsAddedUp(hackLoop?.hackThreads, hosts);
     const preparing = enabled ? (hackLoop?.preparing ?? null) : null;
     return {
       enabled,
