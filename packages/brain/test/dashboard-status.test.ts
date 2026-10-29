@@ -682,7 +682,7 @@ test("batcherOutOfStep (#206): a rise in the batcher run's desyncs, late or lost
     name: "batcherOutOfStep",
     sinceMs: STARTED_AT_MS + 14_000,
     detail:
-      "the batcher is out of step on n00dles: 1 desyncs, 0 late, 0 lost lately; it stops hacking, prepares the " +
+      "the batcher is out of step on n00dles: 1 desync, 0 late, 0 lost lately; it stops hacking, prepares the " +
       "target again and goes on, and the run report fails the run",
   });
 });

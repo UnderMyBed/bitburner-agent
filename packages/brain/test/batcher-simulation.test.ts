@@ -91,7 +91,8 @@ test.each(SEEDS)(
     const section = report.slice(report.indexOf("6. The batcher"), report.indexOf("Verdict"));
     console.log(section);
     expect(section).toContain("batching on n00dles");
-    expect(section).toContain("  desyncs: none\n  late or lost: none\n  problems: none");
+    expect(section).toContain("  desyncs: none\n  late or lost: none\n  least slack: ");
+    expect(section).toContain("  problems: none");
     // Sent and running throughout (#211): no stretch of fast snapshots with it not running.
     expect(section).toContain("  sent but not running (3 fast snapshots in a row or more):\n    none");
     expect(fresh.latest<FastSnapshotData>("fast")?.batcherDeploy).toMatchObject({

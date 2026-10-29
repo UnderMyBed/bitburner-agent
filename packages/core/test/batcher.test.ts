@@ -680,3 +680,15 @@ describe("batchHoldsMs with other batches (#206)", () => {
     expect(batchHoldsMs(zer0, player(100), large, [small])).toEqual(batchHoldsMs(zer0, player(100), large));
   });
 });
+
+describe("preparationTimeMs, weaken alone (#216's review)", () => {
+  test("joesguns at its money, security 15, on 100 GB: four waves, each a weaken's time at the security the last left", () => {
+    // 100 GB holds 55 weaken threads, 2.75 security a wave: 15, then 12.25, 9.5 and 6.75, then 5.
+    const now = { money: joesguns.moneyMax, security: 15 };
+    const expected = [15, 12.25, 9.5, 6.75].reduce(
+      (total, security) => total + operationTimeMs("weaken1", joesguns, player(100), security) + BATCH_LAUNCH_LEAD_MS,
+      0,
+    );
+    expect(preparationTimeMs(joesguns, player(100), now, 100)).toBeCloseTo(expected, 6);
+  });
+});

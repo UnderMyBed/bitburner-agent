@@ -26,8 +26,11 @@ import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
 import { type Alert, activeAlerts, type IncomeFacts } from "./alerts.ts";
 
-/** How far back the batcher's not-running streak is read (#211): fast snapshots, 2 s apart. */
-const BATCHER_NOT_RUNNING_LOOKBACK = 100;
+/**
+ * How far back the batcher's not-running streak (#211) and its out-of-step rise (#206) are read: fast snapshots, 2 s
+ * apart.
+ */
+const BATCHER_SNAPSHOTS_LOOKBACK = 100;
 
 /** The gap report's window on the dashboard: the last 24 h. */
 export const GAP_WINDOW_MS = 24 * 60 * 60_000;
@@ -220,7 +223,7 @@ export function buildDashboardStatus({
   const newestUnread = unreadInARow[0]?.status;
   // The newest fast snapshots in a row with the batcher wanted and not running (#211).
   const notRunningInARow: { receivedAtMs: number; problem: string }[] = [];
-  const latestFast = store.latestSnapshots({ environment, tier: "fast", limit: BATCHER_NOT_RUNNING_LOOKBACK });
+  const latestFast = store.latestSnapshots({ environment, tier: "fast", limit: BATCHER_SNAPSHOTS_LOOKBACK });
   for (const each of latestFast) {
     const problem = batcherNotRunning((each.data as Partial<FastSnapshotData> | null)?.batcherDeploy);
     if (problem === null) break;

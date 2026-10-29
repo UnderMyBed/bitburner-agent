@@ -150,11 +150,18 @@ async function batchingBatcher(simulation: Simulation): Promise<number> {
 }
 
 /** The operation scripts running on the hosts: their pid, id and landing time, the latest landing last. */
-async function inFlight(simulation: Simulation): Promise<{ pid: number; id: string; landAt: number }[]> {
+async function inFlight(
+  simulation: Simulation,
+): Promise<{ pid: number; id: string; landAt: number; target: string }[]> {
   const running = [];
   for (const host of OPERATION_HOSTS) {
     for (const process of await simulation.ps(host)) {
-      running.push({ pid: process.pid, id: String(process.args[3]), landAt: Number(process.args[1]) });
+      running.push({
+        pid: process.pid,
+        id: String(process.args[3]),
+        landAt: Number(process.args[1]),
+        target: String(process.args[0]),
+      });
     }
   }
   return running.sort((a, b) => a.landAt - b.landAt);
@@ -482,4 +489,38 @@ test("a last wave on a target at its minimum, with room beside it, starts the ba
   }
   const landed = await healthOf(simulation);
   expect(landed).toMatchObject({ desyncs: 0, late: 0, lost: 0, outOfBounds: 0, batchesShort: 0 });
+});
+
+test("a move back to a target its batches still land on waits for them, no wave among them (#216's review)", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  const config = n00dlesConfig();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  const before = await healthOf(simulation);
+  expect(before.batchesPending).toBeGreaterThan(0);
+  // Away to foodnstuff and straight back: n00dles' batches are all still landing.
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  await simulation.run("home", "set-port.js", {
+    args: [BATCHER_CONFIG_PORT, JSON.stringify({ ...config, target: "foodnstuff", figures: foodnstuff })],
+  });
+  await simulation.advance(1_000);
+  expect((await healthOf(simulation)).target).toBe("foodnstuff");
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  expect(await healthOf(simulation)).toMatchObject({ state: "preparing", target: "n00dles" });
+  // No n00dles preparation wave while its batches land; then it batches n00dles again, in step.
+  const n00dlesWaves = async () =>
+    (await inFlight(simulation)).filter((each) => /.pd+./.test(each.id) && each.target === "n00dles").length;
+  for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 1_000) {
+    expect(waited, "batching again within 10 virtual minutes").toBeLessThan(10 * 60_000);
+    if ((await healthOf(simulation)).batchesPending > 0) expect(await n00dlesWaves()).toBe(0);
+    await simulation.advance(1_000);
+  }
+  await simulation.advance(2 * 60_000);
+  expect(await healthOf(simulation)).toMatchObject({ desyncs: 0, late: 0, lost: 0, outOfBounds: 0 });
 });

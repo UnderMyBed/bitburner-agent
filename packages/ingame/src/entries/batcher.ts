@@ -406,6 +406,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const prepare = () => {
     if (preparing.size > 0 || Date.now() < waitUntilMs) return;
     const { target, figures } = current();
+    // A move back to a target its batches are still landing on (#216's review): they land first, so no wave goes out
+    // among them.
+    if ([...batches.values()].some((each) => each.target === target)) return;
+    if (landing.some((each) => each.target === target && each.untilMs >= Date.now())) return;
     const now = { money: ns.getServerMoneyAvailable(target), security: ns.getServerSecurityLevel(target) };
     health.seen = now;
     const player = playerNow();
@@ -452,6 +456,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const room = batchRamGb(freeRam().map((host) => host.freeGb)) >= peakGb;
     if (problem === lastingProblem && last && room && now.security <= figures.minDifficulty + 1e-9) {
       const wavesLastAt = landAt + 2 * BATCH_LANDING_GAP_MS;
+      // The wave counts among the batches landing until it has (#216's review): its grow raises the security until its
+      // weaken2 lands, so the batches' leads (`largestLanding`) cover it.
+      landing.push({ target, threads: { hack: 0, weaken1, grow: growCount, weaken2 }, untilMs: wavesLastAt });
       // A second to spare: a hack's lead grows with the security its batch may leave (`launchLeadMs`).
       startBatching(wavesLastAt + operationTimeMs("hack", figures, player) + BATCH_LAUNCH_LEAD_MS + 1_000);
     }

@@ -146,7 +146,7 @@ export function batcherSection(points: BatcherPoint[], failures: string[] = []):
       `    hour ${hour + 1}: ${[...states].join(", ")} on ${[...targets].join(", ") || "no target"}; ` +
         `${counts.batchesStarted} batches, ${counts.hacksLanded} hack parts landed ($${Math.round(counts.moneyHacked)}), ` +
         `${counts.hacksFailed} failed, ${counts.hacksSkipped} skipped, ${counts.batchesShort} short; ` +
-        `${counts.desyncs} desyncs (${counts.outOfOrder} out of order, ${counts.outOfBounds} out of bounds), ` +
+        `${counts.desyncs} desync${counts.desyncs === 1 ? "" : "s"} (${counts.outOfOrder} out of order, ${counts.outOfBounds} out of bounds), ` +
         `${counts.late} late, ${counts.lost} lost, ${counts.unexpected} records of another run`,
     );
   }
@@ -156,10 +156,18 @@ export function batcherSection(points: BatcherPoint[], failures: string[] = []):
       : `  desyncs: ${total.desyncs} (${total.outOfOrder} out of order, ${total.outOfBounds} out of bounds)`,
   );
   lines.push(total.late + total.lost === 0 ? "  late or lost: none" : `  late: ${total.late}, lost: ${total.lost}`);
+  // How close it came to late (#216's review): one late operation fails the run, so the margin is worth seeing.
+  const slacks = healths.map(({ health }) => health.leastSlackMs).filter((slack) => typeof slack === "number");
+  lines.push(
+    slacks.length === 0
+      ? "  least slack: unknown (no operation recorded it)"
+      : `  least slack: ${Math.round(Math.min(...slacks))} ms (an operation's time to spare when it was called; ` +
+          "under 0 is late)",
+  );
   // Out of step, a failure (#206): the batches no longer land as planned, or someone else touched the target.
   if (total.desyncs + total.late + total.lost > 0) {
     const line =
-      `batcher out of step: ${total.desyncs} desyncs (${total.outOfOrder} out of order, ${total.outOfBounds} out of ` +
+      `batcher out of step: ${total.desyncs} desync${total.desyncs === 1 ? "" : "s"} (${total.outOfOrder} out of order, ${total.outOfBounds} out of ` +
       `bounds), ${total.late} late, ${total.lost} lost, the first seen at ` +
       formatIsoTime(firstOutOfStepMs ?? firstMs);
     lines.push(`  ${line}`);

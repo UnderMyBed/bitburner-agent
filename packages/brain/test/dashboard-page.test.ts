@@ -1101,6 +1101,6 @@ test("the batcher's button (#205) sends its switch; off, on with nothing sent, a
     "Batcher: on foodnstuff, against n00dles, on 6 servers: 13.2% a batch, one every 27 s",
   );
   expect(textOf(document, "#batcher")).toContain("Its health: batching, 12 batches, 30 hacks landed");
-  expect(textOf(document, "#batcher")).toContain("1 desyncs (0 out of order, 1 out of bounds)");
+  expect(textOf(document, "#batcher")).toContain("1 desync (0 out of order, 1 out of bounds)");
   expect(document.querySelector("#batcher div div:last-child")?.className).toBe("bad");
 });

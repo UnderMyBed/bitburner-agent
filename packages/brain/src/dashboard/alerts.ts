@@ -237,7 +237,7 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       name: "batcherOutOfStep",
       sinceMs: outOfStep.sinceMs,
       detail:
-        `the batcher is out of step on ${outOfStep.target}: ${outOfStep.desyncs} desyncs, ${outOfStep.late} late, ` +
+        `the batcher is out of step on ${outOfStep.target}: ${outOfStep.desyncs} desync${outOfStep.desyncs === 1 ? "" : "s"}, ${outOfStep.late} late, ` +
         `${outOfStep.lost} lost lately; it stops hacking, prepares the target again and goes on, and the run report ` +
         "fails the run",
     });

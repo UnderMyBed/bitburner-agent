@@ -312,7 +312,7 @@ test("batcherOutOfStep (#206): its desyncs, late or lost rose lately, with the t
       name: "batcherOutOfStep",
       sinceMs: 7_000,
       detail:
-        "the batcher is out of step on n00dles: 1 desyncs, 2 late, 0 lost lately; it stops hacking, prepares the " +
+        "the batcher is out of step on n00dles: 1 desync, 2 late, 0 lost lately; it stops hacking, prepares the " +
         "target again and goes on, and the run report fails the run",
     },
   ]);

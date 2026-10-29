@@ -8,6 +8,7 @@
 // BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
+  type BatcherHealth,
   type DesiredState,
   EFFECTOR_BACKENDS,
   type FactionWorkType,
@@ -413,7 +414,7 @@ export class DesiredStateController {
     this.#update();
   }
 
-  /** The batcher's switch (#205), likewise; off by default. */
+  /** The batcher's switch (#205), likewise; on by default since #206. */
   setBatcherEnabled(enabled: boolean): void {
     writeSwitch(this.#store, BATCHER_ENABLED_SETTING, enabled);
     this.#update();
@@ -425,8 +426,19 @@ export class DesiredStateController {
       readBatcherEnabled(this.#store),
       this.#desired?.batcher ?? null,
       this.#batcherWhy,
-      this.#fastData?.batcher,
+      this.#batcherHealth(),
     );
+  }
+
+  /**
+   * The batcher's health in the latest fast snapshot, or null; null too when it was written before the game's last
+   * install (#216's review): ports outlive an install, so a batcher the reset killed would still read as batching.
+   */
+  #batcherHealth(): BatcherHealth | null {
+    const health = this.#fastData?.batcher ?? null;
+    const resetAt = resetTimeOf(this.#slowData, "lastAugReset");
+    if (health === null || (resetAt !== null && typeof health.atMs === "number" && health.atMs < resetAt)) return null;
+    return health;
   }
 
   /** The hacking programs' switch, likewise. */
@@ -970,7 +982,7 @@ export class DesiredStateController {
     const hosts = batcherHostsOf(hackLoop);
     // Where it runs now, kept while it still fits (#211), so a larger host doesn't restart it; the target it batches,
     // kept unless another is worth the move (#206).
-    const health = this.#fastData?.batcher;
+    const health = this.#batcherHealth();
     const batching = health?.state === "batching" ? health.target : null;
     const planned = chooseBatcher(this.#staticData, this.#mediumData, hosts, this.#desired?.batcher ?? null, batching);
     if (planned.batcher === null) {
