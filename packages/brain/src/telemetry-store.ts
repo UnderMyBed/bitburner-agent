@@ -173,6 +173,22 @@ export class TelemetryStore {
     return row ? snapshotOfRow(row) : null;
   }
 
+  /** The newest `limit` snapshots of a tier, newest first, in the order stored (#197: the faction state's alert). */
+  latestSnapshots({
+    environment,
+    tier,
+    limit,
+  }: {
+    environment: Environment;
+    tier: string;
+    limit: number;
+  }): (RecordContext & StoredSnapshot)[] {
+    const rows = this.#database
+      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT ?`)
+      .all(environment, tier, limit) as Record<string, string | number>[];
+    return rows.map(snapshotOfRow);
+  }
+
   /**
    * The newest snapshot of a tier received before `beforeMs`, or null if there's none: the run report's static snapshot
    * for a window that starts after it (#196).

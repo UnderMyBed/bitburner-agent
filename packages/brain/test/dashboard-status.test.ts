@@ -125,7 +125,12 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     programs: [],
     servers: [],
   } as MediumSnapshotData);
-  recordSnapshot("slow", STARTED_AT_MS + 2_000, {});
+  const factionState = {
+    joined: [{ name: "CyberSec", reputation: 5, favor: 0 }],
+    invitations: [],
+    queuedAugmentations: [],
+  };
+  recordSnapshot("slow", STARTED_AT_MS + 2_000, { factions: { backend: "ui", state: factionState, problem: null } });
   recordSnapshot("static", STARTED_AT_MS + 2_000, {});
   const nowMs = STARTED_AT_MS + 21_000;
 
@@ -165,6 +170,15 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     homeRam,
     intents,
     work: { desired: null, outcome: null },
+    factions: {
+      receivedAtMs: STARTED_AT_MS + 2_000,
+      kind: "read",
+      backend: "ui",
+      state: factionState,
+      problem: null,
+      opened: null,
+      unreadInARow: 0,
+    },
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
@@ -425,6 +439,60 @@ test("a dialog left open in the newest fast snapshot (#143) is the dialogBlockin
   expect(status(STARTED_AT_MS + 3_000).alerts).toMatchObject([
     { name: "dialogBlocking", sinceMs: STARTED_AT_MS + 2_000, detail: expect.stringContaining("travel to Aevum") },
   ]);
+});
+
+test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread; the panel says how many; an older Agent's isn't one", () => {
+  const nowMs = STARTED_AT_MS + 300_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const unread = (problem: string) => ({ factions: { backend: "ui", state: null, problem } });
+  recordSnapshot("slow", STARTED_AT_MS + 60_000, unread("a dialog the Agent leaves for the owner is open"));
+  recordSnapshot("slow", STARTED_AT_MS + 120_000, unread("a dialog the Agent leaves for the owner is open"));
+  // Two in a row: shown on the panel, no alert yet.
+  expect(status(nowMs).alerts).toEqual([]);
+  expect(status(nowMs).factions).toEqual({
+    receivedAtMs: STARTED_AT_MS + 120_000,
+    kind: "unread",
+    backend: "ui",
+    state: null,
+    problem: "a dialog the Agent leaves for the owner is open",
+    opened: null,
+    unreadInARow: 2,
+  });
+  recordSnapshot("slow", STARTED_AT_MS + 180_000, unread("no game page to read the faction state through"));
+  expect(status(nowMs).alerts).toEqual([
+    {
+      name: "factionStateUnread",
+      sinceMs: STARTED_AT_MS + 60_000,
+      detail:
+        "the faction state couldn't be read in the last 3 slow snapshots in a row (ui): no game page to read the " +
+        "faction state through",
+    },
+  ]);
+  // A skipped one neither ends the streak nor adds to it; the next unread does, its start kept.
+  recordSnapshot("slow", STARTED_AT_MS + 200_000, {
+    factions: { backend: "ui", state: null, problem: null, skipped: "no sidebar on the page" },
+  });
+  expect(status(nowMs).alerts).toMatchObject([
+    { sinceMs: STARTED_AT_MS + 60_000, detail: expect.stringContaining("in the last 3 slow snapshots in a row") },
+  ]);
+  recordSnapshot("slow", STARTED_AT_MS + 220_000, unread("no game page to read the faction state through"));
+  expect(status(nowMs).alerts).toMatchObject([{ sinceMs: STARTED_AT_MS + 60_000 }]);
+  expect(status(nowMs).factions).toMatchObject({ kind: "unread", unreadInARow: 4 });
+  // An older Agent's slow snapshot (a redeploy) has no reading: not read by this Agent, never a problem.
+  recordSnapshot("slow", STARTED_AT_MS + 240_000, { purchasedServers: [] });
+  expect(status(nowMs).alerts).toEqual([]);
+  expect(status(nowMs).factions).toMatchObject({ kind: "absent", backend: null, state: null, problem: null });
+  // One not well formed is a bug: unread.
+  recordSnapshot("slow", STARTED_AT_MS + 250_000, { factions: { backend: "ui" } });
+  expect(status(nowMs).factions).toMatchObject({
+    kind: "unread",
+    problem: "the slow snapshot's faction state isn't well formed",
+    unreadInARow: 1,
+  });
+  const empty = { joined: [], invitations: [], queuedAugmentations: [] };
+  recordSnapshot("slow", STARTED_AT_MS + 260_000, { factions: { backend: "sim", state: empty, problem: null } });
+  expect(status(nowMs).alerts).toEqual([]);
+  expect(status(nowMs).factions).toMatchObject({ kind: "read", backend: "sim", state: empty, problem: null });
 });
 
 test("the hacking rows (#196): the ceiling at the newest snapshots, and hacking's income over the last 10 minutes", () => {

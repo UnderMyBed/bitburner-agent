@@ -475,3 +475,23 @@ describe("properties (§9.3)", () => {
     );
   });
 });
+
+test("augmentation purchases done are counted, all told, past the brain dropping the done intent (#197)", async () => {
+  const NEUROTRAINER = intent({
+    action: "purchaseAugmentation",
+    args: { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 },
+  });
+  const { runner, round } = runnerWith(() => DONE);
+  expect(runner.augmentationsBought()).toBe(0);
+  runner.desire([NEUROTRAINER, AEVUM]);
+  await round();
+  expect(runner.augmentationsBought()).toBe(1);
+  // The brain stops sending it once done; the count stays, for the faction state's next read.
+  runner.desire([]);
+  await round();
+  expect(runner.augmentationsBought()).toBe(1);
+  // Sent again and done again (another level, say): counted again; the travel never counts.
+  runner.desire([NEUROFLUX_3]);
+  await round();
+  expect(runner.augmentationsBought()).toBe(2);
+});

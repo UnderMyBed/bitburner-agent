@@ -34,6 +34,11 @@ interface HeldIntent {
 
 export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner: EffectorRunner }) {
   let held: HeldIntent[] = [];
+  /**
+   * Augmentation purchases reported done, all told (#197): the faction state's reader rereads the queue after one. A
+   * count, as the brain stops sending a done intent within seconds, long before the next read.
+   */
+  let augmentationsBought = 0;
   async function run(entry: HeldIntent, deadlineMs: number): Promise<void> {
     const effector = effectorFor(entry.intent);
     const { description } = effector;
@@ -62,6 +67,7 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
     const problem = report.problem === null ? "" : `: ${report.problem}`;
     if (report.done) {
       entry.outcome.done = true;
+      if (entry.intent.action === "purchaseAugmentation") augmentationsBought += 1;
       ns.print(`agent: ${description} (${entry.outcome.backend}): done${problem}`);
       return;
     }
@@ -105,6 +111,9 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
         await run(entry, deadlineMs);
       }
     },
+
+    /** How many augmentation purchases it has seen done, all told, the brain's list since aside (#197). */
+    augmentationsBought: () => augmentationsBought,
 
     /** How each held intent went, in order, for the fast snapshot. */
     outcomes(): IntentOutcome[] {

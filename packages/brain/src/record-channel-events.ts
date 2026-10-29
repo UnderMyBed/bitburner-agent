@@ -1,5 +1,6 @@
 import { type Clock, ControlChannel } from "@bitburner-agent/bridge";
 import { type FastSnapshotData, type HandledDialog, MAX_DIALOG_TEXT_LENGTH } from "@bitburner-agent/core";
+import { FACTION_STATE_READ_EVENT_KIND, FACTION_STATE_UNREAD_EVENT_KIND, factionStatusOf } from "./faction-state.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 import { reportedPromotion } from "./work.ts";
 
@@ -49,7 +50,9 @@ export function brainChannel({
  * reports (#155) is a `workPromotion` event, and a line for `log`, once: the work outcome carries the latest one
  * snapshot after snapshot, so one already stored, after a brain restart too, isn't stored again. Each record's release
  * is the brain's own plus the deployment of the Agent connected when it arrived, or `none` while no Agent is
- * (architecture §7).
+ * (architecture §7). A slow snapshot whose faction state couldn't be read (#197) is a `factionStateUnread` event, and a
+ * line for `log`, each time the problem changes, and `factionStateRead` once it's read again; after a brain restart, the
+ * last one stored says where it was.
  */
 export function recordChannelEvents(
   channel: ControlChannel,
@@ -63,6 +66,16 @@ export function recordChannelEvents(
   let connectedDeploymentId = "none";
   const [lastStored] = store.recentEvents({ environment, limit: 1, kinds: [WORK_PROMOTION_EVENT_KIND] });
   let lastPromotion = JSON.stringify(reportedPromotion(lastStored?.detail));
+  const [lastFactionEvent] = store.recentEvents({
+    environment,
+    limit: 1,
+    kinds: [FACTION_STATE_UNREAD_EVENT_KIND, FACTION_STATE_READ_EVENT_KIND],
+  });
+  /** The faction state's last problem stored, or null for read (or never unread). */
+  let lastFactionProblem =
+    lastFactionEvent?.kind === FACTION_STATE_UNREAD_EVENT_KIND
+      ? String((lastFactionEvent.detail as { problem?: unknown } | null)?.problem)
+      : null;
   channel.subscribe((event) => {
     if (event.type === "agentConnected") connectedDeploymentId = event.deploymentId;
     const context = { environment, release: `${brainRelease}+${connectedDeploymentId}` };
@@ -85,6 +98,32 @@ export function recordChannelEvents(
           lastPromotion = JSON.stringify(promotion);
           store.recordEvent(context, { atMs: event.atMs, kind: WORK_PROMOTION_EVENT_KIND, detail: promotion });
           log(`the Agent took a promotion at ${promotion.company}: ${promotion.from} to ${promotion.to}`);
+        }
+      }
+      if (tier === "slow") {
+        // Only unread changes it: one read (or read with the page not put back) clears it; one skipped, or from an
+        // older Agent (no reading), is neither (faction-state.ts).
+        const status = factionStatusOf(data);
+        const { backend } = status;
+        const problem =
+          status.kind === "unread"
+            ? status.problem
+            : status.kind === "skipped" || status.kind === "absent"
+              ? lastFactionProblem
+              : null;
+        if (problem !== lastFactionProblem) {
+          if (problem === null) {
+            store.recordEvent(context, { atMs: event.atMs, kind: FACTION_STATE_READ_EVENT_KIND, detail: { backend } });
+            log(`the faction state is read again (${backend})`);
+          } else {
+            store.recordEvent(context, {
+              atMs: event.atMs,
+              kind: FACTION_STATE_UNREAD_EVENT_KIND,
+              detail: { backend, problem },
+            });
+            log(`the faction state couldn't be read${backend === null ? "" : ` (${backend})`}: ${problem}`);
+          }
+          lastFactionProblem = problem;
         }
       }
       return;
