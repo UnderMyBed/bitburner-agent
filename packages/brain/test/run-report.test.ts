@@ -480,7 +480,8 @@ describe("cloud servers (#194)", () => {
     const line = `${at(2 * MINUTE)} the Agent REFUSED the brain's message (2 so far): an intent's hostname isn't valid`;
     expect(failures).toEqual([line]);
     expect(text).toContain(
-      `  deploy failures, version drift, supervision given up, brain messages the Agent refused:\n    ${line}`,
+      "  deploy failures, version drift, supervision given up, brain messages the Agent refused, restarts that couldn't " +
+        `type (#212):\n    ${line}`,
     );
   });
 
