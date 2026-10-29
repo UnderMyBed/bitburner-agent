@@ -315,3 +315,50 @@ test("a brain message the Agent refused (#194's review): a messageRefused event 
   ]);
   store.close();
 });
+
+test("a restart that couldn't type (#212): a restartFellBack event and a log line, from the fast snapshot's note", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const lines: string[] = [];
+  const channel = new ControlChannel({ token: TOKEN, clock: fixedClock });
+  recordChannelEvents(channel, store, { environment: "E2", brainRelease: "v0.2.0", log: (line) => lines.push(line) });
+  const page = connectionFromTest();
+  channel.accept(page.connection);
+  const message = (type: string, fields: object) =>
+    page.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, type, ...fields } as never));
+  message("hello", {
+    token: TOKEN,
+    deploymentId: "deployment-a",
+    agentSessionId: "session-1",
+    game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+  });
+  const fast = (sequenceNumber: number, restart?: unknown) =>
+    message("snapshot", {
+      agentSessionId: "session-1",
+      tier: "fast",
+      sequenceNumber,
+      gameTimeMs: 1,
+      data: {
+        degradedTiers: [],
+        pageHeapUsedBytes: null,
+        game: null,
+        intents: [],
+        dialogs: { handled: [], blocking: null },
+        ...(restart === undefined ? {} : { restart }),
+      },
+    });
+  fast(1, { outcome: "reloading", reason: "no terminal", atMs: 5 });
+  fast(2);
+  fast(3, { outcome: "sideways", reason: "not one the Agent sends", atMs: 5 });
+  expect(
+    store
+      .events({ environment: "E2" })
+      .filter((event) => event.kind === "restartFellBack")
+      .map((event) => event.detail),
+  ).toEqual([{ outcome: "reloading", reason: "no terminal", atMs: 5 }]);
+  expect(lines).toEqual([
+    "the restart after a reset couldn't type run /agent/boot.js: no terminal; it saved and reloaded the game",
+  ]);
+  store.close();
+});

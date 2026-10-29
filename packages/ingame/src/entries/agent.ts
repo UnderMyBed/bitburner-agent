@@ -45,6 +45,7 @@ import { createSafeMode } from "../agent/safe-mode.ts";
 import { createSnapshotter, SNAPSHOT_ROUND_MS } from "../agent/snapshotter.ts";
 import { createWorkActivity } from "../agent/work.ts";
 import type { NS } from "../ns.ts";
+import { takeRestartNote } from "../page/restart-timer.ts";
 
 const FIRST_RECONNECT_DELAY_MS = 1_000;
 const LONGEST_RECONNECT_DELAY_MS = 30_000;
@@ -132,6 +133,8 @@ export async function main(ns: NS): Promise<void> {
     batcherHealth: () => batcher.health(),
     batcherDeploy: () => batcher.deployReport(),
     dialogReport: () => dialogWatcher.takeReport(),
+    // A restart after a reset that couldn't type `run /agent/boot.js` left a note: reported, never silent (#212).
+    takeRestartNote,
     refusedMessage: () => refused,
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
     factionsUnread: (problem) => factionStateReader.unread(problem),

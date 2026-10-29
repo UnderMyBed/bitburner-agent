@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import { openGamePage } from "../../src/page/game-page.ts";
 import { armRestartAfterInstall, installOnPage, RESTART_STEP_LIMITS_MS } from "../../src/page/install-page.ts";
+import { takeRestartNote } from "../../src/page/restart-timer.ts";
 import { clicks, element, optionsInSidebar, STARTED, terminal, withProps } from "./stand-in-page.ts";
 
 const BOOT = "agent/boot.js";
@@ -30,6 +31,7 @@ function installAlert(): Element {
 }
 
 afterEach(() => {
+  localStorage.clear();
   vi.useRealTimers();
   clicks.length = 0;
   document.body.replaceChildren();
@@ -168,6 +170,8 @@ describe("the restart timer", () => {
     document.body.append(options);
     await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.terminal + 2_000);
     expect(again.state()).toMatchObject({ outcome: "gaveUp", fallbackReason: "no terminal" });
+    // Given up, and noted for the next Agent (#212).
+    expect(takeRestartNote()).toMatchObject({ outcome: "gaveUp", reason: "no terminal" });
   });
 
   test("disarmed (the worker is alive after its click): it stops", async () => {
@@ -341,5 +345,40 @@ describe("the install's steps", () => {
     await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.install + RESTART_STEP_LIMITS_MS.terminal);
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "Confirm"]);
     expect(terminalOutput()).not.toContain(STARTED);
+  });
+});
+
+describe("a restart that couldn't type fails loudly (#212)", () => {
+  test("the fallback's reload leaves a note, before its click; the next Agent takes it once", async () => {
+    vi.useFakeTimers();
+    optionsInSidebar();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    // No terminal ever comes back (the page left elsewhere): the timer can't type.
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.terminal + 2_000);
+    expect(restart.state()).toMatchObject({ outcome: "reloading", fallbackReason: "no terminal" });
+    expect(takeRestartNote()).toEqual({ outcome: "reloading", reason: "no terminal", atMs: expect.any(Number) });
+    expect(takeRestartNote()).toBeNull();
+  });
+
+  test("given up (no Options to reload by): noted too", async () => {
+    vi.useFakeTimers();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.terminal + RESTART_STEP_LIMITS_MS.fallback + 2_000);
+    expect(restart.state().outcome).toBe("gaveUp");
+    expect(takeRestartNote()).toMatchObject({ outcome: "gaveUp", reason: "no terminal" });
+  });
+
+  test("started from the terminal, or disarmed: no note", async () => {
+    vi.useFakeTimers();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    terminal();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(restart.state().outcome).toBe("started");
+    armRestartAfterInstall(document, BOOT).disarm();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(takeRestartNote()).toBeNull();
   });
 });
