@@ -568,11 +568,11 @@ describe("the worker: skipped where a page can't or mustn't be left (#197)", () 
   async function runWorker(): Promise<unknown> {
     const { main } = await import("../../src/entries/faction-state.ts");
     await main({
+      ...ns,
       args: [JSON.stringify(FIRST), Date.now() + 1_500],
       disableLog: () => {},
       getResetInfo: () => ({ lastAugReset: 5, ownedAugs: new Map() }),
       getPlayer: () => ({ factions: ["CyberSec"] }),
-      ...ns,
     } as unknown as NS);
     return reports.at(-1);
   }

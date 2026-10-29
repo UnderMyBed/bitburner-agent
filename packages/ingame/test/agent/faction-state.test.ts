@@ -369,7 +369,7 @@ describe("the slow snapshot", () => {
       expect(order).not.toContain("readFactions");
       const slows = sent.filter((message) => message.tier === "slow");
       expect(slows).toHaveLength(1);
-      expect((slows[0]?.data as SlowSnapshotData).factions).toEqual({
+      expect((slows[0]?.data as SlowSnapshotData | undefined)?.factions).toEqual({
         backend: "ui",
         state: null,
         problem: noTimeToRead(3),
