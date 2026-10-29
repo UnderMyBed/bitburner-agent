@@ -198,6 +198,17 @@ export {
   parseFactionState,
 } from "./faction-state.ts";
 export {
+  FACTION_WORK_CYCLES_PER_SECOND,
+  factionReputationPerCycle,
+  factionReputationPerSecond,
+  HACKING_MULTIPLIERS,
+  hackingSkillValue,
+  hackingValue,
+  MAX_SKILL_LEVEL,
+  UNFOCUSED_WORK_BONUS,
+  type WorkingPerson,
+} from "./faction-work.ts";
+export {
   daedalusAugmentationsRequired,
   FACTION_ENEMIES,
   FACTION_NAMES,

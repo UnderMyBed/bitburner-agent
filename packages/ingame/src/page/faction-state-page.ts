@@ -269,7 +269,7 @@ async function readQueuePage(gamePage: GamePage, installedNeuroFluxLevel: number
 }
 
 /** `joined` with the worked faction's reputation, where it's among them and the page didn't just read it. */
-function withWorkedReputation(
+export function withWorkedReputation(
   joined: JoinedFaction[],
   worked: { faction: string; reputation: number } | null,
 ): JoinedFaction[] {
@@ -354,3 +354,16 @@ export const casinoShown = (gamePage: GamePage) => gamePage.findElementNow(CASIN
 
 /** Whether the page shows the Work page focused: its "Do something else simultaneously". */
 export const focusedOnWork = (gamePage: GamePage) => gamePage.findElementNow(UNFOCUS_XPATH) !== null;
+
+/**
+ * Why the page mustn't be left now, or null: the casino's games, where leaving mid-hand forfeits a blackjack bet; or no
+ * sidebar and not the Work page (the BitVerse, an infiltration), with nothing to reach a page by. Shared by the faction
+ * state's reader (#197) and the work workers (#203 review), which wait for it to pass and catch up then.
+ */
+export function pageMustStayProblem(gamePage: GamePage): string | null {
+  if (casinoShown(gamePage)) return factionStatePageProblems.casino;
+  if (gamePage.findElementNow(SIDEBAR_XPATH) === null && !focusedOnWork(gamePage)) {
+    return factionStatePageProblems.noSidebar;
+  }
+  return null;
+}

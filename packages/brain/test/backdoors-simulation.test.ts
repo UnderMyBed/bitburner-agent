@@ -1,8 +1,9 @@
 // The brain backdoors CSEC from a fresh start (#195), in the simulator: an 8 GB new game in BN1, the brain's rules as on
 // Steam (the hack loop, the programs and home RAM, all on). The loop buys BruteSSH.exe and roots CSEC (1 port); once the
 // hacking level reaches CSEC's (51 to 60, rolled per game), the brain asks for its backdoor, and the Agent's `sim`
-// effector types it into the terminal (#162). The game then invites the player to CyberSec. The simulator has no page,
-// so no invitation dialog: its save shows the invitation. CI runs seed 1; `BACKDOOR_SEEDS` (`1,2,3`, say) runs others.
+// effector types it into the terminal (#162). The game then invites the player to CyberSec, and the brain joins it
+// (#203: factions-simulation.test.ts follows that further). The simulator has no page, so no invitation dialog: its
+// save shows CyberSec joined. CI runs seed 1; `BACKDOOR_SEEDS` (`1,2,3`, say) runs others.
 import { gunzipSync } from "node:zlib";
 import type { FastSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -65,13 +66,13 @@ test.each(SEEDS)(
     // Nothing due, so no backdoorOverdue alert.
     expect(fresh.controller().backdoorsDue()).toEqual([]);
 
-    // The game: CyberSec's invitation, and the terminal back home.
+    // The game: CyberSec's invitation, joined since by the brain (#203), and the terminal back home.
     const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
     const player = JSON.parse(saveObject.data.PlayerSave).data as {
-      factionInvitations: string[];
+      factions: string[];
       currentServer: string;
     };
-    expect(player.factionInvitations).toContain("CyberSec");
+    expect(player.factions).toContain("CyberSec");
     expect(player.currentServer).toBe("home");
 
     // The run report: the backdoor, done through the simulator's effector, and PASS.

@@ -97,7 +97,12 @@ describe("the generated data", () => {
       AugmentationMoneyCost: 1,
       AugmentationRepCost: 1,
       DaedalusAugsRequirement: 30,
+      FactionWorkRepGain: 1,
     });
+    // Faction work's reputation (#203): the BitNodes that cut it, as the game sets them (`BitNode/BitNode.tsx`).
+    expect([2, 4, 13, 14].map((n) => AUGMENTATION_BITNODE_MULTIPLIERS[n]?.FactionWorkRepGain)).toEqual([
+      0.5, 0.75, 0.6, 0.2,
+    ]);
   });
 });
 
@@ -267,6 +272,7 @@ describe("the BitNode's multipliers, from resetInfo", () => {
       AugmentationMoneyCost: 3,
       AugmentationRepCost: 3,
       DaedalusAugsRequirement: 30,
+      FactionWorkRepGain: 1,
     });
     expect(augmentationBitNodeMultipliers(3, { 3: 2 })).toEqual(augmentationBitNodeMultipliers(3, {}));
     // BN12 at level 3 (SF12.2): 1.02^3; another Source-File doesn't count.
@@ -274,6 +280,7 @@ describe("the BitNode's multipliers, from resetInfo", () => {
       AugmentationMoneyCost: 1.02 ** 3,
       AugmentationRepCost: 1.02 ** 3,
       DaedalusAugsRequirement: 31,
+      FactionWorkRepGain: 1 / 1.02 ** 3,
     });
     expect(() => augmentationBitNodeMultipliers(16, {})).toThrow(/no BitNode 16/);
     expect(() => augmentationBitNodeMultipliers(0, {})).toThrow(/no BitNode 0/);

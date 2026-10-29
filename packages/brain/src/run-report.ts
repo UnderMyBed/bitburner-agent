@@ -20,6 +20,14 @@ import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
 import {
+  describeChoice,
+  FACTION_WORK_CHOSEN_EVENT_KIND,
+  FACTION_WORK_STALLED_AFTER_MS,
+  FACTION_WORK_STOPPED_EVENT_KIND,
+  FactionWorkTimeline,
+  SLOW_SNAPSHOT_GAP_MS,
+} from "./factions.ts";
+import {
   DEFAULT_GAP_THRESHOLD_MS,
   describePageHeap,
   findGaps,
@@ -291,6 +299,8 @@ interface RunFacts extends RunWindow {
   slowLast: SlowSnapshotData | undefined;
   /** The faction state over the slow snapshots (#197). */
   factionState: FactionStateFolding;
+  /** The joins and the brain's faction work (#203), over the events and the medium and slow snapshots. */
+  factionWork: FactionWorkTimeline;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -328,6 +338,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
       }
     }
+    const events = store.eventsInWindow(window);
+    const factionWork = new FactionWorkTimeline(events, BRAIN_STARTED_EVENT_KIND);
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
     const factionState = new FactionStateFolding();
@@ -337,6 +349,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowFirst ??= data;
       slowLast = data;
       factionState.add(atMs, data);
+      factionWork.addSlow(atMs, data);
       for (const name of namesOf(data.purchasedServers)) playersServers.add(name);
     }
     let mediumFirst: MediumSnapshotData | undefined;
@@ -352,6 +365,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       inference.add(atMs, data);
       hacking.addMedium(atMs, data);
       backdoors.addMedium(atMs, data);
+      factionWork.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
@@ -375,7 +389,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       .filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
     return {
       ...window,
-      events: store.eventsInWindow(window),
+      events,
       fast,
       mediumFirst,
       mediumLast,
@@ -385,6 +399,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowFirst,
       slowLast,
       factionState,
+      factionWork,
       snapshotCount,
       playersServers,
       hackLoopEnabled: readHackLoopEnabled(store),
@@ -461,7 +476,10 @@ const quote = (value: string, length: number) =>
 
 // --- 1. The window ----------------------------------------------------------------------------------------------------
 
-/** The events of the brain, the Agent's sessions and the save backups, in order; dialogs and promotions are actions. */
+/**
+ * The events of the brain, the Agent's sessions and the save backups, in order; dialogs, promotions and the brain's
+ * faction work (#203) are actions.
+ */
 function windowSection(facts: RunFacts): string[] {
   const lines = ["1. The window"];
   if (facts.earlierBrainStartMs !== null) {
@@ -471,9 +489,13 @@ function windowSection(facts: RunFacts): string[] {
         "restart, give --since",
     );
   }
-  const timeline = facts.events.filter(
-    (event) => event.kind !== "gameDialog" && event.kind !== WORK_PROMOTION_EVENT_KIND,
-  );
+  const actions = [
+    "gameDialog",
+    WORK_PROMOTION_EVENT_KIND,
+    FACTION_WORK_CHOSEN_EVENT_KIND,
+    FACTION_WORK_STOPPED_EVENT_KIND,
+  ];
+  const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event)}`);
   if (timeline.length === 0) lines.push("  no events from the brain or the Agent");
   const count = (kind: string) => timeline.filter((event) => event.kind === kind).length;
@@ -741,6 +763,57 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (dialogs.length === 0) lines.push("    none");
   lines.push(...backdoorLines(facts));
+  lines.push(...factionLines(facts));
+  return lines;
+}
+
+/**
+ * The joins and the brain's faction work (#203): the factions the medium snapshots showed joined, the invitations left
+ * to the owner (a faction with enemies), each choice of work and why, or its end, and the reputation each faction
+ * gained while the brain's work was on it.
+ */
+function factionLines({ factionWork }: RunFacts): string[] {
+  const lines = ["  factions (joins, and the brain's faction work):"];
+  const joined = [...factionWork.joined].map(([faction, atMs]) =>
+    atMs === null ? `${faction} (at the window's start)` : `${faction} by ${formatIsoTime(atMs)}`,
+  );
+  lines.push(`    joined: ${joined.length === 0 ? "none" : joined.join(", ")}`);
+  const left = [...factionWork.leftToOwner].map(([faction, atMs]) => `${faction} (first seen ${formatIsoTime(atMs)})`);
+  lines.push(`    invitations left to you (factions with enemies): ${left.length === 0 ? "none" : left.join(", ")}`);
+  lines.push("    the brain's faction work, as chosen:");
+  for (const record of factionWork.records) {
+    lines.push(
+      `      ${formatIsoTime(record.atMs)}  ${record.kind === "chosen" ? describeChoice(record.choice) : `stopped (${record.reason})`}`,
+    );
+  }
+  if (factionWork.records.length === 0) lines.push("      none");
+  const gained = [...factionWork.gained].map(([faction, reputation]) => `${faction} +${formatReputation(reputation)}`);
+  lines.push(`    reputation gained with the brain's work on it: ${gained.length === 0 ? "none" : gained.join(", ")}`);
+  return lines;
+}
+
+/**
+ * The brain's faction work stalled (#203): a stretch of `FACTION_WORK_STALLED_AFTER_MS` or more, with its choice in
+ * force, in which its faction's reputation rose under half the work's rate over each 10-minute window of slow snapshots
+ * (a faction not being worked gains a little passively; skipped readings left out); a gap of over
+ * `SLOW_SNAPSHOT_GAP_MS` in them starts the readings again, as it's a failure of its own.
+ */
+function factionWorkHealthLines({ factionWork }: RunFacts, failures: string[]): string[] {
+  const lines = [
+    `  faction work stalled (the brain's choice, its faction's reputation rising under half the work's rate for ` +
+      `${formatDuration(FACTION_WORK_STALLED_AFTER_MS)} or more, no slow snapshot gap over ` +
+      `${formatDuration(SLOW_SNAPSHOT_GAP_MS)}):`,
+  ];
+  for (const { faction, workType, reputationPerSecond, fromMs, toMs, ongoing } of factionWork.stalls) {
+    const line =
+      `faction work stalled: ${faction}'s reputation rose under half the ${workType} work's ` +
+      `${reputationPerSecond.toFixed(2)}/s from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} ` +
+      `(${formatDuration(toMs - fromMs)}), with the brain's work for it` +
+      (ongoing ? "; still under it at the last slow snapshot" : "");
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (factionWork.stalls.length === 0) lines.push("    none");
   return lines;
 }
 
@@ -851,6 +924,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
   }
   if (stuck === 0) lines.push("    none");
   lines.push(...backdoorHealthLines(facts, failures));
+  lines.push(...factionWorkHealthLines(facts, failures));
 
   lines.push("  dialogs left blocking the page:");
   const blocking = blockingEpisodes(facts);
