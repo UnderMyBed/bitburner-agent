@@ -1,8 +1,9 @@
 // Augmentations and the reset (#210), in the simulator: a fresh 8 GB start in BN1 reaching its first install, the
 // brain's rules as on Steam (the batcher, programs, home RAM, backdoors, faction work and augmentations, all on).
-// - 17 virtual minutes in (`EDITED_AFTER_MS`), a harness edit stands in for the hours of work (A5's, #203): CyberSec joined with the
-//   reputation for its five augmentations, NiteSec joined with none (so the decision compares, #213 review), and the
-//   money for the five, home's next RAM upgrade and a NeuroFlux Governor level.
+// - 17 virtual minutes in (`EDITED_AFTER_MS`), a harness edit stands in for the hours of work (A5's, #203): CyberSec
+//   joined with the reputation for its five augmentations, NiteSec joined with none (so the decision compares, #213
+//   review), and the money for the five, home's RAM upgrades (those the rest would buy, #218) and a NeuroFlux
+//   Governor level.
 // - The brain chooses the install because NiteSec's next comes sooner installing first ("sooner installing"), buys
 //   the five in buy order through the Agent's `sim` effector, then home's RAM, then NeuroFlux Governor, and installs
 //   through the gate and a save backup; the game starts boot.js after the reset, and the next Agent connects.
@@ -49,6 +50,11 @@ const FIVE = [
 const FIVE_COST = 447_170_900;
 /** NeuroFlux Governor's first level after the five: 750k × 1.9⁵. */
 const NEUROFLUX_LEVEL_1 = 750_000 * 1.9 ** 5;
+/**
+ * What the batcher may earn while the purchases go through, a minute or so, beyond the $3m over (#218): an upgrade
+ * that costs more than NeuroFlux's money, the $3m and this isn't one the rule can take first.
+ */
+const HOME_RAM_INCOME_SLACK = 5_000_000;
 const NEUROFLUX = 1.01000262;
 
 test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd entry fails loudly", () => {
@@ -81,10 +87,20 @@ test.each(SEEDS)(
     await game.run(20_000);
     const homeRamBefore = homeRam();
 
-    // The harness edit: CyberSec's reputation for all five, NiteSec joined, and the money for the five, home's next
-    // upgrade (its price in BN1, as the brain works it out) and a NeuroFlux Governor level, with $3m over.
+    // The harness edit: CyberSec's reputation for all five, NiteSec joined, and the money for the five, home's RAM
+    // and a NeuroFlux Governor level, with $3m over. Committed, the rule buys home's RAM while the money covers its
+    // next upgrade, and only then NeuroFlux Governor (augmentations.ts, the committed steps; home-ram.ts,
+    // `chooseHomeRamUpgrade`). So the money is for every upgrade that what's left for NeuroFlux would also buy (#218):
+    // on seed 4 home is still 16 GB at the edit, and with one upgrade's money the rule took a second, 32 to 64 GB
+    // ($10.1m), out of NeuroFlux's $18.6m, and installed without a level.
     const homeRamNow = homeRamBefore as number;
-    const homeRamPrice = homeRamNow * 32_000 * 1.58 ** Math.log2(homeRamNow);
+    const upgradePrice = (ram: number) => ram * 32_000 * 1.58 ** Math.log2(ram);
+    let homeRamAfter = homeRamNow;
+    let homeRamPrice = 0;
+    do {
+      homeRamPrice += upgradePrice(homeRamAfter);
+      homeRamAfter *= 2;
+    } while (upgradePrice(homeRamAfter) <= NEUROFLUX_LEVEL_1 + 3_000_000 + HOME_RAM_INCOME_SLACK);
     await simulation.diagnostics.joinFactionWithReputation("CyberSec", 18_750);
     await simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
     await simulation.diagnostics.setMoney(FIVE_COST + homeRamPrice + NEUROFLUX_LEVEL_1 + 3_000_000);
@@ -122,9 +138,11 @@ test.each(SEEDS)(
     );
     // Then home's RAM and NeuroFlux Governor's first level, before the install.
     expect(bought.map((each) => each.augmentation)).toEqual([...FIVE, "NeuroFlux Governor"]);
-    expect(brain.logLines).toContainEqual(
-      `augmentations: upgradeHomeRam(${homeRamNow}, Alpha Enterprises) done, before the install (home's RAM stays)`,
-    );
+    for (let ram = homeRamNow; ram < homeRamAfter; ram *= 2) {
+      expect(brain.logLines).toContainEqual(
+        `augmentations: upgradeHomeRam(${ram}, Alpha Enterprises) done, before the install (home's RAM stays)`,
+      );
+    }
     expect(brain.saveBackupEvents.filter((event) => "file" in event).length).toBeGreaterThanOrEqual(1);
     expect(brain.logLines.filter((line) => line.includes("NOT QUEUED"))).toEqual([]);
 
@@ -145,7 +163,7 @@ test.each(SEEDS)(
     expect(mults?.hacking_speed).toBeCloseTo(1.03 * 1.01 * 1.02 * NEUROFLUX, 6);
     expect(mults?.hacking_exp).toBeCloseTo(1.1 * NEUROFLUX, 6);
     expect(mults?.hacking_chance).toBeCloseTo(1.05 * NEUROFLUX, 6);
-    expect(homeRam()).toBe(homeRamNow * 2);
+    expect(homeRam()).toBe(homeRamAfter);
 
     // The run report: the decision, the purchases and the install, the Agent back, and no failure.
     const { text, failures } = runReport(fresh.data.store, {
