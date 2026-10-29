@@ -163,7 +163,7 @@ What the host provides so the above works.
 | Default locale pinned to `en-US`; `TZ=UTC` | `host/parity/locale.ts`, `simulation.ts` | handled: `locale.test.ts`, `locale-case.test.ts`, `new-game.test.ts` |
 | In-memory IndexedDB | `host/parity/storage.ts` | handled: `saves.test.ts` |
 | Synchronous gzip streams | `host/parity/compression.ts` | handled: `saves.test.ts` |
-| `blob:` script modules: revoke-after-import, imports complete in order, the import barrier | `host/scripts.ts` | handled: `scripts.test.ts`. So a script started by `exec` reaches its first `ns` call with no virtual time gone, where a browser takes a few ms or more: the batcher's operations land on time either way, but the real page's lag is E2's to show (#204, #205) |
+| `blob:` script modules: revoke-after-import, imports complete in order, the import barrier | `host/scripts.ts` | handled: `scripts.test.ts`. So a script started by `exec` reaches its first `ns` call with no virtual time gone, where a browser takes a few ms or more: the batcher's operations land on time either way, but the real page's lag is E2's to show: `batcher.e2.test.ts` (#205) prints the least slack an operation had |
 | `MainUILoaded` after boot; the headless router | `engine/bundle/entry.ts`, `engine/bundle/router.ts` | handled: `saves.test.ts`, `router.test.ts` |
 | The page's globals; popups, toasts, errors and prompts as events; prompt rules | `engine/bundle/page.ts`, `host/prompts.ts`, `host/events.ts` | handled: `page.test.ts` |
 | Uncaught errors handled as a browser does; machine-independent stack traces | `host/parity/errors.ts`, `host/clock.ts`, `host/paths.ts` | handled: `page.test.ts`, `paths.test.ts` |

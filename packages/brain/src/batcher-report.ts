@@ -1,13 +1,17 @@
 // The run report's batcher section (#205): what the batcher's health in the fast snapshots says, hour by hour, and its
 // desyncs and problems, reported (a desync becomes a failure in #206). The health's counts are each batcher run's own,
-// from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it.
+// from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
+// already under way at the window's first snapshot counts from there.
 import type { BatcherHealth } from "@bitburner-agent/core";
+import { BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
 
 /** One fast snapshot's batcher health, as stored (the Agent's word: checked as it's read). */
 export interface BatcherPoint {
   atMs: number;
   health: unknown;
+  /** The deploy worker's last report while the batcher was wanted (#211); absent from an older Agent. */
+  deploy?: unknown;
 }
 
 /** The counts added up per hour. */
@@ -40,16 +44,51 @@ function healthOf(value: unknown): BatcherHealth | null {
 }
 
 const zero = (): Counts => Object.fromEntries(COUNTS.map((count) => [count, 0])) as Counts;
+const countsOf = (health: BatcherHealth): Counts =>
+  Object.fromEntries(COUNTS.map((count) => [count, health[count]])) as Counts;
 
-/** The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen. */
-export function batcherSection(points: BatcherPoint[]): string[] {
+/**
+ * The batcher wanted and not running for `BATCHER_NOT_RUNNING_AFTER` fast snapshots in a row or more (#211), each
+ * stretch a failure: the hack loop had left its hosts to it, so nothing hacked them.
+ */
+function notRunningLines(points: BatcherPoint[], failures: string[]): string[] {
+  const lines = ["  sent but not running (3 fast snapshots in a row or more):"];
+  const stretches: { fromMs: number; toMs: number; count: number; problem: string }[] = [];
+  let inStretch = false;
+  for (const { atMs, deploy } of points) {
+    const problem = batcherNotRunning(deploy);
+    const last = stretches.at(-1);
+    if (problem === null) inStretch = false;
+    else if (inStretch && last !== undefined) Object.assign(last, { toMs: atMs, count: last.count + 1, problem });
+    else {
+      stretches.push({ fromMs: atMs, toMs: atMs, count: 1, problem });
+      inStretch = true;
+    }
+  }
+  for (const { fromMs, toMs, count, problem } of stretches) {
+    if (count < BATCHER_NOT_RUNNING_AFTER) continue;
+    const line = `batcher not running from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} (${count} fast snapshots): ${problem}`;
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (lines.length === 1) lines.push("    none");
+  return lines;
+}
+
+/**
+ * The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen, and any stretch it was
+ * sent but not running, which fails the run (`failures`).
+ */
+export function batcherSection(points: BatcherPoint[], failures: string[] = []): string[] {
   const lines = ["6. The batcher (#205)"];
+  const notRunning = notRunningLines(points, failures);
   const healths = points.flatMap(({ atMs, health }) => {
     const each = healthOf(health);
     return each === null ? [] : [{ atMs, health: each }];
   });
   if (healths.length === 0) {
     lines.push("  not run in the window (no fast snapshot with its health)");
+    if (notRunning.length > 2 || notRunning[1] !== "    none") lines.push(...notRunning);
     return lines;
   }
   const firstMs = (healths[0] as { atMs: number }).atMs;
@@ -60,9 +99,11 @@ export function batcherSection(points: BatcherPoint[]): string[] {
     const hour = Math.floor((atMs - firstMs) / HOUR_MS);
     const bucket = hours.get(hour) ?? { counts: zero(), targets: new Set<string>(), states: new Set<string>() };
     hours.set(hour, bucket);
-    const before = lastOfRun.get(health.runName) ?? zero();
+    // A run already under way at the window's first snapshot counts from there (#211): what it did before isn't the
+    // window's. One that starts later counts from 0.
+    const before = lastOfRun.get(health.runName) ?? (atMs === firstMs ? countsOf(health) : zero());
     for (const count of COUNTS) bucket.counts[count] += Math.max(0, health[count] - before[count]);
-    lastOfRun.set(health.runName, Object.fromEntries(COUNTS.map((count) => [count, health[count]])) as Counts);
+    lastOfRun.set(health.runName, countsOf(health));
     if (health.target) bucket.targets.add(health.target);
     bucket.states.add(health.state);
     if (health.problem !== null && !problems.has(health.problem)) problems.set(health.problem, atMs);
@@ -88,5 +129,6 @@ export function batcherSection(points: BatcherPoint[]): string[] {
   lines.push(total.late + total.lost === 0 ? "  late or lost: none" : `  late: ${total.late}, lost: ${total.lost}`);
   lines.push(problems.size === 0 ? "  problems: none" : "  problems:");
   for (const [problem, atMs] of problems) lines.push(`    from ${formatIsoTime(atMs)}: ${problem}`);
+  lines.push(...notRunning);
   return lines;
 }

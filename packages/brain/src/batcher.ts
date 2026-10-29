@@ -26,7 +26,7 @@ export function readBatcherEnabled(store: TelemetryStore): boolean {
 
 /**
  * What home keeps for the Agent and its workers, GB: a fresh save's 8, of which the Agent and its largest worker take
- * 7.65 (architecture §14, Q1). The batcher runs on home only with its budget free beyond it: home of 16 GB or more.
+ * 7.55 (architecture §14, Q1). The batcher runs on home only with its budget free beyond it: home of 16 GB or more.
  */
 export const HOME_KEPT_FOR_THE_AGENT_GB = 8;
 
@@ -55,9 +55,9 @@ function figuresOf(staticData: StaticSnapshotData, target: string): HackingTarge
 
 /**
  * The batcher's desired state (#205), on `target` and `hosts` (the hack loop's), or why there's none:
- * - **where it runs:** home, when its RAM in the medium snapshot leaves the batcher's budget (`BATCHER_RAM_BUDGET_GB`)
- *   beyond what home keeps for the Agent; otherwise the host with the most RAM, which then has that much less for
- *   operations;
+ * - **where it runs:** where it runs now (`current`), while that still holds it (#211: a move restarts it); else home,
+ *   when its RAM in the medium snapshot leaves the batcher's budget (`BATCHER_RAM_BUDGET_GB`) beyond what home keeps
+ *   for the Agent; otherwise the host with the most RAM. The host it runs on has that much less for operations;
  * - **its plan:** core's `batchPlan` on the hosts' RAM (`batchRamGb`), at the hacking level and multipliers of the
  *   medium snapshot. Its share and spacing go in the config; the batcher works out each batch's threads itself.
  */
@@ -66,6 +66,7 @@ export function planBatcher(
   mediumData: MediumSnapshotData,
   target: string,
   hosts: string[],
+  current: string | null = null,
 ): { batcher: BatcherState } | { batcher: null; why: string } {
   const player = hackingPlayerOf(mediumData.player);
   if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
@@ -78,14 +79,16 @@ export function planBatcher(
   );
   const hostsRam = hosts.map((host) => [host, ramOf.get(host) ?? 0] as const).filter(([, ram]) => ram > 0);
   if (hostsRam.length === 0) return { batcher: null, why: "no host with RAM" };
-  const homeRam = ramOf.get("home") ?? 0;
-  const onHome = homeRam - HOME_KEPT_FOR_THE_AGENT_GB >= BATCHER_RAM_BUDGET_GB;
-  const largest = [...hostsRam].sort(([a, ramA], [b, ramB]) => ramB - ramA || (a < b ? -1 : 1))[0] as readonly [
-    string,
-    number,
-  ];
-  if (!onHome && largest[1] < BATCHER_RAM_BUDGET_GB) return { batcher: null, why: "no host holds the batcher" };
-  const runOn = onHome ? "home" : largest[0];
+  const onHome = (ramOf.get("home") ?? 0) - HOME_KEPT_FOR_THE_AGENT_GB >= BATCHER_RAM_BUDGET_GB;
+  const holds = (host: string) =>
+    host === "home" ? onHome : hosts.includes(host) && (ramOf.get(host) ?? 0) >= BATCHER_RAM_BUDGET_GB;
+  const largest = [...hostsRam]
+    .filter(([, ram]) => ram >= BATCHER_RAM_BUDGET_GB)
+    .sort(([a, ramA], [b, ramB]) => ramB - ramA || (a < b ? -1 : 1))
+    .map(([host]) => host)[0];
+  // Kept where it runs while it still fits there (#211): a move restarts it.
+  const runOn = current !== null && holds(current) ? current : onHome ? "home" : largest;
+  if (runOn === undefined) return { batcher: null, why: "no host holds the batcher" };
   const operationsRam = hostsRam.map(([host, ram]) => (host === runOn ? ram - BATCHER_RAM_BUDGET_GB : ram));
   const plan = batchPlan(figures, player, batchRamGb(operationsRam));
   if (plan === null) return { batcher: null, why: `no batch on ${target} fits the hosts' RAM, or it can't be hacked` };
@@ -137,4 +140,27 @@ export function batcherViewOf(
     why: enabled ? why : null,
     health: health ?? null,
   };
+}
+
+/**
+ * Fast snapshots in a row whose deploy report says the batcher, wanted, isn't running (#211): then it's an alert,
+ * `batcherNotRunning`, and a run report failure. The Agent tries again 2 rounds after a failed start, so a start that
+ * fails once and then works shows in 2 at most; a host without the room, or without access, keeps failing.
+ */
+export const BATCHER_NOT_RUNNING_AFTER = 3;
+
+/**
+ * What a fast snapshot's `batcherDeploy` says (#211): null when the batcher isn't wanted, or runs; else why not (the
+ * worker's problem, or "it isn't running"). The Agent's word, so checked as it's read.
+ */
+export function batcherNotRunning(deploy: unknown): string | null {
+  if (typeof deploy !== "object" || deploy === null) return null;
+  const { running, problem } = deploy as Record<string, unknown>;
+  if (typeof problem === "string") return problem;
+  return typeof running === "string" ? null : "it isn't running";
+}
+
+/** The batcher's hosts (#205): all the hack loop's, its preparing ones included, which the hack loop then leaves. */
+export function batcherHostsOf(hackLoop: { hosts: string[]; preparing?: { hosts: string[] } | null }): string[] {
+  return [...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])];
 }

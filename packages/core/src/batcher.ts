@@ -482,6 +482,11 @@ export interface LandingRecord {
   late: boolean;
   /** Its call never ran (a late hack): it landed nothing, so it says nothing of the order. */
   skipped: boolean;
+  /**
+   * The ms it had to spare when it was called (#211): the landing time less now less its operation's time, before
+   * it's clamped to 0; under 0, it was late. Absent from an older script.
+   */
+  slackMs?: number;
 }
 
 /** A landing record, as the port gives it back, or null (data from the game is never taken on trust). */
@@ -490,7 +495,16 @@ export function parseLandingRecord(data: unknown): LandingRecord | null {
   const { id, landAt, landedAt, result, late, skipped } = data as Record<string, unknown>;
   if (typeof id !== "string" || typeof late !== "boolean" || typeof skipped !== "boolean") return null;
   if (![landAt, landedAt, result].every((value) => typeof value === "number" && Number.isFinite(value))) return null;
-  return { id, landAt, landedAt, result, late, skipped } as LandingRecord;
+  const { slackMs } = data as Record<string, unknown>;
+  return {
+    id,
+    landAt,
+    landedAt,
+    result,
+    late,
+    skipped,
+    ...(typeof slackMs === "number" && Number.isFinite(slackMs) ? { slackMs } : {}),
+  } as LandingRecord;
 }
 
 /**
@@ -665,6 +679,11 @@ export interface BatcherHealth {
    * aren't short of the RAM this one's operations still hold.
    */
   latestLandAt: number | null;
+  /**
+   * The least time any operation had to spare when it was called (#211, its record's `slackMs`), ms, or null before
+   * one: how close a start's lag came to making one late. A lead (`BATCH_LAUNCH_LEAD_MS`) of 200 ms less it is the lag.
+   */
+  leastSlackMs: number | null;
   /** The game's clock when this was written. */
   atMs: number;
 }
@@ -693,6 +712,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     batchesPending: 0,
     inFlight: 0,
     latestLandAt: null,
+    leastSlackMs: null,
     atMs,
   };
 }

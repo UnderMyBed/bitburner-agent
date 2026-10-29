@@ -228,3 +228,18 @@ test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread,
     "the faction state couldn't be read in the last 3 slow snapshots in a row: no game page to read it through",
   );
 });
+
+test("batcherNotRunning (#211): sent and not running in 3 fast snapshots in a row, not in 2, with its reason", () => {
+  const notRunning = { sinceMs: 5_000, inARow: 3, problem: "no room on joesguns" };
+  expect(activeAlerts({ ...quiet, batcherNotRunning: notRunning })).toEqual([
+    {
+      name: "batcherNotRunning",
+      sinceMs: 5_000,
+      detail:
+        "the batcher isn't running, in the last 3 fast snapshots, so nothing hacks the servers the hack loop left to " +
+        "it: no room on joesguns",
+    },
+  ]);
+  expect(names({ ...quiet, batcherNotRunning: { ...notRunning, inARow: 2 } })).toEqual([]);
+  expect(names({ ...quiet, batcherNotRunning: null })).toEqual([]);
+});

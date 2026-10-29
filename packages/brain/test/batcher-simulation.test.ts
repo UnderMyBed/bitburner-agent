@@ -9,11 +9,14 @@ import {
   BATCHER_SCRIPT_NAME,
   type BatcherHealth,
   type FastSnapshotData,
+  HACK_LOOP_RAM_BUDGET_GB,
   HACK_LOOP_SCRIPT_NAME,
 } from "@bitburner-agent/core";
+import type { Simulation } from "@bitburner-agent/sim";
 import { expect, test } from "vitest";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
+import { startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
 import { useFreshStarts } from "./helpers/fresh-start.ts";
 
 /** `BATCHER_AGENT_SEEDS`: seeds 1 or more, comma separated; unset, seed 1 alone (CI). Anything else fails loudly. */
@@ -40,6 +43,13 @@ test("BATCHER_AGENT_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd
   expect(agentSeeds("1,2, 3")).toEqual([1, 2, 3]);
   for (const odd of ["", "1,", "0", "1.5", "two", "-1"]) expect(() => agentSeeds(odd)).toThrow(/BATCHER_AGENT_SEEDS/);
 });
+
+/** The Agent's log on home. */
+async function agentLog(simulation: Simulation): Promise<string[]> {
+  const agent = (await simulation.ps("home")).find((process) => process.filename.endsWith("/agent.js"));
+  if (agent === undefined) throw new Error("no Agent on home");
+  return simulation.logs(agent.pid);
+}
 
 test.each(SEEDS)(
   "seed %i: with the switch on, the Agent runs the batcher from an 8 GB fresh start, its health in the store, in step",
@@ -82,6 +92,12 @@ test.each(SEEDS)(
     console.log(section);
     expect(section).toContain("batching on n00dles");
     expect(section).toContain("  desyncs: none\n  late or lost: none\n  problems: none");
+    // Sent and running throughout (#211): no stretch of fast snapshots with it not running.
+    expect(section).toContain("  sent but not running (3 fast snapshots in a row or more):\n    none");
+    expect(fresh.latest<FastSnapshotData>("fast")?.batcherDeploy).toMatchObject({
+      running: view.sent?.runOn,
+      problem: null,
+    });
 
     // The hack loop leaves the batcher's hosts: none of its loops runs there; ours runs once, where the brain said.
     const running = new Map<string, string[]>();
@@ -105,6 +121,54 @@ test.each(SEEDS)(
     for (const host of [...HOSTS, "home"])
       after.push(...(await simulation.ps(host)).map((process) => process.filename));
     expect(after.filter((file) => file.endsWith(`/${BATCHER_SCRIPT_NAME}`))).toEqual([]);
+    // Stopped before the hack loop took its hosts back (#211): the Agent's log says "off" before the loops' line.
+    const log = await agentLog(simulation);
+    const lastOn = log.findLastIndex((line) => line.startsWith("agent: batcher: on "));
+    const off = log.findIndex((line, index) => index > lastOn && line === "agent: batcher: off");
+    const loopsBack = log.findIndex(
+      (line, index) => index > lastOn && /^agent: hack loop: on, .* on [1-9]\d* servers/.test(line),
+    );
+    expect(off, log.join(" | ")).toBeGreaterThan(lastOn);
+    expect(loopsBack, log.join(" | ")).toBeGreaterThan(off);
     expect(after.filter((file) => file.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`)).length).toBeGreaterThan(0);
+    // Its health isn't reported while it's off (#211), though its port still has it.
+    expect(fresh.latest<FastSnapshotData>("fast")?.batcher ?? null).toBeNull();
+    // Once its operations have landed, every loop grows to its host's full size (#211): none left starved.
+    await game.run(5 * 60_000);
+    for (const host of HOSTS) {
+      const loopThreads = (await simulation.ps(host))
+        .filter((process) => process.filename.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`))
+        .reduce((total, process) => total + process.threads, 0);
+      expect(loopThreads, host).toBe(Math.floor(16 / HACK_LOOP_RAM_BUDGET_GB));
+    }
   },
 );
+
+test("instructions only from the brain it's connected to (#211): one that sends none leaves the batcher as it is", {
+  timeout: 600_000,
+}, async () => {
+  const fresh = await freshStartOf({ withDesiredState: true });
+  const { game, simulation } = fresh;
+  fresh.controller().setBatcherEnabled(true);
+  const health = () => fresh.latest<FastSnapshotData>("fast")?.batcher ?? null;
+  await game.runUntil(() => health()?.state === "batching", BATCHING_WITHIN_MS);
+  // The brain gone: safe mode keeps the batcher. Then a brain that sends no desired state at all connects.
+  fresh.brain.stop();
+  await game.run(10_000);
+  const quiet = startBrainInSimulation(game, { build: fresh.build, data: fresh.data, withDesiredState: false });
+  await game.runUntil(() => quiet.channelEvents.some((event) => event.type === "agentConnected"), 60_000);
+  await game.run(5_000);
+  // The batcher dies: with no instructions from this brain, the Agent doesn't start it again.
+  let killed = 0;
+  for (const host of [...HOSTS, "home"]) {
+    for (const process of await simulation.ps(host)) {
+      if (process.filename.endsWith(`/${BATCHER_SCRIPT_NAME}`) && (await simulation.kill(process.pid))) killed += 1;
+    }
+  }
+  expect(killed).toBe(1);
+  await game.run(60_000);
+  const running: string[] = [];
+  for (const host of [...HOSTS, "home"])
+    running.push(...(await simulation.ps(host)).map((process) => process.filename));
+  expect(running.filter((file) => file.endsWith(`/${BATCHER_SCRIPT_NAME}`))).toEqual([]);
+});

@@ -121,6 +121,7 @@ export async function main(ns: NS): Promise<void> {
     intentOutcomes: () => intentRunner.outcomes(),
     workOutcome: () => workActivity.outcome(),
     batcherHealth: () => batcher.health(),
+    batcherDeploy: () => batcher.deployReport(),
     dialogReport: () => dialogWatcher.takeReport(),
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
     factionsUnread: (problem) => factionStateReader.unread(problem),
@@ -165,8 +166,12 @@ export async function main(ns: NS): Promise<void> {
       }
     }
     await dialogWatcher.handle(roundEndsAtMs);
+    // The batcher stopped before the hack loop takes its hosts back, and started after the hack loop has left them
+    // (#211): whichever goes, its RAM is free for the other.
+    const batcherStopping = batcher.stopping();
+    if (batcherStopping) await batcher.convergeIfDue(roundEndsAtMs);
     await hackLoop.convergeIfDue(roundEndsAtMs);
-    await batcher.convergeIfDue(roundEndsAtMs);
+    if (!batcherStopping) await batcher.convergeIfDue(roundEndsAtMs);
     await intentRunner.runDue(roundEndsAtMs);
     await workActivity.convergeIfDue(roundEndsAtMs);
     // Clamped, so a clock that steps back can't stretch the sleep.

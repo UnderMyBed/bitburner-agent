@@ -4,7 +4,7 @@
  * (packages/ingame/README.md, "RAM"). Server and player fields keep the game's own names (`ns.getServer`,
  * `ns.getPlayer`).
  */
-import type { BatcherHealth } from "./batcher.ts";
+import type { BatcherDeployReport, BatcherHealth } from "./batcher.ts";
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { FactionStateReading } from "./faction-state.ts";
 import type { IntentOutcome } from "./intents.ts";
@@ -137,6 +137,12 @@ export interface FastSnapshotData {
    * The Agent's word for what the batcher wrote: read with care.
    */
   batcher?: BatcherHealth | null;
+  /**
+   * The batcher's deploy worker's last report while the brain wants it running (#211): where it runs, or why it
+   * can't; null with none wanted or no report yet, absent from an older Agent. Sent but not running is an alert, and
+   * a failure of the run report after 3 fast snapshots in a row.
+   */
+  batcherDeploy?: BatcherDeployReport | null;
 }
 
 /** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */

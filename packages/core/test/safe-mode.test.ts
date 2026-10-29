@@ -28,7 +28,7 @@ const kept: SafeModeState = {
 test("a file from before the batcher (#205) has none; a batcher the protocol refuses makes it invalid", () => {
   const { batcher: _none, ...older } = kept;
   expect(parseSafeModeState(JSON.stringify(older))).toEqual({ ok: true, message: kept });
-  const sharing = { ...kept, batcher: { ...BATCHER, config: { ...BATCHER.config, hosts: ["n00dles"] } } };
+  const sharing = { ...kept, batcher: { runOn: "home", config: { ...BATCHER.config, hosts: ["n00dles"] } } };
   expect(parseSafeModeState(JSON.stringify(sharing))).toMatchObject({
     ok: false,
     reason: expect.stringContaining("n00dles"),

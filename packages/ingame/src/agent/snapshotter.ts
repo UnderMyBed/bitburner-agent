@@ -13,6 +13,7 @@
 // doesn't report in time, or is still running from before is skipped, named in `degradedTiers`, and tried again next
 // round, until it succeeds.
 import {
+  type BatcherDeployReport,
   type BatcherHealth,
   CONTROL_PROTOCOL_VERSION,
   deployedFilePath,
@@ -73,6 +74,7 @@ export function createSnapshotter(
     intentOutcomes,
     workOutcome,
     batcherHealth = () => null,
+    batcherDeploy = () => null,
     dialogReport,
     readFactions,
     factionsUnread = (problem) => ({ backend: "ui", state: null, problem }),
@@ -86,6 +88,8 @@ export function createSnapshotter(
     workOutcome: () => WorkOutcome | null;
     /** The batcher's health (#205), for the fast snapshot: null with none on its port. */
     batcherHealth?: () => BatcherHealth | null;
+    /** The batcher's deploy worker's last report while it's wanted (#211), for the fast snapshot. */
+    batcherDeploy?: () => BatcherDeployReport | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
     /** The faction state, read within the deadline, for each slow snapshot (#197). */
@@ -179,6 +183,7 @@ export function createSnapshotter(
         dialogs: dialogReport(),
         work: workOutcome(),
         batcher: batcherHealth(),
+        batcherDeploy: batcherDeploy(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 

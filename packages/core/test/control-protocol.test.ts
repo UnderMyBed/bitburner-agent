@@ -510,12 +510,15 @@ describe("the batcher (#205)", () => {
     hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles"] },
     intents: [],
   };
-  const parsed = (fields: Record<string, unknown>) => parseBrainMessage(JSON.stringify({ ...state, ...fields }));
+  const preparing = { target: "zer0", hosts: ["max-hardware"] };
+  const parsed = (fields: Record<string, unknown>) =>
+    parseBrainMessage(JSON.stringify({ ...state, hackLoop: { ...state.hackLoop, preparing }, ...fields }));
 
   test("carried as sent; absent or null, the message carries none: ours stopped", () => {
-    expect(parsed({ batcher })).toEqual({ ok: true, message: { ...state, batcher } });
-    expect(parsed({})).toEqual({ ok: true, message: state });
-    expect(parsed({ batcher: null })).toEqual({ ok: true, message: state });
+    const withPreparing = { ...state, hackLoop: { ...state.hackLoop, preparing } };
+    expect(parsed({ batcher })).toEqual({ ok: true, message: { ...withPreparing, batcher } });
+    expect(parsed({})).toEqual({ ok: true, message: withPreparing });
+    expect(parsed({ batcher: null })).toEqual({ ok: true, message: withPreparing });
   });
 
   test.each([
@@ -524,6 +527,12 @@ describe("the batcher (#205)", () => {
     ["with a config core refuses", { ...batcher, config: { ...batcher.config, spacingMs: 1 } }, "spacing"],
     ["with a hostname too long", { ...batcher, config: { ...batcher.config, hosts: ["x".repeat(257)] } }, "hosts"],
     ["sharing a host with the hack loop", { ...batcher, config: { ...batcher.config, hosts: ["n00dles"] } }, "n00dles"],
+    ["running on a host of the hack loop", { ...batcher, runOn: "n00dles" }, "batcher.runOn is n00dles"],
+    [
+      "sharing a host the hack loop prepares on",
+      { ...batcher, config: { ...batcher.config, hosts: ["max-hardware"] } },
+      "max-hardware",
+    ],
   ])("one %s is refused, with a reason", (_description, value, reason) => {
     expect(parsed({ batcher: value })).toEqual({ ok: false, reason: expect.stringContaining(reason) });
   });
@@ -541,5 +550,12 @@ describe("the batcher (#205)", () => {
     expect(desiredStateWhileHolding({ hackLoop, intents: [] }, lastSent)).toEqual({ hackLoop, intents: [] });
     expect(desiredStateWhileHolding(on, { hackLoop, intents: [] })).toEqual({ hackLoop, intents: [] });
     expect(desiredStateWhileHolding(on, null)).toBeNull();
+  });
+
+  test("turned off during a hold: no batcher, the hack loop as last sent with no hosts: nothing hacks them yet", () => {
+    const hackLoop = { enabled: true, target: "n00dles", hosts: [] };
+    const lastSent = { hackLoop, batcher, intents: [] };
+    const off = { hackLoop: { enabled: true, target: "n00dles", hosts: ["sigma-cosmetics", "joesguns"] }, intents: [] };
+    expect(desiredStateWhileHolding(off, lastSent)).toEqual({ hackLoop, intents: [] });
   });
 });

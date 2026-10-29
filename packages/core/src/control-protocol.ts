@@ -125,8 +125,11 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * an outdated one: only a state that starts nothing new, given `lastSent`, what that Agent was last sent (null for
  * nothing yet). No intents. The hack loop off goes as it is (stopping our own loops is always safe); on, it stays as
  * last sent, and with nothing sent yet, nothing goes. So the intents' removal gets through a hold whatever the hack
- * loop does. The batcher (#205) likewise: off (absent) goes as it is, stopping ours; on, it stays as last sent. No work either: the Agent leaves the work as it is (#151). `ttlMs` goes as the brain set it (#160): a held
- * state starts nothing new, so safe mode keeping it starts nothing new either.
+ * loop does. The batcher (#205) likewise: off (absent) goes as it is, stopping ours; on, it stays as last sent. So
+ * turned off during a hold, nothing hacks the hosts the batcher had until the hold ends: the hack loop goes as last
+ * sent, with none of them (#211's review, finding 16). No work either: the Agent leaves the work as it is (#151).
+ * `ttlMs` goes as the brain set it (#160): a held state starts nothing new, so safe mode keeping it starts nothing new
+ * either.
  */
 export function desiredStateWhileHolding(state: DesiredState, lastSent: DesiredState | null): DesiredState | null {
   const kept = state.ttlMs === undefined ? {} : { ttlMs: state.ttlMs };
@@ -369,7 +372,8 @@ function parseHackThreads(hackThreads: unknown, hosts: Set<string>): ParsedMessa
 /**
  * A desired state's `batcher` (#205), against its hack loop: none when absent or null; else `runOn` a hostname and
  * `config` core's `BatcherConfig` (#204), its target and hosts names the protocol takes; only with the hack loop on,
- * and none of its hosts the hack loop's or the hack loop's preparing ones. Safe mode's file uses it too.
+ * and none of its hosts, nor the host it runs on, the hack loop's or the hack loop's preparing ones. Safe mode's file
+ * uses it too.
  */
 export function parseBatcherState(batcher: unknown, hackLoop: HackLoopState): ParsedMessage<BatcherState | null> {
   if (batcher === undefined || batcher === null) return { ok: true, message: null };
@@ -383,6 +387,7 @@ export function parseBatcherState(batcher: unknown, hackLoop: HackLoopState): Pa
   if (!isHostList(hosts)) return { ok: false, reason: "batcher.config.hosts isn't a list of hostnames" };
   if (!hackLoop.enabled) return { ok: false, reason: "batcher with the hack loop off" };
   const loopHosts = new Set([...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])]);
+  if (loopHosts.has(runOn)) return { ok: false, reason: `batcher.runOn is ${runOn}, a host of the hack loop` };
   const shared = hosts.find((host) => loopHosts.has(host));
   if (shared !== undefined)
     return { ok: false, reason: `batcher.config.hosts names ${shared}, a host of the hack loop` };

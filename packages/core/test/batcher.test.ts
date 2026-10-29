@@ -19,6 +19,7 @@ import {
   hackSharePerThread,
   hackThreadsAtLaunch,
   hackThreadsForShare,
+  isBatcherFile,
   isOutsideBounds,
   isTargetPrepared,
   LANDING_LOST_AFTER_MS,
@@ -575,5 +576,14 @@ describe("parseBatcherConfig", () => {
       problem: null,
       atMs: 5,
     });
+  });
+});
+
+describe("isBatcherFile (#205)", () => {
+  test("a deployment's batcher, in a folder the deployer generated; never a player's own, nor another script", () => {
+    expect(isBatcherFile("agent/0123456789ab/batcher.js")).toBe(true);
+    expect(isBatcherFile("agent/mine/batcher.js")).toBe(false);
+    expect(isBatcherFile("agent/0123456789ab/hack-loop.js")).toBe(false);
+    expect(isBatcherFile("batcher.js")).toBe(false);
   });
 });

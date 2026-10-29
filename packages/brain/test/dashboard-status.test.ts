@@ -585,3 +585,30 @@ test("the hacking rows with no snapshots: the ceiling unknown, no income", () =>
     incomeText: "— (not two slow snapshots with the money sources in the last 10 min)",
   });
 });
+
+test("batcherNotRunning (#211): the newest fast snapshots in a row with the batcher sent and not running, 3 or more", () => {
+  const nowMs = STARTED_AT_MS + 300_000;
+  const down = { running: null, started: false, stopped: 0, problem: "no room on joesguns" };
+  const up = { running: "joesguns", started: true, stopped: 0, problem: null };
+  const fastWith = (batcherDeploy: unknown) => ({ ...fastData(1), batcherDeploy });
+  for (const [second, deploy] of [
+    [10, down],
+    [12, down],
+    [14, down],
+    [16, up],
+    [18, down],
+    [20, down],
+  ] as const) {
+    recordSnapshot("fast", STARTED_AT_MS + second * 1000, fastWith(deploy));
+  }
+  // Two in a row at the newest: the older three before a running one don't count.
+  expect(status(nowMs - 270_000).alerts.map((alert) => alert.name)).not.toContain("batcherNotRunning");
+  recordSnapshot("fast", STARTED_AT_MS + 22_000, fastWith(down));
+  expect(status(nowMs - 270_000).alerts).toContainEqual({
+    name: "batcherNotRunning",
+    sinceMs: STARTED_AT_MS + 18_000,
+    detail:
+      "the batcher isn't running, in the last 3 fast snapshots, so nothing hacks the servers the hack loop left to " +
+      "it: no room on joesguns",
+  });
+});

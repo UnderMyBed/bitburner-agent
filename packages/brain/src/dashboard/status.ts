@@ -13,7 +13,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
-import type { BatcherView } from "../batcher.ts";
+import { type BatcherView, batcherNotRunning } from "../batcher.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
@@ -23,6 +23,9 @@ import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_K
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
 import { type Alert, activeAlerts, type IncomeFacts } from "./alerts.ts";
+
+/** How far back the batcher's not-running streak is read (#211): fast snapshots, 2 s apart. */
+const BATCHER_NOT_RUNNING_LOOKBACK = 100;
 
 /** The gap report's window on the dashboard: the last 24 h. */
 export const GAP_WINDOW_MS = 24 * 60 * 60_000;
@@ -197,6 +200,13 @@ export function buildDashboardStatus({
     unreadInARow.push({ receivedAtMs: each.receivedAtMs, status });
   }
   const newestUnread = unreadInARow[0]?.status;
+  // The newest fast snapshots in a row with the batcher wanted and not running (#211).
+  const notRunningInARow: { receivedAtMs: number; problem: string }[] = [];
+  for (const each of store.latestSnapshots({ environment, tier: "fast", limit: BATCHER_NOT_RUNNING_LOOKBACK })) {
+    const problem = batcherNotRunning((each.data as Partial<FastSnapshotData> | null)?.batcherDeploy);
+    if (problem === null) break;
+    notRunningInARow.push({ receivedAtMs: each.receivedAtMs, problem });
+  }
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -286,6 +296,14 @@ export function buildDashboardStatus({
           : null,
       factionWorkStall,
       backdoorsDue,
+      batcherNotRunning:
+        notRunningInARow.length === 0
+          ? null
+          : {
+              sinceMs: notRunningInARow.at(-1)?.receivedAtMs ?? 0,
+              inARow: notRunningInARow.length,
+              problem: notRunningInARow[0]?.problem ?? "",
+            },
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })

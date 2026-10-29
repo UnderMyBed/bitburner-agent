@@ -1,14 +1,15 @@
-// agent/<deploymentId>/batcher.js: the batcher (#204, M4 phase A slice A7a), a reflex (architecture §5.5). Its one
-// argument is its config as JSON (core's `BatcherConfig`): the target and its figures, the player's multipliers, the
-// hosts, the share a batch hacks and the spacing between batches, chosen by the brain from core's `batchPlan` (A7c).
-// It never decides strategy; it times and launches, and checks what lands. Design: #204.
+// agent/<deploymentId>/batcher.js: the batcher (#204, M4 phase A slice A7a), a reflex (architecture §5.5). Its config
+// (core's `BatcherConfig`): the target and its figures, the player's multipliers, the hosts, the share a batch hacks
+// and the spacing between batches, chosen by the brain from core's `batchPlan` (#205; #206 chooses more). It never
+// decides strategy; it times and launches, and checks what lands. Design: #204.
 // - **Its config, hot (#205):** with no argument, as the Agent's `batcher-deploy.js` starts it, it re-reads its config
 //   from its config port every loop, where the Agent writes the desired state's (architecture §5.5): a new share,
 //   spacing or player applies from the next batch; new hosts get the operation scripts; a new target lets what's in
 //   flight land, as after a desync, then prepares it. With none there yet, or one it can't read, it says so and waits.
 //   Given its config as its argument (#204's tests), it keeps that one.
 // - **After another batcher (#205):** it waits for the latest landing the one before it last published, so its first
-//   operations don't find the hosts' RAM still held.
+//   operations don't find the hosts' RAM still held, and publishes that time as its own until it's past, so one
+//   started while it waits waits too (#211).
 // - **Preparing:** while the target isn't at its minimum security and maximum money, a wave at a time (core's
 //   `preparationWave`): weaken, grow and weaken, landing in that order, on the RAM free.
 // - **Batching:** a batch's hack lands every spacing, its weaken, grow and weaken δ apart after it. Each operation is
@@ -200,6 +201,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         logNow = true;
       }
       if (isHack && record.skipped) health.hacksSkipped += 1;
+      if (record.slackMs !== undefined) {
+        health.leastSlackMs = Math.min(health.leastSlackMs ?? Number.POSITIVE_INFINITY, record.slackMs);
+      }
       if (isHack && !record.skipped) {
         health.hacksLanded += 1;
         health.moneyHacked += record.result;
@@ -414,7 +418,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     wakeAt = Math.min(wakeAt, landings.nextLostAtMs());
     health.batchesPending = batches.size;
     const latestLandAt = landings.latestLandAt();
-    health.latestLandAt = Number.isFinite(latestLandAt) ? latestLandAt : null;
+    // Never before the one it waits for (#211): a batcher started while this one waits must wait for that one too.
+    const latest = Math.max(latestLandAt, waitUntilMs);
+    health.latestLandAt = Number.isFinite(latest) && latest > 0 ? latest : null;
     health.inFlight = landings.inFlight();
     const published = JSON.stringify({ ...health, atMs: 0 });
     const lineDue = Date.now() - lastLineAt >= HEALTH_LINE_EVERY_MS;

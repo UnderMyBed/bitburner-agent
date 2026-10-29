@@ -20,6 +20,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   BATCHER_ENABLED_SETTING,
+  batcherHostsOf,
   batcherViewOf,
   HOME_KEPT_FOR_THE_AGENT_GB,
   planBatcher,
@@ -61,6 +62,16 @@ describe("the switch", () => {
 });
 
 describe("planBatcher", () => {
+  test("kept where it runs while that still holds it (#211): a larger host, or home grown, doesn't move it", () => {
+    const data = medium(50, { n00dles: true, foodnstuff: true }, 64);
+    const hosts = ["n00dles", "foodnstuff"];
+    expect(planBatcher(network, data, "n00dles", hosts, "foodnstuff").batcher?.runOn).toBe("foodnstuff");
+    // Without a current host, home of 64 GB.
+    expect(planBatcher(network, data, "n00dles", hosts).batcher?.runOn).toBe("home");
+    // A current host no longer a host moves it.
+    expect(planBatcher(network, data, "n00dles", ["n00dles"], "foodnstuff").batcher?.runOn).toBe("home");
+  });
+
   test("on an 8 GB home: on the largest host, whose RAM the plan counts less the batcher's; core's plan, its config", () => {
     const data = medium(50, { n00dles: true, foodnstuff: true });
     data.servers = data.servers.map((server) => (server.hostname === "n00dles" ? { ...server, maxRam: 4 } : server));
@@ -173,6 +184,20 @@ describe("the controller", () => {
     expect(agent.lastSent()?.hackLoop.hosts.length).toBeGreaterThan(0);
   });
 
+  test("switch on with the hack loop off: no batcher, and the dashboard says it needs the hack loop (#211)", () => {
+    const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    const controller = new DesiredStateController({ channel, store });
+    controller.setBatcherEnabled(true);
+    const agent = connectedAgent(channel);
+    agent.send("static", network);
+    agent.send("medium", medium(50, { n00dles: true, foodnstuff: true }));
+    expect(agent.lastSent()?.batcher).toBeDefined();
+    controller.setHackLoopEnabled(false);
+    expect(agent.lastSent()?.batcher).toBeUndefined();
+    expect(controller.batcherView()).toMatchObject({ enabled: true, sent: null, why: "it needs the hack loop on" });
+  });
+
   test("switch on with nothing to plan: the hack loop as before, and why on the dashboard", () => {
     const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
@@ -189,6 +214,14 @@ describe("the controller", () => {
       sent: null,
       why: expect.stringContaining("hacking"),
     });
+  });
+});
+
+describe("batcherHostsOf", () => {
+  test("the hack loop's hosts and its preparing ones", () => {
+    expect(batcherHostsOf({ hosts: ["a", "b"] })).toEqual(["a", "b"]);
+    expect(batcherHostsOf({ hosts: ["a"], preparing: { hosts: ["c", "d"] } })).toEqual(["a", "c", "d"]);
+    expect(batcherHostsOf({ hosts: [], preparing: null })).toEqual([]);
   });
 });
 
@@ -221,7 +254,7 @@ describe("the run report's section", () => {
     ).toEqual(["6. The batcher (#205)", "  not run in the window (no fast snapshot with its health)"]);
   });
 
-  test("each hour adds up each run's rises; a restart's counts start again; desyncs and problems reported", () => {
+  test("each hour adds up each run's rises, from the window's first snapshot; a restart's counts start again; desyncs and problems reported", () => {
     const lines = batcherSection([
       { atMs: at(0), health: health("a", { batchesStarted: 2, hacksLanded: 1, moneyHacked: 100 }) },
       { atMs: at(30), health: health("a", { batchesStarted: 10, hacksLanded: 8, moneyHacked: 800 }) },
@@ -239,15 +272,46 @@ describe("the run report's section", () => {
       },
     ]);
     expect(lines[1]).toBe("  runs: 2; per hour, from 2026-01-01T00:00:00.000Z:");
-    expect(lines[2]).toContain("hour 1: batching on n00dles; 10 batches, 8 hack parts landed ($800)");
+    // Run a was under way at the window's first snapshot: it counts from there, 2 batches and $100 already done.
+    expect(lines[2]).toContain("hour 1: batching on n00dles; 8 batches, 7 hack parts landed ($700)");
     expect(lines[3]).toContain("hour 2: batching on n00dles; 3 batches, 2 hack parts landed ($50)");
     expect(lines[3]).toContain("1 desyncs (0 out of order, 1 out of bounds)");
     expect(lines).toContain("  desyncs: 1 (0 out of order, 1 out of bounds): reported here; #206 makes them a failure");
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
   });
 
-  test("in step: no desyncs, nothing late or lost, no problems", () => {
-    const lines = batcherSection([{ atMs: at(0), health: health("a", { batchesStarted: 1 }) }]);
-    expect(lines.slice(-3)).toEqual(["  desyncs: none", "  late or lost: none", "  problems: none"]);
+  test("in step: no desyncs, nothing late or lost, no problems, always running", () => {
+    const failures: string[] = [];
+    const lines = batcherSection([{ atMs: at(0), health: health("a", { batchesStarted: 1 }) }], failures);
+    expect(lines.slice(-5)).toEqual([
+      "  desyncs: none",
+      "  late or lost: none",
+      "  problems: none",
+      "  sent but not running (3 fast snapshots in a row or more):",
+      "    none",
+    ]);
+    expect(failures).toEqual([]);
+  });
+
+  test("sent but not running for 3 fast snapshots in a row or more: each stretch a failure; 2 aren't (#211)", () => {
+    const down = { running: null, started: false, stopped: 0, problem: "no room on joesguns" };
+    const up = { running: "joesguns", started: true, stopped: 0, problem: null };
+    const failures: string[] = [];
+    const lines = batcherSection(
+      [
+        { atMs: at(0), health: null, deploy: down },
+        { atMs: at(1), health: null, deploy: down },
+        { atMs: at(2), health: null, deploy: up },
+        { atMs: at(3), health: null, deploy: { ...down, problem: null } },
+        { atMs: at(4), health: null, deploy: down },
+        { atMs: at(5), health: null, deploy: down },
+        { atMs: at(6), health: null, deploy: null },
+      ],
+      failures,
+    );
+    expect(failures).toEqual([
+      "batcher not running from 2026-01-01T00:03:00.000Z to 2026-01-01T00:05:00.000Z (3 fast snapshots): no room on joesguns",
+    ]);
+    expect(lines).toContain(`    ${failures[0]}`);
   });
 });

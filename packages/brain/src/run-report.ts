@@ -282,6 +282,8 @@ interface FastPoint {
   work: WorkOutcome | null | undefined;
   /** The batcher's health (#205); absent from an older Agent. */
   batcher: unknown;
+  /** The batcher's deploy worker's last report while wanted (#211); absent from an older Agent. */
+  batcherDeploy: unknown;
 }
 
 /** What the report reads from the store for a window, folded as it's read. */
@@ -378,6 +380,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         blocking: data.dialogs?.blocking,
         work: data.work,
         batcher: data.batcher,
+        batcherDeploy: data.batcherDeploy,
       });
     }
     const earlierStarts = store
@@ -441,7 +444,10 @@ export function runReport(
     "",
     ...facts.hacking.section(failures),
     "",
-    ...batcherSection(facts.fast.map(({ atMs, batcher }) => ({ atMs, health: batcher }))),
+    ...batcherSection(
+      facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
+      failures,
+    ),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
     ...failures.map((failure) => `  ${failure}`),

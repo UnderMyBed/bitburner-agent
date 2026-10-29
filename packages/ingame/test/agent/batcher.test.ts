@@ -26,7 +26,20 @@ const BATCHER: BatcherState = {
   },
 };
 
-function agentWith({ reports = true }: { reports?: boolean } = {}) {
+const running = (args: unknown[]) => ({
+  running: (args[0] as string | undefined) ?? null,
+  started: true,
+  stopped: 0,
+  problem: null,
+});
+
+function agentWith({
+  reports = true,
+  deployed = running,
+}: {
+  reports?: boolean;
+  deployed?: (args: unknown[]) => unknown;
+} = {}) {
   const ports = new Map<number, unknown[]>();
   const lines: string[] = [];
   const runs: unknown[][] = [];
@@ -49,7 +62,7 @@ function agentWith({ reports = true }: { reports?: boolean } = {}) {
             report: {
               workerPid: 1,
               gameTimeMs: 0,
-              data: { running: args[0] ?? null, started: true, stopped: 0, problem: null },
+              data: deployed(args),
             },
           }
         : { outcome: "noReport" };
@@ -128,10 +141,52 @@ test("forgotten: what runs keeps running, and nothing is written", async () => {
   expect(runs).toHaveLength(1);
 });
 
-test("health: what the batcher last wrote on its port, or null", () => {
-  const { batcher, ports } = agentWith();
+test("health: what the batcher last wrote on its port, or null; none while off, though the port keeps it (#211)", async () => {
+  const { batcher, ports, rounds } = agentWith();
   expect(batcher.health()).toBeNull();
   const health = newBatcherHealth("n00dles", "r1", 5);
   ports.set(BATCHER_HEALTH_PORT, [health]);
   expect(batcher.health()).toEqual(health);
+  batcher.desire(BATCHER);
+  expect(batcher.health()).toEqual(health);
+  batcher.desire(null);
+  await rounds(1);
+  expect(batcher.health()).toBeNull();
+  // Left on its port: the next batcher's wait reads it.
+  expect(ports.get(BATCHER_HEALTH_PORT)).toEqual([health]);
+});
+
+test("a batcher that can't start: the report for the fast snapshot, and tried again 2 rounds on (#211)", async () => {
+  const problem = "agent/0123456789ab/batcher.js couldn't start on joesguns (no room, or no access)";
+  let failing = true;
+  const { batcher, rounds, runs, lines } = agentWith({
+    deployed: (args) =>
+      failing
+        ? { running: null, started: false, stopped: 0, problem }
+        : { running: args[0], started: true, stopped: 0, problem: null },
+  });
+  expect(batcher.deployReport()).toBeNull();
+  batcher.desire(BATCHER);
+  await rounds(1);
+  expect(batcher.deployReport()).toEqual({ running: null, started: false, stopped: 0, problem });
+  expect(lines.at(-1)).toBe(`agent: batcher: can't run: ${problem}`);
+  await rounds(1);
+  expect(runs).toHaveLength(1);
+  failing = false;
+  await rounds(1);
+  expect(runs).toHaveLength(2);
+  expect(batcher.deployReport()).toMatchObject({ running: "joesguns", problem: null });
+  // Off: no report, even once the worker has stopped it (which reports none running): not a batcher down.
+  batcher.desire(null);
+  await rounds(1);
+  expect(batcher.deployReport()).toBeNull();
+});
+
+test("stopping: only while off, so the Agent stops it before the hack loop takes its hosts back (#211)", () => {
+  const { batcher } = agentWith();
+  expect(batcher.stopping()).toBe(false);
+  batcher.desire(BATCHER);
+  expect(batcher.stopping()).toBe(false);
+  batcher.desire(null);
+  expect(batcher.stopping()).toBe(true);
 });
