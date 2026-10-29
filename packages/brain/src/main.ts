@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
+import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
@@ -100,9 +101,10 @@ try {
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
   const stopRecordingBackups = recordEvents(saveBackups, store, deployerReleaseContext);
-  // The brain's faction work's choices and ends (#203), for the run report. None comes before an Agent's snapshots, and
-  // none of those before this: the control server's listen resolves before its first connection is handled.
-  const stopRecordingFactionWork = recordEvents(desiredState, store, deployerReleaseContext);
+  // The rules' events, for the run report: the brain's faction work's choices and ends (#203), and the augmentation
+  // rule's decisions and purchases and the installs sent (#210). None comes before an Agent's snapshots, and none of
+  // those before this: the control server's listen resolves before its first connection is handled.
+  const stopRecordingRules = recordEvents(desiredState, store, deployerReleaseContext);
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
@@ -145,6 +147,8 @@ try {
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
         cloudServers: desiredState.cloudServersView(),
+        augmentations: desiredState.augmentationsView(),
+        installAwaitingRestart: desiredState.installAwaitingRestart(),
         intents: desiredState.intentsView(),
         work: desiredState.workView(),
         income: incomeWatch.facts(),
@@ -169,6 +173,10 @@ try {
     setBatcherEnabled: (enabled) => {
       desiredState.setBatcherEnabled(enabled);
       log(`the batcher turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setAugmentationsEnabled: (enabled) => {
+      desiredState.setAugmentationsEnabled(enabled);
+      log(`buying and installing augmentations turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
@@ -212,8 +220,8 @@ try {
   log(
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
-      `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"} ` +
-      "(the dashboard's switches)",
+      `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
+      `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
   );
   log(
     supervising
@@ -231,7 +239,7 @@ try {
     stopRecordingDeploys();
     stopLoggingDeploys();
     stopRecordingBackups();
-    stopRecordingFactionWork();
+    stopRecordingRules();
     stopLoggingBackups();
     await dashboardServer.close();
     await remoteFileApiServer.close();

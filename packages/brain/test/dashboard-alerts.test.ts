@@ -6,6 +6,7 @@ import {
   type AlertFacts,
   activeAlerts,
   INCOME_STALLED_AFTER_MS,
+  INSTALL_NOT_RESTARTED_AFTER_MS,
 } from "../src/dashboard/alerts.ts";
 import { FACTION_WORK_STALLED_AFTER_MS } from "../src/factions.ts";
 
@@ -24,8 +25,68 @@ const quiet: AlertFacts = {
   factionState: null,
   backdoorsDue: [],
   factionWorkStall: null,
+  augmentationsNotQueued: [],
+  installAwaitingRestart: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
+
+describe("augmentations (#210)", () => {
+  test("a purchase not queued: one alert each, since it was bought", () => {
+    const alerts = activeAlerts({
+      ...quiet,
+      augmentationsNotQueued: [
+        { augmentation: "BitWire", level: 1, boughtAtMs: 5 },
+        { augmentation: "NeuroFlux Governor", level: 3, boughtAtMs: 6 },
+      ],
+    });
+    expect(alerts).toEqual([
+      {
+        name: "augmentationNotQueued",
+        sinceMs: 5,
+        detail:
+          "BitWire was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
+      },
+      {
+        name: "augmentationNotQueued",
+        sinceMs: 6,
+        detail:
+          "NeuroFlux Governor (level 3) was reported bought, but the faction state's queue doesn't show it: check the " +
+          "Augmentations page",
+      },
+    ]);
+  });
+
+  test("an install not restarted: from 5 minutes after the disconnect, not before", () => {
+    const sinceMs = quiet.nowMs - INSTALL_NOT_RESTARTED_AFTER_MS;
+    const awaiting = { id: "installAugmentations()", sinceMs };
+    // The Agent silent too, at that age: both say so.
+    const facts = { ...quiet, lastFastSnapshotAtMs: quiet.nowMs, installAwaitingRestart: awaiting };
+    expect(activeAlerts(facts)).toEqual([
+      {
+        name: "installNotRestarted",
+        sinceMs,
+        detail:
+          "installAugmentations() went out and the Agent disconnected 5 min ago, and no slow snapshot has shown the " +
+          "reset: is the game at the Terminal, and did boot.js run?",
+      },
+    ]);
+    expect(names({ ...facts, installAwaitingRestart: { ...awaiting, sinceMs: sinceMs + 1 } })).toEqual([]);
+  });
+
+  test("an install reported done that the game didn't reset: at once (#213 re-review)", () => {
+    const awaiting = { id: "installAugmentations()", sinceMs: quiet.nowMs - 1, doneNotReset: true };
+    expect(activeAlerts({ ...quiet, installAwaitingRestart: awaiting })).toEqual([
+      {
+        name: "installNotRestarted",
+        sinceMs: quiet.nowMs - 1,
+        detail:
+          "installAugmentations(): install reported done but the game didn't reset: the faction state's queue isn't " +
+          "the game's. The install cycle is called off, and no other is chosen until a reset (or the brain restarts): " +
+          "check the Augmentations page",
+      },
+    ]);
+  });
+});
 
 test("with everything well, no alerts", () => {
   expect(activeAlerts(quiet)).toEqual([]);

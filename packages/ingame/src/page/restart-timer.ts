@@ -25,7 +25,62 @@
 //      (Steam's "Reload && Kill All Scripts") keeps it, and autoexec skips (`NetscriptWorker.ts:233-236`): then, as
 //      when nothing here works, the brain's supervisor relaunches the silent game (§10.2).
 //   Anything else that throws on the way goes to the fallback; anything that throws there ends it.
-import { findOnPage, playerEvent, reactPropsOf, sidebarItemXpath } from "./game-page.ts";
+// - Never silent (#212): a fallback's reload, or a restart given up, leaves a note in the page's `localStorage`,
+//   which survives the reload and a relaunch; the next Agent takes it and sends it in a fast snapshot, and the brain
+//   stores it as a `restartFellBack` event, which fails the run report.
+import { RESTART_NOTE_STORAGE_KEY, type RestartNote } from "@bitburner-agent/core";
+import { findOnPage, pageDocument, playerEvent, reactPropsOf, sidebarItemXpath } from "./game-page.ts";
+
+/** The page's `localStorage`, or null (none, or refused). */
+function pageStorage(page: Document | null): Storage | null {
+  try {
+    return page?.defaultView?.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Leaves `note` in the page's storage for the next Agent to report (#212): a restart that couldn't type fails loudly,
+ * as a `restartFellBack` event and a run report failure, never as a silent reload.
+ */
+function leaveRestartNote(page: Document, note: RestartNote): void {
+  try {
+    pageStorage(page)?.setItem(RESTART_NOTE_STORAGE_KEY, JSON.stringify(note));
+  } catch {}
+}
+
+/** The note a restart left (`leaveRestartNote`), taken: read and removed, so it's reported once. Null for none. */
+export function takeRestartNote(): RestartNote | null {
+  const storage = pageStorage(pageDocument());
+  if (storage === null) return null;
+  try {
+    const text = storage.getItem(RESTART_NOTE_STORAGE_KEY);
+    if (text === null) return null;
+    storage.removeItem(RESTART_NOTE_STORAGE_KEY);
+    return parseRestartNote(text);
+  } catch {
+    return null;
+  }
+}
+
+/** The note a restart left, as text; one that can't be read is still reported, never dropped (#212). */
+export function parseRestartNote(text: string): RestartNote {
+  const unreadable: RestartNote = { outcome: "gaveUp", reason: "unreadable restart note", atMs: 0 };
+  let note: Partial<RestartNote>;
+  try {
+    note = JSON.parse(text) as Partial<RestartNote>;
+  } catch {
+    return unreadable;
+  }
+  if (typeof note !== "object" || note === null) return unreadable;
+  if (note.outcome !== "reloading" && note.outcome !== "gaveUp") return unreadable;
+  return {
+    outcome: note.outcome,
+    reason: typeof note.reason === "string" ? note.reason : "not recorded",
+    atMs: typeof note.atMs === "number" ? note.atMs : 0,
+  };
+}
 
 /** How often the timer looks at the page. */
 const POLL_MS = 100;
@@ -173,6 +228,9 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
           // The production build asks before unloading, except on `file://` (Steam): asked, the reload could stop.
           const view = page.defaultView as { onbeforeunload: unknown } | null;
           if (view !== null) view.onbeforeunload = null;
+          // Noted before the click, which saves and reloads the page (#212). A click that then doesn't reload is still
+          // noted as reloading; its reason (why the terminal wasn't used) is right either way.
+          leaveRestartNote(page, { outcome: "reloading", reason: reason ?? "not recorded", atMs: Date.now() });
           outcome = callHandler(forceKill, "onClick", playerEvent()) ? "reloading" : "gaveUp";
           return false;
         }
@@ -189,6 +247,11 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
     }
   }
 
+  /** A fallback taken, or a restart given up after the reset: noted for the next Agent, so it's never silent (#212). */
+  const noteIfFailed = () => {
+    if (outcome === "gaveUp") leaveRestartNote(page, { outcome, reason: reason ?? "not recorded", atMs: Date.now() });
+  };
+
   const tick = () => {
     if (outcome !== "waiting") return;
     let again: boolean;
@@ -199,18 +262,21 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
       // A page that isn't as expected: the fallback, unless that's what threw, or the step says stop or give up.
       if (step === "fallback") {
         outcome = "gaveUp";
+        noteIfFailed();
         return;
       }
       const end = typeof step === "number" ? endOf(step) : null;
       if (end !== null && (end.action === "stop" || end.action === "giveUp")) {
         reason = threw;
         outcome = end.action === "stop" ? "stopped" : "gaveUp";
+        noteIfFailed();
         return;
       }
       fallBack(threw);
       again = true;
     }
     if (again) setTimeout(tick, POLL_MS);
+    else noteIfFailed();
   };
   setTimeout(tick, POLL_MS);
 

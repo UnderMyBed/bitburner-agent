@@ -1,5 +1,20 @@
 export { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
 export {
+  type AugmentationSet,
+  augmentationBuyOrder,
+  chooseAugmentationsToBuy,
+  hackingExpForLevel,
+  type InstallCandidate,
+  type InstallDecision,
+  type InstallDecisionInputs,
+  type InstallGains,
+  type InstallReason,
+  installDecision,
+  installGains,
+  isWorthInstalling,
+  rebuildTimeMs,
+} from "./augmentation-plan.ts";
+export {
   AUGMENTATION_NAMES,
   AUGMENTATION_PRICE_GROWTH,
   type AugmentationBitNodeMultipliers,
@@ -286,7 +301,9 @@ export {
   MAX_DIALOG_TEXT_LENGTH,
   MAX_REFUSED_REASON_LENGTH,
   type MediumSnapshotData,
+  RESTART_NOTE_STORAGE_KEY,
   type RefusedBrainMessage,
+  type RestartNote,
   type SlowSnapshotData,
   type StaticSnapshotData,
   snapshotWorkerFileName,

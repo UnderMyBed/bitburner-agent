@@ -12,6 +12,22 @@ import { reportedPromotion } from "./work.ts";
 
 /** The event a promotion the Agent took is stored as (#155): its company, titles and game time. */
 export const WORK_PROMOTION_EVENT_KIND = "workPromotion";
+/**
+ * A restart after a reset through the page that couldn't type `run /agent/boot.js` (#212), as the next Agent reports
+ * it: `{ outcome, reason, atMs }`, the fallback's reload or a give-up. A failure in the run report.
+ */
+export const RESTART_FELL_BACK_EVENT_KIND = "restartFellBack";
+
+/** The restart's note in a fast snapshot, if it's well formed (#212). */
+function restartNoteIn(data: unknown): { outcome: string; reason: string; atMs: number } | null {
+  const note = (data as Partial<FastSnapshotData> | null)?.restart as Record<string, unknown> | undefined;
+  if (typeof note !== "object" || note === null) return null;
+  const { outcome, reason, atMs } = note;
+  if ((outcome !== "reloading" && outcome !== "gaveUp") || typeof reason !== "string" || typeof atMs !== "number") {
+    return null;
+  }
+  return { outcome, reason: reason.slice(0, MAX_DIALOG_TEXT_LENGTH), atMs };
+}
 
 /** The event a brain message the Agent refused is stored as (#194's review): its reason and count. */
 export const MESSAGE_REFUSED_EVENT_KIND = "messageRefused";
@@ -115,6 +131,14 @@ export function recordChannelEvents(
       if (tier === "fast") {
         for (const detail of handledDialogsIn(data))
           store.recordEvent(context, { atMs: event.atMs, kind: "gameDialog", detail });
+        const restart = restartNoteIn(data);
+        if (restart !== null) {
+          store.recordEvent(context, { atMs: event.atMs, kind: RESTART_FELL_BACK_EVENT_KIND, detail: restart });
+          log(
+            `the restart after a reset couldn't type run /agent/boot.js: ${restart.reason}` +
+              (restart.outcome === "reloading" ? "; it saved and reloaded the game" : "; it gave up"),
+          );
+        }
         const promotion = reportedPromotion((data as Partial<FastSnapshotData> | null)?.work?.promotion);
         if (promotion !== null && JSON.stringify(promotion) !== lastPromotion) {
           lastPromotion = JSON.stringify(promotion);

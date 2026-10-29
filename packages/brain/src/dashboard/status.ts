@@ -12,6 +12,7 @@ import {
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { type BatcherView, batcherNotRunning, batcherOutOfStep } from "../batcher.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
@@ -103,6 +104,11 @@ export interface DashboardStatus {
   homeRam: HomeRamView;
   /** Cloud servers (#194): those owned, the purchase being made, or what it waits for, and a problem noted. */
   cloudServers: CloudServersView;
+  /**
+   * Augmentations and the reset (#210): the switch, the set the money covers, the decision, what's asked for, and the
+   * purchases not queued. The reserve is Infinity while committed, which JSON carries as null.
+   */
+  augmentations: AugmentationsView;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -147,6 +153,10 @@ export interface DashboardStatusOptions {
   homeRam: HomeRamView;
   /** Cloud servers' view (#194), likewise. */
   cloudServers: CloudServersView;
+  /** The augmentations' view (#210), likewise. */
+  augmentations: AugmentationsView;
+  /** The install out when the Agent disconnected, until the reset shows (#210): the controller's, for its alert. */
+  installAwaitingRestart: InstallAwaitingRestart | null;
   /** The intents' view (#141), likewise. */
   intents: IntentView[];
   /** The work's view (#151), likewise. */
@@ -179,6 +189,8 @@ export function buildDashboardStatus({
   programs,
   homeRam,
   cloudServers,
+  augmentations,
+  installAwaitingRestart,
   intents,
   work,
   income,
@@ -321,6 +333,8 @@ export function buildDashboardStatus({
               problem: notRunningInARow[0]?.problem ?? "",
             },
       batcherOutOfStep: outOfStep,
+      augmentationsNotQueued: augmentations.notQueued,
+      installAwaitingRestart,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -344,6 +358,7 @@ export function buildDashboardStatus({
     programs,
     homeRam,
     cloudServers,
+    augmentations,
     intents,
     work,
     factions: slow

@@ -133,6 +133,12 @@ export interface FastSnapshotData {
   /** How the work the brain wants went (#151): null while it wants none, or absent from an older Agent. */
   work?: WorkOutcome | null;
   /**
+   * A restart after a reset through the page that couldn't type `run /agent/boot.js` (#212): the page timer's note,
+   * left in the page's storage (through the fallback's reload, or the supervisor's relaunch), taken as the next
+   * welcomed Agent builds its first fast snapshot, and sent once. Absent where there was none.
+   */
+  restart?: RestartNote;
+  /**
    * The batcher's health (#205), as it last wrote it on its port, or null with none there; absent from an older Agent.
    * The Agent's word for what the batcher wrote: read with care.
    */
@@ -159,6 +165,18 @@ export interface RefusedBrainMessage {
 
 /** How much of a refused message's reason the Agent reports. */
 export const MAX_REFUSED_REASON_LENGTH = 500;
+
+/** How a page timer's restart ended when it couldn't type `run /agent/boot.js` (#212): reloaded, or given up. */
+export interface RestartNote {
+  outcome: "reloading" | "gaveUp";
+  /** Why it couldn't type, or why it gave up. */
+  reason: string;
+  /** The page's `Date.now()` when it ended. */
+  atMs: number;
+}
+
+/** Where the page timer leaves its note, in the page's `localStorage`: it outlives the reload (#212). */
+export const RESTART_NOTE_STORAGE_KEY = "bitburner-agent.restartNote";
 
 /** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */
 export interface HandledDialog {

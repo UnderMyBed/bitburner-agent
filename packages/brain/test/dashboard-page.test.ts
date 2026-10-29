@@ -20,7 +20,7 @@ import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
-import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
+import { idleAugmentations, QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
 
 const PAGE = readFileSync(new URL("../src/dashboard/page.html", import.meta.url), "utf8");
 const NOW_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
@@ -103,6 +103,7 @@ const BUSY_STATUS: DashboardStatus = {
     waitingFor: "money for pserv-2 with 8 GB ($440,000)",
     problem: null,
   },
+  augmentations: idleAugmentations,
   intents: [
     {
       id: "travel(Aevum)",
@@ -185,6 +186,8 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     backdoorsDue: [],
     factionWork: QUIET_FACTIONS_VIEW,
     factionWorkStall: null,
+    augmentations: idleAugmentations,
+    installAwaitingRestart: null,
     nowMs: NOW_MS,
   });
   store.close();
@@ -612,6 +615,7 @@ test.each([
   ["home RAM", "#home-ram button", "#home-ram-problem"],
   ["cloud servers", "#cloud-servers button", "#cloud-servers-problem"],
   ["the brain's faction work", "#factions button", "#faction-work-problem"],
+  ["augmentations", "#augmentations button", "#augmentations-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -742,6 +746,63 @@ test.each([
   const cloudServers = { ...BUSY_STATUS.cloudServers, ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, cloudServers } }));
   expect(textOf(document, "#cloud-servers")).toContain(text);
+});
+
+test("the augmentations' button (#210) sends its switch, and each state reads plainly", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = { ...BUSY_STATUS, augmentations: { ...BUSY_STATUS.augmentations, enabled } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  expect(textOf(document, "#augmentations button")).toBe("Stop buying and installing augmentations");
+  (document.querySelector("#augmentations button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/augmentations", '{"enabled":false}']],
+  );
+  expect(textOf(document, "#augmentations")).toContain("Augmentations: not buying or installing");
+  expect(textOf(document, "#augmentations button")).toBe("Start buying and installing augmentations");
+});
+
+test.each([
+  ["waiting for the Agent", {}, "Augmentations: waiting for the Agent's snapshots"],
+  [
+    "not installing yet",
+    {
+      waiting: false,
+      waitingFor: "the next augmentation to come no sooner by installing (1.6 h carrying on, 4.8 h installing)",
+      set: [{ augmentation: "BitWire", price: 10e6 }],
+      setCost: 10e6,
+      decision: {
+        install: false,
+        waitingFor: null,
+        rebuildMs: 7_200_000,
+        without: { augmentation: "Cranial Signal Processors - Gen II", faction: "CyberSec", ms: 5_760_000 },
+        with: { augmentation: "Cranial Signal Processors - Gen II", faction: "CyberSec", ms: 17_280_000 },
+      },
+    },
+    "Augmentations: waiting for the next augmentation to come no sooner by installing (1.6 h carrying on, 4.8 h " +
+      "installing)The set the money covers: BitWire ($10,000,000)The next worth installing: Cranial Signal Processors " +
+      "- Gen II at CyberSec, 1.6 h carrying on, 4.8 h installing first (rebuild 2.0 h)",
+  ],
+  [
+    "buying",
+    { waiting: false, committed: true, asking: "buying BitWire from CyberSec for $10,000,000" },
+    "Augmentations: install chosen: buying BitWire from CyberSec for $10,000,000",
+  ],
+  [
+    "a purchase not queued",
+    { waiting: false, notQueued: [{ augmentation: "BitWire", level: 1, boughtAtMs: 1 }] },
+    "NOT QUEUED: BitWire, reported bought, not in the faction state's queue",
+  ],
+])("the augmentations, %s, say so", async (_description, changes, text) => {
+  const augmentations = { ...BUSY_STATUS.augmentations, ...changes };
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, augmentations } }));
+  expect(textOf(document, "#augmentations")).toContain(text);
 });
 
 describe("the intents (#141)", () => {
