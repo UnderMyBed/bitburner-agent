@@ -330,8 +330,17 @@ function render(status) {
     factions === null
       ? [element("div", "No slow snapshot yet.", "muted")]
       : [
-          element("div", `Read ${time(factions.receivedAtMs)}${factions.backend === null ? "" : ` via ${factions.backend}`}.`, "muted"),
-          ...(factions.problem === null ? [] : [element("div", `Couldn't be read: ${factions.problem}`, "bad")]),
+          element("div", `Read ${time(factions.receivedAtMs)}${factions.backend === null ? "" : ` via ${factions.backend}`}` +
+            (factions.opened === null ? "." : factions.opened.length === 0 ? ", with no page opened." : `, opening ${factions.opened.join(" and ")}.`), "muted"),
+          ...(factions.kind === "absent"
+            ? [element("div", "Not read by this Agent: its slow snapshot comes from an older one.", "muted")]
+            : factions.kind === "skipped"
+              ? [element("div", `Skipped this time: ${factions.problem}`, "muted")]
+              : factions.kind === "readPageNotRestored"
+                ? [element("div", `Read, but the page wasn't put back as found: ${factions.problem}`, "bad")]
+                : factions.kind === "unread"
+                  ? [element("div", `Couldn't be read (${factions.unreadInARow} in a row): ${factions.problem}`, "bad")]
+                  : []),
           ...(factions.state === null
             ? []
             : [

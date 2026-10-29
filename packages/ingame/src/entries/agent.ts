@@ -109,6 +109,12 @@ export async function main(ns: NS): Promise<void> {
   const factionStateReader = createFactionStateReader(ns, {
     effectorRunner,
     handleDialogs: (deadlineMs) => dialogWatcher.handle(deadlineMs),
+    invitationsAnswered: () => dialogWatcher.invitationsAnswered(),
+    augmentationsBought: () =>
+      intentRunner
+        .outcomes()
+        .filter((outcome) => outcome.done && outcome.id.startsWith("purchaseAugmentation("))
+        .map((outcome) => outcome.id),
   });
   const snapshotter = createSnapshotter(ns, {
     deploymentId,

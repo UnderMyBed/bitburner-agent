@@ -31,7 +31,17 @@ afterEach(() => {
  */
 function readerWith(
   answer: () => unknown,
-  { singularity = false, homeRam = 8 }: { singularity?: boolean; homeRam?: number } = {},
+  {
+    singularity = false,
+    homeRam = 8,
+    invitationsAnswered = () => 0,
+    augmentationsBought = () => [] as string[],
+  }: {
+    singularity?: boolean;
+    homeRam?: number;
+    invitationsAnswered?: () => number;
+    augmentationsBought?: () => string[];
+  } = {},
 ) {
   const happened: string[] = [];
   const lines: string[] = [];
@@ -58,15 +68,24 @@ function readerWith(
     handleDialogs: async (deadlineMs) => {
       happened.push(`dialogs by ${deadlineMs}`);
     },
+    invitationsAnswered,
+    augmentationsBought,
   });
-  return { reader, happened, lines };
+  /** The context each page worker was given. */
+  const contexts = () =>
+    runWorker.mock.calls
+      .filter(([workerFile]) => workerFile.endsWith("/faction-state.js"))
+      .map(([, workerArguments]) => JSON.parse(String(workerArguments[0])));
+  return { reader, happened, lines, contexts };
 }
+
+const FIRST_CONTEXT = JSON.stringify({ memory: null, invitationAnswered: false, augmentationBought: false });
 
 describe("the reader", () => {
   test("the routine dialogs first, then the page's worker, with the deadline less the margin: its state", async () => {
     const { reader, happened } = readerWith(() => ({ done: true, problem: null, state: STATE }));
     expect(await reader.read(10_000)).toEqual({ backend: "ui", state: STATE, problem: null });
-    expect(happened).toEqual(["dialogs by 10000", "run faction-state.js [9800]"]);
+    expect(happened).toEqual(["dialogs by 10000", `run faction-state.js ${JSON.stringify([FIRST_CONTEXT, 9800])}`]);
   });
 
   test("with Singularity and room beside the Agent, Singularity's worker; without the room, the page's", async () => {
@@ -115,6 +134,65 @@ describe("the reader", () => {
       "agent: the faction state (ui): agent/abcdef123456/faction-state.js didn't report in time",
       "agent: the faction state is read again",
     ]);
+  });
+});
+
+describe("the page reader's memory, and the Agent's news since", () => {
+  const memory = { state: STATE, lastAugReset: 5, factionsReadAtMs: 1_000 };
+
+  test("each page read's memory goes to the next, with an invitation answered or a purchase done since", async () => {
+    let invitations = 0;
+    let bought: string[] = ["purchaseAugmentation(CyberSec, BitWire, 1)"];
+    const { reader, contexts } = readerWith(() => ({ done: true, problem: null, state: STATE, opened: [], memory }), {
+      invitationsAnswered: () => invitations,
+      augmentationsBought: () => bought,
+    });
+    await reader.read(10_000);
+    await reader.read(10_000);
+    invitations = 1;
+    bought = [...bought, "purchaseAugmentation(CyberSec, Neurotrainer I, 1)"];
+    await reader.read(10_000);
+    await reader.read(10_000);
+    expect(contexts()).toEqual([
+      { memory: null, invitationAnswered: false, augmentationBought: false },
+      { memory, invitationAnswered: false, augmentationBought: false },
+      { memory, invitationAnswered: true, augmentationBought: true },
+      { memory, invitationAnswered: false, augmentationBought: false },
+    ]);
+  });
+
+  test("a read that failed keeps the last memory and the news, for the next try", async () => {
+    const answers: unknown[] = [
+      { done: true, problem: null, state: STATE, memory },
+      { done: false, problem: "a dialog the Agent leaves for the owner is open", state: null },
+      { done: true, problem: null, state: STATE, memory },
+    ];
+    let invitations = 0;
+    const { reader, contexts } = readerWith(() => answers.shift(), { invitationsAnswered: () => invitations });
+    await reader.read(10_000);
+    invitations = 1;
+    await reader.read(10_000);
+    await reader.read(10_000);
+    expect(contexts().map((context) => [context.memory !== null, context.invitationAnswered])).toEqual([
+      [false, false],
+      [true, true],
+      [true, true],
+    ]);
+  });
+
+  test("skipped (no sidebar): not a problem, the last state with it", async () => {
+    const { reader } = readerWith(() => ({
+      done: false,
+      problem: null,
+      skipped: "no sidebar on the page (the BitVerse, an infiltration?)",
+      state: STATE,
+    }));
+    expect(await reader.read(10_000)).toEqual({
+      backend: "ui",
+      state: STATE,
+      problem: null,
+      skipped: "no sidebar on the page (the BitVerse, an infiltration?)",
+    });
   });
 });
 
@@ -174,11 +252,13 @@ describe("the slow snapshot", () => {
         return readFactions(deadlineMs);
       },
     });
+    // Welcomed, so the first round sends every tier.
+    snapshotter.welcomed();
     const sent: SnapshotMessage[] = [];
     return { snapshotter, order, sent, send: (message: SnapshotMessage) => sent.push(message) };
   }
 
-  test("read just after the slow worker, within the round, and sent with its data", async () => {
+  test("read after the slow worker and static (the welcome round's), within the round, and sent with its data", async () => {
     const deadlines: number[] = [];
     const reading: FactionStateReading = { backend: "ui", state: STATE, problem: null };
     const { snapshotter, order, sent, send } = snapshotterWith(async (deadlineMs) => {
@@ -191,9 +271,10 @@ describe("the slow snapshot", () => {
       "snapshot-fast.js",
       "snapshot-medium.js",
       "snapshot-slow.js",
-      "readFactions",
       "snapshot-static.js",
+      "readFactions",
     ]);
+    expect(sent.map((message) => message.tier)).toEqual(["fast", "medium", "static", "slow"]);
     expect(deadlines[0]).toBeGreaterThanOrEqual(before + 2_000);
     expect(deadlines[0]).toBeLessThanOrEqual(Date.now() + 2_000);
     const slow = sent.find((message) => message.tier === "slow");
@@ -218,6 +299,38 @@ describe("the slow snapshot", () => {
     holder.snapshotter = made.snapshotter;
     await made.snapshotter.takeRound(made.send);
     expect(seen).toEqual([true]);
+  });
+
+  test("under a second of the round left after the slow worker: no read, and the slow snapshot waits for the next round", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { snapshotter, order, sent, send } = snapshotterWith(async () => ({
+        backend: "ui",
+        state: STATE,
+        problem: null,
+      }));
+      // The workers take most of the round: 1.1 s by the time static has run.
+      const startedAtMs = Date.now();
+      const advance = (toMs: number) => vi.setSystemTime(startedAtMs + toMs);
+      const runOrder = order as string[];
+      const push = runOrder.push.bind(runOrder);
+      runOrder.push = (...items: string[]) => {
+        if (items.includes("snapshot-static.js")) advance(1_100);
+        return push(...items);
+      };
+      await snapshotter.takeRound(send);
+      expect(order).not.toContain("readFactions");
+      expect(sent.map((message) => message.tier)).toEqual(["fast", "medium", "static"]);
+      // The next round: the slow tier is still due, read and sent.
+      advance(2_000);
+      await snapshotter.takeRound(send);
+      expect(order.filter((each) => each === "readFactions")).toHaveLength(1);
+      expect(sent.map((message) => message.tier)).toEqual(["fast", "medium", "static", "fast", "slow"]);
+      // The first round's slow report, kept: its worker isn't run again (a hung worker's RAM may not leave room).
+      expect(order.filter((each) => each === "snapshot-slow.js")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("unread, it still goes, saying why", async () => {

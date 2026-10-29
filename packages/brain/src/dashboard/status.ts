@@ -12,7 +12,7 @@ import {
   type SnapshotTier,
 } from "@bitburner-agent/core";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
-import { factionStateProblemOf } from "../faction-state.ts";
+import { FACTION_STATE_UNREAD_AFTER, factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
@@ -93,14 +93,19 @@ export interface DashboardStatus {
   /** The work the brain manages (#151), and how the Agent last reported it. */
   work: WorkView;
   /**
-   * The faction state (#197) in the newest slow snapshot, from any run of the brain: when it arrived, the backend, the
-   * state, and why it couldn't be read; null with no slow snapshot.
+   * The faction state (#197) in the newest slow snapshot, from any run of the brain: when it arrived, what it is (read;
+   * read, but the page not put back; unread; skipped; or absent, from an older Agent), the backend, the state, the
+   * problem or why it was skipped, the pages the page's reader opened for it, and how many slow snapshots in a row are
+   * unread; null with no slow snapshot.
    */
   factions: {
     receivedAtMs: number;
+    kind: SlowFactionStatus["kind"];
     backend: EffectorBackend | null;
     state: FactionState | null;
     problem: string | null;
+    opened: string[] | null;
+    unreadInARow: number;
   } | null;
 }
 
@@ -157,7 +162,13 @@ export function buildDashboardStatus({
   const medium = latestOfTier.medium?.data as MediumSnapshotData | undefined;
   const slow = latestOfTier.slow;
   const factionReading = slow ? factionReadingOf(slow.data) : null;
-  const factionProblem = slow ? factionStateProblemOf(slow.data) : null;
+  const factionStatus = slow ? factionStatusOf(slow.data) : null;
+  // The newest slow snapshots unread in a row, up to the alert's count (#197).
+  const unreadInARow: { receivedAtMs: number }[] = [];
+  for (const each of store.latestSnapshots({ environment, tier: "slow", limit: FACTION_STATE_UNREAD_AFTER })) {
+    if (factionStatusOf(each.data).kind !== "unread") break;
+    unreadInARow.push(each);
+  }
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -237,8 +248,13 @@ export function buildDashboardStatus({
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
       factionState:
-        slow && factionProblem?.problem
-          ? { atMs: slow.receivedAtMs, backend: factionProblem.backend, problem: factionProblem.problem }
+        factionStatus?.kind === "unread" && factionStatus.problem !== null
+          ? {
+              sinceMs: unreadInARow.at(-1)?.receivedAtMs ?? 0,
+              unreadInARow: unreadInARow.length,
+              backend: factionStatus.backend,
+              problem: factionStatus.problem,
+            }
           : null,
     }),
     events: store
@@ -266,9 +282,12 @@ export function buildDashboardStatus({
     factions: slow
       ? {
           receivedAtMs: slow.receivedAtMs,
+          kind: factionStatus?.kind ?? "absent",
           backend: factionReading?.backend ?? null,
           state: factionReading?.state ?? null,
-          problem: factionProblem?.problem ?? null,
+          problem: factionStatus?.problem ?? null,
+          opened: factionReading?.opened ?? null,
+          unreadInARow: unreadInARow.length,
         }
       : null,
   };

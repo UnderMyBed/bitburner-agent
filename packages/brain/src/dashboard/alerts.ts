@@ -2,6 +2,7 @@
 // there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
+import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
 export const AGENT_SILENT_AFTER_MS = 60_000;
@@ -32,7 +33,7 @@ export interface Alert {
   /**
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
-   * first watched); for `factionStateUnread`, the newest slow snapshot; for the others, the event or give-up that
+   * first watched); for `factionStateUnread`, the first of the unread slow snapshots in a row; for the others, the event or give-up that
    * raised it.
    */
   sinceMs: number;
@@ -63,10 +64,11 @@ export interface AlertFacts {
   /** The player's money in the medium snapshots, and when it last rose (#184): ./income-watch.ts. */
   income: IncomeFacts | null;
   /**
-   * The newest slow snapshot's faction state problem (#197), when it arrived and the backend: null where it was read,
-   * or there's no slow snapshot.
+   * The faction state unread in the newest slow snapshots (#197): how many in a row (counted up to
+   * `FACTION_STATE_UNREAD_AFTER`), since when, and the newest's backend and problem; null where the newest was read,
+   * skipped, or from an older Agent, or there's no slow snapshot.
    */
-  factionState: { atMs: number; backend: string | null; problem: string } | null;
+  factionState: { sinceMs: number; unreadInARow: number; backend: string | null; problem: string } | null;
 }
 
 /**
@@ -121,12 +123,15 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   }
   const incomeStalled = incomeStalledAlert(facts);
   if (incomeStalled !== null) alerts.push(incomeStalled);
-  if (facts.factionState !== null) {
-    const { atMs, backend, problem } = facts.factionState;
+  // Only once it's unread in a row: a single miss (a dialog flood, the owner acting mid-read) is a log line and an event.
+  if (facts.factionState !== null && facts.factionState.unreadInARow >= FACTION_STATE_UNREAD_AFTER) {
+    const { sinceMs, unreadInARow, backend, problem } = facts.factionState;
     alerts.push({
       name: "factionStateUnread",
-      sinceMs: atMs,
-      detail: `the faction state couldn't be read${backend === null ? "" : ` (${backend})`}: ${problem}`,
+      sinceMs,
+      detail:
+        `the faction state couldn't be read in the last ${unreadInARow} slow snapshots` +
+        `${backend === null ? "" : ` (${backend})`}: ${problem}`,
     });
   }
   for (const outcome of facts.intentOutcomes) {

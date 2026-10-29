@@ -224,12 +224,13 @@ export function workEffectorFor(work: Work, { checkPromotion = false } = {}): Ef
 
 /**
  * The faction state's reader (#197): each joined faction's reputation and favour, the invitations and the queued
- * augmentations, with each slow snapshot. Its report is a `FactionStateReport`.
+ * augmentations, with each slow snapshot. Its report is a `FactionStateReport`. The page's worker gets `context`, the
+ * last reading and the Agent's news since, as JSON (../page/faction-state-page.ts, `FactionReadContext`).
  */
-export function factionStateReader(): Effector {
+export function factionStateReader(context = ""): Effector {
   return {
     description: "read the faction state",
-    ui: { workerName: FACTION_STATE_WORKER_NAME, workerArguments: [] },
+    ui: { workerName: FACTION_STATE_WORKER_NAME, workerArguments: [context] },
     singularity: { workerName: SINGULARITY_FACTION_STATE_WORKER_NAME, workerArguments: [] },
     sim: (effectors) => effectors.readFactionState(),
   };

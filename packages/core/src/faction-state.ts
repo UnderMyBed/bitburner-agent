@@ -1,7 +1,7 @@
 /**
  * Faction state (#197, M4 phase A slice A4b): each joined faction's reputation and favour, the outstanding invitations,
  * and the queued augmentations (bought, not installed), read with each slow snapshot (snapshots.ts). The game keeps
- * reputation and favour on each `Faction` (`Faction/Faction.ts:17`, `:32`), the invitations and the queue on the player
+ * reputation and favour on each `Faction` (`Faction/Faction.ts:32`, `:38-40`), the invitations and the queue on the player
  * (`PersonObjects/Player/PlayerObject.ts:44`, `PersonObjects/Person.ts:45`). No NS call has them without Singularity,
  * so the Agent reads them from the page's React props, Singularity, or the simulator, as its effectors do (§5.6).
  * Shared by the in-game code and the brain.
@@ -26,7 +26,8 @@ export interface FactionState {
   invitations: string[];
   /**
    * The augmentations bought and not yet installed, in the game's form (`Player.queuedAugmentations`): one entry per
-   * purchase, NeuroFlux Governor once per level queued.
+   * purchase, NeuroFlux Governor once per level queued. Their order may differ by backend (the page lists NeuroFlux
+   * once, where its last level was queued), so compare queues as multisets, never in order.
    */
   queuedAugmentations: string[];
 }
@@ -34,15 +35,38 @@ export interface FactionState {
 /** What a faction state reader reports (#197): its effector report, and the state it read (null where it couldn't). */
 export interface FactionStateReport extends EffectorReport {
   state: FactionState | null;
+  /** The page's reader only: why it didn't look this time, if it didn't (no sidebar on the page); not a problem. */
+  skipped?: string;
+  /** The page's reader only: the pages it opened, "Factions" and "Augmentations"; none when nothing had changed. */
+  opened?: string[];
 }
 
 /** The slow snapshot's faction state: the backend that read it, the state, or why it couldn't be read. */
 export interface FactionStateReading {
   backend: EffectorBackend;
-  /** Null where it couldn't be read: never an empty state in its place. */
+  /**
+   * Null where it couldn't be read: never an empty state in its place. Skipped (below), the last state read, or null
+   * before the first.
+   */
   state: FactionState | null;
-  /** Why it couldn't be read, or a problem after reading it (the page not left as found); null for none. */
+  /** Why it couldn't be read, or a problem after reading it (the page not put back as found); null for none. */
   problem: string | null;
+  /** Why the page's reader didn't look this time (no sidebar on the page: the BitVerse, an infiltration): not a problem. */
+  skipped?: string;
+  /** The pages the page's reader opened for it: none when it had nothing new to read there (#197). */
+  opened?: string[];
+}
+
+/**
+ * What a reading is: `read`; `readPageNotRestored`, read, but the page wasn't put back as found; `unread`, with why; or
+ * `skipped`, not looked at this time, which isn't a problem.
+ */
+export type FactionReadingKind = "read" | "readPageNotRestored" | "unread" | "skipped";
+
+export function factionReadingKind(reading: FactionStateReading): FactionReadingKind {
+  if (reading.skipped !== undefined) return "skipped";
+  if (reading.state === null) return "unread";
+  return reading.problem === null ? "read" : "readPageNotRestored";
 }
 
 /** Home worker: reads the faction state from the game's page (#197). */
@@ -73,14 +97,22 @@ export function parseFactionState(value: unknown): FactionState | null {
 export function factionReadingOf(slow: unknown): FactionStateReading | null {
   const reading = (slow as Partial<SlowSnapshotData> | null | undefined)?.factions as unknown;
   if (typeof reading !== "object" || reading === null) return null;
-  const { backend, state, problem } = reading as Record<string, unknown>;
+  const { backend, state, problem, skipped, opened } = reading as Record<string, unknown>;
   if (!EFFECTOR_BACKENDS.includes(backend as EffectorBackend)) return null;
   if (problem !== null && typeof problem !== "string") return null;
+  if (skipped !== undefined && typeof skipped !== "string") return null;
+  if (opened !== undefined && !isStringList(opened)) return null;
   const parsed = state === null ? null : parseFactionState(state);
   if (state !== null && parsed === null) return null;
-  // Neither isn't how the Agent reports: unread always says why. Both is a problem after the read (the way back).
-  if (parsed === null && problem === null) return null;
-  return { backend: backend as EffectorBackend, state: parsed, problem: problem as string | null };
+  // Neither isn't how the Agent reports, unless skipped: unread always says why. Both is a problem after the read.
+  if (parsed === null && problem === null && skipped === undefined) return null;
+  return {
+    backend: backend as EffectorBackend,
+    state: parsed,
+    problem: problem as string | null,
+    ...(skipped === undefined ? {} : { skipped: skipped as string }),
+    ...(opened === undefined ? {} : { opened: [...(opened as string[])] }),
+  };
 }
 
 /** The faction state the slow snapshot carries, or null: unread, absent, or not well formed (A5 and A6 decide on it). */

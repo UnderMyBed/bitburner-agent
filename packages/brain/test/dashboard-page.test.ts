@@ -104,7 +104,10 @@ const BUSY_STATUS: DashboardStatus = {
   },
   factions: {
     receivedAtMs: NOW_MS - 30_000,
+    kind: "read",
     backend: "ui",
+    opened: ["Augmentations"],
+    unreadInARow: 0,
     state: {
       joined: [
         { name: "CyberSec", reputation: 12345.678, favor: 1.234 },
@@ -275,7 +278,7 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   ]);
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
   // The faction state (#197): each faction's reputation and favour, the invitations, the queue counted.
-  expect(textOf(document, "#factions")).toContain("via ui.");
+  expect(textOf(document, "#factions")).toContain("via ui, opening Augmentations.");
   expect([...document.querySelectorAll("#factions tr")].map((row) => row.textContent)).toEqual([
     "CyberSec12,346 rep1.23 favour",
     "Sector-120 rep0 favour",
@@ -285,17 +288,25 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#factions")).not.toContain("Couldn't be read");
 });
 
-test("the faction state unread (#197): why, in red, and nothing in place of the state", async () => {
+test("the faction state unread (#197): why, in red, how many in a row, and nothing in place of the state", async () => {
   const status: DashboardStatus = {
     ...BUSY_STATUS,
-    factions: { receivedAtMs: NOW_MS, backend: "ui", state: null, problem: "no game page to read it through" },
+    factions: {
+      receivedAtMs: NOW_MS,
+      kind: "unread",
+      backend: "ui",
+      state: null,
+      problem: "no game page to read it through",
+      opened: null,
+      unreadInARow: 2,
+    },
   };
   const { document } = await openPage(() => ({ status: 200, body: status }));
   expectDataShown(document);
   const problem = [...document.querySelectorAll("#factions div div")].find((each) =>
     each.textContent?.startsWith("Couldn't be read"),
   );
-  expect(problem?.textContent).toBe("Couldn't be read: no game page to read it through");
+  expect(problem?.textContent).toBe("Couldn't be read (2 in a row): no game page to read it through");
   expect(problem?.className).toBe("bad");
   expect(textOf(document, "#factions")).not.toContain("Invitations");
   expect(document.querySelectorAll("#factions tr")).toHaveLength(0);
@@ -752,4 +763,37 @@ describe("work (#151)", () => {
       ["/api/work", { work: { kind: "class", location: "Powerhouse Gym", classType: "agi" } }],
     ]);
   });
+});
+
+test.each([
+  ["read with no page opened", { kind: "read", opened: [] }, "via ui, with no page opened.", null],
+  [
+    "read, but the page not put back as found",
+    { kind: "readPageNotRestored", problem: 'no "Stats" in the sidebar' },
+    "via ui.",
+    'Read, but the page wasn\'t put back as found: no "Stats" in the sidebar',
+  ],
+  [
+    "skipped",
+    { kind: "skipped", problem: "no sidebar on the page (the BitVerse, an infiltration?)" },
+    "via ui.",
+    "Skipped this time: no sidebar on the page (the BitVerse, an infiltration?)",
+  ],
+  [
+    "from an older Agent",
+    { kind: "absent", backend: null, state: null },
+    ".",
+    "Not read by this Agent: its slow snapshot comes from an older one.",
+  ],
+])("the faction state %s (#197): said as what it is", async (_description, changes, readLine, said) => {
+  const factions = {
+    ...(BUSY_STATUS.factions as NonNullable<DashboardStatus["factions"]>),
+    opened: null,
+    ...changes,
+  } as DashboardStatus["factions"];
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, factions } }));
+  expectDataShown(document);
+  expect(textOf(document, "#factions")).toContain(readLine);
+  if (said !== null) expect(textOf(document, "#factions")).toContain(said);
+  expect(textOf(document, "#factions")).not.toContain("Couldn't be read");
 });

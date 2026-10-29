@@ -155,20 +155,24 @@ describe("incomeStalled (#184): the hack loop on against a target, and money not
   });
 });
 
-test("factionStateUnread (#197): while the newest slow snapshot's faction state couldn't be read, since it came", () => {
-  const atMs = STARTED_AT_MS + 5_000;
-  expect(
-    activeAlerts({ ...quiet, factionState: { atMs, backend: "ui", problem: "no game page to read it through" } }),
-  ).toEqual([
+test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread, since the first of them", () => {
+  const sinceMs = STARTED_AT_MS + 5_000;
+  const unread = (unreadInARow: number, backend: string | null = "ui") => ({
+    ...quiet,
+    factionState: { sinceMs, unreadInARow, backend, problem: "no game page to read it through" },
+  });
+  // One or two misses (a dialog flood, the owner acting mid-read): not yet.
+  expect(activeAlerts(unread(1))).toEqual([]);
+  expect(activeAlerts(unread(2))).toEqual([]);
+  expect(activeAlerts(unread(3))).toEqual([
     {
       name: "factionStateUnread",
-      sinceMs: atMs,
-      detail: "the faction state couldn't be read (ui): no game page to read it through",
+      sinceMs,
+      detail: "the faction state couldn't be read in the last 3 slow snapshots (ui): no game page to read it through",
     },
   ]);
-  // No reading at all, so no backend.
-  expect(
-    activeAlerts({ ...quiet, factionState: { atMs, backend: null, problem: "the slow snapshot carries none" } })[0]
-      ?.detail,
-  ).toBe("the faction state couldn't be read: the slow snapshot carries none");
+  // Not well formed, so no backend.
+  expect(activeAlerts(unread(3, null))[0]?.detail).toBe(
+    "the faction state couldn't be read in the last 3 slow snapshots: no game page to read it through",
+  );
 });

@@ -414,38 +414,61 @@ describe("each failure is a FAIL, with its line", () => {
     ]);
   });
 
-  test("the faction state unread (#197): each stretch of slow snapshots with the same problem, and none at all", () => {
+  const HEADING =
+    "  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; 3 or more is a failure):";
+
+  test("the faction state unread (#197): 3 slow snapshots in a row is a FAIL, whatever each one's reason; fewer is shown, not counted", () => {
     cleanRun();
     const unread = (problem: string): FactionStateReading => ({ backend: "ui", state: null, problem });
     snapshot("slow", 2 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
     snapshot("slow", 3 * MINUTE, slowData([], {}, {}, unread("a dialog the Agent leaves for the owner is open")));
     snapshot("slow", 4 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
-    // Read at 10 min (cleanRun's), then a slow snapshot with no reading at all: an older Agent, or a bug.
-    snapshot("slow", 11 * MINUTE, slowData([], {}, {}, null));
+    // Read at 10 min (cleanRun's); a single miss at 12 min, then read again at 13 min (P → read → P: two stretches).
+    snapshot("slow", 11 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
+    snapshot("slow", 12 * MINUTE, slowData());
+    snapshot("slow", 13 * MINUTE, slowData([], {}, {}, unread("no game page to read the faction state through")));
     const { text, failures, verdictLine } = verdict();
     expect(verdictLine).toBe("Verdict: FAIL");
-    expect(failures).toEqual([
-      `faction state unread from ${at(2 * MINUTE)} to ${at(3 * MINUTE)} (2 slow snapshots, ui): a dialog the Agent ` +
-        "leaves for the owner is open",
-      `faction state unread from ${at(4 * MINUTE)} to ${at(4 * MINUTE)} (1 slow snapshot, ui): no game page to read ` +
-        "the faction state through",
-      `faction state unread from ${at(11 * MINUTE)} to ${at(11 * MINUTE)} (1 slow snapshot): the slow snapshot ` +
-        "carries no faction state the brain can read",
-    ]);
+    const three =
+      `faction state unread from ${at(2 * MINUTE)} to ${at(4 * MINUTE)} (3 slow snapshots in a row, ui): no game page ` +
+      "to read the faction state through";
+    expect(failures).toEqual([three]);
     expect(text).toContain(
-      `  faction state unread (slow snapshots whose faction state couldn't be read, #197):\n    faction`,
+      `${HEADING}\n    ${three}\n` +
+        `    faction state unread from ${at(11 * MINUTE)} to ${at(11 * MINUTE)} (1 slow snapshot in a row, ui): no ` +
+        "game page to read the faction state through; under 3 in a row, not counted\n" +
+        `    faction state unread from ${at(13 * MINUTE)} to ${at(13 * MINUTE)} (1 slow snapshot in a row, ui): no ` +
+        "game page to read the faction state through; under 3 in a row, not counted",
     );
     // What was read still shows.
     expect(text).toContain("    CyberSec: reputation 100 → 1,235, favour 0 (unchanged)");
   });
 
-  test("a clean run's faction state is read throughout: none unread", () => {
+  test("an older Agent's slow snapshots (no reading), skipped ones and ones read with the page not put back: shown, never a FAIL", () => {
     cleanRun();
-    expect(report().text).toContain(
-      "  faction state unread (slow snapshots whose faction state couldn't be read, #197):\n    none",
+    snapshot("slow", 2 * MINUTE, slowData([], {}, {}, null));
+    snapshot("slow", 3 * MINUTE, slowData([], {}, {}, null));
+    snapshot("slow", 4 * MINUTE, slowData([], {}, {}, null));
+    snapshot(
+      "slow",
+      5 * MINUTE,
+      slowData([], {}, {}, { backend: "ui", state: null, problem: null, skipped: "no sidebar" }),
+    );
+    snapshot("slow", 6 * MINUTE, slowData([], {}, {}, { ...factionState(), problem: 'no "Stats" in the sidebar' }));
+    const { text, failures } = verdict();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`${HEADING}\n    none`);
+    expect(text).toContain(
+      "  faction state otherwise: 1 skipped (no sidebar on the page); 3 from an older Agent, with no faction state; 1 " +
+        'read, but the page not put back as found (the last: no "Stats" in the sidebar)',
     );
   });
 
+  test("a clean run's faction state is read throughout: none unread", () => {
+    cleanRun();
+    expect(report().text).toContain(`${HEADING}\n    none`);
+    expect(report().text).not.toContain("faction state otherwise");
+  });
   test("never read: the faction lines say so, never an empty state", () => {
     event(0, "brainStarted", { release: "r" });
     snapshot("fast", 10 * SECOND, fastData());

@@ -4,8 +4,9 @@
 // - fast, every round, always sent (the heartbeat), even when its worker can't run;
 // - medium every 5th round (10 s), slow every 30th (60 s), both in the first round after each welcome;
 // - static, once per Agent start, resent from memory after each welcome.
-// The slow snapshot also carries the faction state (#197), read just after the slow worker by the Agent's reader
-// (./faction-state.ts); read or not, it goes with the slow worker's data, saying why where it couldn't be read.
+// The slow snapshot also carries the faction state (#197), read after the slow worker (and static, in the welcome
+// round) by the Agent's reader (./faction-state.ts), given a second of the round at least, or the next round's; read or
+// not, it goes with the slow worker's data, saying why where it couldn't be read.
 // Workers run one at a time (but the Singularity backdoor's, which outlives its round, #162), as temporary scripts, and
 // report through a port. Every wait ends with the round, so a
 // round never runs past 2 s and the heartbeat is never more than two rounds apart. A tier whose worker can't start,
@@ -30,6 +31,11 @@ import type { NS } from "../ns.ts";
 import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 
 export const SNAPSHOT_ROUND_MS = SNAPSHOT_TIER_PERIOD_MS.fast;
+/**
+ * The least of the round left for the faction state's read (#197), as for an intent's worker (intent-runner.ts): with
+ * less, the slow snapshot waits for the next round.
+ */
+export const MIN_FACTION_READ_MS = 1_000;
 /** Rounds from one snapshot of the tier to the next. */
 const ROUNDS_BETWEEN = {
   medium: SNAPSHOT_TIER_PERIOD_MS.medium / SNAPSHOT_ROUND_MS,
@@ -84,6 +90,8 @@ export function createSnapshotter(
   /** The latest slow snapshot's data, for what the Agent decides from it (Singularity, #145). */
   let lastSlowData: SlowSnapshotData | null = null;
   let staticToSend = false;
+  /** The slow worker's report, waiting for a round with the time for the faction state's read (#197). */
+  let slowReport: WorkerReport | null = null;
 
   const snapshot = (tier: SnapshotTier, gameTimeMs: number, data: unknown): SnapshotMessage => {
     lastSequenceNumbers[tier] += 1;
@@ -139,6 +147,8 @@ export function createSnapshotter(
       roundsUntilDue.medium = 0;
       roundsUntilDue.slow = 0;
       staticToSend = true;
+      // A report from before the welcome is stale: the next round runs the slow worker afresh.
+      slowReport = null;
     },
 
     /** One round, over within 2 s: the fast tier first (the heartbeat), then each other tier that is due. */
@@ -161,24 +171,37 @@ export function createSnapshotter(
           roundsUntilDue[tier] -= 1;
           continue;
         }
+        // A slow worker's report waiting for its faction state's read (below) isn't read again.
+        if (tier === "slow" && slowReport !== null) continue;
         // A tier that fails stays due, so it's tried again next round.
         const report = await runTierWorker(tier, roundEndsAtMs);
         if (report === null) continue;
-        let data = report.data;
         if (tier === "slow") {
-          // Kept first: the reader's backend depends on it (Singularity, #145), so the first read already knows.
+          // Kept now: the reader's backend depends on it (Singularity, #145), so the first read already knows. Sent
+          // once the faction state is read, after static.
           lastSlowData = report.data as SlowSnapshotData;
-          lastSlowData = { ...lastSlowData, factions: await readFactions(roundEndsAtMs) };
-          data = lastSlowData;
+          slowReport = report;
+          continue;
         }
-        send(snapshot(tier, report.gameTimeMs, data));
+        send(snapshot(tier, report.gameTimeMs, report.data));
         roundsUntilDue[tier] = ROUNDS_BETWEEN[tier] - 1;
       }
 
+      // Before the faction state's read (#197), so the read never pushes static out of the welcome round.
       staticReport ??= await runTierWorker("static", roundEndsAtMs);
       if (staticReport !== null && staticToSend) {
         send(snapshot("static", staticReport.gameTimeMs, staticReport.data));
         staticToSend = false;
+      }
+
+      // The slow snapshot, with the faction state read now, if the round has the time for the read; otherwise the
+      // worker's report waits, and the tier stays due, for the next round, which has only the fast tier before it.
+      if (slowReport !== null && roundEndsAtMs - Date.now() >= MIN_FACTION_READ_MS) {
+        const report: WorkerReport = slowReport;
+        slowReport = null;
+        lastSlowData = { ...(report.data as SlowSnapshotData), factions: await readFactions(roundEndsAtMs) };
+        send(snapshot("slow", report.gameTimeMs, lastSlowData));
+        roundsUntilDue.slow = ROUNDS_BETWEEN.slow - 1;
       }
     },
   };

@@ -248,8 +248,16 @@ test("the faction state unread (#197): a factionStateUnread event and a log line
   // The brain restarts: the same problem isn't stored again; read again is.
   brainRun("session-2", [
     unread("no game page to read the faction state through"),
-    { factions: { backend: "sim", state: read, problem: null } },
+    // Neither changes it: skipped (no sidebar), nor an older Agent's (no reading).
+    { factions: { backend: "ui", state: null, problem: null, skipped: "no sidebar on the page" } },
     { purchasedServers: [] },
+    // Still the same problem after them: not stored again.
+    unread("no game page to read the faction state through"),
+    // Read, though the page wasn't put back: read.
+    { factions: { backend: "ui", state: read, problem: 'no "Stats" in the sidebar' } },
+    { purchasedServers: [] },
+    // Not well formed: a bug, unread.
+    { factions: { backend: "ui" } },
   ]);
   const factionEvents = store
     .events({ environment: "E2" })
@@ -258,14 +266,14 @@ test("the faction state unread (#197): a factionStateUnread event and a log line
   expect(factionEvents).toEqual([
     ["factionStateUnread", { backend: "ui", problem: "a dialog the Agent leaves for the owner is open" }],
     ["factionStateUnread", { backend: "ui", problem: "no game page to read the faction state through" }],
-    ["factionStateRead", { backend: "sim" }],
-    ["factionStateUnread", { backend: null, problem: "the slow snapshot carries no faction state the brain can read" }],
+    ["factionStateRead", { backend: "ui" }],
+    ["factionStateUnread", { backend: null, problem: "the slow snapshot's faction state isn't well formed" }],
   ]);
   expect(lines).toEqual([
     "the faction state couldn't be read (ui): a dialog the Agent leaves for the owner is open",
     "the faction state couldn't be read (ui): no game page to read the faction state through",
-    "the faction state is read again (sim)",
-    "the faction state couldn't be read: the slow snapshot carries no faction state the brain can read",
+    "the faction state is read again (ui)",
+    "the faction state couldn't be read: the slow snapshot's faction state isn't well formed",
   ]);
   store.close();
 });

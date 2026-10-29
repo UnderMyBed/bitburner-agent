@@ -128,9 +128,11 @@ export {
 export { FACTIONS } from "./faction-data.ts";
 export {
   FACTION_STATE_WORKER_NAME,
+  type FactionReadingKind,
   type FactionState,
   type FactionStateReading,
   type FactionStateReport,
+  factionReadingKind,
   factionReadingOf,
   factionStateOf,
   type JoinedFaction,
