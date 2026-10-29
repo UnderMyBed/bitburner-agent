@@ -47,7 +47,7 @@ export interface BrainInSimulation {
   desiredState: DesiredStateController | null;
   /** With the controller, the money's last rise (#184), as main.ts has it. */
   incomeWatch: IncomeWatch | null;
-  /** What the brain logged, in order: the income watch's lines (#184). */
+  /** What the brain logged, in order: the income watch's lines (#184), and the backdoors' (#195). */
   logLines: string[];
   /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
@@ -109,12 +109,17 @@ export function startBrainInSimulation(
       backupsKept: SAVE_BACKUPS_KEPT,
       clock: game.clock,
     });
+  const logLines: string[] = [];
   let desiredStateController: DesiredStateController | null = null;
   if (withDesiredState) {
     if (!data) throw new Error("the desired state keeps its switches in the store: give the brain its data");
-    desiredStateController = new DesiredStateController({ channel, store: data.store, saveBackups });
+    desiredStateController = new DesiredStateController({
+      channel,
+      store: data.store,
+      saveBackups,
+      log: (line) => logLines.push(line),
+    });
   }
-  const logLines: string[] = [];
   const controller = desiredStateController;
   const incomeWatch =
     controller === null

@@ -148,6 +148,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     intents: [],
     work: { desired: null, outcome: null },
     income: null,
+    backdoorsDue: [],
     nowMs: NOW_MS,
   });
   store.close();

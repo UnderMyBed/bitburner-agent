@@ -694,6 +694,215 @@ describe("each failure is a FAIL, with its line", () => {
   });
 });
 
+describe("backdoors for the hacker factions (#195)", () => {
+  const BACKDOOR_CSEC = "backdoor(CSEC)";
+  const INVITED = "You received a faction invitation.Would you like to join CyberSec?";
+  /**
+   * A run with CSEC (needing 54) and avmnite-02h (207) in the snapshots, at hacking 60, money rising: `csec(offsetMs)`
+   * says whether CSEC is rooted and backdoored, and `intents(offsetMs)` what the Agent holds. The static snapshot comes at
+   * `staticAtMs` (or none, for null), and `skipMedium` leaves medium snapshots out.
+   */
+  function hackerRun({
+    csec,
+    intents = () => [],
+    staticAtMs = 10 * SECOND,
+    skipMedium = () => false,
+  }: {
+    csec: (offsetMs: number) => { rooted: boolean; backdoored: boolean };
+    intents?: (offsetMs: number) => IntentOutcome[];
+    staticAtMs?: number | null;
+    skipMedium?: (offsetMs: number) => boolean;
+  }) {
+    event(0, "brainStarted", { release: "r" });
+    if (staticAtMs !== null)
+      snapshot("static", staticAtMs, {
+        servers: [
+          ...staticData().servers,
+          staticServer("CSEC", { moneyMax: 0, requiredHackingSkill: 54, numOpenPortsRequired: 1 }),
+          staticServer("avmnite-02h", { moneyMax: 0, requiredHackingSkill: 207, numOpenPortsRequired: 2 }),
+        ],
+      });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData({ intents: intents(offsetMs) }));
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({ money: offsetMs, hacking: 60 });
+      const { rooted, backdoored } = csec(offsetMs);
+      const server = (hostname: string, hasAdminRights: boolean, backdoorInstalled: boolean) => ({
+        hostname,
+        maxRam: 8,
+        cpuCores: 1,
+        hasAdminRights,
+        backdoorInstalled,
+        moneyAvailable: 0,
+        hackDifficulty: 0,
+      });
+      data.servers.push(server("CSEC", rooted, backdoored), server("avmnite-02h", true, false));
+      if (!skipMedium(offsetMs)) snapshot("medium", offsetMs, data);
+    }
+  }
+
+  test("each server's backdoor with when it was first seen, and the invitation that followed", () => {
+    hackerRun({
+      csec: (offsetMs) => ({ rooted: offsetMs >= 30 * SECOND, backdoored: offsetMs >= MINUTE }),
+      intents: (offsetMs) =>
+        offsetMs >= 40 * SECOND && offsetMs < 70 * SECOND
+          ? [intent(BACKDOOR_CSEC, { done: offsetMs >= 50 * SECOND, tries: offsetMs >= 50 * SECOND ? 2 : 1 })]
+          : [],
+    });
+    event(55 * SECOND, "gameDialog", { kind: "factionInvitation", text: INVITED });
+    event(56 * SECOND, "gameDialog", { kind: "alert", text: "Would you like to join NiteSec? (not an invitation)" });
+    const { text, failures } = report();
+    expect(text).toContain(
+      "  backdoors (the hacker factions' servers, for their invitations):\n" +
+        `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; CyberSec's invitation at ` +
+        `${at(55 * SECOND)}\n` +
+        "    avmnite-02h: not backdoored at the window's start\n" +
+        "    I.I.I.I: not in the medium snapshots\n" +
+        "    run4theh111z: not in the medium snapshots\n",
+    );
+    expect(text).toContain(`    ${BACKDOOR_CSEC}: done after 2 tries (sim); done by ${at(50 * SECOND)}`);
+    expect(text).toContain("or more):\n    none\n  backdoors asked for again");
+    expect(text).toContain("already backdoored):\n    none");
+    expect(failures).toEqual([]);
+  });
+
+  test("one backdoored with no invitation seen says so", () => {
+    hackerRun({ csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= MINUTE }) });
+    expect(report().text).toContain(
+      `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; no invitation from CyberSec seen`,
+    );
+  });
+
+  test("one backdoored before the window: its invitation came before too", () => {
+    hackerRun({ csec: () => ({ rooted: true, backdoored: true }) });
+    expect(report().text).toContain("    CSEC: backdoored at the window's start\n");
+  });
+
+  test("overdue: rooted, at its level and not backdoored for 5 minutes or more", () => {
+    hackerRun({ csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs > 5 * MINUTE + 10 * SECOND }) });
+    const { text, failures } = report();
+    const line = `backdoor overdue: CSEC due from ${at(10 * SECOND)} to ${at(5 * MINUTE + 10 * SECOND)} (5 min), not backdoored`;
+    expect(failures).toEqual([line]);
+    expect(text).toContain(
+      "  backdoors overdue (one of the hacker factions' servers rooted, at its level and not backdoored for 5 min or " +
+        `more):\n    ${line}\n`,
+    );
+    expect(text.split("\n").at(-1)).toBe(`  ${line}`);
+  });
+
+  test("not overdue at 4 min 50 s", () => {
+    hackerRun({ csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs > 5 * MINUTE }) });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("each medium snapshot is judged by the newest static snapshot before it: an install rolls the levels again", () => {
+    // From 10 minutes, a new Agent's static snapshot says CSEC needs 70: at hacking 60, no longer due.
+    snapshot("static", 10 * MINUTE, {
+      servers: [...staticData().servers, staticServer("CSEC", { moneyMax: 0, requiredHackingSkill: 70 })],
+    });
+    hackerRun({ csec: () => ({ rooted: true, backdoored: false }) });
+    expect(report().failures).toEqual([
+      `backdoor overdue: CSEC due from ${at(10 * SECOND)} to ${at(10 * MINUTE - 10 * SECOND)} (9 min 40 s), not ` +
+        "backdoored",
+    ]);
+  });
+
+  test("overdue still at the last medium snapshot says so; not rooted, it isn't due", () => {
+    hackerRun({ csec: (offsetMs) => ({ rooted: offsetMs >= 10 * MINUTE, backdoored: false }) });
+    expect(report().failures).toEqual([
+      `backdoor overdue: CSEC due from ${at(10 * MINUTE)} to ${at(RUN_MS)} (10 min), not backdoored; still due at ` +
+        "the last medium snapshot",
+    ]);
+  });
+
+  test("asked for again: a backdoor intent first seen while the server shows backdoored", () => {
+    hackerRun({
+      csec: () => ({ rooted: true, backdoored: true }),
+      intents: (offsetMs) => (offsetMs >= 5 * MINUTE ? [intent(BACKDOOR_CSEC)] : []),
+    });
+    expect(report().failures).toEqual([
+      `backdoor repeated: ${BACKDOOR_CSEC} first seen ${at(5 * MINUTE)}, with CSEC backdoored (the brain's rule, or ` +
+        "the owner's queue)",
+    ]);
+  });
+
+  test("not asked for again: one the window's first fast snapshot already holds, asked for before it", () => {
+    hackerRun({
+      csec: () => ({ rooted: true, backdoored: true }),
+      intents: (offsetMs) => (offsetMs < MINUTE ? [intent(BACKDOOR_CSEC, { done: true })] : []),
+    });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("not asked for again: one asked for after a reset took the backdoor away", () => {
+    // An install at 10 minutes: CSEC's backdoor gone, asked for and installed again.
+    const reset = (offsetMs: number) => offsetMs >= 10 * MINUTE && offsetMs < 11 * MINUTE;
+    hackerRun({
+      csec: (offsetMs) => ({ rooted: true, backdoored: !reset(offsetMs) }),
+      intents: (offsetMs) => (offsetMs > 10 * MINUTE && offsetMs < 12 * MINUTE ? [intent(BACKDOOR_CSEC)] : []),
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      `    CSEC: backdoored at the window's start; not backdoored from ${at(10 * MINUTE)} (a reset); backdoored by ` +
+        `${at(11 * MINUTE)}; no invitation from CyberSec seen`,
+    );
+  });
+
+  test("not asked for again: given again to an Agent that reconnected before it reported it done (no tries again)", () => {
+    hackerRun({
+      csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= 50 * SECOND }),
+      intents: (offsetMs) =>
+        offsetMs < 40 * SECOND
+          ? []
+          : offsetMs < MINUTE
+            ? [intent(BACKDOOR_CSEC, { tries: 1 })]
+            : offsetMs < 70 * SECOND
+              ? [intent(BACKDOOR_CSEC, { tries: 0 })]
+              : [intent(BACKDOOR_CSEC, { done: true })],
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain("already backdoored):\n    none");
+  });
+
+  test("a medium snapshot before the window's first static one is judged by that one", () => {
+    hackerRun({
+      staticAtMs: 30 * SECOND,
+      csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= 6 * MINUTE }),
+    });
+    expect(report().failures).toEqual([
+      `backdoor overdue: CSEC due from ${at(10 * SECOND)} to ${at(6 * MINUTE - 10 * SECOND)} (5 min 40 s), not ` +
+        "backdoored",
+    ]);
+  });
+
+  test("with no static snapshot in the window, overdue can't be judged, and it says so", () => {
+    hackerRun({ staticAtMs: null, csec: () => ({ rooted: true, backdoored: false }) });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      "or more):\n    not judged: no static snapshot (the servers' levels) in the window: give --since an Agent's start\n" +
+        "    none\n",
+    );
+  });
+
+  test("a gap in the medium snapshots ends a due stretch: the gap isn't counted as overdue", () => {
+    hackerRun({
+      csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= 7 * MINUTE }),
+      skipMedium: (offsetMs) => offsetMs > 3 * MINUTE && offsetMs < 4 * MINUTE,
+    });
+    expect(report().failures).toEqual([]);
+  });
+
+  test("no medium snapshot: said so", () => {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("fast", 10 * SECOND, fastData());
+    expect(report().text).toContain(
+      "  backdoors (the hacker factions' servers, for their invitations):\n    no medium snapshot",
+    );
+  });
+});
+
 test("a window that ends before it starts, or with nothing in it, can't be reported", () => {
   expect(() => runReport(store, { ...window, untilMs: T0 })).toThrow(RangeError);
   expect(() => runReport(store, window)).toThrow("nothing recorded (E0) from 2026-10-26T00:00:00.000Z");

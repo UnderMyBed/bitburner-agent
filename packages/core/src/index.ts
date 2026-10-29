@@ -24,7 +24,7 @@ export {
   SHADOWS_OF_ANARCHY_REPUTATION_GROWTH,
   SOURCE_FILE_11_PRICE_GROWTH_DISCOUNT,
 } from "./augmentations.ts";
-export { BACKDOOR_WORKER_NAME, isServerHostname } from "./backdoors.ts";
+export { BACKDOOR_WORKER_NAME, HACKER_FACTION_SERVERS, isServerHostname } from "./backdoors.ts";
 export {
   AGENT_SIM_EFFECTORS_GLOBAL,
   SINGULARITY_BACKDOOR_WORKER_NAME,

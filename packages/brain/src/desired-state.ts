@@ -1,8 +1,8 @@
 // What the brain wants running in the game (architecture D2), kept in step with the dashboard's switches and the
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
-// the next purchase of the hacking programs (#136) or home's RAM (#138), and the owner's manual queue. Irreversible
-// intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
-// brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
+// the next purchase of the hacking programs (#136) or home's RAM (#138), the next backdoor for the hacker factions
+// (#195, ./backdoors.ts), and the owner's manual queue. Irreversible intents wait for their guard and a save backup
+// first (#147). Each state carries how long the Agent keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the BitNode (#175) holds
 // back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
@@ -19,6 +19,7 @@ import {
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
@@ -48,6 +49,9 @@ import {
  * it. 12 hours covers a night or a working day with the brain stopped or crashed for good.
  */
 export const SAFE_MODE_TTL_MS = 12 * 60 * 60_000;
+
+/** The owner's manual queue's limit: the protocol's 100, less room for the purchase and the backdoor (#195). */
+export const MANUAL_QUEUE_LIMIT = MAX_INTENTS - 2;
 
 /** What the dashboard shows of the hack loop. */
 export interface HackLoopView {
@@ -113,8 +117,8 @@ export interface HomeRamView {
 /** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
 export interface IntentView {
   id: string;
-  /** The owner's manual queue, or the brain's purchase rules. */
-  source: "manual" | "purchase";
+  /** The owner's manual queue, the brain's purchase rules, or its backdoors for the hacker factions (#195). */
+  source: "manual" | "purchase" | "backdoor";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -138,9 +142,10 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - One purchase at a time, cheapest first: of the next program and the next RAM upgrade, both affordable, the cheaper
  *   goes and the other waits for it. Money covers the cheaper one first, so nothing is bought ahead of it. With home
  *   RAM on, no program goes before the slow snapshot, which says the BitNode and so the upgrade's price.
- * - Intents go in order: the owner's manual queue first, as added, then the purchase. A manual intent leaves the queue
- *   once the connected Agent reports it done: the game's state can change again (a travel there and back), so a
- *   snapshot can't say it was done.
+ * - Intents go in order: the owner's manual queue first, as added, then the purchase, then the backdoor (#195), asked
+ *   for until the connected Agent reports it done. A manual intent leaves the queue once the connected Agent reports
+ *   it done: the game's state can change again (a travel there and back), so a snapshot can't say it was done. Never
+ *   more than the protocol's 100: a queue stored under the old limit (99) leaves the rules' intents out, logged.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
  *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
  *   intents after it go on without it: a held join doesn't hold up a travel queued later.
@@ -189,24 +194,38 @@ export class DesiredStateController {
   readonly #gates: IrreversibleIntentGates;
   /** The reset time when the first intent that resets the game was sent, while it's queued, or null (#164, #175). */
   #resetSent: ResetSentNote | null;
+  /** The backdoors for the hacker factions (#195): the rule, and the one it asks for now, or null. */
+  readonly #backdoors: BackdoorRule;
+  #backdoor: Intent | null = null;
+  /** When the connected Agent's latest medium snapshot arrived, or null. */
+  #mediumAtMs: number | null = null;
+  readonly #log: (line: string) => void;
+  /** The intents left out to keep to the protocol's 100, as last logged (#195 review): logged on a change. */
+  #leftOut = "";
 
+  /** `log` is the brain's: the backdoors' lines (#195). */
   constructor({
     channel,
     store,
     saveBackups = null,
+    log = () => {},
   }: {
     channel: ControlChannel;
     store: TelemetryStore;
     saveBackups?: BackupsBeforeIrreversibleIntents | null;
+    log?: (line: string) => void;
   }) {
     this.#channel = channel;
     this.#store = store;
+    this.#log = log;
+    this.#backdoors = new BackdoorRule(log);
     this.#resetSent = readResetSentNote(store);
     this.#gates = new IrreversibleIntentGates({ saveBackups, onChange: () => this.#update() });
     channel.subscribe((event) => {
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
         this.#staticData = null;
         this.#mediumData = null;
+        this.#mediumAtMs = null;
         this.#slowData = null;
         this.#fastData = null;
         // Counted on the last Agent's snapshots: every gate starts again.
@@ -220,6 +239,7 @@ export class DesiredStateController {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
         this.#mediumData = event.snapshot.data as MediumSnapshotData;
+        this.#mediumAtMs = event.atMs;
         this.#gates.mediumSnapshot(this.#mediumData, readManualIntents(this.#store), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
@@ -255,10 +275,10 @@ export class DesiredStateController {
     const parsed = parseIntentRequest(request);
     if (!parsed.ok) return parsed;
     const queue = readManualIntents(this.#store);
-    // Room for the purchase too: a desired state over the protocol's limit would be refused by the Agent.
+    // Room for the purchase and the backdoor: a desired state over the protocol's limit would be refused by the Agent.
     if (!queue.some((each) => each.id === parsed.message.id)) {
-      if (queue.length >= MAX_INTENTS - 1) {
-        return { ok: false, reason: `the manual queue is full: ${MAX_INTENTS - 1} intents at most` };
+      if (queue.length >= MANUAL_QUEUE_LIMIT) {
+        return { ok: false, reason: `the manual queue is full: ${MANUAL_QUEUE_LIMIT} intents at most` };
       }
       writeManualIntents(this.#store, [...queue, parsed.message]);
       this.#update();
@@ -306,13 +326,12 @@ export class DesiredStateController {
   intentsView(): IntentView[] {
     const outcomes = this.#reportedOutcomes();
     const manual = readManualIntents(this.#store);
-    const purchase =
-      this.#desired !== null && this.#purchase && !manual.some((each) => each.id === this.#purchase?.id)
-        ? [this.#purchase]
-        : [];
+    const fromRule = (intent: Intent | null) =>
+      this.#desired !== null && intent && !manual.some((each) => each.id === intent.id) ? [intent] : [];
     return [
       ...manual.map(({ id }) => ({ id, source: "manual" as const })),
-      ...purchase.map(({ id }) => ({ id, source: "purchase" as const })),
+      ...fromRule(this.#purchase).map(({ id }) => ({ id, source: "purchase" as const })),
+      ...fromRule(this.#backdoor).map(({ id }) => ({ id, source: "backdoor" as const })),
     ].map((view, index) => ({
       ...view,
       outcome: outcomes.find((outcome) => outcome.id === view.id) ?? null,
@@ -343,6 +362,11 @@ export class DesiredStateController {
         );
       })
       .map(({ id, done, tries, problem, backend }) => ({ id, done, tries, problem, backend: backend ?? null }));
+  }
+
+  /** Each of the hacker factions' servers due a backdoor, and since when (#195): the `backdoorOverdue` alert's. */
+  backdoorsDue(): BackdoorDue[] {
+    return this.#backdoors.due();
   }
 
   hackLoopView(): HackLoopView {
@@ -482,8 +506,22 @@ export class DesiredStateController {
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     this.#purchase = this.#choosePurchase();
-    // The manual queue first; the purchase only if the owner hasn't queued the same.
+    this.#backdoor = this.#backdoors.intent({
+      staticData: this.#staticData,
+      mediumData: this.#mediumData,
+      mediumAtMs: this.#mediumAtMs,
+      resetAt: resetTimeOf(this.#slowData, "lastAugReset"),
+      doneIds: new Set(
+        this.#reportedOutcomes()
+          .filter((outcome) => outcome.done)
+          .map((outcome) => outcome.id),
+      ),
+    });
+    // The manual queue first; then the purchase, then the backdoor (#195), each only if the owner hasn't queued the
+    // same. The purchase before the backdoor: a `buy` never waits for its terminal action.
     const manual = readManualIntents(this.#store);
+    const notManual = (intent: Intent | null) =>
+      intent && !manual.some((each) => each.id === intent.id) ? [intent] : [];
     // An irreversible intent goes once its gate lets it, and nothing queued after a reset's intent before it's done.
     this.#gates.sync(manual);
     const intents = [
@@ -491,8 +529,21 @@ export class DesiredStateController {
         (each, index) =>
           !afterReset(manual, index) && this.#gates.isReleased(each.id) && this.#resetTimeAwaited(each) === null,
       ),
-      ...(this.#purchase && !manual.some((each) => each.id === this.#purchase?.id) ? [this.#purchase] : []),
+      ...notManual(this.#purchase),
+      ...notManual(this.#backdoor),
     ];
+    // A queue stored under the old limit (99, before #195) would make the state too long, and the Agent would refuse it
+    // whole: the rules' intents wait for room, the last first.
+    const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
+    if (leftOut.join() !== this.#leftOut) {
+      this.#leftOut = leftOut.join();
+      if (leftOut.length > 0) {
+        this.#log(
+          `intents: the manual queue holds ${manual.length}, over its ${MANUAL_QUEUE_LIMIT}: ${leftOut.join(", ")} ` +
+            `wait for room in the protocol's ${MAX_INTENTS} (cancel one)`,
+        );
+      }
+    }
     // The owner's work, its focus from the connected Agent's slow snapshot (decision 37): sent only once that says
     // whether the implant is in, so the focus never flips on a connect. None set: not managed.
     const work = this.#slowData === null ? null : this.workView().desired;

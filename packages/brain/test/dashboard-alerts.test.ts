@@ -20,6 +20,7 @@ const quiet: AlertFacts = {
   blockingDialog: null,
   hackLoopTarget: null,
   income: null,
+  backdoorsDue: [],
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 

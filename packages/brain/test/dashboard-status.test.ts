@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
+import type { BackdoorDue } from "../src/backdoors.ts";
+import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
@@ -54,7 +55,11 @@ afterEach(() => {
 
 const status = (
   nowMs: number,
-  { income = null, loop = hackLoop }: { income?: IncomeFacts | null; loop?: HackLoopView } = {},
+  {
+    income = null,
+    loop = hackLoop,
+    backdoorsDue = [],
+  }: { income?: IncomeFacts | null; loop?: HackLoopView; backdoorsDue?: BackdoorDue[] } = {},
 ) =>
   buildDashboardStatus({
     store,
@@ -69,6 +74,7 @@ const status = (
     intents,
     work: { desired: null, outcome: null },
     income,
+    backdoorsDue,
     nowMs,
   });
 
@@ -181,6 +187,23 @@ test("incomeStalled (#184): from the income watch's facts, while the hack loop i
   expect(status(nowMs, { income, loop: off }).alerts).toEqual([]);
 });
 
+test("backdoorOverdue (#195): from the controller's backdoors due, once one has been due 5 minutes", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const csec = { hostname: "CSEC", sinceMs: nowMs - BACKDOOR_OVERDUE_AFTER_MS - 60_000 };
+  const avmnite = { hostname: "avmnite-02h", sinceMs: nowMs - BACKDOOR_OVERDUE_AFTER_MS + 1 };
+  expect(status(nowMs, { backdoorsDue: [csec, avmnite] }).alerts).toEqual([
+    {
+      name: "backdoorOverdue",
+      sinceMs: csec.sinceMs,
+      detail:
+        "CSEC has been rooted, at its hacking level and not backdoored for 6 min: the brain asks for it at once, and " +
+        "it takes seconds",
+    },
+  ]);
+  expect(status(nowMs + 1, { backdoorsDue: [avmnite] }).alerts.map((alert) => alert.name)).toEqual(["backdoorOverdue"]);
+  expect(status(nowMs).alerts).toEqual([]);
+});
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
   const nowMs = STARTED_AT_MS + DAY_MS;
   // One heartbeat from before the window (not counted), then the last 10 minutes every 2 s, but for 100 s.
@@ -351,6 +374,7 @@ test("a brain that doesn't supervise (not Steam's, or not on Windows) shows supe
     intents,
     work: { desired: null, outcome: null },
     income: null,
+    backdoorsDue: [],
     nowMs: STARTED_AT_MS + 1_000,
   });
   expect(built.supervision).toMatchObject({ state: "off", paused: true });
