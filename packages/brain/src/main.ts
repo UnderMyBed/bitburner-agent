@@ -14,6 +14,7 @@ import { DesiredStateController } from "./desired-state.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
 import { readHomeRamEnabled } from "./home-ram.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
+import { IncomeWatch } from "./income-watch.ts";
 import { readProgramsEnabled } from "./programs.ts";
 import { brainChannel, recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
@@ -67,6 +68,13 @@ try {
   });
   // What the brain wants running in the game (#134): set before the channel listens, so the first Agent is given it.
   const desiredState = new DesiredStateController({ channel, store, saveBackups });
+  // The money's last rise (#184), for the incomeStalled alert, logged as a stall starts and ends: after the controller,
+  // so each snapshot's hack loop target is set when it looks.
+  const incomeWatch = new IncomeWatch({
+    channel,
+    hackLoopTarget: () => desiredState.hackLoopView().target,
+    log,
+  });
   const controlServer = await startWebSocketServer({
     port: config.controlPort,
     allowedOrigins: config.allowedOrigins,
@@ -131,6 +139,7 @@ try {
         homeRam: desiredState.homeRamView(),
         intents: desiredState.intentsView(),
         work: desiredState.workView(),
+        income: incomeWatch.facts(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -140,6 +149,7 @@ try {
     setHackLoopEnabled: (enabled) => {
       desiredState.setHackLoopEnabled(enabled);
       log(`hack loop turned ${enabled ? "on" : "off"} from the dashboard`);
+      incomeWatch.hackLoopSwitched(systemClock.now());
     },
     setProgramsEnabled: (enabled) => {
       desiredState.setProgramsEnabled(enabled);

@@ -13,7 +13,7 @@ import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
-import { type Alert, activeAlerts } from "./alerts.ts";
+import { type Alert, activeAlerts, type IncomeFacts } from "./alerts.ts";
 
 /** The gap report's window on the dashboard: the last 24 h. */
 export const GAP_WINDOW_MS = 24 * 60 * 60_000;
@@ -109,6 +109,8 @@ export interface DashboardStatusOptions {
   intents: IntentView[];
   /** The work's view (#151), likewise. */
   work: WorkView;
+  /** The money's last rise (#184), from the brain's `IncomeWatch`, for the `incomeStalled` alert. */
+  income: IncomeFacts | null;
   nowMs: number;
 }
 
@@ -130,6 +132,7 @@ export function buildDashboardStatus({
   homeRam,
   intents,
   work,
+  income,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -214,6 +217,8 @@ export function buildDashboardStatus({
       intentOutcomes: (Array.isArray(fast?.intents) ? fast.intents : []).filter(
         (outcome) => typeof outcome?.id === "string" && typeof outcome.tries === "number",
       ),
+      hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
+      income,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })

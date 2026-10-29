@@ -183,6 +183,43 @@ describe("rejected, each with a reason", () => {
     ["no hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: undefined } }],
     ["a host that isn't a hostname", { ...desiredState, hackLoop: { ...hackLoop, hosts: ["n00dles", 7] } }],
     ["too many hosts", { ...desiredState, hackLoop: { ...hackLoop, hosts: Array(1_001).fill("n00dles") } }],
+    ["preparing that isn't an object", { ...desiredState, hackLoop: { ...hackLoop, preparing: "zer0" } }],
+    ["preparing with no target", { ...desiredState, hackLoop: { ...hackLoop, preparing: { hosts: ["zer0"] } } }],
+    [
+      "preparing with an empty target",
+      { ...desiredState, hackLoop: { ...hackLoop, preparing: { target: "", hosts: ["zer0"] } } },
+    ],
+    ["preparing with no hosts", { ...desiredState, hackLoop: { ...hackLoop, preparing: { target: "zer0" } } }],
+    [
+      "preparing on a host that isn't a hostname",
+      { ...desiredState, hackLoop: { ...hackLoop, preparing: { target: "zer0", hosts: [7] } } },
+    ],
+    [
+      "preparing on a host that also earns",
+      { ...desiredState, hackLoop: { ...hackLoop, preparing: { target: "zer0", hosts: ["joesguns", "foodnstuff"] } } },
+    ],
+    [
+      "more hosts than the most, earning and preparing together",
+      {
+        ...desiredState,
+        hackLoop: {
+          ...hackLoop,
+          hosts: Array.from({ length: 600 }, (_, index) => `earn-${index}`),
+          preparing: { target: "zer0", hosts: Array.from({ length: 401 }, (_, index) => `prepare-${index}`) },
+        },
+      },
+    ],
+    [
+      "preparing with the loop off",
+      {
+        ...desiredState,
+        hackLoop: { enabled: false, target: null, hosts: [], preparing: { target: "zer0", hosts: ["joesguns"] } },
+      },
+    ],
+    [
+      "preparing with no target to earn on",
+      { ...desiredState, hackLoop: { ...hackLoop, target: null, preparing: { target: "zer0", hosts: ["joesguns"] } } },
+    ],
     ["no intents", { ...desiredState, intents: undefined }],
     ["intents that aren't a list", { ...desiredState, intents: travel }],
     ["an intent that isn't valid", withIntents({ ...travel, args: { city: "Atlantis" } })],
@@ -247,6 +284,55 @@ describe("rejected, each with a reason", () => {
     const result = parseBrainMessage(JSON.stringify(message));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).not.toBe("");
+  });
+
+  test("preparing the next target (#184): carried with its hosts; absent, null or on no host, it's none", () => {
+    const preparing = { target: "zer0", hosts: ["joesguns", "max-hardware"] };
+    const at = (fields: unknown) => parseBrainMessage(JSON.stringify({ ...desiredState, hackLoop: fields }));
+    expect(at({ ...hackLoop, preparing: { ...preparing, extra: 1 } })).toEqual({
+      ok: true,
+      message: { ...desiredState, hackLoop: { ...hackLoop, preparing } },
+    });
+    // An older brain's state, with none: absent, as before.
+    for (const none of [undefined, null, { target: "zer0", hosts: [] }]) {
+      expect(at({ ...hackLoop, preparing: none })).toEqual({ ok: true, message: desiredState });
+    }
+    // The most hosts in all, earning and preparing.
+    const most = {
+      ...hackLoop,
+      hosts: Array.from({ length: 600 }, (_, index) => `earn-${index}`),
+      preparing: { target: "zer0", hosts: Array.from({ length: 400 }, (_, index) => `prepare-${index}`) },
+    };
+    expect(at(most).ok).toBe(true);
+    // No hosts is none, whatever else: with the loop off too.
+    const off = { enabled: false, target: null, hosts: [] };
+    expect(at({ ...off, preparing: { target: "zer0", hosts: [] } })).toEqual({
+      ok: true,
+      message: { ...desiredState, hackLoop: off },
+    });
+  });
+
+  test("preparing refused, each with its own reason (#184 review)", () => {
+    const reasonOf = (fields: unknown) => {
+      const result = parseBrainMessage(JSON.stringify({ ...desiredState, hackLoop: fields }));
+      return result.ok ? null : result.reason;
+    };
+    expect(
+      reasonOf({
+        ...hackLoop,
+        hosts: Array.from({ length: 600 }, (_, index) => `earn-${index}`),
+        preparing: { target: "zer0", hosts: Array.from({ length: 401 }, (_, index) => `prepare-${index}`) },
+      }),
+    ).toBe("desiredState's hackLoop.hosts and hackLoop.preparing.hosts together are over 1000");
+    expect(reasonOf({ ...hackLoop, preparing: { target: "n00dles", hosts: ["joesguns"] } })).toBe(
+      "desiredState's hackLoop.preparing.target is the target it earns on",
+    );
+    expect(reasonOf({ ...hackLoop, preparing: { target: "zer0", hosts: [7] } })).toBe(
+      "desiredState's hackLoop.preparing.hosts isn't a list of hostnames",
+    );
+    expect(reasonOf({ enabled: false, target: null, hosts: [], preparing: { target: "zer0", hosts: ["a"] } })).toBe(
+      "desiredState's hackLoop.preparing with the loop off or no target",
+    );
   });
 
   test("a desired state keeps only its known fields", () => {

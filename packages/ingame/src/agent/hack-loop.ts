@@ -13,6 +13,7 @@ import {
   HACK_LOOP_ROOT_WORKER_NAME,
   type HackLoopDeployReport,
   type HackLoopRootReport,
+  hackLoopDeployArguments,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { createChangeLog, createRoundSchedule } from "./activity.ts";
@@ -48,7 +49,7 @@ export function createHackLoop(
     /** The brain's latest desired state: a change makes the loop due at once. */
     desire(hackLoop: DesiredState["hackLoop"]): void {
       if (JSON.stringify(desired) === JSON.stringify(hackLoop)) return;
-      desired = { ...hackLoop, hosts: [...hackLoop.hosts] };
+      desired = structuredClone(hackLoop);
       schedule.dueNow();
       rootedThisTime = false;
     },
@@ -73,7 +74,7 @@ export function createHackLoop(
       }
       const deployed = (await runHackLoopWorker(
         HACK_LOOP_DEPLOY_WORKER_NAME,
-        [desired.enabled, desired.target ?? "", ...desired.hosts],
+        hackLoopDeployArguments(desired),
         deadlineMs,
       )) as HackLoopDeployReport | null;
       if (deployed === null) return;
@@ -81,7 +82,6 @@ export function createHackLoop(
       // Off, once is enough: nothing starts our loops again but this Agent.
       if (desired.enabled) schedule.dueAfter(HACK_LOOP_ROUNDS_BETWEEN);
       else schedule.never();
-      const running = `${deployed.threadsRunning} threads on ${deployed.serversRunning} servers`;
       logOutcome(
         deployed.problem !== null
           ? `can't run: ${deployed.problem}`
@@ -89,8 +89,21 @@ export function createHackLoop(
             ? "off"
             : desired.target === null
               ? "on, no target yet"
-              : `on, ${running}, against ${desired.target}`,
+              : runningText(deployed, desired.target, desired.preparing?.target ?? null),
       );
     },
   };
+}
+
+/**
+ * What runs, for the change log: "on, N threads on M servers, against T", and "; preparing P on K servers" while part
+ * of the hosts prepare the next target (#184).
+ */
+function runningText(deployed: HackLoopDeployReport, target: string, preparing: string | null): string {
+  const runningAgainst = (targetHostname: string) =>
+    deployed.byTarget.find((running) => running.target === targetHostname) ?? { serversRunning: 0, threadsRunning: 0 };
+  const earning = runningAgainst(target);
+  const text = `on, ${earning.threadsRunning} threads on ${earning.serversRunning} servers, against ${target}`;
+  if (preparing === null) return text;
+  return `${text}; preparing ${preparing} on ${runningAgainst(preparing).serversRunning} servers`;
 }

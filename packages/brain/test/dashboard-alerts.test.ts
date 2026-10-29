@@ -1,7 +1,12 @@
 // The dashboard's alerts (#93): rules over what the store holds, evaluated whenever status is read. Each turns on and
 // off at its edge.
-import { expect, test } from "vitest";
-import { AGENT_SILENT_AFTER_MS, type AlertFacts, activeAlerts } from "../src/dashboard/alerts.ts";
+import { describe, expect, test } from "vitest";
+import {
+  AGENT_SILENT_AFTER_MS,
+  type AlertFacts,
+  activeAlerts,
+  INCOME_STALLED_AFTER_MS,
+} from "../src/dashboard/alerts.ts";
 
 const STARTED_AT_MS = 1_000_000;
 const quiet: AlertFacts = {
@@ -13,6 +18,8 @@ const quiet: AlertFacts = {
   supervisionGaveUp: null,
   intentOutcomes: [],
   blockingDialog: null,
+  hackLoopTarget: null,
+  income: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 
@@ -105,4 +112,44 @@ test("a dialog the Agent leaves open (#143) is an alert, quoting its first 200 c
   expect(alerts[0]?.detail).toBe(
     `a dialog the Agent leaves for you is open, so it does nothing on the page: "Buy the server?${"x".repeat(185)}"`,
   );
+});
+
+describe("incomeStalled (#184): the hack loop on against a target, and money not risen for over 10 minutes", () => {
+  const lastRiseAtMs = STARTED_AT_MS + 60_000;
+  const stalled = {
+    ...quiet,
+    hackLoopTarget: "zer0",
+    income: { money: 21_434_097, lastRiseAtMs },
+    // The Agent heard from: only the income can be wrong.
+    lastFastSnapshotAtMs: lastRiseAtMs + INCOME_STALLED_AFTER_MS + 23 * 60_000,
+    nowMs: lastRiseAtMs + INCOME_STALLED_AFTER_MS + 24 * 60_000,
+  };
+
+  test("holds after 10 minutes without a rise, saying how long, the money and the target", () => {
+    expect(activeAlerts(stalled)).toEqual([
+      {
+        name: "incomeStalled",
+        sinceMs: lastRiseAtMs,
+        detail: "money hasn't risen for 34 min, at $21,434,097, with the hack loop on against zer0",
+      },
+    ]);
+    // Over 10 minutes, not at them.
+    const atTheEdge = lastRiseAtMs + INCOME_STALLED_AFTER_MS;
+    expect(names({ ...stalled, lastFastSnapshotAtMs: atTheEdge, nowMs: atTheEdge })).toEqual([]);
+    expect(names({ ...stalled, lastFastSnapshotAtMs: atTheEdge, nowMs: atTheEdge + 1 })).toEqual(["incomeStalled"]);
+  });
+
+  test("not while the hack loop is off or has no target, nor before the money is known", () => {
+    expect(names({ ...stalled, hackLoopTarget: null })).toEqual([]);
+    expect(names({ ...stalled, income: null })).toEqual([]);
+  });
+
+  test("in its place in the order: after dialogBlocking, before intentStuck", () => {
+    const stuck = { id: "buyTor(Alpha Enterprises)", done: false, tries: 5, problem: null, backend: null };
+    expect(names({ ...stalled, blockingDialog: "x", intentOutcomes: [stuck] })).toEqual([
+      "dialogBlocking",
+      "incomeStalled",
+      "intentStuck",
+    ]);
+  });
 });
