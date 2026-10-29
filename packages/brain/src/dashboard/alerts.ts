@@ -33,6 +33,7 @@ export type AlertName =
   | "dialogBlocking"
   | "intentStuck"
   | "incomeStalled"
+  | "factionStateUnread"
   | "backdoorOverdue";
 
 export interface Alert {
@@ -40,7 +41,8 @@ export interface Alert {
   /**
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
-   * first watched); for the others, the event or give-up that raised it.
+   * first watched); for `factionStateUnread`, the newest slow snapshot; for the others, the event or give-up that
+   * raised it.
    */
   sinceMs: number;
   detail: string;
@@ -71,6 +73,11 @@ export interface AlertFacts {
   income: IncomeFacts | null;
   /** Each of the hacker factions' servers due a backdoor, and since when (#195): the controller's view. */
   backdoorsDue: BackdoorDue[];
+  /**
+   * The newest slow snapshot's faction state problem (#197), when it arrived and the backend: null where it was read,
+   * or there's no slow snapshot.
+   */
+  factionState: { atMs: number; backend: string | null; problem: string } | null;
 }
 
 /**
@@ -84,7 +91,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, then one intentStuck per stuck intent, then one backdoorOverdue per overdue backdoor.
+ * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue per
+ * overdue backdoor.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -125,6 +133,14 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   }
   const incomeStalled = incomeStalledAlert(facts);
   if (incomeStalled !== null) alerts.push(incomeStalled);
+  if (facts.factionState !== null) {
+    const { atMs, backend, problem } = facts.factionState;
+    alerts.push({
+      name: "factionStateUnread",
+      sinceMs: atMs,
+      detail: `the faction state couldn't be read${backend === null ? "" : ` (${backend})`}: ${problem}`,
+    });
+  }
   for (const outcome of facts.intentOutcomes) {
     if (outcome.done || outcome.tries < INTENT_STUCK_AFTER_TRIES) continue;
     alerts.push({

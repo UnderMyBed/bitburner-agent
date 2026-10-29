@@ -1,7 +1,10 @@
 // The dashboard's status (#93): everything the page shows, read from the store whenever it's asked for. The alerts are
 // rules over the same reads (alerts.ts), so nothing here keeps state.
 import {
+  type EffectorBackend,
+  type FactionState,
   type FastSnapshotData,
+  factionReadingOf,
   type GameInfo,
   gameDrift,
   type MediumSnapshotData,
@@ -10,6 +13,7 @@ import {
 } from "@bitburner-agent/core";
 import type { BackdoorDue } from "../backdoors.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
+import { factionStateProblemOf } from "../faction-state.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
@@ -89,6 +93,16 @@ export interface DashboardStatus {
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
   work: WorkView;
+  /**
+   * The faction state (#197) in the newest slow snapshot, from any run of the brain: when it arrived, the backend, the
+   * state, and why it couldn't be read; null with no slow snapshot.
+   */
+  factions: {
+    receivedAtMs: number;
+    backend: EffectorBackend | null;
+    state: FactionState | null;
+    problem: string | null;
+  } | null;
 }
 
 export interface DashboardStatusOptions {
@@ -145,6 +159,9 @@ export function buildDashboardStatus({
   ) as Record<SnapshotTier, ReturnType<TelemetryStore["latestSnapshot"]>>;
   const fast = latestOfTier.fast?.data as FastSnapshotData | undefined;
   const medium = latestOfTier.medium?.data as MediumSnapshotData | undefined;
+  const slow = latestOfTier.slow;
+  const factionReading = slow ? factionReadingOf(slow.data) : null;
+  const factionProblem = slow ? factionStateProblemOf(slow.data) : null;
 
   const connectionEvent = store.latestEvent({ ...sinceStart, kinds: ["agentConnected", "agentDisconnected"] });
   // The session, deployment and game come from the connect; a disconnect names only the session.
@@ -224,6 +241,10 @@ export function buildDashboardStatus({
       hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
       income,
       backdoorsDue,
+      factionState:
+        slow && factionProblem?.problem
+          ? { atMs: slow.receivedAtMs, backend: factionProblem.backend, problem: factionProblem.problem }
+          : null,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })
@@ -247,5 +268,13 @@ export function buildDashboardStatus({
     homeRam,
     intents,
     work,
+    factions: slow
+      ? {
+          receivedAtMs: slow.receivedAtMs,
+          backend: factionReading?.backend ?? null,
+          state: factionReading?.state ?? null,
+          problem: factionProblem?.problem ?? null,
+        }
+      : null,
   };
 }

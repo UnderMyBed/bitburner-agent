@@ -213,3 +213,59 @@ test("a promotion the Agent took (#155): a workPromotion event and a log line, o
   ]);
   store.close();
 });
+
+test("the faction state unread (#197): a factionStateUnread event and a log line per change, read again once; after a brain restart too", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "record-"));
+  directories.push(directory);
+  const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+  const lines: string[] = [];
+  const read = { joined: [], invitations: [], queuedAugmentations: [] };
+  const unread = (problem: string) => ({ factions: { backend: "ui", state: null, problem } });
+  /** A brain's run, the Agent connected and sending slow snapshots with `slows`, in turn. */
+  const brainRun = (session: string, slows: unknown[]) => {
+    const channel = new ControlChannel({ token: TOKEN, clock: fixedClock });
+    recordChannelEvents(channel, store, { environment: "E2", brainRelease: "v0.2.0", log: (line) => lines.push(line) });
+    const page = connectionFromTest();
+    channel.accept(page.connection);
+    const message = (type: string, fields: object) =>
+      page.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, type, ...fields } as never));
+    message("hello", {
+      token: TOKEN,
+      deploymentId: "deployment-a",
+      agentSessionId: session,
+      game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
+    });
+    for (const [index, data] of slows.entries()) {
+      message("snapshot", { agentSessionId: session, tier: "slow", sequenceNumber: index + 1, gameTimeMs: 1, data });
+    }
+  };
+  brainRun("session-1", [
+    { factions: { backend: "ui", state: read, problem: null } },
+    unread("a dialog the Agent leaves for the owner is open"),
+    unread("a dialog the Agent leaves for the owner is open"),
+    unread("no game page to read the faction state through"),
+  ]);
+  // The brain restarts: the same problem isn't stored again; read again is.
+  brainRun("session-2", [
+    unread("no game page to read the faction state through"),
+    { factions: { backend: "sim", state: read, problem: null } },
+    { purchasedServers: [] },
+  ]);
+  const factionEvents = store
+    .events({ environment: "E2" })
+    .filter((event) => event.kind.startsWith("factionState"))
+    .map(({ kind, detail }) => [kind, detail]);
+  expect(factionEvents).toEqual([
+    ["factionStateUnread", { backend: "ui", problem: "a dialog the Agent leaves for the owner is open" }],
+    ["factionStateUnread", { backend: "ui", problem: "no game page to read the faction state through" }],
+    ["factionStateRead", { backend: "sim" }],
+    ["factionStateUnread", { backend: null, problem: "the slow snapshot carries no faction state the brain can read" }],
+  ]);
+  expect(lines).toEqual([
+    "the faction state couldn't be read (ui): a dialog the Agent leaves for the owner is open",
+    "the faction state couldn't be read (ui): no game page to read the faction state through",
+    "the faction state is read again (sim)",
+    "the faction state couldn't be read: the slow snapshot carries no faction state the brain can read",
+  ]);
+  store.close();
+});

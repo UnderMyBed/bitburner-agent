@@ -121,6 +121,12 @@ export function pageDocument(): Document | null {
 export const findOnPage = (page: Document, xpath: string): Element | null =>
   page.evaluate(xpath, page, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
 
+/** Every element `xpath` finds in `page`, in the page's order. */
+function findAllOnPage(page: Document, xpath: string): Element[] {
+  const found = page.evaluate(xpath, page, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  return Array.from({ length: found.snapshotLength }, (_, index) => found.snapshotItem(index) as Element);
+}
+
 /** The sidebar's item for one of the game's pages: a list button with its name (`Sidebar/ui/SidebarItem.tsx`). */
 export const sidebarItemXpath = (pageName: string) => `//div[@role='button' and .//p[normalize-space()='${pageName}']]`;
 
@@ -201,11 +207,11 @@ export function openGamePage(ns: NS, deadlineMs: number) {
     /** The element if it's in the page now, without waiting, or null. */
     findElementNow: findElement,
 
+    /** Every element `xpath` finds in the page now, in the page's order (#197). */
+    findAllNow: (xpath: string): Element[] => findAllOnPage(gamePage, xpath),
+
     /** Every dialog open now, in the page's order (MUI's `Modal` roots, `ui/React/Modal.tsx`). */
-    openDialogs(): Element[] {
-      const found = gamePage.evaluate(OPEN_DIALOG_XPATH, gamePage, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-      return Array.from({ length: found.snapshotLength }, (_, index) => found.snapshotItem(index) as Element);
-    },
+    openDialogs: (): Element[] => findAllOnPage(gamePage, OPEN_DIALOG_XPATH),
 
     /** Clicks `element`, `what`, as a player would. */
     clickElement: click,

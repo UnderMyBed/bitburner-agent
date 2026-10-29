@@ -59,4 +59,5 @@ export const mediumData = (
 export const slowData = (currentNode = 1, bitNodeOptions: Record<string, unknown> = {}): SlowSnapshotData => ({
   resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode, ownedAugs: {}, ownedSF: {}, bitNodeOptions },
   purchasedServers: [],
+  factions: { backend: "sim", state: { joined: [], invitations: [], queuedAugmentations: [] }, problem: null },
 });
