@@ -4,11 +4,11 @@ A release is a tag on `main` with notes. A milestone release closes a milestone 
 
 ## Versions
 
-`0.<milestone>.<patch>` until the campaign starts:
+`0.<milestone>.<patch>` until the release we expect to destroy BN1.1, which is 1.0.0 (owner decision 47):
 - **`0.<n>.0`** closes milestone M\<n\>: v0.1.0 is M1, v0.2.0 is M2, and so on.
 - **`0.<n>.<patch>`**, with patch 1 and up, fixes the last released milestone (n), for example after play-testing finds a bug.
 
-The scheme moves to 1.x when the agent first plays the real campaign unattended. That change gets an ADR.
+The scheme moves to 1.x with 1.0.0, the first release we expect to destroy BN1.1 (owner decision 47). The campaign starting earlier, with M4 phase A (owner decision 46), doesn't change it.
 
 ## A milestone release
 
