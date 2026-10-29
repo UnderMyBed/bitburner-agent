@@ -143,7 +143,22 @@ export interface FastSnapshotData {
    * a failure of the run report after 3 fast snapshots in a row.
    */
   batcherDeploy?: BatcherDeployReport | null;
+  /**
+   * The brain's last message the Agent refused as not valid (#194's review), with why, and how many it has refused
+   * since it connected: it acts on the last one it took meanwhile. Null once a desired state is taken again, or absent
+   * from an older Agent.
+   */
+  refusedMessage?: RefusedBrainMessage | null;
 }
+
+/** A brain message the Agent refused (#194's review): `parseBrainMessage`'s reason, and the count so far. */
+export interface RefusedBrainMessage {
+  reason: string;
+  count: number;
+}
+
+/** How much of a refused message's reason the Agent reports. */
+export const MAX_REFUSED_REASON_LENGTH = 500;
 
 /** A dialog of the game's the Agent handled (#143, owner decision 35), and what it said. */
 export interface HandledDialog {

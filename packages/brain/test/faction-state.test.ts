@@ -63,6 +63,7 @@ const dashboard = (fresh: Awaited<ReturnType<typeof freshStart>>) =>
     batcher: { enabled: false, sent: null, why: null, health: null },
     programs: { enabled: false, waiting: false, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: false, waiting: false, ram: null, upgradingTo: null, waitingFor: null },
+    cloudServers: { enabled: false, waiting: false, servers: [], buying: null, waitingFor: null, problem: null },
     intents: [],
     work: { desired: null, source: null, outcome: null },
     income: null,

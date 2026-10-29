@@ -40,5 +40,6 @@
   "snapshot-slow.js": 4.65,
   "snapshot-static.js": 3.8,
   "travel.js": 2.1,
-  "upgrade-home-ram.js": 1.65
+  "upgrade-home-ram.js": 1.65,
+  "upgrade-server.js": 2.2
 }

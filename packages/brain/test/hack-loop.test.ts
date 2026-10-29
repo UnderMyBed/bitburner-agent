@@ -9,6 +9,7 @@ import {
   chooseHackHosts,
   chooseHackTarget,
   HACK_REGROW_ROUNDS,
+  hackLoopHosts,
   type LastHackTarget,
   planHackLoop,
   readHackLoopEnabled,
@@ -70,39 +71,67 @@ describe("chooseHackTarget: a starter rule until the planner (M4)", () => {
   });
 });
 
-describe("chooseHackHosts: where the loop runs", () => {
-  test("the game's rooted servers with RAM, sorted: never home, nor the player's purchased or Hacknet servers", () => {
-    const network: StaticSnapshotData = {
-      servers: [
-        staticServer("home", { moneyMax: 0 }),
-        staticServer("n00dles"),
-        staticServer("foodnstuff"),
-        staticServer("not-rooted"),
-        staticServer("no-ram"),
-        staticServer("bought-1", { purchasedByPlayer: true, moneyMax: 0 }),
-        staticServer("hacknet-server-0", { purchasedByPlayer: true }),
-      ],
-    };
+describe("hackLoopHosts: where the loop runs (#134, #194)", () => {
+  /** The game's servers, home and a Hacknet server as the static snapshot has them (home's is purchased, as the game's). */
+  const network: StaticSnapshotData = {
+    servers: [
+      staticServer("home", { purchasedByPlayer: true, moneyMax: 0 }),
+      staticServer("n00dles"),
+      staticServer("foodnstuff"),
+      staticServer("not-rooted"),
+      staticServer("no-ram"),
+      staticServer("hacknet-server-0", { purchasedByPlayer: true }),
+      staticServer("owners-old-box", { purchasedByPlayer: true, moneyMax: 0 }),
+    ],
+  };
+
+  test("the game's rooted servers with RAM and the brain's cloud servers, sorted: never home, Hacknet or the owner's", () => {
     const medium = mediumData(1, {
       home: true,
       n00dles: true,
       foodnstuff: true,
       "not-rooted": false,
       "no-ram": true,
-      "bought-1": true,
+      "pserv-0": true,
+      "owners-box": true,
+      "owners-old-box": true,
+      "pserv-01": true,
       "hacknet-server-0": true,
     });
-    for (const server of medium.servers) if (server.hostname === "no-ram") server.maxRam = 0;
-    expect(chooseHackHosts(network, medium)).toEqual(["foodnstuff", "n00dles"]);
+    for (const server of medium.servers) {
+      if (server.hostname === "no-ram") server.maxRam = 0;
+      if (server.hostname === "pserv-0") server.maxRam = 1_024;
+    }
+    expect(hackLoopHosts(network, medium)).toEqual([
+      { hostname: "foodnstuff", ram: 16 },
+      { hostname: "n00dles", ram: 16 },
+      { hostname: "pserv-0", ram: 1_024 },
+    ]);
+    expect(chooseHackHosts(network, medium)).toEqual(["foodnstuff", "n00dles", "pserv-0"]);
   });
 
-  test("only names the protocol takes, and at most its limit", () => {
-    const odd: StaticSnapshotData = {
-      servers: [staticServer(""), staticServer("x".repeat(257)), staticServer("n00dles")],
+  test("a home that isn't marked purchased is still never a host", () => {
+    const odd: StaticSnapshotData = { servers: [staticServer("home"), staticServer("n00dles")] };
+    expect(chooseHackHosts(odd, mediumData(1, { home: true, n00dles: true }))).toEqual(["n00dles"]);
+  });
+
+  test("a cloud server the brain bought since the static snapshot is a host at the next medium one, at its RAM then", () => {
+    const before = mediumData(1, { n00dles: true });
+    const after = mediumData(1, { n00dles: true, "pserv-0": true });
+    expect(chooseHackHosts(network, before)).toEqual(["n00dles"]);
+    expect(chooseHackHosts(network, after)).toEqual(["n00dles", "pserv-0"]);
+    // Upgraded: its RAM as the snapshot has it now.
+    for (const server of after.servers) if (server.hostname === "pserv-0") server.maxRam = 64;
+    expect(hackLoopHosts(network, after).at(-1)).toEqual({ hostname: "pserv-0", ram: 64 });
+  });
+
+  test("only names the protocol takes, a RAM that is a number, and at most its limit", () => {
+    const names: StaticSnapshotData = {
+      servers: ["", "x".repeat(257), "n00dles", "odd-ram"].map((hostname) => staticServer(hostname)),
     };
-    expect(chooseHackHosts(odd, mediumData(1, { "": true, ["x".repeat(257)]: true, n00dles: true }))).toEqual([
-      "n00dles",
-    ]);
+    const odd = mediumData(1, { "": true, ["x".repeat(257)]: true, n00dles: true, "odd-ram": true });
+    for (const server of odd.servers) if (server.hostname === "odd-ram") server.maxRam = "16" as unknown as number;
+    expect(chooseHackHosts(names, odd)).toEqual(["n00dles"]);
     const hostnames = Array.from({ length: 1_005 }, (_, index) => `server-${String(index).padStart(4, "0")}`);
     const many: StaticSnapshotData = { servers: hostnames.map((hostname) => staticServer(hostname)) };
     const allRooted = Object.fromEntries(hostnames.map((hostname) => [hostname, true]));
@@ -110,8 +139,9 @@ describe("chooseHackHosts: where the loop runs", () => {
   });
 
   test("nothing to go on: none", () => {
-    expect(chooseHackHosts(null, mediumData(1, { n00dles: true }))).toEqual([]);
-    expect(chooseHackHosts({ servers: [staticServer("n00dles")] }, null)).toEqual([]);
+    expect(chooseHackHosts(null, mediumData(1, { n00dles: true, "pserv-0": true }))).toEqual([]);
+    expect(chooseHackHosts(network, null)).toEqual([]);
+    expect(chooseHackHosts(network, { servers: "odd" } as unknown as MediumSnapshotData)).toEqual([]);
   });
 });
 

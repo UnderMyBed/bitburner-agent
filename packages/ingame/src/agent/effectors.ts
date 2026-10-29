@@ -1,11 +1,12 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #155, #156, #158, #159, #162, #164, #175, architecture §5.6): for
-// each action an intent can name, for the work activity's work, and for the faction state's reading (#197), how each
-// backend does it.
+// The Effectors (#141, #145, #147, #149, #151, #153, #155, #156, #158, #159, #162, #164, #175, #194, architecture
+// §5.6): for each action an intent can name, for the work activity's work, and for the faction state's reading (#197),
+// how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
 // - `ui`: a home worker that does it without Singularity: through the game's page, or with NS calls alone where the
-//   API has them (`buyServer`, #159). Such an action has no Singularity worker: the `ui` one does it in any game.
+//   API has them (`buyServer`, #159; `upgradeServer`, #194). Such an action has no Singularity worker: the `ui` one
+//   does it in any game.
 // The brain never knows which backend does an intent or the work. The simulator's effectors aren't named like NS
 // functions: the game charges RAM for such names in in-game code.
 import {
@@ -45,6 +46,7 @@ import {
   TOR_ROUTER,
   TRAVEL_WORKER_NAME,
   UPGRADE_HOME_RAM_WORKER_NAME,
+  UPGRADE_SERVER_WORKER_NAME,
   type Work,
   type WorkEffectorReport,
 } from "@bitburner-agent/core";
@@ -60,6 +62,7 @@ export interface SimEffectors {
   convergeFactionWork(faction: string, workType: string, focus: boolean): EffectorReport;
   convergeCompanyWork(company: string, field: string, focus: boolean, checkPromotion: boolean): WorkEffectorReport;
   buyCloudServer(hostname: string, ram: number): EffectorReport;
+  upgradeCloudServer(hostname: string, ram: number): EffectorReport;
   backdoorServer(hostname: string): EffectorReport;
   convergeCrimeWork(crime: string, focus: boolean): EffectorReport;
   convergeClassWork(location: string, classType: string, focus: boolean): EffectorReport;
@@ -143,6 +146,15 @@ export function effectorFor(intent: Intent): Effector {
         ui: { workerName: BUY_SERVER_WORKER_NAME, workerArguments: [hostname, ram] },
         singularity: null,
         sim: (effectors) => effectors.buyCloudServer(hostname, ram),
+      };
+    }
+    case "upgradeServer": {
+      const { hostname, ram } = intent.args;
+      return {
+        description: `upgrade the server ${hostname} to ${ram} GB`,
+        ui: { workerName: UPGRADE_SERVER_WORKER_NAME, workerArguments: [hostname, ram] },
+        singularity: null,
+        sim: (effectors) => effectors.upgradeCloudServer(hostname, ram),
       };
     }
     case "backdoor":

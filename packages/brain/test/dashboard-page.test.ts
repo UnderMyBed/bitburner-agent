@@ -92,6 +92,17 @@ const BUSY_STATUS: DashboardStatus = {
     waitingFor: "money for FTPCrack.exe ($1,500,000)",
   },
   homeRam: { enabled: true, waiting: false, ram: 8, upgradingTo: null, waitingFor: "FTPCrack.exe first (cheaper)" },
+  cloudServers: {
+    enabled: true,
+    waiting: false,
+    servers: [
+      { hostname: "pserv-0", ram: 64 },
+      { hostname: "pserv-1", ram: 8 },
+    ],
+    buying: null,
+    waitingFor: "money for pserv-2 with 8 GB ($440,000)",
+    problem: null,
+  },
   intents: [
     {
       id: "travel(Aevum)",
@@ -167,6 +178,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     batcher: { enabled: false, sent: null, why: null, health: null },
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
+    cloudServers: { enabled: true, waiting: true, servers: [], buying: null, waitingFor: null, problem: null },
     intents: [],
     work: { desired: null, source: null, outcome: null },
     income: null,
@@ -303,6 +315,11 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#home-ram")).toContain("Home RAM: waiting for FTPCrack.exe first (cheaper)");
   expect(textOf(document, "#home-ram")).toContain("Home: 8 GB");
   expect(textOf(document, "#home-ram button")).toBe("Stop upgrading home RAM");
+  expect(textOf(document, "#cloud-servers")).toContain(
+    "Cloud servers: waiting for money for pserv-2 with 8 GB ($440,000)",
+  );
+  expect(textOf(document, "#cloud-servers")).toContain("Owned: 2, 72 GB: pserv-0 64 GB, pserv-1 8 GB");
+  expect(textOf(document, "#cloud-servers button")).toBe("Stop buying cloud servers");
   expect([...document.querySelectorAll("#intents tr")].map((row) => row.textContent)).toEqual([
     "travel(Aevum)manual2 tries via ui: no TravelCancel",
     "buyTor(Alpha Enterprises)purchasenot reported yet",
@@ -593,6 +610,7 @@ test.each([
   ["hack loop", "#hack-loop button", "#hack-loop-problem"],
   ["hacking programs", "#programs button", "#programs-problem"],
   ["home RAM", "#home-ram button", "#home-ram-problem"],
+  ["cloud servers", "#cloud-servers button", "#cloud-servers-problem"],
   ["the brain's faction work", "#factions button", "#faction-work-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
@@ -673,6 +691,57 @@ test.each([
   const homeRam = { ...BUSY_STATUS.homeRam, ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, homeRam } }));
   expect(textOf(document, "#home-ram")).toContain(`Home RAM: ${text}`);
+});
+
+test("cloud servers' button (#194) sends its switch, and each state reads plainly", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = { ...BUSY_STATUS, cloudServers: { ...BUSY_STATUS.cloudServers, enabled, waitingFor: null } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  (document.querySelector("#cloud-servers button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/cloud-servers", '{"enabled":false}']],
+  );
+  expect(textOf(document, "#cloud-servers")).toContain("Cloud servers: not buying");
+  expect(textOf(document, "#cloud-servers button")).toBe("Start buying cloud servers");
+  (document.querySelector("#cloud-servers button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => request.body)).toEqual([
+    '{"enabled":false}',
+    '{"enabled":true}',
+  ]);
+});
+
+test.each([
+  [
+    "buying one",
+    {
+      buying: { action: "buyServer", hostname: "pserv-2", ram: 256, price: 14_080_000, paybackMs: 25.2 * 60_000 },
+      waitingFor: null,
+    },
+    "buying pserv-2 with 256 GB for $14,080,000, paid back in 26 min",
+  ],
+  [
+    "upgrading one",
+    {
+      buying: { action: "upgradeServer", hostname: "pserv-1", ram: 64, price: 3_080_000, paybackMs: 40 * 60_000 },
+      waitingFor: null,
+    },
+    "upgrading pserv-1 to 64 GB for $3,080,000, paid back in 40 min",
+  ],
+  ["all at the most", { waitingFor: null }, "all at the most RAM"],
+  ["waiting for the Agent", { waiting: true }, "waiting for the Agent's snapshots"],
+  ["none owned", { servers: [] }, "Owned: none"],
+])("cloud servers, %s, say so", async (_description, changes, text) => {
+  const cloudServers = { ...BUSY_STATUS.cloudServers, ...changes };
+  const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, cloudServers } }));
+  expect(textOf(document, "#cloud-servers")).toContain(text);
 });
 
 describe("the intents (#141)", () => {

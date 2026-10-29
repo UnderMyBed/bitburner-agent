@@ -77,9 +77,9 @@ function ramOf(servers: (MediumServer | undefined)[]): { usableGb: number; ramGb
 /**
  * The ceilings now (#196). The targets are the game's servers rooted, with money (core's figures are 0 for one needing
  * more hacking than the player has: a hack thread's share is 0 there, Hacking.ts:52).
- * - **The score, on the brain's hacking RAM:** the hack loop's hosts (`chooseHackHosts`; A2, #194, makes them
- *   `hackLoopHosts`), the RAM their whole threads can use in the medium snapshot (`usableRamGb`), times the best
- *   target's batcher ceiling and, beside it, its hacking ceiling.
+ * - **The score, on the brain's hacking RAM:** the hack loop's hosts (`chooseHackHosts`, `hackLoopHosts`'s names,
+ *   the brain's cloud servers among them since #194), the RAM their whole threads can use in the medium snapshot
+ *   (`usableRamGb`), times the best target's batcher ceiling and, beside it, its hacking ceiling.
  * - **The bound, on all the RAM a script could run on:** every rooted server's, home's and the player's own included,
  *   times the best target's hacking ceiling. The owner's scripts, a terminal `hack` and A7 on home all count in what
  *   hacking earns, so all count here.

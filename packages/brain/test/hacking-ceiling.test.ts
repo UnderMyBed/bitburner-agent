@@ -82,13 +82,14 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
         medium(50, { home: true, n00dles: true, foodnstuff: true, zer0: true, "pserv-0": true }),
       ),
     );
-    // n00dles, foodnstuff and zer0 are hosts (16 GB each); home (8 GB) and pserv-0 are the player's. zer0 needs 75.
-    expect(ceiling).toMatchObject({ hostCount: 3, hostRamGb: 48, rootedCount: 5, rootedRamGb: 72 });
+    // n00dles, foodnstuff, zer0 and the cloud server pserv-0 are hosts (16 GB each, #194); home (8 GB) isn't. zer0
+    // needs 75.
+    expect(ceiling).toMatchObject({ hostCount: 4, hostRamGb: 64, rootedCount: 5, rootedRamGb: 72 });
     const [n00dles, foodnstuff] = [batcherPerGigabyteSecond("n00dles", 50), batcherPerGigabyteSecond("foodnstuff", 50)];
     expect(ceiling.target).toBe(n00dles > foodnstuff ? "n00dles" : "foodnstuff");
-    expect(ceiling.batcherIncomePerSecond).toBeCloseTo(3 * USABLE_16 * Math.max(n00dles, foodnstuff), 9);
+    expect(ceiling.batcherIncomePerSecond).toBeCloseTo(4 * USABLE_16 * Math.max(n00dles, foodnstuff), 9);
     const best = Math.max(perGigabyteSecond("n00dles", 50), perGigabyteSecond("foodnstuff", 50));
-    expect(ceiling.incomePerSecond).toBeCloseTo(3 * USABLE_16 * best, 9);
+    expect(ceiling.incomePerSecond).toBeCloseTo(4 * USABLE_16 * best, 9);
     // Home's 8 GB holds 4 threads: 7 GB.
     expect(ceiling.boundIncomePerSecond).toBeCloseTo((7 + 4 * USABLE_16) * best, 9);
     // At hacking 150 zer0 counts, and beats both.
