@@ -1,4 +1,6 @@
 import type {
+  GameAugmentationCost,
+  GameData,
   GameDiagnostics,
   GameEvent,
   GameSettingsOverride,
@@ -76,6 +78,10 @@ export interface EngineApi {
   page(): string;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   bitNodeMultipliers(n: number, level: number): Record<string, number>;
+  /** The game's augmentations and factions, from its own objects (#193). Test-only. */
+  gameData(): GameData;
+  /** Every augmentation's price now, by the game's own `getAugCost` (#193). Test-only. */
+  augmentationCosts(): Record<string, GameAugmentationCost>;
   /** The game's own save: gzip bytes. */
   saveBytes(): Promise<Uint8Array>;
   /** The game-side fields of a summary (the host adds `virtualMs`). */
@@ -156,6 +162,8 @@ const API_FUNCTIONS = {
   gainCharismaExp: true,
   queueAugmentation: true,
   bitNodeMultipliers: true,
+  gameData: true,
+  augmentationCosts: true,
   saveBytes: true,
   gameSummary: true,
   saveJson: true,
