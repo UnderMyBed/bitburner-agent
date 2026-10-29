@@ -23,7 +23,14 @@ import {
 } from "../src/augmentations.ts";
 import { BITNODE_COUNT } from "../src/bitnodes.ts";
 import { FACTIONS } from "../src/faction-data.ts";
-import { daedalusAugmentationsRequired, FACTION_ENEMIES, FACTION_NAMES } from "../src/factions.ts";
+import {
+  DAEDALUS,
+  daedalusAugmentationsRequired,
+  daedalusMissing,
+  daedalusRequirements,
+  FACTION_ENEMIES,
+  FACTION_NAMES,
+} from "../src/factions.ts";
 import { PINNED_GAME } from "../src/game-version.ts";
 
 const gameSource = (file: string) =>
@@ -290,5 +297,38 @@ describe("the BitNode's multipliers, from resetInfo", () => {
     expect([1, 6, 7, 15].map((n) => daedalusAugmentationsRequired(n, {}))).toEqual([30, 35, 35, 20]);
     expect(daedalusAugmentationsRequired(12, { 12: 115 })).toBe(39); // 30 + 1.02^116 = 39.9
     expect(daedalusAugmentationsRequired(12, { 12: 500 })).toBe(40);
+  });
+
+  test("Daedalus's requirements (#215): the game's, the BitNode's count; what's missing, worded", () => {
+    const required = daedalusRequirements(1, {});
+    expect(required).toEqual({ augmentations: 30, money: 100e9, hacking: 2500, combat: 1500 });
+    // The game's own list: core's FACTIONS holds what `getFactionInviteRequirements` gives in BN1.
+    expect(FACTIONS[DAEDALUS]?.inviteRequirements).toEqual([
+      { type: "numAugmentations", numAugmentations: 30 },
+      { type: "money", money: 100e9 },
+      {
+        type: "someCondition",
+        conditions: [
+          { type: "skills", skills: { hacking: 2500 } },
+          { type: "skills", skills: { strength: 1500, defense: 1500, dexterity: 1500, agility: 1500 } },
+        ],
+      },
+    ]);
+    const skills = { hacking: 2499, strength: 1, defense: 1, dexterity: 1, agility: 1 };
+    expect(daedalusMissing({ augmentations: 29, money: 99e9, skills }, required)).toEqual([
+      "29 of 30 augmentations installed",
+      "$99,000,000,000 of $100,000,000,000",
+      "hacking 2,499 of 2,500 (or every combat skill 1,500)",
+    ]);
+    expect(
+      daedalusMissing({ augmentations: 30, money: 100e9, skills: { ...skills, hacking: 2500 } }, required),
+    ).toEqual([]);
+    // Every combat skill at 1500 stands in for hacking; one short doesn't.
+    const combat = { hacking: 1, strength: 1500, defense: 1500, dexterity: 1500, agility: 1500 };
+    expect(daedalusMissing({ augmentations: 30, money: 100e9, skills: combat }, required)).toEqual([]);
+    expect(
+      daedalusMissing({ augmentations: 30, money: 100e9, skills: { ...combat, agility: 1499 } }, required),
+    ).toHaveLength(1);
+    expect(daedalusRequirements(15, {}).augmentations).toBe(20);
   });
 });

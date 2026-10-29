@@ -1596,3 +1596,65 @@ describe("the command", () => {
     expect(runCli(["--since", at(-2 * MINUTE), ...until]).exitCode).toBe(1);
   });
 });
+
+describe("the World Daemon (#215)", () => {
+  test("a clean run: the path as the last snapshots show it, and no stall", () => {
+    cleanRun();
+    const { text, failures } = report();
+    expect(text).toContain(
+      [
+        "  the path to the World Daemon (as the window's last snapshots show it):",
+        "    Daedalus: not joined; 1 of 30 augmentations installed; needs 1 of 30 augmentations installed, " +
+          "$1,201,000 of $100,000,000,000, hacking 12 of 2,500 (or every combat skill 1,500)",
+        "    The Red Pill: Daedalus not joined",
+      ].join("\n"),
+    );
+    expect(text).toContain(
+      "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5):\n    none",
+    );
+    expect(failures.filter((failure) => failure.startsWith("world daemon"))).toEqual([]);
+    // In sections 3 and 4, not section 1's timeline.
+    expect(text).not.toContain("worldDaemonStalled:");
+  });
+
+  test("The Red Pill installed: w0r1d_d43m0n's requirement and the ETA at the window's rate; a destroy sent; a stall fails", () => {
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    snapshot("static", 10 * SECOND, { servers: [{ ...staticServer("w0r1d_d43m0n"), requiredHackingSkill: 3000 }] });
+    snapshot("slow", 10 * SECOND, slowData([], { "The Red Pill": 1 }));
+    // Hacking 2000 at about ×5, its experience rising 1e6 a second: the window measures it.
+    const exp2000 = Math.exp(600 / 32) - 534.6;
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const medium = mediumData({ money: 1e9, hacking: 2000 });
+      snapshot("medium", offsetMs, {
+        ...medium,
+        player: { ...medium.player, exp: { hacking: exp2000 + offsetMs * 1_000 } },
+        servers: [...medium.servers, { ...medium.servers[0], hostname: "w0r1d_d43m0n", maxRam: 0 }],
+      });
+    }
+    event(15 * MINUTE, "worldDaemonStalled", {
+      step: "destroy",
+      sinceMs: T0 + 10 * MINUTE,
+      detail: "w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed",
+    });
+    event(16 * MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1 });
+    const { text, failures } = report();
+    // In sections 3 and 4, not section 1's timeline.
+    expect(text).not.toMatch(/worldDaemonStalled|bitNodeDestroySent/);
+    // At the multiplier the last snapshot implies (`skill.ts`), 3000 needs this much more experience.
+    const lastExp = exp2000 + RUN_MS * 1_000;
+    const multiplier = 2000 / (32 * Math.log(lastExp + 534.6) - 200);
+    const eta = ((Math.exp((3000 / multiplier + 200) / 32) - 534.6 - lastExp) / 1e6 / 3600).toFixed(1);
+    expect(text).toContain(
+      [
+        "    The Red Pill: installed",
+        `    w0r1d_d43m0n: rooted; hacking 2,000 of 3,000: about ${eta} h at the measured experience rate`,
+        `    ${at(16 * MINUTE)}  destroy sent (the brain's), into BitNode 1`,
+      ].join("\n"),
+    );
+    expect(failures).toContain(
+      "world daemon stalled: w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed, from " +
+        `${at(10 * MINUTE)} to at least ${at(15 * MINUTE)}`,
+    );
+  });
+});

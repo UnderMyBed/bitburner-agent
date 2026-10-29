@@ -10,6 +10,8 @@
 //   queued or already within a joined seller's reputation, the one with the most value per second of work to reach its
 //   reputation, by the game's rate (core's `factionReputationPerSecond`) for the faction's best work type. NeuroFlux
 //   Governor is A6's: sold everywhere, it never runs out.
+// - The Red Pill first (#215, A8): once a joined faction (Daedalus) sells it, neither installed nor queued, and its
+//   reputation isn't reached, the work is for it, ahead of any hacking value: it ends the BitNode.
 // - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
   type AugmentationPurchaseState,
@@ -33,6 +35,7 @@ import {
   NEUROFLUX_GOVERNOR,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
   type SlowSnapshotData,
+  THE_RED_PILL,
   type WorkingPerson,
 } from "@bitburner-agent/core";
 import { readSwitch, writeSwitch } from "./switches.ts";
@@ -230,7 +233,8 @@ export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: Slow
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
     const conditions = workConditionsOf(resetInfo, slowData);
-    const choice = bestCandidate(person, state, resetInfo, conditions);
+    const choice =
+      redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
   } catch (error) {
@@ -331,6 +335,50 @@ export function workCandidates(
     }
   }
   return candidates;
+}
+
+/**
+ * The work for The Red Pill (#215), or null: at the joined faction selling it (Daedalus; none in BN15) with the soonest
+ * ETA at its best work, while it's neither installed nor queued and no joined seller's reputation reaches it (reached,
+ * it's A6's to buy). Its reputation is core's `augmentationCost`: 2.5m in BN1 (`Augmentation/Augmentations.ts:1946`).
+ */
+export function redPillWork(
+  person: WorkingPerson,
+  state: FactionState,
+  { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
+  conditions: WorkConditions,
+): FactionWorkChoice | null {
+  if (Object.hasOwn(ownedAugs, THE_RED_PILL) || state.queuedAugmentations.includes(THE_RED_PILL)) return null;
+  const sellers = state.joined.filter(
+    (faction) =>
+      FACTION_NAMES.includes(faction.name) &&
+      augmentationsSoldBy(faction.name, currentNode, null).includes(THE_RED_PILL),
+  );
+  const reputationNeeded = augmentationCost(THE_RED_PILL, {
+    installed: ownedAugs,
+    queued: state.queuedAugmentations,
+    sourceFile11Level: ownedSF["11"] ?? 0,
+    bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
+  }).reputation;
+  if (sellers.some((faction) => faction.reputation >= reputationNeeded)) return null;
+  let best: FactionWorkChoice | null = null;
+  for (const faction of sellers) {
+    const rate = bestWorkRate(person, faction, conditions);
+    if (rate === null) continue;
+    const etaSeconds = (reputationNeeded - faction.reputation) / rate.perSecond;
+    if (best === null || etaSeconds < best.etaSeconds) {
+      best = {
+        faction: faction.name,
+        workType: rate.workType,
+        augmentation: THE_RED_PILL,
+        reputation: faction.reputation,
+        reputationNeeded,
+        reputationPerSecond: rate.perSecond,
+        etaSeconds,
+      };
+    }
+  }
+  return best;
 }
 
 /** `chooseFactionWork`'s choice from figures already checked; null for none. */

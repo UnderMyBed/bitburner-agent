@@ -190,6 +190,32 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), genOne).choice?.augmentation).toBe("Cranial Signal Processors - Gen II");
   });
 
+  test("The Red Pill first once Daedalus is joined (#215): its best work, ahead of any hacking value", () => {
+    // CyberSec at 0 has Neurotrainer I to work for; Daedalus at 1m is 1.5m short of The Red Pill.
+    const medium = player(2_600);
+    const plan = chooseFactionWork(medium, slow({ joined: { CyberSec: 0, Daedalus: 1e6 } }));
+    expect(plan.choice).toMatchObject({
+      faction: "Daedalus",
+      augmentation: "The Red Pill",
+      reputation: 1e6,
+      reputationNeeded: 2.5e6,
+    });
+    expect(plan.choice?.etaSeconds).toBeCloseTo(1.5e6 / (plan.choice?.reputationPerSecond as number), 6);
+    expect(plan.choice?.reputationPerSecond).toBeGreaterThanOrEqual(hackingRate(medium));
+    // Reached: A6's to buy, so the work goes back to the hacking value. Queued or installed: likewise.
+    for (const [joined, queued, installed] of [
+      [{ CyberSec: 0, Daedalus: 2.5e6 }, [], {}],
+      [{ CyberSec: 0, Daedalus: 0 }, ["The Red Pill"], {}],
+      [{ CyberSec: 0, Daedalus: 0 }, [], { "The Red Pill": 1 }],
+    ] as const) {
+      const choice = chooseFactionWork(medium, slow({ joined, queued: [...queued], installed })).choice;
+      expect(choice?.augmentation).not.toBe("The Red Pill");
+    }
+    // Not sold at Daedalus in BN15 (`FactionHelpers.tsx:204-207`).
+    const bn15 = chooseFactionWork(medium, slow({ joined: { Daedalus: 0 }, currentNode: 15 }));
+    expect(bn15.choice?.augmentation).not.toBe("The Red Pill");
+  });
+
   test("the value counts, not the time alone, and the level weighs the skill: CyberSec at 1,000", () => {
     // At hacking 300 BitWire's ×1.05 is worth 0.45 (an experience ×1.56), over 2,750 left, before Synaptic
     // Enhancement Implant's 0.030 over 1,000 left, the nearer.

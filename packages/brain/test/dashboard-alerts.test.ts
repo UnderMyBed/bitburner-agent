@@ -73,6 +73,14 @@ describe("augmentations (#210)", () => {
     expect(names({ ...facts, installAwaitingRestart: { ...awaiting, sinceMs: sinceMs + 1 } })).toEqual([]);
   });
 
+  test("the path to the World Daemon stalled (#215): the rule's stall, with how long", () => {
+    const stall = { step: "destroy" as const, sinceMs: quiet.nowMs - 6 * 60_000, detail: "w0r1d_d43m0n at its level" };
+    expect(activeAlerts({ ...quiet, worldDaemonStall: stall })).toEqual([
+      { name: "worldDaemonStalled", sinceMs: stall.sinceMs, detail: "w0r1d_d43m0n at its level, for 6 min" },
+    ]);
+    expect(activeAlerts({ ...quiet, worldDaemonStall: null })).toEqual([]);
+  });
+
   test("an install reported done that the game didn't reset: at once (#213 re-review)", () => {
     const awaiting = { id: "installAugmentations()", sinceMs: quiet.nowMs - 1, doneNotReset: true };
     expect(activeAlerts({ ...quiet, installAwaitingRestart: awaiting })).toEqual([

@@ -21,6 +21,7 @@ const WRITE_PATHS = [
   "/api/home-ram",
   "/api/faction-work",
   "/api/augmentations",
+  "/api/world-daemon",
   "/api/intents",
   "/api/intents/cancel",
   "/api/work",
@@ -46,6 +47,8 @@ export interface DashboardServerOptions {
   setFactionWorkEnabled(enabled: boolean): void;
   /** Buying and installing augmentations' switch (#210). */
   setAugmentationsEnabled(enabled: boolean): void;
+  /** Destroying the BitNode's switch (#215). */
+  setWorldDaemonEnabled(enabled: boolean): void;
   /** The manual intents queue (#141): adds `{ action, args }`. */
   addIntent(request: unknown): AddedIntent;
   /** Takes an intent off the manual queue by id; false if it isn't there. */
@@ -125,6 +128,8 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "enabled", options.setFactionWorkEnabled);
       case "POST /api/augmentations":
         return handleSwitch(request, response, origin, "enabled", options.setAugmentationsEnabled);
+      case "POST /api/world-daemon":
+        return handleSwitch(request, response, origin, "enabled", options.setWorldDaemonEnabled);
       case "POST /api/intents": {
         const added = options.addIntent(await readJsonWrite(request, origin));
         if (!added.ok) throw new RequestError(400, added.reason);

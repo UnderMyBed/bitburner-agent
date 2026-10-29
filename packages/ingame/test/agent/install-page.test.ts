@@ -289,6 +289,9 @@ describe("the install's steps", () => {
   });
 
   test("installed: the timer is armed before the click, the confirmation confirmed, and the worker dies with it", async () => {
+    // Fake timers, run until the timer has finished (#220): on real ones, the page timer outlived the test, polling the
+    // next tests' pages, and a later fake-timer test could drive it to a give-up and its note.
+    vi.useFakeTimers();
     const { ns, state } = workerNs();
     sidebarItem("Stats");
     sidebarItem("Augmentations", () =>
@@ -303,13 +306,20 @@ describe("the install's steps", () => {
     terminal();
     const gamePage = openGamePage(ns, Date.now() + 1_500);
     if (!gamePage) throw new Error("no page");
-    await expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
-    // The timer, armed before the click, takes over.
-    await vi.waitFor(() => expect(terminalOutput()).toContain(STARTED), { timeout: 3_000 });
+    const died = expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await died;
+    // The timer, armed before the click, takes over, and finishes: it saw its line run, so it leaves no note.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminalOutput()).toContain(STARTED);
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.started + RESTART_STEP_LIMITS_MS.fallback);
+    expect(takeRestartNote()).toBeNull();
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "Confirm", "the alert's X"]);
   });
 
   test("with the confirmation turned off, Install itself installs: the timer was armed before it", async () => {
+    // Fake timers, run until the timer has finished (#220), as above.
+    vi.useFakeTimers();
     const { ns, state } = workerNs();
     sidebarItem("Stats");
     sidebarItem("Augmentations", () =>
@@ -325,8 +335,14 @@ describe("the install's steps", () => {
     terminal();
     const gamePage = openGamePage(ns, Date.now() + 1_500);
     if (!gamePage) throw new Error("no page");
-    await expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
-    await vi.waitFor(() => expect(terminalOutput()).toContain(STARTED), { timeout: 3_000 });
+    const died = expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await died;
+    // The timer, armed before the click, takes over, and finishes: it saw its line run, so it leaves no note.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminalOutput()).toContain(STARTED);
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.started + RESTART_STEP_LIMITS_MS.fallback);
+    expect(takeRestartNote()).toBeNull();
     expect(clicks).toEqual(["Augmentations", "Install Augmentations", "the alert's X"]);
   });
 

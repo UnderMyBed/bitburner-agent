@@ -126,8 +126,9 @@ async function moneyedGameWithAgent({
 } = {}) {
   const dataDirectory = path.join(temporaryDirectory, `data-${++dataDirectoryCount}`);
   const ports = await freeBrainPorts();
-  // Buying and installing augmentations (#210) off in every test here: their purchases and installs are their own.
-  const settings = { "augmentations.enabled": "false", ...brainSettings };
+  // Buying and installing augmentations (#210) and destroying the BitNode (#215) off in every test here: their
+  // purchases, installs and destroys are their own.
+  const settings = { "augmentations.enabled": "false", "worldDaemon.enabled": "false", ...brainSettings };
   const brain = await startBrain({ dataDirectory, ports, allowedOrigin: e2.server.origin, settings });
   started.brains.push(brain);
   onTestFailed(() => console.log(`The brain's log (${dataDirectory}):\n${brain.log.join("\n")}`));
