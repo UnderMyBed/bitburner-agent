@@ -3,8 +3,9 @@
 // (#153, #156, #158), on a stand-in page: the Work page's unfocus button, the overview's "Focus", the sidebar, the
 // City's locations and their buttons (a company's, the Slums' crimes, a university's courses), each a React `onClick`
 // that records its click. E2 drives the real page.
-import { afterEach, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { NS } from "../../src/ns.ts";
+import { factionStatePageProblems, pageMustStayProblem } from "../../src/page/faction-state-page.ts";
 import { openGamePage } from "../../src/page/game-page.ts";
 import { reportPageEffect } from "../../src/page/page-effect.ts";
 import { classHeldBack, convergeWorkOnPage, workShown } from "../../src/page/work-page.ts";
@@ -494,4 +495,48 @@ test("a class held back (#158): another city or too little money, unless a class
   );
   expect(classHeldBack(gamePage, algorithms, sector12)).toBeNull();
   expect(classHeldBack(null, algorithms, sector12)).toBeNull();
+});
+
+describe("work not taken from the casino, nor without a sidebar (#203 review)", () => {
+  /** Runs `faction-work.js`'s `main`: hacking work for CyberSec, focused, and returns its report. */
+  async function runFactionWork(): Promise<unknown> {
+    const { main } = await import("../../src/entries/faction-work.ts");
+    await main({
+      ...ns,
+      args: ["CyberSec", "hacking", "true", Date.now() + 1_500],
+      disableLog: () => {},
+    } as unknown as NS);
+    return reports.at(-1);
+  }
+  /** A page with the sidebar (a permanent MUI `Drawer`) and its Factions item. */
+  const withSidebar = (...rest: HTMLElement[]) => {
+    const drawer = Object.assign(document.createElement("div"), { className: "MuiDrawer-root" });
+    drawer.append(clickable("Factions", "sidebar"), clickable("Terminal", "sidebar"));
+    document.body.replaceChildren(drawer, ...rest);
+  };
+
+  test("the casino's games shown: nothing clicked, with why, so a blackjack hand isn't forfeited", async () => {
+    withSidebar(clickable("Stop playing", "button"));
+    expect(await runFactionWork()).toEqual({ done: false, problem: factionStatePageProblems.casino });
+    expect(clicks).toEqual([]);
+  });
+
+  test("no sidebar and not the Work page (an infiltration): nothing clicked, with why", async () => {
+    document.body.replaceChildren(Object.assign(document.createElement("h4"), { textContent: "Infiltrating ECorp" }));
+    expect(await runFactionWork()).toEqual({ done: false, problem: factionStatePageProblems.noSidebar });
+    expect(clicks).toEqual([]);
+  });
+
+  test("otherwise the steps go ahead: the sidebar's Factions", async () => {
+    withSidebar();
+    await runFactionWork();
+    expect(clicks[0]).toBe("Factions");
+  });
+
+  test("pageMustStayProblem: the Work page focused, with no sidebar, isn't a reason to stay", () => {
+    document.body.replaceChildren(clickable("Do something else simultaneously", "button"));
+    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    if (!gamePage) throw new Error("no page");
+    expect(pageMustStayProblem(gamePage)).toBeNull();
+  });
 });

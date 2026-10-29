@@ -268,11 +268,12 @@ async function dashboardIntents(dashboardPort: number): Promise<{ id: string; wa
 }
 
 test("joining Sector-12 (#147): past the brain's guard and a save backup, the Agent clicks Join! on the Factions page", async () => {
-  // As above: the travel to Sector-12 earns the invitation, which the Agent answers "Decide later".
+  // As above: the travel to Sector-12 earns the invitation, which the Agent answers "Decide later". The brain's faction
+  // work off (#203): joined, Sector-12 would be worked for, focused, and the page would end on the Work page.
   const { dataDirectory, page, ports } = await moneyedGameWithAgent({
     money: 20_000_000,
     city: "Aevum",
-    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false", "factionWork.enabled": "false" },
   });
   await queueIntent(ports.dashboardPort, { action: "travel", args: { city: "Sector-12" } });
   await advanceUntil(
@@ -417,8 +418,16 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
 });
 
-/** The brain's switches for a test of work alone: no purchases, and the hack loop off. */
-const ONLY_WORK = { "programs.enabled": "false", "homeRam.enabled": "false", "hackLoop.enabled": "false" };
+/**
+ * The brain's switches for a test of work alone: no purchases, the hack loop off, and the brain's own faction work off
+ * (#203), so the work is the test's and "Stop managing work" leaves the game's as it is.
+ */
+const ONLY_WORK = {
+  "programs.enabled": "false",
+  "homeRam.enabled": "false",
+  "hackLoop.enabled": "false",
+  "factionWork.enabled": "false",
+};
 
 /** Sets the work the brain manages (#151, #153, #156, #158), as the dashboard's Work forms do. */
 async function setWork(

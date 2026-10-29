@@ -20,6 +20,7 @@ export async function reportPageEffect(
     stepsWhenDone = false,
     reportAlso = () => ({}),
     restoreFoundPage = false,
+    mustStay = () => null,
   }: {
     /** Whether the game shows it done: checked first, and again after the steps. */
     isDone: () => boolean;
@@ -50,6 +51,11 @@ export async function reportPageEffect(
      * runs without the brain asking, the faction state's read (#197).
      */
     restoreFoundPage?: boolean;
+    /**
+     * Why the page mustn't be left now, or null (#203 review: the casino mid-hand, an infiltration): then nothing is
+     * touched, and that's the problem, so the work catches up on a later try. Checked once it isn't done.
+     */
+    mustStay?: (gamePage: GamePage) => string | null;
   },
 ): Promise<void> {
   const report: EffectorReport = { done: !stepsWhenDone && isDone(), problem: null };
@@ -60,6 +66,9 @@ export async function reportPageEffect(
       if (stepsWhenDone) report.done = isDone();
     } else if (await gamePage.dialogStaysOpen()) {
       report.problem = "a dialog the Agent leaves for the owner is open";
+      if (stepsWhenDone) report.done = isDone();
+    } else if (mustStay(gamePage) !== null) {
+      report.problem = mustStay(gamePage);
       if (stepsWhenDone) report.done = isDone();
     } else {
       const found = restoreFoundPage ? gamePage.foundPage() : null;
