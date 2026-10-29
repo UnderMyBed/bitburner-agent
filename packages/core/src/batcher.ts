@@ -51,7 +51,10 @@ export const MIN_BATCH_SPACING_MS = 4 * BATCH_LANDING_GAP_MS;
 export const BATCH_LAUNCH_LEAD_MS = 200;
 /**
  * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the
- * batch's plan and its hack's landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking). Extra grow
+ * hack's start and its landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking). The hack's threads
+ * are replanned when it starts (`hackThreadsAtLaunch`), so the margin covers a hack's time, a quarter of a weaken's.
+ * Not tuned in the simulator, where n00dles (needing hacking 1) doesn't move the share: core's rising-level test checks
+ * it holds where the share rises 1.25x over a weaken's time (harakiri-sushi at hacking 55, #208's review). Extra grow
  * costs RAM, never security: only the threads used add it (ServerHelpers.ts:202-212).
  */
 export const GROW_MARGIN = 1.1;
@@ -127,15 +130,16 @@ export function hackThreadsForShare(wantedShare: number, target: HackingTarget, 
  * Each is at least 1.
  */
 export function batchThreads(target: HackingTarget, player: HackingPlayer, hackThreads: number): BatchThreads {
-  // Never `hack`, `grow` or `share` as a name in code the batcher runs: the game charges RAM for any identifier an NS
-  // function has (Script/RamCalculations.ts:407-440), member names too, so `threads.grow` would cost grow's 0.15 GB.
+  // Never `hack`, `grow` or `share` as an identifier or a dotted member in code the batcher runs: the game charges a
+  // script the RAM of every NS function so named that it reaches (Script/RamCalculations.ts:407-440), so `threads.grow`
+  // would cost grow's 0.15 GB. Object keys and destructuring keys aren't charged, so `{ hack: hackCount }` is free.
   const hackCount = Math.max(1, Math.floor(hackThreads));
-  const takes = Math.min(1, hackCount * hackSharePerThread(target, player));
+  const takenShare = Math.min(1, hackCount * hackSharePerThread(target, player));
   const growthLog = growthLogPerThread(
     { serverGrowth: target.serverGrowth, hackDifficulty: target.minDifficulty },
     player,
   );
-  const left = target.moneyMax * Math.max(0, 1 - GROW_MARGIN * takes);
+  const left = target.moneyMax * Math.max(0, 1 - GROW_MARGIN * takenShare);
   const growCount = Math.max(1, growThreads(left, target.moneyMax, target.moneyMax, growthLog));
   return {
     hack: hackCount,
@@ -176,25 +180,54 @@ export function operationTimeMs(
 }
 
 /**
- * The bounds a batch in step keeps its target within (#204), at any moment: money at least what a hack of
+ * The bounds batches in step keep their target within (#204), at any moment: money at least what a hack of
  * `GROW_MARGIN` times its share leaves, and security at most the minimum plus the most one landing adds before its
- * weaken lands (a hack's 0.002 a thread, or a grow's 0.004). Outside them, a batch has landed out of step, or someone
- * else touched the target: a desync.
+ * weaken lands (a hack's 0.002 a thread, or a grow's 0.004), over every batch that may still be landing (`batches`):
+ * an older batch, planned at a lower hacking level, has more hack threads than a newer one. Outside them, a batch has
+ * landed out of step, or someone else touched the target: a desync. The hacking level now gives the largest share.
  */
 export function batchBounds(
   target: HackingTarget,
   player: HackingPlayer,
-  threads: BatchThreads,
+  batches: BatchThreads[],
 ): { moneyFloor: number; securityCeiling: number } {
-  const { hack: hackCount, grow: growCount } = threads;
-  const takes = Math.min(1, hackCount * hackSharePerThread(target, player));
+  let mostHack = 0;
+  let mostGrow = 0;
+  for (const { hack: hackCount, grow: growCount } of batches) {
+    mostHack = Math.max(mostHack, hackCount);
+    mostGrow = Math.max(mostGrow, growCount);
+  }
+  const takenShare = Math.min(1, mostHack * hackSharePerThread(target, player));
   return {
-    moneyFloor: target.moneyMax * Math.max(0, 1 - GROW_MARGIN * takes),
+    moneyFloor: target.moneyMax * Math.max(0, 1 - GROW_MARGIN * takenShare),
     securityCeiling:
-      target.minDifficulty +
-      Math.max(HACK_SECURITY_PER_THREAD * hackCount, GROW_SECURITY_PER_THREAD * growCount) +
-      1e-9,
+      target.minDifficulty + Math.max(HACK_SECURITY_PER_THREAD * mostHack, GROW_SECURITY_PER_THREAD * mostGrow) + 1e-9,
   };
+}
+
+/** Whether what the batcher saw of the target is outside the bounds: money under the floor, or security over it. */
+export function isOutsideBounds(
+  bounds: { moneyFloor: number; securityCeiling: number },
+  seen: { money: number; security: number },
+): boolean {
+  return seen.money < bounds.moneyFloor || seen.security > bounds.securityCeiling;
+}
+
+/**
+ * A batch's hack threads when its hack goes out (#204): at most those planned when its first weaken went out, and no
+ * more than take the share planned then, at the hacking level now. The share a thread takes rises with the level
+ * (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking), so between the plan and the hack's landing it
+ * could outrun the grow's `GROW_MARGIN`: replanned here, the margin need cover only a hack's time, a quarter of a
+ * weaken's. At least 1.
+ */
+export function hackThreadsAtLaunch(
+  plannedHack: number,
+  plannedShare: number,
+  target: HackingTarget,
+  player: HackingPlayer,
+): number {
+  const now = hackThreadsForShare(plannedShare, target, player);
+  return Math.max(1, Math.min(plannedHack, now > 0 ? now : plannedHack));
 }
 
 /**
@@ -220,7 +253,7 @@ export function batchHoldsMs(
   player: HackingPlayer,
   threads: BatchThreads,
 ): Record<BatchOperation, number> {
-  const { securityCeiling } = batchBounds(target, player, threads);
+  const { securityCeiling } = batchBounds(target, player, [threads]);
   const holds = {} as Record<BatchOperation, number>;
   for (const operation of BATCH_OPERATIONS) {
     holds[operation] =
@@ -291,13 +324,13 @@ export function batchPlan(target: HackingTarget, player: HackingPlayer, ramGb: n
   const chance = hackChance(atMinimum(target), player);
   if (!(perThread > 0) || !(chance > 0) || !(target.moneyMax > 0)) return null;
   let best: BatchPlan | null = null;
-  for (let hack = 1; hack === 1 || hack * perThread <= MAX_BATCH_SHARE; hack += 1) {
-    const threads = batchThreads(target, player, hack);
+  for (let hackCount = 1; hackCount === 1 || hackCount * perThread <= MAX_BATCH_SHARE; hackCount += 1) {
+    const threads = batchThreads(target, player, hackCount);
     const holdsMs = batchHoldsMs(target, player, threads);
     const spacingMs = leastSpacingMs(threads, holdsMs, ramGb);
     // More hack threads need more RAM at once: once one batch doesn't fit, none larger does.
     if (spacingMs === null) break;
-    const hackShare = Math.min(1, hack * perThread);
+    const hackShare = Math.min(1, hackCount * perThread);
     const incomePerSecond = (target.moneyMax * hackShare * chance * 1000) / spacingMs;
     if (best === null || incomePerSecond > best.incomePerSecond) {
       best = { hackShare, threads, spacingMs, peakRamGb: batchPeakRamGb(threads, holdsMs, spacingMs), incomePerSecond };
@@ -412,21 +445,25 @@ export interface LandingRecord {
   result: number;
   /** Started too late to land on time: a hack then doesn't run, a grow or weaken lands late. */
   late: boolean;
+  /** Its call never ran (a late hack): it landed nothing, so it says nothing of the order. */
+  skipped: boolean;
 }
 
 /** A landing record, as the port gives it back, or null (data from the game is never taken on trust). */
 export function parseLandingRecord(data: unknown): LandingRecord | null {
   if (typeof data !== "object" || data === null) return null;
-  const { id, landAt, landedAt, result, late } = data as Record<string, unknown>;
-  if (typeof id !== "string" || typeof late !== "boolean") return null;
+  const { id, landAt, landedAt, result, late, skipped } = data as Record<string, unknown>;
+  if (typeof id !== "string" || typeof late !== "boolean" || typeof skipped !== "boolean") return null;
   if (![landAt, landedAt, result].every((value) => typeof value === "number" && Number.isFinite(value))) return null;
-  return { id, landAt, landedAt, result, late } as LandingRecord;
+  return { id, landAt, landedAt, result, late, skipped } as LandingRecord;
 }
 
 /**
  * The checks on the landings (#204): every operation started is expected at its time; each record must come in the
  * order of the times (never before one already landed: out of order), and any not recorded `LANDING_LOST_AFTER_MS`
- * after its time is lost.
+ * after its time is lost. Only expected records count: one this watch never started (a previous batcher's, still
+ * landing; one recorded already, or lost) is unexpected, and moves nothing. Nor does one whose call never ran (a late
+ * hack, recorded at once with its future time), which would make every earlier landing look out of order.
  */
 export class LandingWatch {
   readonly #expected = new Map<string, number>();
@@ -437,12 +474,13 @@ export class LandingWatch {
     this.#expected.set(id, landAt);
   }
 
-  /** A record from the port: whether it landed out of order, and whether it was expected at all. */
+  /** A record from the port: whether it was expected at all, and whether it landed out of order. */
   landed(record: LandingRecord): { outOfOrder: boolean; expected: boolean } {
-    const expected = this.#expected.delete(record.id);
+    if (!this.#expected.delete(record.id)) return { outOfOrder: false, expected: false };
+    if (record.skipped) return { outOfOrder: false, expected: true };
     const outOfOrder = record.landAt < this.#latestLandAt;
     this.#latestLandAt = Math.max(this.#latestLandAt, record.landAt);
-    return { outOfOrder, expected };
+    return { outOfOrder, expected: true };
   }
 
   /** The parts not recorded long after their time, forgotten now: how many. */
@@ -455,6 +493,13 @@ export class LandingWatch {
       }
     }
     return lost;
+  }
+
+  /** When the next part would be lost, if none is recorded first: the batcher wakes then. Infinity with none. */
+  nextLostAtMs(): number {
+    let earliest = Number.POSITIVE_INFINITY;
+    for (const landAt of this.#expected.values()) earliest = Math.min(earliest, landAt + LANDING_LOST_AFTER_MS + 1);
+    return earliest;
   }
 
   /** Parts started and not yet recorded. */
@@ -511,15 +556,15 @@ export function parseBatcherConfig(
   if (typeof value !== "object" || value === null) return { ok: false, reason: "the config isn't an object" };
   const { target, figures, player, hosts, hackShare, spacingMs } = value as Record<string, unknown>;
   if (typeof target !== "string" || target === "") return { ok: false, reason: "the config has no target" };
-  const figure = (figures ?? {}) as Record<string, unknown>;
+  const targetFigures = (figures ?? {}) as Record<string, unknown>;
   for (const field of ["moneyMax", "minDifficulty", "requiredHackingSkill", "serverGrowth"]) {
-    if (!isFiniteNumber(figure[field])) return { ok: false, reason: `the config's figures have no ${field}` };
+    if (!isFiniteNumber(targetFigures[field])) return { ok: false, reason: `the config's figures have no ${field}` };
   }
   const { intelligence, mults } = (player ?? {}) as Record<string, unknown>;
   if (!isFiniteNumber(intelligence)) return { ok: false, reason: "the config's player has no intelligence" };
-  const mult = (mults ?? {}) as Record<string, unknown>;
+  const playerMults = (mults ?? {}) as Record<string, unknown>;
   for (const field of ["hacking_chance", "hacking_speed", "hacking_money", "hacking_grow"]) {
-    if (!isFiniteNumber(mult[field])) return { ok: false, reason: `the config's player has no mults.${field}` };
+    if (!isFiniteNumber(playerMults[field])) return { ok: false, reason: `the config's player has no mults.${field}` };
   }
   if (!Array.isArray(hosts) || hosts.length === 0 || !hosts.every((host) => typeof host === "string" && host !== "")) {
     return { ok: false, reason: "the config's hosts aren't a list of hostnames" };
@@ -567,18 +612,25 @@ export interface BatcherHealth {
   late: number;
   lost: number;
   outOfBounds: number;
+  /** Records no operation of this run's started: a previous batcher's, still landing. Counted, never trusted. */
+  unexpected: number;
   /** All of the desyncs: out of order, and outside the bounds. */
   desyncs: number;
   /** The target's money and security when it last looked (preparing, and at each hack), or null before. */
   seen: { money: number; security: number } | null;
   /** Why it can't do its job (a config it can't read, no RAM to prepare, an operation that wouldn't start), or null. */
   problem: string | null;
+  /** This run's name, the start of each of its operations' ids, so a previous run's records are told apart. */
+  runName: string;
+  /** Batches planned whose hack hasn't gone out, and operation parts started and not yet recorded. */
+  batchesPending: number;
+  inFlight: number;
   /** The game's clock when this was written. */
   atMs: number;
 }
 
 /** A new batcher's health. */
-export function newBatcherHealth(target: string, atMs: number): BatcherHealth {
+export function newBatcherHealth(target: string, runName: string, atMs: number): BatcherHealth {
   return {
     state: "preparing",
     target,
@@ -593,9 +645,13 @@ export function newBatcherHealth(target: string, atMs: number): BatcherHealth {
     late: 0,
     lost: 0,
     outOfBounds: 0,
+    unexpected: 0,
     desyncs: 0,
     seen: null,
     problem: null,
+    runName,
+    batchesPending: 0,
+    inFlight: 0,
     atMs,
   };
 }

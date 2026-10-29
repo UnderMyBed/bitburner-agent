@@ -20,7 +20,8 @@ export async function landOperation(
   const [target, landAt, port, id] = [String(ns.args[0]), Number(ns.args[1]), Number(ns.args[2]), String(ns.args[3])];
   const additionalMsec = landAt - Date.now() - timeMsOf(target);
   const late = additionalMsec < 0;
-  const result = !late || runLate ? await call(target, { additionalMsec: Math.max(0, additionalMsec) }) : 0;
-  const record: LandingRecord = { id, landAt, landedAt: Date.now(), result, late };
+  const skipped = late && !runLate;
+  const result = skipped ? 0 : await call(target, { additionalMsec: Math.max(0, additionalMsec) });
+  const record: LandingRecord = { id, landAt, landedAt: Date.now(), result, late, skipped };
   ns.writePort(port, record);
 }

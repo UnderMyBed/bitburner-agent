@@ -17,7 +17,9 @@ import {
   GROW_MARGIN,
   growThreads,
   hackSharePerThread,
+  hackThreadsAtLaunch,
   hackThreadsForShare,
+  isOutsideBounds,
   isTargetPrepared,
   LANDING_LOST_AFTER_MS,
   LandingWatch,
@@ -181,7 +183,7 @@ describe("the operations: scripts, RAM, landing order, times", () => {
 
   test("batchHoldsMs: each operation's time at the minimum plus its lead at the batch's ceiling", () => {
     const threads = batchThreads(zer0, player(150), 10);
-    const { securityCeiling } = batchBounds(zer0, player(150), threads);
+    const { securityCeiling } = batchBounds(zer0, player(150), [threads]);
     const holds = batchHoldsMs(zer0, player(150), threads);
     for (const operation of BATCH_OPERATIONS) {
       expect(holds[operation]).toBeCloseTo(
@@ -193,15 +195,95 @@ describe("the operations: scripts, RAM, landing order, times", () => {
 });
 
 describe("batchBounds", () => {
+  const threads: BatchThreads = { hack: 10, weaken1: 1, grow: 30, weaken2: 3 };
+
   test("money at least what a hack of 1.1 x the share leaves; security at most the minimum + the larger rise", () => {
-    const threads: BatchThreads = { hack: 10, weaken1: 1, grow: 30, weaken2: 3 };
     const share = 10 * hackSharePerThread(zer0, player(150));
-    const bounds = batchBounds(zer0, player(150), threads);
+    const bounds = batchBounds(zer0, player(150), [threads]);
     expect(bounds.moneyFloor).toBeCloseTo(zer0.moneyMax * (1 - 1.1 * share), 3);
     expect(bounds.securityCeiling).toBeCloseTo(10 + 0.12, 6);
-    expect(batchBounds(zer0, player(150), { ...threads, hack: 100, grow: 10 }).securityCeiling).toBeCloseTo(10.2, 6);
+    expect(batchBounds(zer0, player(150), [{ ...threads, hack: 100, grow: 10 }]).securityCeiling).toBeCloseTo(10.2, 6);
     // A share past all of the money leaves a floor of 0, never below.
-    expect(batchBounds(n00dles, player(50), { ...threads, hack: 1_000 }).moneyFloor).toBe(0);
+    expect(batchBounds(n00dles, player(50), [{ ...threads, hack: 1_000 }]).moneyFloor).toBe(0);
+  });
+
+  test("over every batch still landing: an older batch's larger hack, or grow, sets them", () => {
+    const older = { ...threads, hack: 20, grow: 40 };
+    const share = 20 * hackSharePerThread(zer0, player(150));
+    const bounds = batchBounds(zer0, player(150), [threads, older]);
+    expect(bounds.moneyFloor).toBeCloseTo(zer0.moneyMax * (1 - 1.1 * share), 3);
+    expect(bounds.securityCeiling).toBeCloseTo(10 + 0.16, 6);
+    expect(batchBounds(zer0, player(150), [older, threads])).toEqual(bounds);
+  });
+
+  test("isOutsideBounds: money under the floor, or security over the ceiling, each alone", () => {
+    const bounds = { moneyFloor: 100, securityCeiling: 10.1 };
+    expect(isOutsideBounds(bounds, { money: 100, security: 10.1 })).toBe(false);
+    expect(isOutsideBounds(bounds, { money: 99.99, security: 10 })).toBe(true);
+    expect(isOutsideBounds(bounds, { money: 1_000, security: 10.11 })).toBe(true);
+  });
+});
+
+describe("hackThreadsAtLaunch: a hack replanned when it goes out, as the hacking level rises", () => {
+  test("zer0 (needs 75): planned at hacking 150, sent at 160, no more threads than take the share planned", () => {
+    const planned = batchThreads(zer0, player(150), 40);
+    const plannedShare = planned.hack * hackSharePerThread(zer0, player(150));
+    const atLaunch = hackThreadsAtLaunch(planned.hack, plannedShare, zer0, player(160));
+    expect(atLaunch).toBeLessThan(planned.hack);
+    expect(atLaunch * hackSharePerThread(zer0, player(160))).toBeLessThanOrEqual(plannedShare * (1 + 1e-12));
+    // So the grow, sized for 1.1 x the planned share, still covers what it takes.
+    expect(atLaunch * hackSharePerThread(zer0, player(160))).toBeLessThan(GROW_MARGIN * plannedShare);
+    // Sent unreplanned, the 40 threads would take more than the margin covers: (160 - 74)/160 over (150 - 74)/150.
+    expect(planned.hack * hackSharePerThread(zer0, player(170))).toBeGreaterThan(GROW_MARGIN * plannedShare);
+  });
+
+  /**
+   * Batches on harakiri-sushi (needs 40) every 30 s while the hacking level climbs from 55 by 6 levels a weaken's time,
+   * the rise #208's review measured (the share a thread takes 1.25x over a weaken): each batch planned at its first
+   * weaken's level, its hack sent a hack's time before it lands, and landing at the level then. Money after
+   * each hack never falls under the bounds' floor; sent as planned, unreplanned, it does.
+   */
+  function driftOverBatches(replanned: boolean): { lowest: number; floorBreaks: number } {
+    const harakiri: HackingTarget = {
+      moneyMax: 100_000_000,
+      minDifficulty: 5,
+      requiredHackingSkill: 40,
+      serverGrowth: 40,
+    };
+    const spacingMs = 30_000;
+    const weakenMs = operationTimeMs("weaken1", harakiri, player(55));
+    const levelAt = (ms: number) => 55 + (6 * ms) / weakenMs;
+    const growthLog = growthLogOf(harakiri, player(55));
+    let money = harakiri.moneyMax;
+    let lowest = 1;
+    let floorBreaks = 0;
+    for (let batch = 0; batch < 60; batch += 1) {
+      const landMs = batch * spacingMs + weakenMs;
+      const planned = player(Math.floor(levelAt(landMs - weakenMs)));
+      const threads = batchThreads(harakiri, planned, hackThreadsForShare(0.05, harakiri, planned));
+      const plannedShare = threads.hack * hackSharePerThread(harakiri, planned);
+      const hackMs = operationTimeMs("hack", harakiri, planned);
+      const sent = player(Math.floor(levelAt(landMs - hackMs)));
+      const hackCount = replanned ? hackThreadsAtLaunch(threads.hack, plannedShare, harakiri, sent) : threads.hack;
+      const landing = player(Math.floor(levelAt(landMs)));
+      money *= 1 - Math.min(1, hackCount * hackSharePerThread(harakiri, landing));
+      const { moneyFloor } = batchBounds(harakiri, landing, [threads]);
+      if (money < moneyFloor) floorBreaks += 1;
+      lowest = Math.min(lowest, money / harakiri.moneyMax);
+      money = Math.min(harakiri.moneyMax, (money + threads.grow) * Math.exp(growthLog * threads.grow));
+    }
+    return { lowest, floorBreaks };
+  }
+
+  test("a rising level: replanned at launch, money stays within the bounds; unreplanned, it breaks them", () => {
+    expect(driftOverBatches(true).floorBreaks).toBe(0);
+    expect(driftOverBatches(false).floorBreaks).toBeGreaterThan(0);
+  });
+
+  test("never more than planned, at least 1", () => {
+    expect(hackThreadsAtLaunch(10, 10 * hackSharePerThread(zer0, player(150)), zer0, player(150))).toBe(10);
+    expect(hackThreadsAtLaunch(10, 1, zer0, player(150))).toBe(10);
+    expect(hackThreadsAtLaunch(3, 1e-9, zer0, player(150))).toBe(1);
   });
 });
 
@@ -382,6 +464,7 @@ describe("landings", () => {
     landedAt: landAt,
     result: 1,
     late: false,
+    skipped: false,
     ...extra,
   });
 
@@ -393,6 +476,7 @@ describe("landings", () => {
       3,
       record("a", Number.NaN),
       record("a", 1, { late: "no" }),
+      record("a", 1, { skipped: undefined }),
       { ...record("a", 1), id: 2 },
     ]) {
       expect(parseLandingRecord(bad)).toBeNull();
@@ -408,8 +492,29 @@ describe("landings", () => {
     expect(watch.landed(record("a", 100))).toEqual({ outOfOrder: false, expected: true });
     expect(watch.landed(record("b", 120))).toEqual({ outOfOrder: false, expected: true });
     expect(watch.landed(record("c", 120))).toEqual({ outOfOrder: false, expected: true });
-    expect(watch.landed(record("late", 110))).toEqual({ outOfOrder: true, expected: false });
     expect(watch.inFlight()).toBe(0);
+    watch.expect("d", 110);
+    expect(watch.landed(record("d", 110))).toEqual({ outOfOrder: true, expected: true });
+  });
+
+  test("an unexpected record (another run's, or one already counted) moves nothing", () => {
+    const watch = new LandingWatch();
+    watch.expect("a", 100);
+    expect(watch.landed(record("old.7.hack.0", 1_000))).toEqual({ outOfOrder: false, expected: false });
+    expect(watch.landed(record("a", 100))).toEqual({ outOfOrder: false, expected: true });
+    expect(watch.landed(record("a", 100))).toEqual({ outOfOrder: false, expected: false });
+    expect(watch.latestLandAt()).toBe(100);
+  });
+
+  test("a hack that never ran (late), recorded at once with its later time, makes nothing out of order", () => {
+    const watch = new LandingWatch();
+    watch.expect("w", 100);
+    watch.expect("h", 200);
+    expect(watch.landed(record("h", 200, { late: true, skipped: true }))).toEqual({
+      outOfOrder: false,
+      expected: true,
+    });
+    expect(watch.landed(record("w", 100))).toEqual({ outOfOrder: false, expected: true });
   });
 
   test("lost once LANDING_LOST_AFTER_MS past its time, and forgotten; the latest landing time", () => {
@@ -417,12 +522,14 @@ describe("landings", () => {
     watch.expect("a", 1_000);
     watch.expect("b", 5_000);
     expect(watch.latestLandAt()).toBe(5_000);
+    expect(watch.nextLostAtMs()).toBe(1_001 + LANDING_LOST_AFTER_MS);
     expect(watch.takeLost(1_000 + LANDING_LOST_AFTER_MS)).toBe(0);
     expect(watch.takeLost(1_001 + LANDING_LOST_AFTER_MS)).toBe(1);
     expect(watch.inFlight()).toBe(1);
     watch.landed(record("b", 5_000));
     expect(watch.latestLandAt()).toBe(5_000);
     expect(new LandingWatch().latestLandAt()).toBe(Number.NEGATIVE_INFINITY);
+    expect(new LandingWatch().nextLostAtMs()).toBe(Number.POSITIVE_INFINITY);
   });
 });
 
@@ -458,9 +565,11 @@ describe("parseBatcherConfig", () => {
   });
 
   test("a new batcher's health: preparing, every count 0, no problem", () => {
-    expect(newBatcherHealth("joesguns", 5)).toMatchObject({
+    expect(newBatcherHealth("joesguns", "r1", 5)).toMatchObject({
       state: "preparing",
       target: "joesguns",
+      runName: "r1",
+      unexpected: 0,
       batchesStarted: 0,
       desyncs: 0,
       problem: null,
