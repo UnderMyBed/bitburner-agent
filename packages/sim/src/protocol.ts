@@ -339,6 +339,48 @@ export interface GameDiagnostics {
   pinnedLocale: string | null;
 }
 
+/** A number the game may make infinite, as the host sends it: JSON, which carries IPC, has no Infinity. */
+export type GameNumber = number | "Infinity";
+
+/** An augmentation, as the game defines it (`Augmentation/Augmentation.ts:173-226`): the game's own numbers. */
+export interface GameAugmentation {
+  name: string;
+  /** `baseCost` and `baseRepRequirement`, before any multiplier. */
+  baseMoneyCost: GameNumber;
+  baseRepCost: GameNumber;
+  factions: string[];
+  prereqs: string[];
+  /** Its multipliers that aren't 1, by the game's names (`mults`). */
+  multipliers: Record<string, number>;
+  isSpecial: boolean;
+  /** What an install of it gives: money, and programs. */
+  startingMoney: number;
+  programs: string[];
+}
+
+/** A faction, as the game defines it (`Faction/FactionInfo.tsx`). */
+export interface GameFaction {
+  name: string;
+  enemies: string[];
+  /** As `ns.singularity.getFactionInviteRequirements` returns them (`Singularity.ts:759-764`), now. */
+  inviteRequirements: unknown[];
+  /** Of "hacking", "field" and "security", in that order. */
+  workTypes: string[];
+  keepOnInstall: boolean;
+}
+
+/** The game's augmentations and factions, in the game's order (`diagnostics.gameData`). */
+export interface GameData {
+  augmentations: GameAugmentation[];
+  factions: GameFaction[];
+}
+
+/** An augmentation's price now, by the game's own `getAugCost` (`Augmentation/AugmentationHelpers.ts:127-161`). */
+export interface GameAugmentationCost {
+  moneyCost: GameNumber;
+  repCost: GameNumber;
+}
+
 export interface ClockDiagnostics {
   /** `Engine._lastUpdate`, which the engine reads from Date when its module loads. */
   engineLastUpdate: number;
@@ -461,6 +503,13 @@ export interface HostMethods {
   "diagnostics.queueAugmentation"(params: { augmentation: string }): void;
   /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. Test-only. */
   "diagnostics.bitNodeMultipliers"(params: { n: number; level: number }): Record<string, number>;
+  /**
+   * The game's augmentations and factions, read from its own objects, for core's generated data and the test that
+   * keeps it in step (#193). Test-only.
+   */
+  "diagnostics.gameData"(params: Record<string, never>): GameData;
+  /** Every augmentation's price now, by the game's own `getAugCost`, for core's price parity (#193). Test-only. */
+  "diagnostics.augmentationCosts"(params: Record<string, never>): Record<string, GameAugmentationCost>;
   /** The host's V8 heap in use, in bytes, after a full garbage collection. */
   "diagnostics.heap"(params: Record<string, never>): number;
   /** The host's V8 heap limit, in bytes: `maxHeapMb` plus room for the young generation, or Node's default. */

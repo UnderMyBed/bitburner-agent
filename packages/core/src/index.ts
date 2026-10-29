@@ -1,10 +1,28 @@
+export { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
 export {
   AUGMENTATION_NAMES,
+  AUGMENTATION_PRICE_GROWTH,
+  type AugmentationBitNodeMultipliers,
+  type AugmentationCost,
+  type AugmentationData,
+  type AugmentationPurchase,
+  type AugmentationPurchaseState,
+  augmentationBitNodeMultipliers,
+  augmentationCost,
+  augmentationPriceGrowth,
   augmentationProblems,
+  augmentationsSoldBy,
   BUY_AUGMENTATION_WORKER_NAME,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
+  missingPrerequisites,
   NEUROFLUX_GOVERNOR,
+  NEUROFLUX_LEVEL_GROWTH,
   neuroFluxLevel,
+  purchaseSequenceCost,
+  SHADOWS_OF_ANARCHY_AUGMENTATIONS,
+  SHADOWS_OF_ANARCHY_MONEY_GROWTH,
+  SHADOWS_OF_ANARCHY_REPUTATION_GROWTH,
+  SOURCE_FILE_11_PRICE_GROWTH_DISCOUNT,
 } from "./augmentations.ts";
 export { BACKDOOR_WORKER_NAME, isServerHostname } from "./backdoors.ts";
 export {
@@ -106,7 +124,15 @@ export {
   parseAgentConfig,
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
-export { FACTION_ENEMIES, FACTION_NAMES, JOIN_FACTION_WORKER_NAME } from "./factions.ts";
+export { FACTIONS } from "./faction-data.ts";
+export {
+  daedalusAugmentationsRequired,
+  FACTION_ENEMIES,
+  FACTION_NAMES,
+  type FactionData,
+  JOIN_FACTION_WORKER_NAME,
+  type PlayerRequirement,
+} from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   growthLogPerThread,
