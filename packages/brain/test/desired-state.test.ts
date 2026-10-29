@@ -580,18 +580,18 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
   });
 
-  test("full at 99, leaving room for the purchase in the protocol's 100: the 100th is refused, with a reason", () => {
+  test("full at 98, leaving room for the purchase and the backdoor (#195) in the protocol's 100: the 99th is refused", () => {
     const controller = new DesiredStateController({ channel, store });
     const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
-    for (let index = 0; index < 99; index += 1) {
+    for (let index = 0; index < 98; index += 1) {
       const args = { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] };
       expect(controller.addManualIntent({ action: "upgradeHomeRam", args })).toMatchObject({ ok: true });
     }
     expect(controller.addManualIntent({ action: "travel", args: { city: "Aevum" } })).toEqual({
       ok: false,
-      reason: "the manual queue is full: 99 intents at most",
+      reason: "the manual queue is full: 98 intents at most",
     });
-    expect(readManualIntents(store)).toHaveLength(99);
+    expect(readManualIntents(store)).toHaveLength(98);
   });
 
   test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
@@ -657,6 +657,112 @@ describe("the manual queue (#141, owner decision 36)", () => {
   test("a store value the brain didn't write fails, rather than guess", () => {
     store.setSetting("intents.manual", '[{"action":"travel","args":{"city":"Atlantis"}}]');
     expect(() => new DesiredStateController({ channel, store })).toThrow(/intents\.manual/);
+  });
+});
+
+describe("backdoors for the hacker factions (#195)", () => {
+  /** CSEC, needing hacking 54 and 1 port, beside n00dles. */
+  const withCsec: StaticSnapshotData = {
+    servers: [
+      ...network.servers,
+      staticServer("CSEC", { moneyMax: 0, requiredHackingSkill: 54, numOpenPortsRequired: 1 }),
+    ],
+  };
+  const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
+  /** A medium snapshot at `hacking`, CSEC rooted and backdoored as said, with TOR and BruteSSH.exe owned. */
+  const csecAt = (hacking: number, { rooted = true, backdoored = false, money = 0 } = {}) => {
+    const data = mediumData(
+      hacking,
+      { n00dles: true, CSEC: rooted },
+      { money, hasTorRouter: true, programs: ["BruteSSH.exe"] },
+    );
+    for (const server of data.servers) if (server.hostname === "CSEC") server.backdoorInstalled = backdoored;
+    return data;
+  };
+  const lastIntents = (connection: MemoryConnection) => desiredStates(connection).at(-1)?.intents;
+
+  test("asked for once rooted and at its level, as source backdoor, until installed and reported done", () => {
+    const lines: string[] = [];
+    const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    send(connection, "medium", csecAt(60, { rooted: false }));
+    expect(lastIntents(connection)).toEqual([]);
+    send(connection, "medium", csecAt(53));
+    expect(lastIntents(connection)).toEqual([]);
+    send(connection, "medium", csecAt(54));
+    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC]);
+    expect(controller.intentsView()).toEqual([
+      { id: BACKDOOR_CSEC.id, source: "backdoor", outcome: null, waitingFor: null },
+    ]);
+    // Reported done: still sent, so the Agent keeps it done, until a medium snapshot shows it installed.
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: BACKDOOR_CSEC.id, done: true, tries: 2, problem: null, backend: "sim" }],
+      dialogs: { handled: [], blocking: null },
+    });
+    send(connection, "medium", csecAt(55));
+    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC]);
+    send(connection, "medium", csecAt(55, { backdoored: true }));
+    expect(lastIntents(connection)).toEqual([]);
+    expect(controller.intentsView()).toEqual([]);
+    expect(lines).toEqual([
+      "backdoor: asking for CSEC (hacking 54, needs 54), for CyberSec's invitation",
+      "backdoor: CSEC backdoored, 0 s after it was asked for",
+    ]);
+  });
+
+  test("installed but not yet reported done: still sent, so the Agent's next try sends the terminal home", () => {
+    new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    send(connection, "medium", csecAt(60));
+    send(connection, "medium", csecAt(60, { backdoored: true }));
+    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC]);
+    const fast = (done: boolean) => ({
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: BACKDOOR_CSEC.id, done, tries: done ? 2 : 1, problem: null, backend: "ui" }],
+      dialogs: { handled: [], blocking: null },
+    });
+    send(connection, "fast", fast(false));
+    send(connection, "medium", csecAt(60, { backdoored: true }));
+    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC]);
+    send(connection, "fast", fast(true));
+    send(connection, "medium", csecAt(60, { backdoored: true }));
+    expect(lastIntents(connection)).toEqual([]);
+  });
+
+  test("after the purchase, so a `buy` never waits for its terminal action; once if the owner queued it too", () => {
+    store.setSetting("homeRam.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    send(connection, "slow", slowData());
+    send(connection, "medium", csecAt(60, { money: 2_000_000 }));
+    expect(lastIntents(connection)).toEqual([buyProgram("FTPCrack.exe"), BACKDOOR_CSEC]);
+    controller.addManualIntent({ action: "backdoor", args: { hostname: "CSEC" } });
+    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC, buyProgram("FTPCrack.exe")]);
+    expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+      [BACKDOOR_CSEC.id, "manual"],
+      ["buyProgram(FTPCrack.exe)", "purchase"],
+    ]);
+  });
+
+  test("with the hack loop off too; none before the connected Agent's snapshots, nor after it disconnects", () => {
+    store.setSetting("hackLoop.enabled", "false");
+    new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", withCsec);
+    expect(lastIntents(connection)).toEqual([]);
+    send(connection, "medium", csecAt(60));
+    expect(desiredStates(connection).at(-1)).toEqual({ hackLoop: loopOff, intents: [BACKDOOR_CSEC] });
+    connection.dropFromGameSide();
+    const again = connectAgent("session-2");
+    expect(lastIntents(again)).toEqual([]);
   });
 });
 

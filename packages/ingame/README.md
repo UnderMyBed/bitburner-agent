@@ -321,7 +321,7 @@ E2 buys Neurotrainer I and NeuroFlux level 1 from CyberSec (a save the simulator
 
 ## Backdoors
 
-[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`.
+[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`. Since #195 the brain asks for it itself on the hacker factions' servers, CSEC to run4theh111z, until the Agent reports it done ([`packages/brain`](../brain/README.md#backdoors-for-the-hacker-factions)).
 - **Checked first, by every backend** (`src/workers/backdoor-standing.ts`, `getServer`): installed, with the terminal not on the server, is done. Refused with why, as the terminal's `backdoor` would refuse it (`Terminal/commands/backdoor.ts`): "no server …", "… is the player's own" (home, a cloud server), "no root access on … (NUKE.exe first)", "hacking level 22: hong-fang-tea needs 30", or "no way from home to …". Core refuses an IP address, which `connect` would take but `scan` never lists. Only then does a backend find the terminal busy.
 - **`backdoor.js`**, with the server and a deadline:
   1. The Terminal page (unfocusing work first, and focusing it again after, as every page effector does).

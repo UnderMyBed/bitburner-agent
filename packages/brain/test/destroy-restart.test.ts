@@ -297,13 +297,23 @@ test("a save that starts at the BitVerse (w0r1d_d43m0n backdoored, no portal pic
   // The game saved there and loaded: it starts at the BitVerse, with no cinematic, and autoexec starts the Agent.
   const reloaded = await fresh.reload();
   expect((await reloaded.diagnostics.game()).page).toBe("BitVerse");
+  const typedBefore = await typedSoFar(reloaded);
   await fresh.game.runUntil(() => agentSessions(fresh).length === 2, 15_000);
   await fresh.game.runUntil(() => slow(fresh)?.resetInfo.currentNode === 1, 10_000);
+  // The hack loop rooted CSEC before the backdoor on w0r1d_d43m0n, and the level is 3042: the brain asks for CSEC's
+  // backdoor (#195), which the page can't type at the BitVerse (no sidebar), so neither does the simulator's effector.
+  const csecTried = () =>
+    fresh.latest<FastSnapshotData>("fast")?.intents.find((outcome) => outcome.id === "backdoor(CSEC)");
+  await fresh.game.runUntil(() => (csecTried()?.tries ?? 0) >= 1, 15_000);
+  expect(csecTried()).toMatchObject({
+    done: false,
+    backend: "sim",
+    problem: 'no "Terminal" in the sidebar (is its section collapsed?)',
+  });
   const lastNodeResetBefore = slow(fresh)?.resetInfo.lastNodeReset as number;
-  const typedBefore = await typedSoFar(reloaded);
   fresh.controller().addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
   await fresh.game.runUntil(() => agentSessions(fresh).length === 3, 60_000);
-  // Nothing typed at the BitVerse: no `connect`, no second `backdoor`.
+  // Nothing typed at the BitVerse: no `connect`, no second `backdoor`, no backdoor on CSEC.
   expect(await typedSoFar(reloaded)).toEqual(typedBefore);
   await fresh.game.runUntil(() => fresh.controller().intentsView().length === 0, 10_000);
   const resetAt = expectInBitNode2(fresh, lastNodeResetBefore, { 1: 1 });

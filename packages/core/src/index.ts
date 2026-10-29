@@ -6,7 +6,7 @@ export {
   NEUROFLUX_GOVERNOR,
   neuroFluxLevel,
 } from "./augmentations.ts";
-export { BACKDOOR_WORKER_NAME, isServerHostname } from "./backdoors.ts";
+export { BACKDOOR_WORKER_NAME, HACKER_FACTION_SERVERS, isServerHostname } from "./backdoors.ts";
 export {
   AGENT_SIM_EFFECTORS_GLOBAL,
   SINGULARITY_BACKDOOR_WORKER_NAME,
