@@ -12,6 +12,7 @@ import {
 } from "@bitburner-agent/bridge";
 import { DesiredStateController } from "../../src/desired-state.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
+import { IncomeWatch } from "../../src/income-watch.ts";
 import { brainChannel, recordChannelEvents, recordEvents } from "../../src/record-channel-events.ts";
 import { type SaveBackupEvent, SaveBackups } from "../../src/save-backups.ts";
 import type { SimulatedGame } from "../../src/simulated-game.ts";
@@ -44,6 +45,10 @@ export interface BrainInSimulation {
   deployer: Deployer;
   /** The desired state's controller (the hack loop, #134; the hacking programs, #136), when asked for. */
   desiredState: DesiredStateController | null;
+  /** With the controller, the money's last rise (#184), as main.ts has it. */
+  incomeWatch: IncomeWatch | null;
+  /** What the brain logged, in order: the income watch's lines (#184). */
+  logLines: string[];
   /** Every event the control channel reported, in order. */
   channelEvents: ControlChannelEvent[];
   /** Every event the deployer reported, in order. */
@@ -109,6 +114,16 @@ export function startBrainInSimulation(
     if (!data) throw new Error("the desired state keeps its switches in the store: give the brain its data");
     desiredStateController = new DesiredStateController({ channel, store: data.store, saveBackups });
   }
+  const logLines: string[] = [];
+  const controller = desiredStateController;
+  const incomeWatch =
+    controller === null
+      ? null
+      : new IncomeWatch({
+          channel,
+          hackLoopTarget: () => controller.hackLoopView().target,
+          log: (line) => logLines.push(line),
+        });
   const deployer = new Deployer({
     build,
     controlPort: CONTROL_PORT,
@@ -129,6 +144,8 @@ export function startBrainInSimulation(
     channel,
     deployer,
     desiredState: desiredStateController,
+    incomeWatch,
+    logLines,
     channelEvents: [],
     deployerEvents: [],
     saveBackupEvents: [],

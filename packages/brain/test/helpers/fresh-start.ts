@@ -69,13 +69,16 @@ export function useFreshStarts() {
     withDesiredState,
     beforeAgent = async () => {},
     fixture = { kind: "new", tutorial: "skipped" },
+    seed = 1,
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
     fixture?: SimulationOptions["fixture"];
+    /** The simulation's seed: 1 unless a test runs several (#184). */
+    seed?: number;
   }) {
     const simulation = await start({
-      seed: 1,
+      seed,
       epochMs: EPOCH_MS,
       fixture,
       network: { listenUrls: [CONTROL_URL, RFA_URL] },
@@ -114,7 +117,7 @@ export function useFreshStarts() {
        */
       reload: async (save?: Uint8Array): Promise<Simulation> => {
         const reloaded = await start({
-          seed: 1,
+          seed,
           fixture: { kind: "save", bytes: save ?? (await simulation.save()) },
           network: { listenUrls: [CONTROL_URL, RFA_URL] },
         });

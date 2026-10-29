@@ -235,6 +235,52 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
+test("each host its own target (#184): some earn, some prepare the next; a loop against another target goes, the owner's stays", async () => {
+  const loop = await freshStart({ withDesiredState: false, beforeAgent: ownerScriptOnFoodnstuff });
+  const { simulation, game, brain } = loop;
+  const desire = (hackLoop: DesiredState["hackLoop"]) => brain.channel.setDesiredState({ hackLoop, intents: [] });
+  const targetsByHost = async () =>
+    Object.fromEntries((await loop.loopsRunning()).map((each) => [each.hostname, each.args[0]]));
+  const earning = NO_PORT_SERVERS.filter((hostname) => !["foodnstuff", "joesguns"].includes(hostname));
+  desire({
+    enabled: true,
+    target: "n00dles",
+    hosts: earning,
+    preparing: { target: "joesguns", hosts: ["foodnstuff", "joesguns"] },
+  });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  expect(await targetsByHost()).toEqual({
+    ...Object.fromEntries(earning.map((hostname) => [hostname, "n00dles"])),
+    foodnstuff: "joesguns",
+    joesguns: "joesguns",
+  });
+  const before = await loop.loopsRunning();
+
+  // joesguns ready: every host moves to it. Only the loops whose target isn't their host's are stopped and started.
+  desire({ enabled: true, target: "joesguns", hosts: NO_PORT_SERVERS });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  expect(await targetsByHost()).toEqual(Object.fromEntries(NO_PORT_SERVERS.map((hostname) => [hostname, "joesguns"])));
+  const after = await loop.loopsRunning();
+  for (const hostname of ["foodnstuff", "joesguns"]) {
+    expect(after.find((each) => each.hostname === hostname)?.pid).toBe(
+      before.find((each) => each.hostname === hostname)?.pid,
+    );
+  }
+  expect(after.find((each) => each.hostname === "n00dles")?.pid).not.toBe(
+    before.find((each) => each.hostname === "n00dles")?.pid,
+  );
+  // The owner's script on foodnstuff was never one of ours.
+  expect((await simulation.ps("foodnstuff")).filter((process) => process.filename === OWNER_SCRIPT)).toEqual([
+    expect.objectContaining({ threads: OWNER_THREADS }),
+  ]);
+  // The Agent's change log names both while preparing.
+  const [agent] = (await simulation.ps("home")).filter((process) => process.filename.endsWith("/agent.js"));
+  if (!agent) throw new Error("no Agent on home");
+  const lines = (await simulation.logs(agent.pid)).filter((line) => line.includes("agent: hack loop: on"));
+  expect(lines[0]).toMatch(/on, \d+ threads on 5 servers, against n00dles; preparing joesguns on 2 servers$/);
+  expect(lines.at(-1)).toMatch(/on, \d+ threads on 7 servers, against joesguns$/);
+});
+
 test("a purchase the page can't make (#136, #141): the Agent logs why and when it tries again, and never runs two workers at once", async () => {
   const loop = await freshStart({ withDesiredState: false, beforeAgent: withoutSimEffectors });
   const { simulation, game, brain } = loop;

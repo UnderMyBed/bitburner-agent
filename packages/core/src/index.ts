@@ -74,6 +74,7 @@ export {
   desiredStateWhileHolding,
   encodeControlMessage,
   type GameInfo,
+  type HackLoopState,
   type HelloMessage,
   isSafeIntegerAtLeast,
   MAX_FIELD_LENGTH,
@@ -109,11 +110,16 @@ export { FACTION_ENEMIES, FACTION_NAMES, JOIN_FACTION_WORKER_NAME } from "./fact
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   HACK_LOOP_DEPLOY_WORKER_NAME,
+  HACK_LOOP_MONEY_FRACTION,
   HACK_LOOP_ROOT_WORKER_NAME,
   HACK_LOOP_SCRIPT_NAME,
+  HACK_LOOP_SECURITY_MARGIN,
   type HackLoopDeployReport,
   type HackLoopRootReport,
+  hackLoopDeployArguments,
+  hackLoopTargetsByHost,
   isHackLoopFile,
+  isHackLoopReady,
 } from "./hack-loop.ts";
 export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";

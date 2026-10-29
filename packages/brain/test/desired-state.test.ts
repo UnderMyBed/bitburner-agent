@@ -91,7 +91,7 @@ const upgradeHomeRam = (fromRam: number, vendor = "Alpha Enterprises") =>
 test("on: nothing until the connected Agent's own static and medium snapshots, then the target and hosts", () => {
   const controller = new DesiredStateController({ channel, store });
   const connection = connectAgent();
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [] });
+  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [], preparing: null });
   send(connection, "static", network);
   expect(desiredStates(connection)).toEqual([]);
   // Nothing rooted yet: on, with no target, so the Agent roots what it can.
@@ -101,7 +101,85 @@ test("on: nothing until the connected Agent's own static and medium snapshots, t
     { hackLoop: { enabled: true, target: null, hosts: [] }, intents: [] },
     { hackLoop: loopOn, intents: [] },
   ]);
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: false, target: "n00dles", hosts: ["n00dles"] });
+  expect(controller.hackLoopView()).toEqual({
+    enabled: true,
+    waiting: false,
+    target: "n00dles",
+    hosts: ["n00dles"],
+    preparing: null,
+  });
+});
+
+describe("the move to the next target (#184): prepared while the current one earns", () => {
+  // n00dles at hacking 1; zer0 (needs 75) from hacking 150, at 4% of its money until prepared. alpha is the largest host.
+  const twoTargets: StaticSnapshotData = {
+    servers: [
+      staticServer("home", { moneyMax: 0 }),
+      staticServer("n00dles", { moneyMax: 1_750_000, serverGrowth: 3_000 }),
+      staticServer("zer0", { moneyMax: 187_500_000, serverGrowth: 40, minDifficulty: 10, requiredHackingSkill: 75 }),
+      staticServer("alpha", { moneyMax: 0 }),
+      staticServer("bravo", { moneyMax: 0 }),
+    ],
+  };
+  const at = (hacking: number, zer0Money: number) => {
+    const data = mediumData(hacking, { home: true, n00dles: true, zer0: true, alpha: true, bravo: true });
+    for (const server of data.servers) {
+      if (server.hostname === "alpha") server.maxRam = 64;
+      if (server.hostname === "n00dles" || server.hostname === "zer0") server.maxRam = 0;
+      if (server.hostname === "n00dles") server.moneyAvailable = 1_750_000;
+      if (server.hostname === "zer0") Object.assign(server, { moneyAvailable: zer0Money, hackDifficulty: 10 });
+    }
+    return data;
+  };
+  const earning = { enabled: true, target: "n00dles", hosts: ["alpha", "bravo"] };
+  const preparing = {
+    enabled: true,
+    target: "n00dles",
+    hosts: ["bravo"],
+    preparing: { target: "zer0", hosts: ["alpha"] },
+  };
+  const moved = { enabled: true, target: "zer0", hosts: ["alpha", "bravo"] };
+
+  test("earning on n00dles, zer0 is prepared on the largest host, then everything moves once it's ready", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(100, 7_500_000));
+    send(connection, "medium", at(150, 7_500_000));
+    expect(controller.hackLoopView()).toEqual({ ...preparing, waiting: false });
+    send(connection, "medium", at(150, 100_000_000));
+    send(connection, "medium", at(150, 140_625_000));
+    // Hacked below 75% again: zer0 is current now, so it stays.
+    send(connection, "medium", at(150, 100_000_000));
+    expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([earning, preparing, moved]);
+  });
+
+  test("a brain restart, or an Agent connecting again, starts from the targets that are ready", () => {
+    new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(150, 140_625_000));
+    // zer0 ready from the start: no need to prepare it.
+    expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([moved]);
+    const again = connectAgent();
+    send(again, "static", twoTargets);
+    send(again, "medium", at(150, 7_500_000));
+    // n00dles is the ready one: it earns, and zer0 is prepared again.
+    expect(desiredStates(again).map((state) => state.hackLoop)).toEqual([preparing]);
+  });
+
+  test("off forgets the last target: on again starts from the ready ones", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", twoTargets);
+    send(connection, "medium", at(150, 140_625_000));
+    controller.setHackLoopEnabled(false);
+    send(connection, "medium", at(150, 7_500_000));
+    controller.setHackLoopEnabled(true);
+    expect(controller.hackLoopView()).toMatchObject({ target: "n00dles", preparing: { target: "zer0" } });
+    controller.setHackLoopEnabled(false);
+    expect(controller.hackLoopView()).toMatchObject({ preparing: null });
+  });
 });
 
 test("every state sent carries safe mode's ttlMs (#160): 12 hours, kept by the Agent that long with the brain gone", () => {
@@ -148,7 +226,13 @@ test("the hack loop's switch: off is sent at once, kept in the store; on again s
   send(connection, "medium", mediumData(1, { n00dles: true }));
   controller.setHackLoopEnabled(false);
   expect(readHackLoopEnabled(store)).toBe(false);
-  expect(controller.hackLoopView()).toEqual({ enabled: false, waiting: false, target: null, hosts: [] });
+  expect(controller.hackLoopView()).toEqual({
+    enabled: false,
+    waiting: false,
+    target: null,
+    hosts: [],
+    preparing: null,
+  });
   controller.setHackLoopEnabled(true);
   expect(desiredStates(connection).map((state) => state.hackLoop)).toEqual([loopOn, loopOff, loopOn]);
 });
@@ -166,7 +250,7 @@ test("a disconnect forgets the Agent's snapshots: the views show waiting", () =>
   send(connection, "static", network);
   send(connection, "medium", mediumData(1, { n00dles: true }));
   connection.dropFromGameSide();
-  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [] });
+  expect(controller.hackLoopView()).toEqual({ enabled: true, waiting: true, target: null, hosts: [], preparing: null });
   expect(controller.programsView()).toMatchObject({ enabled: true, waiting: true });
 });
 

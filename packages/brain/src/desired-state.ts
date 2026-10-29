@@ -19,7 +19,7 @@ import {
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { chooseHackHosts, chooseHackTarget, HACK_LOOP_ENABLED_SETTING, readHackLoopEnabled } from "./hack-loop.ts";
+import { HACK_LOOP_ENABLED_SETTING, type HackTargetNote, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
 import {
@@ -54,8 +54,11 @@ export interface HackLoopView {
   enabled: boolean;
   /** On, but the brain hasn't yet had the connected Agent's static and medium snapshots, so it has sent nothing new. */
   waiting: boolean;
+  /** The target it earns on, and its hosts. */
   target: string | null;
   hosts: string[];
+  /** The next target, being prepared on these hosts while the others earn (#184), or null. */
+  preparing: { target: string; hosts: string[] } | null;
 }
 
 /** What the dashboard shows of the hacking programs. */
@@ -142,6 +145,11 @@ export class DesiredStateController {
   #slowData: SlowSnapshotData | null = null;
   #fastData: FastSnapshotData | null = null;
   #desired: DesiredState | null = null;
+  /**
+   * The hack loop's target last set for the connected Agent, and whether it earns, or null (#184): kept while the next
+   * one is prepared. None after a connect, a disconnect or the switch off: the rule then starts from the ready targets.
+   */
+  #hackTarget: HackTargetNote | null = null;
   /** The purchase the brain's rules ask for now, or null. */
   #purchase: Intent | null = null;
   /** From the connected Agent's latest medium snapshot, or null. */
@@ -174,6 +182,7 @@ export class DesiredStateController {
         this.#mediumData = null;
         this.#slowData = null;
         this.#fastData = null;
+        this.#hackTarget = null;
         // Counted on the last Agent's snapshots: every gate starts again.
         this.#gates.forget();
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
@@ -318,6 +327,7 @@ export class DesiredStateController {
       waiting: enabled && this.#desired === null,
       target: enabled ? (hackLoop?.target ?? null) : null,
       hosts: enabled ? (hackLoop?.hosts ?? []) : [],
+      preparing: enabled ? (hackLoop?.preparing ?? null) : null,
     };
   }
 
@@ -460,19 +470,14 @@ export class DesiredStateController {
     // Every state, so the Agent's safe mode keeps it (#160).
     const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };
     if (!hackLoopEnabled) {
+      this.#hackTarget = null;
       this.#desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents, ...workAndTtl };
     } else if (this.#staticData === null || this.#mediumData === null) {
       this.#desired = null;
     } else {
-      this.#desired = {
-        hackLoop: {
-          enabled: true,
-          target: chooseHackTarget(this.#staticData, this.#mediumData),
-          hosts: chooseHackHosts(this.#staticData, this.#mediumData),
-        },
-        intents,
-        ...workAndTtl,
-      };
+      const { hackLoop, note } = planHackLoop(this.#staticData, this.#mediumData, this.#hackTarget);
+      this.#hackTarget = note;
+      this.#desired = { hackLoop: { enabled: true, ...hackLoop }, intents, ...workAndTtl };
     }
     this.#channel.setDesiredState(this.#desired);
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).

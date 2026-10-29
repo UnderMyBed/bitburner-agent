@@ -73,7 +73,13 @@ const BUSY_STATUS: DashboardStatus = {
     { atMs: NOW_MS - 2_000, kind: "agentConnected", detail: { agentSessionId: "session-1" } },
   ],
   supervision: { state: "running", paused: false, gaveUpAtMs: null, relaunches: [] },
-  hackLoop: { enabled: true, waiting: false, target: "n00dles", hosts: ["foodnstuff", "joesguns", "n00dles"] },
+  hackLoop: {
+    enabled: true,
+    waiting: false,
+    target: "n00dles",
+    hosts: ["foodnstuff", "joesguns", "n00dles"],
+    preparing: null,
+  },
   programs: {
     enabled: true,
     waiting: false,
@@ -119,11 +125,12 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     brainStartedAtMs,
     brainStartedEventId,
     supervising: true,
-    hackLoop: { enabled: true, waiting: true, target: null, hosts: [] },
+    hackLoop: { enabled: true, waiting: true, target: null, hosts: [], preparing: null },
     programs: { enabled: true, waiting: true, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: true, waiting: true, ram: null, upgradingTo: null, waitingFor: null },
     intents: [],
     work: { desired: null, outcome: null },
+    income: null,
     nowMs: NOW_MS,
   });
   store.close();
@@ -355,7 +362,9 @@ test("the hack loop's button (#134) sends its switch, the other way from the sta
       const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
       current = {
         ...BUSY_STATUS,
-        hackLoop: enabled ? BUSY_STATUS.hackLoop : { enabled, waiting: false, target: null, hosts: [] },
+        hackLoop: enabled
+          ? BUSY_STATUS.hackLoop
+          : { enabled, waiting: false, target: null, hosts: [], preparing: null },
       };
       return { status: 200, body: { enabled } };
     }
@@ -379,10 +388,25 @@ test("the hack loop's button (#134) sends its switch, the other way from the sta
 test.each([
   [
     "waiting for the Agent's snapshots",
-    { enabled: true, waiting: true, target: null, hosts: [] },
+    { enabled: true, waiting: true, target: null, hosts: [], preparing: null },
     "on, waiting for the Agent's snapshots",
   ],
-  ["no target yet", { enabled: true, waiting: false, target: null, hosts: [] }, "on, rooting servers; no target yet"],
+  [
+    "no target yet",
+    { enabled: true, waiting: false, target: null, hosts: [], preparing: null },
+    "on, rooting servers; no target yet",
+  ],
+  [
+    "preparing the next target (#184)",
+    {
+      enabled: true,
+      waiting: false,
+      target: "n00dles",
+      hosts: ["foodnstuff", "joesguns", "n00dles"],
+      preparing: { target: "zer0", hosts: ["max-hardware", "omega-net"] },
+    },
+    "on, against n00dles, on 3 servers; preparing zer0 on 2 servers",
+  ],
 ])("the hack loop on, %s, says so", async (_description, hackLoop, text) => {
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, hackLoop } }));
   expect(textOf(document, "#hack-loop")).toContain(`Hack loop: ${text}`);

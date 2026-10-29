@@ -59,9 +59,10 @@ export type AgentMessage = HelloMessage | SnapshotMessage;
 export interface DesiredState {
   /**
    * The hack loop: servers rooted where possible, and the loop running on `hosts` against `target` (null: none worth
-   * hacking yet). Off, every loop stops, wherever it runs.
+   * hacking yet), and on `preparing.hosts` against `preparing.target`, the next target, weakened and grown until it's
+   * ready to hack while the others earn (#184). Off, every loop stops, wherever it runs.
    */
-  hackLoop: { enabled: boolean; target: string | null; hosts: string[] };
+  hackLoop: HackLoopState;
   /**
    * What to do, in order, each until the game shows it done: buying the TOR router, a program or home RAM (the brain's
    * purchase rules), and anything the owner queued (the dashboard). An intent that leaves the list isn't tried again.
@@ -78,6 +79,19 @@ export interface DesiredState {
    * (an older brain) or 0: it isn't kept past the brain.
    */
   ttlMs?: number;
+}
+
+/** The desired state's hack loop. */
+export interface HackLoopState {
+  enabled: boolean;
+  target: string | null;
+  hosts: string[];
+  /**
+   * The next target and the hosts preparing it (#184), or absent (null): none. Never with the loop off or without a
+   * target, its hosts never among `hosts`, and both lists together within `MAX_HACK_LOOP_HOSTS`. Absent is how an
+   * older brain, and safe mode's file from one, says none.
+   */
+  preparing?: { target: string; hosts: string[] } | null;
 }
 
 /** The longest `ttlMs` taken: 7 days, so a time it makes is always one a date can show (#160). */
@@ -253,19 +267,44 @@ function parseIntents(intents: unknown): ParsedMessage<Intent[]> {
   }
   return { ok: true, message: parsedIntents };
 }
-/** A desired state's `hackLoop`: its known fields only, or why it isn't valid. Safe mode's file uses it too (#160). */
-export function parseHackLoop(hackLoop: unknown): ParsedMessage<DesiredState["hackLoop"]> {
+/**
+ * A desired state's `hackLoop`: its known fields only, or why it isn't valid. Safe mode's file uses it too (#160).
+ * `preparing` absent and null are the same (#184): only one with hosts to prepare on is carried.
+ */
+export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
   if (typeof hackLoop !== "object" || hackLoop === null) return { ok: false, reason: "hackLoop isn't an object" };
-  const { enabled, target, hosts } = hackLoop as JsonObject;
+  const { enabled, target, hosts, preparing } = hackLoop as JsonObject;
   if (typeof enabled !== "boolean") return { ok: false, reason: "hackLoop.enabled isn't a boolean" };
   if (target !== null && !isShortNonEmptyString(target)) {
     return { ok: false, reason: `hackLoop.target is ${describeValue(target)}` };
   }
-  if (!Array.isArray(hosts) || hosts.length > MAX_HACK_LOOP_HOSTS || !hosts.every(isShortNonEmptyString)) {
-    return { ok: false, reason: "hackLoop.hosts isn't a list of hostnames" };
+  if (!isHostList(hosts)) return { ok: false, reason: "hackLoop.hosts isn't a list of hostnames" };
+  if (preparing === undefined || preparing === null) {
+    return { ok: true, message: { enabled, target, hosts: [...hosts] } };
   }
-  return { ok: true, message: { enabled, target, hosts: [...hosts] } };
+  if (typeof preparing !== "object") return { ok: false, reason: "hackLoop.preparing isn't an object" };
+  const { target: preparingTarget, hosts: preparingHosts } = preparing as JsonObject;
+  if (!enabled || target === null) return { ok: false, reason: "hackLoop.preparing with the loop off or no target" };
+  if (!isShortNonEmptyString(preparingTarget)) {
+    return { ok: false, reason: `hackLoop.preparing.target is ${describeValue(preparingTarget)}` };
+  }
+  if (!isHostList(preparingHosts) || hosts.length + preparingHosts.length > MAX_HACK_LOOP_HOSTS) {
+    return { ok: false, reason: "hackLoop.preparing.hosts isn't a list of hostnames" };
+  }
+  // One target per host: the deploy worker would otherwise start one and stop it on the next round.
+  const earningHosts = new Set(hosts);
+  if (preparingHosts.some((host) => earningHosts.has(host))) {
+    return { ok: false, reason: "hackLoop.preparing.hosts names a host of hackLoop.hosts" };
+  }
+  if (preparingHosts.length === 0) return { ok: true, message: { enabled, target, hosts: [...hosts] } };
+  return {
+    ok: true,
+    message: { enabled, target, hosts: [...hosts], preparing: { target: preparingTarget, hosts: [...preparingHosts] } },
+  };
 }
+
+const isHostList = (hosts: unknown): hosts is string[] =>
+  Array.isArray(hosts) && hosts.length <= MAX_HACK_LOOP_HOSTS && hosts.every(isShortNonEmptyString);
 
 /** What the Agent accepts from the brain. */
 export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
