@@ -118,7 +118,12 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     programs: [],
     servers: [],
   } as MediumSnapshotData);
-  recordSnapshot("slow", STARTED_AT_MS + 2_000, {});
+  const factionState = {
+    joined: [{ name: "CyberSec", reputation: 5, favor: 0 }],
+    invitations: [],
+    queuedAugmentations: [],
+  };
+  recordSnapshot("slow", STARTED_AT_MS + 2_000, { factions: { backend: "ui", state: factionState, problem: null } });
   recordSnapshot("static", STARTED_AT_MS + 2_000, {});
   const nowMs = STARTED_AT_MS + 21_000;
 
@@ -158,6 +163,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     homeRam,
     intents,
     work: { desired: null, outcome: null },
+    factions: { receivedAtMs: STARTED_AT_MS + 2_000, backend: "ui", state: factionState, problem: null },
   });
   // Newest first.
   expect(built.events.map((event) => event.kind)).toEqual(["agentConnected", "deployed", "brainStarted"]);
@@ -400,4 +406,36 @@ test("a dialog left open in the newest fast snapshot (#143) is the dialogBlockin
   expect(status(STARTED_AT_MS + 3_000).alerts).toMatchObject([
     { name: "dialogBlocking", sinceMs: STARTED_AT_MS + 2_000, detail: expect.stringContaining("travel to Aevum") },
   ]);
+});
+
+test("factionStateUnread (#197): the newest slow snapshot's problem is the alert, and the panel says it; read again, gone", () => {
+  const nowMs = STARTED_AT_MS + 70_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  recordSnapshot("slow", STARTED_AT_MS + 5_000, {
+    factions: { backend: "ui", state: null, problem: "a dialog the Agent leaves for the owner is open" },
+  });
+  const unread = status(nowMs);
+  expect(unread.alerts).toEqual([
+    {
+      name: "factionStateUnread",
+      sinceMs: STARTED_AT_MS + 5_000,
+      detail: "the faction state couldn't be read (ui): a dialog the Agent leaves for the owner is open",
+    },
+  ]);
+  expect(unread.factions).toEqual({
+    receivedAtMs: STARTED_AT_MS + 5_000,
+    backend: "ui",
+    state: null,
+    problem: "a dialog the Agent leaves for the owner is open",
+  });
+  // A slow snapshot with no reading at all (an older Agent) is unread too, never an empty state.
+  recordSnapshot("slow", STARTED_AT_MS + 65_000, { purchasedServers: [] });
+  expect(status(nowMs).alerts.map((alert) => alert.detail)).toEqual([
+    "the faction state couldn't be read: the slow snapshot carries no faction state the brain can read",
+  ]);
+  expect(status(nowMs).factions).toMatchObject({ backend: null, state: null });
+  const empty = { joined: [], invitations: [], queuedAugmentations: [] };
+  recordSnapshot("slow", STARTED_AT_MS + 66_000, { factions: { backend: "sim", state: empty, problem: null } });
+  expect(status(nowMs).alerts).toEqual([]);
+  expect(status(nowMs).factions).toMatchObject({ backend: "sim", state: empty, problem: null });
 });

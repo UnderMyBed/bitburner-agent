@@ -20,6 +20,7 @@ const quiet: AlertFacts = {
   blockingDialog: null,
   hackLoopTarget: null,
   income: null,
+  factionState: null,
 };
 const names = (facts: AlertFacts) => activeAlerts(facts).map((alert) => alert.name);
 
@@ -152,4 +153,22 @@ describe("incomeStalled (#184): the hack loop on against a target, and money not
       "intentStuck",
     ]);
   });
+});
+
+test("factionStateUnread (#197): while the newest slow snapshot's faction state couldn't be read, since it came", () => {
+  const atMs = STARTED_AT_MS + 5_000;
+  expect(
+    activeAlerts({ ...quiet, factionState: { atMs, backend: "ui", problem: "no game page to read it through" } }),
+  ).toEqual([
+    {
+      name: "factionStateUnread",
+      sinceMs: atMs,
+      detail: "the faction state couldn't be read (ui): no game page to read it through",
+    },
+  ]);
+  // No reading at all, so no backend.
+  expect(
+    activeAlerts({ ...quiet, factionState: { atMs, backend: null, problem: "the slow snapshot carries none" } })[0]
+      ?.detail,
+  ).toBe("the faction state couldn't be read: the slow snapshot carries none");
 });

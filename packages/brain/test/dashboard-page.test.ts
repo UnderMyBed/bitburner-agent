@@ -102,6 +102,19 @@ const BUSY_STATUS: DashboardStatus = {
     desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
     outcome: { converged: false, problem: "no CyberSec among the factions joined", backend: "ui" },
   },
+  factions: {
+    receivedAtMs: NOW_MS - 30_000,
+    backend: "ui",
+    state: {
+      joined: [
+        { name: "CyberSec", reputation: 12345.678, favor: 1.234 },
+        { name: "Sector-12", reputation: 0.4, favor: 0 },
+      ],
+      invitations: ["Aevum"],
+      queuedAugmentations: ["Neurotrainer I", "NeuroFlux Governor", "NeuroFlux Governor"],
+    },
+    problem: null,
+  },
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
@@ -261,6 +274,31 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
     "buyTor(Alpha Enterprises)purchasenot reported yet",
   ]);
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
+  // The faction state (#197): each faction's reputation and favour, the invitations, the queue counted.
+  expect(textOf(document, "#factions")).toContain("via ui.");
+  expect([...document.querySelectorAll("#factions tr")].map((row) => row.textContent)).toEqual([
+    "CyberSec12,346 rep1.23 favour",
+    "Sector-120 rep0 favour",
+  ]);
+  expect(textOf(document, "#factions")).toContain("Invitations: Aevum");
+  expect(textOf(document, "#factions")).toContain("Queued augmentations: Neurotrainer I, NeuroFlux Governor ×2");
+  expect(textOf(document, "#factions")).not.toContain("Couldn't be read");
+});
+
+test("the faction state unread (#197): why, in red, and nothing in place of the state", async () => {
+  const status: DashboardStatus = {
+    ...BUSY_STATUS,
+    factions: { receivedAtMs: NOW_MS, backend: "ui", state: null, problem: "no game page to read it through" },
+  };
+  const { document } = await openPage(() => ({ status: 200, body: status }));
+  expectDataShown(document);
+  const problem = [...document.querySelectorAll("#factions div div")].find((each) =>
+    each.textContent?.startsWith("Couldn't be read"),
+  );
+  expect(problem?.textContent).toBe("Couldn't be read: no game page to read it through");
+  expect(problem?.className).toBe("bad");
+  expect(textOf(document, "#factions")).not.toContain("Invitations");
+  expect(document.querySelectorAll("#factions tr")).toHaveLength(0);
 });
 
 test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
@@ -273,6 +311,7 @@ test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
   expect(textOf(document, "#gaps")).toContain("No gaps.");
   expect(textOf(document, "#agent")).toContain("Connectedyes");
   expect(textOf(document, "#tiers")).toContain("mediumnone yet");
+  expect(textOf(document, "#factions")).toContain("No slow snapshot yet.");
 });
 
 test("gave up, from the real builder: the Agent gone, a relaunch listed, and the switch offers Resume", async () => {

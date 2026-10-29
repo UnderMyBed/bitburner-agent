@@ -2,17 +2,20 @@
 // Claude) to read after a live run instead of a manual smoke test. Read-only: it records nothing, and reads only what
 // the brain already stores (snapshots, events and the hack loop's switch), in one read transaction, folding the
 // snapshots row by row so a long run's window never sits in memory whole.
-import type {
-  FastSnapshotData,
-  HandledDialog,
-  IntentOutcome,
-  MediumSnapshotData,
-  SlowSnapshotData,
-  StaticSnapshotData,
-  WorkOutcome,
+import {
+  type FactionState,
+  type FastSnapshotData,
+  factionStateOf,
+  type HandledDialog,
+  type IntentOutcome,
+  type MediumSnapshotData,
+  type SlowSnapshotData,
+  type StaticSnapshotData,
+  type WorkOutcome,
 } from "@bitburner-agent/core";
 import { INCOME_STALLED_AFTER_MS, INTENT_STUCK_AFTER_TRIES } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
+import { factionStateProblemOf } from "./faction-state.ts";
 import {
   DEFAULT_GAP_THRESHOLD_MS,
   describePageHeap,
@@ -183,6 +186,60 @@ function serverStates(data: MediumSnapshotData | undefined): Map<string, string>
   );
 }
 
+// --- The faction state (#197) -----------------------------------------------------------------------------------------
+
+/** A faction's reputation and favour, at its first and last reading in the window. */
+interface FactionChange {
+  first: { reputation: number; favor: number };
+  last: { reputation: number; favor: number };
+}
+
+/** A stretch of slow snapshots in a row whose faction state couldn't be read, for the same reason. */
+interface UnreadStretch {
+  problem: string;
+  backend: string | null;
+  fromMs: number;
+  toMs: number;
+  count: number;
+}
+
+/**
+ * The faction state over the window's slow snapshots, one at a time: each faction's first and last reading, when each
+ * invitation was first seen, the first and last queue, and the stretches it couldn't be read.
+ */
+class FactionStateFolding {
+  readonly factions = new Map<string, FactionChange>();
+  readonly invitations = new Map<string, number>();
+  firstQueue: string[] | null = null;
+  lastQueue: string[] | null = null;
+  readonly unread: UnreadStretch[] = [];
+  #current: UnreadStretch | null = null;
+
+  add(atMs: number, data: SlowSnapshotData): void {
+    const { backend, problem } = factionStateProblemOf(data);
+    if (problem === null) {
+      this.#current = null;
+    } else if (this.#current?.problem === problem && this.#current.backend === backend) {
+      this.#current.toMs = atMs;
+      this.#current.count += 1;
+    } else {
+      this.#current = { problem, backend, fromMs: atMs, toMs: atMs, count: 1 };
+      this.unread.push(this.#current);
+    }
+    const state: FactionState | null = factionStateOf(data);
+    if (state === null) return;
+    for (const { name, reputation, favor } of state.joined) {
+      const now = { reputation, favor };
+      const known = this.factions.get(name);
+      if (known) known.last = now;
+      else this.factions.set(name, { first: now, last: now });
+    }
+    for (const name of state.invitations) if (!this.invitations.has(name)) this.invitations.set(name, atMs);
+    this.firstQueue ??= state.queuedAugmentations;
+    this.lastQueue = state.queuedAugmentations;
+  }
+}
+
 // --- Reading the store ------------------------------------------------------------------------------------------------
 
 /** What the report keeps of each fast snapshot: not the home processes, the bulk of it. */
@@ -207,6 +264,8 @@ interface RunFacts extends RunWindow {
   targets: MovedServers[];
   slowFirst: SlowSnapshotData | undefined;
   slowLast: SlowSnapshotData | undefined;
+  /** The faction state over the slow snapshots (#197). */
+  factionState: FactionStateFolding;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -236,10 +295,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     }
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
-    for (const { data } of ofTier<SlowSnapshotData>("slow")) {
+    const factionState = new FactionStateFolding();
+    for (const { atMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
       slowFirst ??= data;
       slowLast = data;
+      factionState.add(atMs, data);
       for (const name of namesOf(data.purchasedServers)) playersServers.add(name);
     }
     let mediumFirst: MediumSnapshotData | undefined;
@@ -283,6 +344,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       targets: inference.stretches,
       slowFirst,
       slowLast,
+      factionState,
       snapshotCount,
       playersServers,
       hackLoopEnabled: readHackLoopEnabled(store),
@@ -503,6 +565,7 @@ function progressSection(facts: RunFacts): string[] {
     lines.push(
       `  purchased servers: ${describeChange(listOrNone(namesOf(slowFirst.purchasedServers)), listOrNone(namesOf(slowLast.purchasedServers)))}`,
     );
+    lines.push(...factionProgressLines(facts.factionState));
   }
   lines.push(
     "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
@@ -514,6 +577,35 @@ function progressSection(facts: RunFacts): string[] {
     );
   }
   if (facts.targets.length === 0) lines.push("    none moved");
+  return lines;
+}
+
+const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
+const formatFavor = (favor: number) => favor.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+/** The augmentations queued, NeuroFlux Governor's copies counted: "Neurotrainer I, NeuroFlux Governor ×2". */
+function describeQueue(queue: string[] | null): string {
+  if (queue === null) return UNKNOWN;
+  const counts = new Map<string, number>();
+  for (const name of queue) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return listOrNone([...counts].map(([name, count]) => (count === 1 ? name : `${name} ×${count}`)));
+}
+
+/** The faction state (#197), first reading → last: each faction's reputation and favour, the invitations, the queue. */
+function factionProgressLines(folding: FactionStateFolding): string[] {
+  const lines = ["  faction reputation and favour, first reading → last:"];
+  for (const [name, { first, last }] of folding.factions) {
+    const reputation = describeChange(formatReputation(first.reputation), formatReputation(last.reputation));
+    const favor = describeChange(formatFavor(first.favor), formatFavor(last.favor));
+    lines.push(`    ${name}: reputation ${reputation}, favour ${favor}`);
+  }
+  if (folding.factions.size === 0) lines.push(`    ${folding.lastQueue === null ? "never read" : "none joined"}`);
+  lines.push("  faction invitations, as first seen:");
+  for (const [name, atMs] of folding.invitations) lines.push(`    ${name}, ${formatIsoTime(atMs)}`);
+  if (folding.invitations.size === 0) lines.push(`    ${folding.lastQueue === null ? "never read" : "none"}`);
+  lines.push(
+    `  augmentations queued: ${describeChange(describeQueue(folding.firstQueue), describeQueue(folding.lastQueue))}`,
+  );
   return lines;
 }
 
@@ -637,6 +729,16 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
     failures.push(line);
   }
   if (blocking.length === 0) lines.push("    none");
+
+  lines.push("  faction state unread (slow snapshots whose faction state couldn't be read, #197):");
+  for (const { problem, backend, fromMs, toMs, count } of facts.factionState.unread) {
+    const line =
+      `faction state unread from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} (${count} slow ` +
+      `${count === 1 ? "snapshot" : "snapshots"}${backend === null ? "" : `, ${backend}`}): ${problem}`;
+    lines.push(`    ${line}`);
+    failures.push(line);
+  }
+  if (facts.factionState.unread.length === 0) lines.push("    none");
 
   lines.push(...disconnectLines(facts, failures));
 

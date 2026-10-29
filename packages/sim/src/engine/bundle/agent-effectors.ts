@@ -644,6 +644,33 @@ const effectors = {
       `backdooring ${hostname}: about ${Math.max(1, Math.ceil(running.timeLeft))} s left, then ${entering}`,
     );
   },
+  /**
+   * The faction state (#197), what the `ui` worker reads from the page and Singularity's worker from the API: each
+   * joined faction's reputation and favour (`Faction/Faction.ts:17`, `:32`), in the order joined, the invitations
+   * (`Player.factionInvitations`) and the queue in the game's form (`Player.queuedAugmentations`: NeuroFlux once per
+   * level). Not named like an NS function.
+   */
+  readFactionState(): EffectorResult & {
+    state: {
+      joined: { name: string; reputation: number; favor: number }[];
+      invitations: string[];
+      queuedAugmentations: string[];
+    };
+  } {
+    return {
+      done: true,
+      problem: null,
+      state: {
+        joined: Player.factions.map((name) => ({
+          name,
+          reputation: Factions[name].playerReputation,
+          favor: Factions[name].favor,
+        })),
+        invitations: [...Player.factionInvitations],
+        queuedAugmentations: Player.queuedAugmentations.map((augmentation) => augmentation.name),
+      },
+    };
+  },
 };
 
 export type AgentSimEffectors = typeof effectors;
