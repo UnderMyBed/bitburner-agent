@@ -11,6 +11,7 @@ import {
   portalXpath,
 } from "../../src/page/destroy-page.ts";
 import { findOnPage, openGamePage } from "../../src/page/game-page.ts";
+import { takeRestartNote } from "../../src/page/restart-timer.ts";
 import { clicks, element, optionsInSidebar, STARTED, terminal, withProps } from "./stand-in-page.ts";
 
 const BOOT = "agent/boot.js";
@@ -86,6 +87,7 @@ function bladeburnerCinematic() {
 }
 
 afterEach(() => {
+  localStorage.clear();
   // A timer left armed by a test is no other test's.
   (document as unknown as Record<string, { disarm(): void } | undefined>).__bitburnerAgentDestroyTimer?.disarm();
   vi.useRealTimers();
@@ -300,6 +302,30 @@ describe("the worker's steps (destroyOnPage)", () => {
     });
   }
 
+  /**
+   * The worker's run on fake timers (#220): time moved on a little at a time until it settles, so the page timer it
+   * arms never outlives the test on real ones, polling the next tests' pages.
+   */
+  async function settled<T>(running: Promise<T>): Promise<T> {
+    let done = false;
+    const result = running.finally(() => {
+      done = true;
+    });
+    while (!done) await vi.advanceTimersByTimeAsync(50);
+    return result;
+  }
+
+  /**
+   * After the BitVerse's Enter: the timer runs on to the Terminal and the run, and is finished, leaving no note: were
+   * it still at it, its time up would leave one (#220).
+   */
+  async function timerFinished() {
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect([...document.querySelectorAll("#terminal > li")].map((line) => line.textContent)).toContain(STARTED);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(takeRestartNote()).toBeNull();
+  }
+
   const pageFor = (ns: NS) => {
     const gamePage = openGamePage(ns, Date.now() + 3_000);
     if (gamePage === null) throw new Error("no page");
@@ -307,58 +333,76 @@ describe("the worker's steps (destroyOnPage)", () => {
   };
 
   test("the terminal's way: the timer armed, the way and the backdoor typed, reported under way; then the BitVerse is entered", async () => {
+    vi.useFakeTimers();
     const { ns, state } = workerNs();
     terminalInSidebar();
     const { ran } = gameTerminal(state);
-    const problem = await destroyOnPage(ns, pageFor(ns), 2, BOOT);
+    const problem = await settled(destroyOnPage(ns, pageFor(ns), 2, BOOT));
     expect(problem).toMatch(/^backdooring w0r1d_d43m0n: about \d+ s left, then entering BitNode 2 from the BitVerse$/);
     expect(ran).toEqual(["connect The-Cave", `connect ${WD}`, "backdoor"]);
     // The backdoor's end: the BitVerse, which the timer, still armed, enters.
     document.body.replaceChildren();
     bitVerse();
-    await vi.waitFor(() => expect(clicks).toContain("enter 2"), { timeout: 3_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicks).toContain("enter 2");
+    await timerFinished();
   });
 
   test("the backdoor entered but not seen started in time (#177 review): the timer stays armed, so the BitVerse is still entered", async () => {
+    vi.useFakeTimers();
     const { ns, state } = workerNs();
     terminalInSidebar();
     gameTerminal(state, { starts: false });
-    expect(await destroyOnPage(ns, pageFor(ns), 2, BOOT)).toBe(`the terminal didn't start the backdoor on ${WD}`);
+    expect(await settled(destroyOnPage(ns, pageFor(ns), 2, BOOT))).toBe(
+      `the terminal didn't start the backdoor on ${WD}`,
+    );
     document.body.replaceChildren();
     bitVerse();
-    await vi.waitFor(() => expect(clicks).toContain("enter 2"), { timeout: 3_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicks).toContain("enter 2");
+    await timerFinished();
   });
 
   test("a problem before the backdoor is entered (the owner's line in the terminal): the timer disarmed, a map left alone", async () => {
+    vi.useFakeTimers();
     const { ns, state } = workerNs();
     terminalInSidebar();
     const { ran } = gameTerminal(state, { typed: "ls" });
-    expect(await destroyOnPage(ns, pageFor(ns), 2, BOOT)).toBe("the terminal has a line typed in it");
+    expect(await settled(destroyOnPage(ns, pageFor(ns), 2, BOOT))).toBe("the terminal has a line typed in it");
     expect(ran).toEqual([]);
     document.body.replaceChildren();
     bitVerse();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Disarmed: however long, the map is never touched, and no note left.
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(clicks).toEqual(["Terminal"]);
+    expect(takeRestartNote()).toBeNull();
   });
 
   test("a backdoor already under way (the terminal busy): nothing typed, and the earlier try's timer kept for it", async () => {
+    vi.useFakeTimers();
     const { ns, state } = workerNs();
     terminalInSidebar();
     const { ran } = gameTerminal(state, { disabled: true });
     const earlier = armRestartAfterDestroy(document, BOOT, 2, 5_000);
-    expect(await destroyOnPage(ns, pageFor(ns), 2, BOOT)).toBe("terminal busy");
+    expect(await settled(destroyOnPage(ns, pageFor(ns), 2, BOOT))).toBe("terminal busy");
     expect(ran).toEqual([]);
     expect(earlier.state().outcome).toBe("waiting");
     // That backdoor's end: its timer enters the BitVerse.
     document.body.replaceChildren();
     bitVerse();
-    await vi.waitFor(() => expect(clicks).toEqual(["Terminal", "portal 2", "enter 2"]), { timeout: 3_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicks).toEqual(["Terminal", "portal 2", "enter 2"]);
+    await timerFinished();
+    expect(earlier.state().outcome).toBe("started");
   });
 
   test("at the BitVerse already (a load there): armed at the portal, nothing typed, and entered", async () => {
+    vi.useFakeTimers();
     const { ns } = workerNs();
     bitVerse();
-    expect(await destroyOnPage(ns, pageFor(ns), 2, BOOT)).toBe("entering BitNode 2 from the BitVerse");
-    await vi.waitFor(() => expect(clicks).toEqual(["portal 2", "enter 2"]), { timeout: 3_000 });
+    expect(await settled(destroyOnPage(ns, pageFor(ns), 2, BOOT))).toBe("entering BitNode 2 from the BitVerse");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicks).toEqual(["portal 2", "enter 2"]);
+    await timerFinished();
   });
 });
