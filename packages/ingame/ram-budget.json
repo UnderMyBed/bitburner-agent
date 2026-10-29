@@ -1,6 +1,10 @@
 {
   "agent.js": 3.0,
   "backdoor.js": 4.0,
+  "batch-grow.js": 1.8,
+  "batch-hack.js": 1.75,
+  "batch-weaken.js": 1.8,
+  "batcher.js": 3.85,
   "boot.js": 2.7,
   "buy-augmentation.js": 2.6,
   "buy-program.js": 1.75,

@@ -309,7 +309,8 @@ The script RAM is the game's (RamCostGenerator.ts:11-20). A host's usable RAM co
 - **`test/hacking-ceiling-parity.test.ts`:** in the simulator, with Formulas.exe bought through the simulator's own effectors:
   - core's chance, share, times, growth log and weaken against `ns.formulas.hacking`, over four servers and two players;
   - the security per thread and the scripts' RAM against the game's own;
-  - the batcher ceiling above whole-thread HWGW batches sized with the game's own `growThreads`.
+  - the batcher ceiling above whole-thread HWGW batches sized with the game's own `growThreads`;
+  - core's `growThreads`, the batcher's (#204), equal to the game's `formulas.hacking.growThreads` over the same servers, players, shares and cores.
 - **`test/hacking-ceiling.test.ts`:**
   - the score's hosts and the bound's rooted servers, cores, multipliers and unknowns;
   - income rises, relaunches and installs;
