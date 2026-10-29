@@ -1,7 +1,8 @@
 /**
  * Gaps in the fast snapshots (the heartbeat, every 2 s): the evidence for M2's "live snapshots on Steam for 24 h
  * without gaps" (architecture §13). A gap is an interval longer than the threshold between consecutive snapshots, or
- * between the window's edges and the first or last one.
+ * between the window's edges and the first or last one. Also the lines `npm run gaps` and `npm run report` both print:
+ * times, durations and the page heap.
  */
 export interface GapWindow {
   sinceMs: number;
@@ -52,7 +53,9 @@ export function findGaps(receivedAtMs: number[], { sinceMs, untilMs, thresholdMs
   };
 }
 
+/** A time as ISO, or "none" for no time. */
 export const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
+/** A duration in seconds, to a tenth: "10.0 s". */
 export const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
 const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 

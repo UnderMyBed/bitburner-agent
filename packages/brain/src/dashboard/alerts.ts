@@ -7,7 +7,10 @@ import type { IntentOutcome } from "@bitburner-agent/core";
 export const AGENT_SILENT_AFTER_MS = 60_000;
 /** An intent tried this many times and still not done is `intentStuck` (#141): 5 tries are 2 minutes. */
 export const INTENT_STUCK_AFTER_TRIES = 5;
-/** The player's money not rising for this long, with the hack loop on and a target, is `incomeStalled` (#184). */
+/**
+ * Money not rising for this long is an income stall: the run report's threshold (#185), the same as #184's
+ * `incomeStalled` alert.
+ */
 export const INCOME_STALLED_AFTER_MS = 10 * 60_000;
 
 /** How much of a blocking dialog's text the alert quotes. */

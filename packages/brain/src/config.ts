@@ -1,9 +1,11 @@
 // The brain's data directory and its config.json: created with defaults on first run, then read (packages/brain/README.md).
+// Also the command-line parsing the brain's commands share: flags, ISO times, and the store and environment that the
+// read-only commands (`npm run gaps`, `npm run report`) read.
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_BACKUP_INTERVAL_MS } from "./save-backups.ts";
-import type { Environment } from "./telemetry-store.ts";
+import { ENVIRONMENTS, type Environment } from "./telemetry-store.ts";
 
 export const DATA_DIRECTORY_VARIABLE = "BITBURNER_AGENT_DATA_DIR";
 export const CONFIG_FILE_NAME = "config.json";
@@ -87,6 +89,23 @@ export function resolveDataDirectory(argv: string[], environmentVariables: NodeJ
     );
   }
   return path.resolve(environmentVariables.INIT_CWD ?? process.cwd(), dataDirectory);
+}
+
+/**
+ * The store a read-only command reads (`npm run gaps`, `npm run report`): in the data directory, as the brain's. Throws
+ * if there's none, rather than create one.
+ */
+export function existingStorePath(argv: string[], environmentVariables: NodeJS.ProcessEnv): string {
+  const storePath = path.join(resolveDataDirectory(argv, environmentVariables), STORE_FILE_NAME);
+  if (!existsSync(storePath)) throw new Error(`No telemetry store at ${storePath}: has the brain run there?`);
+  return storePath;
+}
+
+/** `--environment`: E0 unless given, and one of the store's environments. */
+export function environmentFlag(argv: string[]): Environment {
+  const environment = (flagValue(argv, "--environment") ?? "E0") as Environment;
+  if (!ENVIRONMENTS.includes(environment)) throw new Error(`--environment must be one of ${ENVIRONMENTS.join(", ")}`);
+  return environment;
 }
 
 export function defaultConfig(): BrainConfig {

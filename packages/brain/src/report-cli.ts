@@ -3,20 +3,15 @@
 // window starts at the newest brain start; without --until, it ends now.
 // Exits 0 on PASS, 1 on FAIL, 2 when it couldn't run: no store, no brain start to begin from, a window that ends before
 // it starts, or one with nothing recorded in it.
-import { existsSync } from "node:fs";
-import path from "node:path";
 import process from "node:process";
-import { flagValue, parseIsoTime, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
+import { environmentFlag, existingStorePath, flagValue, parseIsoTime } from "./config.ts";
 import { newestBrainStartMs, runReport } from "./run-report.ts";
-import { ENVIRONMENTS, type Environment, TelemetryStore } from "./telemetry-store.ts";
+import { TelemetryStore } from "./telemetry-store.ts";
 
 try {
   const argv = process.argv.slice(2);
-  const dataDirectory = resolveDataDirectory(argv, process.env);
-  const storePath = path.join(dataDirectory, STORE_FILE_NAME);
-  if (!existsSync(storePath)) throw new Error(`No telemetry store at ${storePath}: has the brain run there?`);
-  const environment = (flagValue(argv, "--environment") ?? "E0") as Environment;
-  if (!ENVIRONMENTS.includes(environment)) throw new Error(`--environment must be one of ${ENVIRONMENTS.join(", ")}`);
+  const storePath = existingStorePath(argv, process.env);
+  const environment = environmentFlag(argv);
   const sinceText = flagValue(argv, "--since");
   const untilText = flagValue(argv, "--until");
   const untilMs = untilText ? parseIsoTime(untilText, "--until") : Date.now();

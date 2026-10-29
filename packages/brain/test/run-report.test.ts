@@ -11,7 +11,7 @@ import type {
   SlowSnapshotData,
   StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
 import { findIncomeStalls, formatDuration, inferHackTargets, runReport } from "../src/run-report.ts";
@@ -108,8 +108,12 @@ function mediumData({
     ],
   };
 }
-const slowData = (purchasedServers: string[] = [], ownedAugs: Record<string, number> = {}): SlowSnapshotData => ({
-  resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs, ownedSF: {}, bitNodeOptions: {} },
+const slowData = (
+  purchasedServers: string[] = [],
+  ownedAugs: Record<string, number> = {},
+  ownedSF: Record<string, number> = {},
+): SlowSnapshotData => ({
+  resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs, ownedSF, bitNodeOptions: {} },
   purchasedServers,
 });
 const staticData = (): StaticSnapshotData => ({
@@ -167,7 +171,7 @@ function cleanRun({
       }),
     );
   }
-  snapshot("slow", RUN_MS, slowData(["pserv-0"], { "Neurotrainer I": 1 }));
+  snapshot("slow", RUN_MS, slowData(["pserv-0"], { "Neurotrainer I": 1 }, { 4: 3 }));
   event(3 * MINUTE, "gameDialog", {
     kind: "alert",
     text: "Message received from unknown sender: I know you can sense it. I know you are searching for it.",
@@ -218,6 +222,7 @@ describe("the sections", () => {
       "  hacking: 1 → 12",
       "  other skills: strength 1 → 1",
       "  home RAM: 8 GB → 16 GB",
+      "  home RAM used: 4 GB (unchanged)",
       "  TOR router: no → yes",
       "  port openers: none → BruteSSH.exe",
       "  the game's servers rooted: 1 → 2",
@@ -226,6 +231,7 @@ describe("the sections", () => {
       "  jobs: none (unchanged)",
       "  installed augmentations: none → Neurotrainer I",
       "  BitNode: 1 (unchanged)",
+      "  Source-Files: none → SF4.3",
       "  purchased servers: none → pserv-0",
       `    n00dles: ${at(20 * SECOND)} to ${at(RUN_MS)}`,
     ]) {
@@ -252,6 +258,74 @@ describe("the sections", () => {
     expect(text).toContain("  page heap: first 100.0 MB, last 100.0 MB, lowest 100.0 MB, highest 300.0 MB");
   });
 
+  test("an intent id given again after it was done is another episode, each with its own outcome", () => {
+    cleanRun({
+      fast: (offsetMs) =>
+        fastData({
+          intents: [
+            offsetMs < MINUTE
+              ? intent("travel(Aevum)", { done: offsetMs >= 30 * SECOND })
+              : intent("travel(Aevum)", { tries: offsetMs < 2 * MINUTE ? 1 : 2, problem: "no money" }),
+          ],
+        }),
+    });
+    const { text } = report();
+    expect(text).toContain(
+      `    travel(Aevum): done after 1 try (sim); done by ${at(30 * SECOND)}\n` +
+        `    travel(Aevum): not done, 2 tries (sim): no money; first seen ${at(MINUTE)}`,
+    );
+  });
+
+  test("home RAM used comes from the fast snapshots; malformed values read as unknown", () => {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("fast", 10 * SECOND, fastData({ game: { money: 0, homeRamUsed: 4.5, homeMaxRam: 8, homeProcesses: [] } }));
+    snapshot("fast", 12 * SECOND, fastData({ game: null }));
+    snapshot("medium", 10 * SECOND, { player: { skills: {} }, hasTorRouter: false, programs: [], servers: [] });
+    snapshot("medium", 20 * SECOND, {
+      player: { money: "lots", skills: {} },
+      hasTorRouter: false,
+      programs: [],
+      servers: [],
+    });
+    const { text } = report();
+    for (const line of [
+      "  money: unknown (unchanged)",
+      "  hacking: unknown (unchanged)",
+      "  home RAM: unknown (unchanged)",
+      "  home RAM used: 4.5 GB → unknown",
+      "  city: unknown (unchanged)",
+    ]) {
+      expect(text).toContain(line);
+    }
+    expect(text).not.toMatch(/undefined|NaN/);
+  });
+
+  test("an earlier brain start in the day before the window is noted", () => {
+    event(-3 * MINUTE, "brainStarted", { release: "r" });
+    cleanRun();
+    expect(report().text).toContain(
+      `  note: the brain also started at ${at(-3 * MINUTE)}, 3 min before the window: for a run that spans a ` +
+        "restart, give --since",
+    );
+  });
+
+  test("a brain start more than a day before the window isn't noted", () => {
+    event(-25 * 60 * MINUTE, "brainStarted", { release: "r" });
+    cleanRun();
+    expect(report().text).not.toContain("note: the brain also started");
+  });
+
+  test("the snapshots are read one row at a time, in one read transaction", () => {
+    cleanRun();
+    const iterate = vi.spyOn(store, "iterateSnapshotsInWindow");
+    const transaction = vi.spyOn(store, "readTransaction");
+    expect(report().failures).toEqual([]);
+    expect(iterate.mock.calls.map(([query]) => query.tier).sort()).toEqual(["fast", "medium", "slow", "static"]);
+    expect(transaction).toHaveBeenCalledOnce();
+    // Every read was inside it.
+    expect(Math.min(...iterate.mock.invocationCallOrder)).toBeGreaterThan(transaction.mock.invocationCallOrder[0] ?? 0);
+  });
+
   test("an intent not done says its tries and problem, and when first seen", () => {
     cleanRun({
       fast: () => fastData({ intents: [intent("travel(Aevum)", { tries: 2, problem: "no money", backend: "ui" })] }),
@@ -267,7 +341,7 @@ describe("the sections", () => {
     const { text } = report();
     for (const line of [
       "  no medium snapshot (the player and the servers) in the window",
-      "  no slow snapshot (the BitNode, augmentations, purchased servers) in the window",
+      "  no slow snapshot (the BitNode, augmentations, Source-Files, purchased servers) in the window",
       "    none moved",
       "  intents:\n    none",
       "  work, as it changed:\n    not reported",
@@ -289,7 +363,25 @@ describe("each failure is a FAIL, with its line", () => {
     cleanRun({ skipFast: (offsetMs) => offsetMs > 60 * SECOND && offsetMs < 70 * SECOND });
     const { failures, verdictLine } = verdict();
     expect(verdictLine).toBe("Verdict: FAIL");
-    expect(failures).toEqual([`gap: ${at(60 * SECOND)} to ${at(70 * SECOND)} (10.0 s)`]);
+    expect(failures).toEqual([`gap: ${at(60 * SECOND)} to ${at(70 * SECOND)} (10.0 s); nothing recorded during it`]);
+  });
+
+  test("a gap names the restarts in it, and a reset intent the Agent held before it", () => {
+    cleanRun({
+      skipFast: (offsetMs) => offsetMs > 60 * SECOND && offsetMs < 100 * SECOND,
+      fast: (offsetMs) =>
+        fastData({ intents: offsetMs <= 60 * SECOND ? [intent("installAugmentations()", { done: true })] : [] }),
+    });
+    event(70 * SECOND, "agentDisconnected", { agentSessionId: "session-1" });
+    event(80 * SECOND, "brainStarted", { release: "r2" });
+    event(99 * SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    // A save backup isn't a restart: not named.
+    event(98 * SECOND, "saveBackup", { file: "f", sizeBytes: 1 });
+    expect(verdict().failures).toEqual([
+      `gap: ${at(60 * SECOND)} to ${at(100 * SECOND)} (40.0 s); during it: agentDisconnected at ${at(70 * SECOND)}, ` +
+        `brainStarted at ${at(80 * SECOND)}, agentConnected at ${at(99 * SECOND)}; before it, the Agent held ` +
+        "installAugmentations()",
+    ]);
   });
 
   test("an interval of exactly 6 s isn't a gap", () => {
@@ -338,6 +430,29 @@ describe("each failure is a FAIL, with its line", () => {
         offsetMs <= 4 * MINUTE ? 1_000 + offsetMs : offsetMs < 830 * SECOND ? 241_000 : 241_000 + offsetMs,
     });
     expect(verdict().failures).toEqual([]);
+  });
+
+  test("with the hack loop switched off, a stall is shown, not counted; switched on, it's a failure", () => {
+    cleanRun({ money: (offsetMs) => Math.min(1_000 + offsetMs, 1_000 + 5 * MINUTE) });
+    store.setSetting("hackLoop.enabled", "false");
+    const off = verdict();
+    expect(off.failures).toEqual([]);
+    expect(off.text).toContain(
+      "the hack loop is switched off now, so these are shown, not counted:\n    income stalled from",
+    );
+    store.setSetting("hackLoop.enabled", "true");
+    expect(verdict().failures).toHaveLength(1);
+  });
+
+  test("a stall over a heartbeat gap says so: the money then went unseen", () => {
+    cleanRun({
+      money: (offsetMs) => Math.min(1_000 + offsetMs, 1_000 + 5 * MINUTE),
+      skipFast: (offsetMs) => offsetMs > 6 * MINUTE && offsetMs < 11 * MINUTE,
+    });
+    expect(verdict().failures).toContain(
+      `income stalled from ${at(5 * MINUTE)} to ${at(RUN_MS)}, the last snapshot, still stalled (15 min): money ` +
+        "$301,000 → $301,000; spans a heartbeat gap of 5 min",
+    );
   });
 
   test("an income stall still going at the last snapshot says so", () => {
@@ -391,8 +506,31 @@ describe("each failure is a FAIL, with its line", () => {
     event(5 * MINUTE, "agentDisconnected", { agentSessionId: "session-1" });
     event(5 * MINUTE + 61 * SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
     expect(verdict().failures).toEqual([
-      `Agent disconnected at ${at(5 * MINUTE)} (session session-1) and reconnected only at ${at(5 * MINUTE + 61 * SECOND)}`,
+      `Agent disconnected at ${at(5 * MINUTE)} (session session-1) and reconnected only at ${at(5 * MINUTE + 61 * SECOND)}; nothing recorded during it`,
     ]);
+  });
+
+  test("a dialog blocking twice, with a clear page between, is two episodes", () => {
+    cleanRun({
+      fast: (offsetMs) =>
+        fastData({
+          dialogs: {
+            handled: [],
+            blocking: (offsetMs >= MINUTE && offsetMs <= 2 * MINUTE) || offsetMs >= 3 * MINUTE ? "Are you sure?" : null,
+          },
+        }),
+    });
+    expect(verdict().failures).toEqual([
+      `dialog left blocking from ${at(MINUTE)} to ${at(2 * MINUTE)}: "Are you sure?"`,
+      `dialog left blocking from ${at(3 * MINUTE)} to ${at(RUN_MS)}: "Are you sure?"`,
+    ]);
+  });
+
+  test("a replaced session's disconnect and its successor's connect in the same millisecond are a reconnect", () => {
+    cleanRun();
+    event(5 * MINUTE, "agentDisconnected", { agentSessionId: "session-1" });
+    event(5 * MINUTE, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-c", game: {} });
+    expect(verdict().failures).toEqual([]);
   });
 
   test("a reconnect within 60 s is fine", () => {
@@ -408,10 +546,14 @@ describe("each failure is a FAIL, with its line", () => {
     event(10 * MINUTE, "relaunch", { cause: "notRunning" });
     const { failures } = verdict();
     expect(failures).toContain(
-      `Agent disconnected at ${at(5 * MINUTE)} (session session-1) and never reconnected in the window`,
+      `Agent disconnected at ${at(5 * MINUTE)} (session session-1) and never reconnected in the window; during it: ` +
+        `relaunch at ${at(10 * MINUTE)}`,
     );
     // And the heartbeat's silence after it, to the run's last record (the promotion's event, at 12 minutes), is a gap.
-    expect(failures).toContain(`gap: ${at(5 * MINUTE)} to ${at(12 * MINUTE)} (420.0 s)`);
+    expect(failures).toContain(
+      `gap: ${at(5 * MINUTE)} to ${at(12 * MINUTE)} (420.0 s); during it: agentDisconnected at ${at(5 * MINUTE)}, ` +
+        `relaunch at ${at(10 * MINUTE)}`,
+    );
   });
 
   test("a disconnect that's the run's last record isn't: the run ended there", () => {
@@ -426,7 +568,7 @@ describe("each failure is a FAIL, with its line", () => {
     event(RUN_MS + 2 * SECOND, "saveBackup", { failure: "no connection" });
     expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * SECOND }).failures).toEqual([]);
     expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 61 * SECOND }).failures).toEqual([
-      `Agent disconnected at ${at(RUN_MS + SECOND)} (session session-1) and never reconnected in the window`,
+      `Agent disconnected at ${at(RUN_MS + SECOND)} (session session-1) and never reconnected in the window; nothing recorded during it`,
     ]);
   });
 
@@ -454,7 +596,7 @@ describe("each failure is a FAIL, with its line", () => {
     const { text } = report();
     expect(text.split("\n").slice(-3)).toEqual([
       "Verdict: FAIL",
-      `  gap: ${at(60 * SECOND)} to ${at(70 * SECOND)} (10.0 s)`,
+      `  gap: ${at(60 * SECOND)} to ${at(70 * SECOND)} (10.0 s); nothing recorded during it`,
       `  ${at(MINUTE)} version drift: drift`,
     ]);
   });
