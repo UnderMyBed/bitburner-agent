@@ -13,6 +13,8 @@
 // doesn't report in time, or is still running from before is skipped, named in `degradedTiers`, and tried again next
 // round, until it succeeds.
 import {
+  type BatcherDeployReport,
+  type BatcherHealth,
   CONTROL_PROTOCOL_VERSION,
   deployedFilePath,
   type FactionStateReading,
@@ -71,6 +73,8 @@ export function createSnapshotter(
     workerRunner,
     intentOutcomes,
     workOutcome,
+    batcherHealth = () => null,
+    batcherDeploy = () => null,
     dialogReport,
     refusedMessage = () => null,
     readFactions,
@@ -83,6 +87,10 @@ export function createSnapshotter(
     intentOutcomes: () => IntentOutcome[];
     /** How the work went (#151), for the fast snapshot: null while the brain wants none. */
     workOutcome: () => WorkOutcome | null;
+    /** The batcher's health (#205), for the fast snapshot: null with none on its port. */
+    batcherHealth?: () => BatcherHealth | null;
+    /** The batcher's deploy worker's last report while it's wanted (#211), for the fast snapshot. */
+    batcherDeploy?: () => BatcherDeployReport | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
     /** The brain's last message refused, while the Agent hasn't taken a desired state since (#194's review). */
@@ -177,6 +185,8 @@ export function createSnapshotter(
         intents: intentOutcomes(),
         dialogs: dialogReport(),
         work: workOutcome(),
+        batcher: batcherHealth(),
+        batcherDeploy: batcherDeploy(),
         refusedMessage: refusedMessage(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));

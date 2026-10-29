@@ -1,15 +1,39 @@
 // What the Agent keeps on home for safe mode (#160): the file's format, and what it refuses.
 import { describe, expect, test } from "vitest";
+import type { BatcherState } from "../src/control-protocol.ts";
 import { DESIRED_STATE_FILE } from "../src/deploy-layout.ts";
 import { encodeSafeModeState, parseSafeModeState, type SafeModeState } from "../src/safe-mode.ts";
 
+const BATCHER: BatcherState = {
+  runOn: "foodnstuff",
+  config: {
+    target: "n00dles",
+    figures: { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 },
+    player: { intelligence: 0, mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 } },
+    hosts: ["sigma-cosmetics", "joesguns"],
+    hackShare: 0.1,
+    spacingMs: 20_000,
+  },
+};
+
 const kept: SafeModeState = {
   hackLoop: { enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] },
+  batcher: null,
   work: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
   ttlMs: 43_200_000,
   heardAtMs: 1_767_225_600_000,
   lastAugReset: 1_767_220_000_000,
 };
+
+test("a file from before the batcher (#205) has none; a batcher the protocol refuses makes it invalid", () => {
+  const { batcher: _none, ...older } = kept;
+  expect(parseSafeModeState(JSON.stringify(older))).toEqual({ ok: true, message: kept });
+  const sharing = { ...kept, batcher: { runOn: "home", config: { ...BATCHER.config, hosts: ["n00dles"] } } };
+  expect(parseSafeModeState(JSON.stringify(sharing))).toMatchObject({
+    ok: false,
+    reason: expect.stringContaining("n00dles"),
+  });
+});
 
 test("lives beside current.txt, outside every deployment's folder, as a text file the game takes", () => {
   expect(DESIRED_STATE_FILE).toBe("agent/desired-state.json");
@@ -33,6 +57,8 @@ test.each<SafeModeState>([
   { ...kept, work: { kind: "crime", crime: "Shoplift", focus: false } },
   // A save older than lastAugReset's migration can hold -1 (SaveDataMigrationUtils.ts:432).
   { ...kept, lastAugReset: -1 },
+  // The batcher (#205), on hosts the hack loop doesn't use.
+  { ...kept, hackLoop: { enabled: true, target: "n00dles", hosts: [] }, batcher: BATCHER },
 ])("round trips %#", (state) => {
   expect(parseSafeModeState(encodeSafeModeState(state))).toEqual({ ok: true, message: state });
 });

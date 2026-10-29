@@ -60,6 +60,7 @@ const dashboard = (fresh: Awaited<ReturnType<typeof freshStart>>) =>
     brainStartedEventId: 0,
     supervising: false,
     hackLoop: { enabled: false, waiting: false, target: null, hosts: [], hackThreads: null, preparing: null },
+    batcher: { enabled: false, sent: null, why: null, health: null },
     programs: { enabled: false, waiting: false, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: false, waiting: false, ram: null, upgradingTo: null, waitingFor: null },
     cloudServers: { enabled: false, waiting: false, servers: [], buying: null, waitingFor: null, problem: null },

@@ -16,6 +16,7 @@ import {
 } from "@bitburner-agent/core";
 import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline } from "./augmentation-report.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
+import { batcherSection } from "./batcher-report.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
 import {
   BACKDOOR_OVERDUE_AFTER_MS,
@@ -291,6 +292,10 @@ interface FastPoint {
   blocking: unknown;
   /** Absent from an older Agent. */
   work: WorkOutcome | null | undefined;
+  /** The batcher's health (#205); absent from an older Agent. */
+  batcher: unknown;
+  /** The batcher's deploy worker's last report while wanted (#211); absent from an older Agent. */
+  batcherDeploy: unknown;
 }
 
 /** A cloud server bought (`fromRam` null) or upgraded (#194), as the medium snapshots show it. */
@@ -446,6 +451,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         intents: Array.isArray(data.intents) ? data.intents.filter((outcome) => typeof outcome?.id === "string") : [],
         blocking: data.dialogs?.blocking,
         work: data.work,
+        batcher: data.batcher,
+        batcherDeploy: data.batcherDeploy,
       });
     }
     const earlierStarts = store
@@ -511,6 +518,11 @@ export function runReport(
     ...healthSection(facts, gapThresholdMs, failures),
     "",
     ...facts.hacking.section(failures),
+    "",
+    ...batcherSection(
+      facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
+      failures,
+    ),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
     ...failures.map((failure) => `  ${failure}`),

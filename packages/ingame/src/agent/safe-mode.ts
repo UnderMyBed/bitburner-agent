@@ -28,7 +28,7 @@ import { createChangeLog } from "./activity.ts";
 const ROUNDS_BETWEEN_WRITES = 30;
 
 /** What safe mode converges on: the activities of the last desired state. */
-export type SafeModeActivities = Pick<SafeModeState, "hackLoop" | "work">;
+export type SafeModeActivities = Pick<SafeModeState, "hackLoop" | "batcher" | "work">;
 
 /** "12 h", "5 min" or "90 s", for the log. */
 const describeDuration = (ms: number): string =>
@@ -94,6 +94,7 @@ export function createSafeMode(ns: NS, { gameDrift }: { gameDrift: string | null
       }
       kept = structuredClone({
         hackLoop: state.hackLoop,
+        batcher: state.batcher ?? null,
         work: state.work ?? null,
         ttlMs: state.ttlMs,
         heardAtMs: nowMs,
@@ -143,7 +144,8 @@ export function createSafeMode(ns: NS, { gameDrift }: { gameDrift: string | null
       // As a hold would: the hack loop as kept, never the work on a game nobody has checked.
       const what = gameDrift === null ? "without intents" : `the hack loop only (the game differs: ${gameDrift})`;
       logChange(`no brain: converging on its last desired state, ${what}, until ${describeTime(untilMs)}`);
-      return { hackLoop: kept.hackLoop, work: gameDrift === null ? kept.work : null };
+      // The batcher (#205) as the hack loop: hacking, which a hold keeps too.
+      return { hackLoop: kept.hackLoop, batcher: kept.batcher, work: gameDrift === null ? kept.work : null };
     },
 
     /** A state is kept, checked or waiting for its check: rounds go on while the Agent has no brain. */

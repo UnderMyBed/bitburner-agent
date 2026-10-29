@@ -19,6 +19,7 @@
 // (packages/sim README), so the real page's timing is E2's to show (#205). CI runs seed 1; `BATCHER_SEEDS`
 // (`1,2,3,4`, say) runs others.
 import {
+  BATCH_LAUNCH_LEAD_MS,
   BATCHER_HEALTH_PORT,
   BATCHER_SCRIPT_NAME,
   type BatcherConfig,
@@ -260,6 +261,8 @@ test.each(SEEDS)(
         `${after.hacksLanded - before.hacksLanded} hack parts`,
     );
     expect(after).toMatchObject(IN_STEP);
+    // Script starts take no virtual time here, so every operation had its whole lead to spare (#211).
+    expect(after.leastSlackMs).toBeGreaterThanOrEqual(BATCH_LAUNCH_LEAD_MS - 1);
     expect(after.hacksLanded - before.hacksLanded).toBeGreaterThan(5);
     expect(scored.score).toBeGreaterThanOrEqual(LEAST_SCORE);
     expect(scored.ofTarget).toBeLessThanOrEqual(1);
@@ -341,6 +344,8 @@ test.each(SEEDS)(
     // The first batcher's records, landing after it was killed, were counted and never trusted.
     expect(after.unexpected).toBeGreaterThan(0);
     expect(after).toMatchObject(IN_STEP);
+    // Script starts take no virtual time here, so every operation had its whole lead to spare (#211).
+    expect(after.leastSlackMs).toBeGreaterThanOrEqual(BATCH_LAUNCH_LEAD_MS - 1);
     expect(after.hacksLanded - before.hacksLanded).toBeGreaterThan(5);
     expect(scored.score).toBeGreaterThanOrEqual(LEAST_SCORE);
     expect(scored.ofTarget).toBeLessThanOrEqual(1);

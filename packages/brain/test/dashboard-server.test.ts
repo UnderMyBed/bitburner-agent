@@ -15,6 +15,7 @@ const STATUS = { nowMs: 1, alerts: [] };
 async function start({ status = () => STATUS as never }: { status?: () => never } = {}) {
   const pausedCalls: boolean[] = [];
   const hackLoopCalls: boolean[] = [];
+  const batcherCalls: boolean[] = [];
   const programsCalls: boolean[] = [];
   const homeRamCalls: boolean[] = [];
   const cloudServersCalls: boolean[] = [];
@@ -29,6 +30,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     status,
     setSupervisionPaused: (paused) => pausedCalls.push(paused),
     setHackLoopEnabled: (enabled) => hackLoopCalls.push(enabled),
+    setBatcherEnabled: (enabled) => batcherCalls.push(enabled),
     setProgramsEnabled: (enabled) => programsCalls.push(enabled),
     setHomeRamEnabled: (enabled) => homeRamCalls.push(enabled),
     setCloudServersEnabled: (enabled) => cloudServersCalls.push(enabled),
@@ -58,6 +60,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     port: server.port,
     pausedCalls,
     hackLoopCalls,
+    batcherCalls,
     programsCalls,
     homeRamCalls,
     cloudServersCalls,
@@ -192,6 +195,7 @@ test.each([
 /** The dashboard's on/off switches: each its own path, and each changes only its own setting. */
 const SWITCHES = [
   ["the hack loop (#134)", "/api/hack-loop", "hackLoopCalls"],
+  ["the batcher (#205)", "/api/batcher", "batcherCalls"],
   ["the hacking programs (#136)", "/api/programs", "programsCalls"],
   ["home RAM (#138)", "/api/home-ram", "homeRamCalls"],
   ["cloud servers (#194)", "/api/cloud-servers", "cloudServersCalls"],

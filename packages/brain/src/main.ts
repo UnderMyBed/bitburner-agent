@@ -143,6 +143,7 @@ try {
         brainStartedEventId: startedEventId,
         supervising,
         hackLoop: desiredState.hackLoopView(),
+        batcher: desiredState.batcherView(),
         programs: desiredState.programsView(),
         homeRam: desiredState.homeRamView(),
         cloudServers: desiredState.cloudServersView(),
@@ -168,6 +169,10 @@ try {
     setProgramsEnabled: (enabled) => {
       desiredState.setProgramsEnabled(enabled);
       log(`buying hacking programs turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setBatcherEnabled: (enabled) => {
+      desiredState.setBatcherEnabled(enabled);
+      log(`the batcher turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     setAugmentationsEnabled: (enabled) => {
       desiredState.setAugmentationsEnabled(enabled);

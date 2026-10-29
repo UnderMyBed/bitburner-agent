@@ -4,6 +4,7 @@
 import type { IntentOutcome } from "@bitburner-agent/core";
 import type { NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
+import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
 
@@ -47,6 +48,7 @@ export type AlertName =
   | "factionStateUnread"
   | "backdoorOverdue"
   | "factionWorkStalled"
+  | "batcherNotRunning"
   | "augmentationNotQueued"
   | "installNotRestarted";
 
@@ -106,6 +108,11 @@ export interface AlertFacts {
   backdoorsDue: BackdoorDue[];
   /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
   factionWorkStall: FactionWorkStall | null;
+  /**
+   * The newest fast snapshots in a row whose deploy report says the batcher, wanted, isn't running (#211): how many,
+   * since the first of them, and the newest's reason; null when the newest says it runs, or isn't wanted.
+   */
+  batcherNotRunning?: { sinceMs: number; inARow: number; problem: string } | null;
   /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
   augmentationsNotQueued: NotQueued[];
   /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
@@ -124,8 +131,8 @@ export interface IncomeFacts {
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
- * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then one augmentationNotQueued per
- * purchase not queued, then installNotRestarted.
+ * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then one
+ * augmentationNotQueued per purchase not queued, then installNotRestarted.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -206,6 +213,17 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   alerts.push(...backdoorOverdueAlerts(facts));
   const factionWorkStalled = factionWorkStalledAlert(facts);
   if (factionWorkStalled !== null) alerts.push(factionWorkStalled);
+  // The batcher sent but not running (#211): the hack loop has left its hosts to it, so nothing hacks them.
+  const notRunning = facts.batcherNotRunning;
+  if (notRunning && notRunning.inARow >= BATCHER_NOT_RUNNING_AFTER) {
+    alerts.push({
+      name: "batcherNotRunning",
+      sinceMs: notRunning.sinceMs,
+      detail:
+        `the batcher isn't running, in the last ${notRunning.inARow} fast snapshots, so nothing hacks the servers the ` +
+        `hack loop left to it: ${notRunning.problem}`,
+    });
+  }
   alerts.push(...augmentationAlerts(facts));
   return alerts;
 }
