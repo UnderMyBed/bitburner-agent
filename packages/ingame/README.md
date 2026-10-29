@@ -206,7 +206,7 @@ The Agent logs what it does when that changes: the servers it rooted, and the lo
 
 ## Intents
 
-M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
+M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/141), architecture §5.3, §5.6): one-shot actions, done at most once. The brain sends them in its desired state as `intents: [{ id, action, args }]` ([protocol](../../docs/bridge/protocol.md#brain--agent)): its purchase rules' next purchase, its next backdoor for a hacker faction (#195), and the owner's manual queue ([packages/brain](../brain/README.md#intents)).
 - **The intent runner** (`src/agent/intent-runner.ts`) keeps the intents until the Agent disconnects (never into [safe mode](#safe-mode): one-shot actions need the brain), and runs each through its effector:
   - in order, after the snapshots and the hack loop, each only with 1 s of the round left (else it waits a round);
   - a new intent is due at once; one not done is tried again every 15 rounds (30 s), logging why each time, with the backend ("travel to Aevum (ui): not done: …; trying again in 30 s");
@@ -327,7 +327,7 @@ E2 buys Neurotrainer I and NeuroFlux level 1 from CyberSec (a save the simulator
 
 ## Backdoors
 
-[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`.
+[#162](https://github.com/UnderMyBed/bitburner-agent/issues/162): the `backdoor` intent installs a backdoor on a server, `{ hostname }`, through the terminal (`src/entries/backdoor.ts`). `w0r1d_d43m0n` is refused in core: its backdoor ends the BitNode, slice 11's `destroyBitNode`. Since #195 the brain asks for it itself on the hacker factions' servers, CSEC to run4theh111z, until the Agent reports it done ([`packages/brain`](../brain/README.md#backdoors-for-the-hacker-factions)).
 - **Checked first, by every backend** (`src/workers/backdoor-standing.ts`, `getServer`): installed, with the terminal not on the server, is done. Refused with why, as the terminal's `backdoor` would refuse it (`Terminal/commands/backdoor.ts`): "no server …", "… is the player's own" (home, a cloud server), "no root access on … (NUKE.exe first)", "hacking level 22: hong-fang-tea needs 30", or "no way from home to …". Core refuses an IP address, which `connect` would take but `scan` never lists. Only then does a backend find the terminal busy.
 - **`backdoor.js`**, with the server and a deadline:
   1. The Terminal page (unfocusing work first, and focusing it again after, as every page effector does).

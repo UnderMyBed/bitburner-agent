@@ -297,13 +297,23 @@ test("a save that starts at the BitVerse (w0r1d_d43m0n backdoored, no portal pic
   // The game saved there and loaded: it starts at the BitVerse, with no cinematic, and autoexec starts the Agent.
   const reloaded = await fresh.reload();
   expect((await reloaded.diagnostics.game()).page).toBe("BitVerse");
+  const typedBefore = await typedSoFar(reloaded);
   await fresh.game.runUntil(() => agentSessions(fresh).length === 2, 15_000);
   await fresh.game.runUntil(() => slow(fresh)?.resetInfo.currentNode === 1, 10_000);
+  // The hack loop rooted CSEC before the backdoor on w0r1d_d43m0n, and the level is 3042: the brain asks for CSEC's
+  // backdoor (#195), which the page can't type at the BitVerse (no sidebar), so neither does the simulator's effector.
+  const csecTried = () =>
+    fresh.latest<FastSnapshotData>("fast")?.intents.find((outcome) => outcome.id === "backdoor(CSEC)");
+  await fresh.game.runUntil(() => (csecTried()?.tries ?? 0) >= 1, 15_000);
+  expect(csecTried()).toMatchObject({
+    done: false,
+    backend: "sim",
+    problem: 'no "Terminal" in the sidebar (is its section collapsed?)',
+  });
   const lastNodeResetBefore = slow(fresh)?.resetInfo.lastNodeReset as number;
-  const typedBefore = await typedSoFar(reloaded);
   fresh.controller().addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
   await fresh.game.runUntil(() => agentSessions(fresh).length === 3, 60_000);
-  // Nothing typed at the BitVerse: no `connect`, no second `backdoor`.
+  // Nothing typed at the BitVerse: no `connect`, no second `backdoor`, no backdoor on CSEC.
   expect(await typedSoFar(reloaded)).toEqual(typedBefore);
   await fresh.game.runUntil(() => fresh.controller().intentsView().length === 0, 10_000);
   const resetAt = expectInBitNode2(fresh, lastNodeResetBefore, { 1: 1 });
@@ -316,6 +326,37 @@ test("a save that starts at the BitVerse (w0r1d_d43m0n backdoored, no portal pic
   await expectDestroyedOnce(fresh, resetAt, 3);
 });
 
+test("at the BitVerse (#195), the simulator's backdoor sends no terminal home from a server it backdoored: no sidebar there", async () => {
+  const effectors = `globalThis.${AGENT_SIM_EFFECTORS_GLOBAL}`;
+  const fresh = await freshStart({
+    withDesiredState: false,
+    // Singularity's `connect`, for the owner's terminal at the BitVerse.
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const,
+    beforeAgent: async (game) => {
+      await toTheRedPill(game);
+      // CSEC backdoored by the simulator's own effector: its terminal left there until a try sends it home.
+      await ownerRunsOnHome(
+        game,
+        `export async function main(ns) { ns.brutessh("CSEC"); ns.nuke("CSEC"); ${effectors}.backdoorServer("CSEC"); }`,
+      );
+      await game.game.run(30_000);
+      await ownerRunsOnHome(game, `export async function main(ns) { ${effectors}.backdoorServer("${DAEMON}"); }`);
+      await game.game.run(10_000);
+      expect((await game.simulation.diagnostics.game()).page).toBe("BitVerse");
+    },
+  });
+  // The owner's terminal on CSEC again, at the BitVerse.
+  await ownerRunsOnHome(fresh, 'export async function main(ns) { ns.singularity.connect("CSEC"); }');
+  const savedPlayer = async () =>
+    JSON.parse(JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8")).data.PlayerSave).data as {
+      currentServer: string;
+    };
+  expect((await savedPlayer()).currentServer).toBe("CSEC");
+  const typedBefore = await typedSoFar(fresh.simulation);
+  await ownerRunsOnHome(fresh, `export async function main(ns) { ${effectors}.backdoorServer("CSEC"); }`);
+  expect(await typedSoFar(fresh.simulation)).toEqual(typedBefore);
+  expect((await savedPlayer()).currentServer).toBe("CSEC");
+});
 test("into BN6 (sim): the Bladeburner cinematic left as its Continue does, so the next Agent starts on the Terminal", async () => {
   const fresh = await readyToDestroy();
   expect(fresh.controller().addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 6 } })).toMatchObject({
