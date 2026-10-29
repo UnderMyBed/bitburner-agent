@@ -425,6 +425,7 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
 const ONLY_WORK = {
   "programs.enabled": "false",
   "homeRam.enabled": "false",
+  "cloudServers.enabled": "false",
   "hackLoop.enabled": "false",
   "factionWork.enabled": "false",
 };
@@ -1397,6 +1398,45 @@ test("buying a server (#159): queued on the dashboard, pserv-0 bought through th
   await advanceGameTime(page, 11_000);
   expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000);
   expect(latestMedium(dataDirectory)?.servers.map((server) => server.hostname)).not.toContain("pserv-0-0");
+});
+
+test("upgrading a server (#194): queued on the dashboard, pserv-0 from 8 GB to 64 GB through the NS API; again, nothing paid", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 5_000_000,
+    // Nothing else moves the money: purchases, cloud servers and the hack loop off.
+    brainSettings: {
+      "programs.enabled": "false",
+      "homeRam.enabled": "false",
+      "cloudServers.enabled": "false",
+      "hackLoop.enabled": "false",
+    },
+  });
+  const moneyBefore = latestMedium(dataDirectory)?.player.money as number;
+  await queueIntent(ports.dashboardPort, { action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
+  await queueIntent(ports.dashboardPort, { action: "upgradeServer", args: { hostname: "pserv-0", ram: 64 } });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  const pserv0 = () => latestMedium(dataDirectory)?.servers.find((server) => server.hostname === "pserv-0");
+  await advanceUntil(page, async () => pserv0()?.maxRam === 64, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
+  // 8 GB for $440k, then the 56 GB more for $3.08m; the worker didn't touch the page.
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000 - 3_080_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
+  // Queued again, and for less: done from the game alone, nothing more paid.
+  await queueIntent(ports.dashboardPort, { action: "upgradeServer", args: { hostname: "pserv-0", ram: 64 } });
+  await queueIntent(ports.dashboardPort, { action: "upgradeServer", args: { hostname: "pserv-0", ram: 32 } });
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceGameTime(page, 11_000);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyBefore - 440_000 - 3_080_000);
+  expect(pserv0()?.maxRam).toBe(64);
 });
 
 /**

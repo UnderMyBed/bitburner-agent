@@ -62,6 +62,7 @@ const dashboard = (fresh: Awaited<ReturnType<typeof freshStart>>) =>
     hackLoop: { enabled: false, waiting: false, target: null, hosts: [], hackThreads: null, preparing: null },
     programs: { enabled: false, waiting: false, owned: [], buying: null, waitingFor: null },
     homeRam: { enabled: false, waiting: false, ram: null, upgradingTo: null, waitingFor: null },
+    cloudServers: { enabled: false, waiting: false, servers: [], buying: null, waitingFor: null, problem: null },
     intents: [],
     work: { desired: null, source: null, outcome: null },
     income: null,

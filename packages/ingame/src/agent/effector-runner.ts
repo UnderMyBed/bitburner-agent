@@ -5,7 +5,8 @@
 //   less than SF4.3), and in home's free RAM now; else the page. Looked at every try, so a home upgrade brings
 //   Singularity back. The free RAM because a worker can outlive its round: a Singularity backdoor's holds 8 GB until
 //   the backdoor ends (#162), and a worker chosen that can't start would be tried, and counted, every round. An action
-//   with no Singularity worker (`buyServer`, #159) always has its `ui` one, which needs no Singularity.
+//   with no Singularity worker (`buyServer`, #159; `upgradeServer`, #194) always has its `ui` one, which needs no
+//   Singularity.
 // - A worker gives up a little before the round ends, so its report is in before the Agent stops waiting.
 import { deployedFilePath, type EffectorBackend, type EffectorReport } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";

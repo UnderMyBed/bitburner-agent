@@ -32,6 +32,9 @@ describe("parseIntentRequest", () => {
     ["buyServer", { hostname: "pserv-0", ram: 8 }],
     ["buyServer", { hostname: "a", ram: 1 }],
     ["buyServer", { hostname: `Big_Box.${"x".repeat(56)}`, ram: 2 ** 20 }],
+    ["upgradeServer", { hostname: "pserv-0", ram: 64 }],
+    ["upgradeServer", { hostname: "a", ram: 2 }],
+    ["upgradeServer", { hostname: `Big_Box.${"x".repeat(56)}`, ram: 2 ** 20 }],
     ["backdoor", { hostname: "CSEC" }],
     ["backdoor", { hostname: "." }],
     ["backdoor", { hostname: "I.I.I.I" }],
@@ -104,6 +107,18 @@ describe("parseIntentRequest", () => {
       "a server named w0r1d_d43m0n, which the game would buy as w0r1d_d43m0n-0, every try",
       { action: "buyServer", args: { hostname: "w0r1d_d43m0n", ram: 8 } },
     ],
+    ["an upgrade of a server named with a space", { action: "upgradeServer", args: { hostname: "my server", ram: 8 } }],
+    ["an upgrade of an IP address", { action: "upgradeServer", args: { hostname: "10.0.0.1", ram: 8 } }],
+    ["an upgrade of a Hacknet server", { action: "upgradeServer", args: { hostname: "hacknet-server-0", ram: 8 } }],
+    ["an upgrade of w0r1d_d43m0n", { action: "upgradeServer", args: { hostname: "w0r1d_d43m0n", ram: 8 } }],
+    [
+      "an upgrade to RAM that isn't a power of two",
+      { action: "upgradeServer", args: { hostname: "pserv-0", ram: 24 } },
+    ],
+    ["an upgrade to over 2^20 GB", { action: "upgradeServer", args: { hostname: "pserv-0", ram: 2 ** 21 } }],
+    ["an upgrade to 1 GB, the least a server has", { action: "upgradeServer", args: { hostname: "pserv-0", ram: 1 } }],
+    ["an upgrade to RAM as text", { action: "upgradeServer", args: { hostname: "pserv-0", ram: "8" } }],
+    ["an upgrade with no RAM", { action: "upgradeServer", args: { hostname: "pserv-0" } }],
     ["a backdoor on a name with a space", { action: "backdoor", args: { hostname: "The Cave" } }],
     ["a backdoor on ''", { action: "backdoor", args: { hostname: "" } }],
     ["a backdoor on a name of 65 characters", { action: "backdoor", args: { hostname: "x".repeat(65) } }],
@@ -136,6 +151,7 @@ test("an intent's id is its action and args, in the args' fixed order", () => {
     "purchaseAugmentation(Sector-12, NeuroFlux Governor, 3)",
   );
   expect(intentId("buyServer", { hostname: "pserv-0", ram: 8 })).toBe("buyServer(pserv-0, 8)");
+  expect(intentId("upgradeServer", { hostname: "pserv-0", ram: 64 })).toBe("upgradeServer(pserv-0, 64)");
   expect(intentId("backdoor", { hostname: "CSEC" })).toBe("backdoor(CSEC)");
   // An install has no args (#164): one id, whatever was queued.
   expect(intentId("installAugmentations", {})).toBe("installAugmentations()");
@@ -186,6 +202,9 @@ describe("isIrreversibleIntent", () => {
     const augmentation = { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 };
     expect(isIrreversibleIntent(intent({ action: "purchaseAugmentation", args: augmentation }))).toBe(false);
     expect(isIrreversibleIntent(intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } }))).toBe(false);
+    expect(isIrreversibleIntent(intent({ action: "upgradeServer", args: { hostname: "pserv-0", ram: 8 } }))).toBe(
+      false,
+    );
     expect(isIrreversibleIntent(intent({ action: "backdoor", args: { hostname: "CSEC" } }))).toBe(false);
   });
 });

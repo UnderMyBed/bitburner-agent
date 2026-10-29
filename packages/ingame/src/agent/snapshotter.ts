@@ -72,6 +72,7 @@ export function createSnapshotter(
     intentOutcomes,
     workOutcome,
     dialogReport,
+    refusedMessage = () => null,
     readFactions,
     factionsUnread = (problem) => ({ backend: "ui", state: null, problem }),
   }: {
@@ -84,6 +85,8 @@ export function createSnapshotter(
     workOutcome: () => WorkOutcome | null;
     /** The game's dialogs handled since the last fast snapshot, and one left open (#143). */
     dialogReport: () => FastSnapshotData["dialogs"];
+    /** The brain's last message refused, while the Agent hasn't taken a desired state since (#194's review). */
+    refusedMessage?: () => FastSnapshotData["refusedMessage"];
     /** The faction state, read within the deadline, for each slow snapshot (#197). */
     readFactions: (deadlineMs: number) => Promise<FactionStateReading>;
     /** The reading for a slow snapshot sent unread, the round having had no time for the read again and again. */
@@ -174,6 +177,7 @@ export function createSnapshotter(
         intents: intentOutcomes(),
         dialogs: dialogReport(),
         work: workOutcome(),
+        refusedMessage: refusedMessage(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));
 

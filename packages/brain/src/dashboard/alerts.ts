@@ -35,6 +35,8 @@ export type AlertName =
   | "dialogBlocking"
   | "intentStuck"
   | "incomeStalled"
+  | "cloudServerProblem"
+  | "messageRefused"
   | "factionStateUnread"
   | "backdoorOverdue"
   | "factionWorkStalled";
@@ -44,7 +46,8 @@ export interface Alert {
   /**
    * Since when: for `agentSilent`, when the Agent was last heard from (or the brain's start); for `intentStuck` and
    * `dialogBlocking`, the newest fast snapshot that shows it; for `incomeStalled`, money's last rise (or when it was
-   * first watched); for `factionStateUnread`, the first of the unread slow snapshots in a row; for the others, the event or give-up that
+   * first watched); for `cloudServerProblem`, now; for `messageRefused`, the newest fast snapshot that shows it; for
+   * `factionStateUnread`, the first of the unread slow snapshots in a row; for the others, the event or give-up that
    * raised it.
    */
   sinceMs: number;
@@ -75,6 +78,16 @@ export interface AlertFacts {
   /** The player's money in the medium snapshots, and when it last rose (#184): ./income-watch.ts. */
   income: IncomeFacts | null;
   /**
+   * A cloud purchase the Agent reported done with a problem (#194), as the controller noted it ("<id>: <problem>"), or
+   * null. Optional for the callers that don't watch cloud servers.
+   */
+  cloudServerProblem?: string | null;
+  /**
+   * The brain's last message the Agent refused, in the newest fast snapshot (#194's review), or null. Optional for the
+   * callers that don't read it.
+   */
+  refusedMessage?: { reason: string; count: number } | null;
+  /**
    * The faction state unread in the newest slow snapshots (#197): how many in a row (skipped ones neither end nor add
    * to it), since the first of them, and the newest's backend and problem; null where the newest was read, skipped,
    * or from an older Agent, or there's no slow snapshot.
@@ -97,8 +110,8 @@ export interface IncomeFacts {
 
 /**
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
- * dialogBlocking, incomeStalled, factionStateUnread, then one intentStuck per stuck intent, then one backdoorOverdue
- * per overdue backdoor, then factionWorkStalled.
+ * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
+ * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -139,6 +152,24 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
   }
   const incomeStalled = incomeStalledAlert(facts);
   if (incomeStalled !== null) alerts.push(incomeStalled);
+  if (facts.cloudServerProblem) {
+    alerts.push({
+      name: "cloudServerProblem",
+      sinceMs: facts.nowMs,
+      detail:
+        `a cloud server purchase went wrong, so the brain buys no more until cloud servers are switched off and on: ` +
+        facts.cloudServerProblem,
+    });
+  }
+  if (facts.refusedMessage) {
+    alerts.push({
+      name: "messageRefused",
+      sinceMs: facts.lastFastSnapshotAtMs ?? facts.nowMs,
+      detail:
+        `the Agent refused the brain's message (${facts.refusedMessage.count} so far), so it acts on the last one it ` +
+        `took: ${facts.refusedMessage.reason}`,
+    });
+  }
   // Only once it's unread in a row: a single miss (a dialog flood, the owner acting mid-read) is a log line and an event.
   if (facts.factionState !== null && facts.factionState.unreadInARow >= FACTION_STATE_UNREAD_AFTER) {
     const { sinceMs, unreadInARow, backend, problem } = facts.factionState;

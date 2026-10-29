@@ -37,6 +37,8 @@ export interface DashboardServerOptions {
   setProgramsEnabled(enabled: boolean): void;
   /** Home RAM's switch (#138). */
   setHomeRamEnabled(enabled: boolean): void;
+  /** Cloud servers' switch (#194). */
+  setCloudServersEnabled(enabled: boolean): void;
   /** The brain's faction work's switch (#203). */
   setFactionWorkEnabled(enabled: boolean): void;
   /** The manual intents queue (#141): adds `{ action, args }`. */
@@ -110,6 +112,8 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "enabled", options.setProgramsEnabled);
       case "POST /api/home-ram":
         return handleSwitch(request, response, origin, "enabled", options.setHomeRamEnabled);
+      case "POST /api/cloud-servers":
+        return handleSwitch(request, response, origin, "enabled", options.setCloudServersEnabled);
       case "POST /api/faction-work":
         return handleSwitch(request, response, origin, "enabled", options.setFactionWorkEnabled);
       case "POST /api/intents": {
