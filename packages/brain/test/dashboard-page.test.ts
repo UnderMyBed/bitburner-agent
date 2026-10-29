@@ -291,6 +291,81 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#factions")).not.toContain("Couldn't be read");
 });
 
+describe("the brain's joins and faction work (#203)", () => {
+  const CHOICE = {
+    faction: "CyberSec",
+    workType: "hacking",
+    augmentation: "Neurotrainer I",
+    reputation: 2.4,
+    reputationNeeded: 1_000,
+    reputationPerSecond: 0.3183,
+    etaSeconds: 3_134,
+  };
+  const withRule = (factionWork: Partial<DashboardStatus["factionWork"]>, work?: DashboardStatus["work"]) => ({
+    ...BUSY_STATUS,
+    factionWork: { ...QUIET_FACTIONS_VIEW, waiting: false, ...factionWork },
+    ...(work ? { work } : {}),
+  });
+
+  test("its choice and why, the join under way, the invitations left to you; the work says it's the brain's", async () => {
+    const work = {
+      desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
+      source: "brain",
+      outcome: { converged: true, problem: null, backend: "ui" },
+    } as const;
+    const status = withRule(
+      {
+        choice: CHOICE,
+        sent: true,
+        joining: "NiteSec",
+        leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      },
+      work,
+    );
+    const { document } = await openPage(() => ({ status: 200, body: status }));
+    const lines = [...document.querySelectorAll("#faction-rule div")].map((each) => [each.textContent, each.className]);
+    expect(lines).toEqual([
+      [
+        "The brain's faction work: hacking for CyberSec, for Neurotrainer I (reputation 2 of 1,000, 0.32/s: about 52 min)",
+        "ok",
+      ],
+      ["Joining: NiteSec", ""],
+      ["Sector-12's invitation is left to you: joining it bans Chongqing, New Tokyo, Ishima, Volhaven", "muted"],
+    ]);
+    expect(textOf(document, "#factions button")).toBe("Stop the brain's faction work");
+    expect(textOf(document, "#work div")).toBe("The brain's: hacking work for CyberSec, focused: converged via ui");
+  });
+
+  test("not sent with your work, saying what it would be; none, saying why; off; waiting", async () => {
+    const rule = async (factionWork: Partial<DashboardStatus["factionWork"]>) => {
+      const { document } = await openPage(() => ({ status: 200, body: withRule(factionWork) }));
+      return [textOf(document, "#faction-rule div"), textOf(document, "#factions button")];
+    };
+    expect(await rule({ choice: CHOICE, sent: false, waitingFor: "your work on the dashboard" })).toEqual([
+      "The brain's faction work: not sent (your work on the dashboard); it would be hacking for CyberSec, for " +
+        "Neurotrainer I (reputation 2 of 1,000, 0.32/s: about 52 min)",
+      "Stop the brain's faction work",
+    ]);
+    expect((await rule({ waitingFor: "a faction to join" }))[0]).toBe(
+      "The brain's faction work: none: waiting for a faction to join",
+    );
+    expect(await rule({ enabled: false, waitingFor: "the Faction work switch is off" })).toEqual([
+      "The brain's faction work: off",
+      "Start the brain's faction work",
+    ]);
+    expect((await rule({ waiting: true }))[0]).toBe("The brain's faction work: waiting for the Agent's snapshots");
+  });
+
+  test("its switch sends the other way from the status, to its own path", async () => {
+    const { document, requests } = await openPage(() => ({ status: 200, body: withRule({ enabled: true }) }));
+    (document.querySelector("#factions button") as HTMLButtonElement).click();
+    await settle();
+    expect(
+      requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body]),
+    ).toEqual([["/api/faction-work", '{"enabled":false}']]);
+  });
+});
+
 test("the faction state unread (#197): why, in red, and nothing in place of the state", async () => {
   const status: DashboardStatus = {
     ...BUSY_STATUS,
@@ -477,6 +552,7 @@ test.each([
   ["hack loop", "#hack-loop button", "#hack-loop-problem"],
   ["hacking programs", "#programs button", "#programs-problem"],
   ["home RAM", "#home-ram button", "#home-ram-problem"],
+  ["the brain's faction work", "#factions button", "#faction-work-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -649,7 +725,7 @@ describe("work (#151)", () => {
   test("the work managed reads plainly, with the Agent's outcome; none says the game's work is left alone", async () => {
     const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
     expect(textOf(document, "#work div")).toBe(
-      "hacking work for CyberSec, focused: not converged via ui (no CyberSec among the factions joined)",
+      "Yours: hacking work for CyberSec, focused: not converged via ui (no CyberSec among the factions joined)",
     );
     const unmanaged = await openPage(() => ({
       status: 200,
@@ -664,7 +740,7 @@ describe("work (#151)", () => {
       outcome: { converged: true, problem: null, backend: "ui" },
     };
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work } }));
-    expect(textOf(document, "#work div")).toBe("Waiter work at Noodle Bar, unfocused: converged via ui");
+    expect(textOf(document, "#work div")).toBe("Yours: Waiter work at Noodle Bar, unfocused: converged via ui");
   });
 
   test("company work with a promotion taken reads it too (#155)", async () => {
@@ -675,7 +751,7 @@ describe("work (#151)", () => {
     };
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work } }));
     expect(textOf(document, "#work div")).toBe(
-      "IT work at Carmichael Security, focused: converged via ui; promoted from IT Intern to IT Analyst",
+      "Yours: IT work at Carmichael Security, focused: converged via ui; promoted from IT Intern to IT Analyst",
     );
   });
 
@@ -693,7 +769,7 @@ describe("work (#151)", () => {
     };
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work } }));
     expect(textOf(document, "#work div")).toBe(
-      'Grand Theft Auto, focused: not converged via ui (no "Grand Theft Auto" at the Slums)',
+      'Yours: Grand Theft Auto, focused: not converged via ui (no "Grand Theft Auto" at the Slums)',
     );
     const crime = document.querySelector("#crime-work select[name=crime]") as HTMLSelectElement;
     expect([...crime.options].map((option) => option.textContent)).toEqual(CRIME_NAMES);
@@ -705,7 +781,7 @@ describe("work (#151)", () => {
       outcome: { converged: true, problem: null, backend: "ui" },
     });
     const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, work: work("dex") } }));
-    expect(textOf(document, "#work div")).toBe("Dexterity training at Iron Gym, unfocused: converged via ui");
+    expect(textOf(document, "#work div")).toBe("Yours: Dexterity training at Iron Gym, unfocused: converged via ui");
     const location = document.querySelector("#class-work select[name=location]") as HTMLSelectElement;
     expect([...location.options].map((option) => option.value)).toEqual(CLASS_LOCATION_NAMES);
     expect([...location.options].map((option) => option.textContent)).toEqual(
@@ -723,7 +799,7 @@ describe("work (#151)", () => {
         work: { ...work("Networks"), desired: { ...work("Networks").desired, location: "Rothman University" } },
       },
     }));
-    expect(textOf(course, "#work div")).toBe("Networks at Rothman University, unfocused: converged via ui");
+    expect(textOf(course, "#work div")).toBe("Yours: Networks at Rothman University, unfocused: converged via ui");
   });
 
   test("the forms set faction, company, crime or class work, and the stop button stops managing it", async () => {

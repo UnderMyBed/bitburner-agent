@@ -9,6 +9,7 @@ import type { BackdoorDue } from "../src/backdoors.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
 import type { HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
+import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
@@ -59,7 +60,15 @@ const status = (
     income = null,
     loop = hackLoop,
     backdoorsDue = [],
-  }: { income?: IncomeFacts | null; loop?: HackLoopView; backdoorsDue?: BackdoorDue[] } = {},
+    factionWork = QUIET_FACTIONS_VIEW,
+    factionWorkStall = null,
+  }: {
+    income?: IncomeFacts | null;
+    loop?: HackLoopView;
+    backdoorsDue?: BackdoorDue[];
+    factionWork?: FactionsView;
+    factionWorkStall?: FactionWorkStall | null;
+  } = {},
 ) =>
   buildDashboardStatus({
     store,
@@ -75,8 +84,8 @@ const status = (
     work: { desired: null, source: null, outcome: null },
     income,
     backdoorsDue,
-    factionWork: QUIET_FACTIONS_VIEW,
-    factionWorkStall: null,
+    factionWork,
+    factionWorkStall,
     nowMs,
   });
 
@@ -212,6 +221,17 @@ test("backdoorOverdue (#195): from the controller's backdoors due, once one has 
   expect(status(nowMs + 1, { backdoorsDue: [avmnite] }).alerts.map((alert) => alert.name)).toEqual(["backdoorOverdue"]);
   expect(status(nowMs).alerts).toEqual([]);
 });
+test("factionWorkStalled (#203): from the controller's stall; its factions view passed through", () => {
+  const nowMs = STARTED_AT_MS + 30 * 60_000;
+  recordSnapshot("fast", nowMs - 1_000, fastData(1));
+  const factionWork: FactionsView = { ...QUIET_FACTIONS_VIEW, waiting: false, joining: "NiteSec" };
+  const stall = { faction: "CyberSec", sinceMs: nowMs - FACTION_WORK_STALLED_AFTER_MS };
+  const built = status(nowMs, { factionWork, factionWorkStall: stall });
+  expect(built.alerts.map((alert) => [alert.name, alert.sinceMs])).toEqual([["factionWorkStalled", stall.sinceMs]]);
+  expect(built.factionWork).toEqual(factionWork);
+  expect(status(nowMs, { factionWorkStall: { ...stall, sinceMs: stall.sinceMs + 1 } }).alerts).toEqual([]);
+});
+
 test("gaps over the last 24 h come from the gap report, from 24 h before now", () => {
   const nowMs = STARTED_AT_MS + DAY_MS;
   // One heartbeat from before the window (not counted), then the last 10 minutes every 2 s, but for 100 s.

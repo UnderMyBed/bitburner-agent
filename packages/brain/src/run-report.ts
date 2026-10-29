@@ -20,7 +20,9 @@ import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { factionStateProblemOf } from "./faction-state.ts";
 import {
   describeChoice,
+  FACTION_WORK_CHOSEN_EVENT_KIND,
   FACTION_WORK_STALLED_AFTER_MS,
+  FACTION_WORK_STOPPED_EVENT_KIND,
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
@@ -437,7 +439,10 @@ const quote = (value: string, length: number) =>
 
 // --- 1. The window ----------------------------------------------------------------------------------------------------
 
-/** The events of the brain, the Agent's sessions and the save backups, in order; dialogs and promotions are actions. */
+/**
+ * The events of the brain, the Agent's sessions and the save backups, in order; dialogs, promotions and the brain's
+ * faction work (#203) are actions.
+ */
 function windowSection(facts: RunFacts): string[] {
   const lines = ["1. The window"];
   if (facts.earlierBrainStartMs !== null) {
@@ -447,9 +452,13 @@ function windowSection(facts: RunFacts): string[] {
         "restart, give --since",
     );
   }
-  const timeline = facts.events.filter(
-    (event) => event.kind !== "gameDialog" && event.kind !== WORK_PROMOTION_EVENT_KIND,
-  );
+  const actions = [
+    "gameDialog",
+    WORK_PROMOTION_EVENT_KIND,
+    FACTION_WORK_CHOSEN_EVENT_KIND,
+    FACTION_WORK_STOPPED_EVENT_KIND,
+  ];
+  const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event)}`);
   if (timeline.length === 0) lines.push("  no events from the brain or the Agent");
   const count = (kind: string) => timeline.filter((event) => event.kind === kind).length;

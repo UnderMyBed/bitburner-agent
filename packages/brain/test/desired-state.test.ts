@@ -580,18 +580,18 @@ describe("the manual queue (#141, owner decision 36)", () => {
     expect(controller.intentsView().map((view) => view.id)).toEqual(["travel(Aevum)", "travel(Sector-12)"]);
   });
 
-  test("full at 98, leaving room for the purchase and the backdoor (#195) in the protocol's 100: the 99th is refused", () => {
+  test("full at 97, leaving room for the purchase, the backdoor (#195) and the join (#203) in the protocol's 100", () => {
     const controller = new DesiredStateController({ channel, store });
     const vendors = ["Alpha Enterprises", "NetLink Technologies", "Omega Software", "CompuTek"];
-    for (let index = 0; index < 98; index += 1) {
+    for (let index = 0; index < 97; index += 1) {
       const args = { fromRam: 2 ** (index % 30), vendor: vendors[Math.floor(index / 30)] };
       expect(controller.addManualIntent({ action: "upgradeHomeRam", args })).toMatchObject({ ok: true });
     }
     expect(controller.addManualIntent({ action: "travel", args: { city: "Aevum" } })).toEqual({
       ok: false,
-      reason: "the manual queue is full: 98 intents at most",
+      reason: "the manual queue is full: 97 intents at most",
     });
-    expect(readManualIntents(store)).toHaveLength(98);
+    expect(readManualIntents(store)).toHaveLength(97);
   });
 
   test("the queue is shown without an Agent, so it can be cancelled; malformed outcomes are left out", () => {
@@ -794,7 +794,7 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toHaveLength(100);
     expect(lastIntents(connection)?.at(-1)).toEqual(buyProgram("FTPCrack.exe"));
     expect(lines.filter((line) => line.startsWith("intents:"))).toEqual([
-      "intents: the manual queue holds 99, over its 98: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
+      "intents: the manual queue holds 99, over its 97: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
     ]);
   });
 
@@ -1372,6 +1372,145 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
   });
 });
 
+describe("factions and their work (#203)", () => {
+  const JOIN_CYBERSEC = intent({ action: "joinFaction", args: { faction: "CyberSec" } });
+  /** A medium snapshot with every skill the work's rate reads: hacking 55, the factions joined. */
+  const withSkills = (factions: string[] = []) => {
+    const data = mediumData(55, { n00dles: true }, { factions });
+    data.player = {
+      ...data.player,
+      skills: { hacking: 55, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+      mults: { faction_rep: 1 },
+    };
+    return data;
+  };
+  /** A slow snapshot with CyberSec joined at `reputation`, or invited. */
+  const factionsSlow = ({ joined, invited = [] as string[] }: { joined?: number; invited?: string[] }) => {
+    const data = slowData(1);
+    data.factions = {
+      backend: "sim",
+      state: {
+        joined: joined === undefined ? [] : [{ name: "CyberSec", reputation: joined, favor: 0 }],
+        invitations: invited,
+        queuedAugmentations: [],
+      },
+      problem: null,
+    };
+    return data;
+  };
+  const lastState = (connection: MemoryConnection) =>
+    connection
+      .sentMessages()
+      .filter((message) => message.type === "desiredState")
+      .at(-1) as unknown as DesiredState | undefined;
+  const HACKING_FOR_CYBERSEC = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
+
+  function connected() {
+    store.setSetting("hackLoop.enabled", "false");
+    const lines: string[] = [];
+    const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const events: unknown[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    send(connection, "static", network);
+    return { controller, connection, lines, events };
+  }
+
+  test("an invitation joined, as source join, after the backdoor; until the medium snapshot shows it joined", () => {
+    const { controller, connection, lines } = connected();
+    send(connection, "slow", factionsSlow({ invited: ["CyberSec", "Sector-12"] }));
+    send(connection, "medium", withSkills());
+    expect(lastState(connection)?.intents).toEqual([JOIN_CYBERSEC]);
+    expect(controller.intentsView()).toEqual([
+      { id: JOIN_CYBERSEC.id, source: "join", outcome: null, waitingFor: null },
+    ]);
+    expect(controller.factionsView()).toMatchObject({
+      joining: "CyberSec",
+      leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+    });
+    send(connection, "medium", withSkills(["CyberSec"]));
+    expect(lastState(connection)?.intents).toEqual([]);
+    expect(lines).toContain("factions: CyberSec joined");
+    // Queued by the owner too: once, as the owner's.
+    send(connection, "slow", factionsSlow({ invited: ["NiteSec"] }));
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "NiteSec" } });
+    expect(lastState(connection)?.intents.map((each) => each.id)).toEqual(["joinFaction(NiteSec)"]);
+    expect(controller.intentsView().map(({ source }) => source)).toEqual(["manual"]);
+  });
+
+  test("the brain's work sent with none of the owner's: its view says whose, and its choice is stored", () => {
+    const { controller, connection, lines, events } = connected();
+    send(connection, "medium", withSkills(["CyberSec"]));
+    send(connection, "slow", factionsSlow({ joined: 0 }));
+    expect(lastState(connection)?.work).toEqual(HACKING_FOR_CYBERSEC);
+    expect(controller.workView()).toEqual({ desired: HACKING_FOR_CYBERSEC, source: "brain", outcome: null });
+    expect(controller.factionsView()).toMatchObject({
+      enabled: true,
+      sent: true,
+      choice: { augmentation: "Neurotrainer I" },
+    });
+    expect(events).toEqual([
+      expect.objectContaining({ type: "factionWorkChosen", faction: "CyberSec", augmentation: "Neurotrainer I" }),
+    ]);
+    expect(lines.filter((line) => line.startsWith("faction work:"))).toHaveLength(1);
+  });
+
+  test("the owner's work wins; the switch off sends none of the brain's, kept in the store; on again, sent", () => {
+    const { controller, connection, events } = connected();
+    send(connection, "medium", withSkills(["CyberSec"]));
+    send(connection, "slow", factionsSlow({ joined: 0 }));
+    controller.setWork({ kind: "crime", crime: "Shoplift" });
+    expect(lastState(connection)?.work).toEqual({ kind: "crime", crime: "Shoplift", focus: true });
+    expect(controller.workView().source).toBe("owner");
+    expect(controller.factionsView()).toMatchObject({ sent: false, waitingFor: "your work on the dashboard" });
+    controller.setWork(null);
+    expect(lastState(connection)?.work).toEqual(HACKING_FOR_CYBERSEC);
+    controller.setFactionWorkEnabled(false);
+    expect(store.getSetting("factionWork.enabled")).toBe("false");
+    expect(lastState(connection)?.work).toBeUndefined();
+    expect(controller.workView()).toEqual({ desired: null, source: null, outcome: null });
+    expect(controller.factionsView()).toMatchObject({ enabled: false, waitingFor: "the Faction work switch is off" });
+    // A restarted brain keeps the switch off.
+    expect(
+      new DesiredStateController({
+        channel: new ControlChannel({ token: TOKEN, clock: new ManualClock() }),
+        store,
+      }).factionsView().enabled,
+    ).toBe(false);
+    controller.setFactionWorkEnabled(true);
+    expect(lastState(connection)?.work).toEqual(HACKING_FOR_CYBERSEC);
+    expect(
+      events.map((event) => (event as { type: string; reason?: string }).reason ?? (event as { type: string }).type),
+    ).toEqual([
+      "factionWorkChosen",
+      "your work on the dashboard",
+      "factionWorkChosen",
+      "the Faction work switch is off",
+      "factionWorkChosen",
+    ]);
+  });
+
+  test("factionWorkStall(): the faction and since when, for the alert; none once disconnected", () => {
+    const { controller, connection } = connected();
+    send(connection, "medium", withSkills(["CyberSec"]));
+    send(connection, "slow", factionsSlow({ joined: 0 }));
+    expect(controller.factionWorkStall()).toEqual({ faction: "CyberSec", sinceMs: expect.any(Number) });
+    connection.dropFromGameSide();
+    expect(controller.factionWorkStall()).toBeNull();
+    expect(controller.factionsView()).toMatchObject({ waiting: true, sent: false });
+  });
+
+  test("none before the connected Agent's slow snapshot, and none for a player who has joined nothing", () => {
+    const { controller, connection, events } = connected();
+    send(connection, "medium", withSkills());
+    expect(lastState(connection)?.work).toBeUndefined();
+    send(connection, "slow", factionsSlow({}));
+    expect(lastState(connection)?.work).toBeUndefined();
+    expect(controller.factionsView()).toMatchObject({ choice: null, waitingFor: "a faction to join" });
+    expect(events).toEqual([]);
+  });
+});
+
 describe("work (#151, owner decision 37)", () => {
   const HACKING_FOR_CYBERSEC = { faction: "CyberSec", workType: "hacking" };
   const sentWork = (connection: MemoryConnection) =>
@@ -1405,7 +1544,7 @@ describe("work (#151, owner decision 37)", () => {
   test("none set: none sent, so the Agent leaves the game's work alone", () => {
     const { controller, connection } = connectedWithLoopOff();
     expect(sentWork(connection)).toBeUndefined();
-    expect(controller.workView()).toEqual({ desired: null, outcome: null });
+    expect(controller.workView()).toEqual({ desired: null, source: null, outcome: null });
   });
 
   test("set on the dashboard: kept in the store, sent at once, focused by default", () => {
