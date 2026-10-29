@@ -3,8 +3,9 @@
 // bounded stretch of virtual time, then the same seed with the batcher switched off, the hack loop alone. Each is
 // scored as the run report scores a live run: the best 10 minutes of what hacking earned against A1's batcher ceiling
 // (the best rooted target's, on the hack loop's hosts' RAM, at the hacking level then). The batcher must beat the
-// hack loop on every seed, with nothing out of step (no desync, nothing late or lost). CI runs seed 1;
-// `BATCHER_SCORE_SEEDS` (`1,2,3,4`, say) runs others (the brain README's score suite has the 8 seeds' table).
+// hack loop by 1.4× or more on every seed (owner decision 49), with nothing out of step (no desync, nothing late or
+// lost). CI runs seed 1; `BATCHER_SCORE_SEEDS` (`1,2,3,4`, say) runs others (the brain README's score suite has the
+// 8 seeds' table).
 import { expect, test } from "vitest";
 import { HackingFold } from "../src/hacking-ceiling.ts";
 import { runReport } from "../src/run-report.ts";
@@ -35,6 +36,11 @@ const RUN_MS = 30 * 60_000;
  * hack loop's best 10 minutes on any seed (18.3–19.9%, #196).
  */
 const LEAST_SCORE = 0.245;
+/**
+ * How many times the hack loop's best 10 minutes the batcher's must be on each seed: #206's criterion as the owner
+ * amended it (2026-10-29, owner decision 49), for 1.48–1.84× over seeds 1 to 8.
+ */
+const LEAST_TIMES_THE_LOOP = 1.4;
 
 test("BATCHER_SCORE_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd entry fails loudly", () => {
   expect(scoreSeeds(undefined)).toEqual([1]);
@@ -86,6 +92,6 @@ test.each(SEEDS)(
     expect(section).toContain("  desyncs: none\n  late or lost: none");
     expect(by).toMatch(/^the batcher, /);
     expect(batcher.score).toBeGreaterThanOrEqual(LEAST_SCORE);
-    expect(batcher.score).toBeGreaterThan(loop.score);
+    expect(batcher.score).toBeGreaterThanOrEqual(LEAST_TIMES_THE_LOOP * loop.score);
   },
 );

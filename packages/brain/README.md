@@ -112,7 +112,7 @@ The brain backs up the game's save over the Remote File API (`getSaveFile`; arch
 
 ## The dashboard
 
-A local page showing whether the skeleton is healthy, its alerts, and its switches: supervision, the hack loop, the batcher (#205; on by default since #206, pending the owner's ruling), buying the hacking programs, upgrading home's RAM, the brain's faction work, and buying and installing augmentations (#210; [#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
+A local page showing whether the skeleton is healthy, its alerts, and its switches: supervision, the hack loop, the batcher (#205; on by default since #206, owner decision 49), buying the hacking programs, upgrading home's RAM, the brain's faction work, and buying and installing augmentations (#210; [#93](https://github.com/UnderMyBed/bitburner-agent/issues/93); architecture §7, §10.2). Open **http://127.0.0.1:12527/** (`dashboardPort`) while the brain runs.
 
 - **What it shows,** refreshed every 2 s from the store:
   - **Alerts:** the ones holding now (below).
@@ -360,7 +360,7 @@ The script RAM is the game's (RamCostGenerator.ts:11-20). A host's usable RAM co
 ## The batcher
 
 M4 phase A slices A7b and A7c ([#205](https://github.com/UnderMyBed/bitburner-agent/issues/205), [#206](https://github.com/UnderMyBed/bitburner-agent/issues/206); the batcher itself is #204's, [packages/ingame](../ingame/README.md#the-batcher)). `src/batcher.ts`, sent by `DesiredStateController`.
-- **The switch:** the dashboard's "Stop the batcher", on by default since #206 (`batcher.enabled` in the store), with the hack loop's switch on. It was off in #205; #206 turned it on because it beats the hack loop on every seed of its score suite (below). The owner switches it off on the dashboard, and the hack loop takes its servers back.
+- **The switch:** the dashboard's "Stop the batcher", on by default since #206 ([owner decision 49](../../docs/decisions/owner-decisions.md): "On by default"), with the hack loop's switch on. It was off in #205. The owner switches it off on the dashboard, and the hack loop takes its servers back.
 - **The mode, from the RAM:** the batcher when a host holds it and a plan on the hosts' RAM earns; otherwise the hack loop (no host with the batcher's 3.85 GB free beyond what home keeps for the Agent, no figures, nothing it can hack), and the dashboard says why. The brain logs each change of mode, of target and of the next target ("batcher: batches n00dles, preparing joesguns next", "batcher: the hack loop hacks, not the batcher: no host holds the batcher").
 - **Its hosts:** all the hack loop's; the hack loop is sent on with its target and no hosts, so its loops stop there, and it still roots.
 - **Where it runs:** `planBatcher` puts the batcher on home when home's RAM leaves its budget (`BATCHER_RAM_BUDGET_GB`, 3.85) beyond the 8 GB home keeps for the Agent (so from 16 GB), else on the largest host, whose RAM it then counts that much less; kept where it runs while it still fits there (#211), since a move restarts it.
@@ -375,7 +375,7 @@ M4 phase A slices A7b and A7c ([#205](https://github.com/UnderMyBed/bitburner-ag
 
 ### The score suite (#206)
 
-`test/batcher-score.test.ts`: an 8 GB fresh start, the brain as on Steam (the batcher on, by default), for 30 virtual minutes, then the same seed with the batcher off. Each is scored as the run report scores a live run: the best 10 minutes of what hacking earned against A1's batcher ceiling. The batcher must beat the hack loop on every seed, at least `LEAST_SCORE` (24.5%), with the report failing nothing (no desync, nothing late or lost). CI runs seed 1; `BATCHER_SCORE_SEEDS=1,2,3,4,5,6,7,8` runs all 8 (about 75 s):
+`test/batcher-score.test.ts`: an 8 GB fresh start, the brain as on Steam (the batcher on, by default), for 30 virtual minutes, then the same seed with the batcher off. Each is scored as the run report scores a live run: the best 10 minutes of what hacking earned against A1's batcher ceiling. The batcher must beat the hack loop on every seed by `LEAST_TIMES_THE_LOOP` (1.4×, #206 as the owner amended it, decision 49), at least `LEAST_SCORE` (24.5%), with the report failing nothing (no desync, nothing late or lost). CI runs seed 1; `BATCHER_SCORE_SEEDS=1,2,3,4,5,6,7,8` runs all 8 (about 75 s):
 
 | Seed | The batcher's best 10 min | From | The hack loop's best 10 min | From | Times |
 |---|---|---|---|---|---|
@@ -389,7 +389,7 @@ M4 phase A slices A7b and A7c ([#205](https://github.com/UnderMyBed/bitburner-ag
 | 8 | **27.5%** | 4.7 min | 16.1% | 1.7 min | 1.71 |
 
 **Reading the table:**
-- **The batcher beats the hack loop on every seed, 1.5 to 1.8 times; not the 2 times #206 asked for.** Its best 10 minutes are all on n00dles, early, every batch in step.
+- **The batcher beats the hack loop on every seed, 1.48 to 1.84 times:** #206 asked for 2 times, and the owner amended it to 1.4 times (2026-10-29, decision 49). Its best 10 minutes are all on n00dles, early, every batch in step.
 - **Why not more, early:** A1's ceiling is the best rooted target's. Within minutes of a fresh start that's joesguns, then harakiri-sushi, which a fresh start's RAM can't prepare: growing joesguns from its 4% takes about 4,600 grow threads (8.3 TB at once), against the 100 to 460 GB it has. So the batcher batches n00dles, about 55% of the better target's ceiling on that RAM, less the weaken's time each jump in RAM takes to reach income.
 - **Why not more, later:** once the batcher earns, the cloud server rule (#194) buys RAM so fast that the ceiling doubles every couple of minutes (100 GB at 9 minutes, 30 TB at 45), while new RAM earns only a weaken's time after the batches it holds start: on a target with a 1.5 minute weaken that alone keeps the batcher near a third of the ceiling. On 26 PB, the most cloud servers hold, one target's money caps the batcher far below a ceiling that grows with the RAM.
 - **The money:** in 45 virtual minutes the batcher hacked $1.7b to $2.8b on seeds 1 to 8 (#206's exploration runs).
