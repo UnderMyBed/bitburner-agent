@@ -223,6 +223,9 @@ describe("renderReport for the stable watcher", () => {
     expect(text).toContain("docs/sim/parity.md#re-auditing-after-a-version-bump");
     // The pinned version is written in docs too: the steps say what to search for.
     expect(text).toContain("search the repository for `3.0.1` and `1da7316ff`");
+    // Core's game data is regenerated from the new game (#193), and its generated headers aren't hand-edited.
+    expect(text).toContain("then regenerate core's game data with `node packages/sim/scripts/generate-game-data.ts`");
+    expect(text).toContain("Skip `packages/core/src/augmentation-data.ts` and `faction-data.ts`");
     expect(text).not.toContain("0005-forward-compat-dev-branch.md");
   });
 
