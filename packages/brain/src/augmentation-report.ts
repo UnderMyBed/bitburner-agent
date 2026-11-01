@@ -1,7 +1,8 @@
 // Augmentations in the run report (#210): the installs the slow snapshots show, and the augmentation rule's events (its
-// decisions, purchases, installs sent and cycles called off), with the failures: a purchase not queued, an install
-// sent with no reset seen after it, and an install reported done with no reset after it.
-import { type InstallReason, installGains, NEUROFLUX_GOVERNOR, type SlowSnapshotData } from "@bitburner-agent/core";
+// decisions, progress on the count rule (#222), purchases, installs sent and cycles called off), with the failures: a
+// purchase not queued, an install sent with no reset seen after it, an install reported done with no reset after it,
+// and a cycle overdue its install (#222).
+import { installGains, NEUROFLUX_GOVERNOR, type SlowSnapshotData } from "@bitburner-agent/core";
 import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
@@ -9,21 +10,31 @@ import {
   AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
+  AUGMENTATION_PROGRESS_EVENT_KIND,
+  advanceOnlineClock,
+  describeProgress,
   describeReason,
   formatEta,
-  type StoredWay,
+  type OnlineClock,
 } from "./augmentations.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 
 /** The augmentation rule's events (#210): section 3's, so left out of section 1's timeline. */
 export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_PROGRESS_EVENT_KIND,
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
 ];
+
+/**
+ * A cycle this long online with no install chosen is overdue (#222): the bar is 1 from 14 h (core's `installBars`), so
+ * by 16 h anything affordable is installed, and nothing affordable in 16 h is reputation stuck, a failure too.
+ */
+export const INSTALL_OVERDUE_ONLINE_MS = 16 * 3_600_000;
 
 /** An install the slow snapshots show: another `lastAugReset`, and what `ownedAugs` gained. */
 interface SeenInstall {
@@ -38,6 +49,63 @@ const formatMoney = (money: unknown) =>
   isFiniteNumber(money) ? `$${Math.round(money).toLocaleString("en-US")}` : "unknown";
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
+
+/**
+ * Why a stored install was chosen, in words. An earlier brain's (#210, before #222) gave its reason as "nothing reachable"
+ * or "sooner installing" with the next augmentation's two ways, or, earlier still, none: "nothing left" with no way
+ * carrying on, else "sooner installing", as main's report inferred it.
+ */
+function describeStoredReason(fields: Record<string, unknown>): string {
+  const way = (value: unknown) => {
+    const each = fieldsOf(value);
+    return { augmentation: typeof each.augmentation === "string" ? each.augmentation : "?", ms: each.ms };
+  };
+  const without = fields.without ?? null;
+  const reason =
+    typeof fields.reason === "string" ? fields.reason : without === null ? "nothing left" : "sooner installing";
+  if (reason === "nothing reachable")
+    return "nothing else reachable at a joined faction's work (a reputation rate of 0)";
+  if (reason === "sooner installing") {
+    const [withInstall, carryingOn] = [way(fields.with), way(without)];
+    const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
+    return `the next sooner installing (${eta(withInstall.ms)} against ${eta(carryingOn.ms)}, ${carryingOn.augmentation})`;
+  }
+  return describeReason(reason, countsOf(fields) ?? {});
+}
+
+/** A stored event's counts and bars (#222), or null where they aren't numbers. */
+function countsOf(fields: Record<string, unknown>) {
+  const { affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux } = fields;
+  if (![affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux].every(isFiniteNumber)) return null;
+  return { affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux } as Record<
+    "affordable" | "affordableWithNeuroFlux" | "bar" | "barWithNeuroFlux",
+    number
+  >;
+}
+
+/**
+ * A stored `augmentationProgress` (#222) in words: "5 of 8 new augmentations affordable (7 of 12 with NeuroFlux), 1.2 h
+ * online this cycle; the bar falls to 7 in 48 min", then the countdown or the hold.
+ */
+function describeStoredProgress(fields: Record<string, unknown>): string {
+  const counts = countsOf(fields);
+  if (counts === null) return "the counts not stored";
+  const number = (value: unknown) => (isFiniteNumber(value) ? value : null);
+  const countdown = fieldsOf(fields.countdown);
+  return (
+    describeProgress({
+      ...counts,
+      onlineMs: number(fields.onlineMs) ?? undefined,
+      barFallsInMs: number(fields.barFallsInMs),
+      barWithNeuroFluxFallsInMs: number(fields.barWithNeuroFluxFallsInMs),
+    }) +
+    (isFiniteNumber(countdown.endsInMs)
+      ? `; install countdown${countdown.quick === true ? " (a quick install)" : ""}, ${formatEta(countdown.endsInMs)} ` +
+        "left"
+      : "") +
+    (typeof fields.held === "string" ? `; held: ${fields.held}` : "")
+  );
+}
 
 /** "BitWire, NeuroFlux Governor ×2", or "none". */
 export function describeAugmentations(names: readonly string[]): string {
@@ -85,10 +153,25 @@ export class AugmentationTimeline {
   /** The slow snapshots' resets, in order: when the first showing each arrived, and its `lastAugReset`. */
   readonly #resets: { atMs: number; lastAugReset: number }[] = [];
   #owned: Record<string, number> | null = null;
+  /**
+   * Each cycle over the window (#222): its `lastAugReset`, its first and last slow snapshots' arrivals, and its time
+   * online, folded through the rule's own `advanceOnlineClock`.
+   */
+  readonly #cycles: { lastAugReset: number; firstAtMs: number; lastAtMs: number; onlineMs: number }[] = [];
+  #clock: OnlineClock | null = null;
 
-  addSlow(atMs: number, data: SlowSnapshotData): void {
+  /** A slow snapshot, which arrived at `atMs`, taken at the game's time `gameTimeMs` (the bars' clock's). */
+  addSlow(atMs: number, data: SlowSnapshotData, gameTimeMs: number): void {
     const reset = resetOf(data);
     if (reset === null) return;
+    this.#clock = advanceOnlineClock(this.#clock, gameTimeMs, reset.lastAugReset).clock;
+    let cycle = this.#cycles.at(-1);
+    if (cycle?.lastAugReset !== reset.lastAugReset) {
+      cycle = { lastAugReset: reset.lastAugReset, firstAtMs: atMs, lastAtMs: atMs, onlineMs: 0 };
+      this.#cycles.push(cycle);
+    }
+    cycle.lastAtMs = atMs;
+    cycle.onlineMs = this.#clock.onlineMs;
     const previous = this.#resets.at(-1);
     if (previous !== undefined && previous.lastAugReset !== reset.lastAugReset) {
       const installed: string[] = [];
@@ -108,23 +191,19 @@ export class AugmentationTimeline {
       const fields = fieldsOf(detail);
       if (kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) {
         const set = Array.isArray(fields.set) ? (fields.set as { augmentation?: unknown }[]) : [];
-        const without = (fields.without ?? null) as StoredWay | null;
-        const withInstall = (fields.with ?? null) as StoredWay | null;
+        // An earlier brain's (#210) gave the game's time since the install; this one, the time online (#222).
+        const since = isFiniteNumber(fields.onlineMs)
+          ? `${formatEta(fields.onlineMs)} online this cycle`
+          : `${formatEta(isFiniteNumber(fields.sinceResetMs) ? fields.sinceResetMs : null)} since the last`;
         entries.push({
           atMs,
           text:
-            `install chosen, ${formatEta(isFiniteNumber(fields.sinceResetMs) ? fields.sinceResetMs : null)} since ` +
-            `the last: buying ${set.map((each) => String(each.augmentation)).join(", ") || "nothing more"} ` +
-            `(${formatMoney(fields.cost)}); ` +
-            describeReason(
-              (typeof fields.reason === "string"
-                ? fields.reason
-                : without === null
-                  ? "nothing left"
-                  : "sooner installing") as InstallReason,
-              { with: withInstall, without },
-            ),
+            `install chosen, ${since}: buying ` +
+            `${set.map((each) => String(each.augmentation)).join(", ") || "nothing more"} (${formatMoney(fields.cost)}); ` +
+            describeStoredReason(fields),
         });
+      } else if (kind === AUGMENTATION_PROGRESS_EVENT_KIND) {
+        entries.push({ atMs, text: `progress: ${describeStoredProgress(fields)}` });
       } else if (kind === AUGMENTATION_BOUGHT_EVENT_KIND) {
         const level = fields.augmentation === NEUROFLUX_GOVERNOR ? ` (level ${String(fields.level)})` : "";
         entries.push({
@@ -172,18 +251,26 @@ export class AugmentationTimeline {
 
   /**
    * Section 4's lines, each failure added to `failures`: a purchase not queued (the rule's event); an install reported
-   * done with no reset in the next slow snapshot (the rule's event, #213 re-review); and an install sent with no slow
+   * done with no reset in the next slow snapshot (the rule's event, #213 re-review); an install sent with no slow
    * snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first, nor where the
-   * cycle was called off meanwhile: withdrawn; one reported done with no reset is the failure above).
+   * cycle was called off meanwhile: withdrawn; one reported done with no reset is the failure above); and a cycle
+   * overdue its install (#222, `#overdueLines`).
    */
   healthLines(
     events: readonly StoredEvent[],
     {
       untilMs,
       withinMs,
+      augmentationsEnabled,
       failures,
       formatTime,
-    }: { untilMs: number; withinMs: number; failures: string[]; formatTime: (ms: number) => string },
+    }: {
+      untilMs: number;
+      withinMs: number;
+      augmentationsEnabled: boolean;
+      failures: string[];
+      formatTime: (ms: number) => string;
+    },
   ): string[] {
     const lines = ["  augmentation purchases reported done and never queued:"];
     const notQueued = events.filter((event) => event.kind === AUGMENTATION_NOT_QUEUED_EVENT_KIND);
@@ -247,6 +334,59 @@ export class AugmentationTimeline {
       failures.push(line);
     }
     if (notSeen === 0) lines.push("    none");
+    lines.push(...this.#overdueLines(events, { augmentationsEnabled, failures, formatTime }));
+    return lines;
+  }
+
+  /**
+   * A cycle overdue its install (#222): its time online reaching `INSTALL_OVERDUE_ONLINE_MS`, the larger of the window's
+   * slow snapshots' count and the brain's own clock in its `augmentationProgress` events (which carries time from
+   * before the window), and no install chosen in it in the window (from the window's start, for the first). A failure
+   * only with the Augmentations switch on (the dashboard's, now: the store keeps no history of it), and not while The
+   * Red Pill's way held the rule (#215) at the cycle's last progress: shown, not counted, then.
+   */
+  #overdueLines(
+    events: readonly StoredEvent[],
+    {
+      augmentationsEnabled,
+      failures,
+      formatTime,
+    }: { augmentationsEnabled: boolean; failures: string[]; formatTime: (ms: number) => string },
+  ): string[] {
+    const lines = [
+      `  install overdue (a cycle ${formatEta(INSTALL_OVERDUE_ONLINE_MS)} online with no install chosen)` +
+        (augmentationsEnabled ? ":" : ": the Augmentations switch is off now, so these are shown, not counted:"),
+    ];
+    let overdue = 0;
+    for (const [index, cycle] of this.#cycles.entries()) {
+      const progress = events.filter(
+        (event) =>
+          event.kind === AUGMENTATION_PROGRESS_EVENT_KIND && fieldsOf(event.detail).lastAugReset === cycle.lastAugReset,
+      );
+      const onlineMs = Math.max(
+        cycle.onlineMs,
+        ...progress.map((event) => fieldsOf(event.detail).onlineMs).filter(isFiniteNumber),
+      );
+      if (onlineMs < INSTALL_OVERDUE_ONLINE_MS) continue;
+      const fromMs = index === 0 ? Number.NEGATIVE_INFINITY : cycle.firstAtMs;
+      const untilMs = this.#cycles[index + 1]?.firstAtMs ?? Number.POSITIVE_INFINITY;
+      const chosen = events.some(
+        (event) =>
+          event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND && event.atMs >= fromMs && event.atMs < untilMs,
+      );
+      if (chosen) continue;
+      overdue++;
+      const last = progress.at(-1);
+      const held = last === undefined ? null : fieldsOf(last.detail).held;
+      const line =
+        `install overdue: ${formatEta(onlineMs)} online in the cycle seen from ${formatTime(cycle.firstAtMs)} to ` +
+        `${formatTime(cycle.lastAtMs)}, and no install chosen; its last counts: ` +
+        (last === undefined ? "none recorded" : describeStoredProgress(fieldsOf(last.detail)));
+      const counted = augmentationsEnabled && typeof held !== "string";
+      lines.push(`    ${line}${typeof held === "string" ? " (held for The Red Pill's way: not a failure)" : ""}`);
+      if (counted) failures.push(line);
+    }
+    if (overdue === 0) lines.push("    none");
     return lines;
   }
 }

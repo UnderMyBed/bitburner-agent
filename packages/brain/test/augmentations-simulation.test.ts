@@ -1,12 +1,13 @@
 // Augmentations and the reset (#210), in the simulator: a fresh 8 GB start in BN1 reaching its first install, the
 // brain's rules as on Steam (the batcher, programs, home RAM, backdoors, faction work and augmentations, all on).
 // - 17 virtual minutes in (`EDITED_AFTER_MS`), a harness edit stands in for the hours of work (A5's, #203): CyberSec
-//   joined with the reputation for its five augmentations, NiteSec joined with none (so the decision compares, #213
-//   review), and the money for the five, home's RAM upgrades (those the rest would buy, #218) and a NeuroFlux
-//   Governor level.
-// - The brain chooses the install because NiteSec's next comes sooner installing first ("sooner installing"), buys
-//   the five in buy order through the Agent's `sim` effector, then home's RAM, then NeuroFlux Governor, and installs
-//   through the gate and a save backup; the game starts boot.js after the reset, and the next Agent connects.
+//   joined with the reputation for its five augmentations, NiteSec joined with none (so something is left at the
+//   joined factions), and the money for the five, home's RAM upgrades (those the rest would buy, #218) and a
+//   NeuroFlux Governor level.
+// - Under 20 minutes into the cycle with 4 or more affordable, the count rule's quick install (#222, the legacy
+//   scripts'): a 30 s countdown in the game's time, then the brain chooses the install, buys the five in buy order
+//   through the Agent's `sim` effector, then home's RAM, then NeuroFlux Governor, and installs through the gate and
+//   a save backup; the game starts boot.js after the reset, and the next Agent connects.
 // - After the reset, the player's multipliers are the five's and NeuroFlux Governor's, and home has its new RAM.
 // CI runs seed 1; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
 import type { MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
@@ -32,12 +33,11 @@ const MINUTE = 60_000;
 /** How long each cycle runs before its hacking level is compared. */
 const COMPARED_AFTER_MS = 20 * MINUTE;
 /**
- * When the harness edit comes. At 20 minutes with the batcher on (#206's default), the brain rightly carries on:
- * the batcher's income and exp put NiteSec's reputation rate so high that installing (about 11 minutes to rebuild the
- * hacking level) comes later, 3.2 h against 3.0 h. At 17 it comes sooner, 4.0 h against 5.1 h (#216's review).
+ * When the harness edit comes: 17 minutes, inside the quick install's 20 (core's `QUICK_INSTALL_WITHIN_MS`, #222), with
+ * room for the slow snapshot showing CyberSec's reputation and the 30 s countdown.
  */
 const EDITED_AFTER_MS = 17 * MINUTE;
-/** From the harness edit to the reset: the decision, five purchases a few seconds apart, the gate and its backup. */
+/** From the harness edit to the reset: the countdown, five purchases a few seconds apart, the gate and its backup. */
 const INSTALLED_WITHIN_MS = 10 * MINUTE;
 /** CyberSec's five in buy order, and their money then: 70m + 125m × 1.9 + 10m × 1.9² + 7.5m × 1.9³ + 4m × 1.9⁴. */
 const FIVE = [
@@ -118,15 +118,20 @@ test.each(SEEDS)(
     const chosen = fresh.data.store
       .eventsInWindow({ environment: "E1", sinceMs: editedAtMs, untilMs: game.clock.now() })
       .find((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)?.detail as
-      | { reason: string; without: { faction: string; ms: number | null } | null; with: { ms: number | null } | null }
+      | { reason: string; onlineMs: number; affordable: number; affordableWithNeuroFlux: number }
       | undefined;
-    // Decided by the comparison: NiteSec's next sooner installing first.
-    expect(chosen?.reason).toBe("sooner installing");
-    expect(chosen?.without?.faction).toBe("NiteSec");
-    expect(chosen?.with?.ms as number).toBeLessThan(chosen?.without?.ms ?? Number.POSITIVE_INFINITY);
+    // The count rule's quick install (#222): under 20 minutes online, 4 or more affordable with NeuroFlux.
+    expect(chosen?.reason).toBe("quick install");
+    expect(chosen?.affordable).toBe(5);
+    expect(chosen?.affordableWithNeuroFlux).toBeGreaterThanOrEqual(6);
+    expect(chosen?.onlineMs).toBeLessThan(20 * MINUTE);
+    expect(brain.logLines).toContainEqual(
+      expect.stringMatching(/^augmentations: install countdown started, 30 s, a quick install, within 20 min of /),
+    );
+    expect(brain.logLines).toContainEqual(expect.stringMatching(/^augmentations: install countdown ended \(/));
     expect(brain.logLines).toContainEqual(
       expect.stringMatching(
-        /^augmentations: install chosen, \S+ \S+ since the last: buying Cranial Signal Processors - Gen I, .* sooner /,
+        /^augmentations: install chosen, \S+ min online this cycle: buying Cranial Signal Processors - Gen I, .*, a quick /,
       ),
     );
     const bought = fresh.data.store
@@ -165,14 +170,18 @@ test.each(SEEDS)(
     expect(mults?.hacking_chance).toBeCloseTo(1.05 * NEUROFLUX, 6);
     expect(homeRam()).toBe(homeRamAfter);
 
-    // The run report: the decision, the purchases and the install, the Agent back, and no failure.
+    // The run report: the count rule's progress, the decision, the purchases and the install, the Agent back, and no
+    // failure.
     const { text, failures } = runReport(fresh.data.store, {
       environment: "E1",
       sinceMs: EPOCH_MS,
       untilMs: game.clock.now(),
     });
     const lines = text.split("\n");
-    expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}install chosen, /));
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^ {4}\S+ {2}progress: 5 of 8 new augmentations affordable .*install countdown \(a quick /),
+    );
+    expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}install chosen, .*; a quick install, /));
     for (const augmentation of FIVE) {
       expect(lines).toContainEqual(
         expect.stringMatching(

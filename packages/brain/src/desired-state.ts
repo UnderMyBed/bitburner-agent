@@ -235,8 +235,10 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  *   can't say it was done. Never more than the protocol's 100: a queue stored under an older limit leaves the rules'
  *   intents out, logged.
  * - Augmentations (#210): once an install is chosen, the programs and cloud servers stand down (an install loses
- *   them), and home's RAM is the augmentation rule's. Before that, cloud servers leave alone the augmentation rule's
- *   reserve too: the set's money, for an install projected within A2's payback limit.
+ *   them), and home's RAM is the augmentation rule's. In the install's countdown before it (#222), the counted
+ *   purchases' money is held from cloud servers and home RAM, and no program is bought. Before that, cloud servers
+ *   leave alone the rule's reserve too: that money, for an install the count rule would choose with A2's payback
+ *   limit's more income.
  * - An irreversible intent (R8, #147) goes out only past its gate (./irreversible-gate.ts): its guard on two
  *   consecutive medium snapshots from the connected Agent, then a save backup. Until then it's left out, and the
  *   intents after it go on without it: a held join doesn't hold up a travel queued later.
@@ -528,9 +530,11 @@ export class DesiredStateController {
   }
 
   /**
-   * The money held back for augmentations (#210): the set the money covers, or will within the cloud servers' reserve
-   * horizon of income, and all of it once an install is chosen. `#reserveForOtherPurchase` holds it back from cloud
-   * servers (#194) where it's more than the program's or home RAM's.
+   * The money held back for augmentations (#210, the rule's `reserve()`): Infinity once an install is chosen; in the
+   * install's countdown, what the counted purchases cost (#222); before it, that only for an install the count rule
+   * would choose with `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0; Daedalus's $100b while it holds for its
+   * invitation (#215). `#reserveForOtherPurchase` holds it back from cloud servers (#194) where it's more than the
+   * program's or home RAM's.
    */
   augmentationReserve(): number {
     return this.#augmentations.reserve();
@@ -909,15 +913,26 @@ export class DesiredStateController {
       };
       return null;
     }
-    // Daedalus's $100b held for its invitation (#215 review): home RAM only with the money above it.
+    // Daedalus's $100b held for its invitation (#215 review), or the money the install's countdown holds (#222): home
+    // RAM only with the money above it.
     const daedalusHold = this.#augmentations.daedalusHold();
+    const countdownHold = this.#augmentations.countdownReserve();
+    // In the countdown, programs are bought no more: they're lost at the install, minutes off.
+    if (countdownHold > 0 && programsNext !== null) {
+      this.#waitingFor.programs = "the augmentations' install countdown (programs are lost at the install)";
+      programsNext = null;
+    }
+    const [hold, heldFor] =
+      countdownHold > daedalusHold
+        ? [countdownHold, "the augmentations' install countdown"]
+        : [daedalusHold, "Daedalus's invitation"];
     const playerMoney = this.#mediumData?.player?.money;
     if (
       homeRamNext !== null &&
-      daedalusHold > 0 &&
-      (typeof playerMoney === "number" ? playerMoney : 0) - (homeRamPlan?.price ?? 0) < daedalusHold
+      hold > 0 &&
+      (typeof playerMoney === "number" ? playerMoney : 0) - (homeRamPlan?.price ?? 0) < hold
     ) {
-      this.#waitingFor.homeRam = `money above the $${daedalusHold.toLocaleString("en-US")} held for Daedalus's invitation`;
+      this.#waitingFor.homeRam = `money above the $${Math.round(hold).toLocaleString("en-US")} held for ${heldFor}`;
       homeRamNext = null;
     }
     // Until the slow snapshot says which BitNode, the upgrade's price isn't known, so neither is which goes first.

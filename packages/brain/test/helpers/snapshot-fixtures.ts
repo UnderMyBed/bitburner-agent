@@ -83,7 +83,7 @@ export const idleAugmentations: AugmentationsView = {
   asking: null,
   set: [],
   setCost: 0,
-  decision: null,
+  progress: null,
   waitingFor: null,
   notQueued: [],
   reserve: 0,

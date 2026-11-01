@@ -1,16 +1,27 @@
-// Augmentations and the reset (#210): which the brain buys, in what order, and whether installing now beats carrying
-// on. Worked by hand from the game's data (`Augmentation/Augmentations.ts`) and formulas (`skill.ts`, `getAugCost`).
+// Augmentations and the reset (#210): which the brain buys, in what order, and when it installs them (the legacy
+// scripts' count rule, #222). Worked by hand from the game's data (`Augmentation/Augmentations.ts`) and formulas
+// (`skill.ts`, `getAugCost`), and from autopilot.js's constants.
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
+  affordableCounts,
   augmentationBuyOrder,
   chooseAugmentationsToBuy,
+  countdownExtensionMs,
   hackingExpForLevel,
-  type InstallCandidate,
-  installDecision,
+  INSTALL_AT_AUGMENTATIONS,
+  INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX,
+  INSTALL_BAR_FALL_PER_HOUR,
+  INSTALL_COUNTDOWN_LEAST_EXTENSION_MS,
+  INSTALL_COUNTDOWN_MS,
+  type InstallRuleInputs,
+  installBars,
   installGains,
+  installRule,
   isWorthInstalling,
-  rebuildTimeMs,
+  QUICK_INSTALL_AT_AUGMENTATIONS,
+  QUICK_INSTALL_COUNTDOWN_MS,
+  QUICK_INSTALL_WITHIN_MS,
 } from "../src/augmentation-plan.ts";
 import { type AugmentationPurchaseState, purchaseSequenceCost } from "../src/augmentations.ts";
 
@@ -209,171 +220,227 @@ describe("the set to buy", () => {
   });
 });
 
-describe("the rebuild", () => {
-  test("the experience for a level is the game's `calculateExp`, never below 0", () => {
+describe("the experience for a level", () => {
+  test("the game's `calculateExp`, never below 0", () => {
     expect(gameSource("PersonObjects/formulas/skill.ts")).toContain(
       "let value = Math.exp((skill / mult + 200) / 32) - 534.6;",
     );
     expect(hackingExpForLevel(300, 1)).toBeCloseTo(6_106_793.89, 1);
     expect(hackingExpForLevel(1, 1)).toBe(0);
   });
+});
 
-  test("CyberSec's five at level 300, 7 h in: the experience a quarter, over the exp and speed gains", () => {
-    const gains = installGains(CYBERSEC);
-    const rebuild = rebuildTimeMs({
-      sinceResetMs: 7 * 3_600_000,
-      hackingLevel: 300,
-      hackingExp: hackingExpForLevel(300, 1),
-      gains,
+const MINUTE = 60_000;
+const HOUR = 3_600_000;
+
+describe("the bars (#222, the legacy scripts' count rule)", () => {
+  test("8 new, or 12 with NeuroFlux, each falling by half an augmentation an hour online, floored", () => {
+    expect([INSTALL_AT_AUGMENTATIONS, INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX, INSTALL_BAR_FALL_PER_HOUR]).toEqual([
+      8, 12, 0.5,
+    ]);
+    expect(installBars(0)).toEqual({
+      bar: 8,
+      barWithNeuroFlux: 12,
+      barFallsAtMs: 2 * HOUR,
+      barWithNeuroFluxFallsAtMs: 2 * HOUR,
     });
-    // 1,464,082 of 6,106,794 experience (0.2397), over 1.1 × 1.06 (exp and speed): 1.44 h.
-    expect(rebuild).toBeCloseTo(5_176_083, -1);
+    // floor(0.5 × 1.99) is 0; at 2 h, 1; at 7.5 h, 3.
+    expect(installBars(2 * HOUR - 1)).toMatchObject({ bar: 8, barWithNeuroFlux: 12 });
+    expect(installBars(2 * HOUR)).toEqual({
+      bar: 7,
+      barWithNeuroFlux: 11,
+      barFallsAtMs: 4 * HOUR,
+      barWithNeuroFluxFallsAtMs: 4 * HOUR,
+    });
+    expect(installBars(7.5 * HOUR)).toMatchObject({ bar: 5, barWithNeuroFlux: 9, barFallsAtMs: 8 * HOUR });
   });
 
-  test("no hacking gain: the experience is the same, so only the exp and speed gains shorten it", () => {
-    const rebuild = rebuildTimeMs({
-      sinceResetMs: 50 * 60_000,
-      hackingLevel: 60,
-      hackingExp: hackingExpForLevel(60, 1),
-      gains: installGains([NEUROTRAINER]),
+  test("never below 1: the bar is 1 from 14 h, with NeuroFlux from 22 h; then it falls no more", () => {
+    expect(installBars(14 * HOUR - 1)).toMatchObject({ bar: 2, barFallsAtMs: 14 * HOUR });
+    expect(installBars(14 * HOUR)).toEqual({
+      bar: 1,
+      barWithNeuroFlux: 5,
+      barFallsAtMs: null,
+      barWithNeuroFluxFallsAtMs: 16 * HOUR,
     });
-    expect(rebuild).toBeCloseTo((50 * 60_000) / 1.1, 3);
+    expect(installBars(22 * HOUR)).toEqual({
+      bar: 1,
+      barWithNeuroFlux: 1,
+      barFallsAtMs: null,
+      barWithNeuroFluxFallsAtMs: null,
+    });
+    expect(installBars(1_000 * HOUR)).toMatchObject({ bar: 1, barWithNeuroFlux: 1 });
   });
 
-  test("the multiplier now comes from the level and experience, the BitNode's in it", () => {
-    // Level 150 at a multiplier of 0.8: nothing gained, so the time since the install.
-    const exp = hackingExpForLevel(150, 0.8);
-    const gains = { hacking: 1, hacking_exp: 1, hacking_speed: 1 };
-    expect(rebuildTimeMs({ sinceResetMs: 3_600_000, hackingLevel: 150, hackingExp: exp, gains })).toBeCloseTo(
-      3_600_000,
-      3,
-    );
-    // ×1.25 hacking: the experience for level 150 at 1.0, of that at 0.8.
-    const quicker = rebuildTimeMs({
-      sinceResetMs: 3_600_000,
-      hackingLevel: 150,
-      hackingExp: exp,
-      gains: { ...gains, hacking: 1.25 },
-    });
-    expect(quicker).toBeCloseTo((3_600_000 * hackingExpForLevel(150, 1)) / exp, 3);
-  });
-
-  test("no experience yet: nothing to rebuild; a figure that isn't finite or is below 0 throws", () => {
-    const gains = { hacking: 1.1, hacking_exp: 1, hacking_speed: 1 };
-    expect(rebuildTimeMs({ sinceResetMs: 60_000, hackingLevel: 1, hackingExp: 0, gains })).toBe(0);
-    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
-      expect(() => rebuildTimeMs({ sinceResetMs: bad, hackingLevel: 1, hackingExp: 1, gains })).toThrow(RangeError);
-      expect(() => rebuildTimeMs({ sinceResetMs: 1, hackingLevel: bad, hackingExp: 1, gains })).toThrow(RangeError);
-      expect(() => rebuildTimeMs({ sinceResetMs: 1, hackingLevel: 1, hackingExp: bad, gains })).toThrow(RangeError);
-    }
+  test("an online time that isn't finite, or is below 0, throws", () => {
+    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY]) expect(() => installBars(bad)).toThrow(RangeError);
   });
 });
 
-describe("the decision", () => {
-  const HOUR = 3_600_000;
-  /** At level 300, 7 h in, CyberSec's five to install: a rebuild of 1.44 h (above). */
-  const base = {
-    sinceResetMs: 7 * HOUR,
-    hackingLevel: 300,
-    hackingExp: hackingExpForLevel(300, 1),
-    installing: CYBERSEC,
-    money: 500e6,
-    incomePerSecond: 100_000,
-  };
-  const REBUILD = 5_176_083;
-  const candidate = (fields: Partial<InstallCandidate>): InstallCandidate => ({
-    augmentation: "Neurotrainer II",
-    faction: "NiteSec",
-    reputation: 0,
-    reputationNeeded: 10_000,
-    reputationPerSecond: 2,
-    costAfterSet: 500e6,
-    priceAfterInstall: 0,
+describe("the counts", () => {
+  const ALL_FIVE = 447_170_900;
+  /** NeuroFlux Governor after the five: 750k × 1.9⁵, then 750k × 1.14 × 1.9⁶ (500 and 570 reputation). */
+  const LEVEL_1 = 750_000 * 1.9 ** 5;
+  const LEVEL_2 = 750_000 * 1.14 * 1.9 ** 6;
+  const five = () => chooseAugmentationsToBuy(CYBERSEC, BN1, ALL_FIVE, LEVEL);
+
+  test("the set, and the NeuroFlux Governor levels the money left after it covers, each priced after the last", () => {
+    const set = five();
+    const counts = affordableCounts({ state: BN1, set, money: ALL_FIVE + LEVEL_1 + LEVEL_2, neuroFluxReputation: 1e6 });
+    expect(counts.affordable).toBe(5);
+    expect(counts.neuroFluxLevels).toBe(2);
+    expect(counts.affordableWithNeuroFlux).toBe(7);
+    expect(counts.money).toBeCloseTo(ALL_FIVE + LEVEL_1 + LEVEL_2, 0);
+    // A dollar short of the second level: one.
+    expect(
+      affordableCounts({ state: BN1, set, money: ALL_FIVE + LEVEL_1 + LEVEL_2 - 1, neuroFluxReputation: 1e6 }),
+    ).toMatchObject({ affordable: 5, affordableWithNeuroFlux: 6, neuroFluxLevels: 1 });
+    expect(affordableCounts({ state: BN1, set, money: ALL_FIVE, neuroFluxReputation: 1e6 })).toMatchObject({
+      affordableWithNeuroFlux: 5,
+      neuroFluxLevels: 0,
+    });
+  });
+
+  test("each level needs a joined seller's reputation too: 500, then 570 (×1.14 a level)", () => {
+    const rich = { state: BN1, set: five(), money: 1e15 };
+    expect(affordableCounts({ ...rich, neuroFluxReputation: 499 }).neuroFluxLevels).toBe(0);
+    expect(affordableCounts({ ...rich, neuroFluxReputation: 569 }).neuroFluxLevels).toBe(1);
+    expect(affordableCounts({ ...rich, neuroFluxReputation: 570 }).neuroFluxLevels).toBe(2);
+  });
+
+  test("only what an install would really install counts: never a purchase the plan holds as queued alone", () => {
+    // The plan's queue holds BitWire (reported bought, never shown queued): priced as queued, not counted.
+    const state = { ...BN1, queued: [BITWIRE] };
+    const set = chooseAugmentationsToBuy([GEN_I], state, 1e12, LEVEL);
+    expect(affordableCounts({ state, installable: [], set, money: set.money, neuroFluxReputation: 0 })).toMatchObject({
+      affordable: 1,
+      affordableWithNeuroFlux: 1,
+    });
+    expect(affordableCounts({ state, set, money: set.money, neuroFluxReputation: 0 }).affordable).toBe(2);
+  });
+
+  test("what's queued counts: those worth installing, and NeuroFlux Governor's copies with NeuroFlux; not the rest", () => {
+    const state = { ...BN1, queued: [BITWIRE, "NeuroFlux Governor", "Combat Rib I"] };
+    const set = chooseAugmentationsToBuy([GEN_I], state, 1e12, LEVEL);
+    expect(set.purchases.map((purchase) => purchase.name)).toEqual([GEN_I]);
+    const counts = affordableCounts({ state, set, money: set.money, neuroFluxReputation: 0 });
+    expect(counts).toEqual({ affordable: 2, affordableWithNeuroFlux: 3, neuroFluxLevels: 0, money: set.money });
+    // Gen I at 1.9³ for the three queued: $70m × 6.859.
+    expect(set.money).toBeCloseTo(70e6 * 1.9 ** 3, 0);
+    // The level after three queued and Gen I: 750k × 1.14 (one copy queued) × 1.9⁴.
+    expect(
+      affordableCounts({ state, set, money: set.money + 750_000 * 1.14 * 1.9 ** 4, neuroFluxReputation: 1e6 }),
+    ).toMatchObject({ affordableWithNeuroFlux: 4, neuroFluxLevels: 1 });
+  });
+});
+
+describe("the rule", () => {
+  /** An hour into a cycle seen from its start, nothing affordable. */
+  const inputs = (fields: Partial<InstallRuleInputs> = {}): InstallRuleInputs => ({
+    onlineMs: HOUR,
+    sinceResetMs: HOUR,
+    affordable: 0,
+    affordableWithNeuroFlux: 0,
+    installing: 0,
+    neuroFluxLevels: 0,
+    nothingLeft: false,
     ...fields,
   });
 
-  test("nothing left to work for: install, with something to install; never with nothing", () => {
-    expect(installDecision({ ...base, candidates: [] })).toMatchObject({
+  test("the count reached: 8 new, or 12 with NeuroFlux; one under either, not", () => {
+    expect(installRule(inputs({ affordable: 8, affordableWithNeuroFlux: 8, installing: 8 }))).toMatchObject({
       install: true,
-      reason: "nothing left",
-      without: null,
-      with: null,
+      reason: "count reached",
+      bar: 8,
+      barWithNeuroFlux: 12,
     });
-    expect(installDecision({ ...base, installing: [], candidates: [] }).install).toBe(false);
-    // The income doesn't matter then.
-    expect(installDecision({ ...base, incomePerSecond: null, candidates: [] }).install).toBe(true);
-  });
-
-  test("the next one sooner carrying on: no install", () => {
-    // Carrying on: 10,000 rep at 2/s, 5,000 s (1.39 h). Installing: 1.44 h, then 5,000 s.
-    const decision = installDecision({ ...base, candidates: [candidate({})] });
-    expect(decision).toMatchObject({ install: false, reason: null });
-    expect(decision.without).toEqual({ augmentation: "Neurotrainer II", faction: "NiteSec", ms: 5_000_000 });
-    expect(decision.with?.ms).toBeCloseTo(REBUILD + 5_000_000, -1);
-    expect(decision.rebuildMs).toBeCloseTo(REBUILD, -1);
-  });
-
-  test("the money far off carrying on (the set's prices ×1.9 each), little once installed: install", () => {
-    // Carrying on: $22.9b less $500m at $100k/s, 224,000 s. Installing: the rebuild, then 10,000 rep at 2/s or its
-    // $250m at $100k/s (2,500 s): 5,000 s.
-    const far = candidate({ costAfterSet: 22.9e9, priceAfterInstall: 250e6 });
-    const decision = installDecision({ ...base, candidates: [far] });
-    expect(decision.without?.ms).toBeCloseTo(224_000_000, -1);
-    expect(decision.with?.ms).toBeCloseTo(REBUILD + 5_000_000, -1);
-    expect(decision).toMatchObject({ install: true, reason: "sooner installing" });
-  });
-
-  test("the longer of reputation and money on each side; the soonest candidate on each", () => {
-    const repBound = candidate({ augmentation: "A", reputationNeeded: 40_000, reputation: 30_000 }); // 5,000 s
-    const moneyBound = candidate({ augmentation: "B", costAfterSet: 1.5e9, priceAfterInstall: 2e9 }); // 10,000 s
-    const decision = installDecision({ ...base, candidates: [moneyBound, repBound] });
-    expect(decision.without).toMatchObject({ augmentation: "A", ms: 5_000_000 });
-    // Installing, A takes 20,000 s, B's money 20,000 s: the first of the soonest.
-    expect(decision.with?.augmentation).toBe("B");
-    expect(decision.with?.ms).toBeCloseTo(REBUILD + 20_000_000, -1);
-  });
-
-  test("installing, the rate is times the install's faction_rep; the reputation from scratch", () => {
-    const sna = candidate({ reputation: 9_000 });
-    const plain = installDecision({ ...base, candidates: [sna] });
-    const repGain = installDecision({
-      ...base,
-      installing: [...CYBERSEC, "Social Negotiation Assistant (S.N.A)"],
-      candidates: [sna],
+    expect(installRule(inputs({ affordable: 5, affordableWithNeuroFlux: 12, installing: 5 }))).toMatchObject({
+      install: true,
+      reason: "count reached",
     });
-    expect(plain.with?.ms).toBeCloseTo(REBUILD + 5_000_000, -1);
-    expect(repGain.with?.ms).toBeCloseTo(REBUILD + 5_000_000 / 1.15, -1);
-    expect(plain.without?.ms).toBe(500_000);
+    expect(installRule(inputs({ affordable: 7, affordableWithNeuroFlux: 11, installing: 7 }))).toMatchObject({
+      install: false,
+      reason: null,
+      affordable: 7,
+      affordableWithNeuroFlux: 11,
+    });
   });
 
-  test("reached and covered: 0 carrying on; no rate is never, and never is as good as nothing left", () => {
-    const covered = candidate({ reputation: 10_000, costAfterSet: 100e6 });
-    expect(installDecision({ ...base, candidates: [covered] }).without?.ms).toBe(0);
-    const noRate = candidate({ reputationPerSecond: 0 });
-    const never = installDecision({ ...base, candidates: [noRate] });
-    expect(never.without?.ms).toBe(Number.POSITIVE_INFINITY);
-    expect(never).toMatchObject({ install: true, reason: "nothing reachable" });
-    expect(installDecision({ ...base, installing: [], candidates: [noRate] }).install).toBe(false);
+  test("the bars fall with the time online: 5 new install at 6 h, 1 at 14 h; the game's time since doesn't count", () => {
+    const five = { affordable: 5, affordableWithNeuroFlux: 5, installing: 5 };
+    expect(installRule(inputs({ ...five, onlineMs: 6 * HOUR - 1, sinceResetMs: 95 * HOUR })).install).toBe(false);
+    expect(installRule(inputs({ ...five, onlineMs: 6 * HOUR, sinceResetMs: 95 * HOUR }))).toMatchObject({
+      install: true,
+      reason: "count reached",
+      bar: 5,
+    });
+    const one = { affordable: 1, affordableWithNeuroFlux: 1, installing: 1 };
+    expect(installRule(inputs({ ...one, onlineMs: 14 * HOUR - 1 })).install).toBe(false);
+    expect(installRule(inputs({ ...one, onlineMs: 14 * HOUR }))).toMatchObject({ install: true, bar: 1 });
+    // NeuroFlux levels alone: the bar with NeuroFlux is 1 from 22 h.
+    const levels = { affordable: 0, affordableWithNeuroFlux: 1, installing: 0, neuroFluxLevels: 1 };
+    expect(installRule(inputs({ ...levels, onlineMs: 22 * HOUR - 1 })).install).toBe(false);
+    expect(installRule(inputs({ ...levels, onlineMs: 22 * HOUR })).install).toBe(true);
   });
 
-  test("an income of 0 (the hack loop off or stalled): it waits, never installs on money it can't judge", () => {
-    // Short of money for every candidate: at $0 a second, carrying on would be never, and install.
-    const short = candidate({ reputation: 10_000, costAfterSet: 22.9e9 });
-    for (const income of [0, -1, Number.NaN]) {
-      const decision = installDecision({ ...base, incomePerSecond: income, candidates: [short] });
-      expect(decision).toMatchObject({ install: false, reason: null, without: null, with: null });
-      expect(decision.waitingFor).toMatch(/^an income above \$0 a second/);
-    }
+  test("a quick install: 4 with NeuroFlux within 20 minutes of the last install, online and in the game's time", () => {
+    expect([QUICK_INSTALL_WITHIN_MS, QUICK_INSTALL_AT_AUGMENTATIONS]).toEqual([20 * MINUTE, 4]);
+    const four = { affordable: 3, affordableWithNeuroFlux: 4, installing: 3 };
+    const early = { onlineMs: 20 * MINUTE - 1, sinceResetMs: 20 * MINUTE - 1 };
+    expect(installRule(inputs({ ...four, ...early }))).toMatchObject({ install: true, reason: "quick install" });
+    expect(installRule(inputs({ ...four, ...early, affordableWithNeuroFlux: 3 })).install).toBe(false);
+    expect(installRule(inputs({ ...four, ...early, onlineMs: 20 * MINUTE })).install).toBe(false);
+    expect(installRule(inputs({ ...four, ...early, sinceResetMs: 20 * MINUTE })).install).toBe(false);
+    // A save first seen mid-cycle: 0 online, 95 h since its install. Not early in its cycle.
+    expect(installRule(inputs({ ...four, onlineMs: 0, sinceResetMs: 95 * HOUR })).install).toBe(false);
+    // The count reached early too: a quick install (its shorter countdown).
+    expect(installRule(inputs({ ...early, affordable: 8, affordableWithNeuroFlux: 8, installing: 8 })).reason).toBe(
+      "quick install",
+    );
   });
 
-  test("with candidates and no income measured: it waits, saying why", () => {
-    const decision = installDecision({ ...base, incomePerSecond: null, candidates: [candidate({})] });
-    expect(decision).toMatchObject({ install: false, without: null, with: null });
-    expect(decision.waitingFor).toMatch(/^the income/);
+  test("nothing left at the joined factions: install, with something to install; never with nothing", () => {
+    expect(
+      installRule(inputs({ nothingLeft: true, affordable: 1, affordableWithNeuroFlux: 1, installing: 1 })),
+    ).toMatchObject({ install: true, reason: "nothing left" });
+    // Something queued (bought by hand, say) and nothing more affordable: installs.
+    expect(installRule(inputs({ nothingLeft: true, installing: 2 })).install).toBe(true);
+    expect(installRule(inputs({ nothingLeft: true }))).toMatchObject({ install: false, reason: null });
+    // NeuroFlux levels alone don't make nothing left an install: only the bars do.
+    expect(installRule(inputs({ nothingLeft: true, affordableWithNeuroFlux: 3, neuroFluxLevels: 3 })).install).toBe(
+      false,
+    );
   });
 
-  test("an empty set to install never installs, however far the next", () => {
-    const far = candidate({ costAfterSet: 1e15, priceAfterInstall: 0 });
-    expect(installDecision({ ...base, installing: [], candidates: [far] }).install).toBe(false);
+  test("never with nothing really to install, whatever the counts say (#222 review: a phantom purchase counted)", () => {
+    // At a bar of 1, a count of 1 that nothing queued, in the set or among the levels backs: no install, no reason.
+    const phantom = {
+      onlineMs: 22 * HOUR,
+      affordable: 1,
+      affordableWithNeuroFlux: 1,
+      installing: 0,
+      neuroFluxLevels: 0,
+    };
+    expect(installRule(inputs(phantom))).toMatchObject({ install: false, reason: null, bar: 1 });
+    expect(
+      installRule(inputs({ ...phantom, onlineMs: 5 * MINUTE, sinceResetMs: 5 * MINUTE, affordableWithNeuroFlux: 4 })),
+    ).toMatchObject({ install: false, reason: null });
+    // A level to buy, or one thing queued, is something.
+    expect(installRule(inputs({ ...phantom, neuroFluxLevels: 1 })).install).toBe(true);
+    expect(installRule(inputs({ ...phantom, installing: 1 })).install).toBe(true);
+  });
+});
+
+describe("the countdown", () => {
+  test("90 s, or 30 s for a quick install; each extension the larger of 10 s and the countdown less a share", () => {
+    expect([INSTALL_COUNTDOWN_MS, QUICK_INSTALL_COUNTDOWN_MS, INSTALL_COUNTDOWN_LEAST_EXTENSION_MS]).toEqual([
+      90_000, 30_000, 10_000,
+    ]);
+    // Bar 12: 90 × (1 − 1/12) = 82.5 s, then 75 s; 10 s once the extensions near the bar.
+    expect(countdownExtensionMs(90_000, 1, 12)).toBeCloseTo(82_500, 6);
+    expect(countdownExtensionMs(90_000, 2, 12)).toBeCloseTo(75_000, 6);
+    expect(countdownExtensionMs(90_000, 11, 12)).toBe(10_000);
+    expect(countdownExtensionMs(90_000, 20, 12)).toBe(10_000);
+    expect(countdownExtensionMs(30_000, 1, 4)).toBeCloseTo(22_500, 6);
   });
 });

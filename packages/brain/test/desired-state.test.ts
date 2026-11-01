@@ -8,8 +8,10 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   AUGMENTATION_NAMES,
   CONTROL_PROTOCOL_VERSION,
+  chooseAugmentationsToBuy,
   type DesiredState,
   encodeControlMessage,
+  INSTALL_COUNTDOWN_MS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,
@@ -1244,11 +1246,37 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         game: null,
         intents: [{ id, done: true, tries: 1, problem: null, backend: "sim" }],
       });
+    /**
+     * A medium snapshot at the game's time past the install's countdown (#222), which runs in the game's time: 90 s
+     * (30 s for a quick install) from the first update saying install, at 1,000.
+     */
+    const pastCountdown = (connection: MemoryConnection, data: unknown) =>
+      connection.receive(
+        encodeControlMessage({
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "snapshot",
+          agentSessionId: "session-1",
+          tier: "medium",
+          sequenceNumber: ++sequenceNumber,
+          gameTimeMs: 1_000 + INSTALL_COUNTDOWN_MS,
+          data,
+        }),
+      );
 
     test("the install chosen: its purchases (`augmentation`), one at a time, the next at once; programs held", () => {
       const { controller, connection, sentIds } = connectedWithLoopOff();
       send(connection, "slow", slowWith());
       send(connection, "medium", richMedium(1e9));
+      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install).
+      expect(sentIds()).toEqual([]);
+      expect(controller.programsView().waitingFor).toBe(
+        "the augmentations' install countdown (programs are lost at the install)",
+      );
+      expect(controller.augmentationsView()).toMatchObject({
+        committed: false,
+        progress: { countdown: { quick: true } },
+      });
+      pastCountdown(connection, richMedium(1e9));
       expect(sentIds()).toEqual([buy(FIVE[0] as string).id]);
       expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
         [buy(FIVE[0] as string).id, "augmentation"],
@@ -1290,17 +1318,18 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           gameTimeMs,
         );
       send(connection, "slow", slowWith());
-      // $447,170,900: the five exactly.
+      // $447,170,900: the five exactly; the countdown run out (#222) at 91,000.
       send(connection, "medium", richMedium(447_170_900));
+      pastCountdown(connection, richMedium(447_170_900));
       for (const [index, name] of FIVE.entries()) {
         expect(sentIds()).toEqual([buy(name).id]);
-        fastAt(buy(name).id, 2_000 + index);
+        fastAt(buy(name).id, 92_000 + index);
       }
       // Nothing left: no NeuroFlux Governor on money already spent; waiting for the faction state to show the five.
       expect(sentIds()).toEqual([]);
       expect(controller.augmentationsView().waitingFor).toMatch(/^the faction state to show /);
       // A medium snapshot taken after them is the money: $30m, NeuroFlux Governor level 1 ($18.6m).
-      at("medium", richMedium(30e6), 10_000);
+      at("medium", richMedium(30e6), 100_000);
       expect(sentIds()).toEqual([buy("NeuroFlux Governor").id]);
     });
 
@@ -1321,9 +1350,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       const sent: unknown[] = [];
       controller.subscribe((event) => sent.push(event));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
-      // All five bought already, no money left: the install is what's left.
+      // All five bought already, no money left: the install is what's left, once its countdown has run out (#222).
       send(connection, "slow", slowWith(FIVE));
       send(connection, "medium", richMedium(0));
+      pastCountdown(connection, richMedium(0));
       send(connection, "medium", richMedium(0));
       expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
       expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
@@ -1338,6 +1368,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       await settleBackup(SAVED);
       expect(sentIds()).toEqual([INSTALL.id]);
       expect(sent).toEqual([
+        expect.objectContaining({ type: "augmentationProgress", countdown: expect.objectContaining({ quick: true }) }),
         expect.objectContaining({ type: "augmentationInstallChosen" }),
         { type: "augmentationInstallSent", atMs: expect.any(Number), source: "brain", queued: FIVE },
       ]);
@@ -1366,8 +1397,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       const sent: { type: string }[] = [];
       controller.subscribe((event) => sent.push(event));
       send(connection, "slow", slowWith(FIVE));
-      // Chosen on the first medium snapshot; the gate's two after it.
-      for (let each = 0; each < 3; each += 1) send(connection, "medium", richMedium(0));
+      // The countdown from the first medium snapshot, chosen at its end (#222); the gate's two after it.
+      send(connection, "medium", richMedium(0));
+      pastCountdown(connection, richMedium(0));
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
       await settleBackup(SAVED);
       expect(sentIds()).toEqual([INSTALL.id]);
       // The game had nothing to install: done, and the next slow snapshot (the game's time on) shows no reset.
@@ -1393,6 +1426,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(controller.augmentationReserve()).toBe(0);
       expect(sent.map((event) => event.type)).toEqual([
+        "augmentationProgress",
         "augmentationInstallChosen",
         "augmentationInstallSent",
         "augmentationInstallNotReset",
@@ -1449,8 +1483,13 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       send(connection, "medium", lateMedium(1e9, { hacking: 300 }));
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(controller.augmentationsView().waitingFor).toMatch(/^the BitNode's destroy: The Red Pill is installed/);
-      // Off, ordinary installs go on: CyberSec's five.
+      // Off, ordinary installs go on: CyberSec's five, once the countdown has run out (#222).
       controller.setWorldDaemonEnabled(false);
+      expect(controller.augmentationsView()).toMatchObject({
+        committed: false,
+        progress: { countdown: { quick: true } },
+      });
+      pastCountdown(connection, lateMedium(1e9, { hacking: 300 }));
       expect(controller.augmentationsView()).toMatchObject({ committed: true });
     });
 
@@ -1776,7 +1815,10 @@ describe("factions and their work (#203)", () => {
     const lines: string[] = [];
     const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
     const events: unknown[] = [];
-    controller.subscribe((event) => events.push(event));
+    // The faction work's events: the augmentation rule's progress (#222) is its own suite's.
+    controller.subscribe((event) => {
+      if (event.type !== "augmentationProgress") events.push(event);
+    });
     const connection = connectAgent();
     send(connection, "static", network);
     return { controller, connection, lines, events };
@@ -2203,23 +2245,65 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       return { controller, connection };
     };
     const CYBERSEC_ALL = [{ name: "CyberSec", reputation: 18_750 }];
-    const AND_NITESEC = [...CYBERSEC_ALL, { name: "NiteSec", reputation: 0 }];
+    /** Eight reached (the rule's tests work it): CyberSec's five, and three of NiteSec's at 15,000. */
+    const EIGHT = [...CYBERSEC_ALL, { name: "NiteSec", reputation: 15_000 }];
+    const EIGHT_COST = chooseAugmentationsToBuy(
+      [
+        "Cranial Signal Processors - Gen I",
+        "Cranial Signal Processors - Gen II",
+        "BitWire",
+        "Synaptic Enhancement Implant",
+        "Neurotrainer I",
+        "Artificial Synaptic Potentiation",
+        "Neurotrainer II",
+        "Embedded Netburner Module",
+      ],
+      {
+        installed: {},
+        queued: [],
+        sourceFile11Level: 0,
+        bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+      },
+      1e15,
+      300,
+    ).money;
+    const heldEight = `$${Math.round(EIGHT_COST).toLocaleString("en-US")}`;
 
-    test("an install projected within 15 minutes holds its set's money from cloud servers; further off, not", () => {
-      // $435m at $20k/s (the rule's tests work it): CyberSec's five ($447,170,900) covered within the 15 minutes, and
-      // the install chosen then. Held back, no server is bought.
-      const near = earningWithFactions(435e6, AND_NITESEC);
-      expect(near.controller.augmentationsView()).toMatchObject({ committed: false });
-      expect(near.controller.augmentationReserve()).toBeCloseTo(447_170_900, 0);
+    test("an install the count rule would choose with 15 minutes more income holds its money from cloud servers", () => {
+      // $10m short of the eight at $20k/s: 15 minutes ($18m) covers them, 8 of 8, so their money is held back (#222).
+      const near = earningWithFactions(EIGHT_COST - 10e6, EIGHT);
+      expect(near.controller.augmentationsView()).toMatchObject({ committed: false, progress: { countdown: null } });
+      expect(near.controller.augmentationReserve()).toBeCloseTo(EIGHT_COST, 0);
       expect(sentPurchases(near.connection)).toEqual([]);
       expect(near.controller.cloudServersView().waitingFor).toMatch(
-        /beyond \$447,170,900 held for the augmentations to buy before the install\)$/,
+        /beyond \$2,927,417,20\d held for the augmentations to buy before the install\)$/,
       );
       near.connection.dropFromGameSide();
-      // $100m: the five not covered within the 15 minutes: nothing held back, and the largest server bought.
-      const far = earningWithFactions(100e6, AND_NITESEC);
+      // $40m short: not covered within the 15 minutes: nothing held back, and the largest server bought.
+      const far = earningWithFactions(EIGHT_COST - 40e6, EIGHT);
       expect(far.controller.augmentationReserve()).toBe(0);
       expect(sentPurchases(far.connection)?.map((each) => each.action)).toEqual(["buyServer"]);
+    });
+
+    test("the install's countdown (#222): the counted purchases' money held from cloud servers and home RAM", () => {
+      const controller = new DesiredStateController({ channel, store });
+      const connection = connectAgent();
+      send(connection, "static", network);
+      sendAt(connection, "slow", slowAt(EIGHT), 7 * 3_600_000);
+      // Home at 8 GB, its next upgrade about $1m: under the money, but not above what's held.
+      send(connection, "medium", withPlayer(medium(EIGHT_COST + 1_000, { homeRam: 8 })));
+      expect(controller.augmentationsView()).toMatchObject({
+        committed: false,
+        progress: { reason: "count reached", countdown: { endsInMs: 90_000 } },
+      });
+      expect(controller.augmentationReserve()).toBeCloseTo(EIGHT_COST, 0);
+      expect(sentPurchases(connection)).toEqual([]);
+      expect(controller.homeRamView().waitingFor).toBe(
+        `money above the ${heldEight} held for the augmentations' install countdown`,
+      );
+      // The switch off: nothing held, home's RAM upgraded.
+      controller.setAugmentationsEnabled(false);
+      expect(sentPurchases(connection)?.map((each) => each.action)).toEqual(["upgradeHomeRam"]);
     });
 
     test("an install chosen: no cloud server at all, saying why, and the augmentation bought instead", () => {

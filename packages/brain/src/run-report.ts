@@ -1,7 +1,7 @@
 // The run report (#185, owner decision 45): what a run did and what went wrong, from the store alone, for a person (and
 // Claude) to read after a live run instead of a manual smoke test. Read-only: it records nothing, and reads only what
-// the brain already stores (snapshots, events and the hack loop's switch), in one read transaction, folding the
-// snapshots row by row so a long run's window never sits in memory whole.
+// the brain already stores (snapshots, events, and the hack loop's and augmentations' switches), in one read
+// transaction, folding the snapshots row by row so a long run's window never sits in memory whole.
 import {
   type FactionState,
   type FastSnapshotData,
@@ -15,6 +15,7 @@ import {
   type WorkOutcome,
 } from "@bitburner-agent/core";
 import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline } from "./augmentation-report.ts";
+import { readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
@@ -378,6 +379,8 @@ interface RunFacts extends RunWindow {
   cloudServerChanges: CloudServerChange[];
   /** The dashboard's switch, now: the store keeps no history of it. */
   hackLoopEnabled: boolean;
+  /** The Augmentations switch, now (#222): likewise. */
+  augmentationsEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
   earlierBrainStartMs: number | null;
   /** Hacking income against the ceiling (#196). */
@@ -388,9 +391,11 @@ const isObject = (data: unknown): data is object => data !== null && typeof data
 
 function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
   return store.readTransaction(() => {
-    function* ofTier<Data>(tier: string): Generator<{ atMs: number; data: Data }> {
+    function* ofTier<Data>(tier: string): Generator<{ atMs: number; gameTimeMs: number; data: Data }> {
       for (const snapshot of store.iterateSnapshotsInWindow({ ...window, tier })) {
-        if (isObject(snapshot.data)) yield { atMs: snapshot.receivedAtMs, data: snapshot.data as Data };
+        if (isObject(snapshot.data)) {
+          yield { atMs: snapshot.receivedAtMs, gameTimeMs: snapshot.gameTimeMs, data: snapshot.data as Data };
+        }
       }
     }
     let snapshotCount = 0;
@@ -420,14 +425,14 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
-    for (const { atMs, data } of ofTier<SlowSnapshotData>("slow")) {
+    for (const { atMs, gameTimeMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
       factionState.add(atMs, data);
       factionWork.addSlow(atMs, data);
-      augmentations.addSlow(atMs, data);
+      augmentations.addSlow(atMs, data, gameTimeMs);
       for (const name of namesOf(data.purchasedServers)) {
         playersServers.add(name);
         cloudServers.add(name);
@@ -493,6 +498,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       staticLast,
       cloudServerChanges: cloudServerChanges.changes,
       hackLoopEnabled: readHackLoopEnabled(store),
+      augmentationsEnabled: readAugmentationsEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
       hacking,
     };
@@ -1101,6 +1107,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
     ...facts.augmentations.healthLines(facts.events, {
       untilMs: facts.untilMs,
       withinMs: INSTALL_NOT_RESTARTED_AFTER_MS,
+      augmentationsEnabled: facts.augmentationsEnabled,
       failures,
       formatTime: formatIsoTime,
     }),

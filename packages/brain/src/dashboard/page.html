@@ -354,16 +354,42 @@ function render(status) {
     ),
   );
   document.querySelector("#cloud-servers button").textContent = cloud.enabled ? "Stop buying cloud servers" : "Start buying cloud servers";
-  // Augmentations and the reset (#210): what the brain asks for, or the set the money covers and the decision.
+  // Augmentations and the reset (#210): what the brain asks for, or the set the money covers and where the count rule
+  // stands (#222): the counts, the bars, when each falls next, and the countdown.
   const augmentations = status.augmentations;
   enableAugmentationsNext = !augmentations.enabled;
   const dollars = (money) => `$${Math.round(money).toLocaleString("en-US")}`;
-  const wayEta = (way) =>
-    way === null || way.ms === null || !Number.isFinite(way.ms)
-      ? "never"
-      : way.ms < 3_600_000
-        ? `${Math.round(way.ms / 60_000)} min`
-        : `${(way.ms / 3_600_000).toFixed(1)} h`;
+  const augmentationEta = (ms) =>
+    ms < 60_000
+      ? `${Math.round(ms / 1000)} s`
+      : ms < 3_600_000
+        ? `${Math.round(ms / 60_000)} min`
+        : `${(ms / 3_600_000).toFixed(1)} h`;
+  const progress = augmentations.progress;
+  const fallsText = (bar, inMs) => (inMs === null ? `${bar}, its floor` : `${bar}, falling to ${bar - 1} in ${augmentationEta(inMs)}`);
+  const progressLines =
+    progress === null
+      ? []
+      : [
+          element(
+            "div",
+            `Affordable: ${progress.affordable} new augmentations, ${progress.affordableWithNeuroFlux} with NeuroFlux; ${augmentationEta(progress.onlineMs)} online this cycle`,
+          ),
+          element(
+            "div",
+            `Install at: ${fallsText(progress.bar, progress.barFallsInMs)}; with NeuroFlux ${fallsText(progress.barWithNeuroFlux, progress.barWithNeuroFluxFallsInMs)}`,
+          ),
+          ...(progress.countdown === null
+            ? []
+            : [
+                element(
+                  "div",
+                  `Countdown${progress.countdown.quick ? " (a quick install)" : ""}: installing in ${augmentationEta(progress.countdown.endsInMs)}${progress.countdown.extensions > 0 ? `, extended ${progress.countdown.extensions} time${progress.countdown.extensions === 1 ? "" : "s"}` : ""}`,
+                  "ok",
+                ),
+              ]),
+          ...(progress.held === null ? [] : [element("div", `Held: ${progress.held}`, "muted")]),
+        ];
   const augmentationsText = !augmentations.enabled
     ? "not buying or installing"
     : augmentations.waiting
@@ -373,21 +399,13 @@ function render(status) {
         : augmentations.waitingFor !== null
           ? `${augmentations.committed ? "install chosen: " : ""}waiting for ${augmentations.waitingFor}`
           : "nothing to do";
-  const decision = augmentations.decision;
   document.querySelector("#augmentations div").replaceChildren(
     element("div", `Augmentations: ${augmentationsText}`, augmentations.enabled ? "ok" : "muted"),
     element(
       "div",
       `The set the money covers: ${augmentations.set.length === 0 ? "none" : `${augmentations.set.map((each) => each.augmentation).join(", ")} (${dollars(augmentations.setCost)})`}`,
     ),
-    ...(decision === null || decision.without === null
-      ? []
-      : [
-          element(
-            "div",
-            `The next worth installing: ${decision.without.augmentation} at ${decision.without.faction}, ${wayEta(decision.without)} carrying on, ${wayEta(decision.with)} installing first (rebuild ${wayEta({ ms: decision.rebuildMs })})`,
-          ),
-        ]),
+    ...progressLines,
     ...augmentations.notQueued.map((each) =>
       element("div", `NOT QUEUED: ${each.augmentation}, reported bought, not in the faction state's queue`, "bad"),
     ),
