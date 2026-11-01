@@ -1,13 +1,15 @@
 /**
  * Augmentations and the reset (#210, M4 phase A slice A6): which augmentations the brain buys, in what order, and
- * whether installing them now beats carrying on. Pure, from the game's formulas (owner decision 46) and core's
- * augmentation data and price rules (#193); the brain's rule (packages/brain/src/augmentations.ts) feeds it what the
- * snapshots say.
+ * when it installs them. Pure, from the game's formulas (owner decision 46) and core's augmentation data and price
+ * rules (#193); the brain's rule (packages/brain/src/augmentations.ts) feeds it what the snapshots say. When to install
+ * is the legacy scripts' count rule (#222, owner decision 51): `alainbryden/bitburner-scripts`' autopilot.js, cited
+ * as `autopilot.js:<line>` (its `maybeInstallAugmentations`, lines 860-1020). Smarter timing is phase B's planner's.
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
 import {
   type AugmentationPurchase,
   type AugmentationPurchaseState,
+  augmentationCost,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
@@ -147,142 +149,155 @@ export function hackingExpForLevel(level: number, multiplier: number): number {
   return Math.max(0, Math.exp((level / multiplier + 200) / 32) - 534.6);
 }
 
+/** Install once this many new augmentations are affordable, NeuroFlux Governor's levels not counted (`autopilot.js:10`). */
+export const INSTALL_AT_AUGMENTATIONS = 8;
+/** Or once this many are, each NeuroFlux Governor level counted (`autopilot.js:11`). */
+export const INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX = 12;
 /**
- * How long getting back to `hackingLevel` takes after the install (#210): this cycle's pace replayed. The experience
- * the level needs at the hacking multiplier after the install, over the experience it took this cycle, times the time
- * since the last install, over the install's experience and speed multipliers (each hack, grow and weaken is that much
- * quicker and gives that much more). The multiplier now is the one the level and experience imply (`skill.ts:13`, so
- * the BitNode's is in it), the level being floored: at most 1/level off. With no experience yet, nothing to rebuild.
+ * Each bar falls by this many an hour online this cycle, floored, never below 1 (`autopilot.js:15`, `:888`, `:897-898`):
+ * an install in a slow cycle locks in what it has. The legacy scripts' SF11 +1 a level (`:896`) is left out: a BN11
+ * concern, the planner's.
  */
-export function rebuildTimeMs({
-  sinceResetMs,
-  hackingLevel,
-  hackingExp,
-  gains,
+export const INSTALL_BAR_FALL_PER_HOUR = 0.5;
+/** A quick install: within 20 minutes of the last install (`autopilot.js:939`), at 4 affordable with NeuroFlux (`:937`). */
+export const QUICK_INSTALL_WITHIN_MS = 20 * 60_000;
+export const QUICK_INSTALL_AT_AUGMENTATIONS = 4;
+/**
+ * The countdown once the rule says install, in the game's time: 90 s (`autopilot.js:13`) to see whether more come
+ * within reach; 30 s for a quick install (`:944-945`). Each rise in the count during it extends it, to the larger of
+ * 10 s (`:973`) and the countdown less a share for each extension so far (`:972-976`). The Red Pill has none (`:968`).
+ */
+export const INSTALL_COUNTDOWN_MS = 90_000;
+export const QUICK_INSTALL_COUNTDOWN_MS = 30_000;
+export const INSTALL_COUNTDOWN_LEAST_EXTENSION_MS = 10_000;
+const HOUR_MS = 3_600_000;
+
+/** The bars at `onlineMs` online this cycle, and the online time each falls next at (null once it's 1). */
+export interface InstallBars {
+  bar: number;
+  barWithNeuroFlux: number;
+  barFallsAtMs: number | null;
+  barWithNeuroFluxFallsAtMs: number | null;
+}
+
+export function installBars(onlineMs: number): InstallBars {
+  if (!Number.isFinite(onlineMs) || onlineMs < 0) {
+    throw new RangeError(`the online time must be finite and 0 or more, not ${onlineMs}`);
+  }
+  const fall = Math.floor((INSTALL_BAR_FALL_PER_HOUR * onlineMs) / HOUR_MS);
+  const nextFallAtMs = ((fall + 1) / INSTALL_BAR_FALL_PER_HOUR) * HOUR_MS;
+  const bar = Math.max(1, INSTALL_AT_AUGMENTATIONS - fall);
+  const barWithNeuroFlux = Math.max(1, INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX - fall);
+  return {
+    bar,
+    barWithNeuroFlux,
+    barFallsAtMs: bar > 1 ? nextFallAtMs : null,
+    barWithNeuroFluxFallsAtMs: barWithNeuroFlux > 1 ? nextFallAtMs : null,
+  };
+}
+
+/** What's affordable: new augmentations, and with NeuroFlux Governor's levels too. */
+export interface InstallCounts {
+  affordable: number;
+  affordableWithNeuroFlux: number;
+}
+
+/**
+ * The counts (#222; `autopilot.js:901-903`, the legacy faction manager's affordable and awaiting-install counts).
+ * - Affordable: those worth installing that are queued, plus the set to buy (`chooseAugmentationsToBuy` with `money`).
+ * - With NeuroFlux: that, the NeuroFlux Governor copies queued, and the levels the money left after the set covers at
+ *   `neuroFluxReputation` (the joined sellers' most), each priced after the set and the levels before it, as
+ *   `augmentationCost` has it (×1.14 a level, ×1.9 a purchase).
+ * Also the levels, and the money the set and the levels cost: the countdown holds it back.
+ */
+export function affordableCounts({
+  state,
+  set,
+  money,
+  neuroFluxReputation,
 }: {
-  sinceResetMs: number;
-  hackingLevel: number;
-  hackingExp: number;
-  gains: Pick<InstallGains, "hacking" | "hacking_exp" | "hacking_speed">;
-}): number {
-  for (const [what, value] of Object.entries({ sinceResetMs, hackingLevel, hackingExp })) {
-    if (!Number.isFinite(value) || value < 0)
-      throw new RangeError(`${what} must be finite and 0 or more, not ${value}`);
-  }
-  if (hackingExp === 0) return 0;
-  const multiplierNow = hackingLevel / (32 * Math.log(hackingExp + 534.6) - 200);
-  const expAfter = hackingExpForLevel(hackingLevel, multiplierNow * gains.hacking);
-  return (sinceResetMs * (expAfter / hackingExp)) / (gains.hacking_exp * gains.hacking_speed);
-}
-
-/** One way to the next augmentation worth installing: an augmentation at one of its joined sellers. */
-export interface InstallCandidate {
-  augmentation: string;
-  faction: string;
-  /** Its reputation there now, and what it needs (the game's `getAugCost`). */
-  reputation: number;
-  reputationNeeded: number;
-  /** The reputation a second the faction's best work earns there now (A5's rate); 0 for none. */
-  reputationPerSecond: number;
-  /** Not installing: the set, then it, in buy order (`purchaseSequenceCost`). */
-  costAfterSet: number;
-  /** Installing: its price with nothing queued. */
-  priceAfterInstall: number;
-}
-
-export interface InstallDecisionInputs {
-  /** The game's time since the last install (the slow snapshot's game time less `lastAugReset`). */
-  sinceResetMs: number;
-  hackingLevel: number;
-  hackingExp: number;
-  /** What the install would install: what's queued and the set to buy (NeuroFlux Governor's copies too). */
-  installing: readonly string[];
+  state: AugmentationPurchaseState;
+  set: AugmentationSet;
   money: number;
-  /** The money earned a second (the slow snapshots' money sources), or null while it isn't measured. */
-  incomePerSecond: number | null;
-  /** Each way to the next augmentation worth installing, at the joined factions. */
-  candidates: readonly InstallCandidate[];
-}
-
-/**
- * Why an install is, or would be, chosen (#210). "The Red Pill" is the brain's own (#215): it's reached or queued, and
- * installing it links w0r1d_d43m0n (`installDecision` never gives it).
- */
-export type InstallReason = "nothing left" | "nothing reachable" | "sooner installing" | "The Red Pill";
-
-/** The decision, with its figures (ms; Infinity for never) for the dashboard, the events and the report. */
-export interface InstallDecision {
-  install: boolean;
-  /** Why not, when it can't be decided: the income not measured yet, or none. Null otherwise. */
-  waitingFor: string | null;
-  /**
-   * Why it installs, or would: nothing left at the joined factions; nothing reachable at a positive reputation rate; or
-   * the next one sooner installing first. Null while it waits.
-   */
-  reason: InstallReason | null;
-  rebuildMs: number;
-  /** The soonest next augmentation not installing, and how long; null with no candidate. */
-  without: { augmentation: string; faction: string; ms: number } | null;
-  /** The same, installing now: the rebuild, then it from scratch. */
-  with: { augmentation: string; faction: string; ms: number } | null;
-}
-
-const eta = (amount: number, perSecond: number) =>
-  amount <= 0 ? 0 : perSecond > 0 ? (amount / perSecond) * 1000 : Number.POSITIVE_INFINITY;
-
-/**
- * Whether to install now (#210): when the next augmentation worth installing comes sooner installing first (rebuilding,
- * then it from scratch) than carrying on, or when none is left to work for at the joined factions; and only with
- * something to install.
- * - Carrying on: the longer of its reputation still needed at the rate, and its money, the set's and its own in buy
- *   order less the money now, at the income.
- * - Installing: `rebuildTimeMs`, then the longer of its whole reputation (it becomes favour, left out: conservative) at
- *   the rate times the install's `faction_rep`, and its price with nothing queued from no money, at the income.
- * The soonest candidate on each side. A decision with candidates waits without an income measured, or with one of 0
- * (the hack loop off or stalled): money's wait can't be judged then, and an install is never chosen on it. Never
- * carrying on is only reputation no joined faction's work earns (a rate of 0).
- */
-export function installDecision(inputs: InstallDecisionInputs): InstallDecision {
-  const { sinceResetMs, hackingLevel, hackingExp, installing, money, incomePerSecond, candidates } = inputs;
-  const gains = installGains(installing);
-  const rebuildMs = rebuildTimeMs({ sinceResetMs, hackingLevel, hackingExp, gains });
-  const decided = (install: boolean, reason: InstallReason | null, waitingFor: string | null = null) => ({
-    install,
-    waitingFor,
-    reason,
-    rebuildMs,
-  });
-  if (candidates.length === 0) return { ...decided(installing.length > 0, "nothing left"), without: null, with: null };
-  if (incomePerSecond === null || !(incomePerSecond > 0)) {
-    const waitingFor =
-      incomePerSecond === null
-        ? "the income, measured over 10 minutes of slow snapshots"
-        : "an income above $0 a second (none over the last 10 minutes), to judge the money's wait";
-    return { ...decided(false, null, waitingFor), without: null, with: null };
+  neuroFluxReputation: number;
+}): InstallCounts & { neuroFluxLevels: number; money: number } {
+  const queuedWorth = state.queued.filter(isWorthInstalling).length;
+  const queuedNeuroFlux = state.queued.filter((name) => name === NEUROFLUX_GOVERNOR).length;
+  const affordable = queuedWorth + set.purchases.length;
+  let queued = [...state.queued, ...set.purchases.map((purchase) => purchase.name)];
+  let spent = set.money;
+  let neuroFluxLevels = 0;
+  for (;;) {
+    const cost = augmentationCost(NEUROFLUX_GOVERNOR, { ...state, queued });
+    // Each level dearer in both, so a finite money or reputation ends it.
+    if (spent + cost.money > money || cost.reputation > neuroFluxReputation) break;
+    spent += cost.money;
+    queued = [...queued, NEUROFLUX_GOVERNOR];
+    neuroFluxLevels += 1;
   }
-  const soonest = (ms: (candidate: InstallCandidate) => number) =>
-    candidates
-      .map((candidate) => ({ augmentation: candidate.augmentation, faction: candidate.faction, ms: ms(candidate) }))
-      .reduce((best, each) => (each.ms < best.ms ? each : best));
-  const without = soonest((candidate) =>
-    Math.max(
-      eta(candidate.reputationNeeded - candidate.reputation, candidate.reputationPerSecond),
-      eta(candidate.costAfterSet - money, incomePerSecond),
-    ),
-  );
-  const withInstall = soonest(
-    (candidate) =>
-      rebuildMs +
-      Math.max(
-        eta(candidate.reputationNeeded, candidate.reputationPerSecond * gains.faction_rep),
-        eta(candidate.priceAfterInstall, incomePerSecond),
-      ),
-  );
-  const reason: InstallReason | null =
-    without.ms === Number.POSITIVE_INFINITY
-      ? "nothing reachable"
-      : withInstall.ms < without.ms
-        ? "sooner installing"
+  return {
+    affordable,
+    affordableWithNeuroFlux: affordable + queuedNeuroFlux + neuroFluxLevels,
+    neuroFluxLevels,
+    money: spent,
+  };
+}
+
+/**
+ * Why an install is chosen (#222). "The Red Pill" is the brain's own (#215): reached or queued, it links w0r1d_d43m0n
+ * once installed (`installRule` never gives it).
+ */
+export type InstallReason = "count reached" | "quick install" | "nothing left" | "The Red Pill";
+
+export interface InstallRuleInputs extends InstallCounts {
+  /** The game's time the brain saw online since the last install: the bars' clock. */
+  onlineMs: number;
+  /** The game's time since the last install, the time the game was closed in it too: a quick install's limit. */
+  sinceResetMs: number;
+  /** What the install would install besides NeuroFlux Governor levels still to buy: what's queued, and the set. */
+  installing: number;
+  /** No augmentation worth installing is left unowned at the joined factions, beyond the set. */
+  nothingLeft: boolean;
+}
+
+export interface InstallRule extends InstallBars, InstallCounts {
+  install: boolean;
+  /** Why it installs, or null. */
+  reason: InstallReason | null;
+}
+
+/**
+ * Whether to install (#222, owner decision 51), the legacy scripts' count rule:
+ * - a quick install: within `QUICK_INSTALL_WITHIN_MS` of the last install, online and in the game's time, at
+ *   `QUICK_INSTALL_AT_AUGMENTATIONS` with NeuroFlux (`autopilot.js:937-945`). The game's time as well (the legacy
+ *   scripts' only clock, `:129`): a save first seen mid-cycle has 0 online, which isn't early in its cycle;
+ * - the count reached: `affordable` at `bar`, or `affordableWithNeuroFlux` at `barWithNeuroFlux` (`:917-918`);
+ * - nothing left (#210): no augmentation worth installing left at the joined factions, with something to install.
+ * Never with nothing to install: each bar is 1 or more, and nothing left needs something queued or in the set.
+ */
+export function installRule(inputs: InstallRuleInputs): InstallRule {
+  const { onlineMs, sinceResetMs, installing, nothingLeft, affordable, affordableWithNeuroFlux } = inputs;
+  const bars = installBars(onlineMs);
+  const quick =
+    onlineMs < QUICK_INSTALL_WITHIN_MS &&
+    sinceResetMs < QUICK_INSTALL_WITHIN_MS &&
+    affordableWithNeuroFlux >= QUICK_INSTALL_AT_AUGMENTATIONS;
+  const reached = affordable >= bars.bar || affordableWithNeuroFlux >= bars.barWithNeuroFlux;
+  const reason: InstallReason | null = quick
+    ? "quick install"
+    : reached
+      ? "count reached"
+      : nothingLeft && installing > 0
+        ? "nothing left"
         : null;
-  return { ...decided(installing.length > 0 && reason !== null, reason), without, with: withInstall };
+  return { ...bars, affordable, affordableWithNeuroFlux, install: reason !== null, reason };
+}
+
+/**
+ * How long a countdown runs from now once the count rises during it (`autopilot.js:972-976`): the countdown (90 s, or
+ * 30 s for a quick install: the legacy scripts lower the option to 30 s, `:944-945`) less a share for each extension so
+ * far, of `barWithNeuroFlux`, never under 10 s. The caller never shortens a deadline already set (`:976`).
+ */
+export function countdownExtensionMs(countdownMs: number, extensions: number, barWithNeuroFlux: number): number {
+  return Math.max(INSTALL_COUNTDOWN_LEAST_EXTENSION_MS, countdownMs * (1 - extensions / barWithNeuroFlux));
 }

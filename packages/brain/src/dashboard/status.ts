@@ -109,8 +109,9 @@ export interface DashboardStatus {
   /** Cloud servers (#194): those owned, the purchase being made, or what it waits for, and a problem noted. */
   cloudServers: CloudServersView;
   /**
-   * Augmentations and the reset (#210): the switch, the set the money covers, the decision, what's asked for, and the
-   * purchases not queued. The reserve is Infinity while committed, which JSON carries as null.
+   * Augmentations and the reset (#210): the switch, the set the money covers, where the count rule stands (#222),
+   * what's asked for, and the purchases not queued. The reserve is Infinity while committed, which JSON carries as
+   * null.
    */
   augmentations: AugmentationsView;
   /**

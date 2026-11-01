@@ -841,26 +841,59 @@ test("the augmentations' button (#210) sends its switch, and each state reads pl
   expect(textOf(document, "#augmentations button")).toBe("Start buying and installing augmentations");
 });
 
+/** Where the count rule stands (#222): 1 of 7 (3 of 11 with NeuroFlux), 2.5 h online. */
+const PROGRESS = {
+  lastAugReset: 0,
+  affordable: 1,
+  affordableWithNeuroFlux: 3,
+  bar: 7,
+  barWithNeuroFlux: 11,
+  onlineMs: 2.5 * 3_600_000,
+  barFallsInMs: 5_400_000,
+  barWithNeuroFluxFallsInMs: 5_400_000,
+  reason: null,
+  countdown: null,
+  held: null,
+};
+
 test.each([
   ["waiting for the Agent", {}, "Augmentations: waiting for the Agent's snapshots"],
   [
-    "not installing yet",
+    "not installing yet (#222): the counts, the bars and when each falls",
     {
       waiting: false,
-      waitingFor: "the next augmentation to come no sooner by installing (1.6 h carrying on, 4.8 h installing)",
+      waitingFor: "the count to reach a bar: 1 of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
       set: [{ augmentation: "BitWire", price: 10e6 }],
       setCost: 10e6,
-      decision: {
-        install: false,
-        waitingFor: null,
-        rebuildMs: 7_200_000,
-        without: { augmentation: "Cranial Signal Processors - Gen II", faction: "CyberSec", ms: 5_760_000 },
-        with: { augmentation: "Cranial Signal Processors - Gen II", faction: "CyberSec", ms: 17_280_000 },
+      progress: {
+        ...PROGRESS,
+        onlineMs: 2.5 * 3_600_000,
+        barFallsInMs: 5_400_000,
+        barWithNeuroFluxFallsInMs: 5_400_000,
       },
     },
-    "Augmentations: waiting for the next augmentation to come no sooner by installing (1.6 h carrying on, 4.8 h " +
-      "installing)The set the money covers: BitWire ($10,000,000)The next worth installing: Cranial Signal Processors " +
-      "- Gen II at CyberSec, 1.6 h carrying on, 4.8 h installing first (rebuild 2.0 h)",
+    "Augmentations: waiting for the count to reach a bar: 1 of 7 new augmentations affordable (3 of 11 with " +
+      "NeuroFlux)The set the money covers: BitWire ($10,000,000)Affordable: 1 new augmentations, 3 with NeuroFlux; " +
+      "2.5 h online this cycleInstall at: 7, falling to 6 in 1.5 h; with NeuroFlux 11, falling to 10 in 1.5 h",
+  ],
+  [
+    "in the countdown (#222), extended; a bar at its floor",
+    {
+      waiting: false,
+      progress: {
+        ...PROGRESS,
+        bar: 1,
+        barFallsInMs: null,
+        countdown: { endsAtGameMs: 1, endsInMs: 25_000, quick: true, extensions: 2 },
+      },
+    },
+    "Install at: 1, its floor; with NeuroFlux 11, falling to 10 in 1.5 hCountdown (a quick install): installing in " +
+      "25 s, extended 2 times",
+  ],
+  [
+    "held for The Red Pill's way (#215)",
+    { waiting: false, progress: { ...PROGRESS, held: "The Red Pill: Daedalus's reputation 1 of 2" } },
+    "Held: The Red Pill: Daedalus's reputation 1 of 2",
   ],
   [
     "buying",

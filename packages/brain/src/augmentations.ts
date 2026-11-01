@@ -2,15 +2,20 @@
 // installs them, the run's reset cycle. Choices computed from the game's formulas (owner decision 46), in core's
 // augmentation-plan.ts; this is the rule as the controller runs it, and what the dashboard and the run report read.
 // - Not committed: each update, the set the money covers of the augmentations reached (a joined seller's reputation
-//   covers them), and core's `installDecision` against the next one worth installing at the joined factions. Install
-//   chosen: committed, kept in the store until the game resets, so a restarted brain carries on.
+//   covers them), the counts of what's affordable, and core's `installRule`, the legacy scripts' count rule (#222,
+//   owner decision 51), on a clock of the game's time the brain saw online this cycle (`advanceOnlineClock`, kept in
+//   the store). The rule saying install starts a countdown in the game's time (90 s, 30 s for a quick install),
+//   extended as the count rises and called off if the rule stops saying so, with the counted purchases' money held
+//   back from cloud servers and home RAM. At its end, the install is chosen: committed, kept in the store until the
+//   game resets, so a restarted brain carries on. Each change in the counts, the bars or the countdown is an
+//   `augmentationProgress` event, for the run report.
 // - Committed, one intent at a time: the set's next purchase (recomputed from what's queued), then home's RAM, which
 //   an install keeps (`Server/ServerHelpers.ts:224-237`), then NeuroFlux Governor a level at a time, then, once
 //   every purchase the Agent reported done shows in the faction state's queue, the install (the controller's gate and
 //   backup), never of nothing (#213 re-review).
 //   Once the install is asked for, nothing more is bought, so the gate's count isn't restarted by a purchase.
-// - The income: a 10-minute window with no gap, the money's side the higher of it and the cycle's average; installing
-//   as the sooner way waits on a window under half the average (#213 re-review).
+// - The income: a 10-minute window with no gap, for one thing alone: before the rule says install, the money is held
+//   back from cloud servers only for an install the rule would choose with 15 minutes more of it (A2's, #213).
 // - Fail loudly: a purchase reported done that two faction state reads after it don't show queued is
 //   `augmentationNotQueued` (an event, a log line, the dashboard's alert and the run report's failure); an install
 //   reported done that the next slow snapshot doesn't show reset is `augmentationInstallNotReset` (likewise).
@@ -22,11 +27,13 @@
 //   under way is called off (what's bought stays queued, for the owner).
 import {
   type AugmentationPurchaseState,
+  type AugmentationSet,
+  affordableCounts,
   augmentationBitNodeMultipliers,
-  augmentationBuyOrder,
   augmentationCost,
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
+  countdownExtensionMs,
   DAEDALUS,
   daedalusMissing,
   daedalusRequirements,
@@ -34,24 +41,23 @@ import {
   type FactionState,
   factionReadingKind,
   factionReadingOf,
-  type InstallCandidate,
-  type InstallDecision,
+  INSTALL_COUNTDOWN_MS,
   type InstallReason,
   type Intent,
-  installDecision,
+  installRule,
   intentId,
   isWorthInstalling,
   type MediumSnapshotData,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
-  purchaseSequenceCost,
+  QUICK_INSTALL_COUNTDOWN_MS,
+  QUICK_INSTALL_WITHIN_MS,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
-  type WorkingPerson,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
-import { bestWorkRate, workCandidates, workConditionsOf, workingPersonOf } from "./factions.ts";
+import { workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -73,24 +79,24 @@ export function writeAugmentationsEnabled(store: TelemetryStore, enabled: boolea
  */
 export const AUGMENTATION_CYCLE_SETTING = "augmentations.cycle";
 
+/**
+ * The bars' clock (#222), kept in the store so a restarted brain carries it on: the game's time the brain saw online
+ * since the last install (`advanceOnlineClock`), keyed by that install's `lastAugReset`.
+ */
+export const AUGMENTATION_ONLINE_SETTING = "augmentations.online";
+
 /** How long the income is measured over: the slow snapshots' money sources across 10 minutes. */
 export const AUGMENTATION_INCOME_WINDOW_MS = 10 * 60_000;
 /**
  * Slow snapshots further apart than this (3 slow intervals, 3 minutes) have a gap between them: the game closed
- * (offline earns a fraction of the online rate), or the Agent or the brain away. What was earned across it isn't the
- * income, so the window starts again after it, and the cycle's average leaves it out (#213 re-review).
+ * (offline earns a fraction of the online rate), or the Agent or the brain away. The time across it isn't online time
+ * (the bars' clock leaves it out, #222), and what was earned across it isn't the income, so the window starts again.
  */
 export const AUGMENTATION_INCOME_GAP_MS = 3 * SNAPSHOT_TIER_PERIOD_MS.slow;
 /**
- * An install chosen as the sooner way to the next augmentation needs the window's income at least this share of the
- * cycle's average: one measured too low (the hack loop off or stalled, a new target's preparation) makes the money's
- * wait look longer than it is, which is what favours installing (#213 re-review).
- */
-export const AUGMENTATION_STEADY_INCOME_SHARE = 0.5;
-/**
- * Before an install is chosen, money is held back from cloud servers (A2, #194) only for an install projected within
- * this: A2's payback limit (`CLOUD_SERVER_PAYBACK_LIMIT_MS`, 15 minutes, decided in #213's review). A server bought now
- * pays itself back within it, so holding money any sooner would cost the income the install is waiting for.
+ * Before the rule says install, money is held back from cloud servers (A2, #194) only for an install the rule would
+ * choose with this much more income: A2's payback limit (`CLOUD_SERVER_PAYBACK_LIMIT_MS`, 15 minutes, decided in
+ * #213's review). A server bought now pays itself back within it, so holding money any sooner would cost the income.
  */
 export const AUGMENTATION_RESERVE_LOOKAHEAD_MS = CLOUD_SERVER_PAYBACK_LIMIT_MS;
 /**
@@ -118,6 +124,11 @@ export const AUGMENTATION_INSTALL_SENT_EVENT_KIND = "augmentationInstallSent";
  * install, though the faction state's queue said otherwise. The cycle is called off; a run report failure.
  */
 export const AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND = "augmentationInstallNotReset";
+/**
+ * The counts, a bar or the countdown changed (#222), or why the rule is held: one each time, none while steady. The
+ * run report lists them, and fails a cycle overdue its install on them.
+ */
+export const AUGMENTATION_PROGRESS_EVENT_KIND = "augmentationProgress";
 
 /** The install of the queued augmentations (#164), as the rule asks for it: the owner's has the same id. */
 export const AUGMENTATION_INSTALL_INTENT: Intent = {
@@ -126,11 +137,23 @@ export const AUGMENTATION_INSTALL_INTENT: Intent = {
   args: {},
 };
 
-/** A decision's figures as stored: Infinity (never) as null, which JSON can carry. */
-export interface StoredWay {
-  augmentation: string;
-  faction: string;
-  ms: number | null;
+/**
+ * Where the count rule stands (#222), for the dashboard, the events and the report: the counts, the bars, the time
+ * online this cycle and the online time until each bar falls next (null once at 1), why it would install, the
+ * countdown (its end in the game's time, and how far off), and why the rule is held (The Red Pill's way), or null.
+ */
+export interface AugmentationProgress {
+  lastAugReset: number;
+  affordable: number;
+  affordableWithNeuroFlux: number;
+  bar: number;
+  barWithNeuroFlux: number;
+  onlineMs: number;
+  barFallsInMs: number | null;
+  barWithNeuroFluxFallsInMs: number | null;
+  reason: InstallReason | null;
+  countdown: { endsAtGameMs: number; endsInMs: number; quick: boolean; extensions: number } | null;
+  held: string | null;
 }
 
 export type AugmentationEvent =
@@ -142,13 +165,16 @@ export type AugmentationEvent =
       cost: number;
       /** Bought already, not installed. */
       queued: string[];
-      sinceResetMs: number;
-      rebuildMs: number;
-      without: StoredWay | null;
-      with: StoredWay | null;
-      /** Nothing left at the joined factions, nothing reachable at a positive rate, or the next sooner installing. */
+      /** The game's time the brain saw online this cycle, and the counts and bars then. */
+      onlineMs: number;
+      affordable: number;
+      affordableWithNeuroFlux: number;
+      bar: number;
+      barWithNeuroFlux: number;
+      /** The count reached, a quick install, nothing left at the joined factions, or The Red Pill. */
       reason: InstallReason;
     }
+  | ({ type: typeof AUGMENTATION_PROGRESS_EVENT_KIND; atMs: number } & AugmentationProgress)
   | {
       type: typeof AUGMENTATION_BOUGHT_EVENT_KIND;
       atMs: number;
@@ -228,14 +254,15 @@ export interface AugmentationsView {
   /** Not committed: the set the money covers now, in buy order, and its money. */
   set: { augmentation: string; price: number }[];
   setCost: number;
-  /** The last decision's figures, or null. */
-  decision: InstallDecision | null;
+  /** Not committed: where the count rule stands (#222), or null. */
+  progress: AugmentationProgress | null;
   /** Why nothing is asked for, or no install chosen, or null. */
   waitingFor: string | null;
   notQueued: NotQueued[];
   /**
-   * The money held back from cloud servers (A2) for augmentations: Infinity while committed; before that, the set's
-   * money only for an install projected within `AUGMENTATION_RESERVE_LOOKAHEAD_MS`, else 0.
+   * The money held back from cloud servers (A2) for augmentations: Infinity while committed; in the countdown, what
+   * the counted purchases cost (#222); before it, that only for an install the rule would choose with
+   * `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0; Daedalus's $100b while it holds for its invitation (#215).
    */
   reserve: number;
 }
@@ -285,14 +312,13 @@ const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-
 
 /**
  * What the rule reads of the player in a medium snapshot, or null: it's the Agent's word. The person is A5's
- * (`workingPersonOf`, #203), with the hacking experience and the money.
+ * (`workingPersonOf`, #203), with the money.
  */
 function playerOf(mediumData: MediumSnapshotData) {
   const person = workingPersonOf(mediumData);
-  const player = mediumData.player as { exp?: Record<string, unknown>; money?: unknown } | undefined;
-  const hackingExp = player?.exp?.hacking;
-  if (person === null || !isFiniteNumber(hackingExp) || !isFiniteNumber(player?.money)) return null;
-  return { person, hackingExp, money: player.money };
+  const player = mediumData.player as { money?: unknown } | undefined;
+  if (person === null || !isFiniteNumber(player?.money)) return null;
+  return { person, money: player.money };
 }
 
 /** The slow snapshot's reset info as the rule needs it, or null where it doesn't say. */
@@ -362,25 +388,101 @@ export function formatEta(ms: number | null): string {
   return `${(ms / 3_600_000).toFixed(1)} h`;
 }
 
-const storedWay = (way: InstallDecision["without"]): StoredWay | null =>
-  way === null ? null : { ...way, ms: Number.isFinite(way.ms) ? way.ms : null };
+/** A countdown's time in seconds, rounded (#222): "90 s", "83 s". */
+export function formatSeconds(ms: number): string {
+  return `${Math.round(ms / 1000)} s`;
+}
 
-/** Why the install was chosen, in words, for the log and the report. */
-export function describeReason(
-  reason: InstallReason,
-  {
-    with: withInstall,
-    without,
-  }: { with: { ms: number | null } | null; without: { augmentation: string; ms: number | null } | null },
-): string {
+/** The counts and bars, as the progress, the events and the report give them. */
+type CountFigures = Pick<AugmentationProgress, "affordable" | "affordableWithNeuroFlux" | "bar" | "barWithNeuroFlux">;
+
+/** "5 of 8 new augmentations affordable (7 of 12 with NeuroFlux)". */
+export function describeCounts({ affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux }: CountFigures): string {
+  return `${affordable} of ${bar} new augmentations affordable (${affordableWithNeuroFlux} of ${barWithNeuroFlux} with NeuroFlux)`;
+}
+
+/**
+ * Where the count rule stands, in words (#222), for the log, the dashboard and the report: "5 of 8 new augmentations
+ * affordable (7 of 12 with NeuroFlux), 1.2 h online this cycle; the bar falls to 7 in 48 min".
+ */
+export function describeProgress(progress: CountFigures & Partial<AugmentationProgress>): string {
+  const { bar, barWithNeuroFlux, onlineMs, barFallsInMs, barWithNeuroFluxFallsInMs } = progress;
+  const online = isFiniteNumber(onlineMs) ? `, ${formatEta(onlineMs)} online this cycle` : "";
+  const falls = isFiniteNumber(barFallsInMs)
+    ? `; the bar falls to ${bar - 1} in ${formatEta(barFallsInMs)}`
+    : isFiniteNumber(barWithNeuroFluxFallsInMs)
+      ? `; the bar is 1, and with NeuroFlux falls to ${barWithNeuroFlux - 1} in ${formatEta(barWithNeuroFluxFallsInMs)}`
+      : barFallsInMs === null && barWithNeuroFluxFallsInMs === null
+        ? "; both bars are 1"
+        : "";
+  return `${describeCounts(progress)}${online}${falls}`;
+}
+
+/** Why the install was chosen, in words, for the log and the report; a reason the brain no longer gives, as stored. */
+export function describeReason(reason: InstallReason | string, figures: Partial<CountFigures>): string {
+  const counted =
+    isFiniteNumber(figures.affordable) &&
+    isFiniteNumber(figures.affordableWithNeuroFlux) &&
+    isFiniteNumber(figures.bar) &&
+    isFiniteNumber(figures.barWithNeuroFlux)
+      ? describeCounts(figures as CountFigures)
+      : "the counts not stored";
+  if (reason === "count reached") return `the count reached: ${counted}`;
+  if (reason === "quick install") {
+    return `a quick install, within ${formatEta(QUICK_INSTALL_WITHIN_MS)} of the last install: ${counted}`;
+  }
   if (reason === "nothing left") return "nothing else worth installing at the joined factions";
   if (reason === "The Red Pill") return "The Red Pill reached: it links w0r1d_d43m0n once installed";
-  if (reason === "nothing reachable")
-    return "nothing else reachable at a joined faction's work (a reputation rate of 0)";
-  return (
-    `the next sooner installing (${formatEta(withInstall?.ms ?? null)} against ${formatEta(without?.ms ?? null)}, ` +
-    `${without?.augmentation ?? "?"})`
-  );
+  return `${reason} (an earlier brain's reason)`;
+}
+
+/** The bars' clock (#222): the game's time online since the install `lastAugReset`, and the last slow snapshot's. */
+export interface OnlineClock {
+  lastAugReset: number;
+  onlineMs: number;
+  lastGameTimeMs: number;
+}
+
+/**
+ * The bars' clock after a slow snapshot taken at `gameTimeMs` in the cycle `lastAugReset` (#222): it adds the time
+ * since the last slow snapshot of the same cycle, if no more than `AUGMENTATION_INCOME_GAP_MS` (the game closed, or
+ * the Agent or the brain away, isn't online time). Another `lastAugReset` starts it at 0: a save first seen mid-cycle
+ * starts when the brain first sees it, the conservative side (the bars start at 8 and 12). Never the game's time since
+ * the install, which counts the time the game was closed. Also the gap, or the clock set back (`stepMs` 0 or less),
+ * that it left out, or null. The rule and the run report each fold their slow snapshots through this.
+ */
+export function advanceOnlineClock(
+  clock: OnlineClock | null,
+  gameTimeMs: number,
+  lastAugReset: number,
+): { clock: OnlineClock; leftOutMs: number | null } {
+  if (clock === null || clock.lastAugReset !== lastAugReset) {
+    return { clock: { lastAugReset, onlineMs: 0, lastGameTimeMs: gameTimeMs }, leftOutMs: null };
+  }
+  const stepMs = gameTimeMs - clock.lastGameTimeMs;
+  if (stepMs === 0) return { clock, leftOutMs: null };
+  const online = stepMs > 0 && stepMs <= AUGMENTATION_INCOME_GAP_MS;
+  return {
+    clock: { lastAugReset, onlineMs: clock.onlineMs + (online ? stepMs : 0), lastGameTimeMs: gameTimeMs },
+    leftOutMs: online ? null : stepMs,
+  };
+}
+
+/** The bars' clock as stored, or null; a value the brain didn't write fails, as the commit's note does. */
+export function readOnlineClock(store: TelemetryStore): OnlineClock | null {
+  const value = store.getSetting(AUGMENTATION_ONLINE_SETTING);
+  if (value === null) return null;
+  let clock: Partial<Record<keyof OnlineClock, unknown>> | null;
+  try {
+    clock = JSON.parse(value) as Partial<Record<keyof OnlineClock, unknown>> | null;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_ONLINE_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, onlineMs, lastGameTimeMs } = clock ?? {};
+  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(onlineMs) || onlineMs < 0 || !isFiniteNumber(lastGameTimeMs)) {
+    throw new Error(`the store's ${AUGMENTATION_ONLINE_SETTING} isn't a clock the brain wrote`);
+  }
+  return { lastAugReset, onlineMs, lastGameTimeMs };
 }
 
 /** The intent buying `augmentation` from `faction` (`level` 1 but for NeuroFlux Governor). */
@@ -404,13 +506,24 @@ export class AugmentationRule {
   /** The income's samples: the game's time, the money earned since the install, and that install. */
   #incomeSamples: { gameTimeMs: number; earned: number; lastAugReset: number }[] = [];
   /**
-   * The cycle's average's figures (#213 re-review): the money earned between samples no gap apart, and the game's time
-   * between them, since the install (`lastAugReset`). There's no NS call for the time online since an install
+   * The bars' clock (#222), as stored. There's no NS call for the time online since an install
    * (`getTimeSinceLastAug` went in 3.0), so it's the time the brain saw online.
    */
-  #online: { lastAugReset: number; earned: number; ms: number } | null = null;
-  /** The income unsteady (under half the cycle's average) when last decided: logged when it starts. */
-  #unsteady = false;
+  #onlineClock: OnlineClock | null;
+  /**
+   * The countdown under way (#222), in the game's time: its cycle, its end, its length (90 s, or 30 s quick), the
+   * extensions so far, and the count with NeuroFlux last seen (a rise extends it).
+   */
+  #countdown: {
+    lastAugReset: number;
+    endsAtGameMs: number;
+    lengthMs: number;
+    quick: boolean;
+    extensions: number;
+    count: number;
+  } | null = null;
+  /** The progress last recorded, as its key: a steady state records nothing. */
+  #progressKey: string | null = null;
   /** The slow snapshot's game time last sampled, so each is taken once. */
   #sampledGameTimeMs: number | null = null;
   /** The game's last `lastAugReset` seen: a new one is a reset, which ends a cycle's purchases. */
@@ -450,7 +563,7 @@ export class AugmentationRule {
     asking: null,
     set: [],
     setCost: 0,
-    decision: null,
+    progress: null,
     waitingFor: null,
     reserve: 0,
   };
@@ -469,6 +582,7 @@ export class AugmentationRule {
     this.#log = log;
     this.#emit = emit;
     readAugmentationCycle(store);
+    this.#onlineClock = readOnlineClock(store);
   }
 
   /** Whether the purchase asked for is among `doneIds`, not yet recorded: the controller updates at once then. */
@@ -490,6 +604,14 @@ export class AugmentationRule {
    */
   daedalusHold(): number {
     return this.#daedalusHold;
+  }
+
+  /**
+   * The money held in the install's countdown (#222): what the counted purchases cost, from cloud servers (`reserve`)
+   * and home RAM alike, as the legacy scripts' reserve.txt holds it from every purchase (`autopilot.js:983`); else 0.
+   */
+  countdownReserve(): number {
+    return this.#enabled && this.#countdown !== null ? this.#view.reserve : 0;
   }
 
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
@@ -537,14 +659,15 @@ export class AugmentationRule {
     if (mediumGameTimeMs !== null) this.#spent = this.#spent.filter((each) => each.gameTimeMs > mediumGameTimeMs);
     if (!enabled) {
       if (readAugmentationCycle(this.#store) !== null) this.#callOff(atMs, "the Augmentations switch turned off");
-      return askNothing(null, { waiting: false, committed: false, reserve: 0, decision: null, set: [], setCost: 0 });
+      this.#cancelCountdown("the Augmentations switch turned off");
+      return askNothing(null, { waiting: false, committed: false, reserve: 0, progress: null, set: [], setCost: 0 });
     }
     if (mediumData === null || slowData === null) return askNothing(null, { waiting: true });
     const resetInfo = resetInfoOf(slowData);
     if (resetInfo === null) return askNothing("the reset info in the Agent's slow snapshot", { waiting: false });
     const player = playerOf(mediumData);
     if (player === null) {
-      return askNothing("the player's skills, experience, money and multipliers in the Agent's medium snapshot", {
+      return askNothing("the player's skills, money and multipliers in the Agent's medium snapshot", {
         waiting: false,
       });
     }
@@ -564,6 +687,10 @@ export class AugmentationRule {
         slowData,
         mediumData,
         slowGameTimeMs,
+        // The game's latest time seen, the countdown's clock (#222): every tier's is the game's `Date.now()`.
+        gameNowMs: Math.max(
+          ...[slowGameTimeMs, mediumGameTimeMs, fastGameTimeMs].filter((time): time is number => time !== null),
+        ),
         atMs,
         homeRamEnabled,
         destroyWanted,
@@ -573,7 +700,7 @@ export class AugmentationRule {
     }
   }
 
-  /** A slow snapshot: a reset; and once per snapshot, the income's sample and the faction state's read. */
+  /** A slow snapshot: a reset; and once per snapshot, the bars' clock, the income's sample and the faction state's read. */
   #sample(slowData: SlowSnapshotData, gameTimeMs: number | null, atMs: number): void {
     const lastAugReset = slowData.resetInfo?.lastAugReset;
     if (isFiniteNumber(lastAugReset) && this.#lastAugReset !== null && lastAugReset !== this.#lastAugReset) {
@@ -594,31 +721,35 @@ export class AugmentationRule {
         this.#installing = false;
         this.#log("augmentations: the game has reset (installed): the install cycle is over");
       }
+      if (this.#countdown !== null && this.#countdown.lastAugReset !== lastAugReset) {
+        this.#cancelCountdown("the game has reset");
+      }
     }
-    // A reset is judged on every slow snapshot; the income and the reads once per snapshot (by its game time).
+    // A reset is judged on every slow snapshot; the clock, the income and the reads once per snapshot (by its time).
     if (gameTimeMs === null || gameTimeMs === this.#sampledGameTimeMs) return;
     this.#sampledGameTimeMs = gameTimeMs;
+    let gap = false;
+    if (isFiniteNumber(lastAugReset)) {
+      const { clock, leftOutMs } = advanceOnlineClock(this.#onlineClock, gameTimeMs, lastAugReset);
+      if (clock !== this.#onlineClock) {
+        this.#onlineClock = clock;
+        this.#store.setSetting(AUGMENTATION_ONLINE_SETTING, JSON.stringify(clock));
+      }
+      if (leftOutMs !== null) {
+        gap = true;
+        this.#log(
+          `augmentations: ${leftOutMs > 0 ? `a gap of ${formatEta(leftOutMs)}` : "the game's clock set back"} between ` +
+            "slow snapshots: left out of the time online this cycle, and the income is measured afresh",
+        );
+      }
+    }
     const earned = earnedOf(slowData);
-    if (earned === null || !isFiniteNumber(lastAugReset)) {
+    if (earned === null || !isFiniteNumber(lastAugReset) || gap) {
       this.#incomeSamples = [];
     } else {
       this.#incomeSamples = this.#incomeSamples.filter((sample) => sample.lastAugReset === lastAugReset);
-      if (this.#online?.lastAugReset !== lastAugReset) this.#online = { lastAugReset, earned: 0, ms: 0 };
-      const last = this.#incomeSamples.at(-1);
-      if (last !== undefined) {
-        const stepMs = gameTimeMs - last.gameTimeMs;
-        if (stepMs > 0 && stepMs <= AUGMENTATION_INCOME_GAP_MS) {
-          this.#online.earned += Math.max(0, earned - last.earned);
-          this.#online.ms += stepMs;
-        } else {
-          // A gap (or the game's clock set back): the window starts again, and the average leaves it out.
-          this.#incomeSamples = [];
-          this.#log(
-            `augmentations: ${stepMs > 0 ? `a gap of ${formatEta(stepMs)}` : "the game's clock set back"} between ` +
-              "slow snapshots: the income is measured afresh, over the next 10 minutes",
-          );
-        }
-      }
+    }
+    if (earned !== null && isFiniteNumber(lastAugReset)) {
       this.#incomeSamples.push({ gameTimeMs, earned, lastAugReset });
       // The newest sample a window old or older, and those after it.
       const old = this.#incomeSamples.findLastIndex(
@@ -630,21 +761,17 @@ export class AugmentationRule {
   }
 
   /**
-   * The money earned a second over the window, and the cycle's average (over the time seen online since the install),
-   * or null until the window is a window long with no gap. The samples are the game's own count since the install, so
-   * they're kept across the Agent's reconnects (#213 review) but for a gap: a reset (another `lastAugReset`) starts
-   * them again.
+   * The money earned a second over the window, or null until the window is a window long with no gap: for the reserve's
+   * lookahead alone (#222). The samples are the game's own count since the install, so they're kept across the Agent's
+   * reconnects (#213 review) but for a gap: a reset (another `lastAugReset`) starts them again.
    */
-  #income(): { window: number; average: number } | null {
+  #income(): number | null {
     const first = this.#incomeSamples[0];
     const last = this.#incomeSamples.at(-1);
-    if (first === undefined || last === undefined || this.#online === null) return null;
+    if (first === undefined || last === undefined) return null;
     const spanMs = last.gameTimeMs - first.gameTimeMs;
-    if (spanMs < AUGMENTATION_INCOME_WINDOW_MS || this.#online.ms <= 0) return null;
-    return {
-      window: (Math.max(0, last.earned - first.earned) / spanMs) * 1000,
-      average: (this.#online.earned / this.#online.ms) * 1000,
-    };
+    if (spanMs < AUGMENTATION_INCOME_WINDOW_MS) return null;
+    return (Math.max(0, last.earned - first.earned) / spanMs) * 1000;
   }
 
   /**
@@ -752,6 +879,7 @@ export class AugmentationRule {
     slowData,
     mediumData,
     slowGameTimeMs,
+    gameNowMs,
     atMs,
     homeRamEnabled,
     destroyWanted,
@@ -762,6 +890,7 @@ export class AugmentationRule {
     slowData: SlowSnapshotData;
     mediumData: MediumSnapshotData;
     slowGameTimeMs: number | null;
+    gameNowMs: number;
     atMs: number;
     homeRamEnabled: boolean;
     destroyWanted: boolean;
@@ -815,75 +944,85 @@ export class AugmentationRule {
     const hackingLevel = player.person.skills.hacking;
     const set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel);
     const setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
-    const measured = this.#income();
-    // The money's side takes the higher of the window and the cycle's average (#213 re-review): an income measured too
-    // low makes the money's wait carrying on look longer, which favours installing.
-    const income = measured === null ? null : Math.max(measured.window, measured.average);
-    const steady = measured === null || measured.window >= AUGMENTATION_STEADY_INCOME_SHARE * measured.average;
     const cycle = readAugmentationCycle(this.#store);
 
     if (cycle === null) {
+      const notCommitted = { set: setView, setCost: set.money, committed: false };
       if (this.#installNotReset !== null) {
+        this.#cancelCountdown("an install was reported done but the game didn't reset");
         return this.#ask(null, {
           waitingFor:
             "a reset: an install was reported done but the game didn't reset, so no other is chosen until one (or " +
             "the brain restarts)",
-          set: setView,
-          setCost: set.money,
+          ...notCommitted,
+          progress: null,
           reserve: 0,
-          committed: false,
         });
       }
       if (slowGameTimeMs === null) {
         return this.#ask(null, {
           waitingFor: "the game's time in the Agent's slow snapshot",
-          set: setView,
-          setCost: set.money,
+          ...notCommitted,
+          progress: null,
           reserve: 0,
-          committed: false,
         });
       }
-      // The time since the last install counts time the game was closed too, which earns less: a longer rebuild, and a
-      // later install, the safe side.
+      const onlineMs = this.#onlineClock?.lastAugReset === resetInfo.lastAugReset ? this.#onlineClock.onlineMs : 0;
+      // The game's time since the last install counts the time the game was closed: only a quick install's limit.
       const sinceResetMs = Math.max(0, slowGameTimeMs - resetInfo.lastAugReset);
+      const neuroFluxReputation = Math.max(
+        0,
+        ...[...shops].filter(([, shop]) => shop.includes(NEUROFLUX_GOVERNOR)).map(([faction]) => reputationOf(faction)),
+      );
       /**
-       * The decision with `spare` money (and the set it covers), `laterMs` from now. Later, it keeps today's hacking
-       * experience: a longer rebuild than then, so a later install (the safe side, #213 re-review).
+       * The counts and the rule with `spare` money and the set it covers. Nothing left: no augmentation worth installing
+       * at the joined factions that isn't owned or in the set and could be bought after it (its prerequisites owned or
+       * in the set; one sold by no joined faction never can be).
        */
-      const decide = (spare: number, laterMs: number) => {
-        const covered = laterMs === 0 ? set : chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel);
-        const installing = [...installable, ...covered.purchases.map((purchase) => purchase.name)];
-        const decision = installDecision({
-          sinceResetMs: sinceResetMs + laterMs,
-          hackingLevel,
-          hackingExp: player.hackingExp,
-          installing,
-          money: spare,
-          incomePerSecond: income,
-          candidates: this.#candidates({
-            state,
-            resetInfo,
-            slowData,
-            purchaseState,
-            installing,
-            reachedLeftOut: reached
-              .filter((name) => isWorthInstalling(name) && !installing.includes(name))
-              .map((augmentation) => {
-                const faction = sellerOf(augmentation) as string;
-                const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
-                return { faction, augmentation, reputation: reputationOf(faction), reputationNeeded };
-              }),
-            person: player.person,
-            hackingLevel,
-          }),
+      const judge = (spare: number, covered: AugmentationSet) => {
+        const names = covered.purchases.map((purchase) => purchase.name);
+        const counts = affordableCounts({ state: purchaseState, set: covered, money: spare, neuroFluxReputation });
+        const afterSet = { installed: ownedAugs, queued: [...queue, ...names] };
+        const left = sold.filter(
+          (name) =>
+            isWorthInstalling(name) &&
+            !owned(name) &&
+            !names.includes(name) &&
+            missingPrerequisites(name, afterSet).length === 0,
+        );
+        const rule = installRule({
+          onlineMs,
+          sinceResetMs,
+          installing: installable.length + names.length,
+          nothingLeft: left.length === 0,
+          affordable: counts.affordable,
+          affordableWithNeuroFlux: counts.affordableWithNeuroFlux,
         });
-        return { covered, installing, decision };
+        return { counts, rule };
       };
-      /** Installing as the sooner way on an income under half the cycle's average waits (#213 re-review). */
-      const unsteady = (each: InstallDecision) => each.install && each.reason === "sooner installing" && !steady;
-      const chosen = decide(money, 0);
-      const { installing } = chosen;
-      let { decision } = chosen;
+      const { counts, rule } = judge(money, set);
+      const progress = (held: string | null): AugmentationProgress => ({
+        lastAugReset: resetInfo.lastAugReset,
+        affordable: rule.affordable,
+        affordableWithNeuroFlux: rule.affordableWithNeuroFlux,
+        bar: rule.bar,
+        barWithNeuroFlux: rule.barWithNeuroFlux,
+        onlineMs,
+        barFallsInMs: rule.barFallsAtMs === null ? null : rule.barFallsAtMs - onlineMs,
+        barWithNeuroFluxFallsInMs:
+          rule.barWithNeuroFluxFallsAtMs === null ? null : rule.barWithNeuroFluxFallsAtMs - onlineMs,
+        reason: rule.reason,
+        countdown:
+          this.#countdown === null
+            ? null
+            : {
+                endsAtGameMs: this.#countdown.endsAtGameMs,
+                endsInMs: Math.max(0, this.#countdown.endsAtGameMs - gameNowMs),
+                quick: this.#countdown.quick,
+                extensions: this.#countdown.extensions,
+              },
+        held,
+      });
       const endgame = this.#endgame({
         resetInfo,
         player,
@@ -899,72 +1038,128 @@ export class AugmentationRule {
         this.#log(`augmentations: no install, waiting for ${endgame.kind === "hold" ? endgame.waitingFor : ""}`);
       }
       this.#holding = holding;
-      if (endgame.kind === "redPill") {
-        decision = { ...decision, install: true, waitingFor: null, reason: "The Red Pill" };
-      } else if (endgame.kind === "hold") {
+      let reason: InstallReason;
+      if (endgame.kind === "hold") {
+        // The Red Pill's way overrides the count rule (#215).
+        this.#cancelCountdown(`held for ${endgame.waitingFor}`);
         if (endgame.why === "daedalus") this.#daedalusHold = endgame.reserve;
+        const held = progress(endgame.waitingFor);
+        this.#recordProgress(held, endgame.why, atMs);
         return this.#ask(null, {
-          set: setView,
-          setCost: set.money,
-          decision: null,
+          ...notCommitted,
+          progress: held,
           reserve: endgame.reserve,
-          committed: false,
           waitingFor: endgame.waitingFor,
         });
-      } else if (unsteady(decision)) {
-        const why =
-          `a steady income: ${formatMoney(measured?.window ?? 0)} a second over the last 10 minutes is under half ` +
-          `this cycle's average (${formatMoney(measured?.average ?? 0)}), too low to judge the money's wait on`;
-        if (!this.#unsteady) this.#log(`augmentations: income unsteady: no install on it, waiting for ${why}`);
-        decision = { ...decision, install: false, waitingFor: why };
       }
-      this.#unsteady = unsteady(chosen.decision);
-      // Held back from cloud servers only for an install projected within A2's payback limit: the decision with that
-      // much more income, then (#213 review).
-      let reserve = 0;
-      if (!decision.install && income !== null && income > 0) {
-        const ahead = decide(
-          money + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000,
-          AUGMENTATION_RESERVE_LOOKAHEAD_MS,
+      if (endgame.kind === "redPill") {
+        // No countdown for The Red Pill (`autopilot.js:968`).
+        this.#cancelCountdown("The Red Pill reached, installed at once");
+        reason = "The Red Pill";
+      } else if (!rule.install) {
+        this.#cancelCountdown(`the rule no longer says install: ${describeCounts(rule)}`);
+        // Held back from cloud servers only for an install the rule would choose with A2's payback limit's more income:
+        // the counted purchases' money then (#213 review, #222).
+        const income = this.#income();
+        let reserve = 0;
+        if (income !== null && income > 0) {
+          const spare = money + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000;
+          const ahead = judge(spare, chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel));
+          if (ahead.rule.install) reserve = ahead.counts.money;
+        }
+        const waiting = progress(null);
+        this.#recordProgress(waiting, null, atMs);
+        return this.#ask(null, {
+          ...notCommitted,
+          progress: waiting,
+          reserve,
+          waitingFor: `the count to reach a bar: ${describeProgress(waiting)}`,
+        });
+      } else {
+        const ruleReason = rule.reason as InstallReason;
+        let countdown = this.#countdown;
+        if (countdown === null) {
+          const quick = ruleReason === "quick install";
+          const lengthMs = quick ? QUICK_INSTALL_COUNTDOWN_MS : INSTALL_COUNTDOWN_MS;
+          countdown = {
+            lastAugReset: resetInfo.lastAugReset,
+            endsAtGameMs: gameNowMs + lengthMs,
+            lengthMs,
+            quick,
+            extensions: 0,
+            count: rule.affordableWithNeuroFlux,
+          };
+          this.#countdown = countdown;
+          this.#log(
+            `augmentations: install countdown started, ${formatSeconds(lengthMs)}, ${describeReason(ruleReason, rule)}; ` +
+              `${formatMoney(counts.money)} held back from cloud servers and home RAM`,
+          );
+        } else if (rule.affordableWithNeuroFlux > countdown.count) {
+          // The count rose: the countdown runs on, a little less each time, never shortened (`autopilot.js:972-976`).
+          countdown.extensions += 1;
+          const endsAtGameMs =
+            gameNowMs + countdownExtensionMs(countdown.lengthMs, countdown.extensions, rule.barWithNeuroFlux);
+          if (endsAtGameMs > countdown.endsAtGameMs) {
+            countdown.endsAtGameMs = endsAtGameMs;
+            this.#log(
+              `augmentations: install countdown extended, ${formatSeconds(endsAtGameMs - gameNowMs)} from now ` +
+                `(extension ${countdown.extensions}): ${describeCounts(rule)}`,
+            );
+          }
+        }
+        countdown.count = rule.affordableWithNeuroFlux;
+        if (gameNowMs < countdown.endsAtGameMs) {
+          const waiting = progress(null);
+          this.#recordProgress(waiting, null, atMs);
+          return this.#ask(null, {
+            ...notCommitted,
+            progress: waiting,
+            reserve: counts.money,
+            waitingFor:
+              `the install countdown: ${formatSeconds(countdown.endsAtGameMs - gameNowMs)} left, ` +
+              describeReason(ruleReason, rule),
+          });
+        }
+        this.#countdown = null;
+        this.#log(
+          `augmentations: install countdown ended (${countdown.extensions} extension` +
+            `${countdown.extensions === 1 ? "" : "s"})`,
         );
-        if (ahead.decision.install && !unsteady(ahead.decision)) reserve = ahead.covered.money;
-      }
-      const view = { set: setView, setCost: set.money, decision, reserve, committed: false };
-      if (!decision.install) {
-        const why =
-          decision.waitingFor ??
-          (installing.length === 0
-            ? "an augmentation worth installing that a joined faction's reputation and the money cover"
-            : `the next augmentation to come no sooner by installing (${formatEta(decision.without?.ms ?? null)} ` +
-              `carrying on, ${formatEta(decision.with?.ms ?? null)} installing)`);
-        return this.#ask(null, { ...view, waitingFor: why });
+        reason = ruleReason;
       }
       writeAugmentationCycle(this.#store, { lastAugReset: resetInfo.lastAugReset, installing: false });
       this.#installing = false;
-      const reason = decision.reason as InstallReason;
+      this.#progressKey = null;
       this.#emit({
         type: AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
         atMs,
         set: setView,
         cost: set.money,
         queued: [...installable],
-        sinceResetMs,
-        rebuildMs: decision.rebuildMs,
-        without: storedWay(decision.without),
-        with: storedWay(decision.with),
+        onlineMs,
+        affordable: rule.affordable,
+        affordableWithNeuroFlux: rule.affordableWithNeuroFlux,
+        bar: rule.bar,
+        barWithNeuroFlux: rule.barWithNeuroFlux,
         reason,
       });
       this.#log(
-        `augmentations: install chosen, ${formatEta(sinceResetMs)} since the last: buying ` +
+        `augmentations: install chosen, ${formatEta(onlineMs)} online this cycle: buying ` +
           `${setView.map((each) => each.augmentation).join(", ") || "nothing more"} (${formatMoney(set.money)}), ` +
-          describeReason(reason, decision),
+          describeReason(reason, rule),
       );
     }
 
     // Committed: the set, home's RAM, NeuroFlux Governor, then the install (already asked for, a restarted brain's note
     // says: nothing more is bought).
     if (cycle?.installing === true) this.#installing = true;
-    const committedView = { set: setView, setCost: set.money, reserve: Number.POSITIVE_INFINITY, committed: true };
+    const committedView = {
+      set: setView,
+      setCost: set.money,
+      progress: null,
+      reserve: Number.POSITIVE_INFINITY,
+      committed: true,
+    };
     if (!this.#installing) {
       const [first] = set.purchases;
       if (first !== undefined) {
@@ -1196,59 +1391,31 @@ export class AugmentationRule {
     return { intent: asked?.intent ?? null, install: false, committed };
   }
 
+  /** The countdown called off, if one is under way (#222), saying why. */
+  #cancelCountdown(why: string): void {
+    if (this.#countdown === null) return;
+    this.#countdown = null;
+    this.#log(`augmentations: install countdown called off: ${why}`);
+  }
+
   /**
-   * Each way to the next augmentation worth installing: A5's candidates (#203, `workCandidates`: worth working for at a
-   * joined faction, not reached there), with the queue as the rule knows it, and the reached ones the set leaves out
-   * (their money); each with its prerequisites owned or in the set. The rate is its faction's best work's (A5's
-   * `bestWorkRate`, 0 for none), the money the set's and its own in buy order, and its price with nothing queued.
+   * The progress, stored as an `augmentationProgress` event when the counts, a bar, the reason, the countdown's end or
+   * the hold (by its kind: its words carry live figures) changed since the last; a steady state records nothing.
    */
-  #candidates({
-    state,
-    resetInfo,
-    slowData,
-    purchaseState,
-    installing,
-    reachedLeftOut,
-    person,
-    hackingLevel,
-  }: {
-    state: FactionState;
-    resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
-    slowData: SlowSnapshotData;
-    purchaseState: AugmentationPurchaseState;
-    /** What's queued and the set to buy. */
-    installing: string[];
-    reachedLeftOut: { faction: string; augmentation: string; reputation: number; reputationNeeded: number }[];
-    person: WorkingPerson;
-    hackingLevel: number;
-  }): InstallCandidate[] {
-    const conditions = workConditionsOf(resetInfo, slowData);
-    const rateOf = (name: string) => {
-      const faction = state.joined.find((each) => each.name === name);
-      return faction === undefined ? 0 : (bestWorkRate(person, faction, conditions)?.perSecond ?? 0);
-    };
-    const afterSet = { installed: purchaseState.installed, queued: [...purchaseState.queued, ...installing] };
-    const installed: Record<string, number> = { ...purchaseState.installed };
-    for (const name of installing) installed[name] = name === NEUROFLUX_GOVERNOR ? (installed[name] ?? 0) + 1 : 1;
-    const afterInstall: AugmentationPurchaseState = { ...purchaseState, installed, queued: [] };
-    const toBuy = installing.filter((name) => !purchaseState.queued.includes(name));
-    const ways = [
-      ...workCandidates({ ...state, queuedAugmentations: [...purchaseState.queued] }, resetInfo, hackingLevel),
-      ...reachedLeftOut,
-    ];
-    const candidates: InstallCandidate[] = [];
-    for (const { faction, augmentation, reputation, reputationNeeded } of ways) {
-      if (installing.includes(augmentation) || missingPrerequisites(augmentation, afterSet).length > 0) continue;
-      candidates.push({
-        augmentation,
-        faction,
-        reputation,
-        reputationNeeded,
-        reputationPerSecond: rateOf(faction),
-        costAfterSet: purchaseSequenceCost(augmentationBuyOrder([...toBuy, augmentation]), purchaseState).money,
-        priceAfterInstall: augmentationCost(augmentation, afterInstall).money,
-      });
-    }
-    return candidates;
+  #recordProgress(progress: AugmentationProgress, hold: string | null, atMs: number): void {
+    const { lastAugReset, affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux, reason } = progress;
+    const key = JSON.stringify([
+      lastAugReset,
+      affordable,
+      affordableWithNeuroFlux,
+      bar,
+      barWithNeuroFlux,
+      reason,
+      progress.countdown?.endsAtGameMs ?? null,
+      hold,
+    ]);
+    if (key === this.#progressKey) return;
+    this.#progressKey = key;
+    this.#emit({ type: AUGMENTATION_PROGRESS_EVENT_KIND, atMs, ...progress });
   }
 }

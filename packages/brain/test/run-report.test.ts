@@ -14,6 +14,7 @@ import type {
   StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { writeAugmentationsEnabled } from "../src/augmentations.ts";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
@@ -40,12 +41,12 @@ afterEach(() => {
 });
 
 let sequenceNumber = 0;
-function snapshot(tier: string, offsetMs: number, data: unknown) {
+function snapshot(tier: string, offsetMs: number, data: unknown, gameTimeMs = 0) {
   store.recordSnapshot(context, {
     agentSessionId: "session-1",
     tier,
     sequenceNumber: ++sequenceNumber,
-    gameTimeMs: 0,
+    gameTimeMs,
     receivedAtMs: T0 + offsetMs,
     missedBefore: 0,
     data,
@@ -1289,10 +1290,12 @@ describe("augmentations and the reset (#210)", () => {
     set: [{ augmentation: "BitWire", price: 10e6 }],
     cost: 10e6,
     queued: [],
-    sinceResetMs: 2 * 3_600_000,
-    rebuildMs: 3_600_000,
-    without: null,
-    with: null,
+    onlineMs: 2 * 3_600_000,
+    affordable: 1,
+    affordableWithNeuroFlux: 3,
+    bar: 7,
+    barWithNeuroFlux: 11,
+    reason: "nothing left",
   };
 
   test("each decision, purchase, install sent and install seen, in time order; nothing failing", () => {
@@ -1322,7 +1325,7 @@ describe("augmentations and the reset (#210)", () => {
     expect(report.text).toContain(
       [
         "  augmentations (the brain's install decisions and purchases, and the installs):",
-        `    ${at(5 * MINUTE)}  install chosen, 2.0 h since the last: buying BitWire ($10,000,000); nothing else worth installing at the joined factions`,
+        `    ${at(5 * MINUTE)}  install chosen, 2.0 h online this cycle: buying BitWire ($10,000,000); nothing else worth installing at the joined factions`,
         `    ${at(6 * MINUTE)}  bought BitWire from CyberSec for $10,000,000 (queue 1)`,
         `    ${at(6 * MINUTE + SECOND)}  bought NeuroFlux Governor (level 2) from CyberSec for $1,425,000 (queue 3)`,
         `    ${at(8 * MINUTE)}  install sent (the brain's): BitWire, NeuroFlux Governor ×2`,
@@ -1417,28 +1420,185 @@ describe("augmentations and the reset (#210)", () => {
     expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
   });
 
-  test("an install chosen says why: nothing reachable at a positive rate, or the next sooner installing", () => {
+  test("an install chosen says why: the count reached, a quick install; an earlier brain's reason as stored", () => {
     const report = augmentationRun({
       events: [
-        [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "nothing reachable" }],
+        [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached", affordable: 7 }],
+        [3 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "quick install", onlineMs: 12 * MINUTE }],
         [
-          3 * MINUTE,
+          4 * MINUTE,
           "augmentationInstallChosen",
           {
-            ...CHOSEN,
+            set: CHOSEN.set,
+            cost: CHOSEN.cost,
+            queued: [],
+            sinceResetMs: 87.5 * 3_600_000,
+            rebuildMs: 3_600_000,
+            without: null,
+            with: null,
             reason: "sooner installing",
-            without: { augmentation: "DataJack", faction: "NiteSec", ms: 15 * 3_600_000 },
-            with: { augmentation: "DataJack", faction: "NiteSec", ms: 3.3 * 3_600_000 },
           },
         ],
       ],
     });
     expect(report.text).toContain(
-      "buying BitWire ($10,000,000); nothing else reachable at a joined faction's work (a reputation rate of 0)",
+      "install chosen, 2.0 h online this cycle: buying BitWire ($10,000,000); the count reached: 7 of 7 new " +
+        "augmentations affordable (3 of 11 with NeuroFlux)",
     );
     expect(report.text).toContain(
-      "buying BitWire ($10,000,000); the next sooner installing (3.3 h against 15.0 h, DataJack)",
+      "install chosen, 12 min online this cycle: buying BitWire ($10,000,000); a quick install, within 20 min of the " +
+        "last install: 1 of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
     );
+    expect(report.text).toContain(
+      "install chosen, 87.5 h since the last: buying BitWire ($10,000,000); sooner installing (an earlier brain's reason)",
+    );
+  });
+
+  /** An `augmentationProgress` (#222) for the cycle the run's slow snapshots show (`lastAugReset` 0). */
+  const progress = (fields: Record<string, unknown> = {}) => ({
+    lastAugReset: 0,
+    affordable: 1,
+    affordableWithNeuroFlux: 3,
+    bar: 8,
+    barWithNeuroFlux: 12,
+    onlineMs: 1.2 * 3_600_000,
+    barFallsInMs: 0.8 * 3_600_000,
+    barWithNeuroFluxFallsInMs: 0.8 * 3_600_000,
+    reason: null,
+    countdown: null,
+    held: null,
+    ...fields,
+  });
+
+  test("the count rule's progress (#222): the counts, the bars' next falls, the countdown and a hold, in time order", () => {
+    const report = augmentationRun({
+      events: [
+        [3 * MINUTE, "augmentationProgress", progress()],
+        [
+          4 * MINUTE,
+          "augmentationProgress",
+          progress({
+            affordableWithNeuroFlux: 4,
+            onlineMs: 12 * MINUTE,
+            reason: "quick install",
+            countdown: { endsAtGameMs: 1, endsInMs: 30_000, quick: true, extensions: 0 },
+          }),
+        ],
+        [5 * MINUTE, "augmentationProgress", progress({ held: "The Red Pill: Daedalus's reputation 1 of 2" })],
+        [6 * MINUTE, "augmentationProgress", { lastAugReset: 0 }],
+      ],
+    });
+    expect(report.text).toContain(
+      [
+        `    ${at(3 * MINUTE)}  progress: 1 of 8 new augmentations affordable (3 of 12 with NeuroFlux), 1.2 h online ` +
+          "this cycle; the bar falls to 7 in 48 min",
+        `    ${at(4 * MINUTE)}  progress: 1 of 8 new augmentations affordable (4 of 12 with NeuroFlux), 12 min online ` +
+          "this cycle; the bar falls to 7 in 48 min; install countdown (a quick install), 30 s left",
+        `    ${at(5 * MINUTE)}  progress: 1 of 8 new augmentations affordable (3 of 12 with NeuroFlux), 1.2 h online ` +
+          "this cycle; the bar falls to 7 in 48 min; held: The Red Pill: Daedalus's reputation 1 of 2",
+        `    ${at(6 * MINUTE)}  progress: the counts not stored`,
+      ].join("\n"),
+    );
+    expect(report.text).not.toContain("augmentationProgress:");
+    expect(report.text).toContain("  install overdue (a cycle 16.0 h online with no install chosen):\n    none");
+  });
+
+  /** 16.2 h online by the brain's clock, nothing affordable: the bar at 1, with NeuroFlux 4. */
+  const OVERDUE = progress({
+    affordable: 0,
+    affordableWithNeuroFlux: 0,
+    bar: 1,
+    barWithNeuroFlux: 4,
+    onlineMs: 16.2 * 3_600_000,
+    barFallsInMs: null,
+    barWithNeuroFluxFallsInMs: 1.8 * 3_600_000,
+  });
+  const OVERDUE_LINE =
+    `install overdue: 16.2 h online in the cycle seen from ${at(30 * SECOND)} to ${at(19 * MINUTE + 30 * SECOND)}, ` +
+    "and no install chosen; its last counts: 0 of 1 new augmentations affordable (0 of 4 with NeuroFlux), 16.2 h " +
+    "online this cycle; the bar is 1, and with NeuroFlux falls to 3 in 1.8 h";
+  const overdueFailures = (report: { failures: string[] }) =>
+    report.failures.filter((failure) => failure.startsWith("install overdue"));
+
+  test("install overdue (#222): a cycle 16 h online by the brain's clock with no install chosen fails, naming its counts", () => {
+    const report = augmentationRun({ events: [[3 * MINUTE, "augmentationProgress", OVERDUE]] });
+    expect(overdueFailures(report)).toEqual([OVERDUE_LINE]);
+    expect(report.text).toContain(
+      `  install overdue (a cycle 16.0 h online with no install chosen):\n    ${OVERDUE_LINE}`,
+    );
+    // Under 16 h: none.
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+    directory = mkdtempSync(path.join(os.tmpdir(), "run-report-"));
+    store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+    const under = augmentationRun({
+      events: [[3 * MINUTE, "augmentationProgress", { ...OVERDUE, onlineMs: 16 * 3_600_000 - 1 }]],
+    });
+    expect(overdueFailures(under)).toEqual([]);
+  });
+
+  test("install overdue: not with an install chosen in the cycle; another cycle's clock doesn't count", () => {
+    const chosen = augmentationRun({
+      events: [
+        [3 * MINUTE, "augmentationProgress", OVERDUE],
+        [10 * MINUTE, "augmentationInstallChosen", CHOSEN],
+      ],
+    });
+    expect(overdueFailures(chosen)).toEqual([]);
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+    directory = mkdtempSync(path.join(os.tmpdir(), "run-report-"));
+    store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+    const otherCycle = augmentationRun({
+      events: [[3 * MINUTE, "augmentationProgress", { ...OVERDUE, lastAugReset: 5 }]],
+    });
+    expect(overdueFailures(otherCycle)).toEqual([]);
+  });
+
+  test("install overdue: shown, not counted, while The Red Pill's way held the rule, or with the switch off", () => {
+    const held = augmentationRun({
+      events: [
+        [3 * MINUTE, "augmentationProgress", { ...OVERDUE, held: "The Red Pill: Daedalus's reputation 1 of 2" }],
+      ],
+    });
+    expect(overdueFailures(held)).toEqual([]);
+    expect(held.text).toContain("(held for The Red Pill's way: not a failure)");
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+    directory = mkdtempSync(path.join(os.tmpdir(), "run-report-"));
+    store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+    writeAugmentationsEnabled(store, false);
+    const off = augmentationRun({ events: [[3 * MINUTE, "augmentationProgress", OVERDUE]] });
+    expect(overdueFailures(off)).toEqual([]);
+    expect(off.text).toContain(
+      "  install overdue (a cycle 16.0 h online with no install chosen): the Augmentations switch is off now, so " +
+        `these are shown, not counted:\n    ${OVERDUE_LINE}`,
+    );
+  });
+
+  test("install overdue by the slow snapshots' own clock (no progress recorded); a gap in the game's time left out", () => {
+    /** Slow snapshots 3 minutes apart for 16 h, the game's time with them, but one step of 4 at `gapAfterMs`. */
+    function longRun(gapAfterMs: number | null) {
+      event(0, "brainStarted", { release: "r" });
+      const untilMs = 16 * 3_600_000;
+      let gameTimeMs = 1e12;
+      for (let offsetMs = 0; offsetMs <= untilMs; offsetMs += 3 * MINUTE) {
+        if (gapAfterMs !== null && offsetMs === gapAfterMs) gameTimeMs += MINUTE;
+        snapshot("slow", offsetMs, slowData(), gameTimeMs);
+        gameTimeMs += 3 * MINUTE;
+      }
+      return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + untilMs });
+    }
+    expect(overdueFailures(longRun(null))).toEqual([
+      `install overdue: 16.0 h online in the cycle seen from ${at(0)} to ${at(16 * 3_600_000)}, and no install ` +
+        "chosen; its last counts: none recorded",
+    ]);
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+    directory = mkdtempSync(path.join(os.tmpdir(), "run-report-"));
+    store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+    // One 4-minute step: left out, so 15.95 h online, not overdue.
+    expect(overdueFailures(longRun(3 * 3_600_000))).toEqual([]);
   });
 
   test("an install sent too near the window's end isn't judged; one the reset follows within 5 minutes passes", () => {
