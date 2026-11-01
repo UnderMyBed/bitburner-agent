@@ -308,6 +308,17 @@ describe("the counts", () => {
     expect(affordableCounts({ ...rich, neuroFluxReputation: 570 }).neuroFluxLevels).toBe(2);
   });
 
+  test("only what an install would really install counts: never a purchase the plan holds as queued alone", () => {
+    // The plan's queue holds BitWire (reported bought, never shown queued): priced as queued, not counted.
+    const state = { ...BN1, queued: [BITWIRE] };
+    const set = chooseAugmentationsToBuy([GEN_I], state, 1e12, LEVEL);
+    expect(affordableCounts({ state, installable: [], set, money: set.money, neuroFluxReputation: 0 })).toMatchObject({
+      affordable: 1,
+      affordableWithNeuroFlux: 1,
+    });
+    expect(affordableCounts({ state, set, money: set.money, neuroFluxReputation: 0 }).affordable).toBe(2);
+  });
+
   test("what's queued counts: those worth installing, and NeuroFlux Governor's copies with NeuroFlux; not the rest", () => {
     const state = { ...BN1, queued: [BITWIRE, "NeuroFlux Governor", "Combat Rib I"] };
     const set = chooseAugmentationsToBuy([GEN_I], state, 1e12, LEVEL);
@@ -331,6 +342,7 @@ describe("the rule", () => {
     affordable: 0,
     affordableWithNeuroFlux: 0,
     installing: 0,
+    neuroFluxLevels: 0,
     nothingLeft: false,
     ...fields,
   });
@@ -366,7 +378,7 @@ describe("the rule", () => {
     expect(installRule(inputs({ ...one, onlineMs: 14 * HOUR - 1 })).install).toBe(false);
     expect(installRule(inputs({ ...one, onlineMs: 14 * HOUR }))).toMatchObject({ install: true, bar: 1 });
     // NeuroFlux levels alone: the bar with NeuroFlux is 1 from 22 h.
-    const levels = { affordable: 0, affordableWithNeuroFlux: 1, installing: 0 };
+    const levels = { affordable: 0, affordableWithNeuroFlux: 1, installing: 0, neuroFluxLevels: 1 };
     expect(installRule(inputs({ ...levels, onlineMs: 22 * HOUR - 1 })).install).toBe(false);
     expect(installRule(inputs({ ...levels, onlineMs: 22 * HOUR })).install).toBe(true);
   });
@@ -395,7 +407,27 @@ describe("the rule", () => {
     expect(installRule(inputs({ nothingLeft: true, installing: 2 })).install).toBe(true);
     expect(installRule(inputs({ nothingLeft: true }))).toMatchObject({ install: false, reason: null });
     // NeuroFlux levels alone don't make nothing left an install: only the bars do.
-    expect(installRule(inputs({ nothingLeft: true, affordableWithNeuroFlux: 3 })).install).toBe(false);
+    expect(installRule(inputs({ nothingLeft: true, affordableWithNeuroFlux: 3, neuroFluxLevels: 3 })).install).toBe(
+      false,
+    );
+  });
+
+  test("never with nothing really to install, whatever the counts say (#222 review: a phantom purchase counted)", () => {
+    // At a bar of 1, a count of 1 that nothing queued, in the set or among the levels backs: no install, no reason.
+    const phantom = {
+      onlineMs: 22 * HOUR,
+      affordable: 1,
+      affordableWithNeuroFlux: 1,
+      installing: 0,
+      neuroFluxLevels: 0,
+    };
+    expect(installRule(inputs(phantom))).toMatchObject({ install: false, reason: null, bar: 1 });
+    expect(
+      installRule(inputs({ ...phantom, onlineMs: 5 * MINUTE, sinceResetMs: 5 * MINUTE, affordableWithNeuroFlux: 4 })),
+    ).toMatchObject({ install: false, reason: null });
+    // A level to buy, or one thing queued, is something.
+    expect(installRule(inputs({ ...phantom, neuroFluxLevels: 1 })).install).toBe(true);
+    expect(installRule(inputs({ ...phantom, installing: 1 })).install).toBe(true);
   });
 });
 

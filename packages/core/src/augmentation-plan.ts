@@ -155,8 +155,9 @@ export const INSTALL_AT_AUGMENTATIONS = 8;
 export const INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX = 12;
 /**
  * Each bar falls by this many an hour online this cycle, floored, never below 1 (`autopilot.js:15`, `:888`, `:897-898`):
- * an install in a slow cycle locks in what it has. The legacy scripts' SF11 +1 a level (`:896`) is left out: a BN11
- * concern, the planner's.
+ * an install in a slow cycle locks in what it has. Left out of the legacy scripts', each the planner's: SF11's +1 a
+ * level (`:896`, BN11's); a gang's 6 for a quick install and its full countdown (`:937`, `:944`); and the BitNode
+ * overrides, BN8's quick reinstalls and BN9's first-install hold (`:885-893`, `:940-941`).
  */
 export const INSTALL_BAR_FALL_PER_HOUR = 0.5;
 /** A quick install: within 20 minutes of the last install (`autopilot.js:939`), at 4 affordable with NeuroFlux (`:937`). */
@@ -165,7 +166,8 @@ export const QUICK_INSTALL_AT_AUGMENTATIONS = 4;
 /**
  * The countdown once the rule says install, in the game's time: 90 s (`autopilot.js:13`) to see whether more come
  * within reach; 30 s for a quick install (`:944-945`). Each rise in the count during it extends it, to the larger of
- * 10 s (`:973`) and the countdown less a share for each extension so far (`:972-976`). The Red Pill has none (`:968`).
+ * 10 s (`:973`) and the countdown less a share for each extension so far (`:972-976`). The legacy scripts start one
+ * for The Red Pill and never extend it (`:963-968`); here The Red Pill has none (#215's install, at once).
  */
 export const INSTALL_COUNTDOWN_MS = 90_000;
 export const QUICK_INSTALL_COUNTDOWN_MS = 30_000;
@@ -204,25 +206,29 @@ export interface InstallCounts {
 
 /**
  * The counts (#222; `autopilot.js:901-903`, the legacy faction manager's affordable and awaiting-install counts).
- * - Affordable: those worth installing that are queued, plus the set to buy (`chooseAugmentationsToBuy` with `money`).
- * - With NeuroFlux: that, the NeuroFlux Governor copies queued, and the levels the money left after the set covers at
+ * - Affordable: those worth installing in `installable`, plus the set to buy (`chooseAugmentationsToBuy` with `money`).
+ *   `installable` is what an install would really install: never a purchase the plan counts as queued only so it isn't
+ *   asked for again (the brain's `augmentationNotQueued`), which `state.queued` holds for the prices (#222 review).
+ * - With NeuroFlux: that, the NeuroFlux Governor copies in `installable`, and the levels the money left after the set covers at
  *   `neuroFluxReputation` (the joined sellers' most), each priced after the set and the levels before it, as
  *   `augmentationCost` has it (×1.14 a level, ×1.9 a purchase).
  * Also the levels, and the money the set and the levels cost: the countdown holds it back.
  */
 export function affordableCounts({
   state,
+  installable = state.queued,
   set,
   money,
   neuroFluxReputation,
 }: {
   state: AugmentationPurchaseState;
+  installable?: readonly string[];
   set: AugmentationSet;
   money: number;
   neuroFluxReputation: number;
 }): InstallCounts & { neuroFluxLevels: number; money: number } {
-  const queuedWorth = state.queued.filter(isWorthInstalling).length;
-  const queuedNeuroFlux = state.queued.filter((name) => name === NEUROFLUX_GOVERNOR).length;
+  const queuedWorth = installable.filter(isWorthInstalling).length;
+  const queuedNeuroFlux = installable.filter((name) => name === NEUROFLUX_GOVERNOR).length;
   const affordable = queuedWorth + set.purchases.length;
   let queued = [...state.queued, ...set.purchases.map((purchase) => purchase.name)];
   let spent = set.money;
@@ -254,8 +260,10 @@ export interface InstallRuleInputs extends InstallCounts {
   onlineMs: number;
   /** The game's time since the last install, the time the game was closed in it too: a quick install's limit. */
   sinceResetMs: number;
-  /** What the install would install besides NeuroFlux Governor levels still to buy: what's queued, and the set. */
+  /** What the install would install besides NeuroFlux Governor levels still to buy: what's really queued, and the set. */
   installing: number;
+  /** The NeuroFlux Governor levels the money covers, still to buy (`affordableCounts`'s). */
+  neuroFluxLevels: number;
   /** No augmentation worth installing is left unowned at the joined factions, beyond the set. */
   nothingLeft: boolean;
 }
@@ -273,10 +281,12 @@ export interface InstallRule extends InstallBars, InstallCounts {
  *   scripts' only clock, `:129`): a save first seen mid-cycle has 0 online, which isn't early in its cycle;
  * - the count reached: `affordable` at `bar`, or `affordableWithNeuroFlux` at `barWithNeuroFlux` (`:917-918`);
  * - nothing left (#210): no augmentation worth installing left at the joined factions, with something to install.
- * Never with nothing to install: each bar is 1 or more, and nothing left needs something queued or in the set.
+ * Never, for any reason, with nothing really to install: nothing queued (really), in the set or among the levels to
+ * buy (#213's guarantee, #222 review). Nothing left needs something queued or in the set: the levels alone don't.
  */
 export function installRule(inputs: InstallRuleInputs): InstallRule {
-  const { onlineMs, sinceResetMs, installing, nothingLeft, affordable, affordableWithNeuroFlux } = inputs;
+  const { onlineMs, sinceResetMs, installing, neuroFluxLevels, nothingLeft, affordable, affordableWithNeuroFlux } =
+    inputs;
   const bars = installBars(onlineMs);
   const quick =
     onlineMs < QUICK_INSTALL_WITHIN_MS &&
@@ -290,7 +300,14 @@ export function installRule(inputs: InstallRuleInputs): InstallRule {
       : nothingLeft && installing > 0
         ? "nothing left"
         : null;
-  return { ...bars, affordable, affordableWithNeuroFlux, install: reason !== null, reason };
+  const anything = installing + neuroFluxLevels > 0;
+  return {
+    ...bars,
+    affordable,
+    affordableWithNeuroFlux,
+    install: anything && reason !== null,
+    reason: anything ? reason : null,
+  };
 }
 
 /**

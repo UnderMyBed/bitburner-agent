@@ -16,6 +16,7 @@ import {
   AUGMENTATION_CYCLE_SETTING,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_ONLINE_SETTING,
+  AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
   type AugmentationEvent,
   type AugmentationInputs,
   AugmentationRule,
@@ -353,7 +354,7 @@ describe("the count rule (#222)", () => {
   test("nothing left at the joined factions (CyberSec's five reached): installs, after the countdown", () => {
     const ask = throughCountdown({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: FIVE_COST }) });
     expect(ask).toEqual({ intent: purchaseIntent("CyberSec", GEN_I, 1), install: false, committed: true });
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false });
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false, neuroFluxTarget: 0 });
     expect(events.at(-1)).toMatchObject({ type: "augmentationInstallChosen", reason: "nothing left", cost: FIVE_COST });
     expect(lines).toEqual([
       "augmentations: install countdown started, 90 s, nothing else worth installing at the joined factions; " +
@@ -504,6 +505,51 @@ describe("the countdown (#222)", () => {
     update({ slowData: slow({ joined: EIGHT_JOINED, lastAugReset: gameTimeMs - 1_000 }), mediumData: null });
     expect(lines.at(-1)).toBe("augmentations: install countdown called off: the game has reset");
   });
+
+  test("the game's clock set back (a save loaded): called off, logged, and a fresh countdown from the new time", () => {
+    update(eight());
+    gameTimeMs += 60_000;
+    update(eight());
+    expect(rule.view().progress?.countdown).toMatchObject({ endsInMs: 30_000 });
+    // An hour back: the old end would be 61 minutes off; called off, and a countdown from now.
+    gameTimeMs -= HOUR;
+    update(eight());
+    expect(lines.slice(-2)).toEqual([
+      "augmentations: install countdown called off: the game's clock set back",
+      expect.stringMatching(/^augmentations: install countdown started, 90 s, the count reached: /),
+    ]);
+    expect(rule.view().progress?.countdown).toMatchObject({ endsInMs: 90_000, extensions: 0 });
+    expect(readAugmentationCycle(store)).toBeNull();
+  });
+
+  test("a brain restarted mid-countdown starts a fresh one (the countdown isn't stored): the safe side", () => {
+    update(eight());
+    gameTimeMs += 60_000;
+    update(eight());
+    rule = newRule();
+    update(eight());
+    expect(rule.view().progress?.countdown).toMatchObject({ endsInMs: 90_000 });
+    gameTimeMs += 89_999;
+    update(eight());
+    expect(readAugmentationCycle(store)).toBeNull();
+    gameTimeMs += 1;
+    update(eight());
+    expect(readAugmentationCycle(store)).not.toBeNull();
+  });
+
+  test("the lookahead's rule is 15 minutes on: no money held for a quick install its window will have closed on", () => {
+    // 10 minutes into the cycle, Neurotrainer I reached and two NeuroFlux Governor levels covered ($8.6m): 3 with
+    // NeuroFlux. At $10k/s, 15 minutes on the money covers a third level, 4, a quick install by today's clocks; but the
+    // cycle is 25 minutes in then, past a quick install's 20, and 4 is under the bars: nothing held.
+    gameTimeMs = 0;
+    const joined = [
+      { name: "CyberSec", reputation: 1_000, favor: 0 },
+      { name: "NiteSec", reputation: 0, favor: 0 },
+    ];
+    measureIncome(10_000, { joined }, medium({ money: 8.6e6 }));
+    expect(rule.view().progress).toMatchObject({ affordable: 1, affordableWithNeuroFlux: 3, onlineMs: 10 * MINUTE });
+    expect(rule.reserve()).toBe(0);
+  });
 });
 
 describe("the progress events (#222)", () => {
@@ -533,15 +579,70 @@ describe("the progress events (#222)", () => {
         held: null,
       },
     ]);
-    // A NeuroFlux Governor level more: recorded.
+    // A NeuroFlux Governor level more, 5 minutes after the last recorded (the brain's time): recorded.
     gameTimeMs += MINUTE;
-    update({ slowData: slow({ joined }), mediumData: medium({ money: FIVE_COST + level1After(5) + SLACK }) });
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: FIVE_COST + level1After(5) + SLACK }),
+      nowMs: 1_000 + AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
+    });
     expect(progressEvents()).toHaveLength(2);
     expect(progressEvents().at(-1)).toMatchObject({ affordableWithNeuroFlux: 6, onlineMs: 5 * MINUTE });
     expect(describeProgress(progressEvents().at(-1) as never)).toBe(
       "5 of 8 new augmentations affordable (6 of 12 with NeuroFlux), 5 min online this cycle; the bar falls to 7 in " +
         "1.9 h",
     );
+  });
+
+  test("money see-sawing across a NeuroFlux Governor price: the counts alone recorded at most every 5 minutes", () => {
+    expect(AUGMENTATION_PROGRESS_COUNTS_EVERY_MS).toBe(5 * MINUTE);
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 0, favor: 0 },
+    ];
+    // Every 10 s of the brain's time for 4 minutes, the money over and under the first level's price: one event.
+    for (let step = 0; step < 24; step += 1) {
+      gameTimeMs += 10_000;
+      const money = FIVE_COST + SLACK + (step % 2 === 0 ? 0 : level1After(5));
+      update({ slowData: slow({ joined }), mediumData: medium({ money }), nowMs: 1_000 + step * 10_000 });
+    }
+    expect(progressEvents()).toHaveLength(1);
+    // Past 5 minutes, the counts differing from the last recorded: one more.
+    gameTimeMs += 10_000;
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: FIVE_COST + SLACK + level1After(5) }),
+      nowMs: 1_000 + AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
+    });
+    expect(progressEvents()).toHaveLength(2);
+    // A countdown starting is recorded at once (8 affordable): the counts change with it.
+    update({
+      slowData: slow({ joined: EIGHT_JOINED }),
+      mediumData: medium({ money: EIGHT_COST + SLACK }),
+      nowMs: 1_000 + AUGMENTATION_PROGRESS_COUNTS_EVERY_MS + 10_000,
+    });
+    expect(progressEvents()).toHaveLength(3);
+    expect(progressEvents().at(-1)?.countdown).not.toBeNull();
+  });
+
+  test("a bar falling on its own, the counts unchanged, is recorded at once (the report's overdue clock reads it)", () => {
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 0, favor: 0 },
+    ];
+    // 2 h online in 3-minute slow snapshots, the brain's time with them: the bars fall to 7 and 11.
+    for (let step = 0; step <= 40; step += 1) {
+      update({
+        slowData: slow({ joined }),
+        mediumData: medium({ money: FIVE_COST + SLACK }),
+        nowMs: 1_000 + step * 3 * MINUTE,
+      });
+      gameTimeMs += 3 * MINUTE;
+    }
+    expect(progressEvents().map((event) => [event.bar, event.barWithNeuroFlux, event.onlineMs])).toEqual([
+      [8, 12, 0],
+      [7, 11, 2 * HOUR],
+    ]);
   });
 });
 
@@ -596,19 +697,22 @@ function committed(money = 1e9) {
 
 describe("committed", () => {
   test("the set in buy order, each once reported done; then home's RAM, NeuroFlux Governor, the install", () => {
+    // Chosen with $1b: the five and 4 NeuroFlux Governor levels counted ($18.6m, $40.2m, $87.1m, $188.7m after them).
     committed();
+    expect(readAugmentationCycle(store)?.neuroFluxTarget).toBe(4);
+    const levelsHeld = [5, 6, 7, 8].reduce((sum, queued, level) => sum + 750_000 * 1.14 ** level * 1.9 ** queued, 0);
     let money = 1e9;
     const queue: string[] = [];
     const bought = (id: string) =>
       update({
         slowData: slow({ reputation: 18_750, queued: [...queue] }),
-        mediumData: medium({ money, homeRam: 256 }),
+        mediumData: medium({ money, homeRam: 128 }),
         doneIds: new Set([id]),
       });
     for (const [index, name] of FIVE.entries()) {
       const ask = update({
         slowData: slow({ reputation: 18_750, queued: [...queue] }),
-        mediumData: medium({ money, homeRam: 256 }),
+        mediumData: medium({ money, homeRam: 128 }),
       });
       expect(ask.intent).toEqual(purchaseIntent("CyberSec", name, 1));
       const chosen = events.find((event) => event.type === "augmentationInstallChosen");
@@ -628,32 +732,38 @@ describe("committed", () => {
         queueLength: index + 1,
       })),
     );
-    // $553m left: home's RAM 256 → 512 GB first ($318m: 256 × 32,000 × 1.58⁸; 512 → 1024 would be $1b).
+    // $553m left: home's RAM 128 → 256 GB first ($100.8m: 128 × 32,000 × 1.58⁷), leaving more than the levels held.
     const homeRam = update({
       slowData: slow({ reputation: 18_750, queued: queue }),
-      mediumData: medium({ money, homeRam: 256 }),
+      mediumData: medium({ money, homeRam: 128 }),
     });
     expect(homeRam.intent).toMatchObject({
       action: "upgradeHomeRam",
-      args: { fromRam: 256, vendor: "Alpha Enterprises" },
+      args: { fromRam: 128, vendor: "Alpha Enterprises" },
     });
-    expect(rule.view().asking).toBe("home RAM to 512 GB before the install (it stays)");
+    expect(rule.view().asking).toBe("home RAM to 256 GB before the install (it stays)");
     update({
       slowData: slow({ reputation: 18_750, queued: queue }),
-      mediumData: medium({ money, homeRam: 256 }),
+      mediumData: medium({ money, homeRam: 128 }),
       doneIds: new Set([homeRam.intent?.id as string]),
     });
     // Reported done again, the medium snapshot not yet showing it: logged once.
     const again = update({
       slowData: slow({ reputation: 18_750, queued: queue }),
-      mediumData: medium({ money, homeRam: 256 }),
+      mediumData: medium({ money, homeRam: 128 }),
       doneIds: new Set([homeRam.intent?.id as string]),
     });
     expect(again.intent).toEqual(homeRam.intent);
     expect(lines.filter((line) => line.endsWith("done, before the install (home's RAM stays)"))).toHaveLength(1);
-    // Home at 1024 GB (as if bought twice), $300m left: NeuroFlux Governor level 1, at 750k × 1.9⁵ = $18.6m.
-    money = 300e6;
-    const neuroFlux = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money }) });
+    // Home at 256 GB, $452m left: 256 → 512 GB ($318m) would leave $134m, under the $334.6m held for the 4 levels
+    // counted (#222 review): NeuroFlux Governor level 1 instead, at 750k × 1.9⁵ = $18.6m.
+    money -= 128 * 32_000 * 1.58 ** 7;
+    expect(money - 256 * 32_000 * 1.58 ** 8).toBeLessThan(levelsHeld);
+    const neuroFlux = update({
+      slowData: slow({ reputation: 18_750, queued: queue }),
+      mediumData: medium({ money, homeRam: 256 }),
+      nowMs: 2_000,
+    });
     expect(neuroFlux.intent).toEqual(purchaseIntent("CyberSec", NFG, 1));
     expect(rule.view().asking).toBe(`buying ${NFG} level 1 from CyberSec for $18,570,742`);
     update({
@@ -898,7 +1008,7 @@ describe("committed", () => {
     const queue = [...FIVE];
     const install = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money: 0 }) });
     expect(install.install).toBe(true);
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: true });
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: true, neuroFluxTarget: 4 });
     rule = newRule();
     // $1b now covers NeuroFlux Governor, but the install is out.
     const after = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money: 1e9 }) });
@@ -944,6 +1054,45 @@ describe("committed", () => {
       type: "augmentationCycleCalledOff",
       reason: NOTHING_QUEUED,
     });
+  });
+
+  test("at a bar of 1, a purchase never queued isn't counted: no install chosen on it, ever (#222 review)", () => {
+    // 22 h online (both bars 1), committed with $70m: Gen I reported bought, two reads don't show it, $0 left. Its
+    // phantom is the plan's queue (never asked for again), not what an install would install: 0 affordable.
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: 22 * HOUR, lastGameTimeMs: gameTimeMs }),
+    );
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    rule = newRule();
+    const fields = { reputation: 18_750 };
+    const ask = update({ slowData: slow(fields), mediumData: medium({ money: 70e6 }) });
+    update({
+      slowData: slow(fields),
+      mediumData: medium({ money: 70e6 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    for (let read = 0; read < 2; read += 1) {
+      gameTimeMs += MINUTE;
+      update({ slowData: slow(fields), mediumData: medium({ money: 0, homeRam: 2 ** 20 }) });
+    }
+    expect(rule.notQueued()).toHaveLength(1);
+    expect(readAugmentationCycle(store)).toBeNull();
+    for (let again = 0; again < 4; again += 1) {
+      gameTimeMs += 90_000;
+      expect(update({ slowData: slow(fields), mediumData: medium({ money: 0, homeRam: 2 ** 20 }) }).committed).toBe(
+        false,
+      );
+    }
+    expect(rule.view().progress).toMatchObject({
+      bar: 1,
+      barWithNeuroFlux: 1,
+      affordable: 0,
+      reason: null,
+      countdown: null,
+    });
+    expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([]);
+    expect(lines.filter((line) => line.includes("countdown started"))).toEqual([]);
   });
 
   test("every purchase a false done: no install of nothing, called off, and none chosen again (#213 re-review)", () => {
@@ -1050,7 +1199,7 @@ describe("The Red Pill and Daedalus first (#215)", () => {
   test("The Red Pill reached at a joined Daedalus: install chosen for it, whatever the income; bought last", () => {
     const joined = [{ name: "Daedalus", reputation: 2.5e6, favor: 0 }];
     const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }) });
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false });
+    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false, neuroFluxTarget: 0 });
     expect(events).toEqual([expect.objectContaining({ type: "augmentationInstallChosen", reason: "The Red Pill" })]);
     expect(lines.at(-1)).toMatch(/The Red Pill reached: it links w0r1d_d43m0n once installed$/);
     // Nothing else the money covers: The Red Pill, from Daedalus, then the install once it shows queued.
@@ -1258,7 +1407,7 @@ describe("the store and the figures", () => {
     expect(describeReason("quick install", {})).toBe(
       "a quick install, within 20 min of the last install: the counts not stored",
     );
-    expect(describeReason("sooner installing", {})).toBe("sooner installing (an earlier brain's reason)");
+    expect(describeReason("sooner installing", {})).toBe("sooner installing");
   });
 
   test("ETAs in words", () => {

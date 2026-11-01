@@ -1420,7 +1420,7 @@ describe("augmentations and the reset (#210)", () => {
     expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
   });
 
-  test("an install chosen says why: the count reached, a quick install; an earlier brain's reason as stored", () => {
+  test("an install chosen says why: the count reached, a quick install; an earlier brain's as main read it", () => {
     const report = augmentationRun({
       events: [
         [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached", affordable: 7 }],
@@ -1434,10 +1434,21 @@ describe("augmentations and the reset (#210)", () => {
             queued: [],
             sinceResetMs: 87.5 * 3_600_000,
             rebuildMs: 3_600_000,
-            without: null,
-            with: null,
+            without: { augmentation: "DataJack", faction: "NiteSec", ms: 15 * 3_600_000 },
+            with: { augmentation: "DataJack", faction: "NiteSec", ms: 3.3 * 3_600_000 },
             reason: "sooner installing",
           },
+        ],
+        [
+          5 * MINUTE,
+          "augmentationInstallChosen",
+          { set: CHOSEN.set, cost: CHOSEN.cost, sinceResetMs: 3_600_000, reason: "nothing reachable" },
+        ],
+        // Older still (before #213's review), no reason: none carrying on is nothing left, as main inferred it.
+        [
+          6 * MINUTE,
+          "augmentationInstallChosen",
+          { set: CHOSEN.set, cost: CHOSEN.cost, sinceResetMs: 3_600_000, without: null },
         ],
       ],
     });
@@ -1450,7 +1461,16 @@ describe("augmentations and the reset (#210)", () => {
         "last install: 1 of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
     );
     expect(report.text).toContain(
-      "install chosen, 87.5 h since the last: buying BitWire ($10,000,000); sooner installing (an earlier brain's reason)",
+      "install chosen, 87.5 h since the last: buying BitWire ($10,000,000); the next sooner installing (3.3 h against " +
+        "15.0 h, DataJack)",
+    );
+    expect(report.text).toContain(
+      "install chosen, 1.0 h since the last: buying BitWire ($10,000,000); nothing else reachable at a joined faction's " +
+        "work (a reputation rate of 0)",
+    );
+    expect(report.text).toContain(
+      `${at(6 * MINUTE)}  install chosen, 1.0 h since the last: buying BitWire ($10,000,000); nothing else worth ` +
+        "installing at the joined factions",
     );
   });
 

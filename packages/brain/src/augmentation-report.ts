@@ -50,6 +50,29 @@ const formatMoney = (money: unknown) =>
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
 
+/**
+ * Why a stored install was chosen, in words. An earlier brain's (#210, before #222) gave its reason as "nothing reachable"
+ * or "sooner installing" with the next augmentation's two ways, or, earlier still, none: "nothing left" with no way
+ * carrying on, else "sooner installing", as main's report inferred it.
+ */
+function describeStoredReason(fields: Record<string, unknown>): string {
+  const way = (value: unknown) => {
+    const each = fieldsOf(value);
+    return { augmentation: typeof each.augmentation === "string" ? each.augmentation : "?", ms: each.ms };
+  };
+  const without = fields.without ?? null;
+  const reason =
+    typeof fields.reason === "string" ? fields.reason : without === null ? "nothing left" : "sooner installing";
+  if (reason === "nothing reachable")
+    return "nothing else reachable at a joined faction's work (a reputation rate of 0)";
+  if (reason === "sooner installing") {
+    const [withInstall, carryingOn] = [way(fields.with), way(without)];
+    const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
+    return `the next sooner installing (${eta(withInstall.ms)} against ${eta(carryingOn.ms)}, ${carryingOn.augmentation})`;
+  }
+  return describeReason(reason, countsOf(fields) ?? {});
+}
+
 /** A stored event's counts and bars (#222), or null where they aren't numbers. */
 function countsOf(fields: Record<string, unknown>) {
   const { affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux } = fields;
@@ -177,7 +200,7 @@ export class AugmentationTimeline {
           text:
             `install chosen, ${since}: buying ` +
             `${set.map((each) => String(each.augmentation)).join(", ") || "nothing more"} (${formatMoney(fields.cost)}); ` +
-            describeReason(String(fields.reason ?? "no reason stored"), countsOf(fields) ?? {}),
+            describeStoredReason(fields),
         });
       } else if (kind === AUGMENTATION_PROGRESS_EVENT_KIND) {
         entries.push({ atMs, text: `progress: ${describeStoredProgress(fields)}` });

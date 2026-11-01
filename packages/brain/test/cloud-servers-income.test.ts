@@ -1,9 +1,9 @@
 // Cloud servers (#194) in the simulator: an 8 GB fresh start in BN1, the brain's rules as on Steam (the hack loop, the
-// programs, home RAM and cloud servers, all on; the batcher, #206, off), for `RUN_MS` of virtual time, against the same
-// run with cloud servers switched off, as `main` was before #194. The brain buys cloud servers by its payback rule, the
-// hack loop runs on them, and the run earns more. CI runs seeds 1 and 2; `CLOUD_SERVER_SEEDS` (`1,2,3,4,5,6,7,8`, say)
-// runs others (the brain README's cloud server suite says how). Each seed prints what each run earned and ended with,
-// and the servers bought.
+// programs, home RAM and cloud servers, all on; the batcher, #206, and augmentations, #222, off), for `RUN_MS` of
+// virtual time, against the same run with cloud servers switched off, as `main` was before #194. The brain buys cloud
+// servers by its payback rule, the hack loop runs on them, and the run earns more. CI runs seeds 1 and 2;
+// `CLOUD_SERVER_SEEDS` (`1,2,3,4,5,6,7,8`, say) runs others (the brain README's cloud server suite says how). Each
+// seed prints what each run earned and ended with, and the servers bought.
 import type { FastSnapshotData, MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { CLOUD_SERVER_PRICE_PER_GB } from "../src/cloud-servers.ts";
@@ -50,6 +50,10 @@ function earned(samples: { money: number }[]): number {
 async function run(seed: number, cloudServers: boolean) {
   const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false });
   if (!cloudServers) fresh.controller().setCloudServersEnabled(false);
+  // Augmentations (#210) off: the count rule (#222, owner decision 51) installs within the 3 hours (seed 1: CyberSec's
+  // three and 8 NeuroFlux Governor levels, 11 of 11 at 2.4 h with cloud servers, 2.7 h without), and the install loses
+  // the cloud servers and the money this suite compares. It measures one cycle's hacking income.
+  fresh.controller().setAugmentationsEnabled(false);
   const samples: { atMs: number; money: number }[] = [];
   const purchases: string[] = [];
   let lastPurchase: string | null = null;

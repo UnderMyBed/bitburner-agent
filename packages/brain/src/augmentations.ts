@@ -50,6 +50,7 @@ import {
   type MediumSnapshotData,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
+  purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
   type SlowSnapshotData,
@@ -92,7 +93,7 @@ export const AUGMENTATION_INCOME_WINDOW_MS = 10 * 60_000;
  * (offline earns a fraction of the online rate), or the Agent or the brain away. The time across it isn't online time
  * (the bars' clock leaves it out, #222), and what was earned across it isn't the income, so the window starts again.
  */
-export const AUGMENTATION_INCOME_GAP_MS = 3 * SNAPSHOT_TIER_PERIOD_MS.slow;
+export const AUGMENTATION_SLOW_GAP_MS = 3 * SNAPSHOT_TIER_PERIOD_MS.slow;
 /**
  * Before the rule says install, money is held back from cloud servers (A2, #194) only for an install the rule would
  * choose with this much more income: A2's payback limit (`CLOUD_SERVER_PAYBACK_LIMIT_MS`, 15 minutes, decided in
@@ -129,6 +130,8 @@ export const AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND = "augmentationInstallNot
  * run report lists them, and fails a cycle overdue its install on them.
  */
 export const AUGMENTATION_PROGRESS_EVENT_KIND = "augmentationProgress";
+/** A change in the counts alone is recorded at most this often (#222 review); any other change at once. */
+export const AUGMENTATION_PROGRESS_COUNTS_EVERY_MS = 5 * 60_000;
 
 /** The install of the queued augmentations (#164), as the rule asks for it: the owner's has the same id. */
 export const AUGMENTATION_INSTALL_INTENT: Intent = {
@@ -357,22 +360,36 @@ export function earnedOf(slowData: SlowSnapshotData): number | null {
 export interface AugmentationCycle {
   lastAugReset: number;
   installing: boolean;
+  /**
+   * The NeuroFlux Governor copies to have queued, those queued and the levels counted when the install was chosen
+   * (#222 review): home's RAM spends only money above the rest's. Absent in an earlier brain's note: none held.
+   */
+  neuroFluxTarget?: number;
 }
 
 export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle | null {
   const value = store.getSetting(AUGMENTATION_CYCLE_SETTING);
   if (value === null) return null;
-  let note: { lastAugReset?: unknown; installing?: unknown } | null;
+  let note: { lastAugReset?: unknown; installing?: unknown; neuroFluxTarget?: unknown } | null;
   try {
-    note = JSON.parse(value) as { lastAugReset?: unknown; installing?: unknown } | null;
+    note = JSON.parse(value) as { lastAugReset?: unknown; installing?: unknown; neuroFluxTarget?: unknown } | null;
   } catch {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't JSON`);
   }
   const installing = note?.installing ?? false;
-  if (!isFiniteNumber(note?.lastAugReset) || typeof installing !== "boolean") {
+  const target = note?.neuroFluxTarget;
+  if (
+    !isFiniteNumber(note?.lastAugReset) ||
+    typeof installing !== "boolean" ||
+    (target !== undefined && !(Number.isInteger(target) && (target as number) >= 0))
+  ) {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't a note the brain wrote`);
   }
-  return { lastAugReset: note.lastAugReset, installing };
+  return {
+    lastAugReset: note.lastAugReset,
+    installing,
+    ...(target === undefined ? {} : { neuroFluxTarget: target as number }),
+  };
 }
 
 function writeAugmentationCycle(store: TelemetryStore, note: AugmentationCycle | null): void {
@@ -389,7 +406,7 @@ export function formatEta(ms: number | null): string {
 }
 
 /** A countdown's time in seconds, rounded (#222): "90 s", "83 s". */
-export function formatSeconds(ms: number): string {
+function countdownSeconds(ms: number): string {
   return `${Math.round(ms / 1000)} s`;
 }
 
@@ -397,7 +414,7 @@ export function formatSeconds(ms: number): string {
 type CountFigures = Pick<AugmentationProgress, "affordable" | "affordableWithNeuroFlux" | "bar" | "barWithNeuroFlux">;
 
 /** "5 of 8 new augmentations affordable (7 of 12 with NeuroFlux)". */
-export function describeCounts({ affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux }: CountFigures): string {
+function describeCounts({ affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux }: CountFigures): string {
   return `${affordable} of ${bar} new augmentations affordable (${affordableWithNeuroFlux} of ${barWithNeuroFlux} with NeuroFlux)`;
 }
 
@@ -418,7 +435,7 @@ export function describeProgress(progress: CountFigures & Partial<AugmentationPr
   return `${describeCounts(progress)}${online}${falls}`;
 }
 
-/** Why the install was chosen, in words, for the log and the report; a reason the brain no longer gives, as stored. */
+/** Why the install was chosen, in words, for the log and the report; another reason, as it is. */
 export function describeReason(reason: InstallReason | string, figures: Partial<CountFigures>): string {
   const counted =
     isFiniteNumber(figures.affordable) &&
@@ -433,7 +450,7 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
   }
   if (reason === "nothing left") return "nothing else worth installing at the joined factions";
   if (reason === "The Red Pill") return "The Red Pill reached: it links w0r1d_d43m0n once installed";
-  return `${reason} (an earlier brain's reason)`;
+  return reason;
 }
 
 /** The bars' clock (#222): the game's time online since the install `lastAugReset`, and the last slow snapshot's. */
@@ -445,7 +462,7 @@ export interface OnlineClock {
 
 /**
  * The bars' clock after a slow snapshot taken at `gameTimeMs` in the cycle `lastAugReset` (#222): it adds the time
- * since the last slow snapshot of the same cycle, if no more than `AUGMENTATION_INCOME_GAP_MS` (the game closed, or
+ * since the last slow snapshot of the same cycle, if no more than `AUGMENTATION_SLOW_GAP_MS` (the game closed, or
  * the Agent or the brain away, isn't online time). Another `lastAugReset` starts it at 0: a save first seen mid-cycle
  * starts when the brain first sees it, the conservative side (the bars start at 8 and 12). Never the game's time since
  * the install, which counts the time the game was closed. Also the gap, or the clock set back (`stepMs` 0 or less),
@@ -461,7 +478,7 @@ export function advanceOnlineClock(
   }
   const stepMs = gameTimeMs - clock.lastGameTimeMs;
   if (stepMs === 0) return { clock, leftOutMs: null };
-  const online = stepMs > 0 && stepMs <= AUGMENTATION_INCOME_GAP_MS;
+  const online = stepMs > 0 && stepMs <= AUGMENTATION_SLOW_GAP_MS;
   return {
     clock: { lastAugReset, onlineMs: clock.onlineMs + (online ? stepMs : 0), lastGameTimeMs: gameTimeMs },
     leftOutMs: online ? null : stepMs,
@@ -521,9 +538,11 @@ export class AugmentationRule {
     quick: boolean;
     extensions: number;
     count: number;
+    /** The game's time it last saw: an earlier one is the clock set back. */
+    seenAtGameMs: number;
   } | null = null;
-  /** The progress last recorded, as its key: a steady state records nothing. */
-  #progressKey: string | null = null;
+  /** The progress last recorded: its cycle, bars, reason, countdown and hold, its counts, and when. */
+  #progress: { structural: string; counts: string; atMs: number } | null = null;
   /** The slow snapshot's game time last sampled, so each is taken once. */
   #sampledGameTimeMs: number | null = null;
   /** The game's last `lastAugReset` seen: a new one is a reset, which ends a cycle's purchases. */
@@ -977,11 +996,19 @@ export class AugmentationRule {
       /**
        * The counts and the rule with `spare` money and the set it covers. Nothing left: no augmentation worth installing
        * at the joined factions that isn't owned or in the set and could be bought after it (its prerequisites owned or
-       * in the set; one sold by no joined faction never can be).
+       * in the set; one sold by no joined faction never can be). `laterMs` on, both clocks are that much later (the
+       * lookahead's: a quick install's 20 minutes may be over by then, #222 review).
        */
-      const judge = (spare: number, covered: AugmentationSet) => {
+      const judge = (spare: number, covered: AugmentationSet, laterMs = 0) => {
         const names = covered.purchases.map((purchase) => purchase.name);
-        const counts = affordableCounts({ state: purchaseState, set: covered, money: spare, neuroFluxReputation });
+        // Counted from what an install would really install, never an `augmentationNotQueued` (#222 review).
+        const counts = affordableCounts({
+          state: purchaseState,
+          installable,
+          set: covered,
+          money: spare,
+          neuroFluxReputation,
+        });
         const afterSet = { installed: ownedAugs, queued: [...queue, ...names] };
         const left = sold.filter(
           (name) =>
@@ -991,9 +1018,10 @@ export class AugmentationRule {
             missingPrerequisites(name, afterSet).length === 0,
         );
         const rule = installRule({
-          onlineMs,
-          sinceResetMs,
+          onlineMs: onlineMs + laterMs,
+          sinceResetMs: sinceResetMs + laterMs,
           installing: installable.length + names.length,
+          neuroFluxLevels: counts.neuroFluxLevels,
           nothingLeft: left.length === 0,
           affordable: counts.affordable,
           affordableWithNeuroFlux: counts.affordableWithNeuroFlux,
@@ -1053,7 +1081,7 @@ export class AugmentationRule {
         });
       }
       if (endgame.kind === "redPill") {
-        // No countdown for The Red Pill (`autopilot.js:968`).
+        // No countdown for The Red Pill: #215's install, at once (the legacy scripts start one, never extended, `:963-968`).
         this.#cancelCountdown("The Red Pill reached, installed at once");
         reason = "The Red Pill";
       } else if (!rule.install) {
@@ -1064,7 +1092,11 @@ export class AugmentationRule {
         let reserve = 0;
         if (income !== null && income > 0) {
           const spare = money + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000;
-          const ahead = judge(spare, chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel));
+          const ahead = judge(
+            spare,
+            chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel),
+            AUGMENTATION_RESERVE_LOOKAHEAD_MS,
+          );
           if (ahead.rule.install) reserve = ahead.counts.money;
         }
         const waiting = progress(null);
@@ -1077,6 +1109,10 @@ export class AugmentationRule {
         });
       } else {
         const ruleReason = rule.reason as InstallReason;
+        // The game's clock set back (a save loaded, say): its end is no longer the countdown's; one starts afresh.
+        if (this.#countdown !== null && gameNowMs < this.#countdown.seenAtGameMs) {
+          this.#cancelCountdown("the game's clock set back");
+        }
         let countdown = this.#countdown;
         if (countdown === null) {
           const quick = ruleReason === "quick install";
@@ -1088,10 +1124,11 @@ export class AugmentationRule {
             quick,
             extensions: 0,
             count: rule.affordableWithNeuroFlux,
+            seenAtGameMs: gameNowMs,
           };
           this.#countdown = countdown;
           this.#log(
-            `augmentations: install countdown started, ${formatSeconds(lengthMs)}, ${describeReason(ruleReason, rule)}; ` +
+            `augmentations: install countdown started, ${countdownSeconds(lengthMs)}, ${describeReason(ruleReason, rule)}; ` +
               `${formatMoney(counts.money)} held back from cloud servers and home RAM`,
           );
         } else if (rule.affordableWithNeuroFlux > countdown.count) {
@@ -1102,12 +1139,13 @@ export class AugmentationRule {
           if (endsAtGameMs > countdown.endsAtGameMs) {
             countdown.endsAtGameMs = endsAtGameMs;
             this.#log(
-              `augmentations: install countdown extended, ${formatSeconds(endsAtGameMs - gameNowMs)} from now ` +
+              `augmentations: install countdown extended, ${countdownSeconds(endsAtGameMs - gameNowMs)} from now ` +
                 `(extension ${countdown.extensions}): ${describeCounts(rule)}`,
             );
           }
         }
         countdown.count = rule.affordableWithNeuroFlux;
+        countdown.seenAtGameMs = gameNowMs;
         if (gameNowMs < countdown.endsAtGameMs) {
           const waiting = progress(null);
           this.#recordProgress(waiting, null, atMs);
@@ -1116,7 +1154,7 @@ export class AugmentationRule {
             progress: waiting,
             reserve: counts.money,
             waitingFor:
-              `the install countdown: ${formatSeconds(countdown.endsAtGameMs - gameNowMs)} left, ` +
+              `the install countdown: ${countdownSeconds(countdown.endsAtGameMs - gameNowMs)} left, ` +
               describeReason(ruleReason, rule),
           });
         }
@@ -1127,9 +1165,13 @@ export class AugmentationRule {
         );
         reason = ruleReason;
       }
-      writeAugmentationCycle(this.#store, { lastAugReset: resetInfo.lastAugReset, installing: false });
+      writeAugmentationCycle(this.#store, {
+        lastAugReset: resetInfo.lastAugReset,
+        installing: false,
+        neuroFluxTarget: installable.filter((name) => name === NEUROFLUX_GOVERNOR).length + counts.neuroFluxLevels,
+      });
       this.#installing = false;
-      this.#progressKey = null;
+      this.#progress = null;
       this.#emit({
         type: AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
         atMs,
@@ -1175,8 +1217,19 @@ export class AugmentationRule {
           { ...committedView, asking: `buying ${first.name} from ${faction} for ${formatMoney(first.money)}` },
         );
       }
+      // Home's RAM (#219's order) only with the money above the NeuroFlux Governor levels counted at the choice and not
+      // bought yet (#222 review): an install counted on them installs them.
+      const neuroFluxLeft = Math.max(
+        0,
+        (readAugmentationCycle(this.#store)?.neuroFluxTarget ?? 0) -
+          installable.filter((name) => name === NEUROFLUX_GOVERNOR).length,
+      );
+      const neuroFluxHeld =
+        neuroFluxLeft === 0
+          ? 0
+          : purchaseSequenceCost(Array<string>(neuroFluxLeft).fill(NEUROFLUX_GOVERNOR), purchaseState).money;
       const homeRam = homeRamEnabled ? chooseHomeRamUpgrade(mediumData, slowData) : null;
-      if (homeRam?.next) {
+      if (homeRam?.next && money - (homeRam.price ?? 0) >= neuroFluxHeld) {
         const args = { fromRam: homeRam.next.fromRam, vendor: homeRam.next.vendor };
         return this.#ask(
           {
@@ -1243,6 +1296,7 @@ export class AugmentationRule {
     if (!this.#installing) {
       this.#installing = true;
       writeAugmentationCycle(this.#store, {
+        ...readAugmentationCycle(this.#store),
         lastAugReset: cycle?.lastAugReset ?? resetInfo.lastAugReset,
         installing: true,
       });
@@ -1399,23 +1453,27 @@ export class AugmentationRule {
   }
 
   /**
-   * The progress, stored as an `augmentationProgress` event when the counts, a bar, the reason, the countdown's end or
-   * the hold (by its kind: its words carry live figures) changed since the last; a steady state records nothing.
+   * The progress, stored as an `augmentationProgress` event when it changed since the last: always for the cycle, a
+   * bar, the reason, the countdown's end or the hold (by its kind: its words carry live figures); for the counts alone,
+   * at most once every `AUGMENTATION_PROGRESS_COUNTS_EVERY_MS` (#222 review: money see-sawing across a NeuroFlux price
+   * would record each crossing). A steady state records nothing.
    */
   #recordProgress(progress: AugmentationProgress, hold: string | null, atMs: number): void {
     const { lastAugReset, affordable, affordableWithNeuroFlux, bar, barWithNeuroFlux, reason } = progress;
-    const key = JSON.stringify([
+    const structural = JSON.stringify([
       lastAugReset,
-      affordable,
-      affordableWithNeuroFlux,
       bar,
       barWithNeuroFlux,
       reason,
       progress.countdown?.endsAtGameMs ?? null,
       hold,
     ]);
-    if (key === this.#progressKey) return;
-    this.#progressKey = key;
+    const counts = JSON.stringify([affordable, affordableWithNeuroFlux]);
+    const last = this.#progress;
+    if (last !== null && last.structural === structural) {
+      if (last.counts === counts || atMs - last.atMs < AUGMENTATION_PROGRESS_COUNTS_EVERY_MS) return;
+    }
+    this.#progress = { structural, counts, atMs };
     this.#emit({ type: AUGMENTATION_PROGRESS_EVENT_KIND, atMs, ...progress });
   }
 }

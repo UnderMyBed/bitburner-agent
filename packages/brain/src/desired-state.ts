@@ -530,9 +530,11 @@ export class DesiredStateController {
   }
 
   /**
-   * The money held back for augmentations (#210): the set the money covers, or will within the cloud servers' reserve
-   * horizon of income, and all of it once an install is chosen. `#reserveForOtherPurchase` holds it back from cloud
-   * servers (#194) where it's more than the program's or home RAM's.
+   * The money held back for augmentations (#210, the rule's `reserve()`): Infinity once an install is chosen; in the
+   * install's countdown, what the counted purchases cost (#222); before it, that only for an install the count rule
+   * would choose with `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0; Daedalus's $100b while it holds for its
+   * invitation (#215). `#reserveForOtherPurchase` holds it back from cloud servers (#194) where it's more than the
+   * program's or home RAM's.
    */
   augmentationReserve(): number {
     return this.#augmentations.reserve();
