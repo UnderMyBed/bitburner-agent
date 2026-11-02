@@ -1,13 +1,13 @@
 // The run report's lines on sharing spare RAM (#224), in its batcher section: from the batcher's health in the fast
 // snapshots, the time it shared, its threads, RAM and bonus, and from the slow snapshots, the brain's faction work's
 // reputation while it shared against while it didn't. Two failures of their own:
-// - **share starved batches:** operations late or lost, or batches short, while it shared, with none before it first
-//   did: the share took RAM the batches needed. The batcher's own out-of-step failure still counts late and lost alike.
+// - **share starved batches:** batches short of RAM while it shared (#226's review: on their own terms): the share
+//   took RAM a batch needed. Late and lost operations, while sharing or not, are the batcher's out-of-step failure.
 // - **share idle:** asked to share while batching, with the room for a thread free, and no share threads for 10
 //   minutes: its rounds don't start.
 import { SHARE_RAM_GB, type SharingHealth } from "@bitburner-agent/core";
 import { formatIsoTime } from "./gap-report.ts";
-import { sharingOf } from "./share.ts";
+import { SHARE_HEALTH_STALE_MS, sharingOf } from "./share.ts";
 
 /** Asked, batching, with the room free and no threads this long: `share idle`, a failure. */
 export const SHARE_IDLE_AFTER_MS = 10 * 60_000;
@@ -43,10 +43,19 @@ const duration = (ms: number) => {
   return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
 };
 
+/**
+ * The points the report reads. A health the batcher hasn't written again for `SHARE_HEALTH_STALE_MS` (the same `atMs`
+ * since a fast snapshot that long before) is a stopped batcher's (#226's review): its sharing isn't counted.
+ */
 function pointsOf(points: { atMs: number; health: unknown }[]): Point[] {
+  let written: { atMs: unknown; firstSeenMs: number } | null = null;
   return points.flatMap(({ atMs, health }) => {
     if (typeof health !== "object" || health === null) return [];
     const fields = health as Record<string, unknown>;
+    const same: { atMs: unknown; firstSeenMs: number } =
+      written !== null && written.atMs === fields.atMs ? written : { atMs: fields.atMs, firstSeenMs: atMs };
+    written = same;
+    const stale = atMs - same.firstSeenMs > SHARE_HEALTH_STALE_MS;
     return [
       {
         atMs,
@@ -55,14 +64,14 @@ function pointsOf(points: { atMs: number; health: unknown }[]): Point[] {
         late: count(fields.late),
         lost: count(fields.lost),
         short: count(fields.batchesShort),
-        sharing: sharingOf(health),
+        sharing: stale ? null : sharingOf(health),
       },
     ];
   });
 }
 
 /**
- * The lines, under "  sharing spare RAM (#224):", and the failures into `failures`. `points`: each fast snapshot's
+ * The lines, under "  sharing spare RAM (#224):", and the failures into `failures`. `rawPoints`: each fast snapshot's
  * batcher health, in time order; `readings`: the brain's worked faction's reputation in the slow snapshots, in order.
  */
 export function sharingLines(
@@ -149,35 +158,32 @@ function reputationLine(points: Point[], readings: readonly ReputationPoint[]): 
 }
 
 /**
- * Late, lost and short while sharing (a fast snapshot interval with share threads at either end), and before it first
- * shared; `share starved batches`, a failure, when there were some while sharing and none before.
+ * Late, lost and short while sharing (a fast snapshot interval with share threads at either end), and while not;
+ * `share starved batches`, a failure, when batches came up short of RAM while sharing (#226's review): a share takes
+ * only what the reserve leaves, so a short batch beside one is the share's doing, or the reserve's. Late and lost are
+ * shown for comparison, and fail as the batcher's out-of-step.
  */
 function starvedLines(points: Point[], failures: string[]): string[] {
   const whileSharing = { late: 0, lost: 0, short: 0 };
-  const before = { late: 0, lost: 0, short: 0 };
-  let shared = false;
-  let firstAtMs: number | null = null;
+  const whileNot = { late: 0, lost: 0, short: 0 };
+  let firstShortAtMs: number | null = null;
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1];
-    const sharing = sharingNow(previous) || sharingNow(point);
-    if (sharing && !shared) {
-      shared = true;
-      firstAtMs = point.atMs;
-    }
     if (previous === undefined || previous.runName === null || previous.runName !== point.runName) continue;
-    const into = sharing ? whileSharing : shared ? null : before;
-    if (into === null) continue;
+    const sharing = sharingNow(previous) || sharingNow(point);
+    const into = sharing ? whileSharing : whileNot;
     into.late += Math.max(0, point.late - previous.late);
     into.lost += Math.max(0, point.lost - previous.lost);
-    into.short += Math.max(0, point.short - previous.short);
+    const short = Math.max(0, point.short - previous.short);
+    into.short += short;
+    if (sharing && short > 0) firstShortAtMs ??= point.atMs;
   }
-  const describe = ({ late, lost, short }: typeof before) => `${late} late, ${lost} lost, ${short} short`;
-  const lines = [`    while sharing: ${describe(whileSharing)}; before it first shared: ${describe(before)}`];
-  const starved = whileSharing.late + whileSharing.lost + whileSharing.short;
-  if (starved > 0 && before.late + before.lost + before.short === 0) {
+  const describe = ({ late, lost, short }: typeof whileNot) => `${late} late, ${lost} lost, ${short} short`;
+  const lines = [`    while sharing: ${describe(whileSharing)}; while not: ${describe(whileNot)}`];
+  if (whileSharing.short > 0) {
     const line =
-      `share starved batches: ${describe(whileSharing)} while sharing, none before it first shared at ` +
-      formatIsoTime(firstAtMs ?? 0);
+      `share starved batches: ${whileSharing.short} batch${whileSharing.short === 1 ? "" : "es"} short of RAM while ` +
+      `sharing, the first seen at ${formatIsoTime(firstShortAtMs ?? 0)}`;
     lines.push(`    ${line}`);
     failures.push(line);
   }

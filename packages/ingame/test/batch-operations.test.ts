@@ -651,6 +651,102 @@ test("sharing (#224): only while batching and asked, on the room the reserve lea
   expect(after).toMatchObject({ state: "batching", desyncs: 0, late: 0, lost: 0, batchesShort: 0, problem: null });
   await simulation.advance(60_000);
   expect((await sharesRunning(simulation)).threads).toBe(0);
+  // Asked again, then a move (#226's review): the new target's first wave waits for the share threads to end, so it has
+  // their RAM, then goes out.
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  await simulation.advance(2_000);
+  expect((await sharesRunning(simulation)).threads).toBeGreaterThan(0);
+  const beforeMove = await healthOf(simulation);
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  await simulation.run("home", "set-port.js", {
+    args: [BATCHER_CONFIG_PORT, JSON.stringify({ ...config, target: "foodnstuff", figures: foodnstuff })],
+  });
+  await simulation.advance(500);
+  expect(await healthOf(simulation)).toMatchObject({ state: "preparing", wavesStarted: beforeMove.wavesStarted });
+  expect((await sharesRunning(simulation)).threads).toBeGreaterThan(0);
+  await simulation.advance(10_000);
+  expect((await sharesRunning(simulation)).threads).toBe(0);
+  expect((await healthOf(simulation)).wavesStarted).toBeGreaterThan(beforeMove.wavesStarted);
+});
+
+test("sharing (#224) uses home's RAM above what it keeps for the Agent, beside its hosts (#226's review)", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.setHomeRam(64);
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // A reserve that leaves its hosts no room: only home shares.
+  const config = { ...n00dlesConfig(), sharing: { reserveGb: 1_000, homeKeptGb: 8, cores: {} } };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 5_000) {
+    expect(waited, "batching within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  await simulation.advance(30_000);
+  const onHome = (await simulation.ps("home")).filter((process) => process.filename.endsWith(SHARE_SCRIPT_NAME));
+  const threads = onHome.reduce((sum, process) => sum + process.threads, 0);
+  // 64 GB less the batcher's 3.85 and the 8 kept: 13 threads, at most.
+  expect(threads).toBeGreaterThan(0);
+  expect(threads * 4).toBeLessThanOrEqual(64 - 3.85 - 8);
+  expect((await sharesRunning(simulation)).threads).toBe(0);
+  expect((await healthOf(simulation)).sharing?.threads).toBe(threads);
+});
+
+test("no share while a last wave lands, nor until the batches planned beside it have (#226's review)", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // n00dles from a fresh start's 4%, at its minimum: one large grow wave, and the batches start beside it at once.
+  const plan = batchPlan(N00DLES, { skills: { hacking: 50, intelligence: 0 }, mults: MULTS }, batchRamGb([16]));
+  if (plan === null) throw new Error("no plan for n00dles on 16 GB");
+  const sharing = { reserveGb: shareReserveGb(plan.peakRamGb, 0), homeKeptGb: 8, cores: {} };
+  const config = { ...n00dlesConfig(), hosts: SHARING_HOSTS, spacingMs: plan.spacingMs, sharing };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  await simulation.advance(1_000);
+  expect(await healthOf(simulation)).toMatchObject({ state: "batching", wavesStarted: 1 });
+  let sharedAt: number | null = null;
+  for (let waited = 0; sharedAt === null; waited += 1_000) {
+    expect(waited, "sharing within 10 virtual minutes").toBeLessThan(10 * 60_000);
+    const health = await healthOf(simulation);
+    expect(health).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0 });
+    if ((await sharesRunning(simulation)).threads > 0) {
+      // Not before the batches planned beside the wave have landed: their hacks first.
+      expect(health.hacksLanded).toBeGreaterThan(0);
+      sharedAt = await simulation.now();
+    }
+    await simulation.advance(1_000);
+  }
+  await simulation.advance(2 * 60_000);
+  expect(await healthOf(simulation)).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0 });
+});
+
+test("no share for a minute after a batch comes up short of RAM (#226's review): the batches come first", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // A spacing planned for 4 hosts' RAM on 2: batches come up short; no reserve, so a share would take any room.
+  const plan = batchPlan(
+    N00DLES,
+    { skills: { hacking: 50, intelligence: 0 }, mults: MULTS },
+    batchRamGb([16, 16, 16, 16]),
+  );
+  if (plan === null) throw new Error("no plan for n00dles on 64 GB");
+  const config = {
+    ...n00dlesConfig(),
+    hackShare: plan.hackShare,
+    spacingMs: plan.spacingMs,
+    sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} },
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  for (let waited = 0; (await healthOf(simulation)).batchesShort === 0; waited += 1_000) {
+    expect(waited, "a batch short within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(1_000);
+  }
+  // A round started before it ends within 10 s; none starts after it.
+  await simulation.advance(10_500);
+  for (let sample = 0; sample < 45; sample++) {
+    expect((await sharesRunning(simulation)).threads, `${sample + 10} s after the first short`).toBe(0);
+    await simulation.advance(1_000);
+  }
 });
 
 test("without its share script (#224), it batches all the same, and says it can't share, loudly", async () => {

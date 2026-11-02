@@ -662,10 +662,11 @@ export interface SharingConfig {
 /** A config's `sharing`, or why it isn't one. */
 function parseSharing(value: unknown): { ok: true; sharing: SharingConfig } | { ok: false; reason: string } {
   const { reserveGb, homeKeptGb, cores } = (value ?? {}) as Record<string, unknown>;
-  if (!isFiniteNumber(reserveGb) || reserveGb < 0)
-    return { ok: false, reason: "the config's sharing has no reserveGb" };
+  if (!isFiniteNumber(reserveGb) || reserveGb < 0) {
+    return { ok: false, reason: "the config's sharing has no reserveGb of 0 or more" };
+  }
   if (!isFiniteNumber(homeKeptGb) || homeKeptGb < 0) {
-    return { ok: false, reason: "the config's sharing has no homeKeptGb" };
+    return { ok: false, reason: "the config's sharing has no homeKeptGb of 0 or more" };
   }
   if (typeof cores !== "object" || cores === null || !Object.values(cores).every((each) => isFiniteNumber(each))) {
     return { ok: false, reason: "the config's sharing has no cores" };

@@ -42,7 +42,7 @@ const finite = (value: number, what: string) => {
  * - each × `faction_rep` × the intelligence bonus × (1 + favour/100) × the BitNode's `FactionWorkRepGain`
  *   (`reputation.ts:8-14`; core's `augmentationBitNodeMultipliers`).
  * - `shareBonus` (#224, core's `shareBonus`, 1 with no share running) multiplies all of hacking work's, and only the
- *   (hacking + intelligence) term of field and security work's (`reputation.ts:16-52`).
+ *   (hacking + intelligence) term of field and security work's, plus SF15.3's charisma in field's (`reputation.ts:16-52`).
  * A figure that isn't finite throws.
  */
 export function factionReputationPerCycle(

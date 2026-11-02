@@ -24,18 +24,21 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
-import { FactionRule } from "../src/factions.ts";
+import { bestWorkRate, FactionRule, WORK_TYPE_SWITCH_GAIN } from "../src/factions.ts";
 import {
   factionWorkGoingOn,
   readShareEnabled,
   SHARE_ENABLED_SETTING,
+  SHARE_HOME_KEPT_GB,
   shareBonusOf,
   sharingConfigOf,
   sharingOf,
+  singularityInEffect,
   writeShareEnabled,
 } from "../src/share.ts";
 import { SHARE_IDLE_AFTER_MS, sharingLines } from "../src/share-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { worldDaemonPath } from "../src/world-daemon.ts";
 import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 };
@@ -44,8 +47,13 @@ const network: StaticSnapshotData = {
   servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles", N00DLES), staticServer("foodnstuff")],
 };
 /** A medium snapshot with the player's figures, as the real worker sends them (`ns.getPlayer()`). */
-function medium(hacking: number, rooted: Record<string, boolean>, factions: string[] = []): MediumSnapshotData {
-  const data = mediumData(hacking, rooted, { factions });
+function medium(
+  hacking: number,
+  rooted: Record<string, boolean>,
+  factions: string[] = [],
+  homeRam?: number,
+): MediumSnapshotData {
+  const data = mediumData(hacking, rooted, { factions, ...(homeRam === undefined ? {} : { homeRam }) });
   const skills = { hacking, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 };
   return { ...data, player: { ...data.player, skills, mults: { ...MULTS, faction_rep: 1 } } };
 }
@@ -66,6 +74,15 @@ test("the switch: on unless the owner turned it off (decision 52)", () => {
   writeShareEnabled(store, false);
   expect(store.getSetting(SHARE_ENABLED_SETTING)).toBe("false");
   expect(readShareEnabled(store)).toBe(false);
+});
+
+test("Singularity in effect (#226's review): in BN4, or with SF4", () => {
+  const slow = (currentNode: number, ownedSF: Record<string, number>) =>
+    ({ resetInfo: { currentNode, ownedSF } }) as unknown as Parameters<typeof singularityInEffect>[0];
+  expect(singularityInEffect(slow(1, {}))).toBe(false);
+  expect(singularityInEffect(slow(4, {}))).toBe(true);
+  expect(singularityInEffect(slow(1, { 4: 1 }))).toBe(true);
+  expect(singularityInEffect(null)).toBe(false);
 });
 
 test("faction work goes on: the work sent is faction work, and the Agent says the game shows it", () => {
@@ -95,9 +112,14 @@ describe("sharingConfigOf", () => {
     const data = medium(50, { foodnstuff: true, CSEC: true });
     expect(sharingConfigOf(config, data)).toEqual({
       reserveGb: shareReserveGb(plan.peakRamGb, 0),
-      homeKeptGb: HOME_KEPT_FOR_THE_AGENT_GB,
+      homeKeptGb: SHARE_HOME_KEPT_GB,
       cores: {},
     });
+    // Home keeps 4 times the Agent's 8 GB free of share threads (#226's review); all of it with Singularity.
+    expect(SHARE_HOME_KEPT_GB).toBe(4 * HOME_KEPT_FOR_THE_AGENT_GB);
+    const withHome = medium(50, { foodnstuff: true, CSEC: true }, [], 2 ** 20);
+    expect(sharingConfigOf(config, withHome, true)?.homeKeptGb).toBe(2 ** 20);
+    expect(sharingConfigOf(config, withHome, false)?.homeKeptGb).toBe(SHARE_HOME_KEPT_GB);
     expect(shareReserveGb(plan.peakRamGb, 0)).toBeGreaterThanOrEqual(plan.peakRamGb * 1.25);
     const next = { target: "foodnstuff", figures: N00DLES, ramGb: 6.4 };
     expect(sharingConfigOf({ ...config, next }, data)?.reserveGb).toBe(shareReserveGb(plan.peakRamGb, 6.4));
@@ -106,8 +128,11 @@ describe("sharingConfigOf", () => {
   test("the hosts' cores over 1, from the medium snapshot; none without the player's hacking figures", () => {
     const data = medium(50, { foodnstuff: true, CSEC: true, "omega-net": true });
     data.servers = data.servers.map((server) => ({ ...server, cpuCores: server.hostname === "foodnstuff" ? 1 : 3 }));
-    // omega-net isn't a host: left out.
+    // omega-net isn't a host: left out. Home, which shares beside the hosts, is in (#226's review).
     expect(sharingConfigOf(config, data)?.cores).toEqual({ CSEC: 3 });
+    const withHome = medium(50, { foodnstuff: true, CSEC: true }, [], 64);
+    withHome.servers = withHome.servers.map((server) => ({ ...server, cpuCores: server.hostname === "home" ? 8 : 1 }));
+    expect(sharingConfigOf(config, withHome)?.cores).toEqual({ home: 8 });
     expect(sharingConfigOf(config, mediumData(50, { foodnstuff: true }))).toBeNull();
   });
 });
@@ -127,6 +152,10 @@ describe("the bonus counted", () => {
     expect(shareBonusOf(newBatcherHealth("n00dles", "r", 0))).toBe(1);
     expect(shareBonusOf(sharing({ bonus: Number.NaN }))).toBe(1);
     expect(shareBonusOf(sharing({ bonus: 0.5 }))).toBe(1);
+    // A stopped batcher's (#226's review): its health 20 s old or more by the game's clock, or reported not running.
+    expect(shareBonusOf({ ...sharing({}), atMs: 100_000 }, 120_000)).toBe(1.28);
+    expect(shareBonusOf({ ...sharing({}), atMs: 100_000 }, 120_001)).toBe(1);
+    expect(shareBonusOf({ ...sharing({}), atMs: 100_000 }, 101_000, true)).toBe(1);
     expect(sharingOf({ sharing: { wanted: "yes", threads: 1, ramGb: 4, bonus: 1, roomGb: 0 } })).toBeNull();
     expect(sharingOf({ sharing: { wanted: true, threads: -1, ramGb: 4, bonus: 1, roomGb: 0 } })).toBeNull();
   });
@@ -300,7 +329,7 @@ describe("the run report's lines", () => {
       const sharing = second <= 140 ? { wanted: false } : { wanted: true, ...sharingAt(1_000, 1.25) };
       points.push({
         atMs: at(second),
-        health: health(second === 360 ? { ...sharing, ...sharingAt(2_000, 1.25) } : sharing),
+        health: health(second === 360 ? { ...sharing, ...sharingAt(2_000, 1.25) } : sharing, { atMs: at(second) }),
       });
     }
     // CyberSec's reputation, a slow snapshot a minute: 1/s without, 1.25/s with.
@@ -321,47 +350,50 @@ describe("the run report's lines", () => {
         "the bonus at most x1.250, x1.250 on average",
       "    the brain's faction work while sharing: +150 reputation in 2 min (1.25/s, the bonus x1.250 on average); " +
         "while not: +120 in 2 min (1.00/s) (x1.25)",
-      "    while sharing: 0 late, 0 lost, 0 short; before it first shared: 0 late, 0 lost, 0 short",
+      "    while sharing: 0 late, 0 lost, 0 short; while not: 0 late, 0 lost, 0 short",
       "    idle (asked, the room free, no threads, for 10 minutes): never",
     ]);
     expect(failures).toEqual([]);
   });
 
-  test("share starved batches: late, lost or short while sharing, none before it first shared, a failure", () => {
+  test("share starved batches (#226's review): batches short of RAM while sharing, on their own terms, a failure", () => {
     const failures: string[] = [];
     const lines = sharingLines(
       [
-        { atMs: at(0), health: health({ wanted: true }) },
-        { atMs: at(2), health: health({ wanted: true, ...sharingAt(10, 1.1) }) },
-        { atMs: at(4), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesShort: 2, late: 1 }) },
+        { atMs: at(-2), health: health({ wanted: true }) },
+        { atMs: at(0), health: health({ wanted: true }, { late: 1 }) },
+        { atMs: at(2), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { late: 2 }) },
+        { atMs: at(4), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesShort: 2, late: 3 }) },
+        { atMs: at(6), health: health({ wanted: true }, { batchesShort: 3, late: 3 }) },
+        { atMs: at(8), health: health({ wanted: true }, { batchesShort: 4, late: 3 }) },
       ],
       [],
       failures,
     );
+    // A late one before sharing doesn't mute it; late and lost are the batcher's out-of-step failure, not this one.
     const line =
-      "share starved batches: 1 late, 0 lost, 2 short while sharing, none before it first shared at 2026-01-01T00:00:02.000Z";
+      "share starved batches: 3 batches short of RAM while sharing, the first seen at 2026-01-01T00:00:04.000Z";
     expect(failures).toEqual([line]);
     expect(lines).toContain(`    ${line}`);
-    expect(lines).toContain(
-      "    while sharing: 1 late, 0 lost, 2 short; before it first shared: 0 late, 0 lost, 0 short",
-    );
-    // Some before: not the share's doing; the batcher's own out-of-step failure still counts the late.
-    const before: string[] = [];
+    expect(lines).toContain("    while sharing: 2 late, 0 lost, 3 short; while not: 1 late, 0 lost, 1 short");
+    // Late or lost while sharing, and short while not: no failure of its own.
+    const others: string[] = [];
     sharingLines(
       [
         { atMs: at(0), health: health({ wanted: true }) },
-        { atMs: at(2), health: health({ wanted: true }, { late: 1 }) },
-        { atMs: at(4), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { late: 2 }) },
+        { atMs: at(2), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { late: 1, lost: 1 }) },
+        { atMs: at(14), health: health({ wanted: true }, { late: 1, lost: 1 }) },
+        { atMs: at(16), health: health({ wanted: true }, { late: 1, lost: 1, batchesShort: 5 }) },
       ],
       [],
-      before,
+      others,
     );
-    expect(before).toEqual([]);
+    expect(others).toEqual([]);
     // Another run's counts start from 0: no rise across runs.
     const restarted: string[] = [];
     sharingLines(
       [
-        { atMs: at(0), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { late: 3 }) },
+        { atMs: at(0), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesShort: 3 }) },
         { atMs: at(2), health: { ...health({ wanted: true, ...sharingAt(10, 1.1) }), runName: "b" } },
       ],
       [],
@@ -370,11 +402,33 @@ describe("the run report's lines", () => {
     expect(restarted).toEqual([]);
   });
 
+  test("a stopped batcher's last health (#226's review): its sharing not counted once 20 s old, nor its idle", () => {
+    // The same health, written once, read in every fast snapshot for 5 minutes.
+    const points = [];
+    for (let second = 0; second <= 300; second += 2) {
+      points.push({ atMs: at(second), health: health({ wanted: true, roomGb: 400, ...sharingAt(1_000, 1.25) }) });
+    }
+    const failures: string[] = [];
+    const lines = sharingLines(points, [], failures);
+    expect(lines[1]).toMatch(/^ {4}shared for 0 min:/);
+    // Asked, with room and no threads, but its health 11 minutes old: not idle, stopped (the batcher's own checks say).
+    const stopped = [];
+    for (let second = 0; second <= 660; second += 2) {
+      stopped.push({ atMs: at(second), health: health({ wanted: true, roomGb: 400 }) });
+    }
+    const idle: string[] = [];
+    sharingLines(stopped, [], idle);
+    expect(idle).toEqual([]);
+  });
+
   test("share idle: asked while batching, the room free and no threads for 10 minutes, a failure", () => {
     const idleFor = (ms: number, changes: Partial<SharingHealth> = {}, state: BatcherHealth["state"] = "batching") => {
       const points = [];
       for (let ms2 = 0; ms2 <= ms; ms2 += 2_000) {
-        points.push({ atMs: at(ms2 / 1000), health: health({ wanted: true, roomGb: 400, ...changes }, { state }) });
+        points.push({
+          atMs: at(ms2 / 1000),
+          health: health({ wanted: true, roomGb: 400, ...changes }, { state, atMs: at(ms2 / 1000) }),
+        });
       }
       const failures: string[] = [];
       return { lines: sharingLines(points, [], failures), failures };
@@ -423,8 +477,88 @@ test("the controller's faction work counts the bonus the batcher reports: its ra
   const shared = controller.factionsView().choice;
   expect(shared?.reputationPerSecond).toBeCloseTo((plain?.reputationPerSecond ?? 0) * 1.5, 12);
   expect(shared?.etaSeconds).toBeCloseTo((plain?.etaSeconds ?? 0) / 1.5, 9);
+  // The batcher reported not running (#226's review): its last health's bonus no longer counts.
+  const stopped = { running: null, started: false, stopped: 0, problem: "no room on foodnstuff" };
+  agent.send("fast", {
+    ...fast({ converged: true, problem: null, backend: "sim" }, health(1_000, 1.5)),
+    batcherDeploy: stopped,
+  });
+  agent.send("medium", medium(100, rooted, ["CyberSec"]));
+  expect(controller.factionsView().choice?.reputationPerSecond).toBeCloseTo(plain?.reputationPerSecond ?? 0, 12);
   // Its threads ended: the rate without.
   agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }, health(0, 1)));
   agent.send("medium", medium(100, rooted, ["CyberSec"]));
   expect(controller.factionsView().choice?.reputationPerSecond).toBeCloseTo(plain?.reputationPerSecond ?? 0, 12);
+});
+
+test("the work type worked is kept against the bonus's swings (#226's review): another must earn 1.1 times as much", () => {
+  // MegaCorp offers all three. Hacking work earns 1.08 times security's here, 1.32 times field's.
+  const person = {
+    skills: { hacking: 330, strength: 300, defense: 300, dexterity: 300, agility: 300, charisma: 1, intelligence: 0 },
+    mults: { faction_rep: 1 },
+  };
+  const faction = { name: "MegaCorp", reputation: 0, favor: 0 };
+  const conditions = { sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: 1 };
+  const keep = (workType: "hacking" | "field" | "security", name = faction.name) => ({
+    ...conditions,
+    keep: { faction: name, workType },
+  });
+  const best = bestWorkRate(person, faction, conditions);
+  expect(best?.workType).toBe("hacking");
+  // Security within 10% of hacking's: kept, at its own rate.
+  const security = bestWorkRate(person, faction, keep("security"));
+  expect(security?.workType).toBe("security");
+  expect((best?.perSecond ?? 0) / (security?.perSecond ?? 1)).toBeLessThan(WORK_TYPE_SWITCH_GAIN);
+  // Field far behind: not kept. Another faction's work changes nothing here.
+  expect(bestWorkRate(person, faction, keep("field"))).toEqual(best);
+  expect(bestWorkRate(person, faction, keep("security", "CyberSec"))).toEqual(best);
+});
+
+test("The Red Pill's rate on the World Daemon's path counts the bonus (#226's review)", () => {
+  const network: StaticSnapshotData = { servers: [staticServer("home", { moneyMax: 0 })] };
+  const data = medium(1_000, {}, ["Daedalus"]);
+  const slowData = {
+    resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs: {}, ownedSF: {}, bitNodeOptions: {} },
+    purchasedServers: [],
+    factions: {
+      backend: "sim" as const,
+      state: { joined: [{ name: "Daedalus", reputation: 0, favor: 0 }], invitations: [], queuedAugmentations: [] },
+      problem: null,
+    },
+  };
+  const at = (shareBonus?: number) =>
+    worldDaemonPath({ staticData: network, mediumData: data, slowData, expPerSecond: null, shareBonus }).redPill;
+  const plain = at();
+  expect(plain?.perSecond).toBeGreaterThan(0);
+  expect(at(1.5)?.perSecond).toBeCloseTo((plain?.perSecond ?? 0) * 1.5, 12);
+});
+
+test("the faction rule keeps the work type worked as the bonus swings (#226's review), until another earns 1.1 times", () => {
+  // MegaCorp: security work earns most at no bonus; at x1.15 hacking work earns 1.04 times as much; at x1.6, 1.33 times.
+  const data = medium(300, {}, ["MegaCorp"]);
+  const combat = { strength: 330, defense: 330, dexterity: 330, agility: 330, charisma: 1 };
+  data.player = { ...data.player, skills: { ...(data.player.skills as object), ...combat } };
+  const inputs = {
+    mediumData: data,
+    slowData: {
+      resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs: {}, ownedSF: {}, bitNodeOptions: {} },
+      purchasedServers: [],
+      factions: {
+        backend: "sim" as const,
+        state: { joined: [{ name: "MegaCorp", reputation: 0, favor: 0 }], invitations: [], queuedAugmentations: [] },
+        problem: null,
+      },
+    },
+    slowAtMs: 1,
+    nowMs: 1,
+    ownersWork: false,
+    enabled: true,
+  };
+  const rule = new FactionRule({});
+  const workType = (shareBonus: number) => rule.update({ ...inputs, shareBonus }).work?.workType;
+  expect(workType(1)).toBe("security");
+  expect(workType(1.15)).toBe("security");
+  expect(workType(1.6)).toBe("hacking");
+  // A rule with no work sent picks the best at once.
+  expect(new FactionRule({}).update({ ...inputs, shareBonus: 1.15 }).work?.workType).toBe("hacking");
 });

@@ -27,14 +27,18 @@
 //   target outside the bounds at a hack, is a desync: no more hacks or batches, and once nothing is in flight, it
 //   prepares the target again.
 // - **Sharing (#224):** while its config asks (the brain's switch on, faction work going on) and it's batching, once the
-//   batches' orders due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on the hosts' free
-//   RAM less the config's reserve for the batches and the next target, home's kept RAM, and no more than takes their use
-//   to 80% (core's `shareRound`): a round at most every 5 s, looking again soon after one finds no room. No wave starts
-//   while share threads still hold RAM (10 s at most), so a move or a desync's preparation has all of it.
+//   batches' orders due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on its hosts' free
+//   RAM less the config's reserve for the batches and the next target, and on home's above what it keeps for the Agent,
+//   to at most 80% of their RAM in use (core's `shareRound`): a round at most every 5 s, looking again soon after one
+//   finds no room. None while a last preparation wave still lands, nor until the batches planned meanwhile, whose leads
+//   it lengthens, have landed (#226's review); none for a minute after a batch came up short (legacy daemon.js shares
+//   only with every batch scheduled). No wave starts while share threads still hold RAM (10 s at most), so a move or a
+//   desync's preparation has all of it.
 // - **Health:** core's `BatcherHealth`, on its health port whenever it changes, and in its log every minute and at each
 //   change of state or of its problem, or anything wrong.
-// RAM (the share threads' too): `exec` 1.3 + `scp` 0.6 + `getServerMoneyAvailable` and `getServerSecurityLevel` 0.1 each + `getServerMaxRam`,
-// `getServerUsedRam` and `getHackingLevel` 0.05 each; ports and `asleep` are free (ram-budget.json).
+// RAM (unchanged by sharing: `exec` and `scp` were already counted): `exec` 1.3 + `scp` 0.6 +
+// `getServerMoneyAvailable` and `getServerSecurityLevel` 0.1 each + `getServerMaxRam`, `getServerUsedRam` and
+// `getHackingLevel` 0.05 each; ports and `asleep` are free (ram-budget.json).
 import {
   BATCH_GROW_SCRIPT_NAME,
   BATCH_HACK_SCRIPT_NAME,
@@ -92,6 +96,8 @@ const PREPARING_LOOK_EVERY_MS = 1_000;
 const SHARE_HELD_MS = SHARE_TIME_MS;
 /** A look for share room that found none looks again this soon: a round's threads end, and free their RAM, at once. */
 const SHARE_LOOK_AGAIN_MS = 100;
+/** No round this long after a batch came up short of RAM (#226's review): the batches come first. */
+const SHARE_AFTER_SHORT_MS = 60_000;
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
@@ -269,6 +275,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const pending: LaunchOrder[] = [];
   const batches = new Map<number, PlannedBatch>();
   let landing: { target: string; threads: BatchThreads; untilMs: number }[] = [];
+  /** No share round before this (#226's review): a batch came up short, or batches planned beside a wave still land. */
+  let sharingHeldOffUntil = 0;
+  /**
+   * Whether a last preparation wave (its `landing` entry, the only one with no hack) still lands, on `target` or any:
+   * batches planned meanwhile lead by its grow's security, so they hold more RAM than the plan's peak.
+   */
+  const waveLanding = (target?: string) =>
+    landing.some(
+      ({ target: each, threads: { hack: hackCount }, untilMs }) =>
+        hackCount === 0 && untilMs >= Date.now() && (target === undefined || each === target),
+    );
   let wave = 0;
 
   /**
@@ -365,6 +382,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       batch.short = true;
       health.batchesShort += 1;
       logNow = true;
+      // No share for a while (#226's review): whatever took the RAM, the batches have it first.
+      sharingHeldOffUntil = Math.max(sharingHeldOffUntil, Date.now() + SHARE_AFTER_SHORT_MS);
     }
   };
 
@@ -541,12 +560,19 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const now = Date.now();
     sharingParts = sharingParts.filter((part) => part.endsAt > now);
     const { sharing } = current();
-    if (sharing === undefined || health.state !== "batching") {
+    if (sharing === undefined || health.state !== "batching" || now < sharingHeldOffUntil || waveLanding()) {
       sharingRoomGb = 0;
       return;
     }
     if (now < nextSharingLookAt) return;
-    const use = hosts.map((host) => ({ host, maxGb: ns.getServerMaxRam(host), usedGb: ns.getServerUsedRam(host) }));
+    // Its hosts, and home beside them (#226's review): after an install, home is most of the RAM.
+    const sharingHosts = hosts.includes("home") ? hosts : [...hosts, "home"];
+    const use = sharingHosts.map((host) => ({
+      host,
+      maxGb: ns.getServerMaxRam(host),
+      usedGb: ns.getServerUsedRam(host),
+      batches: hosts.includes(host),
+    }));
     const round = shareRound(use, sharing.reserveGb, sharing.homeKeptGb);
     sharingRoomGb = round.roomGb;
     let started = 0;
@@ -623,6 +649,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         ) {
           batches.set(nextBatch, next.batch);
           pending.push(...next.orders);
+          // Planned while a last preparation wave lands, its leads cover the wave's grow, longer than the plan's: no
+          // share until it has landed (#226's review), the reserve being the plan's peak.
+          if (waveLanding(next.batch.target)) {
+            sharingHeldOffUntil = Math.max(sharingHeldOffUntil, nextLandAt + landingOffsetMs("weaken2"));
+          }
           health.batchesStarted += 1;
           nextBatch += 1;
           nextLandAt += current().spacingMs;
@@ -648,7 +679,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     if (health.state !== "recovering") prepareNext();
     shareSpareRam();
     health.sharing = sharingHealth();
-    if (health.sharing?.wanted && health.state === "batching") wakeAt = Math.min(wakeAt, nextSharingLookAt);
+    if (health.sharing?.wanted && health.state === "batching") {
+      wakeAt = Math.min(wakeAt, Math.max(nextSharingLookAt, sharingHeldOffUntil));
+    }
     // Awake as share threads end (#224): its health's count falls then, and a wave waiting for them goes out.
     for (const part of sharingParts) wakeAt = Math.min(wakeAt, part.endsAt);
     // Awake when a part would be lost, so it's counted then, not at the next launch.

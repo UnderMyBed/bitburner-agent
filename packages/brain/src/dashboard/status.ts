@@ -121,7 +121,7 @@ export interface DashboardStatus {
    */
   worldDaemon: WorldDaemonView | null;
   /** Sharing spare RAM (#224): its switch, whether the batcher is asked or why not, and its last report; null before. */
-  share?: ShareView | null;
+  share: ShareView | null;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */

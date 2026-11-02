@@ -190,18 +190,21 @@ export function hackingEtaSeconds(
 
 /**
  * The path from the snapshots (#215): what the dashboard and the run report show. `expPerSecond` is the measured
- * hacking experience rate, or null. Throws for what core doesn't know (another game version).
+ * hacking experience rate, or null; `shareBonus`, the share threads' running (#224), in The Red Pill's rate, 1 by
+ * default. Throws for what core doesn't know (another game version).
  */
 export function worldDaemonPath({
   staticData,
   mediumData,
   slowData,
   expPerSecond,
+  shareBonus = 1,
 }: {
   staticData: StaticSnapshotData | null;
   mediumData: MediumSnapshotData | null;
   slowData: SlowSnapshotData | null;
   expPerSecond: number | null;
+  shareBonus?: number;
 }): WorldDaemonPath {
   const resetInfo = slowData === null ? null : resetInfoOf(slowData);
   const state: FactionState | null = slowData === null ? null : (factionReadingOf(slowData)?.state ?? null);
@@ -234,7 +237,7 @@ export function worldDaemonPath({
     const work =
       person === null || state === null || slowData === null
         ? null
-        : redPillWork(person, state, resetInfo, workConditionsOf(resetInfo, slowData));
+        : redPillWork(person, state, resetInfo, workConditionsOf(resetInfo, slowData, shareBonus));
     path.redPill = {
       installed: false,
       queued,
@@ -386,6 +389,8 @@ export interface WorldDaemonInputs {
   /** The controller's clock (a channel event's), for the stalls. */
   nowMs: number | null;
   enabled: boolean;
+  /** The share threads' bonus running (#224), for The Red Pill's rate; 1 when absent. */
+  shareBonus?: number;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -441,7 +446,15 @@ export class WorldDaemonRule {
   }
 
   /** Whether to ask for the destroy. */
-  update({ staticData, mediumData, mediumGameTimeMs, slowData, nowMs, enabled }: WorldDaemonInputs): boolean {
+  update({
+    staticData,
+    mediumData,
+    mediumGameTimeMs,
+    slowData,
+    nowMs,
+    enabled,
+    shareBonus = 1,
+  }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     const hacking = hackingOf(mediumData);
     if (hacking !== null && hacking.exp !== null && mediumGameTimeMs !== null)
@@ -458,7 +471,7 @@ export class WorldDaemonRule {
     if (staticData === null || mediumData === null || slowData === null) return this.#asked !== null;
     let path: WorldDaemonPath;
     try {
-      path = worldDaemonPath({ staticData, mediumData, slowData, expPerSecond: this.#expRate.perSecond() });
+      path = worldDaemonPath({ staticData, mediumData, slowData, expPerSecond: this.#expRate.perSecond(), shareBonus });
     } catch (error) {
       this.#log(`world daemon: the snapshots as core knows the game: ${(error as Error).message}`);
       return this.#asked !== null;

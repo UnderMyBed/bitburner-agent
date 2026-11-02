@@ -104,6 +104,28 @@ test("a round never takes the hosts' use past 80% of their RAM, nor home's kept 
   ]);
 });
 
+test("home beside the batches' hosts (#224's review): its free RAM above what it keeps, outside the reserve, first", () => {
+  const home = { ...host("home", 1_024, 4), batches: false };
+  // The reserve takes all the batches' hosts' free RAM: only home's, above its 8 GB, is shared.
+  expect(shareRound([home, host("pserv-0", 1_024, 24)], 1_000, 8)).toEqual({
+    placed: [{ host: "home", threads: 253 }],
+    roomGb: 1_012,
+  });
+  // With room on both, home first, then the batches' hosts, never more there than their room (4,096 - 3,996 = 100 GB).
+  expect(shareRound([host("pserv-0", 4_096, 0), home], 3_996, 8).placed).toEqual([
+    { host: "home", threads: 253 },
+    { host: "pserv-0", threads: 25 },
+  ]);
+  // Home's fragment (2 GB) makes no room on the batches' hosts: 102 GB there is 25 threads, not 26.
+  expect(shareRound([{ ...home, usedGb: 1_014 }, host("pserv-0", 4_096, 0)], 3_994, 8).placed).toEqual([
+    { host: "pserv-0", threads: 25 },
+  ]);
+  // Home first, though a batches' host has less free.
+  expect(shareRound([host("pserv-0", 64, 0), home], 0, 8).placed).toEqual([{ host: "home", threads: 216 }]);
+  // The 80% cap counts home's RAM and use too: 0.8 x 2,048 - 1,724 is under 0, though home has 316 GB free.
+  expect(shareRound([{ ...home, usedGb: 700 }, host("pserv-0", 1_024, 1_024)], 0, 8).placed).toEqual([]);
+});
+
 test("a round places nothing where the room holds no thread: the reserve takes it all", () => {
   expect(shareRound([host("a", 64, 0)], 64, 0)).toEqual({ placed: [], roomGb: 0 });
   expect(shareRound([host("a", 64, 0)], 61, 0)).toEqual({ placed: [], roomGb: 3 });
@@ -178,9 +200,9 @@ test("the config's sharing (#224): its reserve, home's kept RAM and the cores; a
   expect(parseBatcherConfig({ ...config, sharing })).toEqual({ ok: true, config: { ...config, sharing } });
   expect(parseBatcherConfig({ ...config, sharing: null })).toEqual({ ok: true, config });
   for (const [odd, reason] of [
-    [{ ...sharing, reserveGb: -1 }, "reserveGb"],
-    [{ ...sharing, reserveGb: "1" }, "reserveGb"],
-    [{ ...sharing, homeKeptGb: Number.NaN }, "homeKeptGb"],
+    [{ ...sharing, reserveGb: -1 }, "reserveGb of 0 or more"],
+    [{ ...sharing, reserveGb: "1" }, "reserveGb of 0 or more"],
+    [{ ...sharing, homeKeptGb: Number.NaN }, "homeKeptGb of 0 or more"],
     [{ ...sharing, cores: { CSEC: "2" } }, "cores"],
     [{ reserveGb: 1, homeKeptGb: 8 }, "cores"],
   ] as const) {

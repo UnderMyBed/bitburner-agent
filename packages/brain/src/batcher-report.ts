@@ -1,7 +1,8 @@
 // The run report's batcher section (#205): what the batcher's health in the fast snapshots says, hour by hour, and its
 // desyncs and problems; out of step (a desync, or an operation late or lost) fails the run (#206). Its counts are each
 // run's, from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a
-// run already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's (#224).
+// run already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
+// (#224).
 import type { BatcherHealth } from "@bitburner-agent/core";
 import { BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";

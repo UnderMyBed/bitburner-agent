@@ -57,19 +57,25 @@ export function shareBonus(parts: readonly { threads: number; cores: number }[],
   return shareBonusOfPower(power);
 }
 
-/** A batcher host's RAM, GB, as `getServerMaxRam` and `getServerUsedRam` give it. */
+/**
+ * A host a round may use, its RAM in GB as `getServerMaxRam` and `getServerUsedRam` give it, and whether the batches
+ * run there: home, where they don't (the hack loop's hosts never include it), shares beside them, outside the reserve.
+ */
 export interface HostRamUse {
   host: string;
   maxGb: number;
   usedGb: number;
+  /** The batches' host, whose free RAM the reserve is kept on; absent, it is. */
+  batches?: boolean;
 }
 
 /**
- * Where a round of share threads goes (#224), and the room it had: the RAM free on the hosts, less `homeKeptGb` on
- * home (the Agent's), less `reserveGb` (the batches' and the next target's, `shareReserveGb`), and no more than takes
- * the hosts' use to `SHARE_MOST_USE` of their RAM. Each host's whole threads (`threadsThatFit`), the hosts with the
- * least free first, so the large keep room for whole batch operations (`placeThreads`). None when the room holds no
- * thread.
+ * Where a round of share threads goes (#224), and the room it had: the free RAM of the batches' hosts less `reserveGb`
+ * (theirs and the next target's, `shareReserveGb`), and that of any other host (home, beside them), less `homeKeptGb`
+ * on home (the Agent's and its workers'); no more than takes all the hosts' use to `SHARE_MOST_USE` of their RAM. The
+ * other hosts first, then the batches' hosts with the least free first, so the large keep room for whole batch
+ * operations (`placeThreads`), never more on them than their room; whole threads (`threadsThatFit`). None when the
+ * room holds no thread.
  */
 export function shareRound(
   hosts: readonly HostRamUse[],
@@ -78,23 +84,33 @@ export function shareRound(
 ): { placed: { host: string; threads: number }[]; roomGb: number } {
   const freeOf = (each: HostRamUse) =>
     Math.max(0, each.maxGb - each.usedGb - (each.host === "home" ? Math.max(0, homeKeptGb) : 0));
+  const forBatches = (each: HostRamUse) => each.batches !== false;
   let totalGb = 0;
   let usedGb = 0;
-  let freeGb = 0;
+  let batchesFreeGb = 0;
+  let otherFreeGb = 0;
   for (const each of hosts) {
     totalGb += each.maxGb;
     usedGb += each.usedGb;
-    freeGb += freeOf(each);
+    if (forBatches(each)) batchesFreeGb += freeOf(each);
+    else otherFreeGb += freeOf(each);
   }
-  const roomGb = Math.max(0, Math.min(freeGb - Math.max(0, reserveGb), SHARE_MOST_USE * totalGb - usedGb));
+  const batchesRoomGb = Math.max(0, batchesFreeGb - Math.max(0, reserveGb));
+  const roomGb = Math.max(0, Math.min(batchesRoomGb + otherFreeGb, SHARE_MOST_USE * totalGb - usedGb));
   const placed: { host: string; threads: number }[] = [];
   let left = Math.floor(roomGb / SHARE_RAM_GB + 1e-9);
-  for (const each of [...hosts].sort((a, b) => freeOf(a) - freeOf(b) || (a.host < b.host ? -1 : 1))) {
+  let leftOnBatches = Math.floor(batchesRoomGb / SHARE_RAM_GB + 1e-9);
+  const order = [...hosts].sort(
+    (a, b) => Number(forBatches(a)) - Number(forBatches(b)) || freeOf(a) - freeOf(b) || (a.host < b.host ? -1 : 1),
+  );
+  for (const each of order) {
     if (left === 0) break;
-    const threads = Math.min(left, threadsThatFit(freeOf(each), SHARE_RAM_GB));
+    const most = forBatches(each) ? Math.min(left, leftOnBatches) : left;
+    const threads = Math.min(most, threadsThatFit(freeOf(each), SHARE_RAM_GB));
     if (threads === 0) continue;
     placed.push({ host: each.host, threads });
     left -= threads;
+    if (forBatches(each)) leftOnBatches -= threads;
   }
   return { placed, roomGb };
 }

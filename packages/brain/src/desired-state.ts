@@ -79,11 +79,12 @@ import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readPr
 import {
   factionWorkGoingOn,
   readShareEnabled,
-  SHARE_ENABLED_SETTING,
   type ShareView,
   shareBonusOf,
   sharingConfigOf,
   sharingOf,
+  singularityInEffect,
+  writeShareEnabled,
 } from "./share.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -407,7 +408,9 @@ export class DesiredStateController {
         if (event.type === "agentConnected") this.#installDisconnectedAtMs = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' and the work's outcomes: for the views, and the manual intents done, or the augmentation
-        // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send.
+        // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send: the work's
+        // outcome, which turns sharing on or off (#224), and the share bonus the batcher reports, are sent with the next
+        // medium snapshot's update.
         this.#fastData = event.snapshot.data as FastSnapshotData;
         this.#fastGameTimeMs = event.snapshot.gameTimeMs;
         // A batcher sent but not running, logged when that changes (#211); the dashboard and the run report say more.
@@ -466,7 +469,7 @@ export class DesiredStateController {
 
   /** Sharing's switch (#224, owner decision 52), likewise; on by default. */
   setShareEnabled(enabled: boolean): void {
-    writeSwitch(this.#store, SHARE_ENABLED_SETTING, enabled);
+    writeShareEnabled(this.#store, enabled);
     this.#update();
   }
 
@@ -1070,7 +1073,9 @@ export class DesiredStateController {
    * loop then leaves (it still roots), with the brain's own target (#206, `chooseBatcher`). The mode switch, from the
    * RAM: the batcher when a host holds it and a plan on the hosts' RAM earns; otherwise (the switch off, or no batcher
    * to plan, the reason kept for the dashboard) the hack loop as planned. Logged when it changes, and when the target
-   * or the next target does.
+   * or the next target does. With faction work going on (`factionWorking`, from the work sent and the Agent's word) and
+   * sharing's switch on, the batcher's config asks it to share (#224); so it starts or stops at the next update after
+   * the work's outcome changes, a medium snapshot at most.
    */
   #withBatcher(
     hackLoop: DesiredState["hackLoop"],
@@ -1111,7 +1116,9 @@ export class DesiredStateController {
       return { hackLoop };
     }
     // Sharing its spare RAM (#224), while the player works for a faction, the brain's work or the owner's.
-    const sharingConfig = factionWorking ? sharingConfigOf(planned.batcher.config, this.#mediumData) : null;
+    const sharingConfig = factionWorking
+      ? sharingConfigOf(planned.batcher.config, this.#mediumData, singularityInEffect(this.#slowData))
+      : null;
     const sharing = readShareEnabled(this.#store) ? sharingConfig : null;
     this.#shareWhy = !factionWorking
       ? "no faction work going on"
@@ -1125,6 +1132,13 @@ export class DesiredStateController {
 
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
+    // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
+    // a health gone stale, or a batcher reported not running (#226's review).
+    const shareBonus = shareBonusOf(
+      this.#batcherHealth(),
+      this.#fastGameTimeMs,
+      batcherNotRunning(this.#fastData?.batcherDeploy) !== null,
+    );
     // Augmentations and the reset (#210) first: an install chosen holds the programs back.
     const augmentations = this.#augmentations.update({
       mediumData: this.#mediumData,
@@ -1151,6 +1165,7 @@ export class DesiredStateController {
       slowData: this.#slowData,
       nowMs: this.#lastEventAtMs,
       enabled: readWorldDaemonEnabled(this.#store),
+      shareBonus,
     });
     this.#purchase = this.#choosePurchase();
     this.#backdoor = this.#backdoors.intent({
@@ -1168,8 +1183,7 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
       enabled: readFactionWorkEnabled(this.#store),
-      // The bonus of the share threads the batcher reports running (#224): the rate it chooses by, and is judged on.
-      shareBonus: shareBonusOf(this.#batcherHealth()),
+      shareBonus,
     });
     this.#join = factions.join;
     this.#factionWork = factions.work;
