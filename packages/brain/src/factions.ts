@@ -297,6 +297,8 @@ function unreadFactionState(slowData: SlowSnapshotData): string {
 export function chooseFactionWork(
   mediumData: MediumSnapshotData,
   slowData: SlowSnapshotData,
+  shareBonus = 1,
+  keep?: { faction: string; workType: FactionWorkType },
   { donations = true }: { donations?: boolean } = {},
 ): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
@@ -313,7 +315,7 @@ export function chooseFactionWork(
   if (working.length === 0) return waiting("a joined faction that offers work", false);
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
-    const conditions = { ...workConditionsOf(resetInfo, slowData), donations };
+    const conditions = { ...workConditionsOf(resetInfo, slowData, shareBonus), donations, ...(keep ? { keep } : {}) };
     const choice =
       redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
@@ -336,10 +338,24 @@ export interface WorkConditions {
   favorToDonateToFaction: number;
   /** Donations to come (#225): the Augmentations switch on. Absent, they are. */
   donations?: boolean;
+  /** The share threads' bonus while they run (#224, ./share.ts's `shareBonusOf`); 1 when absent. */
+  shareBonus?: number;
+  /**
+   * The work sent now (#226's review): its faction keeps its work type unless another earns `WORK_TYPE_SWITCH_GAIN`
+   * times as much, so the share's bonus, which the work type gets only part of, doesn't flip it to and fro.
+   */
+  keep?: { faction: string; workType: FactionWorkType };
 }
 
-/** The work conditions in the slow snapshot's reset info. Throws for a BitNode core doesn't know. */
-export function workConditionsOf(resetInfo: WorkResetInfo, slowData: SlowSnapshotData | null): WorkConditions {
+/** How much more another work type must earn to replace the one worked (#226's review). */
+export const WORK_TYPE_SWITCH_GAIN = 1.1;
+
+/** The work conditions in the slow snapshot's reset info, and the share bonus. Throws for a BitNode core doesn't know. */
+export function workConditionsOf(
+  resetInfo: WorkResetInfo,
+  slowData: SlowSnapshotData | null,
+  shareBonus = 1,
+): WorkConditions {
   const { currentNode, ownedAugs, ownedSF } = resetInfo;
   return {
     sourceFile15Level: ownedSF["15"] ?? 0,
@@ -348,6 +364,7 @@ export function workConditionsOf(resetInfo: WorkResetInfo, slowData: SlowSnapsho
     implant: Object.hasOwn(ownedAugs, NEURORECEPTOR_MANAGEMENT_IMPLANT),
     factionWorkRepGain: augmentationBitNodeMultipliers(currentNode, ownedSF).FactionWorkRepGain,
     favorToDonateToFaction: augmentationBitNodeMultipliers(currentNode, ownedSF).FavorToDonateToFaction,
+    shareBonus,
   };
 }
 
@@ -362,11 +379,16 @@ export function bestWorkRate(
   conditions: WorkConditions,
 ): { workType: FactionWorkType; perSecond: number } | null {
   const workTypes = FACTION_NAMES.includes(faction.name) ? (FACTIONS[faction.name]?.workTypes ?? []) : [];
+  const { keep, ...rateConditions } = conditions;
   let best: { workType: FactionWorkType; perSecond: number } | null = null;
+  let kept: { workType: FactionWorkType; perSecond: number } | null = null;
   for (const workType of workTypes) {
-    const perSecond = factionReputationPerSecond(person, workType, { favor: faction.favor, ...conditions });
+    const perSecond = factionReputationPerSecond(person, workType, { favor: faction.favor, ...rateConditions });
     if (best === null || perSecond > best.perSecond) best = { workType, perSecond };
+    if (keep?.faction === faction.name && keep.workType === workType) kept = { workType, perSecond };
   }
+  // The work type worked is kept while nothing earns `WORK_TYPE_SWITCH_GAIN` times as much (#226's review).
+  if (kept !== null && best !== null && best.perSecond < kept.perSecond * WORK_TYPE_SWITCH_GAIN) best = kept;
   return best !== null && best.perSecond > 0 ? best : null;
 }
 
@@ -587,6 +609,8 @@ export interface FactionInputs {
   augmentationsEnabled?: boolean;
   /** The brain's faction work's switch. */
   enabled: boolean;
+  /** The share bonus running (#224): the work's rate counts it. 1 when absent. */
+  shareBonus?: number;
 }
 
 const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
@@ -641,6 +665,8 @@ export class FactionRule {
   #leftLoggedResetAt: number | null = null;
   /** The last choice stored (faction, work type, target), "stopped", or null before any. */
   #lastStored: string | null = null;
+  /** The work sent at the last update, kept against the share bonus's swings (#226's review), or null. */
+  #sent: { faction: string; workType: FactionWorkType } | null = null;
   /**
    * The stall's watch on the work sent: its faction, its reputation's readings the 10-minute window still needs (skipped
    * ones left out), and where the window it's been stalled over started, while it is.
@@ -732,11 +758,13 @@ export class FactionRule {
   }
 
   #work(inputs: FactionInputs): { faction: string; workType: FactionWorkType } | null {
-    const { mediumData, slowData, slowAtMs, nowMs, ownersWork, enabled } = inputs;
+    const { mediumData, slowData, slowAtMs, nowMs, ownersWork, enabled, shareBonus = 1 } = inputs;
     const plan: FactionWorkPlan =
       mediumData === null || slowData === null
         ? { choice: null, waitingFor: "the Agent's medium and slow snapshots", transient: true }
-        : chooseFactionWork(mediumData, slowData, { donations: inputs.augmentationsEnabled ?? true });
+        : chooseFactionWork(mediumData, slowData, shareBonus, this.#sent ?? undefined, {
+            donations: inputs.augmentationsEnabled ?? true,
+          });
     const notSent = !enabled
       ? "the brain's faction work is switched off"
       : ownersWork
@@ -753,6 +781,7 @@ export class FactionRule {
     };
     this.#store(sent, notSent ?? (plan.transient ? null : plan.waitingFor), nowMs);
     this.#watchReputation(sent, slowData, slowAtMs);
+    this.#sent = sent === null ? null : { faction: sent.faction, workType: sent.workType };
     return sent === null ? null : { faction: sent.faction, workType: sent.workType };
   }
 
@@ -876,6 +905,8 @@ export class FactionWorkTimeline {
   readonly leftToOwner = new Map<string, number>();
   /** Each faction's reputation gained while the brain's work was on it: its rises, summed (skipped readings aside). */
   readonly gained = new Map<string, number>();
+  /** Each reading of the worked faction's reputation, skipped ones aside (#224: the share's gain is judged on them). */
+  readonly readings: { atMs: number; faction: string; reputation: number }[] = [];
   readonly stalls: ReputationStall[] = [];
   readonly #ends: number[];
   #firstMedium = true;
@@ -952,6 +983,7 @@ export class FactionWorkTimeline {
       return;
     }
     const { faction, workType } = current.choice;
+    this.readings.push({ atMs, faction, reputation });
     const watch = this.#watch;
     if (watch === null || watch.faction !== faction || this.#endedBetween(watch.record.atMs, current.record.atMs)) {
       this.#endWatch();

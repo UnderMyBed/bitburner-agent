@@ -133,6 +133,8 @@ export {
   placeThreads,
   preparationTimeMs,
   preparationWave,
+  type SharingConfig,
+  type SharingHealth,
   threadsThatFit,
 } from "./batcher.ts";
 export {
@@ -332,6 +334,20 @@ export {
 export { CITIES, TECH_VENDORS, TRAVEL_COST, TRAVEL_WORKER_NAME } from "./locations.ts";
 export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
 export { encodeSafeModeState, parseSafeModeState, type SafeModeState } from "./safe-mode.ts";
+export {
+  effectiveShareThreads,
+  type HostRamUse,
+  SHARE_MOST_USE,
+  SHARE_RAM_GB,
+  SHARE_RESERVE_MARGIN,
+  SHARE_ROUND_MS,
+  SHARE_SCRIPT_NAME,
+  SHARE_TIME_MS,
+  shareBonus,
+  shareBonusOfPower,
+  shareReserveGb,
+  shareRound,
+} from "./share.ts";
 export {
   type FastSnapshotData,
   type FastWorkerData,

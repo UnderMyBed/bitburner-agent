@@ -23,6 +23,7 @@ import { readProgramsEnabled } from "./programs.ts";
 import { brainChannel, recordChannelEvents, recordEvents } from "./record-channel-events.ts";
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
+import { readShareEnabled } from "./share.ts";
 import { setSupervisionPaused } from "./supervision.ts";
 import { Supervisor, shouldSupervise } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
@@ -160,6 +161,7 @@ try {
         factionWorkStall: desiredState.factionWorkStall(),
         worldDaemon: desiredState.worldDaemonView(),
         worldDaemonStall: desiredState.worldDaemonStall(),
+        share: desiredState.shareView(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -186,6 +188,10 @@ try {
     setWorldDaemonEnabled: (enabled) => {
       desiredState.setWorldDaemonEnabled(enabled);
       log(`destroying the BitNode turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setShareEnabled: (enabled) => {
+      desiredState.setShareEnabled(enabled);
+      log(`sharing spare RAM turned ${enabled ? "on" : "off"} from the dashboard`);
     },
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
@@ -231,7 +237,8 @@ try {
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
-      `${readWorldDaemonEnabled(store) ? "on" : "off"} (the dashboard's switches)`,
+      `${readWorldDaemonEnabled(store) ? "on" : "off"}, sharing spare RAM ${readShareEnabled(store) ? "on" : "off"} ` +
+      "(the dashboard's switches)",
   );
   log(
     supervising

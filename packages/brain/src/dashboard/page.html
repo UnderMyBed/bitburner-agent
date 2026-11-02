@@ -43,6 +43,10 @@
     <h2>Batcher</h2><div></div><button type="button">Start the batcher</button>
     <div class="bad" id="batcher-problem" hidden></div>
   </section>
+  <section id="share">
+    <h2>Sharing spare RAM</h2><div></div><button type="button">Stop sharing spare RAM</button>
+    <div class="bad" id="share-problem" hidden></div>
+  </section>
   <section id="programs">
     <h2>Hacking programs</h2><div></div><button type="button">Stop buying programs</button>
     <div class="bad" id="programs-problem" hidden></div>
@@ -141,6 +145,8 @@ let workSource = null;
 let enableAugmentationsNext = false;
 /** What destroying the BitNode's switch sends next (#215), likewise; null when the brain doesn't say. */
 let enableWorldDaemonNext = null;
+/** What sharing spare RAM's switch sends next (#224), likewise; null when the brain doesn't say. */
+let enableShareNext = null;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -287,10 +293,34 @@ function render(status) {
   // Red when out of step (#206: a desync, a late or lost operation fails the run) or with a problem.
   const healthBad =
     health !== null && (health.desyncs + health.late + health.lost > 0 || health.problem !== null);
+  // Its share threads (#224), while it shares or is asked to.
+  const sharingText = (sharing) =>
+    `Sharing: ${sharing.threads.toLocaleString("en-US")} threads, ${Math.round(sharing.ramGb).toLocaleString("en-US")} GB, ` +
+    `the bonus x${sharing.bonus.toFixed(3)}${sharing.wanted ? "" : " (no longer asked)"}`;
+  const healthSharing = health?.sharing ?? null;
   document.querySelector("#batcher div").replaceChildren(
     element("div", `Batcher: ${batcherText}`, batcher.enabled ? "ok" : "muted"),
     element("div", healthText, healthBad ? "bad" : undefined),
+    ...(healthSharing === null ? [] : [element("div", sharingText(healthSharing))]),
   );
+  // Sharing spare RAM (#224): its switch, whether the batcher is asked to or why not, and what it reports.
+  const share = status.share ?? null;
+  enableShareNext = share === null ? null : !share.enabled;
+  const shareState =
+    share === null
+      ? "not given by this brain"
+      : !share.enabled
+        ? "off"
+        : share.asked
+          ? "on: the batcher shares what its batches leave, while the player works for a faction"
+          : `on, not asked of the batcher: ${share.why}`;
+  document.querySelector("#share div").replaceChildren(
+    element("div", `Sharing spare RAM: ${shareState}`, share?.enabled ? "ok" : "muted"),
+    element("div", share?.sharing ? sharingText(share.sharing) : "Sharing: no share threads reported", "muted"),
+  );
+  const shareButton = document.querySelector("#share button");
+  shareButton.disabled = share === null;
+  shareButton.textContent = share === null || share.enabled ? "Stop sharing spare RAM" : "Start sharing spare RAM";
   document.querySelector("#batcher button").textContent = batcher.enabled ? "Stop the batcher" : "Start the batcher";
 
   const programs = status.programs;
@@ -668,6 +698,9 @@ document.querySelector("#factions button").addEventListener("click", () =>
 document.querySelector("#augmentations button").addEventListener("click", () =>
   sendSwitch("/api/augmentations", { enabled: enableAugmentationsNext }, "#augmentations-problem"),
 );
+document.querySelector("#share button").addEventListener("click", () => {
+  if (enableShareNext !== null) sendSwitch("/api/share", { enabled: enableShareNext }, "#share-problem");
+});
 document.querySelector("#world-daemon button").addEventListener("click", () => {
   if (enableWorldDaemonNext !== null) {
     sendSwitch("/api/world-daemon", { enabled: enableWorldDaemonNext }, "#world-daemon-problem");

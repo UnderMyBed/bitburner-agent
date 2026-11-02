@@ -541,6 +541,7 @@ export function runReport(
     ...batcherSection(
       facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
       failures,
+      facts.factionWork.readings,
     ),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",

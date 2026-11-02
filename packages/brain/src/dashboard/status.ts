@@ -23,6 +23,7 @@ import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { reportedRefusal } from "../record-channel-events.ts";
+import type { ShareView } from "../share.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
@@ -121,6 +122,8 @@ export interface DashboardStatus {
    * switch and whether it's asked for; and a stall. Null from a brain that doesn't give it.
    */
   worldDaemon: WorldDaemonView | null;
+  /** Sharing spare RAM (#224): its switch, whether the batcher is asked or why not, and its last report; null before. */
+  share: ShareView | null;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -185,6 +188,8 @@ export interface DashboardStatusOptions {
   /** The path to the World Daemon (#215), the controller's view, and its stall for the alert. */
   worldDaemon?: WorldDaemonView;
   worldDaemonStall?: WorldDaemonStall | null;
+  /** Sharing's view (#224), the controller's. */
+  share?: ShareView;
   nowMs: number;
 }
 
@@ -216,6 +221,7 @@ export function buildDashboardStatus({
   factionWorkStall,
   worldDaemon,
   worldDaemonStall = null,
+  share,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -381,6 +387,7 @@ export function buildDashboardStatus({
     cloudServers,
     augmentations,
     worldDaemon: worldDaemon ?? null,
+    share: share ?? null,
     intents,
     work,
     factions: slow

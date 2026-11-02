@@ -501,12 +501,14 @@ describe("chooseFactionWork's parts, for A6 too (#203 review)", () => {
 
   test("the Augmentations switch off (#225 review): no favour caps, and unlocked factions worked, as no donation follows", () => {
     const off = { donations: false };
-    const toAugmentation = chooseFactionWork(player(800), slow({ joined: { BitRunners: 400_000 } }), off);
+    const toAugmentation = chooseFactionWork(player(800), slow({ joined: { BitRunners: 400_000 } }), 1, undefined, off);
     expect(toAugmentation.choice).toMatchObject({ faction: "BitRunners", target: "augmentation" });
     expect(toAugmentation.choice?.reputationNeeded).toBeGreaterThan(462_491);
     const unlocked = chooseFactionWork(
       player(800),
       slow({ joined: { BitRunners: { reputation: 0, favor: 150 } } }),
+      1,
+      undefined,
       off,
     );
     expect(unlocked.choice?.faction).toBe("BitRunners");

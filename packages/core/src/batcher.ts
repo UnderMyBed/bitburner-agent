@@ -643,6 +643,35 @@ export interface BatcherConfig {
    * batching at once; absent with none.
    */
   next?: { target: string; figures: HackingTarget; ramGb: number };
+  /**
+   * Sharing spare RAM for faction reputation (#224), while the brain wants it (its switch on, faction work going on);
+   * absent otherwise. A round of share keeps `reserveGb` of the hosts' free RAM for the batches and the next target
+   * (core's `shareReserveGb`), and `homeKeptGb` of home's for the Agent; `cores` are the hosts' with more than 1, for
+   * the bonus it reports.
+   */
+  sharing?: SharingConfig;
+}
+
+/** The config's `sharing` (#224). */
+export interface SharingConfig {
+  reserveGb: number;
+  homeKeptGb: number;
+  cores: Record<string, number>;
+}
+
+/** A config's `sharing`, or why it isn't one. */
+function parseSharing(value: unknown): { ok: true; sharing: SharingConfig } | { ok: false; reason: string } {
+  const { reserveGb, homeKeptGb, cores } = (value ?? {}) as Record<string, unknown>;
+  if (!isFiniteNumber(reserveGb) || reserveGb < 0) {
+    return { ok: false, reason: "the config's sharing has no reserveGb of 0 or more" };
+  }
+  if (!isFiniteNumber(homeKeptGb) || homeKeptGb < 0) {
+    return { ok: false, reason: "the config's sharing has no homeKeptGb of 0 or more" };
+  }
+  if (typeof cores !== "object" || cores === null || !Object.values(cores).every((each) => isFiniteNumber(each))) {
+    return { ok: false, reason: "the config's sharing has no cores" };
+  }
+  return { ok: true, sharing: { reserveGb, homeKeptGb, cores: cores as Record<string, number> } };
 }
 
 /** A target's figures, or the first missing (the config is the brain's word, checked as it's read). */
@@ -693,6 +722,9 @@ export function parseBatcherConfig(
     if (!isFiniteNumber(ramGb) || ramGb <= 0) return { ok: false, reason: "the config's next has no RAM above 0" };
     parsedNext = { target: nextTarget, figures: nextFigures as HackingTarget, ramGb };
   }
+  const { sharing } = value as Record<string, unknown>;
+  const parsedSharing = sharing === undefined || sharing === null ? null : parseSharing(sharing);
+  if (parsedSharing !== null && !parsedSharing.ok) return parsedSharing;
   return {
     ok: true,
     config: {
@@ -703,6 +735,7 @@ export function parseBatcherConfig(
       hackShare,
       spacingMs,
       ...(parsedNext === undefined ? {} : { next: parsedNext }),
+      ...(parsedSharing === null ? {} : { sharing: parsedSharing.sharing }),
     },
   };
 }
@@ -759,8 +792,23 @@ export interface BatcherHealth {
    * whether it was ready when it last looked; null with none. Absent from an older batcher.
    */
   next?: { target: string; wavesStarted: number; ready: boolean } | null;
+  /**
+   * Sharing (#224): whether its config asks for it, the share threads running (started under `SHARE_TIME_MS` ago),
+   * their RAM and the bonus they give (core's `shareBonus`), and the room its last look found (the RAM a round could
+   * take); null while it neither shares nor is asked to. Absent from an older batcher.
+   */
+  sharing?: SharingHealth | null;
   /** The game's clock when this was written. */
   atMs: number;
+}
+
+/** The batcher's sharing, in its health (#224). */
+export interface SharingHealth {
+  wanted: boolean;
+  threads: number;
+  ramGb: number;
+  bonus: number;
+  roomGb: number;
 }
 
 /** A new batcher's health. */
@@ -789,6 +837,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     latestLandAt: null,
     leastSlackMs: null,
     next: null,
+    sharing: null,
     atMs,
   };
 }

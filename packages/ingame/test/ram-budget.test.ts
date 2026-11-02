@@ -13,6 +13,8 @@ import {
   freshSaveHomeWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
   homeWorkerFileNames,
+  SHARE_RAM_GB,
+  SHARE_SCRIPT_NAME,
   singularityWorkerFileNames,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -52,7 +54,7 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
 
 /**
  * What isn't a worker beside the Agent on home: the Agent, `boot.js`, the loop, which runs on other servers, and the
- * batcher and its operation scripts (#204), whose place the Agent chooses by RAM (#205).
+ * batcher and its operation scripts (#204) and share script (#224), whose place the Agent chooses by RAM (#205).
  */
 const NOT_HOME_WORKERS = [
   "agent.js",
@@ -62,6 +64,7 @@ const NOT_HOME_WORKERS = [
   BATCH_HACK_SCRIPT_NAME,
   BATCH_GROW_SCRIPT_NAME,
   BATCH_WEAKEN_SCRIPT_NAME,
+  SHARE_SCRIPT_NAME,
 ];
 
 test("the Agent's budget plus its largest fresh-save home worker's fits in a fresh save's 8 GB home", () => {
@@ -83,6 +86,8 @@ test("the batch operation scripts' budgets are core's, by which the batcher and 
   expect(budgets[BATCH_HACK_SCRIPT_NAME]).toBe(BATCH_HACK_RAM_GB);
   expect(budgets[BATCH_GROW_SCRIPT_NAME]).toBe(BATCH_GROW_RAM_GB);
   expect(budgets[BATCH_WEAKEN_SCRIPT_NAME]).toBe(BATCH_WEAKEN_RAM_GB);
+  // The share script's (#224), by which a round counts its threads.
+  expect(budgets[SHARE_SCRIPT_NAME]).toBe(SHARE_RAM_GB);
   // And the batcher's own, by which the brain plans where it runs (#205).
   expect(budgets[BATCHER_SCRIPT_NAME]).toBe(BATCHER_RAM_BUDGET_GB);
 });
