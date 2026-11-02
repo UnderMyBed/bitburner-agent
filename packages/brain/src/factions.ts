@@ -12,11 +12,13 @@
 //   Governor is A6's: sold everywhere, it never runs out.
 // - The Red Pill first (#215, A8): once a joined faction (Daedalus) sells it, neither installed nor queued, and its
 //   reputation isn't reached, the work is for it, ahead of any hacking value: it ends the BitNode.
-// - Working toward donation favour (#225, owner decision 53; legacy `work-for-factions.js:897-918`, `:944`): at a
+// - Working toward donation favour (#225, owner decision 53; legacy `work-for-factions.js:897-918`, `:929-930`): at a
 //   faction that takes donations, the work goes to the lesser of the augmentation's reputation and the reputation that
-//   unlocks donations at the next install (`workTarget`), the augmentation's if it's within 10% of that. Past it, the
-//   augmentation is bought with a donation after the install. A faction whose donations are unlocked isn't worked, nor
-//   an augmentation one sells: A6 buys its reputation. The Red Pill's work stops so too: A6's "Daedalus donations".
+//   unlocks donations at the next install (`workTarget`), the augmentation's if it's within 10% of the larger of that
+//   and the reputation now. Past it, the augmentation is bought with a donation after the install. A faction whose
+//   donations are unlocked isn't worked, nor an augmentation one sells: A6 buys its reputation. The Red Pill's work
+//   stops so too (`redPillTarget`): A6's "Daedalus donations", unless 90% of it is earned. All this only with the
+//   Augmentations switch on: off, no install or donation follows, so the work is to the augmentation's reputation.
 // - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
   type AugmentationPurchaseState,
@@ -186,32 +188,56 @@ export interface WorkTarget {
 }
 
 /**
- * Within this share of the reputation that unlocks donations, the augmentation's reputation is worked all the way to
- * (legacy `work-for-factions.js:944`): it's soon reached, and bought at once.
+ * Within this share of the larger of the reputation that unlocks donations and the reputation now, the augmentation's
+ * reputation is worked all the way to (legacy `work-for-factions.js:929-930`): it's soon reached, and bought at once.
  */
 export const WORK_TO_AUGMENTATION_WITHIN = 1.1;
 
 /**
  * The reputation to work toward at `faction` for an augmentation needing `augmentationReputation` (#225), or null where
- * the faction's donations are unlocked already: its reputation is bought, not earned (legacy `:914-917`).
+ * the faction's donations are unlocked already: its reputation is bought, not earned (legacy `:916-919`).
+ * - With `donations` false (the Augmentations switch off: no install or donation follows), the augmentation's.
  * - A faction taking no donations (`acceptsDonations`): the augmentation's.
  * - Else the lesser of it and the reputation this cycle that unlocks donations at the next install (core's
  *   `reputationToUnlockDonations`), unless the augmentation's is within `WORK_TO_AUGMENTATION_WITHIN` of the larger of
- *   that and the reputation now (legacy `:944`): then the augmentation's.
+ *   that and the reputation now (legacy `:929-930`): then the augmentation's.
  */
 export function workTarget(
   augmentationReputation: number,
   faction: JoinedFaction,
   favorToDonateToFaction: number,
+  donations = true,
 ): WorkTarget | null {
-  if (!acceptsDonations(faction.name, null)) return { reputation: augmentationReputation, reason: "augmentation" };
+  const augmentation: WorkTarget = { reputation: augmentationReputation, reason: "augmentation" };
+  // No gang is modelled (none in BN1): the gang's faction would take none.
+  if (!donations || !acceptsDonations(faction.name, null)) return augmentation;
   const unlock = reputationToUnlockDonations(faction.favor, { FavorToDonateToFaction: favorToDonateToFaction });
   if (unlock === 0) return null;
-  if (augmentationReputation <= unlock) return { reputation: augmentationReputation, reason: "augmentation" };
-  if (augmentationReputation <= WORK_TO_AUGMENTATION_WITHIN * Math.max(faction.reputation, unlock)) {
-    return { reputation: augmentationReputation, reason: "augmentation" };
-  }
+  if (augmentationReputation <= unlock) return augmentation;
+  if (augmentationReputation <= WORK_TO_AUGMENTATION_WITHIN * Math.max(faction.reputation, unlock)) return augmentation;
   return { reputation: unlock, reason: "donations" };
+}
+
+/**
+ * Daedalus's guard (legacy `work-for-factions.js:829`, `daedalusSpecialCheck`): from this share of The Red Pill's
+ * reputation, it's earned to the end, never installed away for donations' favour.
+ */
+export const RED_PILL_EARNED_SHARE = 0.9;
+
+/**
+ * The reputation to work toward for The Red Pill at its seller (#225): `workTarget`'s, but The Red Pill's own once
+ * `RED_PILL_EARNED_SHARE` of it is earned. A5's target and A6's "Daedalus donations" install both read it, so the
+ * work never stops short where no install follows.
+ */
+export function redPillTarget(
+  redPillReputation: number,
+  faction: JoinedFaction,
+  favorToDonateToFaction: number,
+  donations = true,
+): WorkTarget | null {
+  const target = workTarget(redPillReputation, faction, favorToDonateToFaction, donations);
+  if (target === null || faction.reputation < RED_PILL_EARNED_SHARE * redPillReputation) return target;
+  return { reputation: redPillReputation, reason: "augmentation" };
 }
 
 /**
@@ -268,7 +294,11 @@ function unreadFactionState(slowData: SlowSnapshotData): string {
  *   game's order.
  * - It ranks by the reputation's ETA alone: the money is A6's, which adds its own ETA (#210).
  */
-export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: SlowSnapshotData): FactionWorkPlan {
+export function chooseFactionWork(
+  mediumData: MediumSnapshotData,
+  slowData: SlowSnapshotData,
+  { donations = true }: { donations?: boolean } = {},
+): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
   const state: FactionState | null = factionReadingOf(slowData)?.state ?? null;
   if (state === null) return waiting(unreadFactionState(slowData), true);
@@ -283,7 +313,7 @@ export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: Slow
   if (working.length === 0) return waiting("a joined faction that offers work", false);
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
-    const conditions = workConditionsOf(resetInfo, slowData);
+    const conditions = { ...workConditionsOf(resetInfo, slowData), donations };
     const choice =
       redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
@@ -304,6 +334,8 @@ export interface WorkConditions {
   factionWorkRepGain: number;
   /** The BitNode's, on the favour that unlocks donations (#225). */
   favorToDonateToFaction: number;
+  /** Donations to come (#225): the Augmentations switch on. Absent, they are. */
+  donations?: boolean;
 }
 
 /** The work conditions in the slow snapshot's reset info. Throws for a BitNode core doesn't know. */
@@ -364,9 +396,12 @@ export function workCandidates(
   state: FactionState,
   { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
   hackingLevel: number,
+  donations = true,
 ): WorkCandidate[] {
   const { FavorToDonateToFaction } = augmentationBitNodeMultipliers(currentNode, ownedSF);
+  // No gang is modelled (none in BN1): the gang's faction would take none.
   const unlocked = (faction: JoinedFaction) =>
+    donations &&
     acceptsDonations(faction.name, null) &&
     reputationToUnlockDonations(faction.favor, { FavorToDonateToFaction }) === 0;
   const purchaseState: AugmentationPurchaseState = {
@@ -397,7 +432,7 @@ export function workCandidates(
       const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
       if (soldByJoined(augmentation).some(([seller]) => reputationOf(seller) >= reputationNeeded)) continue;
       if (soldByJoined(augmentation).some(([seller]) => unlocked(joinedOf(seller)))) continue;
-      const target = workTarget(reputationNeeded, joinedOf(faction), FavorToDonateToFaction);
+      const target = workTarget(reputationNeeded, joinedOf(faction), FavorToDonateToFaction, donations);
       if (target === null || reputationOf(faction) >= target.reputation) continue;
       const { favor } = joinedOf(faction);
       candidates.push({
@@ -418,8 +453,8 @@ export function workCandidates(
  * The work for The Red Pill (#215), or null: at the joined faction selling it (Daedalus; none in BN15) with the soonest
  * ETA at its best work, while it's neither installed nor queued and no joined seller's reputation reaches it (reached,
  * it's A6's to buy). Its reputation is core's `augmentationCost`: 2.5m in BN1 (`Augmentation/Augmentations.ts:1946`).
- * Donations (#225): worked to its seller's `workTarget`; none at a seller whose donations are unlocked (A8's way buys
- * the reputation), and none once the target is reached there (A6 installs for "Daedalus donations").
+ * Donations (#225): worked to its seller's `redPillTarget`; none at a seller whose donations are unlocked (A8's way
+ * buys the reputation), and none once the target is reached there (A6 installs for "Daedalus donations").
  */
 export function redPillWork(
   person: WorkingPerson,
@@ -442,7 +477,7 @@ export function redPillWork(
   if (sellers.some((faction) => faction.reputation >= reputationNeeded)) return null;
   let best: FactionWorkChoice | null = null;
   for (const faction of sellers) {
-    const target = workTarget(reputationNeeded, faction, conditions.favorToDonateToFaction);
+    const target = redPillTarget(reputationNeeded, faction, conditions.favorToDonateToFaction, conditions.donations);
     if (target === null || faction.reputation >= target.reputation) continue;
     const rate = bestWorkRate(person, faction, conditions);
     if (rate === null) continue;
@@ -474,7 +509,7 @@ function bestCandidate(
 ): FactionWorkChoice | null {
   const rates = new Map(state.joined.map((faction) => [faction.name, bestWorkRate(person, faction, conditions)]));
   let best: (FactionWorkChoice & { score: number }) | null = null;
-  for (const candidate of workCandidates(state, resetInfo, person.skills.hacking)) {
+  for (const candidate of workCandidates(state, resetInfo, person.skills.hacking, conditions.donations)) {
     const rate = rates.get(candidate.faction);
     if (!rate) continue;
     const etaSeconds = (candidate.target.reputation - candidate.reputation) / rate.perSecond;
@@ -548,6 +583,8 @@ export interface FactionInputs {
   nowMs: number | null;
   /** The owner's work is set: it wins. */
   ownersWork: boolean;
+  /** The Augmentations switch (#225): off, no donation follows, so the work is to each augmentation's reputation. */
+  augmentationsEnabled?: boolean;
   /** The brain's faction work's switch. */
   enabled: boolean;
 }
@@ -699,7 +736,7 @@ export class FactionRule {
     const plan: FactionWorkPlan =
       mediumData === null || slowData === null
         ? { choice: null, waitingFor: "the Agent's medium and slow snapshots", transient: true }
-        : chooseFactionWork(mediumData, slowData);
+        : chooseFactionWork(mediumData, slowData, { donations: inputs.augmentationsEnabled ?? true });
     const notSent = !enabled
       ? "the brain's faction work is switched off"
       : ownersWork

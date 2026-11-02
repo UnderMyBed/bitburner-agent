@@ -2,8 +2,8 @@
  * The Singularity backend's home workers (#145, architecture §5.6): one per action, so each costs only its own call.
  * They never run on a fresh save, so the fresh-save check (the Agent's budget plus its largest worker within 8 GB) leaves
  * them out: at SF4.3 or in BN4 the first four are within today's largest fresh-save worker, the faction join is 5.1 GB,
- * the augmentation purchase 12.6 GB, the donation 7.6 GB (#225), faction work 5.3 GB (#151), company work 8.8 GB (#153),
- * crime 7.3 GB (#156),
+ * the augmentation purchase 12.6 GB, the donation 7.6 GB (#225), faction work 5.3 GB (#151), company work 8.8 GB
+ * (#153), crime 7.3 GB (#156),
  * classes 6.8 GB (#158), backdoors 8.0 GB (#162), the install 6.6 GB (#164), the destroy 33.9 GB (#175, beside the
  * Agent only on a 64 GB home) and the faction state's reader 12.1 GB (#197). With less of SF4 the game charges
  * their calls 4× or 16× (`Netscript/RamCostGenerator.ts:82-95`). One that doesn't fit home beside the Agent, or home's

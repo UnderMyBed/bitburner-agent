@@ -77,6 +77,11 @@ describe("unlocking donations", () => {
     expect(reputationToUnlockDonations(150.5, BN1)).toBe(0);
     expect(reputationToUnlockDonations(0, { FavorToDonateToFaction: 0 })).toBe(0);
     expect(reputationToUnlockDonations(0, { FavorToDonateToFaction: 0.5 })).toBe(85_396);
+    // A threshold past the most favour there is (BN12 from SF12.275, 150 × 1.02^276): never reached, and no loop.
+    expect(reputationToUnlockDonations(0, { FavorToDonateToFaction: 1.02 ** 276 })).toBe(Number.POSITIVE_INFINITY);
+    expect(reputationToUnlockDonations(35_000, { FavorToDonateToFaction: 35_331 / 150 })).toBeLessThan(
+      Number.POSITIVE_INFINITY,
+    );
   });
 });
 
@@ -93,6 +98,9 @@ describe("a donation's reputation", () => {
     expect(donationToReach(0, 1, 1)).toBe(0);
     expect(donationToReach(-3, 1, 1)).toBe(0);
     expect(donationToReach(2.5e6, 1, 1)).toBe(2.5e12 + 10_000);
+    // Past 2^53 dollars none can be named: Infinity, which no money covers, and no loop.
+    expect(donationToReach(1e10, 1, 1)).toBe(Number.POSITIVE_INFINITY);
+    expect(donationToReach(9e9, 1, 1)).toBe(9e15 + 10_000);
     for (const [reputation, factionRep, gain] of [
       [1000, 1.37, 0.75],
       [462_491.07, 1.1, 1],

@@ -26,6 +26,7 @@ import {
   FactionWorkTimeline,
   joinIntent,
   onTrack,
+  redPillTarget,
   resetInfoOf,
   SLOW_SNAPSHOT_GAP_MS,
   workCandidates,
@@ -481,6 +482,52 @@ describe("chooseFactionWork's parts, for A6 too (#203 review)", () => {
     expect(candidates.some((each) => each.faction === "BitRunners")).toBe(false);
     // Embedded Netburner Module: sold at both, so bought at BitRunners by donation, never worked for at NiteSec.
     expect(candidates.some((each) => each.augmentation === "Embedded Netburner Module")).toBe(false);
+  });
+
+  test("The Red Pill's target (#225 review): its own from 90% earned (legacy's daedalusSpecialCheck), A6 installing not", () => {
+    const daedalus = (reputation: number, favor = 0) => ({ name: "Daedalus", reputation, favor });
+    expect(redPillTarget(2.5e6, daedalus(100_000), 1)).toEqual({ reputation: 462_491, reason: "donations" });
+    expect(redPillTarget(2.5e6, daedalus(2_249_999), 1)).toEqual({ reputation: 462_491, reason: "donations" });
+    expect(redPillTarget(2.5e6, daedalus(2_250_000), 1)).toEqual({ reputation: 2.5e6, reason: "augmentation" });
+    expect(redPillTarget(2.5e6, daedalus(2_250_000, 150), 1)).toBeNull();
+    // A5 works on from 90%, to The Red Pill itself.
+    const plan = chooseFactionWork(player(2_600), slow({ joined: { Daedalus: 2_250_000 } }));
+    expect(plan.choice).toMatchObject({
+      augmentation: "The Red Pill",
+      reputationNeeded: 2.5e6,
+      target: "augmentation",
+    });
+  });
+
+  test("the Augmentations switch off (#225 review): no favour caps, and unlocked factions worked, as no donation follows", () => {
+    const off = { donations: false };
+    const toAugmentation = chooseFactionWork(player(800), slow({ joined: { BitRunners: 400_000 } }), off);
+    expect(toAugmentation.choice).toMatchObject({ faction: "BitRunners", target: "augmentation" });
+    expect(toAugmentation.choice?.reputationNeeded).toBeGreaterThan(462_491);
+    const unlocked = chooseFactionWork(
+      player(800),
+      slow({ joined: { BitRunners: { reputation: 0, favor: 150 } } }),
+      off,
+    );
+    expect(unlocked.choice?.faction).toBe("BitRunners");
+    expect(workTarget(1e6, { name: "BitRunners", reputation: 0, favor: 150 }, 1, false)).toEqual({
+      reputation: 1e6,
+      reason: "augmentation",
+    });
+    // The rule passes the switch on: off, its choice is to the augmentation's reputation.
+    const { factions, update } = ruleOf();
+    update({
+      slowData: slow({ joined: { BitRunners: 400_000 } }),
+      mediumData: player(800),
+      augmentationsEnabled: false,
+    });
+    expect(factions.view().choice).toMatchObject({ faction: "BitRunners", target: "augmentation" });
+    update({
+      slowData: slow({ joined: { BitRunners: 400_000 } }),
+      mediumData: player(800),
+      augmentationsEnabled: true,
+    });
+    expect(factions.view().choice).toMatchObject({ faction: "BitRunners", target: "donations" });
   });
 
   test("The Red Pill's work (#225): none once Daedalus's reputation unlocks its donations, nor with them unlocked", () => {

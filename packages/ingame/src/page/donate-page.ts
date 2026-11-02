@@ -1,5 +1,5 @@
-// Donating to a faction through the game's page (#225), for `donate-to-faction.js` (../entries/): a module of its own so
-// its jsdom tests can import it (an entry's bundle exports only `main`). No NS call donates without Singularity.
+// Donating to a faction through the game's page (#225), for `donate-to-faction.js` (../entries/): a module of its own
+// so its jsdom tests can import it (an entry's bundle exports only `main`). No NS call donates without Singularity.
 // - The sidebar's Factions, then "Details" on the faction's row (`Faction/ui/FactionsRoot.tsx`), its own page
 //   (`Faction/ui/FactionRoot.tsx`): its `DonateOption` (`Faction/ui/DonateOption.tsx`) shows for a faction that offers
 //   work and isn't the player's gang (`FactionRoot.tsx:94-143`), a `NumberInput` with a "donate" button once the

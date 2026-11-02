@@ -128,8 +128,8 @@ export interface AugmentationSet {
  * The donations buying `names` needs (#225): each not in `reached` is bought from one of its donation sellers, the one
  * whose donation it raises least (reputation already reached costs nothing; ties to the seller with more reputation,
  * then the game's order of factions), and a faction's donation brings it to the most reputation that's bought there
- * (legacy `faction-manager.js:842-850`: the max, not the sum). `targets` carries donations already planned: each
- * faction's reputation to reach.
+ * (legacy `faction-manager.js:871-893`: the max, not the sum, `:891`). `targets` carries donations already planned:
+ * each faction's reputation to reach.
  */
 function planDonations(
   names: readonly string[],
@@ -421,7 +421,8 @@ export function affordableCounts({
 
 /**
  * Why an install is chosen (#222). "The Red Pill" is the brain's own (#215): reached or queued, it links w0r1d_d43m0n
- * once installed (`installRule` never gives it).
+ * once installed; and "Daedalus donations" (#225): Daedalus's reputation unlocks its donations at the next install, so
+ * The Red Pill's is bought. `installRule` gives neither.
  */
 export type InstallReason = "count reached" | "quick install" | "nothing left" | "The Red Pill" | "Daedalus donations";
 

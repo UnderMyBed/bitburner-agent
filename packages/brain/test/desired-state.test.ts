@@ -1509,6 +1509,22 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       );
     });
 
+    test("The Red Pill's donation's money held from home RAM and programs too (#225 review)", () => {
+      const { controller, connection } = connectedWithLoopOff();
+      const slow = slowWith();
+      const daedalus = { name: "Daedalus", reputation: 0, favor: 150 };
+      send(connection, "slow", {
+        ...slow,
+        factions: { ...slow.factions, state: { ...slow.factions.state, joined: [daedalus] } },
+      });
+      // $2t, short of the $2.5t donation for The Red Pill's 2.5m: home's next upgrade and BruteSSH.exe both wait.
+      send(connection, "medium", { ...lateMedium(2e12, { hacking: 2600, homeRam: 1024 }), programs: [] });
+      const held = "money above the $2,500,000,010,000 held for The Red Pill's donation";
+      expect(controller.homeRamView().waitingFor).toBe(held);
+      expect(controller.programsView().waitingFor).toBe(held);
+      expect(controller.augmentationReserve()).toBe(2_500_000_010_000);
+    });
+
     test("the owner's install queued too: one install, the owner's", () => {
       const { controller, connection } = connectedWithLoopOff();
       controller.addManualIntent({ action: "installAugmentations", args: {} });

@@ -309,7 +309,8 @@ async function savedCyberSec(fresh: { simulation: { save(): Promise<Uint8Array> 
   return factions.CyberSec?.playerReputation ?? 0;
 }
 
-/** A fresh start with `money`, in CyberSec at 5,000 reputation with `favor` (150 unlocks donations), as the test sets it. */
+/** A fresh start with `money`, in CyberSec at 5,000 reputation with `favor` (150 unlocks donations), as the test sets
+/** it. */
 function donatingToCyberSec(money: number, favor: number, options: { singularity: boolean } = { singularity: false }) {
   return freshStart({
     withDesiredState: false,

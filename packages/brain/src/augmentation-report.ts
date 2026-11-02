@@ -184,6 +184,7 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
       const { money, reputation } = augmentationCost(name, purchaseState);
       const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
       if (sellers.some((faction) => faction.reputation >= reputation)) continue;
+      // No gang is modelled (none in BN1): the gang's faction would take none.
       const donors = sellers.filter(
         (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
       );
@@ -211,6 +212,7 @@ export function donationStatus(
   slow: SlowSnapshotData | undefined,
 ): string {
   const info = slow?.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
+  // No gang is modelled (none in BN1): the gang's faction would take none.
   if (!acceptsDonations(faction, null) || !Number.isInteger(info?.currentNode)) return "";
   try {
     const multipliers = augmentationBitNodeMultipliers(
@@ -511,9 +513,10 @@ export class AugmentationTimeline {
 
   /**
    * The donations' failures (#225): each donation the faction state never showed (the rule's event), and donations
-   * unused: a stretch of `DONATIONS_UNUSED_ONLINE_MS` online (the slow snapshots' gaps left out, as the bars' clock does)
-   * in one cycle in which every slow snapshot showed an augmentation within reach by a donation, the money (the latest
-   * medium snapshot's) covering its price and its donation, while the brain's progress in force counted none by
+   * unused: a stretch of `DONATIONS_UNUSED_ONLINE_MS` online (the slow snapshots' gaps left out, as the bars' clock
+   * does) in one cycle in which every slow snapshot showed an augmentation within reach by a donation, the money (the
+   * latest medium snapshot's, less what the brain's counted set and its donations cost, #225 review) covering its price
+   * and its donation, while the brain's progress in force counted none by
    * donation and it bought, donated and chose to install nothing. Shown, not counted, with the switch off now.
    */
   #donationLines(
@@ -550,19 +553,21 @@ export class AugmentationTimeline {
     for (const check of this.#offers) {
       clock = advanceOnlineClock(clock, check.gameTimeMs, check.lastAugReset).clock;
       const money = this.#money.findLast((each) => each.atMs <= check.atMs);
-      const offer =
-        money === undefined
-          ? undefined
-          : check.offers.find(
-              (each) =>
-                each.price + donationToReach(each.missing, money.factionRep, check.factionWorkRepGain) <= money.money,
-            );
       const progress = events.findLast(
         (event) =>
           event.kind === AUGMENTATION_PROGRESS_EVENT_KIND &&
           event.atMs <= check.atMs &&
           fieldsOf(event.detail).lastAugReset === check.lastAugReset,
       );
+      // The money left after the brain's counted set (#225 review): its greedy set may rightly spend it on another.
+      const setCost = fieldsOf(progress?.detail).setCost;
+      const left = money === undefined ? 0 : money.money - (isFiniteNumber(setCost) ? setCost : 0);
+      const offer =
+        money === undefined
+          ? undefined
+          : check.offers.find(
+              (each) => each.price + donationToReach(each.missing, money.factionRep, check.factionWorkRepGain) <= left,
+            );
       const counted =
         isFiniteNumber(fieldsOf(progress?.detail).byDonation) && (fieldsOf(progress?.detail).byDonation as number) > 0;
       const fromMs = stretch?.fromMs;

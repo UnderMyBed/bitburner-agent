@@ -287,10 +287,10 @@ const effectors = {
   },
   /**
    * A faction's page's donation (#225, `Faction/ui/FactionRoot.tsx:94-143`, `DonateOption.tsx:31-42`): shown for a
-   * member's faction that offers work and isn't the player's gang, enabled once the favour unlocks donations, its button
-   * once the money covers the amount (`canDonate`). Done once the faction's reputation is `reputation`, so a faction
-   * already there is never donated to. The page's alert after it is the page's own, not the game's: none here. Not named
-   * `donateToFaction`, which is an NS function.
+   * member's faction that offers work and isn't the player's gang, enabled once the favour unlocks donations, its
+   * button once the money covers the amount (`canDonate`). Done once the faction's reputation is `reputation`, so a
+   * faction already there is never donated to. The page's alert after it is the page's own, not the game's: none here.
+   * Not named `donateToFaction`, which is an NS function.
    */
   donateToFactionFor(factionName: string, amount: number, reputation: number): EffectorResult {
     const faction = Object.values(FactionName).includes(factionName as FactionName)
@@ -302,7 +302,7 @@ const effectors = {
       return result(false, `${factionName}'s page has no donations (is it joined? the player's gang?)`);
     }
     if (!faction.getInfo().offersWork()) {
-      return result(false, `${factionName}'s page has no donations (no work, or the player's gang?)`);
+      return result(false, `${factionName}'s page has no donations (it offers no work)`);
     }
     if (faction.favor < favorNeededToDonate()) {
       return result(false, `${factionName}'s donations aren't unlocked (its favour is short)`);

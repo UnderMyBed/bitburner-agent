@@ -22,13 +22,14 @@
 // - The Red Pill first (#215, A8): with Daedalus's count of installed augmentations reached and its other
 //   requirements but the money, no install is chosen and its $100b is held back from cloud servers, until it invites
 //   (A5 joins). Joined, none is chosen while The Red Pill is short of its reputation (an install resets it,
-//   `Faction/Faction.ts:77-85`); reached, or queued, the install is chosen ("The Red Pill"), and it's bought last.
+//   `Faction/Faction.ts:77-85`), or until Daedalus's reputation unlocks its donations at the next install (#225,
+//   "Daedalus donations", below); reached, or queued, the install is chosen ("The Red Pill"), and it's bought last.
 // - The "Augmentations" switch, on by default (owner decision 48): off, nothing is bought or installed, and a cycle
 //   under way is called off (what's bought stays queued, for the owner).
 // - Donations (#225, owner decision 53, under the same switch): an augmentation sold by a joined faction with donations
 //   unlocked counts as within reach when the money covers its price and the donation for its missing reputation
-//   (core's `chooseAugmentationsToBuy` and `affordableCounts` with `DonationTerms`), so the counts, the countdown's hold
-//   and the reserve include the donations. The commit's note records each faction's donation; committed, they go
+//   (core's `chooseAugmentationsToBuy` and `affordableCounts` with `DonationTerms`), so the counts, the countdown's
+//   hold and the reserve include the donations. The commit's note records each faction's donation; committed, they go
 //   first, one faction at a time (the `donateToFaction` intent), each confirmed by the faction state showing the
 //   reputation before anything else is bought (else `augmentationDonationFailed`: the cycle called off, alerted).
 // - Daedalus's favour (#225, legacy `autopilot.js:920-931`): with Daedalus joined, its donations not unlocked (and
@@ -70,13 +71,12 @@ import {
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
-  reputationToUnlockDonations,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
-import { workingPersonOf } from "./factions.ts";
+import { redPillTarget, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -183,6 +183,8 @@ export interface AugmentationProgress {
   held: string | null;
   /** How many of the counted purchases, the set's and NeuroFlux Governor's levels, need a donation (#225). */
   byDonation: number;
+  /** What the set and its donations cost (#225 review): the run report's "donations unused" weighs what's left. */
+  setCost: number;
 }
 
 export type AugmentationEvent =
@@ -440,6 +442,13 @@ export interface AugmentationCycle {
   neuroFluxTarget?: number;
   /** The donations the commit makes first, one a faction (#225). Absent in an earlier brain's note: none. */
   donations?: Donation[];
+  /** Why the install was chosen (#225): "Daedalus donations" installs without The Red Pill. */
+  reason?: InstallReason;
+  /**
+   * The faction whose donation is The Red Pill's (#225): first, never passed over; the money for it gone, the cycle is
+   * called off.
+   */
+  redPill?: string;
 }
 
 const isDonation = (value: unknown): value is Donation => {
@@ -450,7 +459,14 @@ const isDonation = (value: unknown): value is Donation => {
 export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle | null {
   const value = store.getSetting(AUGMENTATION_CYCLE_SETTING);
   if (value === null) return null;
-  type Note = { lastAugReset?: unknown; installing?: unknown; neuroFluxTarget?: unknown; donations?: unknown };
+  type Note = {
+    lastAugReset?: unknown;
+    installing?: unknown;
+    neuroFluxTarget?: unknown;
+    donations?: unknown;
+    reason?: unknown;
+    redPill?: unknown;
+  };
   let note: Note | null;
   try {
     note = JSON.parse(value) as Note | null;
@@ -460,11 +476,15 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
   const installing = note?.installing ?? false;
   const target = note?.neuroFluxTarget;
   const donations = note?.donations;
+  const reason = note?.reason;
+  const redPill = note?.redPill;
   if (
     !isFiniteNumber(note?.lastAugReset) ||
     typeof installing !== "boolean" ||
     (target !== undefined && !(Number.isInteger(target) && (target as number) >= 0)) ||
-    (donations !== undefined && !(Array.isArray(donations) && donations.every(isDonation)))
+    (donations !== undefined && !(Array.isArray(donations) && donations.every(isDonation))) ||
+    (reason !== undefined && typeof reason !== "string") ||
+    (redPill !== undefined && typeof redPill !== "string")
   ) {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't a note the brain wrote`);
   }
@@ -473,6 +493,8 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     installing,
     ...(target === undefined ? {} : { neuroFluxTarget: target as number }),
     ...(donations === undefined ? {} : { donations: donations as Donation[] }),
+    ...(reason === undefined ? {} : { reason: reason as InstallReason }),
+    ...(redPill === undefined ? {} : { redPill: redPill as string }),
   };
 }
 
@@ -570,6 +592,7 @@ export function donationTermsOf(
   factionRep: number,
   multipliers: { FactionWorkRepGain: number; FavorToDonateToFaction: number },
 ): DonationTerms {
+  // No gang is modelled (none in BN1): the gang's faction would take none.
   const donors = joined.filter(
     (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
   );
@@ -653,12 +676,15 @@ type Endgame =
   | { kind: "hold"; why: HoldReason; waitingFor: string; reserve: number }
   | { kind: "none" };
 
-/** The note's donations with `extra` (The Red Pill's, #225): one a faction, for the most reputation. */
+/**
+ * The note's donations with `extra` (The Red Pill's, #225) first, so the counted ones never spend its money: one a
+ * faction, for the most reputation.
+ */
 function withDonation(donations: readonly Donation[], extra: Donation | null): Donation[] {
   if (extra === null) return [...donations];
   const same = donations.find((each) => each.faction === extra.faction);
-  if (same !== undefined && same.reputation >= extra.reputation) return [...donations];
-  return [...donations.filter((each) => each.faction !== extra.faction), extra];
+  const first = same !== undefined && same.reputation > extra.reputation ? same : extra;
+  return [first, ...donations.filter((each) => each.faction !== extra.faction)];
 }
 
 /** The augmentation rule (#210), as the controller runs it. */
@@ -720,6 +746,8 @@ export class AugmentationRule {
   #holding: HoldReason | null = null;
   /** Daedalus's $100b, held back for its invitation (#215), or 0: home RAM keeps it too (#215 review). */
   #daedalusHold = 0;
+  /** The Red Pill's donation's money, held back (#225 review), or 0. */
+  #redPillHold = 0;
   /** The install reported done, and the latest slow snapshot's game time then: the next one should show the reset. */
   #installDone: { slowGameTimeMs: number | null } | null = null;
   /**
@@ -778,6 +806,14 @@ export class AugmentationRule {
   }
 
   /**
+   * The money held for The Red Pill's donation (#225), while the money is short of it with a seller's donations
+   * unlocked, else 0: from cloud servers (`reserve`), home RAM and programs alike.
+   */
+  redPillHold(): number {
+    return this.#redPillHold;
+  }
+
+  /**
    * The money held in the install's countdown (#222): what the counted purchases cost, from cloud servers (`reserve`)
    * and home RAM alike, as the legacy scripts' reserve.txt holds it from every purchase (`autopilot.js:983`); else 0.
    */
@@ -823,6 +859,7 @@ export class AugmentationRule {
     const { mediumData, mediumGameTimeMs, slowData, slowGameTimeMs, doneIds, fastGameTimeMs, nowMs } = inputs;
     const { enabled, homeRamEnabled, destroyWanted } = inputs;
     this.#daedalusHold = 0;
+    this.#redPillHold = 0;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
     // Nothing asked for now; the last purchase asked for is kept, so its done is recorded when it's reported (after a
@@ -1209,10 +1246,32 @@ export class AugmentationRule {
             multipliers,
           )
         : undefined;
-    const set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel, terms);
-    const setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
+    let set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel, terms);
+    let setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
+
+    // A donation asked for, its reputation shown before its done is reported (#225 review): recorded now, as the next
+    // ask replaces it and its done would never be.
+    this.#recordDonationShown(reputationOf, slowGameTimeMs, atMs);
 
     if (cycle === null) {
+      const endgame0 = this.#endgame({
+        resetInfo,
+        player,
+        purchaseState,
+        installable,
+        queue,
+        shops,
+        joined,
+        reputationOf,
+        destroyWanted,
+      });
+      // The Red Pill's donation first (#225 review): the counts are budgeted without its money.
+      const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
+      const budget = money - redPillAmount;
+      if (redPillAmount > 0) {
+        set = chooseAugmentationsToBuy(reached, purchaseState, budget, hackingLevel, terms);
+        setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
+      }
       const notCommitted = { set: setView, setCost: set.money, committed: false, donations: [] as Donation[] };
       if (this.#installNotReset !== null) {
         this.#cancelCountdown("an install was reported done but the game didn't reset");
@@ -1276,7 +1335,7 @@ export class AugmentationRule {
         });
         return { counts, rule };
       };
-      const { counts, rule } = judge(money, set);
+      const { counts, rule } = judge(budget, set);
       const progress = (held: string | null, reason: InstallReason | null = rule.reason): AugmentationProgress => ({
         lastAugReset: resetInfo.lastAugReset,
         affordable: rule.affordable,
@@ -1299,19 +1358,10 @@ export class AugmentationRule {
               },
         held,
         byDonation: counts.byDonation,
+        setCost: set.money + set.donationMoney,
       });
       const notCommittedDonations = { ...notCommitted, donations: counts.donations };
-      let endgame = this.#endgame({
-        resetInfo,
-        player,
-        purchaseState,
-        installable,
-        queue,
-        shops,
-        joined,
-        reputationOf,
-        destroyWanted,
-      });
+      let endgame = endgame0;
       // Daedalus's favour (#225): an install only with something to install (`installRule`'s guarantee), else held.
       const anything = installable.length + set.purchases.length + counts.neuroFluxLevels > 0;
       if (endgame.kind === "daedalusDonations" && !anything) {
@@ -1334,6 +1384,7 @@ export class AugmentationRule {
         // The Red Pill's way overrides the count rule (#215).
         this.#cancelCountdown(`held for ${endgame.waitingFor}`);
         if (endgame.why === "daedalus") this.#daedalusHold = endgame.reserve;
+        if (endgame.why === "redPill") this.#redPillHold = endgame.reserve;
         const held = progress(endgame.waitingFor);
         this.#recordProgress(held, endgame.why, atMs);
         return this.#ask(null, {
@@ -1362,7 +1413,7 @@ export class AugmentationRule {
           const spare = money + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000;
           const ahead = judge(
             spare,
-            chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel),
+            chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel, terms),
             AUGMENTATION_RESERVE_LOOKAHEAD_MS,
           );
           if (ahead.rule.install) reserve = ahead.counts.money;
@@ -1439,6 +1490,8 @@ export class AugmentationRule {
         installing: false,
         neuroFluxTarget: installable.filter((name) => name === NEUROFLUX_GOVERNOR).length + counts.neuroFluxLevels,
         donations,
+        reason,
+        ...(redPillDonation === null ? {} : { redPill: redPillDonation.faction }),
       });
       this.#installing = false;
       this.#progress = null;
@@ -1465,8 +1518,8 @@ export class AugmentationRule {
       );
     }
 
-    // Committed: the set, home's RAM, NeuroFlux Governor, then the install (already asked for, a restarted brain's note
-    // says: nothing more is bought).
+    // Committed: the donations (#225), the set, home's RAM, NeuroFlux Governor, then the install (already asked for, a
+    // restarted brain's note says: nothing more is bought).
     if (cycle?.installing === true) this.#installing = true;
     const note = readAugmentationCycle(this.#store);
     const committedView = {
@@ -1485,6 +1538,19 @@ export class AugmentationRule {
           ...committedView,
           waitingFor: `the faction state to show ${this.#donated.map((each) => `${each.faction}'s`).join(", ")} reputation after the donation`,
         });
+      }
+      // The Red Pill's donation is never passed over (#225 review): the money for it gone, the cycle is called off, and
+      // `#endgame` holds the next for the money.
+      const redPillDonation = note?.donations?.find((each) => each.faction === note.redPill);
+      const redPillAmount =
+        redPillDonation === undefined ? 0 : this.#donationNow(redPillDonation, reputationOf, player, multipliers);
+      if (redPillDonation !== undefined && redPillAmount > money) {
+        this.#callOff(
+          atMs,
+          `the money for ${THE_RED_PILL}'s donation is gone: ${describeDonation({ ...redPillDonation, amount: redPillAmount })}` +
+            `, ${formatMoney(money)} now`,
+        );
+        return this.#ask(null, { committed: false, reserve: 0, waitingFor: null });
       }
       const donation = this.#nextDonation(note?.donations ?? [], reputationOf, player, money, multipliers);
       if (donation !== null) {
@@ -1518,7 +1584,8 @@ export class AugmentationRule {
         neuroFluxLeft === 0
           ? 0
           : purchaseSequenceCost(Array<string>(neuroFluxLeft).fill(NEUROFLUX_GOVERNOR), purchaseState).money;
-      // The donations (#225) went first, each shown before this, or were passed over: home's RAM never spends their money.
+      // The donations (#225) went first, each shown before this, or were passed over: home's RAM never spends their
+      // money.
       const homeRam = homeRamEnabled ? chooseHomeRamUpgrade(mediumData, slowData) : null;
       if (homeRam?.next && money - (homeRam.price ?? 0) >= neuroFluxHeld) {
         const args = { fromRam: homeRam.next.fromRam, vendor: homeRam.next.vendor };
@@ -1565,9 +1632,11 @@ export class AugmentationRule {
       }
       // Daedalus's path chosen (a joined seller of The Red Pill, not installed): never an install without it (#215
       // review). Reported bought and never queued (`augmentationNotQueued`, alerted), the cycle is called off, and
-      // `#endgame` holds the next; not bought yet (its reputation fell short), it waits.
+      // `#endgame` holds the next; not bought yet (its reputation fell short), it waits. But for "Daedalus donations"
+      // (#225 review): that install is for Daedalus's favour, without The Red Pill.
       const redPillSold = [...shops.values()].some((shop) => shop.includes(THE_RED_PILL));
-      if (redPillSold && !Object.hasOwn(ownedAugs, THE_RED_PILL) && !installable.includes(THE_RED_PILL)) {
+      const forFavour = note?.reason === "Daedalus donations";
+      if (redPillSold && !forFavour && !Object.hasOwn(ownedAugs, THE_RED_PILL) && !installable.includes(THE_RED_PILL)) {
         if (queue.includes(THE_RED_PILL)) {
           this.#callOff(atMs, `${THE_RED_PILL} reported bought but never queued: no install without it`);
           return this.#ask(null, { committed: false, reserve: 0, waitingFor: null });
@@ -1616,6 +1685,10 @@ export class AugmentationRule {
    *   w0r1d_d43m0n needs (and drop its root), with `lastNodeReset` unmoved, so the destroy would wait hours.
    * - Reported bought and never queued (`augmentationNotQueued`, #215 review): `hold`, as R2 counts it owned for the
    *   plan; an install without it would install the rest and lose Daedalus's reputation.
+   * - `redPill` with a donation (#225): a joined seller's donations are unlocked and the money covers the donation for
+   *   its missing reputation; short of it, `hold`, that money held back (`redPillHold`).
+   * - `daedalusDonations` (#225): Daedalus joined, its donations not unlocked, its reputation this cycle at what
+   *   unlocks them at the next install (`redPillTarget`'s donations target: not once 90% of The Red Pill's is earned).
    * - `none`: installed already (the destroy not wanted), not sold in this BitNode (BN15), or Daedalus's count not
    *   reached.
    */
@@ -1671,7 +1744,8 @@ export class AugmentationRule {
     const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
     const sellerFactions = joined.filter((faction) => sellers.includes(faction.name));
     // Donations unlocked at a seller (#225, A8's way): its reputation bought once the money covers the donation, held
-    // back from cloud servers meanwhile; an install now would lose what's earned toward it.
+    // back from cloud servers, home RAM and programs meanwhile; an install now would lose what's earned toward it. No
+    // gang is modelled (none in BN1): the gang's faction would take none.
     const donor = sellerFactions.find(
       (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
     );
@@ -1694,9 +1768,12 @@ export class AugmentationRule {
       };
     }
     // Daedalus's favour (#225, legacy `autopilot.js:920-931`): its reputation this cycle unlocks its donations at the
-    // next install. Never where they're unlocked from the start (BN8's `FavorToDonateToFaction` of 0): the donor above.
+    // next install, A5's target for it (`redPillTarget`: not once 90% of The Red Pill's is earned, legacy
+    // `work-for-factions.js:829`). Never where they're unlocked from the start (BN8's `FavorToDonateToFaction` of 0):
+    // the donor above.
     const daedalus = sellerFactions.find((faction) => faction.name === DAEDALUS);
-    if (daedalus !== undefined && daedalus.reputation >= reputationToUnlockDonations(daedalus.favor, multipliers)) {
+    const target = daedalus === undefined ? null : redPillTarget(needed, daedalus, multipliers.FavorToDonateToFaction);
+    if (daedalus !== undefined && target?.reason === "donations" && daedalus.reputation >= target.reputation) {
       return { kind: "daedalusDonations" };
     }
     if (sellers.length > 0) {
@@ -1726,6 +1803,35 @@ export class AugmentationRule {
         `${DAEDALUS}'s invitation (${missing.join(", ") || "the game's next check"}): an install now would reset the ` +
         "money and the hacking level",
     };
+  }
+
+  /**
+   * The donation asked for, if the faction state shows its reputation reached though its done isn't reported yet (#225
+   * review): its event, its money spent, and recorded, so the done that comes later changes nothing.
+   */
+  #recordDonationShown(reputationOf: (faction: string) => number, slowGameTimeMs: number | null, atMs: number): void {
+    const asked = this.#asked;
+    if (asked?.donation === undefined || this.#recorded.has(asked.intent.id)) return;
+    const shown = reputationOf(asked.faction);
+    if (shown < asked.donation.reputation) return;
+    this.#recorded.add(asked.intent.id);
+    this.#spent.push({ gameTimeMs: slowGameTimeMs ?? 0, price: asked.price });
+    const { reputation, before } = asked.donation;
+    const amount = asked.price;
+    this.#emit({
+      type: AUGMENTATION_DONATED_EVENT_KIND,
+      atMs,
+      faction: asked.faction,
+      amount,
+      reputation,
+      before,
+      after: shown,
+    });
+    this.#log(
+      `augmentations: donated ${describeDonation({ faction: asked.faction, amount, reputation })}: its reputation ` +
+        `${Math.round(before).toLocaleString("en-US")} → ${Math.round(shown).toLocaleString("en-US")} (seen before ` +
+        "its done was reported)",
+    );
   }
 
   /** The donation `donation` needs now (#225): to its reputation from the faction's now; 0 once it's there. */

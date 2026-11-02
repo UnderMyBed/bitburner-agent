@@ -922,11 +922,23 @@ export class DesiredStateController {
       this.#waitingFor.programs = "the augmentations' install countdown (programs are lost at the install)";
       programsNext = null;
     }
-    const [hold, heldFor] =
-      countdownHold > daedalusHold
-        ? [countdownHold, "the augmentations' install countdown"]
-        : [daedalusHold, "Daedalus's invitation"];
+    // And The Red Pill's donation's money (#225 review), from programs too.
+    const redPillHold = this.#augmentations.redPillHold();
+    const holds: [number, string][] = [
+      [daedalusHold, "Daedalus's invitation"],
+      [countdownHold, "the augmentations' install countdown"],
+      [redPillHold, "The Red Pill's donation"],
+    ];
+    const [hold, heldFor] = holds.reduce((most, each) => (each[0] > most[0] ? each : most));
     const playerMoney = this.#mediumData?.player?.money;
+    if (
+      programsNext !== null &&
+      redPillHold > 0 &&
+      (typeof playerMoney === "number" ? playerMoney : 0) - (programsPlan?.price ?? 0) < redPillHold
+    ) {
+      this.#waitingFor.programs = `money above the $${Math.round(redPillHold).toLocaleString("en-US")} held for The Red Pill's donation`;
+      programsNext = null;
+    }
     if (
       homeRamNext !== null &&
       hold > 0 &&
@@ -1124,6 +1136,7 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
       enabled: readFactionWorkEnabled(this.#store),
+      augmentationsEnabled: readAugmentationsEnabled(this.#store),
     });
     this.#join = factions.join;
     this.#factionWork = factions.work;

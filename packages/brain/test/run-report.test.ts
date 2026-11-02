@@ -1691,6 +1691,20 @@ describe("donations (#225)", () => {
     );
   });
 
+  test("donations unused (#225 review): weighed against the money left after the brain's counted set", () => {
+    // The brain's set spent $1b of the $6b on another augmentation (none by donation): Gen I's $5.07b isn't left.
+    const spent = donationRun({
+      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 0, affordable: 1, setCost: 1e9 }]],
+    });
+    expect(unused(spent)).toEqual([]);
+    fresh();
+    // A set that leaves enough: unused all the same.
+    const room = donationRun({
+      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 0, affordable: 1, setCost: 1e8 }]],
+    });
+    expect(unused(room)).toHaveLength(1);
+  });
+
   test("donations unused: not with the brain counting one, acting, the money short, or the favour short", () => {
     const counting = donationRun({
       events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 1, affordable: 1 }]],

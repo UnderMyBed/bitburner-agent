@@ -3,9 +3,11 @@
 // - Donating: CyberSec joined at 5,000 reputation with 150 favour (donations unlocked), and the money for its five and
 //   the donation for Cranial Signal Processors - Gen I and II's reputation. The count rule counts the five, two by
 //   donation: a quick install (#222). Committed, the brain donates first, sees CyberSec's reputation rise in the
-//   faction state, then buys the five in buy order, Gen II far above the reputation earned. A5 never works for CyberSec.
+//   faction state, then buys the five in buy order, Gen II far above the reputation earned. A5 never works for
+//   CyberSec.
 // - Working toward favour: BitRunners joined with 100 favour, its reputation a little short of the 306,374 that makes
-//   150 favour at the next install. A5 works for it to that, not to The BitRunners Neurolink's 875,000, and stops there.
+//   150 favour at the next install. A5 works for it to that, not to The BitRunners Neurolink's 875,000, and stops
+//   there.
 // CI runs seed 1; `DONATION_SEEDS` (`1,2,3`, say) runs others.
 import { factionStateOf, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";

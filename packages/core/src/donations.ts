@@ -9,8 +9,8 @@
  * - A donation of `amount` gives `amount / 1e6 × faction_rep × FactionWorkRepGain` reputation (`donation.ts:8-14`);
  *   favour doesn't multiply it.
  * - Who takes one (`NetscriptFunctions/Singularity.ts:925-964`; the page shows `DonateOption` on the same terms,
- *   `Faction/ui/FactionRoot.tsx:94-143`): a joined faction, not the player's gang's, that offers work (not Bladeburners,
- *   Church of the Machine God or Shadows of Anarchy), with the favour.
+ *   `Faction/ui/FactionRoot.tsx:94-143`): a joined faction, not the player's gang's, that offers work (not
+ *   Bladeburners, Church of the Machine God or Shadows of Anarchy), with the favour.
  */
 import { FACTIONS } from "./faction-data.ts";
 
@@ -33,7 +33,8 @@ export function repToFavor(reputation: number): number {
   return Math.min(MAX_FAVOR, Math.max(0, Math.log1p(reputation / 25000) / LOG_1_POINT_02));
 }
 
-/** A faction's favour after the next install, with `reputation` earned this cycle (`addRepToFavor`, `favor.ts:22-24`). */
+/** A faction's favour after the next install, with `reputation` earned this cycle (`addRepToFavor`, `favor.ts:22-24`).
+/** */
 export function favorAfterInstall(favor: number, reputation: number): number {
   return repToFavor(favorToRep(favor) + reputation);
 }
@@ -48,7 +49,7 @@ export function favorToDonate({ FavorToDonateToFaction }: DonationBitNodeMultipl
   return Math.floor(BASE_FAVOR_TO_DONATE * FavorToDonateToFaction);
 }
 
-/** Whether `favor` unlocks donations now: the game's own comparison (`Singularity.ts:948`, `FactionRoot.tsx:104`). */
+/** Whether `favor` unlocks donations now: the game's own comparison (`Singularity.ts:951`, `FactionRoot.tsx:104`). */
 export function donationsUnlocked(favor: number, multipliers: DonationBitNodeMultipliers): boolean {
   return favor >= favorToDonate(multipliers);
 }
@@ -56,10 +57,11 @@ export function donationsUnlocked(favor: number, multipliers: DonationBitNodeMul
 /**
  * The reputation to earn this cycle for the favour at the next install to unlock donations: 0 if `favor` does already;
  * else the least whole reputation that does, by the game's own floating point (`favorAfterInstall`). From no favour in
- * BN1, 462,491.
+ * BN1, 462,491. Infinity where the threshold is past `MAX_FAVOR` (BN12 from SF12.275): no reputation reaches it.
  */
 export function reputationToUnlockDonations(favor: number, multipliers: DonationBitNodeMultipliers): number {
   const needed = favorToDonate(multipliers);
+  if (needed > MAX_FAVOR) return Number.POSITIVE_INFINITY;
   // Unlocked already: favour's worth past the threshold's makes this 0.
   let reputation = Math.max(0, Math.ceil(favorToRep(needed) - favorToRep(favor)));
   while (favorAfterInstall(favor, reputation) < needed) reputation += 1;
@@ -77,7 +79,7 @@ export function donationForReputation(reputation: number, factionRep: number, fa
 }
 
 /**
- * Reputation a donation gives beyond what's missing: the game adds it to the faction's (`donation.ts:28`), and a sum
+ * Reputation a donation gives beyond what's missing: the game adds it to the faction's (`donation.ts:32`), and a sum
  * can round a hair below the price, which a worker would see as not done and donate again.
  */
 export const DONATION_REPUTATION_MARGIN = 0.01;
@@ -85,12 +87,14 @@ export const DONATION_REPUTATION_MARGIN = 0.01;
 /**
  * The least whole-dollar donation whose reputation, by the game's own formula, is at least `reputation` and
  * `DONATION_REPUTATION_MARGIN` more: what the brain donates, and plans to, so the faction's reputation reaches the
- * price, never a hair short of it. 0 for none missing.
+ * price, never a hair short of it. 0 for none missing; Infinity past `Number.MAX_SAFE_INTEGER` dollars.
  */
 export function donationToReach(reputation: number, factionRep: number, factionWorkRepGain: number): number {
   if (!(reputation > 0)) return 0;
   const wanted = reputation + DONATION_REPUTATION_MARGIN;
   let amount = Math.ceil(donationForReputation(wanted, factionRep, factionWorkRepGain));
+  // Past 2^53 a dollar more is no more: no whole-dollar donation can be named (nor taken by `donateToFaction`).
+  if (!(amount <= Number.MAX_SAFE_INTEGER)) return Number.POSITIVE_INFINITY;
   while (repFromDonation(amount, factionRep, factionWorkRepGain) < wanted) amount += 1;
   return amount;
 }
