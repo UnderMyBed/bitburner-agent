@@ -1527,13 +1527,26 @@ describe("donations (#225)", () => {
       slowData: slow({ joined: UNLOCKED }),
       mediumData: medium({ money: FIVE_COST + DONATION + SLACK }),
     });
-    // The owner spent it meanwhile: $200m left.
+    // The owner spent it meanwhile, with no donation in flight (a restarted brain asked for none): $200m left.
+    rule = newRule();
     const ask = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money: 200e6 }) });
     expect(ask.intent?.action).toBe("purchaseAugmentation");
     expect(lines).toContainEqual(
       "augmentations: the donation $13,750,010,000 to CyberSec (for 18,750 reputation) passed over: $200,000,000 " +
         "now; what it was for isn't bought",
     );
+  });
+
+  test("a counted donation in flight, its money already spent, isn't passed over (#227 re-review): asked again", () => {
+    const asked = throughCountdown({
+      slowData: slow({ joined: UNLOCKED }),
+      mediumData: medium({ money: FIVE_COST + DONATION + SLACK }),
+    });
+    expect(asked.intent).toEqual(donateIntent("CyberSec", DONATION, 18_750));
+    // The medium snapshot shows the money spent before the done comes: the same donation, nothing passed over.
+    const again = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money: FIVE_COST + SLACK }) });
+    expect(again.intent).toEqual(asked.intent);
+    expect(lines.filter((line) => line.includes("passed over"))).toEqual([]);
   });
 
   test("Daedalus's favour (legacy autopilot.js:920-931): its reputation unlocking donations installs, after the countdown", () => {
@@ -1657,7 +1670,32 @@ describe("donations (#225)", () => {
     expect(rest.map((each) => each.faction)).toEqual(["CyberSec"]);
     expect(rest.reduce((sum, each) => sum + each.amount, 0)).toBeLessThanOrEqual(6e9);
     expect(ask.intent).toEqual(donateIntent("Daedalus", RED_PILL_DONATION, 2.5e6));
-    // Never passed over: its money gone (spent elsewhere), the cycle is called off, and the next held for it.
+    // In flight (#227 re-review): the medium snapshot shows its $2.5t spent before the done comes. No call-off: asked
+    // again; then the done, recorded, and the reputation shown.
+    const spent = update({ slowData: slow({ joined }), mediumData: medium({ money: 6e9 }) });
+    expect(spent.intent).toEqual(ask.intent);
+    expect(readAugmentationCycle(store)).not.toBeNull();
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: 6e9 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    gameTimeMs += MINUTE;
+    const shown = [{ ...joined[0], reputation: 2.5e6 + 0.01 }, joined[1]] as typeof joined;
+    update({ slowData: slow({ joined: shown }), mediumData: medium({ money: 6e9 }) });
+    expect(events.filter((event) => event.type === "augmentationCycleCalledOff")).toEqual([]);
+    expect(events.filter((event) => event.type === "augmentationDonated")).toEqual([
+      expect.objectContaining({ faction: "Daedalus", amount: RED_PILL_DONATION, before: 0 }),
+    ]);
+  });
+
+  test("The Red Pill's donation never passed over: its money gone with none in flight, the cycle called off, held for it", () => {
+    const joined = [{ name: "Daedalus", reputation: 0, favor: 150 }];
+    const RED_PILL_DONATION = 2_500_000_010_000;
+    update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION }) });
+    expect(readAugmentationCycle(store)?.redPill).toBe("Daedalus");
+    // A restarted brain (none in flight); the owner spent the money meanwhile.
+    rule = newRule();
     const short = update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION - 1 }) });
     expect(short).toMatchObject({ intent: null, committed: false });
     expect(readAugmentationCycle(store)).toBeNull();

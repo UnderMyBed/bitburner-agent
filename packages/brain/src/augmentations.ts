@@ -1539,6 +1539,22 @@ export class AugmentationRule {
           waitingFor: `the faction state to show ${this.#donated.map((each) => `${each.faction}'s`).join(", ")} reputation after the donation`,
         });
       }
+      // A donation asked for and not yet reported done (#227 re-review): its money may be spent already, the medium
+      // snapshot showing it before the fast one reports the done and the slow one the reputation. Asked again, and
+      // nothing else judged, until its done or its reputation shows (`#recordDonationShown`); one that never goes
+      // through is the Agent's `intentStuck`.
+      const inFlight = this.#asked;
+      if (
+        inFlight?.donation !== undefined &&
+        !this.#recorded.has(inFlight.intent.id) &&
+        (note?.donations ?? []).some((each) => each.faction === inFlight.faction)
+      ) {
+        const { reputation } = inFlight.donation;
+        return this.#ask(inFlight, {
+          ...committedView,
+          asking: `donating ${describeDonation({ faction: inFlight.faction, amount: inFlight.price, reputation })}`,
+        });
+      }
       // The Red Pill's donation is never passed over (#225 review): the money for it gone, the cycle is called off, and
       // `#endgame` holds the next for the money.
       const redPillDonation = note?.donations?.find((each) => each.faction === note.redPill);
