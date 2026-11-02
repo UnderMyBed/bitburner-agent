@@ -21,14 +21,17 @@ import {
   FACTION_WORK_STOPPED_EVENT_KIND,
   type FactionInputs,
   FactionRule,
+  type FactionWorkChoice,
   type FactionWorkEvent,
   FactionWorkTimeline,
   joinIntent,
   onTrack,
+  redPillTarget,
   resetInfoOf,
   SLOW_SNAPSHOT_GAP_MS,
   workCandidates,
   workingPersonOf,
+  workTarget,
 } from "../src/factions.ts";
 
 /** A player at `hacking`, every other skill at `others`, intelligence 0 and `faction_rep` 1 unless given. */
@@ -167,6 +170,9 @@ describe("chooseFactionWork", () => {
         reputationNeeded: 1_000,
         reputationPerSecond: rate,
         etaSeconds: 1_000 / rate,
+        target: "augmentation",
+        augmentationReputation: 1_000,
+        favor: 0,
       },
       waitingFor: null,
       transient: false,
@@ -191,16 +197,19 @@ describe("chooseFactionWork", () => {
   });
 
   test("The Red Pill first once Daedalus is joined (#215): its best work, ahead of any hacking value", () => {
-    // CyberSec at 0 has Neurotrainer I to work for; Daedalus at 1m is 1.5m short of The Red Pill.
+    // CyberSec at 0 has Neurotrainer I to work for; Daedalus at 100k is worked to what unlocks its donations at the
+    // next install (#225): 462,491, The Red Pill's 2.5m being more than 10% past it.
     const medium = player(2_600);
-    const plan = chooseFactionWork(medium, slow({ joined: { CyberSec: 0, Daedalus: 1e6 } }));
+    const plan = chooseFactionWork(medium, slow({ joined: { CyberSec: 0, Daedalus: 100_000 } }));
     expect(plan.choice).toMatchObject({
       faction: "Daedalus",
       augmentation: "The Red Pill",
-      reputation: 1e6,
-      reputationNeeded: 2.5e6,
+      reputation: 100_000,
+      reputationNeeded: 462_491,
+      target: "donations",
+      augmentationReputation: 2.5e6,
     });
-    expect(plan.choice?.etaSeconds).toBeCloseTo(1.5e6 / (plan.choice?.reputationPerSecond as number), 6);
+    expect(plan.choice?.etaSeconds).toBeCloseTo(362_491 / (plan.choice?.reputationPerSecond as number), 6);
     expect(plan.choice?.reputationPerSecond).toBeGreaterThanOrEqual(hackingRate(medium));
     // Reached: A6's to buy, so the work goes back to the hacking value. Queued or installed: likewise.
     for (const [joined, queued, installed] of [
@@ -387,7 +396,13 @@ function aevumCheaperOnes(): Record<string, number> {
 
 describe("chooseFactionWork's parts, for A6 too (#203 review)", () => {
   const person = workingPersonOf(player(55)) as NonNullable<ReturnType<typeof workingPersonOf>>;
-  const conditions = { sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: 1 };
+  const conditions = {
+    sourceFile15Level: 0,
+    focused: true,
+    implant: false,
+    factionWorkRepGain: 1,
+    favorToDonateToFaction: 1,
+  };
 
   test("bestWorkRate: the faction's best work type and its rate; null for none offered, or none earned", () => {
     expect(bestWorkRate(person, { name: "CyberSec", reputation: 0, favor: 0 }, conditions)).toEqual({
@@ -417,7 +432,115 @@ describe("chooseFactionWork's parts, for A6 too (#203 review)", () => {
       value: hackingValue("BitWire", 300),
       reputationNeeded: 3_750,
       reputation: 1_000,
+      target: { reputation: 3_750, reason: "augmentation" },
+      favor: 0,
     });
+  });
+
+  test("workTarget (#225): the lesser of the augmentation's and what unlocks donations, within 10% the augmentation's", () => {
+    const at = (reputation: number, favor = 0, name = "BitRunners") => ({ name, reputation, favor });
+    // From no favour, 462,491 unlocks donations at the next install (core's `reputationToUnlockDonations`).
+    expect(workTarget(1e6, at(0), 1)).toEqual({ reputation: 462_491, reason: "donations" });
+    expect(workTarget(400_000, at(0), 1)).toEqual({ reputation: 400_000, reason: "augmentation" });
+    // Within 10% of the unlock (or of the reputation now): worked all the way to the augmentation's.
+    expect(workTarget(508_740, at(0), 1)).toEqual({ reputation: 508_740, reason: "augmentation" });
+    expect(workTarget(508_741, at(0), 1)).toEqual({ reputation: 462_491, reason: "donations" });
+    expect(workTarget(1e6, at(910_000), 1)).toEqual({ reputation: 1e6, reason: "augmentation" });
+    // Favour banked lowers it: 306,374 from 100.
+    expect(workTarget(1e6, at(0, 100), 1)).toEqual({ reputation: 306_374, reason: "donations" });
+    // Unlocked already: not worked; in BN8 every faction is (its multiplier is 0); BN3's halves the favour needed.
+    expect(workTarget(1e6, at(0, 150), 1)).toBeNull();
+    expect(workTarget(1e6, at(0), 0)).toBeNull();
+    expect(workTarget(1e6, at(0), 0.5)).toEqual({ reputation: 85_396, reason: "donations" });
+    // A faction that takes no donations (no work): the augmentation's.
+    expect(workTarget(1e6, at(0, 0, "Shadows of Anarchy"), 1)).toEqual({ reputation: 1e6, reason: "augmentation" });
+  });
+
+  test("A5 with donations (#225): toward the favour, never at a faction already unlocked, nor for what one sells", () => {
+    const medium = player(800);
+    // BitRunners' Neurolink is 875k, its dearest; at 400k the work goes on, to 462,491, for donations' favour.
+    const toFavour = chooseFactionWork(medium, slow({ joined: { BitRunners: 400_000 } }));
+    expect(toFavour.choice).toMatchObject({ faction: "BitRunners", reputationNeeded: 462_491, target: "donations" });
+    expect(toFavour.choice?.etaSeconds).toBeCloseTo(62_491 / (toFavour.choice?.reputationPerSecond as number), 6);
+    expect(describeChoice(toFavour.choice as FactionWorkChoice)).toMatch(
+      /^hacking for BitRunners, for .* \(reputation 400,000 of 462,491: donations at the next install, .* at [\d,]+; favour 0\.0, 150\.0 after the next install at it, /,
+    );
+    // Past it: nothing more at BitRunners for those beyond it (bought by donation after the install).
+    const past = chooseFactionWork(medium, slow({ joined: { BitRunners: 462_491 } }));
+    expect(past.choice?.faction ?? null).not.toBe("BitRunners");
+    // Unlocked: not worked, and NiteSec isn't worked for what BitRunners sells either.
+    const unlocked = chooseFactionWork(
+      medium,
+      slow({ joined: { BitRunners: { reputation: 0, favor: 150 }, NiteSec: 0 } }),
+    );
+    expect(unlocked.choice?.faction).toBe("NiteSec");
+    const state = factionStateOf(
+      slow({ joined: { BitRunners: { reputation: 0, favor: 150 }, NiteSec: 0 } }),
+    ) as NonNullable<ReturnType<typeof factionStateOf>>;
+    const resetInfo = resetInfoOf(slow()) as NonNullable<ReturnType<typeof resetInfoOf>>;
+    const candidates = workCandidates(state, resetInfo, 800);
+    expect(candidates.some((each) => each.faction === "BitRunners")).toBe(false);
+    // Embedded Netburner Module: sold at both, so bought at BitRunners by donation, never worked for at NiteSec.
+    expect(candidates.some((each) => each.augmentation === "Embedded Netburner Module")).toBe(false);
+  });
+
+  test("The Red Pill's target (#225 review): its own from 90% earned (legacy's daedalusSpecialCheck), A6 installing not", () => {
+    const daedalus = (reputation: number, favor = 0) => ({ name: "Daedalus", reputation, favor });
+    expect(redPillTarget(2.5e6, daedalus(100_000), 1)).toEqual({ reputation: 462_491, reason: "donations" });
+    expect(redPillTarget(2.5e6, daedalus(2_249_999), 1)).toEqual({ reputation: 462_491, reason: "donations" });
+    expect(redPillTarget(2.5e6, daedalus(2_250_000), 1)).toEqual({ reputation: 2.5e6, reason: "augmentation" });
+    expect(redPillTarget(2.5e6, daedalus(2_250_000, 150), 1)).toBeNull();
+    // A5 works on from 90%, to The Red Pill itself.
+    const plan = chooseFactionWork(player(2_600), slow({ joined: { Daedalus: 2_250_000 } }));
+    expect(plan.choice).toMatchObject({
+      augmentation: "The Red Pill",
+      reputationNeeded: 2.5e6,
+      target: "augmentation",
+    });
+  });
+
+  test("the Augmentations switch off (#225 review): no favour caps, and unlocked factions worked, as no donation follows", () => {
+    const off = { donations: false };
+    const toAugmentation = chooseFactionWork(player(800), slow({ joined: { BitRunners: 400_000 } }), 1, undefined, off);
+    expect(toAugmentation.choice).toMatchObject({ faction: "BitRunners", target: "augmentation" });
+    expect(toAugmentation.choice?.reputationNeeded).toBeGreaterThan(462_491);
+    const unlocked = chooseFactionWork(
+      player(800),
+      slow({ joined: { BitRunners: { reputation: 0, favor: 150 } } }),
+      1,
+      undefined,
+      off,
+    );
+    expect(unlocked.choice?.faction).toBe("BitRunners");
+    expect(workTarget(1e6, { name: "BitRunners", reputation: 0, favor: 150 }, 1, false)).toEqual({
+      reputation: 1e6,
+      reason: "augmentation",
+    });
+    // The rule passes the switch on: off, its choice is to the augmentation's reputation.
+    const { factions, update } = ruleOf();
+    update({
+      slowData: slow({ joined: { BitRunners: 400_000 } }),
+      mediumData: player(800),
+      augmentationsEnabled: false,
+    });
+    expect(factions.view().choice).toMatchObject({ faction: "BitRunners", target: "augmentation" });
+    update({
+      slowData: slow({ joined: { BitRunners: 400_000 } }),
+      mediumData: player(800),
+      augmentationsEnabled: true,
+    });
+    expect(factions.view().choice).toMatchObject({ faction: "BitRunners", target: "donations" });
+  });
+
+  test("The Red Pill's work (#225): none once Daedalus's reputation unlocks its donations, nor with them unlocked", () => {
+    const medium = player(2_600);
+    for (const daedalus of [462_491, 1e6, { reputation: 0, favor: 150 }]) {
+      const plan = chooseFactionWork(medium, slow({ joined: { CyberSec: 0, Daedalus: daedalus } }));
+      expect(plan.choice?.augmentation, JSON.stringify(daedalus)).not.toBe("The Red Pill");
+    }
+    // In BN8 (donations unlocked from the start, `FavorToDonateToFaction` 0), never worked for: bought.
+    const bn8 = chooseFactionWork(medium, slow({ joined: { Daedalus: 0 }, currentNode: 8 }));
+    expect(bn8.choice?.augmentation).not.toBe("The Red Pill");
   });
 
   test("the ETA is to what's left: the requirement less the faction's reputation, at the rate", () => {

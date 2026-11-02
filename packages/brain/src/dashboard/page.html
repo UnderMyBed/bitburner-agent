@@ -72,7 +72,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -403,7 +403,7 @@ function render(status) {
       : [
           element(
             "div",
-            `Affordable: ${progress.affordable} new augmentations, ${progress.affordableWithNeuroFlux} with NeuroFlux; ${augmentationEta(progress.onlineMs)} online this cycle`,
+            `Affordable: ${progress.affordable} new augmentations, ${progress.affordableWithNeuroFlux} with NeuroFlux${(progress.byDonation ?? 0) > 0 ? ` (${progress.byDonation} by donation)` : ""}; ${augmentationEta(progress.onlineMs)} online this cycle`,
           ),
           element(
             "div",
@@ -436,8 +436,20 @@ function render(status) {
       `The set the money covers: ${augmentations.set.length === 0 ? "none" : `${augmentations.set.map((each) => each.augmentation).join(", ")} (${dollars(augmentations.setCost)})`}`,
     ),
     ...progressLines,
+    // The donations (#225): those the counts plan, or the commit's note's, made first.
+    ...((augmentations.donations ?? []).length === 0
+      ? []
+      : [
+          element(
+            "div",
+            `Donations${augmentations.committed ? ", first" : " counted"}: ${augmentations.donations.map((each) => `${dollars(each.amount)} to ${each.faction} (for ${Math.round(each.reputation).toLocaleString("en-US")} reputation)`).join(", ")}`,
+          ),
+        ]),
     ...augmentations.notQueued.map((each) =>
       element("div", `NOT QUEUED: ${each.augmentation}, reported bought, not in the faction state's queue`, "bad"),
+    ),
+    ...(augmentations.donationsFailed ?? []).map((each) =>
+      element("div", `DONATION FAILED: ${dollars(each.amount)} to ${each.faction}, reported done, not in its reputation`, "bad"),
     ),
   );
   document.querySelector("#augmentations button").textContent = augmentations.enabled
@@ -573,7 +585,8 @@ function render(status) {
     seconds < 90 ? `${Math.max(1, Math.round(seconds))} s` : seconds < 5400 ? `${Math.round(seconds / 60)} min` : `${(seconds / 3600).toFixed(1)} h`;
   const choiceText = (choice) =>
     `${choice.workType} for ${choice.faction}, for ${choice.augmentation} (reputation ` +
-    `${Math.round(choice.reputation).toLocaleString()} of ${Math.round(choice.reputationNeeded).toLocaleString()}, ` +
+    `${Math.round(choice.reputation).toLocaleString()} of ${Math.round(choice.reputationNeeded).toLocaleString()}` +
+    `${choice.target === "donations" ? ": donations at the next install" : ""}, ` +
     `${choice.reputationPerSecond.toFixed(2)}/s: about ${eta(choice.etaSeconds)})`;
   const workLine = rule.waiting
     ? "waiting for the Agent's snapshots"
@@ -602,6 +615,8 @@ function render(status) {
             element("td", faction.name),
             element("td", `${Math.round(faction.reputation).toLocaleString()} rep`),
             element("td", `${faction.favor.toLocaleString(undefined, { maximumFractionDigits: 2 })} favour`),
+            // Its favour after the next install, and when its donations unlock (#225).
+            element("td", (factions.donations?.[faction.name] ?? "").replace(/^; /, "")),
           );
           return row;
         })),

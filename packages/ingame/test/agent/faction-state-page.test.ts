@@ -324,9 +324,11 @@ describe("which pages are opened (`pagesToOpen`)", () => {
     );
     expect(pagesToOpen(since(empty), game([]), seen).factions).toBe(false);
     expect(pagesToOpen(FIRST, game([]), { ...seen, factionsShown: false }).factions).toBe(false);
-    // Just under 10 minutes: not yet.
+    // Just under 10 minutes: not yet; unless a donation was made since (#225), whose reputation is read at once.
     const recent = memoryOf({}, { factionsReadAtMs: NOW_MS - FACTIONS_PAGE_REFRESH_MS + 1 });
     expect(pagesToOpen(since(recent), game(["CyberSec"]), seen).factions).toBe(false);
+    expect(pagesToOpen(since(recent, { donationMade: true }), game(["CyberSec"]), seen).factions).toBe(true);
+    expect(pagesToOpen(since(recent, { donationMade: true }), game(["CyberSec"]), hidden).factions).toBe(true);
   });
 
   test("Augmentations: the count other than the queue read, or bought while the sidebar is hidden; never with none", () => {

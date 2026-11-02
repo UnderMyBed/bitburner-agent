@@ -476,6 +476,11 @@ export interface HostMethods {
    */
   "diagnostics.joinFactionWithReputation"(params: { faction: string; reputation: number }): void;
   /**
+   * Sets `faction`'s favour (one of the game's names; finite, 0 or more) through the game's own `setFavor`, as an
+   * install banks it, for test scenarios (#225). A harness edit, not something a player can do.
+   */
+  "diagnostics.setFactionFavor"(params: { faction: string; favor: number }): void;
+  /**
    * Makes the player `job` (one of the game's titles, offered by `company`) at `company` (one of the game's names), as
    * an application does, with this reputation there (finite, 0 or more), for test scenarios (#155). A harness edit,
    * not something a player can do.

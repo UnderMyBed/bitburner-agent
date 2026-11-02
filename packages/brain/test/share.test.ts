@@ -498,7 +498,13 @@ test("the work type worked is kept against the bonus's swings (#226's review): a
     mults: { faction_rep: 1 },
   };
   const faction = { name: "MegaCorp", reputation: 0, favor: 0 };
-  const conditions = { sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: 1 };
+  const conditions = {
+    sourceFile15Level: 0,
+    focused: true,
+    implant: false,
+    factionWorkRepGain: 1,
+    favorToDonateToFaction: 1,
+  };
   const keep = (workType: "hacking" | "field" | "security", name = faction.name) => ({
     ...conditions,
     keep: { faction: name, workType },

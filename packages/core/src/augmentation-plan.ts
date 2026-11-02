@@ -4,6 +4,9 @@
  * rules (#193); the brain's rule (packages/brain/src/augmentations.ts) feeds it what the snapshots say. When to install
  * is the legacy scripts' count rule (#222, owner decision 51): `alainbryden/bitburner-scripts`' autopilot.js, cited
  * as `autopilot.js:<line>` (its `maybeInstallAugmentations`, lines 860-1020). Smarter timing is phase B's planner's.
+ * Donations (#225, owner decision 53): an augmentation a joined faction with donations unlocked sells counts as within
+ * reach when the money covers its price and the donation for its missing reputation, as the legacy faction manager's
+ * `canAffordWithDonation` has it (`faction-manager.js:546-549`, `:631`, `:822-860`).
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
 import {
@@ -14,7 +17,9 @@ import {
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
 } from "./augmentations.ts";
+import { donationToReach } from "./donations.ts";
 import { HACKING_MULTIPLIERS, hackingValue } from "./faction-work.ts";
+import { FACTION_NAMES } from "./factions.ts";
 
 /** An augmentation's data; an unknown name throws, as in augmentations.ts. */
 function dataOf(name: string) {
@@ -82,10 +87,122 @@ export function augmentationBuyOrder(names: readonly string[]): string[] {
   return order;
 }
 
-/** What buying a set costs: each purchase in buy order, at its price then, and the money in all. */
+/** A joined faction that takes donations, donations unlocked (core's donations.ts), and its reputation now. */
+export interface DonationSeller {
+  faction: string;
+  reputation: number;
+}
+
+/**
+ * What buying with donations needs (#225): the joined factions taking donations that sell each augmentation no joined
+ * seller's reputation reaches, and NeuroFlux Governor; the player's `faction_rep` and the BitNode's
+ * `FactionWorkRepGain`, which a donation's reputation is multiplied by.
+ */
+export interface DonationTerms {
+  sellers: Readonly<Record<string, readonly DonationSeller[]>>;
+  neuroFluxSellers: readonly DonationSeller[];
+  factionRep: number;
+  factionWorkRepGain: number;
+}
+
+/** One faction's donation (#225): the reputation it brings the faction to, and the money (core's `donationToReach`). */
+export interface Donation {
+  faction: string;
+  reputation: number;
+  amount: number;
+}
+
+/**
+ * What buying a set costs: each purchase in buy order, at its price then, and the money in all; and (#225) the
+ * donations it needs, one a faction, their money, and the purchases they're for.
+ */
 export interface AugmentationSet {
   purchases: AugmentationPurchase[];
   money: number;
+  donations: Donation[];
+  donationMoney: number;
+  byDonation: string[];
+}
+
+/**
+ * The donations buying `names` needs (#225): each not in `reached` is bought from one of its donation sellers, the one
+ * whose donation it raises least (reputation already reached costs nothing; ties to the seller with more reputation,
+ * then the game's order of factions), and a faction's donation brings it to the most reputation that's bought there
+ * (legacy `faction-manager.js:871-893`: the max, not the sum, `:891`). `targets` carries donations already planned:
+ * each faction's reputation to reach.
+ */
+function planDonations(
+  names: readonly string[],
+  state: AugmentationPurchaseState,
+  reached: readonly string[],
+  terms: DonationTerms | undefined,
+  targets = new Map<string, DonationSeller>(),
+): { targets: Map<string, DonationSeller>; byDonation: string[] } {
+  const byDonation: string[] = [];
+  for (const name of names) {
+    if (reached.includes(name)) continue;
+    const needed = augmentationCost(name, state).reputation;
+    const pick = cheapestSeller(terms?.sellers[name] ?? [], needed, targets);
+    if (pick === null) throw new RangeError(`${name} is neither reached nor sold by a faction taking donations`);
+    if (needed > (targets.get(pick.faction)?.reputation ?? pick.reputation)) {
+      targets.set(pick.faction, { faction: pick.faction, reputation: needed });
+    }
+    byDonation.push(name);
+  }
+  return { targets, byDonation };
+}
+
+/** Of `sellers`, the one whose planned reputation is raised least to `needed`: ties as `planDonations` says. */
+function cheapestSeller(
+  sellers: readonly DonationSeller[],
+  needed: number,
+  targets: ReadonlyMap<string, DonationSeller>,
+): DonationSeller | null {
+  const planned = (seller: DonationSeller) => Math.max(seller.reputation, targets.get(seller.faction)?.reputation ?? 0);
+  let best: DonationSeller | null = null;
+  for (const seller of sellers) {
+    if (best === null) {
+      best = seller;
+      continue;
+    }
+    const [raise, bestRaise] = [Math.max(0, needed - planned(seller)), Math.max(0, needed - planned(best))];
+    if (raise !== bestRaise) {
+      if (raise < bestRaise) best = seller;
+    } else if (seller.reputation !== best.reputation) {
+      if (seller.reputation > best.reputation) best = seller;
+    } else if (FACTION_NAMES.indexOf(seller.faction) < FACTION_NAMES.indexOf(best.faction)) {
+      best = seller;
+    }
+  }
+  return best;
+}
+
+/** The donations `targets` plans, each from its seller's reputation now (`sellerReputation`), and their money. */
+function donationsOf(
+  targets: ReadonlyMap<string, DonationSeller>,
+  sellerReputation: (faction: string) => number,
+  terms: DonationTerms | undefined,
+): { donations: Donation[]; donationMoney: number } {
+  const donations: Donation[] = [];
+  for (const { faction, reputation } of targets.values()) {
+    const missing = reputation - sellerReputation(faction);
+    if (!(missing > 0) || terms === undefined) continue;
+    donations.push({
+      faction,
+      reputation,
+      amount: donationToReach(missing, terms.factionRep, terms.factionWorkRepGain),
+    });
+  }
+  return { donations, donationMoney: donations.reduce((sum, each) => sum + each.amount, 0) };
+}
+
+/** Each seller's reputation now in `terms`, by faction. */
+function sellerReputations(terms: DonationTerms | undefined): (faction: string) => number {
+  const reputations = new Map<string, number>();
+  for (const seller of [...Object.values(terms?.sellers ?? {}).flat(), ...(terms?.neuroFluxSellers ?? [])]) {
+    reputations.set(seller.faction, seller.reputation);
+  }
+  return (faction) => reputations.get(faction) ?? 0;
 }
 
 /**
@@ -94,16 +211,21 @@ export interface AugmentationSet {
  * hacking skill multiplier by the level; ties to the cheaper, then the game's order), each is
  * added with its prerequisites not yet owned, queued or chosen, if they're all reached too, and kept if the whole set,
  * in buy order, costs no more than the money (core's `purchaseSequenceCost`). Only those worth installing count.
+ * With `donations` (#225), one no joined seller's reputation reaches is a candidate too where a seller taking donations
+ * sells it: kept if the set's prices and its donations (`planDonations`) together are within the money.
  */
 export function chooseAugmentationsToBuy(
   reached: readonly string[],
   state: AugmentationPurchaseState,
   money: number,
   hackingLevel: number,
+  donations?: DonationTerms,
 ): AugmentationSet {
   const owned = (name: string) => Object.hasOwn(state.installed, name) || state.queued.includes(name);
-  const candidates = [...new Set(reached)]
-    .filter((name) => isWorthInstalling(name) && !owned(name))
+  const available = (name: string) => reached.includes(name) || (donations?.sellers[name]?.length ?? 0) > 0;
+  const sellerReputation = sellerReputations(donations);
+  const candidates = [...new Set([...reached, ...Object.keys(donations?.sellers ?? {})])]
+    .filter((name) => available(name) && isWorthInstalling(name) && !owned(name))
     .sort(
       (a, b) =>
         hackingValue(b, hackingLevel) - hackingValue(a, hackingLevel) ||
@@ -111,13 +233,19 @@ export function chooseAugmentationsToBuy(
         gameOrder(a) - gameOrder(b),
     );
   let chosen: string[] = [];
-  let set: AugmentationSet = { purchases: [], money: 0 };
+  let set: AugmentationSet = { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] };
   for (const name of candidates) {
     if (chosen.includes(name)) continue;
     const bundle = withPrerequisites(name, state, chosen);
-    if (bundle === null || !bundle.every((each) => reached.includes(each))) continue;
-    const tried = purchaseSequenceCost(augmentationBuyOrder([...chosen, ...bundle]), state);
-    if (tried.money <= money) {
+    if (bundle === null || !bundle.every(available)) continue;
+    const order = augmentationBuyOrder([...chosen, ...bundle]);
+    const { targets, byDonation } = planDonations(order, state, reached, donations);
+    const tried = {
+      ...purchaseSequenceCost(order, state),
+      ...donationsOf(targets, sellerReputation, donations),
+      byDonation,
+    };
+    if (tried.money + tried.donationMoney <= money) {
       chosen = [...chosen, ...bundle];
       set = tried;
     }
@@ -204,6 +332,18 @@ export interface InstallCounts {
   affordableWithNeuroFlux: number;
 }
 
+/** The counts' purchases and their money (#222), and (#225) the donations they need. */
+export interface CountedPurchases extends InstallCounts {
+  neuroFluxLevels: number;
+  /** What the set, the levels and the donations cost. */
+  money: number;
+  /** One a faction, the set's and the levels' together, and their money. */
+  donations: Donation[];
+  donationMoney: number;
+  /** How many of the counted purchases, the set's and the levels', need a donation. */
+  byDonation: number;
+}
+
 /**
  * The counts (#222; `autopilot.js:901-903`, the legacy faction manager's affordable and awaiting-install counts).
  * - Affordable: those worth installing in `installable`, plus the set to buy (`chooseAugmentationsToBuy` with `money`).
@@ -213,6 +353,9 @@ export interface InstallCounts {
  *   `neuroFluxReputation` (the joined sellers' most), each priced after the set and the levels before it, as
  *   `augmentationCost` has it (×1.14 a level, ×1.9 a purchase).
  * Also the levels, and the money the set and the levels cost: the countdown holds it back.
+ * With `donations` (#225), a level beyond `neuroFluxReputation` is bought with a donation at a NeuroFlux seller taking
+ * donations, the one it raises least, on top of the set's donations (legacy `faction-manager.js:822-860`): the money
+ * covers its price and what its donation adds. The money then includes every donation.
  */
 export function affordableCounts({
   state,
@@ -220,40 +363,68 @@ export function affordableCounts({
   set,
   money,
   neuroFluxReputation,
+  donations,
 }: {
   state: AugmentationPurchaseState;
   installable?: readonly string[];
   set: AugmentationSet;
   money: number;
   neuroFluxReputation: number;
-}): InstallCounts & { neuroFluxLevels: number; money: number } {
+  donations?: DonationTerms;
+}): CountedPurchases {
   const queuedWorth = installable.filter(isWorthInstalling).length;
   const queuedNeuroFlux = installable.filter((name) => name === NEUROFLUX_GOVERNOR).length;
   const affordable = queuedWorth + set.purchases.length;
   let queued = [...state.queued, ...set.purchases.map((purchase) => purchase.name)];
-  let spent = set.money;
+  const sellerReputation = sellerReputations(donations);
+  let targets = new Map(set.donations.map(({ faction, reputation }) => [faction, { faction, reputation }]));
+  let planned = donationsOf(targets, sellerReputation, donations);
+  let spent = set.money + planned.donationMoney;
   let neuroFluxLevels = 0;
+  let levelsByDonation = 0;
   for (;;) {
     const cost = augmentationCost(NEUROFLUX_GOVERNOR, { ...state, queued });
-    // Each level dearer in both, so a finite money or reputation ends it.
-    if (spent + cost.money > money || cost.reputation > neuroFluxReputation) break;
-    spent += cost.money;
+    // A seller taking donations reaches what its planned donation brings it to.
+    const reach = Math.max(
+      neuroFluxReputation,
+      ...(donations?.neuroFluxSellers ?? []).map((each) => targets.get(each.faction)?.reputation ?? each.reputation),
+    );
+    let nextTargets = targets;
+    let next = planned;
+    const byDonation = cost.reputation > reach;
+    if (byDonation) {
+      const seller = cheapestSeller(donations?.neuroFluxSellers ?? [], cost.reputation, targets);
+      // Without a seller taking donations, a finite reputation ends it.
+      if (seller === null) break;
+      nextTargets = new Map(targets).set(seller.faction, { faction: seller.faction, reputation: cost.reputation });
+      next = donationsOf(nextTargets, sellerReputation, donations);
+    }
+    // Each level dearer, so a finite money ends it.
+    if (spent + cost.money + next.donationMoney - planned.donationMoney > money) break;
+    spent += cost.money + next.donationMoney - planned.donationMoney;
+    targets = nextTargets;
+    planned = next;
     queued = [...queued, NEUROFLUX_GOVERNOR];
     neuroFluxLevels += 1;
+    if (byDonation) levelsByDonation += 1;
   }
   return {
     affordable,
     affordableWithNeuroFlux: affordable + queuedNeuroFlux + neuroFluxLevels,
     neuroFluxLevels,
     money: spent,
+    donations: planned.donations,
+    donationMoney: planned.donationMoney,
+    byDonation: set.byDonation.length + levelsByDonation,
   };
 }
 
 /**
  * Why an install is chosen (#222). "The Red Pill" is the brain's own (#215): reached or queued, it links w0r1d_d43m0n
- * once installed (`installRule` never gives it).
+ * once installed; and "Daedalus donations" (#225): Daedalus's reputation unlocks its donations at the next install, so
+ * The Red Pill's is bought. `installRule` gives neither.
  */
-export type InstallReason = "count reached" | "quick install" | "nothing left" | "The Red Pill";
+export type InstallReason = "count reached" | "quick install" | "nothing left" | "The Red Pill" | "Daedalus donations";
 
 export interface InstallRuleInputs extends InstallCounts {
   /** The game's time the brain saw online since the last install: the bars' clock. */

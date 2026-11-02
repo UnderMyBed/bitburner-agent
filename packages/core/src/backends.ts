@@ -2,7 +2,8 @@
  * The Singularity backend's home workers (#145, architecture §5.6): one per action, so each costs only its own call.
  * They never run on a fresh save, so the fresh-save check (the Agent's budget plus its largest worker within 8 GB) leaves
  * them out: at SF4.3 or in BN4 the first four are within today's largest fresh-save worker, the faction join is 5.1 GB,
- * the augmentation purchase 12.6 GB, faction work 5.3 GB (#151), company work 8.8 GB (#153), crime 7.3 GB (#156),
+ * the augmentation purchase 12.6 GB, the donation 7.6 GB (#225), faction work 5.3 GB (#151), company work 8.8 GB
+ * (#153), crime 7.3 GB (#156),
  * classes 6.8 GB (#158), backdoors 8.0 GB (#162), the install 6.6 GB (#164), the destroy 33.9 GB (#175, beside the
  * Agent only on a 64 GB home) and the faction state's reader 12.1 GB (#197). With less of SF4 the game charges
  * their calls 4× or 16× (`Netscript/RamCostGenerator.ts:82-95`). One that doesn't fit home beside the Agent, or home's
@@ -17,6 +18,8 @@ export const SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME = "singularity-upgrade-hom
 export const SINGULARITY_JOIN_FACTION_WORKER_NAME = "singularity-join-faction.js";
 /** 12.6 GB: `getResetInfo`, `getOwnedAugmentations` and `purchaseAugmentation` (#149). */
 export const SINGULARITY_BUY_AUGMENTATION_WORKER_NAME = "singularity-buy-augmentation.js";
+/** 7.6 GB: `singularity.getFactionRep` (1 GB) and `singularity.donateToFaction` (5 GB) (#225). */
+export const SINGULARITY_DONATE_TO_FACTION_WORKER_NAME = "singularity-donate-to-faction.js";
 /** `getCurrentWork`, `isFocused`, `workForFaction` and `setFocus` (#151). */
 export const SINGULARITY_FACTION_WORK_WORKER_NAME = "singularity-faction-work.js";
 /** 8.8 GB: `getPlayer`, `getCurrentWork`, `isFocused`, `applyToCompany`, `workForCompany` and `setFocus` (#153). */
@@ -65,6 +68,7 @@ export function singularityWorkerFileNames(): string[] {
     SINGULARITY_UPGRADE_HOME_RAM_WORKER_NAME,
     SINGULARITY_JOIN_FACTION_WORKER_NAME,
     SINGULARITY_BUY_AUGMENTATION_WORKER_NAME,
+    SINGULARITY_DONATE_TO_FACTION_WORKER_NAME,
     SINGULARITY_FACTION_WORK_WORKER_NAME,
     SINGULARITY_COMPANY_WORK_WORKER_NAME,
     SINGULARITY_CRIME_WORK_WORKER_NAME,

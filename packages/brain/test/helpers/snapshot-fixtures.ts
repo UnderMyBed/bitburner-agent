@@ -84,6 +84,7 @@ export const idleAugmentations: AugmentationsView = {
   set: [],
   setCost: 0,
   progress: null,
+  donations: [],
   waitingFor: null,
   notQueued: [],
   reserve: 0,

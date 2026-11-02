@@ -55,6 +55,7 @@ try {
       AugmentationRepCost: all.AugmentationRepCost as number,
       DaedalusAugsRequirement: all.DaedalusAugsRequirement as number,
       FactionWorkRepGain: all.FactionWorkRepGain as number,
+      FavorToDonateToFaction: all.FavorToDonateToFaction as number,
     };
   }
 

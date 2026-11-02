@@ -36,11 +36,13 @@ function readerWith(
     homeRam = 8,
     invitationsAnswered = () => 0,
     augmentationsBought = () => 0,
+    donationsMade = () => 0,
   }: {
     singularity?: boolean;
     homeRam?: number;
     invitationsAnswered?: () => number;
     augmentationsBought?: () => number;
+    donationsMade?: () => number;
   } = {},
 ) {
   const happened: string[] = [];
@@ -70,6 +72,7 @@ function readerWith(
     },
     invitationsAnswered,
     augmentationsBought,
+    donationsMade,
   });
   /** The context each page worker was given. */
   const contexts = () =>
@@ -79,7 +82,12 @@ function readerWith(
   return { reader, happened, lines, contexts };
 }
 
-const FIRST_CONTEXT = JSON.stringify({ memory: null, invitationAnswered: false, augmentationBought: false });
+const FIRST_CONTEXT = JSON.stringify({
+  memory: null,
+  invitationAnswered: false,
+  augmentationBought: false,
+  donationMade: false,
+});
 
 describe("the reader", () => {
   test("the routine dialogs first, then the page's worker, with the deadline less the margin: its state", async () => {
@@ -144,9 +152,11 @@ describe("the page reader's memory, and the Agent's news since", () => {
     let invitations = 0;
     // Counted, all told: the brain stops sending a done intent long before the next read (#197).
     let bought = 1;
+    let donated = 0;
     const { reader, contexts } = readerWith(() => ({ done: true, problem: null, state: STATE, opened: [], memory }), {
       invitationsAnswered: () => invitations,
       augmentationsBought: () => bought,
+      donationsMade: () => donated,
     });
     await reader.read(10_000);
     await reader.read(10_000);
@@ -154,11 +164,18 @@ describe("the page reader's memory, and the Agent's news since", () => {
     bought = 2;
     await reader.read(10_000);
     await reader.read(10_000);
+    // A donation done (#225): its faction's reputation is read again.
+    donated = 1;
+    await reader.read(10_000);
+    await reader.read(10_000);
+    const none = { invitationAnswered: false, augmentationBought: false, donationMade: false };
     expect(contexts()).toEqual([
-      { memory: null, invitationAnswered: false, augmentationBought: false },
-      { memory, invitationAnswered: false, augmentationBought: false },
-      { memory, invitationAnswered: true, augmentationBought: true },
-      { memory, invitationAnswered: false, augmentationBought: false },
+      { memory: null, ...none },
+      { memory, ...none },
+      { memory, invitationAnswered: true, augmentationBought: true, donationMade: false },
+      { memory, ...none },
+      { memory, ...none, donationMade: true },
+      { memory, ...none },
     ]);
   });
 

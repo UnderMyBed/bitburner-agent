@@ -14,7 +14,7 @@ import {
   type StaticSnapshotData,
   type WorkOutcome,
 } from "@bitburner-agent/core";
-import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline } from "./augmentation-report.ts";
+import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline, donationStatus } from "./augmentation-report.ts";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
@@ -456,6 +456,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       hacking.addMedium(atMs, data);
       backdoors.addMedium(atMs, data);
       factionWork.addMedium(atMs, data);
+      augmentations.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
@@ -772,7 +773,7 @@ function progressSection(facts: RunFacts): string[] {
     lines.push(
       `  purchased servers: ${describeChange(listOrNone(namesOf(slowFirst.purchasedServers)), listOrNone(namesOf(slowLast.purchasedServers)))}`,
     );
-    lines.push(...factionProgressLines(facts.factionState));
+    lines.push(...factionProgressLines(facts.factionState, slowLast));
   }
   lines.push(
     "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
@@ -798,13 +799,16 @@ function describeQueue(queue: string[] | null): string {
   return listOrNone([...counts].map(([name, count]) => (count === 1 ? name : `${name} ×${count}`)));
 }
 
-/** The faction state (#197), first reading → last: each faction's reputation and favour, the invitations, the queue. */
-function factionProgressLines(folding: FactionStateFolding): string[] {
+/**
+ * The faction state (#197), first reading → last: each faction's reputation and favour, the invitations, the queue;
+ * and (#225) each faction's favour after the next install, and when its donations unlock (`donationStatus`).
+ */
+function factionProgressLines(folding: FactionStateFolding, slowLast: SlowSnapshotData | undefined): string[] {
   const lines = ["  faction reputation and favour, first reading → last:"];
   for (const [name, { first, last }] of folding.factions) {
     const reputation = describeChange(formatReputation(first.reputation), formatReputation(last.reputation));
     const favor = describeChange(formatFavor(first.favor), formatFavor(last.favor));
-    lines.push(`    ${name}: reputation ${reputation}, favour ${favor}`);
+    lines.push(`    ${name}: reputation ${reputation}, favour ${favor}${donationStatus(name, last, slowLast)}`);
   }
   if (folding.factions.size === 0) lines.push(`    ${folding.lastQueue === null ? "never read" : "none joined"}`);
   lines.push("  faction invitations, as first seen:");

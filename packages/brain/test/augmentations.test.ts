@@ -317,6 +317,7 @@ describe("the count rule (#222)", () => {
       bar: 5,
       barWithNeuroFlux: 9,
       reason: "count reached",
+      donations: [],
     });
     expect(lines.at(-1)).toBe(
       `augmentations: install chosen, 6.0 h online this cycle: buying ${FIVE.join(", ")} ($447,170,900), the count ` +
@@ -354,7 +355,13 @@ describe("the count rule (#222)", () => {
   test("nothing left at the joined factions (CyberSec's five reached): installs, after the countdown", () => {
     const ask = throughCountdown({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: FIVE_COST }) });
     expect(ask).toEqual({ intent: purchaseIntent("CyberSec", GEN_I, 1), install: false, committed: true });
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false, neuroFluxTarget: 0 });
+    expect(readAugmentationCycle(store)).toEqual({
+      lastAugReset: 0,
+      installing: false,
+      neuroFluxTarget: 0,
+      donations: [],
+      reason: "nothing left",
+    });
     expect(events.at(-1)).toMatchObject({ type: "augmentationInstallChosen", reason: "nothing left", cost: FIVE_COST });
     expect(lines).toEqual([
       "augmentations: install countdown started, 90 s, nothing else worth installing at the joined factions; " +
@@ -577,6 +584,8 @@ describe("the progress events (#222)", () => {
         reason: null,
         countdown: null,
         held: null,
+        byDonation: 0,
+        setCost: expect.closeTo(FIVE_COST, 0),
       },
     ]);
     // A NeuroFlux Governor level more, 5 minutes after the last recorded (the brain's time): recorded.
@@ -1008,7 +1017,13 @@ describe("committed", () => {
     const queue = [...FIVE];
     const install = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money: 0 }) });
     expect(install.install).toBe(true);
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: true, neuroFluxTarget: 4 });
+    expect(readAugmentationCycle(store)).toEqual({
+      lastAugReset: 0,
+      installing: true,
+      neuroFluxTarget: 4,
+      donations: [],
+      reason: "nothing left",
+    });
     rule = newRule();
     // $1b now covers NeuroFlux Governor, but the install is out.
     const after = update({ slowData: slow({ reputation: 18_750, queued: queue }), mediumData: medium({ money: 1e9 }) });
@@ -1199,7 +1214,13 @@ describe("The Red Pill and Daedalus first (#215)", () => {
   test("The Red Pill reached at a joined Daedalus: install chosen for it, whatever the income; bought last", () => {
     const joined = [{ name: "Daedalus", reputation: 2.5e6, favor: 0 }];
     const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: 0 }) });
-    expect(readAugmentationCycle(store)).toEqual({ lastAugReset: 0, installing: false, neuroFluxTarget: 0 });
+    expect(readAugmentationCycle(store)).toEqual({
+      lastAugReset: 0,
+      installing: false,
+      neuroFluxTarget: 0,
+      donations: [],
+      reason: "The Red Pill",
+    });
     expect(events).toEqual([expect.objectContaining({ type: "augmentationInstallChosen", reason: "The Red Pill" })]);
     expect(lines.at(-1)).toMatch(/The Red Pill reached: it links w0r1d_d43m0n once installed$/);
     // Nothing else the money covers: The Red Pill, from Daedalus, then the install once it shows queued.
@@ -1242,18 +1263,18 @@ describe("The Red Pill and Daedalus first (#215)", () => {
   });
 
   test("Daedalus joined, The Red Pill short: no install or countdown, though the count is reached; nothing held back", () => {
-    // Eight reached and covered, with Daedalus joined at 1m.
-    const joined = [...EIGHT_JOINED, { name: "Daedalus", reputation: 1e6, favor: 0 }];
-    const why = "The Red Pill: Daedalus's reputation 1,000,000 of 2,500,000 (an install now would lose it)";
+    // Eight reached and covered, with Daedalus joined at 100k: short of what unlocks its donations too (#225).
+    const joined = [...EIGHT_JOINED, { name: "Daedalus", reputation: 100_000, favor: 0 }];
+    const why = "The Red Pill: Daedalus's reputation 100,000 of 2,500,000 (an install now would lose it)";
     measureIncome(10_000, { joined }, medium({ money: EIGHT_COST + SLACK }));
     expect(readAugmentationCycle(store)).toBeNull();
     expect(rule.view()).toMatchObject({ waitingFor: why, reserve: 0, progress: { countdown: null, held: why } });
     expect(rule.view().progress?.reason).not.toBeNull();
     // One progress event, held: the reputation's figure in its words changes nothing recorded.
     gameTimeMs += MINUTE;
-    const more = [...EIGHT_JOINED, { name: "Daedalus", reputation: 1.2e6, favor: 0 }];
+    const more = [...EIGHT_JOINED, { name: "Daedalus", reputation: 120_000, favor: 0 }];
     update({ slowData: slow({ joined: more }), mediumData: medium({ money: EIGHT_COST + SLACK }) });
-    expect(rule.view().progress?.held).toMatch(/^The Red Pill: Daedalus's reputation 1,200,000 of /);
+    expect(rule.view().progress?.held).toMatch(/^The Red Pill: Daedalus's reputation 120,000 of /);
     expect(events.map((event) => event.type)).toEqual(["augmentationProgress"]);
     expect(lines).toEqual([`augmentations: no install, waiting for ${why}`]);
   });
@@ -1360,6 +1381,379 @@ describe("The Red Pill and Daedalus first (#215)", () => {
     expect(rule.daedalusHold()).toBe(0);
     update({ slowData: slow(fields), mediumData: medium({ hacking: 2000, money: 150e9 }) });
     expect(rule.daedalusHold()).toBe(0);
+  });
+});
+
+describe("donations (#225)", () => {
+  /** CyberSec at 5,000 with its donations unlocked: Gen I and Gen II by one donation, to Gen II's 18,750. */
+  const UNLOCKED = [{ name: "CyberSec", reputation: 5_000, favor: 150 }];
+  const DONATION = 13_750_010_000;
+  const donateIntent = (faction: string, amount: number, reputation: number) => ({
+    id: `donateToFaction(${faction}, ${amount}, ${reputation})`,
+    action: "donateToFaction",
+    args: { faction, amount, reputation },
+  });
+  const atReputation = (reputation: number, favor = 150) => [{ name: "CyberSec", reputation, favor }];
+
+  test("counted when the money covers the prices and the donation; the reserve holds both; the note records it", () => {
+    const mediumData = medium({ money: FIVE_COST + DONATION + SLACK });
+    update({ slowData: slow({ joined: UNLOCKED }), mediumData });
+    expect(rule.view().progress).toMatchObject({ affordable: 5, byDonation: 2, reason: "nothing left" });
+    expect(rule.view().donations).toEqual([{ faction: "CyberSec", reputation: 18_750, amount: DONATION }]);
+    expect(rule.view().reserve).toBeCloseTo(FIVE_COST + DONATION, 0);
+    expect(describeProgress(rule.view().progress as never)).toMatch(
+      /^5 of 8 new augmentations affordable \(5 of 12 with NeuroFlux; 2 of them by donation\)/,
+    );
+    // The money for the five's prices alone: Gen II and Gen I, which need the donation, left out.
+    rule = newRule();
+    update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money: FIVE_COST }) });
+    expect(rule.view().progress).toMatchObject({ byDonation: 0 });
+    expect(rule.view().donations).toEqual([]);
+    // Not unlocked (favour 149): none by donation.
+    rule = newRule();
+    update({ slowData: slow({ joined: atReputation(5_000, 149) }), mediumData });
+    expect(rule.view().progress).toMatchObject({ affordable: 3, byDonation: 0 });
+    // Committed (after the countdown), the note and the event carry the donation.
+    rule = newRule();
+    gameTimeMs += MINUTE;
+    throughCountdown({ slowData: slow({ joined: UNLOCKED }), mediumData });
+    expect(readAugmentationCycle(store)?.donations).toEqual([
+      { faction: "CyberSec", reputation: 18_750, amount: DONATION },
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "augmentationInstallChosen",
+      donations: [{ faction: "CyberSec", reputation: 18_750, amount: DONATION }],
+    });
+    expect(lines.at(-1)).toMatch(/donating \$13,750,010,000 to CyberSec \(for 18,750 reputation\) first, /);
+  });
+
+  test("a change in the count by donation alone is recorded, as the counts' are (at most every 5 minutes)", () => {
+    const nitesec = { name: "NiteSec", reputation: 0, favor: 0 };
+    update({
+      slowData: slow({ joined: [...UNLOCKED, nitesec] }),
+      mediumData: medium({ money: FIVE_COST + DONATION + SLACK }),
+    });
+    // CyberSec worked up to Gen II meanwhile: the same five, none by donation.
+    gameTimeMs += MINUTE;
+    update({
+      slowData: slow({ joined: [...atReputation(18_750), nitesec] }),
+      mediumData: medium({ money: FIVE_COST + SLACK }),
+      nowMs: 1_000 + AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
+    });
+    expect(
+      progressEvents().map((event) => [event.affordable, event.affordableWithNeuroFlux, event.byDonation]),
+    ).toEqual([
+      [5, 5, 2],
+      [5, 5, 0],
+    ]);
+  });
+
+  test("committed: the donation first, then nothing bought until the faction state shows it; then the set in buy order", () => {
+    const money = FIVE_COST + DONATION + SLACK;
+    throughCountdown({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    const ask = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money, homeRam: 128 }) });
+    // Before Gen I, and before home's RAM, which the money would cover.
+    expect(ask.intent).toEqual(donateIntent("CyberSec", DONATION, 18_750));
+    expect(rule.view().asking).toBe("donating $13,750,010,000 to CyberSec (for 18,750 reputation)");
+    update({
+      slowData: slow({ joined: UNLOCKED }),
+      mediumData: medium({ money, homeRam: 128 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    // Reported done, the faction state not showing it yet: nothing more.
+    const waiting = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money, homeRam: 128 }) });
+    expect(waiting.intent).toBeNull();
+    expect(rule.view().waitingFor).toBe("the faction state to show CyberSec's reputation after the donation");
+    // A read showing it: the donation's event, then Gen I.
+    gameTimeMs += MINUTE;
+    const next = update({
+      slowData: slow({ joined: atReputation(18_750.01) }),
+      mediumData: medium({ money: FIVE_COST + SLACK, homeRam: 128 }),
+    });
+    expect(events.filter((event) => event.type === "augmentationDonated")).toEqual([
+      {
+        type: "augmentationDonated",
+        atMs: 1_000,
+        faction: "CyberSec",
+        amount: DONATION,
+        reputation: 18_750,
+        before: 5_000,
+        after: 18_750.01,
+      },
+    ]);
+    expect(next.intent).toEqual(purchaseIntent("CyberSec", GEN_I, 1));
+    expect(lines).toContainEqual(
+      "augmentations: donated $13,750,010,000 to CyberSec (for 18,750 reputation): its reputation 5,000 → 18,750",
+    );
+  });
+
+  test("a donation the faction state never shows: augmentationDonationFailed, alerted, the cycle called off", () => {
+    const money = FIVE_COST + DONATION + SLACK;
+    throughCountdown({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    const ask = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    update({
+      slowData: slow({ joined: UNLOCKED }),
+      mediumData: medium({ money }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    // One read missing it: not yet.
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    expect(rule.donationsFailed()).toEqual([]);
+    // A skipped reading isn't a read.
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ joined: UNLOCKED, reading: "skipped" }), mediumData: medium({ money }) });
+    expect(rule.donationsFailed()).toEqual([]);
+    gameTimeMs += MINUTE;
+    update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    expect(rule.donationsFailed()).toEqual([
+      { faction: "CyberSec", amount: DONATION, reputation: 18_750, donatedAtMs: 1_000 },
+    ]);
+    expect(events.find((event) => event.type === "augmentationDonationFailed")).toMatchObject({
+      faction: "CyberSec",
+      shown: 5_000,
+    });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(lines).toContainEqual(
+      "augmentations: the install cycle is called off: the donation to CyberSec didn't show in its reputation",
+    );
+    expect(lines.some((line) => line.startsWith("augmentations: DONATION FAILED: $13,750,010,000 to CyberSec"))).toBe(
+      true,
+    );
+  });
+
+  test("a note's donation the money no longer covers: passed over, said, and the reached ones bought", () => {
+    throughCountdown({
+      slowData: slow({ joined: UNLOCKED }),
+      mediumData: medium({ money: FIVE_COST + DONATION + SLACK }),
+    });
+    // The owner spent it meanwhile, with no donation in flight (a restarted brain asked for none): $200m left.
+    rule = newRule();
+    const ask = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money: 200e6 }) });
+    expect(ask.intent?.action).toBe("purchaseAugmentation");
+    expect(lines).toContainEqual(
+      "augmentations: the donation $13,750,010,000 to CyberSec (for 18,750 reputation) passed over: $200,000,000 " +
+        "now; what it was for isn't bought",
+    );
+  });
+
+  test("a counted donation in flight, its money already spent, isn't passed over (#227 re-review): asked again", () => {
+    const asked = throughCountdown({
+      slowData: slow({ joined: UNLOCKED }),
+      mediumData: medium({ money: FIVE_COST + DONATION + SLACK }),
+    });
+    expect(asked.intent).toEqual(donateIntent("CyberSec", DONATION, 18_750));
+    // The medium snapshot shows the money spent before the done comes: the same donation, nothing passed over.
+    const again = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money: FIVE_COST + SLACK }) });
+    expect(again.intent).toEqual(asked.intent);
+    expect(lines.filter((line) => line.includes("passed over"))).toEqual([]);
+  });
+
+  test("Daedalus's favour (legacy autopilot.js:920-931): its reputation unlocking donations installs, after the countdown", () => {
+    // CyberSec's five reached and covered; Daedalus at 462,491, what unlocks its donations at the next install.
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "Daedalus", reputation: 462_491, favor: 0 },
+    ];
+    const mediumData = medium({ money: FIVE_COST + SLACK });
+    update({ slowData: slow({ joined }), mediumData });
+    expect(rule.view().progress).toMatchObject({ reason: "Daedalus donations", held: null });
+    expect(rule.view().progress?.countdown).toMatchObject({ quick: false });
+    gameTimeMs += 90_000;
+    update({ slowData: slow({ joined }), mediumData });
+    expect(events.at(-1)).toMatchObject({ type: "augmentationInstallChosen", reason: "Daedalus donations" });
+    expect(lines.at(-1)).toMatch(
+      /Daedalus donations: its reputation this cycle unlocks its donations at the next install/,
+    );
+    expect(describeReason("Daedalus donations", {})).toMatch(/^Daedalus donations: /);
+  });
+
+  test("Daedalus's favour: its preconditions, each needed", () => {
+    const money = FIVE_COST + SLACK;
+    const daedalusAt = (reputation: number, favor = 0) => [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "Daedalus", reputation, favor },
+    ];
+    // A reputation short of it: The Red Pill's hold, no install.
+    update({ slowData: slow({ joined: daedalusAt(462_490) }), mediumData: medium({ money }) });
+    expect(rule.view().progress?.held).toMatch(/^The Red Pill: Daedalus's reputation 462,490 of 2,500,000/);
+    // Banked favour lowers it: 306,374 from 100.
+    rule = newRule();
+    update({ slowData: slow({ joined: daedalusAt(306_374, 100) }), mediumData: medium({ money }) });
+    expect(rule.view().progress?.reason).toBe("Daedalus donations");
+    // Not joined: Daedalus's hold for its invitation, or nothing (not its count).
+    rule = newRule();
+    update({ slowData: slow({ joined: daedalusAt(462_491).slice(0, 1) }), mediumData: medium({ money }) });
+    expect(rule.view().progress?.reason).not.toBe("Daedalus donations");
+    // The Red Pill reached: its own install, at once.
+    rule = newRule();
+    update({ slowData: slow({ joined: daedalusAt(2.5e6) }), mediumData: medium({ money }) });
+    expect(events.at(-1)).toMatchObject({ type: "augmentationInstallChosen", reason: "The Red Pill" });
+    // Nothing at all to install: no install, held, saying why.
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    rule = newRule();
+    update({ slowData: slow({ joined: [{ name: "Daedalus", reputation: 500_000, favor: 0 }] }), mediumData: medium() });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view().progress?.held).toMatch(/^something affordable to install: Daedalus's reputation this cycle/);
+    expect(rule.view().progress?.countdown).toBeNull();
+  });
+
+  test("Daedalus's donations unlocked: The Red Pill's reputation donated and bought once the money covers it", () => {
+    const joined = [{ name: "Daedalus", reputation: 0, favor: 150 }];
+    // $2.5t and $10k for the margin, at faction_rep 1.
+    const amount = 2.5e12 + 10_000;
+    update({ slowData: slow({ joined }), mediumData: medium({ money: amount - 1 }) });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view()).toMatchObject({
+      waitingFor:
+        "The Red Pill: the money for Daedalus's donation, $2,500,000,010,000 for its reputation " +
+        "($2,500,000,009,999 now)",
+      reserve: amount,
+    });
+    // Covered: the install chosen for it, the donation first.
+    const chosen = update({ slowData: slow({ joined }), mediumData: medium({ money: amount }) });
+    expect(events.at(-1)).toMatchObject({
+      type: "augmentationInstallChosen",
+      reason: "The Red Pill",
+      donations: [{ faction: "Daedalus", reputation: 2.5e6, amount }],
+    });
+    expect(chosen.intent).toEqual(donateIntent("Daedalus", amount, 2.5e6));
+  });
+
+  test("Daedalus donations, driven to the install (#225 review): committed without The Red Pill, then install: true", () => {
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "Daedalus", reputation: 462_491, favor: 0 },
+    ];
+    let money = FIVE_COST + SLACK;
+    update({ slowData: slow({ joined }), mediumData: medium({ money }) });
+    gameTimeMs += 90_000;
+    let ask = update({ slowData: slow({ joined }), mediumData: medium({ money }) });
+    expect(readAugmentationCycle(store)?.reason).toBe("Daedalus donations");
+    const chosen = events.find((event) => event.type === "augmentationInstallChosen") as {
+      set: { augmentation: string; price: number }[];
+    };
+    expect(chosen.set.length).toBeGreaterThan(0);
+    const queue: string[] = [];
+    for (const { augmentation, price } of chosen.set) {
+      expect(ask.intent).toMatchObject({ action: "purchaseAugmentation", args: { augmentation } });
+      update({
+        slowData: slow({ joined, queued: [...queue] }),
+        mediumData: medium({ money }),
+        doneIds: new Set([ask.intent?.id as string]),
+      });
+      queue.push(augmentation);
+      money -= price;
+      gameTimeMs += MINUTE;
+      ask = update({ slowData: slow({ joined, queued: [...queue] }), mediumData: medium({ money }) });
+    }
+    // The set bought; the money for nothing more.
+    gameTimeMs += MINUTE;
+    ask = update({ slowData: slow({ joined, queued: [...queue] }), mediumData: medium({ money: 0 }) });
+    // Daedalus sells The Red Pill, unreached: #215's guard would hold for it, but this install is for the favour.
+    expect(ask).toEqual({ intent: null, install: true, committed: true });
+  });
+
+  test("The Red Pill's donation first, the counts budgeted without its money, with another donor present (#225 review)", () => {
+    // Daedalus and CyberSec both unlocked: $2.5t for The Red Pill, and $6b more.
+    const joined = [
+      { name: "Daedalus", reputation: 0, favor: 150 },
+      { name: "CyberSec", reputation: 5_000, favor: 150 },
+    ];
+    const RED_PILL_DONATION = 2_500_000_010_000;
+    const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION + 6e9 }) });
+    const note = readAugmentationCycle(store);
+    expect(note).toMatchObject({ reason: "The Red Pill", redPill: "Daedalus" });
+    expect(note?.donations?.[0]).toEqual({ faction: "Daedalus", reputation: 2.5e6, amount: RED_PILL_DONATION });
+    // The rest planned within the $6b left, after it: CyberSec's $5b for Gen I, not Daedalus's own augmentations'.
+    const rest = (note?.donations ?? []).slice(1);
+    expect(rest.map((each) => each.faction)).toEqual(["CyberSec"]);
+    expect(rest.reduce((sum, each) => sum + each.amount, 0)).toBeLessThanOrEqual(6e9);
+    expect(ask.intent).toEqual(donateIntent("Daedalus", RED_PILL_DONATION, 2.5e6));
+    // In flight (#227 re-review): the medium snapshot shows its $2.5t spent before the done comes. No call-off: asked
+    // again; then the done, recorded, and the reputation shown.
+    const spent = update({ slowData: slow({ joined }), mediumData: medium({ money: 6e9 }) });
+    expect(spent.intent).toEqual(ask.intent);
+    expect(readAugmentationCycle(store)).not.toBeNull();
+    update({
+      slowData: slow({ joined }),
+      mediumData: medium({ money: 6e9 }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    gameTimeMs += MINUTE;
+    const shown = [{ ...joined[0], reputation: 2.5e6 + 0.01 }, joined[1]] as typeof joined;
+    update({ slowData: slow({ joined: shown }), mediumData: medium({ money: 6e9 }) });
+    expect(events.filter((event) => event.type === "augmentationCycleCalledOff")).toEqual([]);
+    expect(events.filter((event) => event.type === "augmentationDonated")).toEqual([
+      expect.objectContaining({ faction: "Daedalus", amount: RED_PILL_DONATION, before: 0 }),
+    ]);
+  });
+
+  test("The Red Pill's donation never passed over: its money gone with none in flight, the cycle called off, held for it", () => {
+    const joined = [{ name: "Daedalus", reputation: 0, favor: 150 }];
+    const RED_PILL_DONATION = 2_500_000_010_000;
+    update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION }) });
+    expect(readAugmentationCycle(store)?.redPill).toBe("Daedalus");
+    // A restarted brain (none in flight); the owner spent the money meanwhile.
+    rule = newRule();
+    const short = update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION - 1 }) });
+    expect(short).toMatchObject({ intent: null, committed: false });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(events.at(-1)).toMatchObject({
+      type: "augmentationCycleCalledOff",
+      reason: expect.stringMatching(/^the money for The Red Pill's donation is gone: \$2,500,000,010,000 to Daedalus/),
+    });
+    update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION - 1 }) });
+    expect(rule.redPillHold()).toBe(RED_PILL_DONATION);
+    expect(rule.reserve()).toBe(RED_PILL_DONATION);
+  });
+
+  test("Daedalus's favour, legacy's 90% guard (#225 review): from 2,250,000 of 2.5m earned, no install, earned to the end", () => {
+    const at = (reputation: number) => [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "Daedalus", reputation, favor: 0 },
+    ];
+    update({ slowData: slow({ joined: at(2_249_999) }), mediumData: medium({ money: FIVE_COST + SLACK }) });
+    expect(rule.view().progress?.reason).toBe("Daedalus donations");
+    rule = newRule();
+    update({ slowData: slow({ joined: at(2_250_000) }), mediumData: medium({ money: FIVE_COST + SLACK }) });
+    expect(rule.view().progress?.held).toMatch(/^The Red Pill: Daedalus's reputation 2,250,000 of 2,500,000/);
+  });
+
+  test("the lookahead's reserve counts the donations (#225 review): an install 15 minutes off by donation holds its money", () => {
+    // CyberSec alone, unlocked at 5,000: with $0 now and 15 minutes of income, the five, two by donation, nothing left.
+    measureIncome((FIVE_COST + DONATION + SLACK) / 900, { joined: UNLOCKED }, medium({ money: 0 }));
+    expect(rule.view().progress?.countdown).toBeNull();
+    expect(rule.reserve()).toBeCloseTo(FIVE_COST + DONATION, 0);
+  });
+
+  test("a donation shown in the faction state before its done is reported (#225 review): recorded once, then on", () => {
+    const money = FIVE_COST + DONATION + SLACK;
+    const ask = throughCountdown({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    expect(ask.intent).toEqual(donateIntent("CyberSec", DONATION, 18_750));
+    // The faction state shows it; the medium snapshot doesn't yet, nor has the done come: Gen I next, on the money
+    // left.
+    gameTimeMs += MINUTE;
+    const next = update({ slowData: slow({ joined: atReputation(18_750.01) }), mediumData: medium({ money }) });
+    expect(next.intent).toEqual(purchaseIntent("CyberSec", GEN_I, 1));
+    const donated = () => events.filter((event) => event.type === "augmentationDonated");
+    expect(donated()).toEqual([expect.objectContaining({ faction: "CyberSec", amount: DONATION, after: 18_750.01 })]);
+    // The done, reported late: nothing more.
+    update({
+      slowData: slow({ joined: atReputation(18_750.01) }),
+      mediumData: medium({ money }),
+      doneIds: new Set([ask.intent?.id as string]),
+    });
+    expect(donated()).toHaveLength(1);
+  });
+
+  test("the switch off: nothing donated, and a cycle under way called off", () => {
+    const money = FIVE_COST + DONATION + SLACK;
+    throughCountdown({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }) });
+    const off = update({ slowData: slow({ joined: UNLOCKED }), mediumData: medium({ money }), enabled: false });
+    expect(off.intent).toBeNull();
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(rule.view().donations).toEqual([]);
   });
 });
 

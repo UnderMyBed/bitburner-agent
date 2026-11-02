@@ -123,6 +123,7 @@ export async function main(ns: NS): Promise<void> {
     handleDialogs: (deadlineMs) => dialogWatcher.handle(deadlineMs),
     invitationsAnswered: () => dialogWatcher.invitationsAnswered(),
     augmentationsBought: () => intentRunner.augmentationsBought(),
+    donationsMade: () => intentRunner.donationsMade(),
   });
   const snapshotter = createSnapshotter(ns, {
     deploymentId,

@@ -30,6 +30,11 @@ export type IntentRequest =
   | { action: "joinFaction"; args: { faction: string } }
   /** `level` is 1 but for NeuroFlux Governor, where it's the level bought: each level its own intent (#149). */
   | { action: "purchaseAugmentation"; args: { faction: string; augmentation: string; level: number } }
+  /**
+   * Donates `amount` to `faction` (#225), for the faction's reputation to reach `reputation`: done once it has it, so a
+   * donation the game shows done is never made again.
+   */
+  | { action: "donateToFaction"; args: { faction: string; amount: number; reputation: number } }
   /** A cloud server named `hostname` with `ram` GB (#159): done once the player has one of that name. */
   | { action: "buyServer"; args: { hostname: string; ram: number } }
   /** The player's cloud server `hostname` with at least `ram` GB (#194): done once it has. */
@@ -52,6 +57,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   upgradeHomeRam: true,
   joinFaction: true,
   purchaseAugmentation: true,
+  donateToFaction: true,
   buyServer: true,
   upgradeServer: true,
   backdoor: true,
@@ -152,6 +158,23 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
           action,
           args: { faction: args.faction as string, augmentation: args.augmentation as string, level: level as number },
         },
+      };
+    }
+    case "donateToFaction": {
+      // Which take donations (core's `acceptsDonations`) is the effector's to refuse: its data stays out of bundles.
+      if (!FACTION_NAMES.includes(args.faction as string)) {
+        return { ok: false, reason: "donateToFaction's faction isn't one of the game's" };
+      }
+      const { amount, reputation } = args;
+      if (!Number.isSafeInteger(amount) || (amount as number) < 1) {
+        return { ok: false, reason: "donateToFaction's amount isn't a whole number of dollars from 1" };
+      }
+      if (typeof reputation !== "number" || !Number.isFinite(reputation) || reputation <= 0) {
+        return { ok: false, reason: "donateToFaction's reputation isn't a finite number above 0" };
+      }
+      return {
+        ok: true,
+        message: { action, args: { faction: args.faction as string, amount: amount as number, reputation } },
       };
     }
     case "buyServer":

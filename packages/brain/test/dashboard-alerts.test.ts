@@ -56,6 +56,19 @@ describe("augmentations (#210)", () => {
     ]);
   });
 
+  test("a donation not shown (#225): one alert each, since it was donated, saying the cycle is called off", () => {
+    const failed = { faction: "CyberSec", amount: 13_750_010_000, reputation: 18_750, donatedAtMs: 7 };
+    expect(activeAlerts({ ...quiet, augmentationDonationsFailed: [failed] })).toEqual([
+      {
+        name: "augmentationDonationFailed",
+        sinceMs: 7,
+        detail:
+          "$13,750,010,000 to CyberSec was reported donated, but the faction state doesn't show its reputation at " +
+          "18,750: the install cycle is called off; check the faction's page",
+      },
+    ]);
+  });
+
   test("an install not restarted: from 5 minutes after the disconnect, not before", () => {
     const sinceMs = quiet.nowMs - INSTALL_NOT_RESTARTED_AFTER_MS;
     const awaiting = { id: "installAugmentations()", sinceMs };

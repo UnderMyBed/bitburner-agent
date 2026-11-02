@@ -302,6 +302,76 @@ test("buying augmentations (singularity): with SF4.3, through its Singularity wo
   });
 });
 
+/** CyberSec's reputation and favour, as the game saves them (#225). */
+async function savedCyberSec(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
+  const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));
+  const factions = JSON.parse(saveObject.data.FactionsSave) as Record<string, { playerReputation?: number }>;
+  return factions.CyberSec?.playerReputation ?? 0;
+}
+
+/** A fresh start with `money`, in CyberSec at 5,000 reputation with `favor` (150 unlocks donations), as the test sets
+/** it. */
+function donatingToCyberSec(money: number, favor: number, options: { singularity: boolean } = { singularity: false }) {
+  return freshStart({
+    withDesiredState: false,
+    ...(options.singularity ? { fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 1, 4: 3 } } as const } : {}),
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(money);
+      await game.simulation.diagnostics.joinFactionWithReputation("CyberSec", 5_000);
+      await game.simulation.diagnostics.setFactionFavor("CyberSec", favor);
+      if (options.singularity) await withoutSimEffectors(game);
+    },
+  });
+}
+
+/** 13,750 reputation for CyberSec, to 18,750: $13.75b at a new player's `faction_rep` of 1 in BN1. */
+const DONATION = intent({
+  action: "donateToFaction",
+  args: { faction: "CyberSec", amount: 13_750_000_000, reputation: 18_750 },
+});
+
+test.each([
+  ["sim", false],
+  ["singularity", true],
+] as const)(
+  "donating (%s, #225): the money for the missing reputation, once; sent again, nothing paid",
+  async (backend, singularity) => {
+    const fresh = await donatingToCyberSec(2e10, 150, { singularity });
+    await fresh.game.runUntil(() => fresh.medium() !== null, 15_000);
+    const [outcome] = await boughtEach(fresh, [DONATION]);
+    expect(outcome).toMatchObject({ done: true, tries: 1, backend, problem: null });
+    // The donation's reputation, at the player's `faction_rep` (SF1.1's 1.16 in the Singularity fixture), and a little
+    // gained passively (`processPassiveFactionRepGain`): never a second donation's.
+    const factionRep = (fresh.medium()?.player.mults as { faction_rep?: number } | undefined)?.faction_rep ?? 1;
+    const after = await savedCyberSec(fresh);
+    expect(after).toBeGreaterThanOrEqual(5_000 + 13_750 * factionRep - 1e-6);
+    expect(after).toBeLessThan(5_100 + 13_750 * factionRep);
+    // Sent again as a new intent: the reputation is there, so it's done with nothing donated.
+    fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+    await fresh.game.run(2_000);
+    const [again] = await boughtEach(fresh, [DONATION]);
+    expect(again?.done).toBe(true);
+    expect(await savedCyberSec(fresh)).toBeLessThan(after + 100);
+  },
+);
+
+test("donating (sim, #225): without the favour, or the money, nothing is donated, and the reason is the outcome", async () => {
+  const locked = await donatingToCyberSec(2e10, 149);
+  locked.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [DONATION] });
+  expect(await triedOnce(locked, DONATION.id)).toMatchObject({
+    done: false,
+    problem: "CyberSec's donations aren't unlocked (its favour is short)",
+  });
+  expect(await savedCyberSec(locked)).toBeLessThan(5_100);
+  const poor = await donatingToCyberSec(1e9, 150);
+  poor.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [DONATION] });
+  expect(await triedOnce(poor, DONATION.id)).toMatchObject({
+    done: false,
+    problem: "can't donate $13750000000 to CyberSec (the money?)",
+  });
+  expect(await savedCyberSec(poor)).toBeLessThan(5_100);
+});
+
 /** The player's work and focus, as the game saves them: `null` for none. */
 async function savedWork(fresh: { simulation: { save(): Promise<Uint8Array> } }) {
   const saveObject = JSON.parse(gunzipSync(await fresh.simulation.save()).toString("utf8"));

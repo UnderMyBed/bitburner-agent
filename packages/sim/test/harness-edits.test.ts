@@ -20,7 +20,7 @@ async function saved(sim: Simulation) {
   const companies = typeof save.CompaniesSave === "string" ? JSON.parse(save.CompaniesSave) : save.CompaniesSave;
   return {
     player: save.PlayerSave.data,
-    factions: factions as Record<string, { playerReputation?: number }>,
+    factions: factions as Record<string, { playerReputation?: number; favor?: number }>,
     companies: companies as Record<string, { playerReputation?: number }>,
   };
 }
@@ -40,6 +40,16 @@ test("joinFactionWithReputation and setMoney refuse what isn't a faction, or isn
   await expect(sim.diagnostics.joinFactionWithReputation("CyberSec", Number.NaN)).rejects.toThrow(/reputation/);
   await expect(sim.diagnostics.setMoney(-1)).rejects.toThrow(/money/);
   expect((await saved(sim)).player.factions).toEqual([]);
+});
+
+test("setFactionFavor (#225): the faction's favour, through the game's own setFavor; refused for no faction or no number", async () => {
+  const sim = await newGame();
+  await sim.diagnostics.joinFactionWithReputation("CyberSec", 0);
+  await sim.diagnostics.setFactionFavor("CyberSec", 150);
+  expect((await saved(sim)).factions.CyberSec?.favor).toBe(150);
+  await expect(sim.diagnostics.setFactionFavor("The Gibson", 1)).rejects.toThrow(/no faction The Gibson/);
+  await expect(sim.diagnostics.setFactionFavor("CyberSec", -1)).rejects.toThrow(/favour/);
+  await expect(sim.diagnostics.setFactionFavor("CyberSec", Number.NaN)).rejects.toThrow(/favour/);
 });
 
 test("giveInstalledAugmentation: installed, as the game saves it, without its price; unknown or twice is refused", async () => {

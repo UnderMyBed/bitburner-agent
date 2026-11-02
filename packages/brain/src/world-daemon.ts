@@ -234,10 +234,14 @@ export function worldDaemonPath({
     };
     const queued = state?.queuedAugmentations.includes(THE_RED_PILL) ?? false;
     const daedalus = state?.joined.find((faction) => faction.name === DAEDALUS) ?? null;
+    // By work alone, to The Red Pill's own reputation (#225 review): A5's favour target for it isn't the path's ETA.
     const work =
       person === null || state === null || slowData === null
         ? null
-        : redPillWork(person, state, resetInfo, workConditionsOf(resetInfo, slowData, shareBonus));
+        : redPillWork(person, state, resetInfo, {
+            ...workConditionsOf(resetInfo, slowData, shareBonus),
+            donations: false,
+          });
     path.redPill = {
       installed: false,
       queued,

@@ -1637,6 +1637,155 @@ describe("augmentations and the reset (#210)", () => {
   });
 });
 
+describe("donations (#225)", () => {
+  const DONATION_RUN_MS = 40 * MINUTE;
+  /**
+   * 40 minutes: CyberSec joined at 5,000 with `favor`, a slow snapshot a minute (the game's time with them), and the
+   * money every 10 s with a `faction_rep` of 1; the brain's `events`. Cranial Signal Processors - Gen I (10,000, $70m)
+   * is CyberSec's only augmentation short of its reputation with its prerequisites owned: $5,000,010,000 by donation.
+   */
+  function donationRun({
+    events: donationEvents = [],
+    money = 6e9,
+    favor = 150,
+  }: {
+    events?: [number, string, unknown][];
+    money?: number;
+    favor?: number;
+  } = {}) {
+    event(0, "brainStarted", { release: "r" });
+    for (let offsetMs = 10 * SECOND; offsetMs <= DONATION_RUN_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({ money });
+      (data.player as Record<string, unknown>).mults = { faction_rep: 1 };
+      snapshot("medium", offsetMs, data);
+    }
+    for (let offsetMs = MINUTE; offsetMs <= DONATION_RUN_MS; offsetMs += MINUTE) {
+      const factions = factionState({ joined: [{ name: "CyberSec", reputation: 5_000, favor }] });
+      snapshot("slow", offsetMs, slowData([], {}, {}, factions), 1e12 + offsetMs);
+    }
+    for (const [offsetMs, kind, detail] of donationEvents) event(offsetMs, kind, detail);
+    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + DONATION_RUN_MS });
+  }
+  const unused = (report: { failures: string[] }) =>
+    report.failures.filter((failure) => failure.startsWith("donations unused"));
+  const fresh = () => {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+    directory = mkdtempSync(path.join(os.tmpdir(), "run-report-"));
+    store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+  };
+  const UNUSED_LINE =
+    "donations unused: Cranial Signal Processors - Gen I within reach at CyberSec by a donation ($5,000,010,000 and " +
+    `its $70,000,000, with $6,000,000,000) for 30 min online from ${at(MINUTE)} to ${at(31 * MINUTE)}, and the brain ` +
+    "counted none by donation, and bought, donated and chose to install nothing";
+
+  test("donations unused: one within reach 30 min online, the brain counting none, fails once, naming it", () => {
+    const report = donationRun();
+    expect(unused(report)).toEqual([UNUSED_LINE]);
+    expect(report.text).toContain(
+      `  donations unused (one within reach 30 min online, counted by none):\n    ${UNUSED_LINE}`,
+    );
+    // The faction's favour, and its donations unlocked.
+    expect(report.text).toContain(
+      "    CyberSec: reputation 5,000 (unchanged), favour 150 (unchanged); donations unlocked",
+    );
+  });
+
+  test("donations unused (#225 review): weighed against the money left after the brain's counted set", () => {
+    // The brain's set spent $1b of the $6b on another augmentation (none by donation): Gen I's $5.07b isn't left.
+    const spent = donationRun({
+      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 0, affordable: 1, setCost: 1e9 }]],
+    });
+    expect(unused(spent)).toEqual([]);
+    fresh();
+    // A set that leaves enough: unused all the same.
+    const room = donationRun({
+      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 0, affordable: 1, setCost: 1e8 }]],
+    });
+    expect(unused(room)).toHaveLength(1);
+  });
+
+  test("donations unused: not with the brain counting one, acting, the money short, or the favour short", () => {
+    const counting = donationRun({
+      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 1, affordable: 1 }]],
+    });
+    expect(unused(counting)).toEqual([]);
+    fresh();
+    // Something donated at 20 min: the stretch starts again after it, 19 min to the end.
+    const acted = donationRun({
+      events: [
+        [20 * MINUTE, "augmentationDonated", { faction: "NiteSec", amount: 1, reputation: 1, before: 0, after: 1 }],
+      ],
+    });
+    expect(unused(acted)).toEqual([]);
+    fresh();
+    expect(unused(donationRun({ money: 5_070_009_999 }))).toEqual([]);
+    fresh();
+    const locked = donationRun({ favor: 149 });
+    expect(unused(locked)).toEqual([]);
+    // Its favour after the next install, and the reputation still to earn this cycle for donations.
+    expect(locked.text).toContain(
+      "    CyberSec: reputation 5,000 (unchanged), favour 149 (unchanged); 149.5 after the next install; donations " +
+        "unlock at 150 favour, 4,559 more reputation this cycle",
+    );
+  });
+
+  test("donations unused: shown, not counted, with the Augmentations switch off", () => {
+    writeAugmentationsEnabled(store, false);
+    const off = donationRun();
+    expect(unused(off)).toEqual([]);
+    expect(off.text).toContain(
+      "  donations unused (one within reach 30 min online, counted by none): the Augmentations switch is off now, so " +
+        `these are shown, not counted:\n    ${UNUSED_LINE}`,
+    );
+  });
+
+  test("a donation not shown fails; each donation, its install chosen and the counts by donation read in section 3", () => {
+    const donation = { faction: "CyberSec", amount: 5_000_010_000, reputation: 10_000 };
+    const report = donationRun({
+      events: [
+        [
+          2 * MINUTE,
+          "augmentationProgress",
+          { lastAugReset: 0, affordable: 1, affordableWithNeuroFlux: 1, bar: 8, barWithNeuroFlux: 12, byDonation: 1 },
+        ],
+        [
+          3 * MINUTE,
+          "augmentationInstallChosen",
+          {
+            set: [{ augmentation: "Cranial Signal Processors - Gen I", price: 70e6 }],
+            cost: 70e6,
+            queued: [],
+            onlineMs: 2 * 3_600_000,
+            reason: "nothing left",
+            donations: [donation],
+          },
+        ],
+        [4 * MINUTE, "augmentationDonated", { ...donation, before: 5_000, after: 10_000.01 }],
+        [9 * MINUTE, "augmentationDonationFailed", { ...donation, shown: 5_000, donatedAtMs: T0 + 6 * MINUTE }],
+      ],
+    });
+    expect(report.text).toContain(
+      `    ${at(2 * MINUTE)}  progress: 1 of 8 new augmentations affordable (1 of 12 with NeuroFlux; 1 of them by donation)`,
+    );
+    expect(report.text).toContain(
+      `    ${at(3 * MINUTE)}  install chosen, 2.0 h online this cycle: buying Cranial Signal Processors - Gen I ($70,000,000); ` +
+        "nothing else worth installing at the joined factions; donating first: $5,000,010,000 to CyberSec (for 10,000 " +
+        "reputation)",
+    );
+    expect(report.text).toContain(
+      `    ${at(4 * MINUTE)}  donated $5,000,010,000 to CyberSec (for 10,000 reputation): reputation 5,000 → 10,000`,
+    );
+    const failed =
+      `donation failed: $5,000,010,000 to CyberSec (for 10,000 reputation), reported done at ${at(6 * MINUTE)}, the ` +
+      `faction state showing 5,000 by ${at(9 * MINUTE)}`;
+    expect(report.failures).toContain(failed);
+    expect(report.text).toContain(
+      `  donations reported done and never shown in the faction's reputation:\n    ${failed}`,
+    );
+  });
+});
+
 test("a window that ends before it starts, or with nothing in it, can't be reported", () => {
   expect(() => runReport(store, { ...window, untilMs: T0 })).toThrow(RangeError);
   expect(() => runReport(store, window)).toThrow("nothing recorded (E0) from 2026-10-26T00:00:00.000Z");

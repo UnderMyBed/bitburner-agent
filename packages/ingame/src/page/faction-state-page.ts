@@ -10,10 +10,10 @@
 // - So the pages are opened only for what changed (`pagesToOpen`); otherwise the last reading stands, with the worked
 //   faction's reputation from its prop.
 //   - **Factions** (`Faction/ui/FactionsRoot.tsx`): with no reading yet, the reset moved, the factions joined changed,
-//     an invitation answered or one in the badge, or 10 minutes since it was last opened, and never with nothing
-//     joined and no invitation. A row per faction, a `Paper` whose component's `faction` prop is the game's own
-//     `Faction` (`:71-75`), with `playerReputation` and `favor` unrounded (the text rounds them, `:207-210`). The
-//     invitations are under `span.factions-invites` (`:229`, `:265-278`), the joined factions under
+//     an invitation answered or one in the badge, a donation made (#225), or 10 minutes since it was last opened, and
+//     never with nothing joined and no invitation. A row per faction, a `Paper` whose component's `faction` prop is the
+//     game's own `Faction` (`:71-75`), with `playerReputation` and `favor` unrounded (the text rounds them,
+//     `:207-210`). The invitations are under `span.factions-invites` (`:229`, `:265-278`), the joined factions under
 //     `span.factions-joined` (`:227`, `:280-304`), a gang's in a box of its own first. Opening it marks the invitations
 //     seen (`:220-224`), so the badge for them goes, as it does for a player who looks.
 //   - **Augmentations** (`Augmentation/ui/AugmentationsRoot.tsx:185-193`, `PurchasedAugmentations.tsx`): with no
@@ -81,6 +81,8 @@ export interface FactionReadContext {
   invitationAnswered: boolean;
   /** An augmentation purchase was reported done since the last read. */
   augmentationBought: boolean;
+  /** A donation was reported done since the last read (#225): its faction's reputation is read again. */
+  donationMade?: boolean;
 }
 
 /** What the worker knows of the game without the page. */
@@ -187,7 +189,7 @@ export function workedFactionReputation(gamePage: GamePage): { faction: string; 
  * may have changed. A sidebar that can't be seen (the Work page hides it) counts as no news from it.
  */
 export function pagesToOpen(
-  { memory, invitationAnswered, augmentationBought }: FactionReadContext,
+  { memory, invitationAnswered, augmentationBought, donationMade = false }: FactionReadContext,
   game: FactionGameFacts,
   facts: SidebarFacts,
 ): { factions: boolean; augmentations: boolean } {
@@ -202,6 +204,7 @@ export function pagesToOpen(
         game.joined,
       ) ||
       invitationAnswered ||
+      donationMade ||
       (facts.invitationsBadge ?? 0) > 0
     ) {
       factions = true;

@@ -38,6 +38,11 @@ import {
   purchaseAugmentation,
 } from "../../../../../vendor/bitburner-src/src/Faction/FactionHelpers";
 import { Factions } from "../../../../../vendor/bitburner-src/src/Faction/Factions";
+import {
+  canDonate,
+  donate,
+  favorNeededToDonate,
+} from "../../../../../vendor/bitburner-src/src/Faction/formulas/donation";
 import { Locations } from "../../../../../vendor/bitburner-src/src/Locations/Locations";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { startWorkerScript } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
@@ -279,6 +284,32 @@ const effectors = {
       levelNow() >= level,
       `can't buy ${augmentationName} from ${factionName} yet (the money, the reputation or a prerequisite?)`,
     );
+  },
+  /**
+   * A faction's page's donation (#225, `Faction/ui/FactionRoot.tsx:94-143`, `DonateOption.tsx:31-42`): shown for a
+   * member's faction that offers work and isn't the player's gang, enabled once the favour unlocks donations, its
+   * button once the money covers the amount (`canDonate`). Done once the faction's reputation is `reputation`, so a
+   * faction already there is never donated to. The page's alert after it is the page's own, not the game's: none here.
+   * Not named `donateToFaction`, which is an NS function.
+   */
+  donateToFactionFor(factionName: string, amount: number, reputation: number): EffectorResult {
+    const faction = Object.values(FactionName).includes(factionName as FactionName)
+      ? Factions[factionName as FactionName]
+      : undefined;
+    const reached = () => faction !== undefined && faction.playerReputation >= reputation;
+    if (reached()) return result(true, "");
+    if (faction === undefined || !faction.isMember || (Player.gang && Player.getGangName() === factionName)) {
+      return result(false, `${factionName}'s page has no donations (is it joined? the player's gang?)`);
+    }
+    if (!faction.getInfo().offersWork()) {
+      return result(false, `${factionName}'s page has no donations (it offers no work)`);
+    }
+    if (faction.favor < favorNeededToDonate()) {
+      return result(false, `${factionName}'s donations aren't unlocked (its favour is short)`);
+    }
+    if (!canDonate(amount)) return result(false, `can't donate $${amount} to ${factionName} (the money?)`);
+    donate(amount, faction);
+    return result(reached(), `${factionName}'s reputation isn't ${reputation} after the donation`);
   },
   /**
    * The work activity's effector (#151): faction work as the faction's page starts it (`Faction/ui/FactionRoot.tsx:59-
