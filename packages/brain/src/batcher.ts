@@ -43,7 +43,7 @@ export const HOME_KEPT_FOR_THE_AGENT_GB = 8;
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
 /** The player's hacking figures from the medium snapshot (the Agent's word), or null if any is missing. */
-function hackingPlayerOf(player: unknown): HackingPlayer | null {
+export function hackingPlayerOf(player: unknown): HackingPlayer | null {
   const { skills, mults } = (player ?? {}) as { skills?: Record<string, unknown>; mults?: Record<string, unknown> };
   const hacking = skills?.hacking;
   const intelligence = skills?.intelligence;

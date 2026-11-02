@@ -217,7 +217,11 @@ function unreadFactionState(slowData: SlowSnapshotData): string {
  *   game's order.
  * - It ranks by the reputation's ETA alone: the money is A6's, which adds its own ETA (#210).
  */
-export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: SlowSnapshotData): FactionWorkPlan {
+export function chooseFactionWork(
+  mediumData: MediumSnapshotData,
+  slowData: SlowSnapshotData,
+  shareBonus = 1,
+): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
   const state: FactionState | null = factionReadingOf(slowData)?.state ?? null;
   if (state === null) return waiting(unreadFactionState(slowData), true);
@@ -232,7 +236,7 @@ export function chooseFactionWork(mediumData: MediumSnapshotData, slowData: Slow
   if (working.length === 0) return waiting("a joined faction that offers work", false);
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
-    const conditions = workConditionsOf(resetInfo, slowData);
+    const conditions = workConditionsOf(resetInfo, slowData, shareBonus);
     const choice =
       redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
@@ -251,10 +255,16 @@ export interface WorkConditions {
   implant: boolean;
   /** The BitNode's (core's `augmentationBitNodeMultipliers`). */
   factionWorkRepGain: number;
+  /** The share threads' bonus while they run (#224, ./share.ts's `shareBonusOf`); 1 when absent. */
+  shareBonus?: number;
 }
 
-/** The work conditions in the slow snapshot's reset info. Throws for a BitNode core doesn't know. */
-export function workConditionsOf(resetInfo: WorkResetInfo, slowData: SlowSnapshotData | null): WorkConditions {
+/** The work conditions in the slow snapshot's reset info, and the share bonus. Throws for a BitNode core doesn't know. */
+export function workConditionsOf(
+  resetInfo: WorkResetInfo,
+  slowData: SlowSnapshotData | null,
+  shareBonus = 1,
+): WorkConditions {
   const { currentNode, ownedAugs, ownedSF } = resetInfo;
   return {
     sourceFile15Level: ownedSF["15"] ?? 0,
@@ -262,6 +272,7 @@ export function workConditionsOf(resetInfo: WorkResetInfo, slowData: SlowSnapsho
     focused: workFocus({ kind: "faction", faction: "CyberSec", workType: "hacking" }, slowData),
     implant: Object.hasOwn(ownedAugs, NEURORECEPTOR_MANAGEMENT_IMPLANT),
     factionWorkRepGain: augmentationBitNodeMultipliers(currentNode, ownedSF).FactionWorkRepGain,
+    shareBonus,
   };
 }
 
@@ -463,6 +474,8 @@ export interface FactionInputs {
   ownersWork: boolean;
   /** The brain's faction work's switch. */
   enabled: boolean;
+  /** The share bonus running (#224): the work's rate counts it. 1 when absent. */
+  shareBonus?: number;
 }
 
 const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
@@ -596,11 +609,11 @@ export class FactionRule {
   }
 
   #work(inputs: FactionInputs): { faction: string; workType: FactionWorkType } | null {
-    const { mediumData, slowData, slowAtMs, nowMs, ownersWork, enabled } = inputs;
+    const { mediumData, slowData, slowAtMs, nowMs, ownersWork, enabled, shareBonus = 1 } = inputs;
     const plan: FactionWorkPlan =
       mediumData === null || slowData === null
         ? { choice: null, waitingFor: "the Agent's medium and slow snapshots", transient: true }
-        : chooseFactionWork(mediumData, slowData);
+        : chooseFactionWork(mediumData, slowData, shareBonus);
     const notSent = !enabled
       ? "the brain's faction work is switched off"
       : ownersWork
@@ -731,6 +744,8 @@ export class FactionWorkTimeline {
   readonly leftToOwner = new Map<string, number>();
   /** Each faction's reputation gained while the brain's work was on it: its rises, summed (skipped readings aside). */
   readonly gained = new Map<string, number>();
+  /** Each reading of the worked faction's reputation, skipped ones aside (#224: the share's gain is judged on them). */
+  readonly readings: { atMs: number; faction: string; reputation: number }[] = [];
   readonly stalls: ReputationStall[] = [];
   readonly #ends: number[];
   #firstMedium = true;
@@ -806,6 +821,7 @@ export class FactionWorkTimeline {
       return;
     }
     const { faction, workType } = current.choice;
+    this.readings.push({ atMs, faction, reputation });
     const watch = this.#watch;
     if (watch === null || watch.faction !== faction || this.#endedBetween(watch.record.atMs, current.record.atMs)) {
       this.#endWatch();

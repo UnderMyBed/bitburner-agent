@@ -22,6 +22,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const factionWorkCalls: boolean[] = [];
   const augmentationsCalls: boolean[] = [];
   const worldDaemonCalls: boolean[] = [];
+  const shareCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
   const workRequests: unknown[] = [];
@@ -38,6 +39,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setFactionWorkEnabled: (enabled) => factionWorkCalls.push(enabled),
     setAugmentationsEnabled: (enabled) => augmentationsCalls.push(enabled),
     setWorldDaemonEnabled: (enabled) => worldDaemonCalls.push(enabled),
+    setShareEnabled: (enabled) => shareCalls.push(enabled),
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
       intentRequests.push(request);
@@ -69,6 +71,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     factionWorkCalls,
     augmentationsCalls,
     worldDaemonCalls,
+    shareCalls,
     intentRequests,
     cancelledIds,
     workRequests,
@@ -205,6 +208,7 @@ const SWITCHES = [
   ["the brain's faction work (#203)", "/api/faction-work", "factionWorkCalls"],
   ["augmentations (#210)", "/api/augmentations", "augmentationsCalls"],
   ["destroying the BitNode (#215)", "/api/world-daemon", "worldDaemonCalls"],
+  ["sharing spare RAM (#224)", "/api/share", "shareCalls"],
 ] as const;
 
 test.each(SWITCHES)("POST sets the switch for %s, from the dashboard's own page", async (_name, switchPath, own) => {

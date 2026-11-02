@@ -26,9 +26,14 @@
 //   already recorded is out of order, one started too late is late, one never recorded is lost. Out of order, or the
 //   target outside the bounds at a hack, is a desync: no more hacks or batches, and once nothing is in flight, it
 //   prepares the target again.
+// - **Sharing (#224):** while its config asks (the brain's switch on, faction work going on) and it's batching, once the
+//   batches' orders due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on the hosts' free
+//   RAM less the config's reserve for the batches and the next target, home's kept RAM, and no more than takes their use
+//   to 80% (core's `shareRound`): a round at most every 5 s, looking again soon after one finds no room. No wave starts
+//   while share threads still hold RAM (10 s at most), so a move or a desync's preparation has all of it.
 // - **Health:** core's `BatcherHealth`, on its health port whenever it changes, and in its log every minute and at each
 //   change of state or of its problem, or anything wrong.
-// RAM: `exec` 1.3 + `scp` 0.6 + `getServerMoneyAvailable` and `getServerSecurityLevel` 0.1 each + `getServerMaxRam`,
+// RAM (the share threads' too): `exec` 1.3 + `scp` 0.6 + `getServerMoneyAvailable` and `getServerSecurityLevel` 0.1 each + `getServerMaxRam`,
 // `getServerUsedRam` and `getHackingLevel` 0.05 each; ports and `asleep` are free (ram-budget.json).
 import {
   BATCH_GROW_SCRIPT_NAME,
@@ -66,6 +71,13 @@ import {
   parseLandingRecord,
   placeThreads,
   preparationWave,
+  SHARE_RAM_GB,
+  SHARE_ROUND_MS,
+  SHARE_SCRIPT_NAME,
+  SHARE_TIME_MS,
+  type SharingHealth,
+  shareBonus,
+  shareRound,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 
@@ -73,6 +85,13 @@ import type { NS } from "../ns.ts";
 const HEALTH_LINE_EVERY_MS = 60_000;
 /** While preparing, how often it looks again: a wave in flight lands well within it. */
 const PREPARING_LOOK_EVERY_MS = 1_000;
+/**
+ * A share thread counts as running this long after it's started (#224): its call's 10 s. It ends a moment later (its
+ * start's lag), and the next round can't take its RAM before: so the count never adds a round to the one it replaces.
+ */
+const SHARE_HELD_MS = SHARE_TIME_MS;
+/** A look for share room that found none looks again this soon: a round's threads end, and free their RAM, at once. */
+const SHARE_LOOK_AGAIN_MS = 100;
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
@@ -151,6 +170,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   /** The config read last: only called once one has been. */
   const current = () => config as BatcherConfig;
   let hosts: string[] = [];
+  /** The hosts the share script (#224) couldn't be copied to: copied apart, so a host without it still batches. */
+  let unsharedHosts = new Set<string>();
   /** What stays wrong while the hosts do: hosts it couldn't copy its scripts to. Other problems clear back to it. */
   let lastingProblem: string | null = null;
   const landings = new LandingWatch();
@@ -358,6 +379,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       const uncopied = next.hosts.filter((host) => !hosts.includes(host));
       lastingProblem = uncopied.length > 0 ? `can't copy its scripts to ${uncopied.join(", ")}` : null;
       setProblem(lastingProblem);
+      unsharedHosts = new Set(
+        hosts.filter((host) => host !== "home" && !ns.scp(folder + SHARE_SCRIPT_NAME, host, "home")),
+      );
     }
     const newTarget =
       config !== null &&
@@ -404,7 +428,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * target's batches may still be landing (#206): the wave takes the RAM they leave.
    */
   const prepare = () => {
-    if (preparing.size > 0 || Date.now() < waitUntilMs) return;
+    // Nor while share threads may still hold RAM (#224): a wave takes the RAM free, all of it once they've ended.
+    if (preparing.size > 0 || Date.now() < waitUntilMs || Date.now() < sharingHeldUntil()) return;
     const { target, figures } = current();
     // A move back to a target its batches are still landing on (#216's review): they land first, so no wave goes out
     // among them.
@@ -497,6 +522,72 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     nextHealth.wavesStarted += 1;
   };
 
+  // Sharing (#224): each part of a round started, the next look, the rounds started, and the room the last look found.
+  let sharingParts: { host: string; threads: number; cores: number; endsAt: number }[] = [];
+  let nextSharingLookAt = 0;
+  let sharingRounds = 0;
+  let sharingRoomGb = 0;
+  /** The problem its last round gave (a part that wouldn't start), until a round without one; or null. */
+  let sharingProblem: string | null = null;
+  /** When the share threads started last may have ended, or 0 with none. */
+  const sharingHeldUntil = () => sharingParts.reduce((latest, part) => Math.max(latest, part.endsAt), 0);
+
+  /**
+   * A round of share (#224): only while batching, with its config's `sharing`, at most every `SHARE_ROUND_MS`, on the
+   * hosts' free RAM less the config's reserve and home's kept RAM, to at most 80% of their RAM (core's `shareRound`).
+   * Called once the batches' orders due and the waves are out, so they come first.
+   */
+  const shareSpareRam = () => {
+    const now = Date.now();
+    sharingParts = sharingParts.filter((part) => part.endsAt > now);
+    const { sharing } = current();
+    if (sharing === undefined || health.state !== "batching") {
+      sharingRoomGb = 0;
+      return;
+    }
+    if (now < nextSharingLookAt) return;
+    const use = hosts.map((host) => ({ host, maxGb: ns.getServerMaxRam(host), usedGb: ns.getServerUsedRam(host) }));
+    const round = shareRound(use, sharing.reserveGb, sharing.homeKeptGb);
+    sharingRoomGb = round.roomGb;
+    let started = 0;
+    let failed: string | null = null;
+    for (const [part, { host, threads }] of round.placed.entries()) {
+      const options = { threads, temporary: true };
+      if (unsharedHosts.has(host)) {
+        failed ??= `can't copy its share script to ${host}`;
+      } else if (ns.exec(folder + SHARE_SCRIPT_NAME, host, options, `${runName}.s${sharingRounds}.${part}`)) {
+        sharingParts.push({ host, threads, cores: sharing.cores[host] ?? 1, endsAt: now + SHARE_HELD_MS });
+        started += threads;
+      } else {
+        failed ??= `a share of ${threads} threads on ${host} wouldn't start`;
+      }
+    }
+    // Said until a round without one: then the problem goes back to what lasts.
+    if (failed !== null) setProblem(failed);
+    else if (round.placed.length > 0 && sharingProblem !== null && health.problem === sharingProblem) {
+      setProblem(lastingProblem);
+    }
+    if (round.placed.length > 0) sharingProblem = failed;
+    if (started > 0) sharingRounds += 1;
+    nextSharingLookAt = now + (started > 0 ? SHARE_ROUND_MS : SHARE_LOOK_AGAIN_MS);
+  };
+
+  /** The sharing in its health: null while it neither shares nor is asked to. */
+  const sharingHealth = (): SharingHealth | null => {
+    const now = Date.now();
+    const running = sharingParts.filter((part) => part.endsAt > now);
+    const wanted = config?.sharing !== undefined;
+    if (!wanted && running.length === 0) return null;
+    const threads = running.reduce((sum, part) => sum + part.threads, 0);
+    return {
+      wanted,
+      threads,
+      ramGb: threads * SHARE_RAM_GB,
+      bonus: shareBonus(running, current().player.intelligence),
+      roomGb: sharingRoomGb,
+    };
+  };
+
   let lastLineAt = 0;
   let lastPublished = "";
   for (;;) {
@@ -555,6 +646,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       logNow = true;
     }
     if (health.state !== "recovering") prepareNext();
+    shareSpareRam();
+    health.sharing = sharingHealth();
+    if (health.sharing?.wanted && health.state === "batching") wakeAt = Math.min(wakeAt, nextSharingLookAt);
+    // Awake as share threads end (#224): its health's count falls then, and a wave waiting for them goes out.
+    for (const part of sharingParts) wakeAt = Math.min(wakeAt, part.endsAt);
     // Awake when a part would be lost, so it's counted then, not at the next launch.
     wakeAt = Math.min(wakeAt, landings.nextLostAtMs());
     health.batchesPending = batches.size;

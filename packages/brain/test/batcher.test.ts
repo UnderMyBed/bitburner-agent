@@ -319,7 +319,7 @@ describe("the run report's section", () => {
       ],
       failures,
     );
-    expect(lines.slice(-6)).toEqual([
+    expect(lines.slice(-8)).toEqual([
       "  desyncs: none",
       "  late or lost: none",
       // The least over the window (#216's review).
@@ -327,6 +327,9 @@ describe("the run report's section", () => {
       "  problems: none",
       "  sent but not running (3 fast snapshots in a row or more):",
       "    none",
+      // Its sharing (#224): never asked here.
+      "  sharing spare RAM (#224):",
+      "    never asked, and no share threads",
     ]);
     expect(failures).toEqual([]);
   });

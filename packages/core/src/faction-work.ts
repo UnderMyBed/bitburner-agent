@@ -41,8 +41,9 @@ const finite = (value: number, what: string) => {
  * - security: 0.9 × (str + def + dex + agi + 3/10 of charisma with SF15.3 + hacking + intelligence) / 975 / 4.5;
  * - each × `faction_rep` × the intelligence bonus × (1 + favour/100) × the BitNode's `FactionWorkRepGain`
  *   (`reputation.ts:8-14`; core's `augmentationBitNodeMultipliers`).
- * The share bonus is 1: the brain runs no `share()` (`NetworkShare/Share.ts:43-57`, 1 with no threads). A figure that
- * isn't finite throws.
+ * - `shareBonus` (#224, core's `shareBonus`, 1 with no share running) multiplies all of hacking work's, and only the
+ *   (hacking + intelligence) term of field and security work's (`reputation.ts:16-52`).
+ * A figure that isn't finite throws.
  */
 export function factionReputationPerCycle(
   person: WorkingPerson,
@@ -50,11 +51,13 @@ export function factionReputationPerCycle(
   favor: number,
   sourceFile15Level: number,
   factionWorkRepGain: number,
+  shareBonus = 1,
 ): number {
   const skills = Object.fromEntries(
     Object.entries(person.skills).map(([name, value]) => [name, finite(value, `the player's ${name}`)]),
   ) as WorkingPerson["skills"];
   const factionRep = finite(person.mults.faction_rep, "the player's faction_rep multiplier");
+  const bonus = finite(shareBonus, "the share bonus");
   if (!(finite(favor, "the faction's favour") >= 0)) throw new RangeError(`the faction's favour is ${favor}`);
   // `getDarknetCharismaBonus` (`reputation.ts:54-59`): charisma × the scalar with SF15 at level 3 or more.
   const charismaBonus = (scalar: number) => (sourceFile15Level >= 3 ? skills.charisma * scalar : 0);
@@ -67,14 +70,15 @@ export function factionReputationPerCycle(
       ((hacking + intelligence / 3 + charismaBonus(0.1)) / MAX_SKILL_LEVEL) *
       factionRep *
       intelligenceMultiplier *
-      favorMult
+      favorMult *
+      bonus
     );
   }
   const physical = strength + defense + dexterity + agility;
   const sum =
     workType === "field"
-      ? physical + charisma + hacking + intelligence + charismaBonus(0.3)
-      : physical + charismaBonus(0.3) + hacking + intelligence;
+      ? physical + charisma + (hacking + intelligence + charismaBonus(0.3)) * bonus
+      : physical + charismaBonus(0.3) + (hacking + intelligence) * bonus;
   const divisor = workType === "field" ? 5.5 : 4.5;
   return ((0.9 * sum) / MAX_SKILL_LEVEL / divisor) * factionRep * favorMult * intelligenceMultiplier;
 }
@@ -82,7 +86,7 @@ export function factionReputationPerCycle(
 /**
  * The reputation a second of `workType` earns (`FactionWork.getReputationRate`, `Work/FactionWork.tsx:37-40`): five
  * cycles, × 0.8 unfocused unless the Neuroreceptor Management Implant is installed (`focusPenalty`,
- * `PersonObjects/Player/PlayerObjectGeneralMethods.ts:622-628`).
+ * `PersonObjects/Player/PlayerObjectGeneralMethods.ts:622-628`), with the share bonus running (#224), 1 by default.
  */
 export function factionReputationPerSecond(
   person: WorkingPerson,
@@ -93,10 +97,25 @@ export function factionReputationPerSecond(
     focused,
     implant,
     factionWorkRepGain,
-  }: { favor: number; sourceFile15Level: number; focused: boolean; implant: boolean; factionWorkRepGain: number },
+    shareBonus = 1,
+  }: {
+    favor: number;
+    sourceFile15Level: number;
+    focused: boolean;
+    implant: boolean;
+    factionWorkRepGain: number;
+    shareBonus?: number;
+  },
 ): number {
   const focusBonus = focused || implant ? 1 : UNFOCUSED_WORK_BONUS;
-  const perCycle = factionReputationPerCycle(person, workType, favor, sourceFile15Level, factionWorkRepGain);
+  const perCycle = factionReputationPerCycle(
+    person,
+    workType,
+    favor,
+    sourceFile15Level,
+    factionWorkRepGain,
+    shareBonus,
+  );
   return perCycle * focusBonus * FACTION_WORK_CYCLES_PER_SECOND;
 }
 
