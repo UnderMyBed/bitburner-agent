@@ -76,6 +76,16 @@ import {
   writeResetSentNote,
 } from "./manual-intents.ts";
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
+import {
+  factionWorkGoingOn,
+  readShareEnabled,
+  type ShareView,
+  shareBonusOf,
+  sharingConfigOf,
+  sharingOf,
+  singularityInEffect,
+  writeShareEnabled,
+} from "./share.ts";
 import { writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 import {
@@ -281,6 +291,8 @@ export class DesiredStateController {
   #batcherMode: string | null = null;
   /** Why the batcher sent isn't running, as the last fast snapshot said, or null (#211). */
   #batcherNotRunning: string | null = null;
+  /** Why the batcher isn't asked to share while sharing's switch is on (#224), or null when it is. */
+  #shareWhy: string | null = null;
   /** The purchase the brain's rules ask for now, or null. */
   #purchase: Intent | null = null;
   /** From the connected Agent's latest medium snapshot, or null. */
@@ -396,7 +408,9 @@ export class DesiredStateController {
         if (event.type === "agentConnected") this.#installDisconnectedAtMs = null;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "fast") {
         // The intents' and the work's outcomes: for the views, and the manual intents done, or the augmentation
-        // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send.
+        // purchase asked for (#210), whose next one goes at once. Anything else changes nothing to send: the work's
+        // outcome, which turns sharing on or off (#224), and the share bonus the batcher reports, are sent with the next
+        // medium snapshot's update.
         this.#fastData = event.snapshot.data as FastSnapshotData;
         this.#fastGameTimeMs = event.snapshot.gameTimeMs;
         // A batcher sent but not running, logged when that changes (#211); the dashboard and the run report say more.
@@ -451,6 +465,24 @@ export class DesiredStateController {
       this.#batcherWhy,
       this.#batcherHealth(),
     );
+  }
+
+  /** Sharing's switch (#224, owner decision 52), likewise; on by default. */
+  setShareEnabled(enabled: boolean): void {
+    writeShareEnabled(this.#store, enabled);
+    this.#update();
+  }
+
+  /** Sharing (#224): its switch, whether the batcher is asked to share or why not, and its last report. */
+  shareView(): ShareView {
+    const enabled = readShareEnabled(this.#store);
+    const asked = this.#desired?.batcher?.config.sharing !== undefined;
+    return {
+      enabled,
+      asked,
+      why: enabled && !asked ? (this.#shareWhy ?? "waiting for the Agent's snapshots") : null,
+      sharing: sharingOf(this.#batcherHealth()),
+    };
   }
 
   /**
@@ -1041,16 +1073,22 @@ export class DesiredStateController {
    * loop then leaves (it still roots), with the brain's own target (#206, `chooseBatcher`). The mode switch, from the
    * RAM: the batcher when a host holds it and a plan on the hosts' RAM earns; otherwise (the switch off, or no batcher
    * to plan, the reason kept for the dashboard) the hack loop as planned. Logged when it changes, and when the target
-   * or the next target does.
+   * or the next target does. With faction work going on (`factionWorking`, from the work sent and the Agent's word) and
+   * sharing's switch on, the batcher's config asks it to share (#224); so it starts or stops at the next update after
+   * the work's outcome changes, a medium snapshot at most.
    */
-  #withBatcher(hackLoop: DesiredState["hackLoop"]): Pick<DesiredState, "hackLoop" | "batcher"> {
-    const result = this.#chooseMode(hackLoop);
+  #withBatcher(
+    hackLoop: DesiredState["hackLoop"],
+    factionWorking: boolean,
+  ): Pick<DesiredState, "hackLoop" | "batcher"> {
+    const result = this.#chooseMode(hackLoop, factionWorking);
     const sent = result.batcher;
     const mode =
       sent === undefined || sent === null
         ? `batcher: the hack loop hacks${this.#batcherWhy === null ? "" : `, not the batcher: ${this.#batcherWhy}`}`
         : `batcher: batches ${sent.config.target}` +
-          (sent.config.next === undefined ? "" : `, preparing ${sent.config.next.target} next`);
+          (sent.config.next === undefined ? "" : `, preparing ${sent.config.next.target} next`) +
+          (sent.config.sharing === undefined ? "" : ", sharing its spare RAM");
     if (mode !== this.#batcherMode) {
       // Not before the switch is first on: the hack loop is the default's mode then.
       if (this.#batcherMode !== null || (sent !== undefined && sent !== null)) this.#log(mode);
@@ -1059,8 +1097,9 @@ export class DesiredStateController {
     return result;
   }
 
-  #chooseMode(hackLoop: DesiredState["hackLoop"]): Pick<DesiredState, "hackLoop" | "batcher"> {
+  #chooseMode(hackLoop: DesiredState["hackLoop"], factionWorking: boolean): Pick<DesiredState, "hackLoop" | "batcher"> {
     this.#batcherWhy = null;
+    this.#shareWhy = "the batcher isn't sent";
     if (!readBatcherEnabled(this.#store) || this.#staticData === null || this.#mediumData === null) return { hackLoop };
     if (hackLoop.target === null) {
       this.#batcherWhy = "no target yet";
@@ -1076,11 +1115,30 @@ export class DesiredStateController {
       this.#batcherWhy = planned.why;
       return { hackLoop };
     }
-    return { hackLoop: { enabled: true, target: hackLoop.target, hosts: [] }, batcher: planned.batcher };
+    // Sharing its spare RAM (#224), while the player works for a faction, the brain's work or the owner's.
+    const sharingConfig = factionWorking
+      ? sharingConfigOf(planned.batcher.config, this.#mediumData, singularityInEffect(this.#slowData))
+      : null;
+    const sharing = readShareEnabled(this.#store) ? sharingConfig : null;
+    this.#shareWhy = !factionWorking
+      ? "no faction work going on"
+      : sharingConfig === null
+        ? "the medium snapshot has no hacking figures for the player"
+        : null;
+    const batcher =
+      sharing === null ? planned.batcher : { ...planned.batcher, config: { ...planned.batcher.config, sharing } };
+    return { hackLoop: { enabled: true, target: hackLoop.target, hosts: [] }, batcher };
   }
 
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
+    // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
+    // a health gone stale, or a batcher reported not running (#226's review).
+    const shareBonus = shareBonusOf(
+      this.#batcherHealth(),
+      this.#fastGameTimeMs,
+      batcherNotRunning(this.#fastData?.batcherDeploy) !== null,
+    );
     // Augmentations and the reset (#210) first: an install chosen holds the programs back.
     const augmentations = this.#augmentations.update({
       mediumData: this.#mediumData,
@@ -1107,6 +1165,7 @@ export class DesiredStateController {
       slowData: this.#slowData,
       nowMs: this.#lastEventAtMs,
       enabled: readWorldDaemonEnabled(this.#store),
+      shareBonus,
     });
     this.#purchase = this.#choosePurchase();
     this.#backdoor = this.#backdoors.intent({
@@ -1124,6 +1183,7 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
       enabled: readFactionWorkEnabled(this.#store),
+      shareBonus,
     });
     this.#join = factions.join;
     this.#factionWork = factions.work;
@@ -1164,6 +1224,8 @@ export class DesiredStateController {
     const work = this.#slowData === null ? null : this.workView().desired;
     // Every state, so the Agent's safe mode keeps it (#160).
     const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };
+    // Sharing (#224) goes with the batcher: none without it.
+    this.#shareWhy = "the batcher isn't sent";
     if (!hackLoopEnabled) {
       this.#lastSetHackTarget = null;
       // The batcher batches what the hack loop would: with the hack loop off, it isn't sent (#211).
@@ -1181,7 +1243,8 @@ export class DesiredStateController {
       const { hackLoop, lastSet } = planHackLoop(this.#staticData, this.#mediumData, this.#lastSetHackTarget);
       this.#lastSetHackTarget = lastSet;
       this.#lastSetHackTargetResetAt = resetAt ?? this.#lastSetHackTargetResetAt;
-      this.#desired = { ...this.#withBatcher({ enabled: true, ...hackLoop }), intents, ...workAndTtl };
+      const factionWorking = factionWorkGoingOn(work, this.#fastData?.work);
+      this.#desired = { ...this.#withBatcher({ enabled: true, ...hackLoop }, factionWorking), intents, ...workAndTtl };
     }
     this.#channel.setDesiredState(this.#desired);
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).

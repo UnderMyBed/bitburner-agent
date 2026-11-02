@@ -115,6 +115,7 @@ const BUSY_STATUS: DashboardStatus = {
     ownersDestroy: false,
     stall: null,
   },
+  share: { enabled: true, asked: true, why: null, sharing: null },
   intents: [
     {
       id: "travel(Aevum)",
@@ -628,6 +629,7 @@ test.each([
   ["the brain's faction work", "#factions button", "#faction-work-problem"],
   ["augmentations", "#augmentations button", "#augmentations-problem"],
   ["destroying the BitNode", "#world-daemon button", "#world-daemon-problem"],
+  ["sharing spare RAM", "#share button", "#share-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -1209,4 +1211,53 @@ test("the batcher's button (#205) sends its switch; off, on with nothing sent, a
   expect(textOf(document, "#batcher")).toContain("Its health: batching, 12 batches, 30 hacks landed");
   expect(textOf(document, "#batcher")).toContain("1 desync (0 out of order, 1 out of bounds)");
   expect(document.querySelector("#batcher div div:last-child")?.className).toBe("bad");
+});
+
+test("sharing spare RAM (#224): its switch, why it isn't asked, and the batcher's threads, RAM and bonus", async () => {
+  const sharing = { wanted: true, threads: 4_489_859, ramGb: 17_959_436, bonus: 1.6127, roomGb: 0 };
+  const shareView = { enabled: true, asked: false, why: "no faction work going on", sharing: null };
+  let current: DashboardStatus = { ...BUSY_STATUS, share: shareView };
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      // Turned off, it says so; turned on again, the status the test set next.
+      if (!enabled) current = { ...BUSY_STATUS, share: { ...shareView, enabled, why: null } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  expect(textOf(document, "#share")).toContain(
+    "Sharing spare RAM: on, not asked of the batcher: no faction work going on",
+  );
+  expect(textOf(document, "#share")).toContain("Sharing: no share threads reported");
+  expect(textOf(document, "#share button")).toBe("Stop sharing spare RAM");
+  (document.querySelector("#share button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/share", '{"enabled":false}']],
+  );
+  expect(textOf(document, "#share")).toContain("Sharing spare RAM: off");
+  expect(textOf(document, "#share button")).toBe("Start sharing spare RAM");
+  // Asked, and sharing: in the batcher's panel and its own.
+  const health = { ...newBatcherHealth("n00dles", "r", NOW_MS), state: "batching" as const, sharing };
+  current = {
+    ...BUSY_STATUS,
+    batcher: { ...BUSY_STATUS.batcher, enabled: true, health },
+    share: { enabled: true, asked: true, why: null, sharing },
+  };
+  (document.querySelector("#share button") as HTMLButtonElement).click();
+  await settle();
+  const line = "Sharing: 4,489,859 threads, 17,959,436 GB, the bonus x1.613";
+  expect(textOf(document, "#batcher")).toContain(line);
+  expect(textOf(document, "#share")).toContain("Sharing spare RAM: on: the batcher shares what its batches leave");
+  expect(textOf(document, "#share")).toContain(line);
+});
+
+test("a brain that doesn't give sharing (#224): said so, and its button does nothing", async () => {
+  const { document, requests } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, share: null } }));
+  expect(textOf(document, "#share")).toContain("Sharing spare RAM: not given by this brain");
+  expect((document.querySelector("#share button") as HTMLButtonElement).disabled).toBe(true);
+  (document.querySelector("#share button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST")).toEqual([]);
 });

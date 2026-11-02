@@ -1,11 +1,16 @@
 // Faction work's reputation (#203, core's faction-work.ts) against the game's own, in the simulator:
 // `ns.formulas.work.factionGains` (Formulas.exe, bought through the simulator's own effectors) takes any person and
 // favour, so the rate is checked for each work type over people and favours that differ in every figure it reads.
-// SF15.3's charisma term needs a Source-File the simulator's new game hasn't: core's test works it by hand.
+// SF15.3's charisma term needs a Source-File the simulator's new game hasn't: core's test works it by hand. The share
+// bonus (#224, core's share.ts) is checked against the engine's own while share threads run: `ns.getSharePower()`,
+// `ns.formulas.reputation.sharePower`, and the rate with it for each work type.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  effectiveShareThreads,
   FACTION_WORK_TYPES,
   factionReputationPerCycle,
+  shareBonus,
+  shareBonusOfPower,
   type WorkingPerson,
 } from "@bitburner-agent/core";
 import { runScript, useSimulations } from "@bitburner-agent/sim/test-helpers";
@@ -69,4 +74,66 @@ for (const [index, each] of people.entries()) {
       .filter((each) => each.index === index && each.favor === 0)
       .reduce((top, each) => (each.reputation > top.reputation ? each : top)).workType;
   expect([best(0), best(1)]).toEqual(["hacking", "security"]);
+});
+
+test("core's share bonus is the engine's while share threads run, and the rate with it, for each work type (#224)", async () => {
+  const sim = await start({ seed: 1, epochMs: Date.UTC(2026, 0, 1), fixture: { kind: "new", tutorial: "skipped" } });
+  await sim.diagnostics.setHomeRam(2 ** 20);
+  await sim.diagnostics.setMoney(1e11);
+  // 100,000 threads of share on home (1 core), held for 10 s.
+  await sim.writeFile("home", "share.js", "export async function main(ns) { await ns.share(); }");
+  expect((await sim.run("home", "share.js", { threads: 100_000 })).error).toBeUndefined();
+  await sim.advance(100);
+  const SHARE_POWERS = [
+    [1, 1],
+    [1_000, 4],
+    [6_500_000, 8],
+  ];
+  const { out } = await runScript(
+    sim,
+    `const effectors = globalThis.${AGENT_SIM_EFFECTORS_GLOBAL};
+effectors.buyTorRouter();
+effectors.buyDarkwebProgram("Formulas.exe");
+out({ running: ns.getSharePower() });
+for (const [threads, cores] of ${JSON.stringify(SHARE_POWERS)}) {
+  out({ threads, cores, power: ns.formulas.reputation.sharePower(threads, cores) });
+}
+const people = ${JSON.stringify(PEOPLE)};
+for (const [index, each] of people.entries()) {
+  const person = ns.formulas.mockPerson();
+  Object.assign(person.skills, each.skills);
+  Object.assign(person.mults, each.mults);
+  for (const workType of ${JSON.stringify(FACTION_WORK_TYPES)}) {
+    out({ index, workType, reputation: ns.formulas.work.factionGains(person, workType, 0).reputation });
+  }
+}`,
+  );
+  const [{ running }] = out as [{ running: number }];
+  // The game's `shareThreads` starts at 1 (Share.ts:6): 1 + ln(1 + 100,000)/25.
+  expect(running).toBeCloseTo(shareBonus([{ threads: 100_000, cores: 1 }], 0), 14);
+  expect(running).toBeGreaterThan(1.4);
+  // `sharePower` is the bonus of those threads alone, without the 1 (Formulas.ts:140-146).
+  const powers = out.filter((each) => (each as { power?: number }).power !== undefined) as {
+    threads: number;
+    cores: number;
+    power: number;
+  }[];
+  expect(powers).toHaveLength(SHARE_POWERS.length);
+  for (const { threads, cores, power } of powers) {
+    expect(shareBonusOfPower(effectiveShareThreads(threads, cores, 0)), `${threads} on ${cores}`).toBeCloseTo(
+      power,
+      14,
+    );
+  }
+  // Each work type's rate with the bonus running: all of hacking's, field's and security's hacking term only.
+  const rates = out.filter((each) => (each as { workType?: string }).workType !== undefined) as {
+    index: number;
+    workType: (typeof FACTION_WORK_TYPES)[number];
+    reputation: number;
+  }[];
+  expect(rates).toHaveLength(PEOPLE.length * FACTION_WORK_TYPES.length);
+  for (const { index, workType, reputation } of rates) {
+    const ours = factionReputationPerCycle(PEOPLE[index] as WorkingPerson, workType, 0, 0, 1, running);
+    expect(ours, `person ${index}, ${workType}`).toBeCloseTo(reputation, 14);
+  }
 });

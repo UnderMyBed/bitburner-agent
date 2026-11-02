@@ -1,10 +1,12 @@
 // The run report's batcher section (#205): what the batcher's health in the fast snapshots says, hour by hour, and its
 // desyncs and problems; out of step (a desync, or an operation late or lost) fails the run (#206). Its counts are each
 // run's, from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a
-// run already under way at the window's first snapshot counts from there.
+// run already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
+// (#224).
 import type { BatcherHealth } from "@bitburner-agent/core";
 import { BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
+import { type ReputationPoint, sharingLines } from "./share-report.ts";
 
 /** One fast snapshot's batcher health, as stored (the Agent's word: checked as it's read). */
 export interface BatcherPoint {
@@ -103,9 +105,14 @@ export function whoHacked(points: { atMs: number; health: unknown }[]): string {
 
 /**
  * The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen, and any stretch it was
- * sent but not running, which fails the run (`failures`).
+ * sent but not running, which fails the run (`failures`); then its sharing (#224), with the brain's worked faction's
+ * reputation (`readings`).
  */
-export function batcherSection(points: BatcherPoint[], failures: string[] = []): string[] {
+export function batcherSection(
+  points: BatcherPoint[],
+  failures: string[] = [],
+  readings: readonly ReputationPoint[] = [],
+): string[] {
   const lines = ["6. The batcher (#205, #206)"];
   const notRunning = notRunningLines(points, failures);
   const healths = points.flatMap(({ atMs, health }) => {
@@ -176,5 +183,6 @@ export function batcherSection(points: BatcherPoint[], failures: string[] = []):
   lines.push(problems.size === 0 ? "  problems: none" : "  problems:");
   for (const [problem, atMs] of problems) lines.push(`    from ${formatIsoTime(atMs)}: ${problem}`);
   lines.push(...notRunning);
+  lines.push(...sharingLines(healths, readings, failures));
   return lines;
 }
