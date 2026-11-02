@@ -135,6 +135,10 @@ const BUSY_STATUS: DashboardStatus = {
     backend: "ui",
     opened: ["Augmentations"],
     unreadInARow: 0,
+    donations: {
+      CyberSec: "; 21.1 after the next install; donations unlock at 150 favour, 449,526 more reputation this cycle",
+      "Sector-12": "; 0.0 after the next install; donations unlock at 150 favour, 462,491 more reputation this cycle",
+    },
     state: {
       joined: [
         { name: "CyberSec", reputation: 12345.678, favor: 1.234 },
@@ -341,9 +345,10 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(document.querySelectorAll("#events tr")).toHaveLength(2);
   // The faction state (#197): each faction's reputation and favour, the invitations, the queue counted.
   expect(textOf(document, "#factions")).toContain("via ui, opening Augmentations.");
+  // And (#225) each one's favour after the next install, and when its donations unlock.
   expect([...document.querySelectorAll("#factions tr")].map((row) => row.textContent)).toEqual([
-    "CyberSec12,346 rep1.23 favour",
-    "Sector-120 rep0 favour",
+    "CyberSec12,346 rep1.23 favour21.1 after the next install; donations unlock at 150 favour, 449,526 more reputation this cycle",
+    "Sector-120 rep0 favour0.0 after the next install; donations unlock at 150 favour, 462,491 more reputation this cycle",
   ]);
   expect(textOf(document, "#factions")).toContain("Invitations: Aevum");
   expect(textOf(document, "#factions")).toContain("Queued augmentations: Neurotrainer I, NeuroFlux Governor ×2");
@@ -904,6 +909,35 @@ test.each([
     "a purchase not queued",
     { waiting: false, notQueued: [{ augmentation: "BitWire", level: 1, boughtAtMs: 1 }] },
     "NOT QUEUED: BitWire, reported bought, not in the faction state's queue",
+  ],
+  [
+    "counted with donations (#225)",
+    {
+      waiting: false,
+      progress: { ...PROGRESS, byDonation: 2 },
+      donations: [{ faction: "CyberSec", reputation: 18_750, amount: 13_750_010_000 }],
+    },
+    "Affordable: 1 new augmentations, 3 with NeuroFlux (2 by donation); 2.5 h online this cycleInstall at: 7, falling " +
+      "to 6 in 1.5 h; with NeuroFlux 11, falling to 10 in 1.5 hDonations counted: $13,750,010,000 to CyberSec (for " +
+      "18,750 reputation)",
+  ],
+  [
+    "committed, its donations first (#225)",
+    {
+      waiting: false,
+      committed: true,
+      asking: "donating $13,750,010,000 to CyberSec (for 18,750 reputation)",
+      donations: [{ faction: "CyberSec", reputation: 18_750, amount: 13_750_010_000 }],
+    },
+    "Donations, first: $13,750,010,000 to CyberSec (for 18,750 reputation)",
+  ],
+  [
+    "a donation not shown (#225)",
+    {
+      waiting: false,
+      donationsFailed: [{ faction: "CyberSec", amount: 13_750_010_000, reputation: 18_750, donatedAtMs: 1 }],
+    },
+    "DONATION FAILED: $13,750,010,000 to CyberSec, reported done, not in its reputation",
   ],
 ])("the augmentations, %s, say so", async (_description, changes, text) => {
   const augmentations = { ...BUSY_STATUS.augmentations, ...changes };

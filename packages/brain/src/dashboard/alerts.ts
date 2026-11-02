@@ -2,7 +2,7 @@
 // there's no alert state to keep in sync. The route-stall alert (no progress on the route's critical path) needs a
 // route, so it comes with the planner (M4).
 import type { IntentOutcome } from "@bitburner-agent/core";
-import type { InstallAwaitingRestart, NotQueued } from "../augmentations.ts";
+import type { DonationFailed, InstallAwaitingRestart, NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
@@ -52,6 +52,7 @@ export type AlertName =
   | "batcherNotRunning"
   | "batcherOutOfStep"
   | "augmentationNotQueued"
+  | "augmentationDonationFailed"
   | "installNotRestarted"
   | "worldDaemonStalled";
 
@@ -123,6 +124,8 @@ export interface AlertFacts {
   batcherOutOfStep?: { sinceMs: number; target: string; desyncs: number; late: number; lost: number } | null;
   /** The augmentation purchases reported done that the faction state never showed queued (#210): the controller's. */
   augmentationsNotQueued: NotQueued[];
+  /** The donations reported done that the faction state never showed (#225): the controller's. */
+  augmentationDonationsFailed?: DonationFailed[];
   /** The install out when the Agent disconnected, until a slow snapshot shows the reset (#210), or null. */
   installAwaitingRestart: InstallAwaitingRestart | null;
   /** A step on the path to the World Daemon stalled (#215): the controller's, or null. */
@@ -142,8 +145,8 @@ export interface IncomeFacts {
  * The alerts that hold now, in a fixed order: agentSilent, versionDrift, deployFailed, supervisionGaveUp,
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
- * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then installNotRestarted, then
- * worldDaemonStalled.
+ * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then one augmentationDonationFailed per
+ * donation not shown (#225), then installNotRestarted, then worldDaemonStalled.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -266,8 +269,12 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
 export function augmentationAlerts({
   nowMs,
   augmentationsNotQueued,
+  augmentationDonationsFailed = [],
   installAwaitingRestart,
-}: Pick<AlertFacts, "nowMs" | "augmentationsNotQueued" | "installAwaitingRestart">): Alert[] {
+}: Pick<
+  AlertFacts,
+  "nowMs" | "augmentationsNotQueued" | "augmentationDonationsFailed" | "installAwaitingRestart"
+>): Alert[] {
   const alerts: Alert[] = augmentationsNotQueued.map((notQueued) => ({
     name: "augmentationNotQueued",
     sinceMs: notQueued.boughtAtMs,
@@ -277,6 +284,17 @@ export function augmentationAlerts({
         : `${notQueued.augmentation} `) +
       "was reported bought, but the faction state's queue doesn't show it: check the Augmentations page",
   }));
+  // A donation the faction state never showed (#225): the install cycle it was for is called off.
+  for (const failed of augmentationDonationsFailed) {
+    alerts.push({
+      name: "augmentationDonationFailed",
+      sinceMs: failed.donatedAtMs,
+      detail:
+        `$${Math.round(failed.amount).toLocaleString("en-US")} to ${failed.faction} was reported donated, but the ` +
+        `faction state doesn't show its reputation at ${Math.round(failed.reputation).toLocaleString("en-US")}: the ` +
+        "install cycle is called off; check the faction's page",
+    });
+  }
   if (installAwaitingRestart?.doneNotReset === true) {
     alerts.push({
       name: "installNotRestarted",

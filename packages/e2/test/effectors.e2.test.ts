@@ -18,6 +18,7 @@ import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   BOOT_SCRIPT,
   type FastSnapshotData,
+  factionReadingOf,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
   type SlowSnapshotData,
@@ -427,6 +428,64 @@ test("an augmentation the money doesn't cover (#149): its disabled Buy is never 
   ).toBe(0);
   expect(latestMedium(dataDirectory)?.player.money).toBe(1_000_000);
   await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+});
+
+/**
+ * A synthetic save in CyberSec at 5,000 reputation with 150 favour, donations unlocked (#225): the simulator's harness
+ * edits, never a Steam save.
+ */
+const donatingInCyberSec = async (sim: Simulation) => {
+  await sim.diagnostics.joinFactionWithReputation("CyberSec", 5_000);
+  await sim.diagnostics.setFactionFavor("CyberSec", 150);
+};
+
+test("donating (#225): the amount typed into CyberSec's page, 'donate' clicked, its alert closed; again, nothing paid", async () => {
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 2e10,
+    prepareSave: donatingInCyberSec,
+    brainSettings: ONLY_WORK,
+  });
+  const moneyBefore = latestMedium(dataDirectory)?.player.money as number;
+  // 13,750 reputation at a new player's `faction_rep` of 1: CyberSec to 18,750.
+  const donation = {
+    action: "donateToFaction",
+    args: { faction: "CyberSec", amount: 13_750_000_000, reputation: 18_750 },
+  };
+  await queueIntent(ports.dashboardPort, donation);
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  expect(
+    latestFast(dataDirectory)?.intents.find((each) => each.id === "donateToFaction(CyberSec, 13750000000, 18750)"),
+  ).toMatchObject({ done: true, backend: "ui", problem: null });
+  // Paid once; the faction state read again at once (the Agent's news), showing the reputation.
+  const spent = () => moneyBefore - (latestMedium(dataDirectory)?.player.money as number);
+  await advanceUntil(page, async () => spent() >= 13_750_000_000, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 15_000,
+  });
+  expect(spent()).toBeLessThan(13_760_000_000);
+  const cyberSec = () =>
+    factionReadingOf(latestSlow(dataDirectory))?.state?.joined.find((each) => each.name === "CyberSec");
+  await advanceUntil(page, async () => (cyberSec()?.reputation ?? 0) >= 18_750, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 70_000,
+  });
+  // The worker closed the "You just donated" alert itself: the dialog watcher reported none.
+  expect(gameDialogs(dataDirectory).filter((dialog) => dialog.text.startsWith("You just donated"))).toEqual([]);
+  // Queued again: CyberSec's reputation is there, so it's done from the page, nothing paid.
+  const moneyAfter = latestMedium(dataDirectory)?.player.money;
+  await queueIntent(ports.dashboardPort, donation);
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 30_000,
+  });
+  await advanceGameTime(page, 11_000);
+  expect(latestMedium(dataDirectory)?.player.money).toBe(moneyAfter);
+  await advanceGameTime(page, 2_000);
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
 
 /**

@@ -49,6 +49,7 @@ export function createFactionStateReader(
     handleDialogs,
     invitationsAnswered = () => 0,
     augmentationsBought = () => 0,
+    donationsMade = () => 0,
   }: {
     effectorRunner: EffectorRunner;
     /** The dialog watcher's `handle`: the routine dialogs closed or answered, within the deadline. */
@@ -60,6 +61,8 @@ export function createFactionStateReader(
      * a done intent within seconds, before the next read.
      */
     augmentationsBought?: () => number;
+    /** How many donations the intent runner has seen done, all told (#225). */
+    donationsMade?: () => number;
   },
 ) {
   /** What the log said last (the problem, skipped, or read), so it says each change once. */
@@ -70,6 +73,7 @@ export function createFactionStateReader(
   let memory: FactionPageMemory | null = null;
   let invitationsAtRead = 0;
   let boughtAtRead = 0;
+  let donatedAtRead = 0;
 
   function logged(reading: FactionStateReading): FactionStateReading {
     const line =
@@ -92,11 +96,13 @@ export function createFactionStateReader(
       await handleDialogs(deadlineMs);
       const invitations = invitationsAnswered();
       const bought = augmentationsBought();
+      const donated = donationsMade();
       // News is news since a read: with none yet, everything is read anyway.
       const context: FactionReadContext = {
         memory,
         invitationAnswered: memory !== null && invitations > invitationsAtRead,
         augmentationBought: memory !== null && bought > boughtAtRead,
+        donationMade: memory !== null && donated > donatedAtRead,
       };
       const run = await effectorRunner.run(factionStateReader(JSON.stringify(context)), deadlineMs);
       lastBackend = run.backend;
@@ -106,6 +112,7 @@ export function createFactionStateReader(
         memory = remembered;
         invitationsAtRead = invitations;
         boughtAtRead = bought;
+        donatedAtRead = donated;
       }
       return logged(reading);
     },

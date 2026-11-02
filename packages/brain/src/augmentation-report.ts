@@ -1,17 +1,40 @@
 // Augmentations in the run report (#210): the installs the slow snapshots show, and the augmentation rule's events (its
 // decisions, progress on the count rule (#222), purchases, installs sent and cycles called off), with the failures: a
 // purchase not queued, an install sent with no reset seen after it, an install reported done with no reset after it,
-// and a cycle overdue its install (#222).
-import { installGains, NEUROFLUX_GOVERNOR, type SlowSnapshotData } from "@bitburner-agent/core";
+// and a cycle overdue its install (#222). Donations (#225): each made, and two failures: a donation the faction state
+// never showed, and donations unused (one within reach for 30 minutes online with the brain counting none).
+import {
+  acceptsDonations,
+  augmentationBitNodeMultipliers,
+  augmentationCost,
+  augmentationsSoldBy,
+  donationsUnlocked,
+  donationToReach,
+  FACTION_NAMES,
+  factionReadingKind,
+  factionReadingOf,
+  favorAfterInstall,
+  favorToDonate,
+  installGains,
+  isWorthInstalling,
+  type MediumSnapshotData,
+  missingPrerequisites,
+  NEUROFLUX_GOVERNOR,
+  reputationToUnlockDonations,
+  type SlowSnapshotData,
+} from "@bitburner-agent/core";
 import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
+  AUGMENTATION_DONATED_EVENT_KIND,
+  AUGMENTATION_DONATION_FAILED_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
   AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   AUGMENTATION_PROGRESS_EVENT_KIND,
   advanceOnlineClock,
+  describeDonation,
   describeProgress,
   describeReason,
   formatEta,
@@ -28,7 +51,24 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
+  AUGMENTATION_DONATED_EVENT_KIND,
+  AUGMENTATION_DONATION_FAILED_EVENT_KIND,
 ];
+
+/**
+ * Donations unused (#225): an augmentation within reach by a donation (a joined faction with donations unlocked sells
+ * it, the money covers its price and the donation for its missing reputation) this long online, the Augmentations
+ * switch on, with the brain's progress counting none by donation, and nothing bought, donated or chosen to install.
+ */
+export const DONATIONS_UNUSED_ONLINE_MS = 30 * 60_000;
+
+/** What a slow snapshot shows within reach by a donation (#225), before the money: each, at its donor. */
+interface DonationOffer {
+  augmentation: string;
+  faction: string;
+  price: number;
+  missing: number;
+}
 
 /**
  * A cycle this long online with no install chosen is overdue (#222): the bar is 1 from 14 h (core's `installBars`), so
@@ -47,6 +87,8 @@ interface SeenInstall {
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const formatMoney = (money: unknown) =>
   isFiniteNumber(money) ? `$${Math.round(money).toLocaleString("en-US")}` : "unknown";
+const formatReputation = (reputation: unknown) =>
+  isFiniteNumber(reputation) ? Math.round(reputation).toLocaleString("en-US") : "unknown";
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
 
@@ -95,6 +137,7 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
   return (
     describeProgress({
       ...counts,
+      byDonation: number(fields.byDonation) ?? 0,
       onlineMs: number(fields.onlineMs) ?? undefined,
       barFallsInMs: number(fields.barFallsInMs),
       barWithNeuroFluxFallsInMs: number(fields.barWithNeuroFluxFallsInMs),
@@ -105,6 +148,86 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
       : "") +
     (typeof fields.held === "string" ? `; held: ${fields.held}` : "")
   );
+}
+
+/**
+ * What a slow snapshot shows within reach by a donation (#225), its money aside: each augmentation worth installing,
+ * not owned, its prerequisites owned, no joined seller's reputation reaching it, and sold by a joined faction taking
+ * donations with them unlocked (the one with the most reputation). Empty where the snapshot doesn't say, or core
+ * doesn't know what it says.
+ */
+export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
+  const reading = factionReadingOf(data);
+  const state = reading?.state ?? null;
+  const info = data.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
+  if (state === null || reading === null || factionReadingKind(reading) === "unread") return [];
+  if (!Number.isInteger(info?.currentNode) || typeof info?.ownedAugs !== "object" || info.ownedAugs === null) return [];
+  try {
+    const currentNode = info.currentNode as number;
+    const ownedSF = (info.ownedSF ?? {}) as Record<string, number>;
+    const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
+    const purchaseState = {
+      installed: info.ownedAugs as Record<string, number>,
+      queued: state.queuedAugmentations,
+      sourceFile11Level: ownedSF["11"] ?? 0,
+      bitNodeMultipliers: multipliers,
+    };
+    const joined = state.joined.filter((faction) => FACTION_NAMES.includes(faction.name));
+    const shops = new Map(
+      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
+    );
+    const owned = (name: string) =>
+      Object.hasOwn(purchaseState.installed, name) || state.queuedAugmentations.includes(name);
+    const offers: DonationOffer[] = [];
+    for (const name of new Set([...shops.values()].flat())) {
+      if (!isWorthInstalling(name) || owned(name) || missingPrerequisites(name, purchaseState).length > 0) continue;
+      const { money, reputation } = augmentationCost(name, purchaseState);
+      const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
+      if (sellers.some((faction) => faction.reputation >= reputation)) continue;
+      const donors = sellers.filter(
+        (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
+      );
+      const donor = donors.reduce<(typeof donors)[number] | null>(
+        (best, each) => (best === null || each.reputation > best.reputation ? each : best),
+        null,
+      );
+      if (donor !== null)
+        offers.push({ augmentation: name, faction: donor.name, price: money, missing: reputation - donor.reputation });
+    }
+    return offers;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A faction's favour after the next install and when its donations unlock (#225), for the run report's faction
+ * progress: "; 12.3 after the next install; donations unlock at the next install", "…at 150 favour, 230,145 more
+ * reputation this cycle", or "; donations unlocked". Nothing for one that takes none, or where `slow` doesn't say.
+ */
+export function donationStatus(
+  faction: string,
+  { reputation, favor }: { reputation: number; favor: number },
+  slow: SlowSnapshotData | undefined,
+): string {
+  const info = slow?.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
+  if (!acceptsDonations(faction, null) || !Number.isInteger(info?.currentNode)) return "";
+  try {
+    const multipliers = augmentationBitNodeMultipliers(
+      info?.currentNode as number,
+      (info?.ownedSF ?? {}) as Record<string, number>,
+    );
+    if (donationsUnlocked(favor, multipliers)) return "; donations unlocked";
+    const unlock = reputationToUnlockDonations(favor, multipliers);
+    return (
+      `; ${favorAfterInstall(favor, reputation).toFixed(1)} after the next install; donations unlock ` +
+      (reputation >= unlock
+        ? "at the next install"
+        : `at ${favorToDonate(multipliers)} favour, ${formatReputation(unlock - reputation)} more reputation this cycle`)
+    );
+  } catch {
+    return "";
+  }
 }
 
 /** "BitWire, NeuroFlux Governor ×2", or "none". */
@@ -159,6 +282,23 @@ export class AugmentationTimeline {
    */
   readonly #cycles: { lastAugReset: number; firstAtMs: number; lastAtMs: number; onlineMs: number }[] = [];
   #clock: OnlineClock | null = null;
+  /** Each slow snapshot's offers by donation (#225), and the medium snapshots' money and `faction_rep`. */
+  readonly #offers: {
+    atMs: number;
+    gameTimeMs: number;
+    lastAugReset: number;
+    offers: DonationOffer[];
+    factionWorkRepGain: number;
+  }[] = [];
+  readonly #money: { atMs: number; money: number; factionRep: number }[] = [];
+
+  /** A medium snapshot, in time order (#225): the money and `faction_rep` a donation is weighed with. */
+  addMedium(atMs: number, data: MediumSnapshotData): void {
+    const player = data.player as { money?: unknown; mults?: { faction_rep?: unknown } } | undefined;
+    const money = player?.money;
+    const factionRep = player?.mults?.faction_rep;
+    if (isFiniteNumber(money) && isFiniteNumber(factionRep)) this.#money.push({ atMs, money, factionRep });
+  }
 
   /** A slow snapshot, which arrived at `atMs`, taken at the game's time `gameTimeMs` (the bars' clock's). */
   addSlow(atMs: number, data: SlowSnapshotData, gameTimeMs: number): void {
@@ -172,6 +312,21 @@ export class AugmentationTimeline {
     }
     cycle.lastAtMs = atMs;
     cycle.onlineMs = this.#clock.onlineMs;
+    const info = data.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
+    let factionWorkRepGain = 1;
+    try {
+      factionWorkRepGain = augmentationBitNodeMultipliers(
+        info?.currentNode as number,
+        (info?.ownedSF ?? {}) as Record<string, number>,
+      ).FactionWorkRepGain;
+    } catch {}
+    this.#offers.push({
+      atMs,
+      gameTimeMs,
+      lastAugReset: reset.lastAugReset,
+      offers: donationOffersOf(data),
+      factionWorkRepGain,
+    });
     const previous = this.#resets.at(-1);
     if (previous !== undefined && previous.lastAugReset !== reset.lastAugReset) {
       const installed: string[] = [];
@@ -200,7 +355,22 @@ export class AugmentationTimeline {
           text:
             `install chosen, ${since}: buying ` +
             `${set.map((each) => String(each.augmentation)).join(", ") || "nothing more"} (${formatMoney(fields.cost)}); ` +
-            describeStoredReason(fields),
+            describeStoredReason(fields) +
+            (Array.isArray(fields.donations) && fields.donations.length > 0
+              ? `; donating first: ${fields.donations.map((each) => describeDonation(fieldsOf(each) as never)).join(", ")}`
+              : ""),
+        });
+      } else if (kind === AUGMENTATION_DONATED_EVENT_KIND) {
+        entries.push({
+          atMs,
+          text:
+            `donated ${describeDonation(fields as never)}: reputation ${formatReputation(fields.before)} → ` +
+            formatReputation(fields.after),
+        });
+      } else if (kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND) {
+        entries.push({
+          atMs,
+          text: `donation not shown: ${describeDonation(fields as never)}, the faction state showing ${formatReputation(fields.shown)}`,
         });
       } else if (kind === AUGMENTATION_PROGRESS_EVENT_KIND) {
         entries.push({ atMs, text: `progress: ${describeStoredProgress(fields)}` });
@@ -335,6 +505,97 @@ export class AugmentationTimeline {
     }
     if (notSeen === 0) lines.push("    none");
     lines.push(...this.#overdueLines(events, { augmentationsEnabled, failures, formatTime }));
+    lines.push(...this.#donationLines(events, { augmentationsEnabled, failures, formatTime }));
+    return lines;
+  }
+
+  /**
+   * The donations' failures (#225): each donation the faction state never showed (the rule's event), and donations
+   * unused: a stretch of `DONATIONS_UNUSED_ONLINE_MS` online (the slow snapshots' gaps left out, as the bars' clock does)
+   * in one cycle in which every slow snapshot showed an augmentation within reach by a donation, the money (the latest
+   * medium snapshot's) covering its price and its donation, while the brain's progress in force counted none by
+   * donation and it bought, donated and chose to install nothing. Shown, not counted, with the switch off now.
+   */
+  #donationLines(
+    events: readonly StoredEvent[],
+    {
+      augmentationsEnabled,
+      failures,
+      formatTime,
+    }: { augmentationsEnabled: boolean; failures: string[]; formatTime: (ms: number) => string },
+  ): string[] {
+    const lines = ["  donations reported done and never shown in the faction's reputation:"];
+    const failed = events.filter((event) => event.kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND);
+    for (const { atMs, detail } of failed) {
+      const fields = fieldsOf(detail);
+      const line =
+        `donation failed: ${describeDonation(fields as never)}, reported done at ${formatTime(Number(fields.donatedAtMs))}, ` +
+        `the faction state showing ${formatReputation(fields.shown)} by ${formatTime(atMs)}`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
+    if (failed.length === 0) lines.push("    none");
+    lines.push(
+      `  donations unused (one within reach ${formatEta(DONATIONS_UNUSED_ONLINE_MS)} online, counted by none)` +
+        (augmentationsEnabled ? ":" : ": the Augmentations switch is off now, so these are shown, not counted:"),
+    );
+    const acted = [
+      AUGMENTATION_BOUGHT_EVENT_KIND,
+      AUGMENTATION_DONATED_EVENT_KIND,
+      AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+    ];
+    let clock: OnlineClock | null = null;
+    let stretch: { fromMs: number; onlineFromMs: number; lastAugReset: number; flagged: boolean } | null = null;
+    let unused = 0;
+    for (const check of this.#offers) {
+      clock = advanceOnlineClock(clock, check.gameTimeMs, check.lastAugReset).clock;
+      const money = this.#money.findLast((each) => each.atMs <= check.atMs);
+      const offer =
+        money === undefined
+          ? undefined
+          : check.offers.find(
+              (each) =>
+                each.price + donationToReach(each.missing, money.factionRep, check.factionWorkRepGain) <= money.money,
+            );
+      const progress = events.findLast(
+        (event) =>
+          event.kind === AUGMENTATION_PROGRESS_EVENT_KIND &&
+          event.atMs <= check.atMs &&
+          fieldsOf(event.detail).lastAugReset === check.lastAugReset,
+      );
+      const counted =
+        isFiniteNumber(fieldsOf(progress?.detail).byDonation) && (fieldsOf(progress?.detail).byDonation as number) > 0;
+      const fromMs = stretch?.fromMs;
+      const actedSince =
+        fromMs !== undefined &&
+        events.some((event) => acted.includes(event.kind) && event.atMs > fromMs && event.atMs <= check.atMs);
+      if (offer === undefined || money === undefined || counted) {
+        stretch = null;
+        continue;
+      }
+      if (stretch === null || actedSince || stretch.lastAugReset !== check.lastAugReset) {
+        stretch = {
+          fromMs: check.atMs,
+          onlineFromMs: clock.onlineMs,
+          lastAugReset: check.lastAugReset,
+          flagged: false,
+        };
+        continue;
+      }
+      const onlineMs = clock.onlineMs - stretch.onlineFromMs;
+      if (onlineMs < DONATIONS_UNUSED_ONLINE_MS || stretch.flagged) continue;
+      stretch.flagged = true;
+      unused++;
+      const donation = donationToReach(offer.missing, money.factionRep, check.factionWorkRepGain);
+      const line =
+        `donations unused: ${offer.augmentation} within reach at ${offer.faction} by a donation ` +
+        `(${formatMoney(donation)} and its ${formatMoney(offer.price)}, with ${formatMoney(money.money)}) for ` +
+        `${formatEta(onlineMs)} online from ${formatTime(stretch.fromMs)} to ${formatTime(check.atMs)}, and the brain ` +
+        "counted none by donation, and bought, donated and chose to install nothing";
+      lines.push(`    ${line}`);
+      if (augmentationsEnabled) failures.push(line);
+    }
+    if (unused === 0) lines.push("    none");
     return lines;
   }
 

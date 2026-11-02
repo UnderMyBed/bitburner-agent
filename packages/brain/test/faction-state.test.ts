@@ -112,7 +112,10 @@ test("sim backend: each slow snapshot has CyberSec's rising reputation, Sector-1
   const lines = report.text.split("\n");
   const first = Math.round(states[0]?.joined[0]?.reputation as number).toLocaleString("en-US");
   const last = Math.round(states.at(-1)?.joined[0]?.reputation as number).toLocaleString("en-US");
-  expect(lines).toContain(`    CyberSec: reputation ${first} → ${last}, favour 0 (unchanged)`);
+  // And (#225) its favour after the next install, and the reputation still to earn this cycle for donations.
+  expect(
+    lines.find((line) => line.startsWith(`    CyberSec: reputation ${first} → ${last}, favour 0 (unchanged); `)),
+  ).toMatch(/; \d+\.\d after the next install; donations unlock at 150 favour, [\d,]+ more reputation this cycle$/);
   expect(lines.find((line) => line.startsWith("    Sector-12, "))).toBeDefined();
   expect(lines).toContain("  augmentations queued: Neurotrainer I, NeuroFlux Governor ×2 (unchanged)");
   expect(report.text).toContain(

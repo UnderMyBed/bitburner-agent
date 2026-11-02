@@ -18,6 +18,10 @@ const NEUROFLUX_3 = intent({
   action: "purchaseAugmentation",
   args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 3 },
 });
+const DONATE_SECTOR_12 = intent({
+  action: "donateToFaction",
+  args: { faction: "Sector-12", amount: 1_000_000, reputation: 1 },
+});
 const PSERV_0 = intent({ action: "buyServer", args: { hostname: "pserv-0", ram: 8 } });
 const PSERV_0_TO_64 = intent({ action: "upgradeServer", args: { hostname: "pserv-0", ram: 64 } });
 const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
@@ -79,13 +83,14 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     AEVUM,
     JOIN_SECTOR_12,
     NEUROFLUX_3,
+    DONATE_SECTOR_12,
     PSERV_0,
     PSERV_0_TO_64,
     BACKDOOR_CSEC,
     INSTALL,
     DESTROY_INTO_2,
   ]);
-  await round(10 * ROUND_MS);
+  await round(12 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
   expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
     ["agent/abcdef123456/buy-program.js", ["TOR router", "Alpha Enterprises"]],
@@ -94,6 +99,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/travel.js", ["Aevum"]],
     ["agent/abcdef123456/join-faction.js", ["Sector-12"]],
     ["agent/abcdef123456/buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
+    ["agent/abcdef123456/donate-to-faction.js", ["Sector-12", 1_000_000, 1]],
     ["agent/abcdef123456/buy-server.js", ["pserv-0", 8]],
     ["agent/abcdef123456/upgrade-server.js", ["pserv-0", 64]],
     ["agent/abcdef123456/backdoor.js", ["CSEC"]],
@@ -306,11 +312,12 @@ describe("backends (#145)", () => {
       AEVUM,
       JOIN_SECTOR_12,
       NEUROFLUX_3,
+      DONATE_SECTOR_12,
       BACKDOOR_CSEC,
       INSTALL,
       DESTROY_INTO_2,
     ]);
-    await round(10 * ROUND_MS);
+    await round(12 * ROUND_MS);
     const calls = runWorker.mock.calls as unknown as [string, unknown[]][];
     expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
       ["agent/abcdef123456/singularity-buy-tor.js", []],
@@ -319,6 +326,7 @@ describe("backends (#145)", () => {
       ["agent/abcdef123456/singularity-travel.js", ["Aevum"]],
       ["agent/abcdef123456/singularity-join-faction.js", ["Sector-12"]],
       ["agent/abcdef123456/singularity-buy-augmentation.js", ["Sector-12", "NeuroFlux Governor", 3]],
+      ["agent/abcdef123456/singularity-donate-to-faction.js", ["Sector-12", 1_000_000, 1]],
       ["agent/abcdef123456/singularity-backdoor.js", ["CSEC"]],
       // Installing, with the script the game starts after the reset (#164).
       ["agent/abcdef123456/singularity-install-augmentations.js", ["agent/boot.js"]],
@@ -507,4 +515,21 @@ test("augmentation purchases done are counted, all told, past the brain dropping
   runner.desire([NEUROFLUX_3]);
   await round();
   expect(runner.augmentationsBought()).toBe(2);
+  expect(runner.donationsMade()).toBe(0);
+});
+
+test("donations done are counted, all told, past the brain dropping the done intent (#225)", async () => {
+  const DONATION = intent({
+    action: "donateToFaction",
+    args: { faction: "CyberSec", amount: 6_750_000_000, reputation: 18_750 },
+  });
+  const { runner, round } = runnerWith(() => DONE);
+  expect(runner.donationsMade()).toBe(0);
+  runner.desire([DONATION, AEVUM]);
+  await round();
+  expect(runner.donationsMade()).toBe(1);
+  runner.desire([]);
+  await round();
+  expect(runner.donationsMade()).toBe(1);
+  expect(runner.augmentationsBought()).toBe(0);
 });

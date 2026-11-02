@@ -523,6 +523,31 @@ test("a dialog left open in the newest fast snapshot (#143) is the dialogBlockin
   ]);
 });
 
+test("each joined faction's favour after the next install, and when its donations unlock (#225)", () => {
+  recordSnapshot("fast", STARTED_AT_MS + 59_000, fastData(1));
+  recordSnapshot("slow", STARTED_AT_MS + 60_000, {
+    resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs: {}, ownedSF: {}, bitNodeOptions: {} },
+    factions: {
+      backend: "sim",
+      state: {
+        joined: [
+          { name: "CyberSec", reputation: 462_491, favor: 0 },
+          { name: "NiteSec", reputation: 0, favor: 150 },
+          { name: "Shadows of Anarchy", reputation: 0, favor: 0 },
+        ],
+        invitations: [],
+        queuedAugmentations: [],
+      },
+      problem: null,
+    },
+  });
+  expect(status(STARTED_AT_MS + 61_000).factions?.donations).toEqual({
+    CyberSec: "; 150.0 after the next install; donations unlock at the next install",
+    NiteSec: "; donations unlocked",
+    "Shadows of Anarchy": "",
+  });
+});
+
 test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread; the panel says how many; an older Agent's isn't one", () => {
   const nowMs = STARTED_AT_MS + 300_000;
   recordSnapshot("fast", nowMs - 1_000, fastData(1));
@@ -539,6 +564,7 @@ test("factionStateUnread (#197): only once 3 slow snapshots in a row are unread;
     problem: "a dialog the Agent leaves for the owner is open",
     opened: null,
     unreadInARow: 2,
+    donations: {},
   });
   recordSnapshot("slow", STARTED_AT_MS + 180_000, unread("no game page to read the faction state through"));
   expect(status(nowMs).alerts).toEqual([

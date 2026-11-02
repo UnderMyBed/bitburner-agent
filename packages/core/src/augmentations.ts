@@ -211,6 +211,8 @@ export interface AugmentationBitNodeMultipliers {
   DaedalusAugsRequirement: number;
   /** Faction work's reputation (`PersonObjects/formulas/reputation.ts:13`): 0.2 in BN14, 0.5 in BN2, … */
   FactionWorkRepGain: number;
+  /** The favour that unlocks donations, over 150 (#225, `Faction/formulas/donation.ts:16-18`): 0.5 in BN3, 0 in BN8. */
+  FavorToDonateToFaction: number;
 }
 
 /** The price's growth with each augmentation queued: `MultipleAugMultiplier` (`Constants.ts:41`). */
@@ -398,8 +400,9 @@ export function augmentationBitNodeMultipliers(
     AugmentationMoneyCost: growth,
     AugmentationRepCost: growth,
     DaedalusAugsRequirement: Math.floor(Math.min(defaultDaedalus + growth, 40)),
-    // BN12's `dec` (`BitNode/BitNode.tsx:926`, `:968`).
+    // BN12's `dec` (`BitNode/BitNode.tsx:926`, `:968`), and its `inc` on donations' favour (`:969`, #225).
     FactionWorkRepGain: 1 / growth,
+    FavorToDonateToFaction: growth,
   };
 }
 

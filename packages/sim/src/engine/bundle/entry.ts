@@ -228,6 +228,15 @@ export function joinFactionWithReputation(faction: string, reputation: number) {
 }
 
 /**
+ * Sets `faction`'s favour through the game's own `setFavor` (`Faction/Faction.ts:42-55`), as an install banks it: a
+ * harness edit for test scenarios (#225), not something a player can do. An unknown faction throws.
+ */
+export function setFactionFavor(faction: string, favor: number) {
+  if (!Object.values(FactionName).includes(faction as FactionName)) throw new RangeError(`no faction ${faction}`);
+  Factions[faction as FactionName].setFavor(favor);
+}
+
+/**
  * Makes the player `job` at `company`, as an application sets it (`Player.jobs`, `applyForJob`), with this reputation
  * there: a harness edit for test scenarios (#155), not something a player can do. A company the game doesn't have, or
  * a job it doesn't offer, throws.

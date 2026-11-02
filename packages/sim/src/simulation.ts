@@ -237,6 +237,9 @@ export class Simulation {
     /** Makes the player a member of `faction` with this reputation. A harness edit, for test scenarios (#149). */
     joinFactionWithReputation: (faction: string, reputation: number) =>
       this.rpc.call("diagnostics.joinFactionWithReputation", { faction, reputation }),
+    /** Sets `faction`'s favour, as an install banks it. A harness edit, for test scenarios (#225). */
+    setFactionFavor: (faction: string, favor: number) =>
+      this.rpc.call("diagnostics.setFactionFavor", { faction, favor }),
     /** Makes the player `job` at `company`, with this reputation there. A harness edit, for test scenarios (#155). */
     employWithReputation: (company: string, job: string, reputation: number) =>
       this.rpc.call("diagnostics.employWithReputation", { company, job, reputation }),

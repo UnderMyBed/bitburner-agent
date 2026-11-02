@@ -1,4 +1,4 @@
-// The Effectors (#141, #145, #147, #149, #151, #153, #155, #156, #158, #159, #162, #164, #175, #194, architecture
+// The Effectors (#141, #145, #147, #149, #151, #153, #155, #156, #158, #159, #162, #164, #175, #194, #225, architecture
 // §5.6): for each action an intent can name, for the work activity's work, and for the faction state's reading (#197),
 // how each backend does it.
 // - `sim`: the simulator's own effectors, called directly (packages/sim, `agent-effectors.ts`): the simulator renders
@@ -21,6 +21,7 @@ import {
   CRIME_WORK_WORKER_NAME,
   classLabel,
   DESTROY_BITNODE_WORKER_NAME,
+  DONATE_TO_FACTION_WORKER_NAME,
   type EffectorReport,
   FACTION_STATE_WORKER_NAME,
   FACTION_WORK_WORKER_NAME,
@@ -37,6 +38,7 @@ import {
   SINGULARITY_COMPANY_WORK_WORKER_NAME,
   SINGULARITY_CRIME_WORK_WORKER_NAME,
   SINGULARITY_DESTROY_BITNODE_WORKER_NAME,
+  SINGULARITY_DONATE_TO_FACTION_WORKER_NAME,
   SINGULARITY_FACTION_STATE_WORKER_NAME,
   SINGULARITY_FACTION_WORK_WORKER_NAME,
   SINGULARITY_INSTALL_AUGMENTATIONS_WORKER_NAME,
@@ -59,6 +61,7 @@ export interface SimEffectors {
   travelTo(city: string): EffectorReport;
   acceptFactionInvitation(faction: string): EffectorReport;
   buyAugmentationFrom(faction: string, augmentation: string, level: number): EffectorReport;
+  donateToFactionFor(faction: string, amount: number, reputation: number): EffectorReport;
   convergeFactionWork(faction: string, workType: string, focus: boolean): EffectorReport;
   convergeCompanyWork(company: string, field: string, focus: boolean, checkPromotion: boolean): WorkEffectorReport;
   buyCloudServer(hostname: string, ram: number): EffectorReport;
@@ -137,6 +140,17 @@ export function effectorFor(intent: Intent): Effector {
         ui: { workerName: BUY_AUGMENTATION_WORKER_NAME, workerArguments },
         singularity: { workerName: SINGULARITY_BUY_AUGMENTATION_WORKER_NAME, workerArguments },
         sim: (effectors) => effectors.buyAugmentationFrom(faction, augmentation, level),
+      };
+    }
+    // Done once the faction's reputation is the donation's: one already there is never donated again (#225).
+    case "donateToFaction": {
+      const { faction, amount, reputation } = intent.args;
+      const workerArguments = [faction, amount, reputation];
+      return {
+        description: `donate $${amount} to ${faction}, for ${reputation} reputation`,
+        ui: { workerName: DONATE_TO_FACTION_WORKER_NAME, workerArguments },
+        singularity: { workerName: SINGULARITY_DONATE_TO_FACTION_WORKER_NAME, workerArguments },
+        sim: (effectors) => effectors.donateToFactionFor(faction, amount, reputation),
       };
     }
     case "buyServer": {

@@ -29,6 +29,8 @@ describe("parseIntentRequest", () => {
     ["purchaseAugmentation", { faction: "CyberSec", augmentation: "Neurotrainer I", level: 1 }],
     ["purchaseAugmentation", { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: 7 }],
     ["purchaseAugmentation", { faction: "Blade Industries", augmentation: "The Blade's Simulacrum", level: 1 }],
+    ["donateToFaction", { faction: "CyberSec", amount: 6_750_000_000, reputation: 18_750 }],
+    ["donateToFaction", { faction: "Daedalus", amount: 1, reputation: 0.5 }],
     ["buyServer", { hostname: "pserv-0", ram: 8 }],
     ["buyServer", { hostname: "a", ram: 1 }],
     ["buyServer", { hostname: `Big_Box.${"x".repeat(56)}`, ram: 2 ** 20 }],
@@ -87,6 +89,27 @@ describe("parseIntentRequest", () => {
         action: "purchaseAugmentation",
         args: { faction: "Sector-12", augmentation: "NeuroFlux Governor", level: "3" },
       },
+    ],
+    [
+      "a donation of no dollars",
+      { action: "donateToFaction", args: { faction: "CyberSec", amount: 0, reputation: 1 } },
+    ],
+    [
+      "a donation of a part dollar",
+      { action: "donateToFaction", args: { faction: "CyberSec", amount: 1.5, reputation: 1 } },
+    ],
+    ["a donation as text", { action: "donateToFaction", args: { faction: "CyberSec", amount: "100", reputation: 1 } }],
+    [
+      "a donation for no reputation",
+      { action: "donateToFaction", args: { faction: "CyberSec", amount: 1, reputation: 0 } },
+    ],
+    [
+      "a donation for reputation without end",
+      { action: "donateToFaction", args: { faction: "CyberSec", amount: 1, reputation: Number.POSITIVE_INFINITY } },
+    ],
+    [
+      "a donation to a faction that isn't one",
+      { action: "donateToFaction", args: { faction: "The Gibson", amount: 1, reputation: 1 } },
     ],
     ["a server named with a space", { action: "buyServer", args: { hostname: "my server", ram: 8 } }],
     ["a server named ''", { action: "buyServer", args: { hostname: "", ram: 8 } }],

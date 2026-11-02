@@ -77,6 +77,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `buy-augmentation.js` | `getResetInfo` (1.0 GB); the page costs nothing | 2.6 GB (2.6) |
 | `faction-state.js` | `getPlayer` (0.5 GB), for the factions joined, `getResetInfo` (1.0 GB), for NeuroFlux Governor's installed level; the page costs nothing (#197) | 3.1 GB (3.1) |
 | `faction-work.js` | nothing beyond the base; the page costs nothing | 1.6 GB (1.6) |
+| `donate-to-faction.js` | nothing beyond the base; the page costs nothing (#225) | 1.6 GB (1.6) |
 | `company-work.js` | `getPlayer` (0.5 GB), for the jobs held; the page costs nothing | 2.1 GB (2.1) |
 | `buy-server.js` | `cloud.purchaseServer` (2.25 GB), `cloud.getServerCost` (0.25 GB), `serverExists`, `getServerMoneyAvailable`, `cloud.getServerUpgradeCost` (0.1 GB each), `getServerMaxRam`, `cloud.getServerLimit` (0.05 GB each); no page | 4.5 GB (4.5) |
 | `upgrade-server.js` | `cloud.upgradeServer` (0.25 GB), `serverExists`, `getServerMoneyAvailable`, `cloud.getServerUpgradeCost` (0.1 GB each), `getServerMaxRam` (0.05 GB); no page | 2.2 GB (2.2) |
@@ -91,6 +92,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `singularity-upgrade-home-ram.js` | `getServerMaxRam` (0.05 GB), `singularity.upgradeHomeRam` (3 GB) | 4.65 GB (4.65) |
 | `singularity-join-faction.js` | `getPlayer` (0.5 GB), `singularity.joinFaction` (3 GB) | 5.1 GB (5.1) |
 | `singularity-buy-augmentation.js` | `getResetInfo` (1.0 GB), `singularity.getOwnedAugmentations`, `singularity.purchaseAugmentation` (5 GB each) | 12.6 GB (12.6) |
+| `singularity-donate-to-faction.js` | `singularity.getFactionRep` (1 GB), `singularity.donateToFaction` (5 GB) (#225) | 7.6 GB (7.6) |
 | `singularity-faction-work.js` | `singularity.getCurrentWork` (0.5 GB), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.workForFaction` (3 GB) | 5.3 GB (5.3) |
 | `singularity-company-work.js` | `getPlayer`, `singularity.getCurrentWork` (0.5 GB each), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.applyToCompany`, `singularity.workForCompany` (3 GB each) | 8.8 GB (8.8) |
 | `singularity-crime-work.js` | `singularity.getCurrentWork` (0.5 GB), `singularity.isFocused`, `singularity.setFocus` (0.1 GB each), `singularity.commitCrime` (5 GB) | 7.3 GB (7.3) |
@@ -250,6 +252,7 @@ M3's fourth slice ([#141](https://github.com/UnderMyBed/bitburner-agent/issues/1
   | `travel` | `travel.js` (the city) | `singularity-travel.js` (the city) | `travelTo(city)` |
   | `joinFaction` | `join-faction.js` (the faction) | `singularity-join-faction.js` (the faction) | `acceptFactionInvitation(faction)` |
   | `purchaseAugmentation` | `buy-augmentation.js` (the faction, the augmentation, the level) | `singularity-buy-augmentation.js` (the same) | `buyAugmentationFrom(faction, augmentation, level)` |
+  | `donateToFaction` | `donate-to-faction.js` (the faction, the amount, the reputation) | `singularity-donate-to-faction.js` (the same) | `donateToFactionFor(faction, amount, reputation)` |
   | `buyServer` | `buy-server.js` (the hostname, the RAM): NS calls alone, no page | none: `buy-server.js` needs no Singularity | `buyCloudServer(hostname, ram)` |
   | `upgradeServer` | `upgrade-server.js` (the hostname, the RAM): NS calls alone, no page | none: `upgrade-server.js` needs no Singularity | `upgradeCloudServer(hostname, ram)` |
   | `backdoor` | `backdoor.js` (the server) | `singularity-backdoor.js` (the server) | `backdoorServer(hostname)` |
@@ -342,6 +345,21 @@ The fifth `ui` effector ([#149](https://github.com/UnderMyBed/bitburner-agent/is
 - **Names with apostrophes** ("The Shadow's Simulacrum") are quoted for XPath by `xpathString` (`src/page/game-page.ts`).
 
 E2 buys Neurotrainer I and NeuroFlux level 1 from CyberSec (a save the simulator sets up with the reputation), with the confirmation and alert handled, and checks a purchase the money doesn't cover opens no dialog: its disabled "Buy" is never clicked.
+
+## Donations
+
+A `ui` effector of M4 phase A ([#225](https://github.com/UnderMyBed/bitburner-agent/issues/225), owner decision 53): the `donateToFaction` intent donates `amount` to a joined faction whose favour unlocks donations, for its reputation to reach `reputation` (`src/entries/donate-to-faction.ts`, its steps in `src/page/donate-page.ts`, tested on a stand-in page).
+- **`donate-to-faction.js`**, with the faction, the amount, the reputation and a deadline:
+  1. **Never over an open dialog** the dialog watcher leaves.
+  2. The sidebar's Factions, then "Details" on the faction's row: its own page (`Faction/ui/FactionRoot.tsx`), whose `DonateOption` shows for a faction that offers work and isn't the player's gang.
+  3. **The game first:** `DonateOption`'s `faction` prop is the game's own `Faction`, so its `playerReputation` already at `reputation` is done, with nothing donated: a donation is never made twice. No donations there ("Unlock donations at … favor", or none) says so.
+  4. The amount typed through the input's React `onChange`, then, once rendered, "donate" (its handler reads the amount from that render). **A disabled "donate" is never clicked:** the page disables it without the money (`canDonate`).
+  5. The "You just donated" alert closed with its own button, then the reputation read again from the same `Faction`: done once it's `reputation`.
+  6. **Back to the Terminal,** however it went (or focused on the player's work again).
+- **`singularity-donate-to-faction.js`:** `getFactionRep` first, then `donateToFaction`, which refuses what the page would.
+- **The faction state's read after it:** the intent runner counts the donations done, and the page's reader opens Factions at its next read after one (`donationMade`), so the brain sees the reputation at once rather than within 10 minutes.
+
+E2 donates to CyberSec at 150 favour (a synthetic save the simulator sets up), checks the alert closed by the worker and the money paid once, and sends it again: done from the page, nothing paid.
 
 ## The faction state
 

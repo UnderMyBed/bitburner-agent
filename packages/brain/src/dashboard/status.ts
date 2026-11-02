@@ -8,10 +8,12 @@ import {
   type GameInfo,
   gameDrift,
   type MediumSnapshotData,
+  type SlowSnapshotData,
   SNAPSHOT_TIERS,
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import { donationStatus } from "../augmentation-report.ts";
 import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { type BatcherView, batcherNotRunning, batcherOutOfStep } from "../batcher.ts";
@@ -137,6 +139,8 @@ export interface DashboardStatus {
     problem: string | null;
     opened: string[] | null;
     unreadInARow: number;
+    /** Each joined faction's favour after the next install and when its donations unlock (#225, `donationStatus`). */
+    donations?: Record<string, string>;
   } | null;
   /** The brain's joins and faction work (#203): its switch, the join under way, the invitations left, its choice. */
   factionWork: FactionsView;
@@ -349,6 +353,7 @@ export function buildDashboardStatus({
             },
       batcherOutOfStep: outOfStep,
       augmentationsNotQueued: augmentations.notQueued,
+      augmentationDonationsFailed: augmentations.donationsFailed ?? [],
       installAwaitingRestart,
       worldDaemonStall,
     }),
@@ -387,6 +392,12 @@ export function buildDashboardStatus({
           problem: factionStatus?.problem ?? null,
           opened: factionReading?.opened ?? null,
           unreadInARow: unreadInARow.length,
+          donations: Object.fromEntries(
+            (factionReading?.state?.joined ?? []).map((faction) => [
+              faction.name,
+              donationStatus(faction.name, faction, slow.data as SlowSnapshotData),
+            ]),
+          ),
         }
       : null,
     factionWork,

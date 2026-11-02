@@ -12,9 +12,15 @@
 //   Governor is A6's: sold everywhere, it never runs out.
 // - The Red Pill first (#215, A8): once a joined faction (Daedalus) sells it, neither installed nor queued, and its
 //   reputation isn't reached, the work is for it, ahead of any hacking value: it ends the BitNode.
+// - Working toward donation favour (#225, owner decision 53; legacy `work-for-factions.js:897-918`, `:944`): at a
+//   faction that takes donations, the work goes to the lesser of the augmentation's reputation and the reputation that
+//   unlocks donations at the next install (`workTarget`), the augmentation's if it's within 10% of that. Past it, the
+//   augmentation is bought with a donation after the install. A faction whose donations are unlocked isn't worked, nor
+//   an augmentation one sells: A6 buys its reputation. The Red Pill's work stops so too: A6's "Daedalus donations".
 // - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
   type AugmentationPurchaseState,
+  acceptsDonations,
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
@@ -26,6 +32,7 @@ import {
   factionReadingKind,
   factionReadingOf,
   factionReputationPerSecond,
+  favorAfterInstall,
   hackingValue,
   type Intent,
   intentId,
@@ -34,6 +41,7 @@ import {
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
+  reputationToUnlockDonations,
   type SlowSnapshotData,
   THE_RED_PILL,
   type WorkingPerson,
@@ -154,13 +162,56 @@ export interface FactionWorkChoice {
   workType: FactionWorkType;
   /** The augmentation the work is for. */
   augmentation: string;
-  /** The faction's reputation now (the slow snapshot's), and what the augmentation needs. */
+  /** The faction's reputation now (the slow snapshot's), and the reputation the work is for (`workTarget`'s). */
   reputation: number;
   reputationNeeded: number;
   /** The work's reputation a second, by the game's formula. */
   reputationPerSecond: number;
   /** Until the reputation is reached at that rate. */
   etaSeconds: number;
+  /**
+   * Why that reputation (#225): the augmentation's, or the reputation that unlocks the faction's donations at the next
+   * install (then the augmentation's own is `augmentationReputation`). The faction's favour now. Absent in an earlier
+   * brain's choice.
+   */
+  target?: WorkTarget["reason"];
+  augmentationReputation?: number;
+  favor?: number;
+}
+
+/** The reputation worked toward at a faction for an augmentation (#225), and why. */
+export interface WorkTarget {
+  reputation: number;
+  reason: "augmentation" | "donations";
+}
+
+/**
+ * Within this share of the reputation that unlocks donations, the augmentation's reputation is worked all the way to
+ * (legacy `work-for-factions.js:944`): it's soon reached, and bought at once.
+ */
+export const WORK_TO_AUGMENTATION_WITHIN = 1.1;
+
+/**
+ * The reputation to work toward at `faction` for an augmentation needing `augmentationReputation` (#225), or null where
+ * the faction's donations are unlocked already: its reputation is bought, not earned (legacy `:914-917`).
+ * - A faction taking no donations (`acceptsDonations`): the augmentation's.
+ * - Else the lesser of it and the reputation this cycle that unlocks donations at the next install (core's
+ *   `reputationToUnlockDonations`), unless the augmentation's is within `WORK_TO_AUGMENTATION_WITHIN` of the larger of
+ *   that and the reputation now (legacy `:944`): then the augmentation's.
+ */
+export function workTarget(
+  augmentationReputation: number,
+  faction: JoinedFaction,
+  favorToDonateToFaction: number,
+): WorkTarget | null {
+  if (!acceptsDonations(faction.name, null)) return { reputation: augmentationReputation, reason: "augmentation" };
+  const unlock = reputationToUnlockDonations(faction.favor, { FavorToDonateToFaction: favorToDonateToFaction });
+  if (unlock === 0) return null;
+  if (augmentationReputation <= unlock) return { reputation: augmentationReputation, reason: "augmentation" };
+  if (augmentationReputation <= WORK_TO_AUGMENTATION_WITHIN * Math.max(faction.reputation, unlock)) {
+    return { reputation: augmentationReputation, reason: "augmentation" };
+  }
+  return { reputation: unlock, reason: "donations" };
 }
 
 /**
@@ -251,6 +302,8 @@ export interface WorkConditions {
   implant: boolean;
   /** The BitNode's (core's `augmentationBitNodeMultipliers`). */
   factionWorkRepGain: number;
+  /** The BitNode's, on the favour that unlocks donations (#225). */
+  favorToDonateToFaction: number;
 }
 
 /** The work conditions in the slow snapshot's reset info. Throws for a BitNode core doesn't know. */
@@ -262,6 +315,7 @@ export function workConditionsOf(resetInfo: WorkResetInfo, slowData: SlowSnapsho
     focused: workFocus({ kind: "faction", faction: "CyberSec", workType: "hacking" }, slowData),
     implant: Object.hasOwn(ownedAugs, NEURORECEPTOR_MANAGEMENT_IMPLANT),
     factionWorkRepGain: augmentationBitNodeMultipliers(currentNode, ownedSF).FactionWorkRepGain,
+    favorToDonateToFaction: augmentationBitNodeMultipliers(currentNode, ownedSF).FavorToDonateToFaction,
   };
 }
 
@@ -293,6 +347,9 @@ export interface WorkCandidate {
   /** Its reputation (core's `augmentationCost`), and the faction's now. */
   reputationNeeded: number;
   reputation: number;
+  /** The reputation worked toward for it there (#225, `workTarget`): below `reputationNeeded` for donations' favour. */
+  target: WorkTarget;
+  favor: number;
 }
 
 /**
@@ -300,12 +357,18 @@ export interface WorkCandidate {
  * factions and their shops list them: a hacking value at `hackingLevel` (core's `hackingValue`), neither installed nor
  * queued, not NeuroFlux Governor (A6's), each missing prerequisite sold by a joined faction, and its reputation not yet
  * reached at any joined faction that sells it (one reached is A6's to buy). Throws for what core doesn't know.
+ * Donations (#225): not one a joined faction with donations unlocked sells (A6 buys its reputation), nor at such a
+ * faction; and each at its faction's `workTarget`, not one already reached there.
  */
 export function workCandidates(
   state: FactionState,
   { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
   hackingLevel: number,
 ): WorkCandidate[] {
+  const { FavorToDonateToFaction } = augmentationBitNodeMultipliers(currentNode, ownedSF);
+  const unlocked = (faction: JoinedFaction) =>
+    acceptsDonations(faction.name, null) &&
+    reputationToUnlockDonations(faction.favor, { FavorToDonateToFaction }) === 0;
   const purchaseState: AugmentationPurchaseState = {
     installed: ownedAugs,
     queued: state.queuedAugmentations,
@@ -320,7 +383,9 @@ export function workCandidates(
   const owned = (augmentation: string) =>
     Object.hasOwn(ownedAugs, augmentation) || state.queuedAugmentations.includes(augmentation);
   const soldByJoined = (augmentation: string) => [...shops].filter(([, shop]) => shop.includes(augmentation));
-  const reputationOf = (faction: string) => state.joined.find((each) => each.name === faction)?.reputation ?? 0;
+  const joinedOf = (faction: string) =>
+    state.joined.find((each) => each.name === faction) ?? { name: faction, reputation: 0, favor: 0 };
+  const reputationOf = (faction: string) => joinedOf(faction).reputation;
   const candidates: WorkCandidate[] = [];
   for (const [faction, shop] of shops) {
     for (const augmentation of shop) {
@@ -331,7 +396,19 @@ export function workCandidates(
       if (!missing.every((prerequisite) => soldByJoined(prerequisite).length > 0)) continue;
       const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
       if (soldByJoined(augmentation).some(([seller]) => reputationOf(seller) >= reputationNeeded)) continue;
-      candidates.push({ faction, augmentation, value, reputationNeeded, reputation: reputationOf(faction) });
+      if (soldByJoined(augmentation).some(([seller]) => unlocked(joinedOf(seller)))) continue;
+      const target = workTarget(reputationNeeded, joinedOf(faction), FavorToDonateToFaction);
+      if (target === null || reputationOf(faction) >= target.reputation) continue;
+      const { favor } = joinedOf(faction);
+      candidates.push({
+        faction,
+        augmentation,
+        value,
+        reputationNeeded,
+        reputation: reputationOf(faction),
+        target,
+        favor,
+      });
     }
   }
   return candidates;
@@ -341,6 +418,8 @@ export function workCandidates(
  * The work for The Red Pill (#215), or null: at the joined faction selling it (Daedalus; none in BN15) with the soonest
  * ETA at its best work, while it's neither installed nor queued and no joined seller's reputation reaches it (reached,
  * it's A6's to buy). Its reputation is core's `augmentationCost`: 2.5m in BN1 (`Augmentation/Augmentations.ts:1946`).
+ * Donations (#225): worked to its seller's `workTarget`; none at a seller whose donations are unlocked (A8's way buys
+ * the reputation), and none once the target is reached there (A6 installs for "Daedalus donations").
  */
 export function redPillWork(
   person: WorkingPerson,
@@ -363,18 +442,23 @@ export function redPillWork(
   if (sellers.some((faction) => faction.reputation >= reputationNeeded)) return null;
   let best: FactionWorkChoice | null = null;
   for (const faction of sellers) {
+    const target = workTarget(reputationNeeded, faction, conditions.favorToDonateToFaction);
+    if (target === null || faction.reputation >= target.reputation) continue;
     const rate = bestWorkRate(person, faction, conditions);
     if (rate === null) continue;
-    const etaSeconds = (reputationNeeded - faction.reputation) / rate.perSecond;
+    const etaSeconds = (target.reputation - faction.reputation) / rate.perSecond;
     if (best === null || etaSeconds < best.etaSeconds) {
       best = {
         faction: faction.name,
         workType: rate.workType,
         augmentation: THE_RED_PILL,
         reputation: faction.reputation,
-        reputationNeeded,
+        reputationNeeded: target.reputation,
         reputationPerSecond: rate.perSecond,
         etaSeconds,
+        target: target.reason,
+        augmentationReputation: reputationNeeded,
+        favor: faction.favor,
       };
     }
   }
@@ -393,7 +477,7 @@ function bestCandidate(
   for (const candidate of workCandidates(state, resetInfo, person.skills.hacking)) {
     const rate = rates.get(candidate.faction);
     if (!rate) continue;
-    const etaSeconds = (candidate.reputationNeeded - candidate.reputation) / rate.perSecond;
+    const etaSeconds = (candidate.target.reputation - candidate.reputation) / rate.perSecond;
     const score = candidate.value / etaSeconds;
     const better =
       best === null ||
@@ -405,9 +489,12 @@ function bestCandidate(
         workType: rate.workType,
         augmentation: candidate.augmentation,
         reputation: candidate.reputation,
-        reputationNeeded: candidate.reputationNeeded,
+        reputationNeeded: candidate.target.reputation,
         reputationPerSecond: rate.perSecond,
         etaSeconds,
+        target: candidate.target.reason,
+        augmentationReputation: candidate.reputationNeeded,
+        favor: candidate.favor,
         score,
       };
     }
@@ -474,11 +561,23 @@ export function describeEta(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} h`;
 }
 
-/** A choice in words, for the log, the dashboard and the run report. */
+/**
+ * A choice in words, for the log, the dashboard and the run report; one for donations' favour (#225) says so, with the
+ * augmentation's own reputation and the favour after the next install at the target.
+ */
 export function describeChoice(choice: FactionWorkChoice): string {
+  const target =
+    choice.target === "donations"
+      ? `: donations at the next install, ${choice.augmentation} at ` +
+        `${formatReputation(choice.augmentationReputation ?? Number.NaN)}` +
+        (typeof choice.favor === "number"
+          ? `; favour ${choice.favor.toFixed(1)}, ${favorAfterInstall(choice.favor, choice.reputationNeeded).toFixed(1)} ` +
+            "after the next install at it"
+          : "")
+      : "";
   return (
     `${choice.workType} for ${choice.faction}, for ${choice.augmentation} (reputation ` +
-    `${formatReputation(choice.reputation)} of ${formatReputation(choice.reputationNeeded)}, ` +
+    `${formatReputation(choice.reputation)} of ${formatReputation(choice.reputationNeeded)}${target}, ` +
     `${choice.reputationPerSecond.toFixed(2)}/s: about ${describeEta(choice.etaSeconds)})`
   );
 }
@@ -624,7 +723,7 @@ export class FactionRule {
   #store(sent: FactionWorkChoice | null, reason: string | null, nowMs: number | null): void {
     if (nowMs === null) return;
     if (sent !== null) {
-      const key = JSON.stringify([sent.faction, sent.workType, sent.augmentation]);
+      const key = JSON.stringify([sent.faction, sent.workType, sent.augmentation, sent.reputationNeeded]);
       if (key === this.#lastStored) return;
       this.#lastStored = key;
       this.#emit({ type: FACTION_WORK_CHOSEN_EVENT_KIND, atMs: nowMs, ...sent });
@@ -702,6 +801,15 @@ export type FactionWorkRecord =
   | { atMs: number; kind: "chosen"; choice: FactionWorkChoice }
   | { atMs: number; kind: "stopped"; reason: string };
 
+/** A stored choice's optional figures (#225), where they're as the brain writes them. */
+function targetFieldsOf(detail: Partial<FactionWorkChoice>): Partial<FactionWorkChoice> {
+  return {
+    ...(detail.target === "donations" || detail.target === "augmentation" ? { target: detail.target } : {}),
+    ...(isFiniteNumber(detail.augmentationReputation) ? { augmentationReputation: detail.augmentationReputation } : {}),
+    ...(isFiniteNumber(detail.favor) ? { favor: detail.favor } : {}),
+  };
+}
+
 const isChoice = (detail: unknown): detail is FactionWorkChoice => {
   const fields = detail as Partial<FactionWorkChoice> | null;
   return (
@@ -759,6 +867,7 @@ export class FactionWorkTimeline {
           reputationNeeded,
           reputationPerSecond,
           etaSeconds,
+          ...targetFieldsOf(detail),
         };
         this.records.push({ atMs, kind: "chosen", choice });
       } else if (kind === FACTION_WORK_STOPPED_EVENT_KIND) {

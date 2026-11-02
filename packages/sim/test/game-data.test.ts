@@ -175,11 +175,13 @@ test("the BitNode multipliers on augmentations and faction work are the engine's
     AugmentationRepCost,
     DaedalusAugsRequirement,
     FactionWorkRepGain,
+    FavorToDonateToFaction,
   }: Record<string, number>) => ({
     AugmentationMoneyCost,
     AugmentationRepCost,
     DaedalusAugsRequirement,
     FactionWorkRepGain,
+    FavorToDonateToFaction,
   });
   expect(Object.keys(AUGMENTATION_BITNODE_MULTIPLIERS).map(Number)).toEqual(
     Array.from({ length: BITNODE_COUNT }, (_, i) => i + 1),

@@ -165,7 +165,13 @@ describe("the set to buy", () => {
     const threeHundred = chooseAugmentationsToBuy(CYBERSEC, BN1, 300e6, LEVEL);
     expect(threeHundred.purchases.map((purchase) => purchase.name)).toEqual([GEN_I, BITWIRE, SYNAPTIC, NEUROTRAINER]);
     expect(threeHundred.money).toBeCloseTo(143_511_000, 0);
-    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 3_999_999, LEVEL)).toEqual({ purchases: [], money: 0 });
+    expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 3_999_999, LEVEL)).toEqual({
+      purchases: [],
+      money: 0,
+      donations: [],
+      donationMoney: 0,
+      byDonation: [],
+    });
     expect(chooseAugmentationsToBuy(CYBERSEC, BN1, 4e6, LEVEL).purchases.map((purchase) => purchase.name)).toEqual([
       NEUROTRAINER,
     ]);
@@ -186,7 +192,7 @@ describe("the set to buy", () => {
   });
 
   test("a prerequisite not reached keeps out what needs it; one installed or queued doesn't", () => {
-    expect(chooseAugmentationsToBuy([GEN_II], BN1, 1e12, LEVEL)).toEqual({ purchases: [], money: 0 });
+    expect(chooseAugmentationsToBuy([GEN_II], BN1, 1e12, LEVEL).purchases).toEqual([]);
     const installed = { ...BN1, installed: { [GEN_I]: 1 } };
     expect(chooseAugmentationsToBuy([GEN_II], installed, 1e12, LEVEL).purchases).toEqual([
       { name: GEN_II, money: 125e6, reputation: 18_750 },
@@ -217,6 +223,123 @@ describe("the set to buy", () => {
     );
     expect(chooseAugmentationsToBuy([BITWIRE], { ...BN1, queued: [BITWIRE] }, 1e12, LEVEL).purchases).toEqual([]);
     expect(() => chooseAugmentationsToBuy(["Nothing"], BN1, 1e12, LEVEL)).toThrow(RangeError);
+  });
+});
+
+describe("donations (#225): what a donation brings within reach", () => {
+  // $1m a reputation: faction_rep 1, FactionWorkRepGain 1. CyberSec at 5,000 and NiteSec at 12,000, both unlocked.
+  const SELLERS = {
+    CyberSec: { faction: "CyberSec", reputation: 5_000 },
+    NiteSec: { faction: "NiteSec", reputation: 12_000 },
+  };
+  const terms = (
+    sellers: Record<string, { faction: string; reputation: number }[]>,
+    neuroFluxSellers = [] as (typeof SELLERS.CyberSec)[],
+  ) => ({
+    sellers,
+    neuroFluxSellers,
+    factionRep: 1,
+    factionWorkRepGain: 1,
+  });
+  /** Gen II (18,750) is reached at neither; the rest are: Gen I at NiteSec, the three cheap ones at CyberSec. */
+  const REACHED = [GEN_I, BITWIRE, SYNAPTIC, NEUROTRAINER];
+  const GEN_II_SELLERS = { [GEN_II]: [SELLERS.CyberSec, SELLERS.NiteSec] };
+  const ALL_FIVE = 447_170_900;
+
+  test("an augmentation no seller's reputation reaches: bought from the seller whose donation is least", () => {
+    const set = chooseAugmentationsToBuy(REACHED, BN1, 1e12, LEVEL, terms(GEN_II_SELLERS));
+    expect(set.purchases.map((purchase) => purchase.name)).toEqual([GEN_I, GEN_II, BITWIRE, SYNAPTIC, NEUROTRAINER]);
+    expect(set.money).toBeCloseTo(ALL_FIVE, 0);
+    // NiteSec's 6,750 short, not CyberSec's 13,750: $6.75b, and $10k for a hundredth more (core's margin).
+    expect(set.donations).toEqual([{ faction: "NiteSec", reputation: 18_750, amount: 6_750_010_000 }]);
+    expect(set.donationMoney).toBe(6_750_010_000);
+    expect(set.byDonation).toEqual([GEN_II]);
+    // Reached ones cost nothing: no donation without Gen II.
+    expect(chooseAugmentationsToBuy(REACHED, BN1, 1e12, LEVEL, terms({})).donations).toEqual([]);
+  });
+
+  test("the money must cover the prices and the donations: a dollar short of Gen II's, it's left out", () => {
+    // Gen II with Gen I, its prerequisite: $70m + $125m × 1.9, and NiteSec's $6.75b.
+    const genII = 70e6 + 125e6 * 1.9 + 6_750_010_000;
+    const short = chooseAugmentationsToBuy(REACHED, BN1, genII - 1, LEVEL, terms(GEN_II_SELLERS));
+    expect(short.purchases.map((purchase) => purchase.name)).not.toContain(GEN_II);
+    expect(short.byDonation).toEqual([]);
+    expect(short.donations).toEqual([]);
+    const enough = chooseAugmentationsToBuy(REACHED, BN1, genII, LEVEL, terms(GEN_II_SELLERS));
+    expect(enough.purchases.map((purchase) => purchase.name)).toEqual([GEN_I, GEN_II]);
+    expect(enough.byDonation).toEqual([GEN_II]);
+    expect(enough.money + enough.donationMoney).toBe(genII);
+  });
+
+  test("one donation a faction, for the most reputation bought there: the max, not the sum", () => {
+    const nitesec = { faction: "NiteSec", reputation: 0 };
+    const sellers = {
+      [BITWIRE]: [nitesec],
+      [GEN_I]: [nitesec],
+      [GEN_II]: [nitesec],
+    };
+    const set = chooseAugmentationsToBuy([], BN1, 1e12, LEVEL, terms(sellers));
+    expect(set.byDonation.sort()).toEqual([BITWIRE, GEN_I, GEN_II].sort());
+    expect(set.donations).toEqual([{ faction: "NiteSec", reputation: 18_750, amount: 18_750_010_000 }]);
+  });
+
+  test("the seller already raised wins: Gen I's donation at NiteSec covers most of Gen II's there", () => {
+    // Both at 0: Gen I (10,000) goes to the first in the game's order (NiteSec); Gen II then raises that one least.
+    const zero = (faction: string) => ({ faction, reputation: 0 });
+    const both = [zero("NiteSec"), zero("CyberSec")];
+    const set = chooseAugmentationsToBuy([], BN1, 1e12, LEVEL, terms({ [GEN_I]: both, [GEN_II]: both }));
+    expect(set.donations).toEqual([{ faction: "NiteSec", reputation: 18_750, amount: 18_750_010_000 }]);
+  });
+
+  test("a tie on the donation goes to the seller with more reputation: one donation each, not one for both", () => {
+    // Gen I raises NiteSec (at 0) to 10,000; Gen II then raises it or CyberSec (at 10,000) by as much: CyberSec.
+    const nitesec = { faction: "NiteSec", reputation: 0 };
+    const cyberSec = { faction: "CyberSec", reputation: 10_000 };
+    const set = chooseAugmentationsToBuy(
+      [],
+      BN1,
+      1e12,
+      LEVEL,
+      terms({ [GEN_I]: [nitesec], [GEN_II]: [nitesec, cyberSec] }),
+    );
+    expect(set.donations).toEqual([
+      { faction: "NiteSec", reputation: 10_000, amount: 10_000_010_000 },
+      { faction: "CyberSec", reputation: 18_750, amount: 8_750_010_000 },
+    ]);
+  });
+
+  test("NeuroFlux Governor's levels beyond the sellers' reputation, bought with a donation on top of the set's", () => {
+    const set = chooseAugmentationsToBuy(REACHED, BN1, ALL_FIVE, LEVEL, terms({}));
+    const LEVEL_1 = 750_000 * 1.9 ** 4;
+    const LEVEL_2 = 750_000 * 1.14 * 1.9 ** 5;
+    const base = { state: BN1, set, neuroFluxReputation: 0 };
+    const cyberSec = { faction: "CyberSec", reputation: 0 };
+    // 500 reputation, then 570: $500m, then $70m more, one donation of $570m (and a hundredth of a reputation's $10k).
+    const money = set.money + LEVEL_1 + 500_010_000 + LEVEL_2 + 70e6;
+    const counts = affordableCounts({ ...base, money, donations: terms({}, [cyberSec]) });
+    expect(counts).toMatchObject({ neuroFluxLevels: 2, byDonation: 2, donationMoney: 570_010_000 });
+    expect(counts.donations).toEqual([{ faction: "CyberSec", reputation: 570, amount: 570_010_000 }]);
+    expect(counts.money).toBeCloseTo(money, 0);
+    // A dollar short of the second level's donation: one level.
+    expect(affordableCounts({ ...base, money: money - 1, donations: terms({}, [cyberSec]) }).neuroFluxLevels).toBe(1);
+    // Without a seller taking donations: none, as before.
+    expect(affordableCounts({ ...base, money }).neuroFluxLevels).toBe(0);
+  });
+
+  test("the set's donations count for NeuroFlux too: a seller raised to Gen II's 18,750 needs none for a level", () => {
+    const cyberSec = { faction: "CyberSec", reputation: 0 };
+    const donating = terms({ [GEN_II]: [cyberSec], [GEN_I]: [cyberSec] }, [cyberSec]);
+    const set = chooseAugmentationsToBuy([], BN1, 1e12, LEVEL, donating);
+    expect(set.donations).toEqual([{ faction: "CyberSec", reputation: 18_750, amount: 18_750_010_000 }]);
+    const level = 750_000 * 1.9 ** 2;
+    const counts = affordableCounts({
+      state: BN1,
+      set,
+      money: set.money + set.donationMoney + level,
+      neuroFluxReputation: 0,
+      donations: donating,
+    });
+    expect(counts).toMatchObject({ affordable: 2, neuroFluxLevels: 1, byDonation: 2, donationMoney: 18_750_010_000 });
   });
 });
 
@@ -324,7 +447,15 @@ describe("the counts", () => {
     const set = chooseAugmentationsToBuy([GEN_I], state, 1e12, LEVEL);
     expect(set.purchases.map((purchase) => purchase.name)).toEqual([GEN_I]);
     const counts = affordableCounts({ state, set, money: set.money, neuroFluxReputation: 0 });
-    expect(counts).toEqual({ affordable: 2, affordableWithNeuroFlux: 3, neuroFluxLevels: 0, money: set.money });
+    expect(counts).toEqual({
+      affordable: 2,
+      affordableWithNeuroFlux: 3,
+      neuroFluxLevels: 0,
+      money: set.money,
+      donations: [],
+      donationMoney: 0,
+      byDonation: 0,
+    });
     // Gen I at 1.9³ for the three queued: $70m × 6.859.
     expect(set.money).toBeCloseTo(70e6 * 1.9 ** 3, 0);
     // The level after three queued and Gen I: 750k × 1.14 (one copy queued) × 1.9⁴.
