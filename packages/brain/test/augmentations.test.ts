@@ -1642,19 +1642,20 @@ describe("donations (#225)", () => {
   });
 
   test("The Red Pill's donation first, the counts budgeted without its money, with another donor present (#225 review)", () => {
-    // Daedalus and CyberSec both unlocked: $2.5t for The Red Pill, and $1b more.
+    // Daedalus and CyberSec both unlocked: $2.5t for The Red Pill, and $6b more.
     const joined = [
       { name: "Daedalus", reputation: 0, favor: 150 },
       { name: "CyberSec", reputation: 5_000, favor: 150 },
     ];
     const RED_PILL_DONATION = 2_500_000_010_000;
-    const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION + 1e9 }) });
+    const ask = update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION + 6e9 }) });
     const note = readAugmentationCycle(store);
     expect(note).toMatchObject({ reason: "The Red Pill", redPill: "Daedalus" });
     expect(note?.donations?.[0]).toEqual({ faction: "Daedalus", reputation: 2.5e6, amount: RED_PILL_DONATION });
-    // The rest planned within the $1b left: not CyberSec's $5b for Gen I, nor Daedalus's own augmentations'.
+    // The rest planned within the $6b left, after it: CyberSec's $5b for Gen I, not Daedalus's own augmentations'.
     const rest = (note?.donations ?? []).slice(1);
-    expect(rest.reduce((sum, each) => sum + each.amount, 0)).toBeLessThanOrEqual(1e9);
+    expect(rest.map((each) => each.faction)).toEqual(["CyberSec"]);
+    expect(rest.reduce((sum, each) => sum + each.amount, 0)).toBeLessThanOrEqual(6e9);
     expect(ask.intent).toEqual(donateIntent("Daedalus", RED_PILL_DONATION, 2.5e6));
     // Never passed over: its money gone (spent elsewhere), the cycle is called off, and the next held for it.
     const short = update({ slowData: slow({ joined }), mediumData: medium({ money: RED_PILL_DONATION - 1 }) });
