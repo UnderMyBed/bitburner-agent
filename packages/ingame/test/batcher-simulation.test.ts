@@ -242,7 +242,7 @@ const IN_STEP = {
   batchesShort: 0,
   batchesTrimmed: 0,
   hacksSkipped: 0,
-  belowFullMoney: 0,
+  moneyLooksBelowFull: 0,
   leastMoneyAfterGrow: 1,
   problem: null,
 };

@@ -47,6 +47,7 @@ import {
   preparationTimeMs,
   preparationWave,
   type RamHold,
+  recordGrowsNotLooked,
   recordMoneyLook,
   threadsThatFit,
 } from "../src/batcher.ts";
@@ -694,57 +695,106 @@ describe("landings", () => {
 
 describe("the money after each batch's grow (#234)", () => {
   const target = { target: "iron-gym", moneyMax: 500_000_000 };
+  const IRON = "iron-gym";
 
   test("looked at once all its parts have landed, and only then; each grow once", () => {
     const watch = new GrowLandingWatch();
-    watch.started("7", target.target, target.moneyMax, 1_040, ["r.7.grow.0", "r.7.grow.1", "r.7.grow.2"]);
-    watch.landed("r.7.grow.0", 1_040);
-    watch.landed("r.7.grow.1", 1_040);
-    expect(watch.takeDue()).toEqual({ due: [], skipped: 0 });
-    watch.landed("r.7.grow.2", 1_040);
-    expect(watch.takeDue()).toEqual({ due: [target], skipped: 0 });
-    expect(watch.takeDue()).toEqual({ due: [], skipped: 0 });
+    watch.started("7", IRON, target.moneyMax, 1_040, ["r.7.grow.0", "r.7.grow.1", "r.7.grow.2"]);
+    watch.landed("r.7.grow.0", 1_040, IRON);
+    watch.landed("r.7.grow.1", 1_040, IRON);
+    expect(watch.takeDue()).toEqual({ due: [], notLooked: 0 });
+    watch.landed("r.7.grow.2", 1_040, IRON);
+    expect(watch.takeDue()).toEqual({ due: [target], notLooked: 0 });
+    expect(watch.takeDue()).toEqual({ due: [], notLooked: 0 });
   });
 
-  test("its own weaken2 landed after it, δ later: still its money; the next hack landed after it: skipped", () => {
+  test("its own weaken2 landed after it, δ later: still its money; the next hack after it: not looked at", () => {
     const watch = new GrowLandingWatch();
-    watch.started("7", target.target, target.moneyMax, 1_040, ["r.7.grow.0"]);
-    watch.started("8", target.target, target.moneyMax, 1_120, ["r.8.grow.0"]);
-    watch.landed("r.7.grow.0", 1_040);
-    watch.landed("r.7.weaken2.0", 1_040 + BATCH_LANDING_GAP_MS);
-    expect(watch.takeDue()).toEqual({ due: [target], skipped: 0 });
-    watch.landed("r.8.grow.0", 1_120);
+    watch.started("7", IRON, target.moneyMax, 1_040, ["r.7.grow.0"]);
+    watch.started("8", IRON, target.moneyMax, 1_120, ["r.8.grow.0"]);
+    watch.landed("r.7.grow.0", 1_040, IRON);
+    watch.landed("r.7.weaken2.0", 1_040 + BATCH_LANDING_GAP_MS, IRON);
+    expect(watch.takeDue()).toEqual({ due: [target], notLooked: 0 });
+    watch.landed("r.8.grow.0", 1_120, IRON);
     // Batch 9's hack, 2δ after batch 8's grow at the least spacing, drained with it: the money is the hack's now.
-    watch.landed("r.9.hack.0", 1_120 + 2 * BATCH_LANDING_GAP_MS);
-    expect(watch.takeDue()).toEqual({ due: [], skipped: 1 });
+    watch.landed("r.9.hack.0", 1_120 + 2 * BATCH_LANDING_GAP_MS, IRON);
+    expect(watch.takeDue()).toEqual({ due: [], notLooked: 1 });
+  });
+
+  test("only what lands on its target counts (#235's review): another target's wave doesn't stop a look", () => {
+    const watch = new GrowLandingWatch();
+    watch.started("7", IRON, target.moneyMax, 1_040, ["r.7.grow.0"]);
+    watch.landed("r.7.grow.0", 1_040, IRON);
+    // The next target's preparation wave lands meanwhile, on another server.
+    watch.landed("r.n3.weaken1.0", 1_200, "silver-helix");
+    expect(watch.takeDue()).toEqual({ due: [target], notLooked: 0 });
+  });
+
+  test("a record of no known target (another run's, a lost part's) counts on every target (#235's review)", () => {
+    const watch = new GrowLandingWatch();
+    watch.started("7", IRON, target.moneyMax, 1_040, ["r.7.grow.0"]);
+    watch.landed("r.7.grow.0", 1_040, IRON);
+    // Another run's hack, or one of this run's lost, may have hacked the target: its money isn't the grow's.
+    watch.landed("old.3.hack.0", 1_100, null);
+    expect(watch.takeDue()).toEqual({ due: [], notLooked: 1 });
   });
 
   test("a part lost: its grow is never looked at, nor kept; other records and unknown parts move nothing", () => {
     const watch = new GrowLandingWatch();
-    watch.started("7", target.target, target.moneyMax, 1_040, ["r.7.grow.0", "r.7.grow.1"]);
-    watch.started("8", target.target, target.moneyMax, 1_120, ["r.8.grow.0"]);
+    watch.started("7", IRON, target.moneyMax, 1_040, ["r.7.grow.0", "r.7.grow.1"]);
+    watch.started("8", IRON, target.moneyMax, 1_120, ["r.8.grow.0"]);
+    // `waiting` is for this test: a lost part leaves nothing behind.
     expect(watch.waiting()).toBe(2);
-    watch.landed("r.7.grow.0", 1_040);
+    watch.landed("r.7.grow.0", 1_040, IRON);
     watch.lost("r.7.grow.1");
     watch.lost("r.3.hack.0");
     expect(watch.waiting()).toBe(1);
-    expect(watch.takeDue()).toEqual({ due: [], skipped: 0 });
+    expect(watch.takeDue()).toEqual({ due: [], notLooked: 0 });
     // A grow with no parts started is never looked at.
-    watch.started("8", target.target, target.moneyMax, 1_120, []);
-    expect(watch.takeDue()).toEqual({ due: [], skipped: 0 });
+    watch.started("8", IRON, target.moneyMax, 1_120, []);
+    expect(watch.takeDue()).toEqual({ due: [], notLooked: 0 });
   });
 
-  test("recordMoneyLook: the looks, those below the maximum, and the least share of it", () => {
-    const health = newBatcherHealth("iron-gym", "r", 0);
-    expect(health).toMatchObject({ moneyLooks: 0, belowFullMoney: 0, leastMoneyAfterGrow: 1 });
-    recordMoneyLook(health, 500_000_000, 500_000_000);
-    recordMoneyLook(health, 490_000_000, 500_000_000);
-    recordMoneyLook(health, 495_000_000, 500_000_000);
-    expect(health).toMatchObject({ moneyLooks: 3, belowFullMoney: 2, leastMoneyAfterGrow: 0.98 });
+  test("the health: the looks, those below the maximum, the least and its target, the grows not looked at", () => {
+    const health = newBatcherHealth(IRON, "r", 0);
+    expect(health).toMatchObject({
+      moneyLooks: 0,
+      moneyLooksBelowFull: 0,
+      leastMoneyAfterGrow: 1,
+      leastMoneyAfterGrowOn: null,
+      growsNotLooked: 0,
+    });
+    recordMoneyLook(health, IRON, 500_000_000, 500_000_000);
+    recordMoneyLook(health, IRON, 490_000_000, 500_000_000);
+    recordMoneyLook(health, "silver-helix", 950_000_000, 1_000_000_000);
+    recordMoneyLook(health, IRON, 495_000_000, 500_000_000);
+    recordGrowsNotLooked(health, 2);
+    recordGrowsNotLooked(health, 0);
+    expect(health).toMatchObject({
+      moneyLooks: 4,
+      moneyLooksBelowFull: 3,
+      leastMoneyAfterGrow: 0.95,
+      leastMoneyAfterGrowOn: "silver-helix",
+      growsNotLooked: 2,
+    });
     // An older health without the counts starts them.
-    const older = { ...newBatcherHealth("iron-gym", "r", 0), moneyLooks: undefined, belowFullMoney: undefined };
-    recordMoneyLook(older, 1, 2);
-    expect(older).toMatchObject({ moneyLooks: 1, belowFullMoney: 1, leastMoneyAfterGrow: 0.5 });
+    const older = {
+      ...newBatcherHealth(IRON, "r", 0),
+      moneyLooks: undefined,
+      moneyLooksBelowFull: undefined,
+      leastMoneyAfterGrow: undefined,
+      leastMoneyAfterGrowOn: undefined,
+      growsNotLooked: undefined,
+    };
+    recordMoneyLook(older, IRON, 1, 2);
+    recordGrowsNotLooked(older, 1);
+    expect(older).toMatchObject({
+      moneyLooks: 1,
+      moneyLooksBelowFull: 1,
+      leastMoneyAfterGrow: 0.5,
+      leastMoneyAfterGrowOn: IRON,
+      growsNotLooked: 1,
+    });
   });
 });
 

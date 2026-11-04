@@ -743,7 +743,7 @@ export class LandingWatch {
 }
 
 /** A grow whose money is to be looked at (#234): its target and that target's maximum money. */
-export interface GrowLook {
+interface GrowLook {
   target: string;
   moneyMax: number;
 }
@@ -754,15 +754,18 @@ export interface GrowLook {
  * NetscriptFunctions.ts:292), so above a minimum security of about 8.57, where growth isn't capped (grow.ts:15-18),
  * its later parts grow less than the plan, which counts them all at the minimum. Its margin (`GROW_MARGIN`) covers
  * the batcher's own plans (#234's measurement), so a grow that leaves the target below its maximum is a drift to see.
- * A grow is due once every part started has landed; its money is the grow's only while nothing later has landed but
- * its own weaken2, δ after it (the next batch's hack lands 2δ after it at the least spacing). The batcher drains its
- * landing port as each record is written, so the records drained with a grow's last part are all that have landed.
+ * A grow is due once every part started has landed; its money is the grow's only while nothing has landed on its
+ * target since but its own weaken2, δ after it (the next batch's hack lands 2δ after it at the least spacing). The
+ * batcher drains its landing port as each record is written, so the records drained with a grow's last part are all
+ * that have landed.
  */
 export class GrowLandingWatch {
   readonly #grows = new Map<string, GrowLook & { landAt: number; parts: Set<string> }>();
   /** Each part started, by id: its batch's grow. */
   readonly #batchOfPart = new Map<string, string>();
-  #latestLandedAt = Number.NEGATIVE_INFINITY;
+  /** The latest landing on each target, and of any record whose target isn't known (it may be any). */
+  readonly #latestLandedOn = new Map<string, number>();
+  #latestLandedAnywhere = Number.NEGATIVE_INFINITY;
   #landedInFull: (GrowLook & { landAt: number })[] = [];
 
   /** A batch's grow started, all its parts (`partIds`), to land at `landAt` on `target`. */
@@ -773,19 +776,23 @@ export class GrowLandingWatch {
     for (const part of parts) this.#batchOfPart.set(part, batchId);
   }
 
-  /** A part of any operation landed (an expected record whose call ran), at `landAt`. */
-  landed(id: string, landAt: number): void {
-    this.#latestLandedAt = Math.max(this.#latestLandedAt, landAt);
+  /**
+   * A part of any operation landed (a record whose call ran) at `landAt`, on `target`; null when that isn't known
+   * (#235's review: another run's record, or a lost part's, late), which may have been on any target.
+   */
+  landed(id: string, landAt: number, target: string | null): void {
+    if (target === null) this.#latestLandedAnywhere = Math.max(this.#latestLandedAnywhere, landAt);
+    else this.#latestLandedOn.set(target, Math.max(this.#latestLandedOn.get(target) ?? landAt, landAt));
     const batchId = this.#batchOfPart.get(id);
     if (batchId === undefined) return;
     this.#batchOfPart.delete(id);
-    const grown = this.#grows.get(batchId);
-    if (grown === undefined) return;
-    grown.parts.delete(id);
-    if (grown.parts.size > 0) return;
+    const growing = this.#grows.get(batchId);
+    if (growing === undefined) return;
+    growing.parts.delete(id);
+    if (growing.parts.size > 0) return;
     this.#grows.delete(batchId);
-    const { target, moneyMax, landAt: grownAt } = grown;
-    this.#landedInFull.push({ target, moneyMax, landAt: grownAt });
+    const { target: grownOn, moneyMax, landAt: grownAt } = growing;
+    this.#landedInFull.push({ target: grownOn, moneyMax, landAt: grownAt });
   }
 
   /**
@@ -798,33 +805,48 @@ export class GrowLandingWatch {
     if (batchId !== undefined) this.#grows.delete(batchId);
   }
 
-  /** The grows started whose parts haven't all landed (none left behind by a part lost). */
+  /** The grows started whose parts haven't all landed: for its tests, so a part lost is seen to leave none behind. */
   waiting(): number {
     return this.#grows.size;
   }
 
   /**
-   * The grows landed in full since the last call whose money is theirs now (`due`), and those it no longer is
-   * (`skipped`): something later than their weaken2 has landed.
+   * The grows landed in full since the last call whose money is theirs now (`due`), and how many no longer are
+   * (`notLooked`): something has landed on their target since but their own weaken2.
    */
-  takeDue(): { due: GrowLook[]; skipped: number } {
+  takeDue(): { due: GrowLook[]; notLooked: number } {
     const due: GrowLook[] = [];
-    let skipped = 0;
+    let notLooked = 0;
     for (const { target, moneyMax, landAt } of this.#landedInFull) {
-      if (this.#latestLandedAt > landAt + BATCH_LANDING_GAP_MS) skipped += 1;
+      const latest = Math.max(this.#latestLandedOn.get(target) ?? landAt, this.#latestLandedAnywhere);
+      if (latest > landAt + BATCH_LANDING_GAP_MS) notLooked += 1;
       else due.push({ target, moneyMax });
     }
     this.#landedInFull = [];
-    return { due, skipped };
+    return { due, notLooked };
   }
 }
 
-/** A look at the target's money after a batch's grow (#234), in the health: `money` of its `moneyMax`. */
-export function recordMoneyLook(health: BatcherHealth, money: number, moneyMax: number): void {
+/** A look at `target`'s money after a batch's grow (#234), in the health: `money` of its `moneyMax`. */
+export function recordMoneyLook(health: BatcherHealth, target: string, money: number, moneyMax: number): void {
   health.moneyLooks = (health.moneyLooks ?? 0) + 1;
-  if (money < moneyMax) health.belowFullMoney = (health.belowFullMoney ?? 0) + 1;
-  else health.belowFullMoney ??= 0;
-  health.leastMoneyAfterGrow = Math.min(health.leastMoneyAfterGrow ?? 1, moneyMax > 0 ? money / moneyMax : 1);
+  health.moneyLooksBelowFull = (health.moneyLooksBelowFull ?? 0) + (money < moneyMax ? 1 : 0);
+  // Not `share`: the batcher runs this, and the game would charge share's 2.4 GB for the name (RamCalculations.ts:436).
+  const fractionOfMax = moneyMax > 0 ? money / moneyMax : 1;
+  if (fractionOfMax < (health.leastMoneyAfterGrow ?? 1)) {
+    health.leastMoneyAfterGrow = fractionOfMax;
+    health.leastMoneyAfterGrowOn = target;
+  }
+  health.leastMoneyAfterGrow ??= 1;
+  health.leastMoneyAfterGrowOn ??= null;
+}
+
+/**
+ * Grows not looked at (#235's review), in the health: something landed on their target before the look, or they
+ * landed while the batcher recovered from a desync (the money then isn't a grow's doing).
+ */
+export function recordGrowsNotLooked(health: BatcherHealth, count: number): void {
+  health.growsNotLooked = (health.growsNotLooked ?? 0) + count;
 }
 
 /** An operation of a batch to start: when, and when it lands. */
@@ -981,15 +1003,19 @@ export interface BatcherHealth {
    */
   batchesTrimmedBySharing?: number;
   /**
-   * The target's money after each batch's grow (#234): looked at once all of its grow's parts have landed and before
-   * anything later has (it's woken by each landing's record), the looks, those that found it below its maximum (a grow
-   * short of the hack before it: a split grow's later parts grow at the security the earlier ones left, and the batches
-   * then drift down to the bounds' floor), and the least money seen, a share of the maximum (1 while none was below).
-   * Absent from an older batcher.
+   * The target's money after each batch's grow (#234): looked at once all of its grow's parts have landed and nothing
+   * has landed on its target since but its own weaken2 (it's woken by each landing's record). The looks; those that
+   * found it below its maximum (a grow short of the hack before it: a split grow's later parts grow at the security the
+   * earlier ones left, and the batches then drift down to the bounds' floor); the run's least money so far, a share of
+   * the maximum (1 while none was below), and its target (null before one); and the grows not looked at (#235's
+   * review: something else landed on the target first, or they landed while it recovered from a desync). Absent from an
+   * older batcher.
    */
   moneyLooks?: number;
-  belowFullMoney?: number;
+  moneyLooksBelowFull?: number;
   leastMoneyAfterGrow?: number;
+  leastMoneyAfterGrowOn?: string | null;
+  growsNotLooked?: number;
   /**
    * Hacks landed, a part a host where one was split across hosts, and those that took nothing (the chance failed),
    * and the money they took.
@@ -1069,8 +1095,10 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     batchesTrimmed: 0,
     batchesTrimmedBySharing: 0,
     moneyLooks: 0,
-    belowFullMoney: 0,
+    moneyLooksBelowFull: 0,
     leastMoneyAfterGrow: 1,
+    leastMoneyAfterGrowOn: null,
+    growsNotLooked: 0,
     hacksLanded: 0,
     hacksFailed: 0,
     moneyHacked: 0,

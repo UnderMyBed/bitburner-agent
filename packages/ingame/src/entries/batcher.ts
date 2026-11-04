@@ -30,9 +30,11 @@
 //   already recorded is out of order, one started too late is late, one never recorded is lost. Out of order, or the
 //   target outside the bounds at a hack, is a desync: no more hacks or batches, and once nothing is in flight, it
 //   prepares the target again.
-// - **The money after each grow (#234):** once all of a batch's grow parts have landed, and nothing since but its own
-//   weaken2, it looks at the target's money (core's `GrowLandingWatch`): one below the maximum is counted
-//   (`belowFullMoney`), a grow short of the hack before it, so the batches would drift toward the bounds' floor.
+// - **The money after each grow (#234):** once all of a batch's grow parts have landed, and nothing has landed on its
+//   target since but its own weaken2, it looks at the target's money (core's `GrowLandingWatch`): one below the
+//   maximum is counted (`moneyLooksBelowFull`), a grow short of the hack before it, so the batches would drift toward
+//   the bounds' floor. A grow it can't look at so is counted (`growsNotLooked`, #235's review), and so are those that
+//   land while it recovers from a desync, whose money isn't the grow's doing.
 // - **Sharing (#224):** while its config asks (the brain's switch on, faction work going on) and it's batching, once the
 //   batches' orders due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on its hosts' free
 //   RAM less the config's reserve for the batches and the next target, and on home's above what it keeps for the Agent,
@@ -89,6 +91,7 @@ import {
   placeThreads,
   preparationWave,
   type RamHold,
+  recordGrowsNotLooked,
   recordMoneyLook,
   SHARE_RAM_GB,
   SHARE_ROUND_MS,
@@ -205,7 +208,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * Each operation's part started and not yet recorded (#232): its host, RAM and landing, which hold that RAM until
    * then. With the share threads, the RAM of the batcher's own on its hosts; the rest of what's used there isn't.
    */
-  const parts = new Map<string, { host: string; gb: number; landAt: number }>();
+  const parts = new Map<string, { host: string; gb: number; landAt: number; target: string }>();
   /**
    * The parts of the target's preparation wave, and of the next target's (#206), not yet recorded: the next wave of
    * each starts once its last has landed, whatever else is in flight.
@@ -242,7 +245,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         ns.exec(folder + operationScriptName(operation), host, options, target, landAt, BATCHER_LANDING_PORT, partId)
       ) {
         landings.expect(partId, landAt);
-        parts.set(partId, { host, gb: partThreads * operationRamGb(operation), landAt });
+        parts.set(partId, { host, gb: partThreads * operationRamGb(operation), landAt, target });
         wave?.add(partId);
       } else {
         return false;
@@ -262,9 +265,15 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     for (;;) {
       const data = ns.readPort(BATCHER_LANDING_PORT);
       if (data === "NULL PORT DATA") {
-        // Woken by each record as it's written, so nothing else has landed (#234). No new NS call: no more RAM.
-        for (const { target, moneyMax } of growLandings.takeDue().due) {
-          recordMoneyLook(health, ns.getServerMoneyAvailable(target), moneyMax);
+        // Woken by each record as it's written, so these are all that have landed (#234). No new NS call: no more RAM.
+        const { due, notLooked } = growLandings.takeDue();
+        // While it recovers from a desync (#235's review), the money isn't the grows' doing: not looked at.
+        const recovering = health.state === "recovering";
+        recordGrowsNotLooked(health, notLooked + (recovering ? due.length : 0));
+        if (!recovering) {
+          for (const { target, moneyMax } of due) {
+            recordMoneyLook(health, target, ns.getServerMoneyAvailable(target), moneyMax);
+          }
         }
         return;
       }
@@ -276,12 +285,16 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       const { outOfOrder, expected } = landings.landed(record);
       if (!expected) {
         health.unexpected += 1;
+        // Another run's record, or a part's lost and late (#235's review): it may have landed on any target, when
+        // it says.
+        if (!record.skipped) growLandings.landed(record.id, Math.max(record.landAt, record.landedAt), null);
         continue;
       }
       preparing.delete(record.id);
       preparingNext.delete(record.id);
+      const landedOn = parts.get(record.id)?.target ?? null;
       parts.delete(record.id);
-      if (!record.skipped) growLandings.landed(record.id, record.landAt);
+      if (!record.skipped) growLandings.landed(record.id, record.landAt, landedOn);
       const isHack = record.id.split(".")[2] === "hack";
       if (record.late) {
         health.late += 1;

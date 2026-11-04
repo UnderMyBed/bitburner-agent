@@ -35,9 +35,16 @@ const COUNTS = [
 ] as const;
 /**
  * Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM, and of them the share's (#232); its
- * looks at the target's money after each batch's grow, and those below its maximum (#234).
+ * looks at the target's money after each batch's grow, those below its maximum (#234), and the grows not looked at
+ * (#235's review).
  */
-const NEWER_COUNTS = ["batchesTrimmed", "batchesTrimmedBySharing", "moneyLooks", "belowFullMoney"] as const;
+const NEWER_COUNTS = [
+  "batchesTrimmed",
+  "batchesTrimmedBySharing",
+  "moneyLooks",
+  "moneyLooksBelowFull",
+  "growsNotLooked",
+] as const;
 const ALL_COUNTS = [...COUNTS, ...NEWER_COUNTS] as const;
 type Counts = Record<(typeof ALL_COUNTS)[number], number>;
 /** The counts that say the batches are out of step: each a run report failure (#206). */
@@ -122,6 +129,36 @@ export function whoHacked(points: { atMs: number; health: unknown }[]): string {
 }
 
 /**
+ * The money after each batch's grow (#234), for section 6's line: full at all the looks, or how many found the target
+ * below its maximum and the least so far of the runs that did (with its target); the grows not looked at (#235's
+ * review); none landed; or an older batcher, which doesn't look.
+ */
+function moneyAfterGrows(
+  anyLooking: boolean,
+  total: Counts,
+  runsBelowFull: number,
+  least: { share: number; target: string | null } | null,
+): string {
+  if (!anyLooking) return "not reported (an older batcher)";
+  const grows = (count: number) => `${count} grow${count === 1 ? "" : "s"}`;
+  const notLooked = total.growsNotLooked === 0 ? "" : `, ${grows(total.growsNotLooked)} not looked at`;
+  if (total.moneyLooks === 0) {
+    return total.growsNotLooked === 0
+      ? "not looked at (no grow landed in the window)"
+      : `none looked at: ${grows(total.growsNotLooked)} not looked at (something else landed on the target first, or ` +
+          "a desync's recovery)";
+  }
+  if (total.moneyLooksBelowFull === 0) return `full at all ${total.moneyLooks} looks${notLooked}`;
+  const whose = runsBelowFull === 1 ? "the run's" : "the runs'";
+  const share = `${((least?.share ?? 1) * 100).toFixed(1)}%`;
+  const ofMaximum = least?.target ? `${least.target}'s maximum` : "the maximum";
+  return (
+    `below full after ${total.moneyLooksBelowFull} of ${total.moneyLooks} looks (${whose} least so far: ${share} of ` +
+    `${ofMaximum})${notLooked}; a grow short of the hack before it, so the batches drift toward the bounds' floor`
+  );
+}
+
+/**
  * The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen, and any stretch it was
  * sent but not running, which fails the run (`failures`); then its sharing (#224), with the brain's worked faction's
  * reputation (`readings`).
@@ -153,8 +190,12 @@ export function batcherSection(
   let shortWhileSharing = 0;
   let shortOwn = 0;
   let firstShortOwnMs: number | null = null;
-  // The least money after a grow (#234), of the healths whose count below full rose: each run's least so far.
-  let leastBelowFull = 1;
+  // The least money after a grow (#234), of the healths whose count below full rose: each run's least so far, which
+  // only falls, so a run under way at the window's start may give one from before it. And the runs below.
+  let leastMoneyBelowFull: { share: number; target: string | null } | null = null;
+  const runsBelowFull = new Set<string>();
+  // An older batcher doesn't look (#235's review): none of its healths has the count.
+  let anyLooking = false;
   for (const { atMs, health } of healths) {
     const hour = Math.floor((atMs - firstMs) / HOUR_MS);
     const bucket = hours.get(hour) ?? { counts: zero(), targets: new Set<string>(), states: new Set<string>() };
@@ -173,9 +214,13 @@ export function batcherSection(
       shortOwn += short;
       firstShortOwnMs ??= atMs;
     }
-    const { leastMoneyAfterGrow } = health;
-    if (now.belowFullMoney > before.belowFullMoney && typeof leastMoneyAfterGrow === "number") {
-      leastBelowFull = Math.min(leastBelowFull, leastMoneyAfterGrow);
+    if (typeof health.moneyLooks === "number") anyLooking = true;
+    const { leastMoneyAfterGrow, leastMoneyAfterGrowOn } = health;
+    if (now.moneyLooksBelowFull > before.moneyLooksBelowFull && typeof leastMoneyAfterGrow === "number") {
+      runsBelowFull.add(health.runName);
+      if (leastMoneyBelowFull === null || leastMoneyAfterGrow < leastMoneyBelowFull.share) {
+        leastMoneyBelowFull = { share: leastMoneyAfterGrow, target: leastMoneyAfterGrowOn ?? null };
+      }
     }
     lastOfRun.set(health.runName, now);
     lastHealthOfRun.set(health.runName, health);
@@ -249,15 +294,8 @@ export function batcherSection(
   // The money after each batch's grow (#234): a grow short of the hack before it (a split grow's later parts grow at
   // the security the earlier ones left) leaves the target below its maximum, and the batches drift toward the bounds'
   // floor. A line, not a failure: one that reaches the floor is a desync, which fails the run; this shows it earlier.
-  lines.push(
-    total.moneyLooks === 0
-      ? "  money after each batch's grow (#234): not looked at (no grow landed in the window)"
-      : total.belowFullMoney === 0
-        ? `  money after each batch's grow (#234): full at all ${total.moneyLooks} looks`
-        : `  money after each batch's grow (#234): below full after ${total.belowFullMoney} of ${total.moneyLooks} looks ` +
-          `(the least ${(leastBelowFull * 100).toFixed(1)}% of the maximum): a grow short of the hack before it, so the ` +
-          "batches drift toward the bounds' floor",
-  );
+  const afterGrows = moneyAfterGrows(anyLooking, total, runsBelowFull.size, leastMoneyBelowFull);
+  lines.push(`  money after each batch's grow (#234): ${afterGrows}`);
   lines.push(problems.size === 0 ? "  problems: none" : "  problems:");
   for (const [problem, atMs] of problems) lines.push(`    from ${formatIsoTime(atMs)}: ${problem}`);
   lines.push(...notRunning);
