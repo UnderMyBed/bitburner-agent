@@ -110,6 +110,7 @@ export {
   batchRamGb,
   batchRamHolds,
   batchThreads,
+  fitBatch,
   GROW_MARGIN,
   growThreads,
   type HostRam,

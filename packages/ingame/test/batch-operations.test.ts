@@ -862,53 +862,70 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
   expect(counts(without.after)).toEqual(counts(withShare.after));
 });
 
-test("a new plan while the old one's batches still land (#232): fitted to the RAM as held, trimmed, never short", async () => {
-  // #229's augmentations suite: as cloud servers were bought back after an install, the brain's plan moved from fewer,
-  // larger batches to more, smaller ones. The old plan's hacks, out last, and the new one's weakens and grows, out
-  // first, ran at once: 2 to 3% over the hosts' RAM, split across many, and a hack came up short. Here, on six 16 GB
-  // hosts (a hack's 1.75 GB beside the 1.8 GB of the rest), a plan of 28 hack threads, each fitting the RAM, then one
-  // of 1: the batcher trims the new plan's batches until the old one's have landed, and none is short.
-  const simulation = await gameWithScripts();
-  await simulation.diagnostics.gainHackingExp(2_000);
-  const hosts = SHARING_HOSTS;
-  const player = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
-  const ramGb = batchRamGb(hosts.map(() => 16));
-  const configOf = (hackThreads: number): BatcherConfig => {
-    const threads = batchThreads(N00DLES, player, hackThreads);
-    const holds = batchHoldsMs(N00DLES, player, threads);
-    const spacingMs = leastSpacingMs(threads, holds, ramGb);
-    if (spacingMs === null) throw new Error(`no spacing for ${hackThreads} hack threads on ${ramGb} GB`);
-    // Each plan alone peaks within the RAM.
-    expect(batchPeakRamGb(threads, holds, spacingMs)).toBeLessThanOrEqual(ramGb);
-    return { ...n00dlesConfig(), hosts, hackShare: hackThreads * hackSharePerThread(N00DLES, player), spacingMs };
-  };
-  const setConfig = (config: BatcherConfig) =>
-    simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
-  await setConfig(configOf(28));
-  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
-  expect(error).toBeUndefined();
-  for (let waited = 0; (await healthOf(simulation)).hacksLanded < 3; waited += 5_000) {
-    expect(waited, "the first plan's hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
-    await simulation.advance(5_000);
-  }
-  const before = await healthOf(simulation);
-  expect(before).toMatchObject({ batchesShort: 0, batchesTrimmed: 0 });
-  await setConfig(configOf(1));
-  for (let minute = 0; minute < 6; minute++) {
-    await simulation.advance(60_000);
-    expect(await healthOf(simulation), `${minute + 1} min after the new plan`).toMatchObject({
-      batchesShort: 0,
-      desyncs: 0,
-      late: 0,
-      lost: 0,
-    });
-  }
-  const after = await healthOf(simulation);
-  // Trimmed while the old plan's batches landed; then the new plan's own, in full.
-  expect(after.batchesTrimmed).toBeGreaterThan(0);
-  expect(after.batchesStarted - before.batchesStarted).toBeGreaterThan(20);
-  expect(after.hacksLanded - before.hacksLanded).toBeGreaterThan(20);
-});
+test.each(["not sharing", "sharing"])(
+  "a new plan while the old one's batches still land (#232), %s: fitted to the RAM as held, trimmed, never short",
+  async (sharingOrNot) => {
+    // #229's augmentations suite: as cloud servers were bought back after an install, the brain's plan moved from
+    // fewer, larger batches to more, smaller ones. The old plan's hacks, out last, and the new one's weakens and grows,
+    // out first, ran at once: 2 to 3% over the hosts' RAM, split across many, and a hack came up short. Here, on six
+    // 16 GB hosts (a hack's 1.75 GB beside the 1.8 GB of the rest), a plan of 28 hack threads, each fitting the RAM,
+    // then one of 1: the batcher trims the new plan's batches until the old one's have landed, and none is short.
+    // Sharing with no reserve (#232's review), a round takes only the room beside them: the trims are the old plan's,
+    // not the share's.
+    const sharing = sharingOrNot === "sharing" ? { sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} } } : {};
+    const simulation = await gameWithScripts();
+    await simulation.diagnostics.gainHackingExp(2_000);
+    const hosts = SHARING_HOSTS;
+    const player = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
+    const ramGb = batchRamGb(hosts.map(() => 16));
+    const configOf = (hackThreads: number): BatcherConfig => {
+      const threads = batchThreads(N00DLES, player, hackThreads);
+      const holds = batchHoldsMs(N00DLES, player, threads);
+      const spacingMs = leastSpacingMs(threads, holds, ramGb);
+      if (spacingMs === null) throw new Error(`no spacing for ${hackThreads} hack threads on ${ramGb} GB`);
+      // Each plan alone peaks within the RAM.
+      expect(batchPeakRamGb(threads, holds, spacingMs)).toBeLessThanOrEqual(ramGb);
+      return {
+        ...n00dlesConfig(),
+        hosts,
+        hackShare: hackThreads * hackSharePerThread(N00DLES, player),
+        spacingMs,
+        ...sharing,
+      };
+    };
+    const setConfig = (config: BatcherConfig) =>
+      simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+    await setConfig(configOf(28));
+    const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+    expect(error).toBeUndefined();
+    for (let waited = 0; (await healthOf(simulation)).hacksLanded < 3; waited += 5_000) {
+      expect(waited, "the first plan's hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+      await simulation.advance(5_000);
+    }
+    const before = await healthOf(simulation);
+    expect(before).toMatchObject({ batchesShort: 0, batchesTrimmed: 0 });
+    await setConfig(configOf(1));
+    let mostShared = 0;
+    for (let seconds = 5; seconds <= 360; seconds += 5) {
+      await simulation.advance(5_000);
+      mostShared = Math.max(mostShared, (await sharesRunning(simulation)).threads);
+      expect(await healthOf(simulation), `${seconds} s after the new plan`).toMatchObject({
+        batchesShort: 0,
+        batchesTrimmedBySharing: 0,
+        desyncs: 0,
+        late: 0,
+        lost: 0,
+      });
+    }
+    const after = await healthOf(simulation);
+    // Shared on its hosts beside them, when asked.
+    expect(mostShared > 0).toBe(sharingOrNot === "sharing");
+    // Trimmed while the old plan's batches landed; then the new plan's own, in full.
+    expect(after.batchesTrimmed).toBeGreaterThan(0);
+    expect(after.batchesStarted - before.batchesStarted).toBeGreaterThan(20);
+    expect(after.hacksLanded - before.hacksLanded).toBeGreaterThan(20);
+  },
+);
 test("a player's own scripts on its hosts (#232): the batches fitted to the RAM they leave, trimmed, never short", async () => {
   // The brain plans on the hosts' RAM, not knowing what else runs there: half of each host's taken, the batcher plans
   // its batches on the rest.
@@ -960,8 +977,57 @@ test("a share round never takes the RAM the batches planned will hold (#232), wh
   const health = await healthOf(simulation);
   expect(health).toMatchObject({ state: "batching", batchesShort: 0, desyncs: 0, late: 0, lost: 0 });
   expect(health.hacksLanded).toBeGreaterThan(10);
+  // Nor a batch planned beside a round trimmed for its threads (#232's review): the share's failure too.
+  expect(health.batchesTrimmedBySharing).toBe(0);
   // It shared on its hosts all the same, beside the batches.
   expect(mostShared).toBeGreaterThan(0);
+});
+test("a larger plan beside a round's threads (#232's review): trimmed for them, counted as the share's", async () => {
+  // A round leaves the batches planned and due their RAM, at the plan's size. A larger plan sent just after it finds
+  // the round's threads on its hosts: its batches are trimmed for them until they end, and counted apart, the share's
+  // (`share starved batches` in the run report), never short. At hacking 1,000, n00dles' weaken takes under a round's
+  // 10 s, so a round's threads are beside whole batches.
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(1e17);
+  const hacking = (await simulation.summary()).hackingLevel;
+  expect(hacking).toBeGreaterThan(900);
+  const player = { skills: { hacking, intelligence: 0 }, mults: MULTS };
+  const ramGb = batchRamGb(SHARING_HOSTS.map(() => 16));
+  const configOf = (planGb: number): BatcherConfig => {
+    const plan = batchPlan(N00DLES, player, planGb);
+    if (plan === null) throw new Error(`no plan for n00dles on ${planGb} GB`);
+    return {
+      ...n00dlesConfig(),
+      hosts: SHARING_HOSTS,
+      hackShare: plan.hackShare,
+      spacingMs: plan.spacingMs,
+      sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} },
+    };
+  };
+  const setConfig = (config: BatcherConfig) =>
+    simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  await setConfig(configOf(ramGb / 4));
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded < 3; waited += 1_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(1_000);
+  }
+  // A round just started: the larger plan at once.
+  const firstRounds = (await sharesRunning(simulation)).rounds;
+  for (let waited = 0; ; waited += 100) {
+    expect(waited, "a new round within a minute").toBeLessThan(60_000);
+    const { rounds } = await sharesRunning(simulation);
+    if (rounds.some((round) => !firstRounds.includes(round))) break;
+    await simulation.advance(100);
+  }
+  expect((await healthOf(simulation)).batchesTrimmedBySharing).toBe(0);
+  await setConfig(configOf(ramGb));
+  await simulation.advance(30_000);
+  const health = await healthOf(simulation);
+  expect(health).toMatchObject({ batchesShort: 0, desyncs: 0, late: 0, lost: 0 });
+  expect(health.batchesTrimmedBySharing).toBeGreaterThan(0);
+  expect(health.batchesTrimmed).toBeGreaterThanOrEqual(health.batchesTrimmedBySharing ?? 0);
 });
 test("a share on home and on its hosts at once (#231's review): its health counts only the hosts' part", async () => {
   const simulation = await gameWithScripts();

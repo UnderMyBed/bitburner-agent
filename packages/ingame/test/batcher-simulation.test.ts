@@ -61,7 +61,10 @@ const HOSTS: [string, number][] = [
   ["hong-fang-tea", 16],
   ["n00dles", 4],
 ];
-/** The RAM the score is on, A1's measure of the hosts' (1.7 GB threads); the plan gets `batchRamGb` (1.8 GB). */
+/**
+ * The RAM the score is on, A1's measure of the hosts' (1.7 GB threads); the plan gets `batchRamGb` (each host's RAM
+ * less one 1.8 GB thread, #232).
+ */
 const SCORE_RAM_GB = HOSTS.reduce((total, [, ram]) => total + usableRamGb(ram), 0);
 /**
  * The other script that hacks n00dles runs on home, made 128 GB for it, with 40 threads: 16% a hack, and 0.08
@@ -224,7 +227,10 @@ function pendingAtMost(config: BatcherConfig, hacking: number): number {
 
 const percent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 
-/** Health in step: nothing out of order, late, lost, short, skipped or out of bounds; no desync, no problem. */
+/**
+ * Health in step: nothing out of order, late, lost, short, skipped or out of bounds; no desync, no problem; and, the
+ * plan the same throughout, no batch trimmed to the RAM (#232's review: the fit never cuts a plan its RAM holds).
+ */
 const IN_STEP = {
   state: "batching",
   outOfOrder: 0,
@@ -233,6 +239,7 @@ const IN_STEP = {
   outOfBounds: 0,
   desyncs: 0,
   batchesShort: 0,
+  batchesTrimmed: 0,
   hacksSkipped: 0,
   problem: null,
 };

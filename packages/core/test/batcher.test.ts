@@ -17,6 +17,7 @@ import {
   batchRamGb,
   batchRamHolds,
   batchThreads,
+  fitBatch,
   GROW_MARGIN,
   growThreads,
   hackSharePerThread,
@@ -537,6 +538,36 @@ describe("fitting a batch to the RAM as it will be held (#232)", () => {
     expect(largestBatchThatFits(40, planOf, [], gbOf(17), 0)?.threads.hack).toBe(17);
     expect(largestBatchThatFits(40, planOf, [], gbOf(1), 0)?.threads.hack).toBe(1);
     expect(largestBatchThatFits(40, planOf, [], gbOf(1) - 0.01, 0)).toBeNull();
+  });
+
+  test("fitBatch: trimmed, and the share's doing only if, without its threads, the batch would be larger", () => {
+    const holds = { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 };
+    const planOf = (hackThreads: number) => {
+      const threads = batchThreads(zer0, player(300), hackThreads);
+      return { threads, orders: batchOrders(0, 10_000, holds) };
+    };
+    const gbOf = (hackThreads: number) => batchPeakRamGb(planOf(hackThreads).threads, holds, 1e9);
+    const capacityGb = gbOf(40);
+    // Room for all of it.
+    expect(fitBatch(40, planOf, [], [], capacityGb, 0)).toMatchObject({ trimmed: false, trimmedBySharing: false });
+    // Share threads held while the hack runs: trimmed for them.
+    const shareWhileHacking = hold(gbOf(40) - gbOf(30), 9_000, 9_500);
+    const bySharing = fitBatch(40, planOf, [shareWhileHacking], [shareWhileHacking], capacityGb, 0);
+    expect(bySharing).toMatchObject({ trimmed: true, trimmedBySharing: true });
+    expect(bySharing.batch?.threads.hack).toBe(30);
+    // Something else held then, and share threads only while the weakens run, with room beside them: trimmed the
+    // same without the share, so not its doing.
+    const other = hold(gbOf(40) - gbOf(30), 9_000, 9_500);
+    const shareEarly = hold(1, 6_100, 6_200);
+    const notBySharing = fitBatch(40, planOf, [other, shareEarly], [shareEarly], capacityGb, 0);
+    expect(notBySharing).toMatchObject({ trimmed: true, trimmedBySharing: false });
+    expect(notBySharing.batch?.threads.hack).toBe(30);
+    // None fits: trimmed to nothing.
+    expect(fitBatch(40, planOf, [], [], gbOf(1) - 0.01, 0)).toEqual({
+      batch: null,
+      trimmed: true,
+      trimmedBySharing: false,
+    });
   });
 });
 

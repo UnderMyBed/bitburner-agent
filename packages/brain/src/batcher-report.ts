@@ -1,8 +1,9 @@
 // The run report's batcher section (#205): what the batcher's health in the fast snapshots says, hour by hour, and its
 // desyncs and problems; out of step (a desync, or an operation late or lost) fails the run (#206), and so does a batch
-// short of RAM but while sharing on the batches' hosts, the share's failure (#232). Its counts are each run's, from 0
-// when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run already
-// under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's (#224).
+// short of RAM, except while sharing on the batches' hosts, the share's failure (#232). Its counts are each run's,
+// from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
+// already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
+// (#224).
 import type { BatcherHealth } from "@bitburner-agent/core";
 import { BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
@@ -209,11 +210,11 @@ export function batcherSection(
     lines.push(`  ${line}`);
     failures.push(line);
   }
-  const batches = (count: number) => `${count} batch${count === 1 ? "" : "es"}`;
+  const describeBatchCount = (count: number) => `${count} batch${count === 1 ? "" : "es"}`;
   lines.push(
     total.batchesShort === 0
       ? "  short of RAM: none"
-      : `  short of RAM: ${batches(total.batchesShort)} (${shortWhileSharing} while sharing on the batches' hosts: ` +
+      : `  short of RAM: ${describeBatchCount(total.batchesShort)} (${shortWhileSharing} while sharing on the batches' hosts: ` +
           "the share's)",
   );
   // Trimmed (#232): the batcher fits each batch to the RAM as it will be held, so a plan its hosts can't place is cut,
@@ -222,14 +223,14 @@ export function batcherSection(
   lines.push(
     total.batchesTrimmed === 0
       ? "  trimmed to the hosts' RAM (#232): none"
-      : `  trimmed to the hosts' RAM (#232): ${batches(total.batchesTrimmed)} planned with fewer hack threads than the ` +
+      : `  trimmed to the hosts' RAM (#232): ${describeBatchCount(total.batchesTrimmed)} planned with fewer hack threads than the ` +
           "config's share, or none",
   );
   // Short of RAM, a failure (#232): the batcher fits each batch to the RAM as it will be held, so one short is RAM
   // taken after it was planned (anyone else's script on its hosts), or the fit is wrong. Its hack is lost.
   if (shortOwn > 0) {
     const line =
-      `batches short of RAM: ${batches(shortOwn)} short (their hacks lost), not while sharing on the batches' hosts, ` +
+      `batches short of RAM: ${describeBatchCount(shortOwn)} short (their hacks lost), not while sharing on the batches' hosts, ` +
       `the first seen at ${formatIsoTime(firstShortOwnMs ?? firstMs)}`;
     lines.push(`  ${line}`);
     failures.push(line);

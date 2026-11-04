@@ -34,10 +34,11 @@
 //   batches' orders due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on its hosts' free
 //   RAM less the config's reserve for the batches and the next target, and on home's above what it keeps for the Agent,
 //   to at most 80% of their RAM in use (core's `shareRound`), and never the RAM the batches planned will hold over its
-//   10 s (#232): a round at most every 5 s, looking again soon after one finds no room. None while a last preparation wave still lands, nor until the batches planned meanwhile, whose leads
-//   it lengthens, have landed (#226's review); none for a minute after a batch came up short (legacy daemon.js shares
-//   only with every batch scheduled). No wave starts while share threads still hold RAM (10 s at most), so a move or a
-//   desync's preparation has all of it.
+//   10 s (#232): a round at most every 5 s, looking again soon after one finds no room. None while a last preparation
+//   wave still lands, nor until the batches planned meanwhile, whose leads it lengthens, have landed (#226's review);
+//   none for a minute after a batch came up short (legacy daemon.js shares only with every batch scheduled). No wave
+//   starts while share threads still hold RAM (10 s at most), so a move or a desync's preparation has all of it. A
+//   batch trimmed that the share's threads on its hosts made smaller is counted apart, the share's (#232's review).
 // - **Health:** core's `BatcherHealth`, on its health port whenever it changes, and in its log every minute and at each
 //   change of state or of its problem, or anything wrong.
 // RAM (unchanged by sharing: `exec` and `scp` were already counted): `exec` 1.3 + `scp` 0.6 +
@@ -64,6 +65,7 @@ import {
   batchRamGb,
   batchRamHolds,
   batchThreads,
+  fitBatch,
   type HackingPlayer,
   type HostRam,
   hackSharePerThread,
@@ -73,7 +75,6 @@ import {
   LandingWatch,
   type LaunchOrder,
   landingOffsetMs,
-  largestBatchThatFits,
   mostRamHeldGb,
   newBatcherHealth,
   operationRamGb,
@@ -326,10 +327,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   };
 
   /**
-   * The next batch, planned at the hacking level now, with the config's share's hack threads or `hackThreads`: its
-   * threads, its hack's share and its orders.
+   * The next batch, planned at the hacking level now, with the config's share's hack threads or `hackThreads`, its
+   * hack landing at `landAt` (the next's by default): its threads, its hack's share and its orders.
    */
-  const planNextBatch = (hackThreads?: number) => {
+  const planNextBatch = (hackThreads?: number, landAt = nextLandAt) => {
     const { target, figures } = current();
     const player = playerNow();
     const threads = batchThreads(
@@ -344,8 +345,21 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     return {
       batch: { target, figures, threads, plannedShare, short: false },
       threads,
-      orders: batchOrders(nextBatch, nextLandAt, batchHoldsMs(figures, player, threads, [largestLanding(target)])),
+      orders: batchOrders(nextBatch, landAt, batchHoldsMs(figures, player, threads, [largestLanding(target)])),
     };
+  };
+
+  /**
+   * The RAM of the batches not yet planned whose first operation is due before `untilMs` (#232's review), at the
+   * plan's size, from their starts: a round of share leaves it them, as it leaves the batches planned theirs.
+   */
+  const upcomingRam = (untilMs: number): RamHold[] => {
+    const upcoming: RamHold[] = [];
+    for (let landAt = nextLandAt; ; landAt += current().spacingMs) {
+      const { threads, orders } = planNextBatch(undefined, landAt);
+      if ((orders[0] as LaunchOrder).launchAt >= untilMs) return upcoming;
+      upcoming.push(...batchRamHolds(threads, orders, Date.now()));
+    }
   };
 
   /**
@@ -354,38 +368,51 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    */
   const capacityGb = () => {
     const now = Date.now();
-    const ours = new Map<string, number>();
-    for (const { host, gb } of parts.values()) ours.set(host, (ours.get(host) ?? 0) + gb);
+    const batcherOwnGb = new Map<string, number>();
+    for (const { host, gb } of parts.values()) batcherOwnGb.set(host, (batcherOwnGb.get(host) ?? 0) + gb);
     for (const { host, threads, endsAt } of sharingParts) {
-      if (endsAt > now) ours.set(host, (ours.get(host) ?? 0) + threads * SHARE_RAM_GB);
+      if (endsAt > now) batcherOwnGb.set(host, (batcherOwnGb.get(host) ?? 0) + threads * SHARE_RAM_GB);
     }
     return batchRamGb(
       hosts.map((host) => {
-        const othersGb = Math.max(0, ns.getServerUsedRam(host) - (ours.get(host) ?? 0));
+        const othersGb = Math.max(0, ns.getServerUsedRam(host) - (batcherOwnGb.get(host) ?? 0));
         return ns.getServerMaxRam(host) - othersGb;
       }),
     );
   };
 
   /**
-   * The RAM held from now on, on the hosts (#232): each part in flight until its landing's release (one past it, not
-   * yet recorded, now), the share threads there until they end, and the orders of the batches planned, from their
-   * starts.
+   * The RAM held from now on, on the hosts (#232), as `capacityGb` counts them (#232's review: a part on a host no
+   * longer the batches' isn't): each part in flight until its landing's release (one past it, not yet recorded, now),
+   * and the orders of the batches planned, from their starts; the share threads' are `shareRamHeld`'s.
    */
   const heldRam = (): RamHold[] => {
     const now = Date.now();
     const held: RamHold[] = [];
-    for (const { gb, landAt } of parts.values()) {
+    for (const { host, gb, landAt } of parts.values()) {
+      if (!hosts.includes(host)) continue;
       held.push({ gb, fromMs: now, untilMs: Math.max(landAt + BATCH_RAM_RELEASE_MS, now + 1) });
-    }
-    for (const { host, threads, endsAt } of sharingParts) {
-      if (endsAt > now && hosts.includes(host)) held.push({ gb: threads * SHARE_RAM_GB, fromMs: now, untilMs: endsAt });
     }
     for (const order of pending) {
       const batch = batches.get(order.batch);
       if (batch !== undefined) held.push(...batchRamHolds(batch.threads, [order], now));
     }
     return held;
+  };
+
+  /**
+   * The share threads' RAM on the hosts (#224), until they end and their script's release: it ends a moment after its
+   * call (`SHARE_HELD_MS`), as an operation's does after its landing (#232's review).
+   */
+  const shareRamHeld = (): RamHold[] => {
+    const now = Date.now();
+    return sharingParts
+      .filter(({ host, endsAt }) => endsAt > now && hosts.includes(host))
+      .map(({ threads, endsAt }) => ({
+        gb: threads * SHARE_RAM_GB,
+        fromMs: now,
+        untilMs: endsAt + BATCH_RAM_RELEASE_MS,
+      }));
   };
 
   /**
@@ -637,9 +664,12 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       usedGb: ns.getServerUsedRam(host),
       batches: hosts.includes(host),
     }));
-    // Never the RAM the batches planned will hold over its threads' time (#232): a round takes at most the room
-    // beside the most held then, whatever the brain's reserve leaves.
-    const roomBesideGb = Math.max(0, capacityGb() - mostRamHeldGb(heldRam(), now, now + SHARE_HELD_MS));
+    // Never the RAM the batches will hold over its threads' time and release (#232): those planned, and those due
+    // meanwhile at the plan's size (#232's review), else trimmed for its threads. A round takes at most the room beside
+    // the most held then, whatever the brain's reserve leaves.
+    const roundEndsAt = now + SHARE_HELD_MS + BATCH_RAM_RELEASE_MS;
+    const heldThen = mostRamHeldGb([...heldRam(), ...shareRamHeld(), ...upcomingRam(roundEndsAt)], now, roundEndsAt);
+    const roomBesideGb = Math.max(0, capacityGb() - heldThen);
     const hostsFreeGb = use.reduce(
       (total, each) => total + (each.batches ? Math.max(0, each.maxGb - each.usedGb) : 0),
       0,
@@ -725,9 +755,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
           // Fitted to the RAM as it will be held (#232): the batches planned before a new plan, or at a lower hacking
           // level, may hold more than the plan's peak. Fewer hack threads, or none this time: never short.
           const { hack: plannedHack } = next.threads;
-          const fitted = largestBatchThatFits(plannedHack, planNextBatch, heldRam(), capacityGb(), Date.now());
-          const { hack: fittedHack } = fitted?.threads ?? { hack: 0 };
-          if (fittedHack < plannedHack) health.batchesTrimmed = (health.batchesTrimmed ?? 0) + 1;
+          // The share's doing (#232's review) when, without its threads on the hosts, it would be larger: they took
+          // RAM a batch needed, as a short beside them shows (`share starved batches`).
+          const shareHeld = shareRamHeld();
+          const held = [...heldRam(), ...shareHeld];
+          const {
+            batch: fitted,
+            trimmed,
+            trimmedBySharing,
+          } = fitBatch(plannedHack, planNextBatch, held, shareHeld, capacityGb(), Date.now());
+          if (trimmed) health.batchesTrimmed = (health.batchesTrimmed ?? 0) + 1;
+          if (trimmedBySharing) health.batchesTrimmedBySharing = (health.batchesTrimmedBySharing ?? 0) + 1;
           if (fitted === null) {
             nextLandAt += current().spacingMs;
             continue;

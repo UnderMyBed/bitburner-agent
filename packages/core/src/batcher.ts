@@ -466,13 +466,13 @@ export function mostRamHeldGb(holds: readonly RamHold[], fromMs: number, untilMs
     if (end < untilMs) changes.push([end, -gb]);
   }
   // At the same moment, one ends before another starts.
-  changes.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  let most = held;
-  for (const [, change] of changes) {
-    held += change;
-    most = Math.max(most, held);
+  changes.sort(([atMs, changeGb], [otherAtMs, otherChangeGb]) => atMs - otherAtMs || changeGb - otherChangeGb);
+  let mostHeld = held;
+  for (const [, changeGb] of changes) {
+    held += changeGb;
+    mostHeld = Math.max(mostHeld, held);
   }
-  return most;
+  return mostHeld;
 }
 
 /**
@@ -501,11 +501,11 @@ export function batchFits(
   capacityGb: number,
   nowMs: number,
 ): boolean {
-  const own = batchRamHolds(threads, orders, nowMs);
-  if (own.length === 0) return true;
-  const fromMs = Math.min(...own.map((each) => each.fromMs));
-  const untilMs = Math.max(...own.map((each) => each.untilMs));
-  return mostRamHeldGb([...held, ...own], fromMs, untilMs) <= capacityGb + 1e-9;
+  const batchHolds = batchRamHolds(threads, orders, nowMs);
+  if (batchHolds.length === 0) return true;
+  const fromMs = Math.min(...batchHolds.map((each) => each.fromMs));
+  const untilMs = Math.max(...batchHolds.map((each) => each.untilMs));
+  return mostRamHeldGb([...held, ...batchHolds], fromMs, untilMs) <= capacityGb + 1e-9;
 }
 
 /**
@@ -519,16 +519,16 @@ export function largestBatchThatFits<Batch extends { threads: BatchThreads; orde
   capacityGb: number,
   nowMs: number,
 ): Batch | null {
-  const fits = (batch: Batch) => batchFits(batch.threads, batch.orders, held, capacityGb, nowMs);
-  const most = planOf(Math.max(1, Math.floor(mostHack)));
-  if (fits(most)) return most;
+  const fitsBeside = (batch: Batch) => batchFits(batch.threads, batch.orders, held, capacityGb, nowMs);
+  const asPlanned = planOf(Math.max(1, Math.floor(mostHack)));
+  if (fitsBeside(asPlanned)) return asPlanned;
   let fitting: Batch | null = null;
   let low = 1;
   let high = Math.max(1, Math.floor(mostHack)) - 1;
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
     const batch = planOf(middle);
-    if (fits(batch)) {
+    if (fitsBeside(batch)) {
       fitting = batch;
       low = middle + 1;
     } else {
@@ -536,6 +536,37 @@ export function largestBatchThatFits<Batch extends { threads: BatchThreads; orde
     }
   }
   return fitting;
+}
+
+/**
+ * A batch fitted to the RAM (#232): the largest that fits beside `held` (`largestBatchThatFits`); whether it was
+ * trimmed (fewer hack threads than `plannedHack`, or none); and whether the share's threads did it (#232's review):
+ * beside `held` without `shareHeld` (those of `held` that are share threads), it would have been larger.
+ */
+export function fitBatch<Batch extends { threads: BatchThreads; orders: LaunchOrder[] }>(
+  plannedHack: number,
+  planOf: (hackThreads: number) => Batch,
+  held: readonly RamHold[],
+  shareHeld: readonly RamHold[],
+  capacityGb: number,
+  nowMs: number,
+): { batch: Batch | null; trimmed: boolean; trimmedBySharing: boolean } {
+  // Destructured: the batcher runs this, and the game would charge hack's RAM for the name (RamCalculations.ts:436).
+  const hackOf = (batch: Batch | null) => {
+    const { hack: hackThreads } = batch?.threads ?? { hack: 0 };
+    return hackThreads;
+  };
+  const batch = largestBatchThatFits(plannedHack, planOf, held, capacityGb, nowMs);
+  const trimmed = hackOf(batch) < Math.max(1, Math.floor(plannedHack));
+  if (!trimmed || shareHeld.length === 0) return { batch, trimmed, trimmedBySharing: false };
+  const unshared = largestBatchThatFits(
+    plannedHack,
+    planOf,
+    held.filter((each) => !shareHeld.includes(each)),
+    capacityGb,
+    nowMs,
+  );
+  return { batch, trimmed, trimmedBySharing: hackOf(unshared) > hackOf(batch) };
 }
 
 /** A target ready for batches: at its minimum security and maximum money. */
@@ -860,6 +891,11 @@ export interface BatcherHealth {
    */
   batchesTrimmed?: number;
   /**
+   * Of them, those the share took the RAM of (#232's review): with share threads on its hosts, and planned larger
+   * without them. The share's failure, as a batch short beside it is. Absent from an older batcher.
+   */
+  batchesTrimmedBySharing?: number;
+  /**
    * Hacks landed, a part a host where one was split across hosts, and those that took nothing (the chance failed),
    * and the money they took.
    */
@@ -936,6 +972,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     batchesStarted: 0,
     batchesShort: 0,
     batchesTrimmed: 0,
+    batchesTrimmedBySharing: 0,
     hacksLanded: 0,
     hacksFailed: 0,
     moneyHacked: 0,

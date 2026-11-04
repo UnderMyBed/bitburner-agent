@@ -422,7 +422,81 @@ describe("the run report's lines", () => {
     expect(restarted).toEqual([]);
   });
 
-  test("short while the share is on home alone (#230): shown apart, not the share's, no failure", () => {
+  test("share starved batches (#232's review): batches trimmed for the share's threads on the batches' hosts too", () => {
+    // The batcher trims a batch the RAM doesn't hold, never short; one it would have planned larger without the share's
+    // threads on its hosts is the share's (`batchesTrimmedBySharing`), a lost hack as a short is.
+    const failures: string[] = [];
+    sharingLines(
+      [
+        { atMs: at(0), health: health({ wanted: true, ...sharingAt(10, 1.1) }) },
+        { atMs: at(2), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesTrimmedBySharing: 2 }) },
+        { atMs: at(4), health: health({ wanted: true }, { batchesTrimmedBySharing: 2, batchesTrimmed: 5 }) },
+      ],
+      [],
+      failures,
+    );
+    expect(failures).toEqual([
+      "share starved batches: 2 batches trimmed to the RAM its threads left (#232) while sharing on the batches' " +
+        "hosts, the first seen at 2026-01-01T00:00:02.000Z",
+    ]);
+    // Short and trimmed: both counted.
+    const both: string[] = [];
+    sharingLines(
+      [
+        { atMs: at(0), health: health({ wanted: true, ...sharingAt(10, 1.1) }) },
+        {
+          atMs: at(2),
+          health: health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesShort: 1, batchesTrimmedBySharing: 1 }),
+        },
+      ],
+      [],
+      both,
+    );
+    expect(both).toEqual([
+      "share starved batches: 1 batch short of RAM and 1 batch trimmed to the RAM its threads left (#232) while " +
+        "sharing on the batches' hosts, the first seen at 2026-01-01T00:00:02.000Z",
+    ]);
+    // An older batcher doesn't count them: none.
+    const older: string[] = [];
+    sharingLines(
+      [
+        {
+          atMs: at(0),
+          health: { ...health({ wanted: true, ...sharingAt(10, 1.1) }), batchesTrimmedBySharing: undefined },
+        },
+        {
+          atMs: at(2),
+          health: { ...health({ wanted: true, ...sharingAt(10, 1.1) }), batchesTrimmedBySharing: undefined },
+        },
+      ],
+      [],
+      older,
+    );
+    expect(older).toEqual([]);
+  });
+
+  test("a run that starts in the window (#232's review): counted from 0, as the batcher's section counts it", () => {
+    // Its first snapshot's short, beside a share on its hosts then, is the share's; the window's first counts from
+    // there.
+    const failures: string[] = [];
+    sharingLines(
+      [
+        { atMs: at(0), health: health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesShort: 4 }) },
+        {
+          atMs: at(2),
+          health: { ...health({ wanted: true, ...sharingAt(10, 1.1) }, { batchesShort: 1 }), runName: "b" },
+        },
+      ],
+      [],
+      failures,
+    );
+    expect(failures).toEqual([
+      "share starved batches: 1 batch short of RAM while sharing on the batches' hosts, the first seen at " +
+        "2026-01-01T00:00:02.000Z",
+    ]);
+  });
+
+  test("short while the share is on home alone (#230): shown apart, no share failure (the batcher's own, #232)", () => {
     // #229's augmentations suite: home shares beside the hosts, whose reserve leaves them none, and batches come up
     // short of their own (the same batches with sharing off).
     const failures: string[] = [];
