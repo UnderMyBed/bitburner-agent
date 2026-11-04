@@ -313,6 +313,8 @@ export interface InvitationPlan {
   waitingFor: string | null;
   /** A wait (#228 review): a travel or a group wanted, held up (the money, the hacking level); not "nothing to do". */
   waiting: boolean;
+  /** A trip wanted (#228 re-review): the next visit's travel, sent or short of its money. The owner's stand stops it. */
+  trip: boolean;
 }
 
 /**
@@ -355,6 +357,7 @@ export function planInvitations(
     next: null,
     travel: null,
     waiting: false,
+    trip: false,
   };
   const here = pending.find((visit) => visit.city === city);
   if (here !== undefined) {
@@ -367,26 +370,31 @@ export function planInvitations(
   const next = pending[0];
   if (next !== undefined) {
     const needed = next.money + TRAVEL_COST;
+    // A city group's trip, chosen on the money it had (#228 review): that money held while it builds up again, so the
+    // cloud server buyer doesn't spend it first, and while the travel is sent (#228 re-review: else the buyer spends it
+    // the moment it's there, and the hold comes back). Tian Di Hui's alone isn't: $1.2m would hold the early game back.
+    const hold = next.factions.some((faction) => faction !== TIAN_DI_HUI) ? needed : 0;
     if (money < needed) {
-      // A city group's trip, chosen on the money it had (#228 review): that money held while it builds up again, so the
-      // cloud server buyer doesn't spend it first. Tian Di Hui's alone isn't: its $1.2m would hold the early game back.
-      const forGroup = next.factions.some((faction) => faction !== TIAN_DI_HUI);
       return {
         ...base,
-        hold: forGroup ? needed : 0,
+        hold,
+        trip: true,
         waiting: true,
         waitingFor:
           `${formatMoney(needed)} to travel to ${next.city} for ${invitationsOf(next.factions)} ` +
           `(${formatMoney(money)} now)`,
       };
     }
-    return { ...base, travel: next.city, next, waitingFor: null };
+    return { ...base, hold, trip: true, travel: next.city, next, waitingFor: null };
   }
   // Group B's visits done away from Ishima: on to its tech vendor.
   if (group?.group === "B" && TECH_VENDORS[city] === undefined && TIAN_DI_HUI_CITIES.includes(city)) {
-    if (money < TRAVEL_COST) return { ...base, waiting: true, waitingFor: `the ticket to ${TIAN_DI_HUI_TRAVEL_CITY}` };
+    if (money < TRAVEL_COST) {
+      return { ...base, trip: true, waiting: true, waitingFor: `the ticket to ${TIAN_DI_HUI_TRAVEL_CITY}` };
+    }
     return {
       ...base,
+      trip: true,
       travel: TIAN_DI_HUI_TRAVEL_CITY,
       next: { city: TIAN_DI_HUI_TRAVEL_CITY, factions: [], money: 0 },
       waitingFor: null,
@@ -486,8 +494,9 @@ export class InvitationRule {
   #notShownStored = false;
   /** The factions not invited 5 minutes into their hold this cycle (#228 review): the game won't invite them again. */
   #skipped: { lastAugReset: number; factions: string[] } | null = null;
-  /** The wait last stored, as a key (its figures left out), or null. */
+  /** The wait last stored, as a key (its figures left out), or null; and whether short then. */
   #waitKey: string | null = null;
+  #lastShort = false;
   #view: InvitationView = {
     travel: null,
     hold: 0,
@@ -519,16 +528,21 @@ export class InvitationRule {
     return this.#view.cityFactions;
   }
 
-  /** The city group chosen this cycle, or null: the World Daemon's reach counts it. */
-  chosenGroup(): string | null {
-    return this.#kept?.group ?? null;
+  /**
+   * The city group chosen in the cycle of `lastAugReset`, or null: the World Daemon's reach counts it. Not the last
+   * cycle's, before this rule has run after an install (#228 re-review).
+   */
+  chosenGroup(lastAugReset: number | null): string | null {
+    return this.#kept !== null && this.#kept.lastAugReset === lastAugReset ? this.#kept.group : null;
   }
 
   update({ inputs, stood, beforeInstall = false, nowMs }: InvitationRuleInputs): Intent | null {
     if (inputs === null) {
       this.#view = { ...this.#view, travel: null, hold: 0, holdIn: null, waitingFor: "the Agent's snapshots" };
-      // The Agent gone (#228 review): a hold's clock starts again with the snapshots, the time away not counted.
+      // The Agent gone (#228 review): a hold's clock starts again with the snapshots, the time away not counted; and a
+      // wait under way ends, the time away not counted as waiting (#228 re-review).
       this.#holdingSinceMs = null;
+      this.#wait(null, this.#lastShort, nowMs ?? 0);
       return null;
     }
     const atMs = nowMs ?? 0;
@@ -570,7 +584,7 @@ export class InvitationRule {
         cityFactions: plan.cityFactions,
         waitingFor: "the install under way (it puts the player back in Sector-12)",
       };
-      this.#wait(null, inputs, atMs);
+      this.#wait(null, inputs.count.short, atMs);
       const vendorTrip = {
         ...plan,
         hold: 0,
@@ -580,17 +594,21 @@ export class InvitationRule {
       this.#phases(vendorTrip, travel, inputs, atMs);
       return travel === null ? null : travelIntent(travel);
     }
-    const travel = stood === null ? plan.travel : null;
+    // The owner's stand (their work, their travel queued, the switch) stops a trip, and with it the money held for it
+    // (#228 re-review): only a hold in the city, for invitations there, goes on.
+    const stoodTrip = stood !== null && plan.trip;
+    const travel = stoodTrip ? null : plan.travel;
+    const hold = stoodTrip && plan.holdFor === null ? 0 : plan.hold;
     this.#view = {
       travel,
-      hold: plan.hold,
+      hold,
       holdIn: plan.holdFor?.city ?? null,
       cityGroup: describeCityGroupChoice(choice),
       cityFactions: plan.cityFactions,
-      waitingFor: plan.travel !== null && stood !== null ? stood : plan.waitingFor,
+      waitingFor: stoodTrip ? stood : plan.waitingFor,
     };
-    this.#wait(plan.travel !== null && stood !== null ? stood : plan.waiting ? plan.waitingFor : null, inputs, atMs);
-    this.#phases(plan, travel, inputs, atMs);
+    this.#wait(stoodTrip ? stood : plan.waiting ? plan.waitingFor : null, inputs.count.short, atMs);
+    this.#phases({ ...plan, hold }, travel, inputs, atMs);
     return travel === null ? null : travelIntent(travel);
   }
 
@@ -599,12 +617,13 @@ export class InvitationRule {
    * switch) or by the money or the hacking level. Logged and stored as it starts, changes (its figures aside) or ends,
    * for the run report's time spent waiting while short.
    */
-  #wait(reason: string | null, inputs: InvitationInputs, atMs: number): void {
+  #wait(reason: string | null, short: boolean, atMs: number): void {
+    this.#lastShort = short;
     const key = reason === null ? null : waitKey(reason);
     if (key === this.#waitKey) return;
     this.#waitKey = key;
     this.#log(reason === null ? "invitations: no longer waiting" : `invitations: waiting for ${reason}`);
-    this.#emit({ type: INVITATION_WAITING_EVENT_KIND, atMs, reason, short: inputs.count.short });
+    this.#emit({ type: INVITATION_WAITING_EVENT_KIND, atMs, reason, short });
   }
 
   /** Each change of phase logged and stored, and a hold with no invitation in 5 minutes made loud. */
@@ -783,6 +802,7 @@ export function invitationLines(
   events: readonly Stored[],
   formatTime: (ms: number) => string,
   untilMs: number,
+  brainStartsMs: readonly number[] = [],
 ): string[] {
   const lines = ["    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54):"];
   const own = events.filter((event) =>
@@ -792,21 +812,22 @@ export function invitationLines(
     lines.push(`      ${formatTime(atMs)}  ${describeInvitationEvent(kind, detail)}`);
   }
   if (own.length === 0) lines.push("      none");
-  lines.push(waitingLine(events, untilMs));
+  lines.push(waitingLine(events, untilMs, brainStartsMs));
   return lines;
 }
 
 /**
- * The time spent waiting while short of Daedalus's count (#228 review): each wait stored, to the next or the window's
- * end, summed by its reason (its figures aside), the longest first.
+ * The time spent waiting while short of Daedalus's count (#228 review): each wait stored, to the next, a brain start
+ * (#228 re-review: a new brain stores no end for its predecessor's) or the window's end, summed by its reason (its
+ * figures aside), the longest first.
  */
-function waitingLine(events: readonly Stored[], untilMs: number): string {
+function waitingLine(events: readonly Stored[], untilMs: number, brainStartsMs: readonly number[]): string {
   const waits = events.filter((event) => event.kind === INVITATION_WAITING_EVENT_KIND);
   const byReason = new Map<string, { text: string; ms: number }>();
   for (const [index, { atMs, detail }] of waits.entries()) {
     const { reason, short } = fieldsOf(detail);
     if (typeof reason !== "string" || short !== true) continue;
-    const endMs = waits[index + 1]?.atMs ?? untilMs;
+    const endMs = Math.min(waits[index + 1]?.atMs ?? untilMs, ...brainStartsMs.filter((startMs) => startMs > atMs));
     const key = waitKey(reason);
     const entry = byReason.get(key) ?? { text: reason, ms: 0 };
     entry.ms += Math.max(0, endMs - atMs);

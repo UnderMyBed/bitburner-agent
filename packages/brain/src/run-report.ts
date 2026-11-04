@@ -918,7 +918,15 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (dialogs.length === 0) lines.push("    none");
   lines.push(...backdoorLines(facts));
-  lines.push(...factionLines(facts), ...invitationLines(facts.events, formatIsoTime, facts.untilMs));
+  lines.push(
+    ...factionLines(facts),
+    ...invitationLines(
+      facts.events,
+      formatIsoTime,
+      facts.untilMs,
+      facts.events.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND).map((event) => event.atMs),
+    ),
+  );
   lines.push(...facts.augmentations.actionLines(facts.events, formatIsoTime));
   lines.push(...facts.worldDaemon.pathLines(facts, facts.events, formatIsoTime));
   return lines;

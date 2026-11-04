@@ -455,7 +455,7 @@ export class WorldDaemonRule {
   /** Daedalus's reputation while The Red Pill is short, and when it last rose (or was first seen). */
   #reputation: { value: number; risenAtMs: number } | null = null;
   /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`. */
-  #count: { lastAugReset: number; installed: number; required: number; short: boolean } | null = null;
+  #count: { lastAugReset: number; installed: number; required: number; short: boolean; queued: number } | null = null;
   /**
    * The last install while short that added none to the count (#228), while its cycle lasts: "Daedalus count stuck".
    */
@@ -527,6 +527,8 @@ export class WorldDaemonRule {
       // The Agent gone (#228 review): a step's clock not stored yet starts again with the snapshots, so the time away
       // isn't counted as time online.
       for (const [step, ready] of this.#ready) if (!ready.stored) this.#ready.delete(step);
+      // The Red Pill's reputation clock too, unless its stall is stored (#228 re-review).
+      if (!this.#ready.get("redPillReputation")?.stored) this.#reputation = null;
       return this.#asked !== null;
     }
     let path: WorldDaemonPath;
@@ -562,7 +564,9 @@ export class WorldDaemonRule {
   /**
    * Daedalus's count across an install (#228): one while short (the count as last seen before it, Daedalus neither
    * joined nor invited) that leaves the count where it was is "Daedalus count stuck", for the cycle after it. Judged
-   * per install, from the slow snapshots' `lastAugReset`: a restarted brain judges the installs it sees.
+   * per install, from the slow snapshots' `lastAugReset`: a restarted brain judges the installs it sees. A reset with
+   * nothing queued before it isn't an install (#228 re-review): a soft reset (`installAugmentations(true)`,
+   * `GameRoot.tsx:297-299`, `Singularity.ts:185-193`, `PlayerObjectGeneralMethods.ts:126`), or an older save loaded.
    */
   #watchCount(path: WorldDaemonPath, slowData: SlowSnapshotData, nowMs: number): void {
     const lastAugReset = slowData.resetInfo?.lastAugReset;
@@ -574,7 +578,7 @@ export class WorldDaemonRule {
     }
     const before = this.#count;
     if (before !== null && before.lastAugReset !== lastAugReset) {
-      const stuck = before.short && daedalus.augmentations <= before.installed;
+      const stuck = before.short && before.queued > 0 && daedalus.augmentations <= before.installed;
       this.#stuck = stuck
         ? {
             atMs: nowMs,
@@ -589,6 +593,7 @@ export class WorldDaemonRule {
       installed: daedalus.augmentations,
       required: daedalus.augmentationsRequired,
       short: daedalus.short,
+      queued: factionReadingOf(slowData)?.state?.queuedAugmentations.length ?? 0,
     };
   }
 

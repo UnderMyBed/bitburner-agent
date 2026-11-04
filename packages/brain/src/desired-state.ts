@@ -1258,7 +1258,7 @@ export class DesiredStateController {
       enabled: readWorldDaemonEnabled(this.#store),
       shareBonus,
       // The reach counts the city group the brain chose (#228 review): the last update's choice.
-      cityGroup: this.#invitations.chosenGroup(),
+      cityGroup: this.#invitations.chosenGroup(resetTimeOf(this.#slowData, "lastAugReset")),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

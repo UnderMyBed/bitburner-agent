@@ -535,11 +535,12 @@ describe("the rule's waits, holds and the owner's joins (#228 review)", () => {
     rule.update({ inputs: chongqing, stood: null, nowMs: 0 });
     expect(rule.hold()).toBe(20e6);
     rule.update({ inputs: chongqing, stood: null, nowMs: INVITATION_NOT_SHOWN_AFTER_MS });
-    // On to New Tokyo, the hold gone; Chongqing stays the group's (an invitation shown late is still joined).
+    // On to New Tokyo, Chongqing's $20m no longer held (New Tokyo's trip's, while it's sent); Chongqing stays the
+    // group's (an invitation shown late is still joined).
     expect(rule.update({ inputs: chongqing, stood: null, nowMs: INVITATION_NOT_SHOWN_AFTER_MS + 1 })).toEqual(
       travelIntent("New Tokyo"),
     );
-    expect(rule.hold()).toBe(0);
+    expect(rule.hold()).toBe(20e6 + 200e3);
     expect(rule.cityFactions()).toContain("Chongqing");
     // A new cycle visits it again.
     expect(rule.update({ inputs: inputs({ city: "Chongqing", lastAugReset: 9 }), stood: null, nowMs: 1 })).toBeNull();
@@ -563,7 +564,7 @@ describe("the rule's waits, holds and the owner's joins (#228 review)", () => {
     // Sector-12 queued by the owner: group A, though B is worth more.
     const owners = inputs({ ownersJoins: ["Sector-12"] });
     expect(rule.update({ inputs: owners, stood: null, nowMs: 0 })).toBeNull();
-    expect(rule.chosenGroup()).toBe("A");
+    expect(rule.chosenGroup(0)).toBe("A");
     expect(rule.cityFactions()).toContain("Sector-12");
     // In Sector-12: its $15m held for the invitation the owner's join waits on.
     expect(rule.hold()).toBe(15e6);
@@ -605,5 +606,54 @@ describe("the rule's waits, holds and the owner's joins (#228 review)", () => {
       hold: 0,
       waitingFor: expect.stringMatching(/^\$1,200,000 to travel to Ishima /),
     });
+  });
+});
+
+describe("the owner's stand and the trip's hold, waits across restarts, the cycle's group (#228 re-review)", () => {
+  let events: InvitationEvent[];
+  let rule: InvitationRule;
+  beforeEach(() => {
+    events = [];
+    rule = new InvitationRule({ emit: (event) => events.push(event) });
+  });
+  /** B chosen with $40m from Ishima (joined, as Tian Di Hui), the next trip Chongqing's $20.2m. */
+  const state = stateOf([...HACKERS, "Ishima", "Tian Di Hui"]);
+  const at = (money: number) => inputs({ money, city: "Ishima", state });
+
+  test("the money for the trip held until the travel is sent: no dip for the cloud server buyer to spend", () => {
+    rule.update({ inputs: at(1_000), stood: null, nowMs: 0 });
+    expect(rule.update({ inputs: at(40e6), stood: null, nowMs: 1 })).toEqual(travelIntent("Chongqing"));
+    expect(rule.hold()).toBe(20e6 + 200e3);
+  });
+
+  test("the owner's stand: no trip, and none of its money held; the stand said instead of the money", () => {
+    rule.update({ inputs: at(40e6), stood: null, nowMs: 0 });
+    for (const money of [1_000, 40e6]) {
+      expect(rule.update({ inputs: at(money), stood: "your work on the dashboard", nowMs: 1 })).toBeNull();
+      expect(rule.view()).toMatchObject({ travel: null, hold: 0, waitingFor: "your work on the dashboard" });
+    }
+    // A hold in the city, for invitations there, goes on: the owner's stand doesn't stop an invitation.
+    rule.update({ inputs: inputs({ city: "Chongqing", state }), stood: "your work on the dashboard", nowMs: 2 });
+    expect(rule.hold()).toBe(20e6);
+  });
+
+  test("the Agent gone ends a wait under way; the report ends one at a brain start too", () => {
+    rule.update({ inputs: at(1_000), stood: null, nowMs: 0 });
+    rule.update({ inputs: null, stood: null, nowMs: MINUTE });
+    expect(events.filter((event) => event.type === INVITATION_WAITING_EVENT_KIND).map((event) => event.reason)).toEqual(
+      ["$20,200,000 to travel to Chongqing for Chongqing's invitation ($1,000 now)", null],
+    );
+    const stored = [
+      { atMs: 0, kind: INVITATION_WAITING_EVENT_KIND, detail: { reason: "your work on the dashboard", short: true } },
+    ];
+    expect(invitationLines(stored, (ms) => `t${ms}`, 60 * MINUTE, [10 * MINUTE]).at(-1)).toBe(
+      "    waiting for a travel while short of Daedalus's count: 10 min in all (your work on the dashboard: 10 min)",
+    );
+  });
+
+  test("the group chosen is this cycle's: none for a reset the rule hasn't seen yet", () => {
+    rule.update({ inputs: inputs(), stood: null, nowMs: 0 });
+    expect(rule.chosenGroup(0)).toBe("B");
+    expect(rule.chosenGroup(5)).toBeNull();
   });
 });

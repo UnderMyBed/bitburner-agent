@@ -401,9 +401,15 @@ describe("Daedalus count stuck (#228)", () => {
     ...Object.fromEntries(more.map((name) => [name, 1])),
     "NeuroFlux Governor": level,
   });
-  const cycle = (install: number, ownedAugs: Record<string, number>, invited = false) => ({
+  /** A cycle's slow snapshot: NeuroFlux Governor queued for the install that ends it, unless `queued` says else. */
+  const cycle = (
+    install: number,
+    ownedAugs: Record<string, number>,
+    invited = false,
+    queued = ["NeuroFlux Governor"],
+  ) => ({
     mediumData: medium({ hacking: 6_368, money: 1e12 }),
-    slowData: slow({ ownedAugs, lastAugReset: install * 10 * MINUTE, invited }),
+    slowData: slow({ ownedAugs, lastAugReset: install * 10 * MINUTE, invited, queued }),
   });
   const DETAIL =
     "Daedalus count stuck: an install at 23 of 30 augmentations installed added none to the count (NeuroFlux " +
@@ -443,6 +449,16 @@ describe("Daedalus count stuck (#228)", () => {
     update({ ...cycle(4, runTwo(4), true), nowMs: 40 * MINUTE });
     expect(rule.stall()).toBeNull();
     expect(events.filter((event) => event.type === "worldDaemonStalled")).toHaveLength(1);
+  });
+
+  test("a reset with nothing queued before it (a soft reset, an older save) isn't an install: quiet", () => {
+    update({ ...cycle(0, runTwo(1), false, []), nowMs: 0 });
+    update({ ...cycle(1, runTwo(1), false, []), nowMs: 10 * MINUTE });
+    expect(rule.stall()).toBeNull();
+    // With something queued, the same reset is an install, and stuck.
+    update({ ...cycle(1, runTwo(1)), nowMs: 15 * MINUTE });
+    update({ ...cycle(2, runTwo(2)), nowMs: 20 * MINUTE });
+    expect(rule.stall()).toMatchObject({ step: "daedalusCount" });
   });
 
   test("the path's line: the reach, counting the city group chosen", () => {
@@ -485,4 +501,16 @@ test("the Agent gone: a step's clock not yet stored starts again with the snapsh
   expect(rule.stall()).toBeNull();
   update({ ...met, nowMs: 4 * MINUTE + WORLD_DAEMON_STALLED_AFTER_MS });
   expect(rule.stall()).toMatchObject({ step: "daedalus", sinceMs: 4 * MINUTE });
+});
+
+test("the Agent gone: The Red Pill's reputation clock starts again too, the time away left out (#228 re-review)", () => {
+  const at = (nowMs: number, slowData: SlowSnapshotData | null = slow({ ownedAugs: THIRTY, daedalus: 1e6 })) =>
+    update({ mediumData: medium({ hacking: 2600 }), slowData, nowMs });
+  at(0);
+  at(MINUTE, null);
+  at(30 * MINUTE);
+  at(30 * MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS - 1);
+  expect(rule.stall()).toBeNull();
+  at(30 * MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS);
+  expect(rule.stall()).toMatchObject({ step: "redPillReputation", sinceMs: 30 * MINUTE });
 });
