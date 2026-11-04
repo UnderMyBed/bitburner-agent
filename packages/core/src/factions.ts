@@ -139,5 +139,14 @@ export function daedalusMissing(figures: DaedalusFigures, required: ReturnType<t
   return missing;
 }
 
+/**
+ * Tian Di Hui (#228): no enemies, and its invitation needs the player in one of its cities, hacking 50 and $1m held at
+ * the game's check (`Faction/FactionInfo.tsx:680-692`), every 10 engine cycles (`engine.tsx:154`, `:177-183`).
+ */
+export const TIAN_DI_HUI = "Tian Di Hui";
+export const TIAN_DI_HUI_CITIES = ["Chongqing", "New Tokyo", "Ishima"];
+export const TIAN_DI_HUI_HACKING = 50;
+export const TIAN_DI_HUI_MONEY = 1e6;
+
 /** Home worker: joins a faction through the game's Factions page (#147). */
 export const JOIN_FACTION_WORKER_NAME = "join-faction.js";

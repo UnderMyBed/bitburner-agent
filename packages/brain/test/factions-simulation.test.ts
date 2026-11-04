@@ -53,10 +53,11 @@ test.each(SEEDS)(
     const joinedAtMs = game.clock.now() - EPOCH_MS;
     await game.run(WORKED_MS);
 
-    // The brain joined once, chose CyberSec's hacking work, and logged both.
-    expect(brain.logLines.filter((line) => line.startsWith("factions: joining "))).toEqual([
-      "factions: joining CyberSec (its invitation)",
-    ]);
+    // The brain joined once, chose CyberSec's hacking work, and logged both. Tian Di Hui too, travelled for at hacking 50
+    // and $1.2m (#228: its ADR-V1 and S.N.A have a hacking value).
+    expect(
+      brain.logLines.filter((line) => line.startsWith("factions: joining ") && !line.includes("Tian Di Hui")),
+    ).toEqual(["factions: joining CyberSec (its invitation)"]);
     expect(brain.logLines).toContain("factions: CyberSec joined");
     const chosen = brain.logLines.filter((line) => line.startsWith("faction work: "));
     expect(chosen[0]).toMatch(/^faction work: hacking for CyberSec, for Neurotrainer I \(reputation \d of 1,000, /);
@@ -103,7 +104,12 @@ test.each(SEEDS)(
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}joinFaction\(CyberSec\): done after 1 try \(sim\); done by /),
     );
-    expect(lines).toContainEqual(expect.stringMatching(/^ {4}joined: CyberSec by \S+$/));
+    // Tian Di Hui too, travelled for (#228), before or after.
+    const joinedLine = lines.find((line) => line.startsWith("    joined: ")) ?? "";
+    expect(joinedLine.slice("    joined: ".length).split(", ").sort()).toEqual([
+      expect.stringMatching(/^CyberSec by \S+$/),
+      expect.stringMatching(/^Tian Di Hui by \S+$/),
+    ]);
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {6}\S+ {2}hacking for CyberSec, for Neurotrainer I \(reputation \d of 1,000, /),
     );

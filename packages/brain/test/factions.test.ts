@@ -2,9 +2,11 @@
 // rule's log, events and stall as the controller runs it, and what the run report reads of them.
 import {
   augmentationBitNodeMultipliers,
+  augmentationsSoldBy,
   factionReputationPerSecond,
   factionStateOf,
   hackingValue,
+  isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
   type SlowSnapshotData,
@@ -256,11 +258,18 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), slow({ joined: { "Sector-12": 0 } })).choice?.augmentation).toBe(
       "Neuralstimulator",
     );
-    // With it installed, only those without one are left: none.
-    const left = slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } });
+    // With it installed, only those without one are left: none, with Daedalus inviting (the count met, #228).
+    const left = slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 }, invitations: ["Daedalus"] });
     expect(chooseFactionWork(player(55), left)).toMatchObject({
       choice: null,
       waitingFor: "an augmentation worth working for at the joined factions",
+    });
+    // Short of Daedalus's count, the hacking way sold out (#228): any counts, the soonest first (1,250 reputation).
+    const short = chooseFactionWork(player(55), slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } }));
+    expect(short.choice).toMatchObject({
+      faction: "Sector-12",
+      augmentation: "Wired Reflexes",
+      count: { installed: 1, required: 30 },
     });
   });
 
@@ -964,5 +973,65 @@ describe("FactionWorkTimeline", () => {
     // Over the window from minute 3, half of 0.5/s is 150.
     timeline.addSlow(13 * 60_000, slow({ joined: { CyberSec: 3 + 150 } }));
     expect(timeline.stalls).toEqual([expect.objectContaining({ fromMs: 0, toMs: 12 * 60_000, ongoing: false })]);
+  });
+});
+
+describe("short of Daedalus's count (#228)", () => {
+  const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
+  /** Run #2's 23 (2026-11-04): the four hacker factions' set with a hacking value, and NeuroFlux Governor. */
+  const RUN_2: Record<string, number> = {
+    ...Object.fromEntries(
+      [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))]
+        .filter((name) => isWorthInstalling(name))
+        .map((name) => [name, 1]),
+    ),
+    "NeuroFlux Governor": 124,
+  };
+  const joined = (blackHand = 0) => ({ CyberSec: 0, NiteSec: 0, "The Black Hand": blackHand, BitRunners: 0 });
+
+  test("the hacking way sold out: no-value augmentations are candidates, and the work says it's for the count", () => {
+    const state = slow({ joined: joined(), installed: RUN_2 });
+    const resetInfo = resetInfoOf(state) as NonNullable<ReturnType<typeof resetInfoOf>>;
+    const factionState = factionStateOf(state) as NonNullable<ReturnType<typeof factionStateOf>>;
+    expect(workCandidates(factionState, resetInfo, 6_000)).toEqual([]);
+    expect(workCandidates(factionState, resetInfo, 6_000, true, true).map((each) => each.augmentation)).toEqual([
+      "Magnetism Amplifier",
+      "Neural Wit Amplifier",
+    ]);
+    const plan = chooseFactionWork(player(6_000), state);
+    expect(plan.choice).toMatchObject({
+      faction: "BitRunners",
+      augmentation: "Neural Wit Amplifier",
+      reputationNeeded: 5_000,
+      count: { installed: 23, required: 30 },
+    });
+    expect(describeChoice(plan.choice as FactionWorkChoice)).toMatch(
+      /^hacking for BitRunners, for Neural Wit Amplifier \(reputation 0 of 5,000, .*\), for Daedalus's count: 23 of 30 augmentations installed$/,
+    );
+  });
+
+  test("the soonest reached first: The Black Hand 1,000 from Magnetism Amplifier beats Neural Wit's 5,000", () => {
+    const plan = chooseFactionWork(player(6_000), slow({ joined: joined(14_000), installed: RUN_2 }));
+    expect(plan.choice).toMatchObject({ faction: "The Black Hand", augmentation: "Magnetism Amplifier" });
+  });
+
+  test("Daedalus inviting, or the count met: not short, and nothing worth working for", () => {
+    const invited = chooseFactionWork(
+      player(6_000),
+      slow({ joined: joined(), installed: RUN_2, invitations: ["Daedalus"] }),
+    );
+    expect(invited).toMatchObject({ choice: null });
+    // Not short, a choice carries no count.
+    const fresh = chooseFactionWork(player(55), slow({ joined: { CyberSec: 0 } }));
+    expect(fresh.choice?.count).toBeUndefined();
+  });
+
+  test("the run report reads the count back from the stored choice", () => {
+    const plan = chooseFactionWork(player(6_000), slow({ joined: joined(), installed: RUN_2 }));
+    const timeline = new FactionWorkTimeline(
+      [{ atMs: 1, kind: FACTION_WORK_CHOSEN_EVENT_KIND, detail: plan.choice }],
+      "brainStarted",
+    );
+    expect(timeline.records[0]).toMatchObject({ kind: "chosen", choice: { count: { installed: 23, required: 30 } } });
   });
 });

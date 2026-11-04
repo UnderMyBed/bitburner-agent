@@ -5,6 +5,7 @@ import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@
 import type { StoredEvent } from "./telemetry-store.ts";
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
+  DAEDALUS_OUT_OF_REACH_AFTER_MS,
   describeWorldDaemonPath,
   HackingExpRate,
   WORLD_DAEMON_STALLED_EVENT_KIND,
@@ -68,13 +69,17 @@ export class WorldDaemonFold {
 
   /** Section 4's lines, each stall the rule stored a failure. */
   healthLines(events: readonly StoredEvent[], failures: string[], formatTime: (ms: number) => string): string[] {
-    const lines = ["  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5):"];
+    const lines = [
+      "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5; or Daedalus's count " +
+        `out of reach for ${DAEDALUS_OUT_OF_REACH_AFTER_MS / 60_000} min, #228):`,
+    ];
     const stalls = events.filter((event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND);
     for (const { atMs, detail } of stalls) {
       const fields = fieldsOf(detail);
+      // "Daedalus out of reach" (#228) says so itself; every other step is a stall.
       const line =
-        `world daemon stalled: ${String(fields.detail)}, from ${formatTime(Number(fields.sinceMs))} to at least ` +
-        formatTime(atMs);
+        `${fields.step === "daedalusReach" ? "" : "world daemon stalled: "}${String(fields.detail)}, from ` +
+        `${formatTime(Number(fields.sinceMs))} to at least ${formatTime(atMs)}`;
       lines.push(`    ${line}`);
       failures.push(line);
     }

@@ -19,6 +19,9 @@
 //   donations are unlocked isn't worked, nor an augmentation one sells: A6 buys its reputation. The Red Pill's work
 //   stops so too (`redPillTarget`): A6's "Daedalus donations", unless 90% of it is earned. All this only with the
 //   Augmentations switch on: off, no install or donation follows, so the work is to the augmentation's reputation.
+// - Short of Daedalus's count (#228, core's `daedalusCountOf`): every augmentation but NeuroFlux Governor and The Red Pill
+//   is a candidate (core's `isWorthInstalling`), each adding one to the count, and the soonest to reach goes first.
+//   Tian Di Hui's invitation is ./daedalus-count.ts's travel.
 // - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
   type AugmentationPurchaseState,
@@ -26,6 +29,8 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  type DaedalusCount,
+  daedalusCountOf,
   FACTION_ENEMIES,
   FACTION_NAMES,
   FACTIONS,
@@ -38,6 +43,7 @@ import {
   hackingValue,
   type Intent,
   intentId,
+  isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
   missingPrerequisites,
@@ -179,6 +185,8 @@ export interface FactionWorkChoice {
   target?: WorkTarget["reason"];
   augmentationReputation?: number;
   favor?: number;
+  /** Short of Daedalus's count (#228): the work is for the count, installed of required. Absent otherwise. */
+  count?: Pick<DaedalusCount, "installed" | "required">;
 }
 
 /** The reputation worked toward at a faction for an augmentation (#225), and why. */
@@ -316,13 +324,26 @@ export function chooseFactionWork(
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
     const conditions = { ...workConditionsOf(resetInfo, slowData, shareBonus), donations, ...(keep ? { keep } : {}) };
+    const count = countOf(state, resetInfo);
     const choice =
-      redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions);
+      redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions, count);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
   } catch (error) {
     return waiting(`the snapshots as core knows the game (${(error as Error).message})`, false);
   }
+}
+
+/** Daedalus's count (#228) from the faction state and the reset info: core's `daedalusCountOf`. */
+export function countOf(state: FactionState, { currentNode, ownedAugs, ownedSF }: WorkResetInfo): DaedalusCount {
+  return daedalusCountOf({
+    currentNode,
+    ownedSF,
+    installed: ownedAugs,
+    queued: state.queuedAugmentations,
+    joined: state.joined,
+    invitations: state.invitations,
+  });
 }
 
 /** What a faction work rate depends on beyond the person and the faction: the run's figures and the focus. */
@@ -413,12 +434,14 @@ export interface WorkCandidate {
  * reached at any joined faction that sells it (one reached is A6's to buy). Throws for what core doesn't know.
  * Donations (#225): not one a joined faction with donations unlocked sells (A6 buys its reputation), nor at such a
  * faction; and each at its faction's `workTarget`, not one already reached there.
+ * `short` of Daedalus's count (#228): every augmentation core's `isWorthInstalling` counts then, whatever its value.
  */
 export function workCandidates(
   state: FactionState,
   { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
   hackingLevel: number,
   donations = true,
+  short = false,
 ): WorkCandidate[] {
   const { FavorToDonateToFaction } = augmentationBitNodeMultipliers(currentNode, ownedSF);
   // No gang is modelled (none in BN1): the gang's faction would take none.
@@ -448,7 +471,7 @@ export function workCandidates(
     for (const augmentation of shop) {
       if (augmentation === NEUROFLUX_GOVERNOR || owned(augmentation)) continue;
       const value = hackingValue(augmentation, hackingLevel);
-      if (!(value > 0)) continue;
+      if (!(short ? isWorthInstalling(augmentation, true) : value > 0)) continue;
       const missing = missingPrerequisites(augmentation, purchaseState);
       if (!missing.every((prerequisite) => soldByJoined(prerequisite).length > 0)) continue;
       const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
@@ -522,20 +545,24 @@ export function redPillWork(
   return best;
 }
 
-/** `chooseFactionWork`'s choice from figures already checked; null for none. */
+/**
+ * `chooseFactionWork`'s choice from figures already checked; null for none. Short of Daedalus's count (#228), each
+ * candidate adds one to it: the soonest reached goes first. (Short, the hacking way is sold out: none has a value.)
+ */
 function bestCandidate(
   person: WorkingPerson,
   state: FactionState,
   resetInfo: WorkResetInfo,
   conditions: WorkConditions,
+  count: DaedalusCount,
 ): FactionWorkChoice | null {
   const rates = new Map(state.joined.map((faction) => [faction.name, bestWorkRate(person, faction, conditions)]));
   let best: (FactionWorkChoice & { score: number }) | null = null;
-  for (const candidate of workCandidates(state, resetInfo, person.skills.hacking, conditions.donations)) {
+  for (const candidate of workCandidates(state, resetInfo, person.skills.hacking, conditions.donations, count.short)) {
     const rate = rates.get(candidate.faction);
     if (!rate) continue;
     const etaSeconds = (candidate.target.reputation - candidate.reputation) / rate.perSecond;
-    const score = candidate.value / etaSeconds;
+    const score = count.short ? -etaSeconds : candidate.value / etaSeconds;
     const better =
       best === null ||
       score > best.score ||
@@ -552,6 +579,7 @@ function bestCandidate(
         target: candidate.target.reason,
         augmentationReputation: candidate.reputationNeeded,
         favor: candidate.favor,
+        ...(count.short ? { count: { installed: count.installed, required: count.required } } : {}),
         score,
       };
     }
@@ -639,7 +667,10 @@ export function describeChoice(choice: FactionWorkChoice): string {
   return (
     `${choice.workType} for ${choice.faction}, for ${choice.augmentation} (reputation ` +
     `${formatReputation(choice.reputation)} of ${formatReputation(choice.reputationNeeded)}${target}, ` +
-    `${choice.reputationPerSecond.toFixed(2)}/s: about ${describeEta(choice.etaSeconds)})`
+    `${choice.reputationPerSecond.toFixed(2)}/s: about ${describeEta(choice.etaSeconds)})` +
+    (choice.count === undefined
+      ? ""
+      : `, for Daedalus's count: ${choice.count.installed} of ${choice.count.required} augmentations installed`)
   );
 }
 
@@ -873,6 +904,9 @@ function targetFieldsOf(detail: Partial<FactionWorkChoice>): Partial<FactionWork
     ...(detail.target === "donations" || detail.target === "augmentation" ? { target: detail.target } : {}),
     ...(isFiniteNumber(detail.augmentationReputation) ? { augmentationReputation: detail.augmentationReputation } : {}),
     ...(isFiniteNumber(detail.favor) ? { favor: detail.favor } : {}),
+    ...(isFiniteNumber(detail.count?.installed) && isFiniteNumber(detail.count?.required)
+      ? { count: { installed: detail.count.installed, required: detail.count.required } }
+      : {}),
   };
 }
 

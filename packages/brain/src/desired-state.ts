@@ -2,7 +2,8 @@
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136), home's RAM (#138) or a cloud server (#194), the next backdoor for
 // the hacker factions (#195, ./backdoors.ts), the next faction to join and the brain's faction work (#203,
-// ./factions.ts), the augmentations' purchases and install (#210, ./augmentations.ts), and the owner's manual queue and
+// ./factions.ts), the travel for Tian Di Hui's invitation (#228, ./daedalus-count.ts), the augmentations' purchases and
+// install (#210, ./augmentations.ts), and the owner's manual queue and
 // work. Irreversible intents wait for their guard and a save backup first (#147). Each state carries how long the Agent
 // keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the
 // BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
@@ -13,6 +14,7 @@ import {
   EFFECTOR_BACKENDS,
   type FactionWorkType,
   type FastSnapshotData,
+  factionReadingOf,
   type Intent,
   type IntentOutcome,
   intentId,
@@ -37,6 +39,7 @@ import {
   writeAugmentationsEnabled,
 } from "./augmentations.ts";
 import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
+import { type TianDiHuiEvent, type TianDiHuiInputs, TianDiHuiRule, type TianDiHuiView } from "./daedalus-count.ts";
 import {
   BATCHER_ENABLED_SETTING,
   type BatcherView,
@@ -58,11 +61,13 @@ import {
   readCloudServersEnabled,
 } from "./cloud-servers.ts";
 import {
+  countOf,
   FactionRule,
   type FactionsView,
   type FactionWorkEvent,
   type FactionWorkStall,
   readFactionWorkEnabled,
+  resetInfoOf,
   writeFactionWorkEnabled,
 } from "./factions.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
@@ -204,14 +209,17 @@ export interface CloudServersView {
   problem: string | null;
 }
 
+/** The rules' events, for the store (#203, #210, #215, #228). */
+export type RuleEvent = FactionWorkEvent | AugmentationEvent | WorldDaemonEvent | TianDiHuiEvent;
+
 /** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
 export interface IntentView {
   id: string;
   /**
-   * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), or its augmentations'
-   * purchases and install (#210), or its destroy (#215).
+   * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), its travel for Tian Di
+   * Hui (#228), or its augmentations' purchases and install (#210), or its destroy (#215).
    */
-  source: "manual" | "purchase" | "backdoor" | "join" | "augmentation" | "worldDaemon";
+  source: "manual" | "purchase" | "backdoor" | "join" | "travel" | "augmentation" | "worldDaemon";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -325,9 +333,12 @@ export class DesiredStateController {
   /** The joins and the brain's faction work (#203): the rule, the join it asks for now, the work it sends, or null. */
   readonly #factions: FactionRule;
   #join: Intent | null = null;
+  /** The travel for Tian Di Hui's invitation (#228): the rule, and the travel it asks for now, or null. */
+  readonly #tianDiHui: TianDiHuiRule;
+  #travel: Intent | null = null;
   #factionWork: { faction: string; workType: FactionWorkType } | null = null;
   /** Who gets the rules' events (#203, #210): the store, through main.ts. */
-  readonly #listeners = new Set<(event: FactionWorkEvent | AugmentationEvent | WorldDaemonEvent) => void>();
+  readonly #listeners = new Set<(event: RuleEvent) => void>();
   /** When the connected Agent's latest medium and slow snapshots arrived, or null. */
   #mediumAtMs: number | null = null;
   /** The game's time of the connected Agent's latest medium and fast snapshots (their `gameTimeMs`), or null (#213). */
@@ -374,6 +385,7 @@ export class DesiredStateController {
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
+    this.#tianDiHui = new TianDiHuiRule({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
     // A restarted brain with its destroy out (#215 review): held, and its note kept, until the BitNode's reset shows.
     if (this.#resetSent?.field === "lastNodeReset" && this.#resetSent.id === WORLD_DAEMON_DESTROY_INTENT.id) {
@@ -545,13 +557,18 @@ export class DesiredStateController {
     return { ...this.#worldDaemon.view(), ownersDestroy };
   }
 
+  /** The travel for Tian Di Hui's invitation (#228), and the money held for it. */
+  tianDiHuiView(): TianDiHuiView {
+    return this.#tianDiHui.view();
+  }
+
   /** A step on the path stalled (#215), or null: the `worldDaemonStalled` alert's. */
   worldDaemonStall(): WorldDaemonStall | null {
     return this.#worldDaemon.stall();
   }
 
   /** Listens for the rules' events (#203, #210, #215), to store them; returns a function that stops it. */
-  subscribe(listener: (event: FactionWorkEvent | AugmentationEvent | WorldDaemonEvent) => void): () => void {
+  subscribe(listener: (event: RuleEvent) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -676,6 +693,7 @@ export class DesiredStateController {
       ...fromRule(this.#augmentationIntent).map((intent) => ({ intent, source: "augmentation" as const })),
       ...fromRule(this.#backdoor).map((intent) => ({ intent, source: "backdoor" as const })),
       ...fromRule(this.#join).map((intent) => ({ intent, source: "join" as const })),
+      ...fromRule(this.#travel).map((intent) => ({ intent, source: "travel" as const })),
     ].map(({ intent, source }, index) => ({
       id: intent.id,
       source,
@@ -718,7 +736,7 @@ export class DesiredStateController {
     );
   }
 
-  #emit(event: FactionWorkEvent | AugmentationEvent | WorldDaemonEvent): void {
+  #emit(event: RuleEvent): void {
     for (const listener of this.#listeners) listener(event);
   }
 
@@ -915,6 +933,10 @@ export class DesiredStateController {
     const other =
       cheaper !== undefined && shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
     const augmentations = this.#augmentations.reserve();
+    const tianDiHui = this.#tianDiHui.hold();
+    if (tianDiHui > Math.max(augmentations, other?.amount ?? 0)) {
+      return { amount: tianDiHui, forWhat: "Tian Di Hui's invitation (#228)" };
+    }
     return augmentations > (other?.amount ?? 0)
       ? { amount: augmentations, forWhat: "the augmentations to buy before the install" }
       : other;
@@ -954,21 +976,28 @@ export class DesiredStateController {
       this.#waitingFor.programs = "the augmentations' install countdown (programs are lost at the install)";
       programsNext = null;
     }
-    // And The Red Pill's donation's money (#225 review), from programs too.
+    // And The Red Pill's donation's money (#225 review), and Tian Di Hui's $1m for its invitation (#228), from programs
+    // too.
     const redPillHold = this.#augmentations.redPillHold();
+    const tianDiHuiHold = this.#tianDiHui.hold();
     const holds: [number, string][] = [
       [daedalusHold, "Daedalus's invitation"],
       [countdownHold, "the augmentations' install countdown"],
       [redPillHold, "The Red Pill's donation"],
+      [tianDiHuiHold, "Tian Di Hui's invitation"],
     ];
     const [hold, heldFor] = holds.reduce((most, each) => (each[0] > most[0] ? each : most));
     const playerMoney = this.#mediumData?.player?.money;
+    const [programsHold, programsHeldFor] =
+      redPillHold >= tianDiHuiHold
+        ? [redPillHold, "The Red Pill's donation"]
+        : [tianDiHuiHold, "Tian Di Hui's invitation"];
     if (
       programsNext !== null &&
-      redPillHold > 0 &&
-      (typeof playerMoney === "number" ? playerMoney : 0) - (programsPlan?.price ?? 0) < redPillHold
+      programsHold > 0 &&
+      (typeof playerMoney === "number" ? playerMoney : 0) - (programsPlan?.price ?? 0) < programsHold
     ) {
-      this.#waitingFor.programs = `money above the $${Math.round(redPillHold).toLocaleString("en-US")} held for The Red Pill's donation`;
+      this.#waitingFor.programs = `money above the $${Math.round(programsHold).toLocaleString("en-US")} held for ${programsHeldFor}`;
       programsNext = null;
     }
     if (
@@ -1142,6 +1171,36 @@ export class DesiredStateController {
     return { hackLoop: { enabled: true, target: hackLoop.target, hosts: [] }, batcher };
   }
 
+  /** What the travel for Tian Di Hui (#228) reads of the snapshots, or null where they don't say it all. */
+  #tianDiHuiInputs(): TianDiHuiInputs | null {
+    const slow = this.#slowData;
+    const player = this.#mediumData?.player as
+      | { skills?: { hacking?: unknown }; money?: unknown; city?: unknown }
+      | undefined;
+    const state = slow === null ? null : (factionReadingOf(slow)?.state ?? null);
+    const resetInfo = slow === null ? null : resetInfoOf(slow);
+    const hacking = player?.skills?.hacking;
+    const money = player?.money;
+    const city = player?.city;
+    if (state === null || resetInfo === null || typeof city !== "string") return null;
+    if (typeof hacking !== "number" || !Number.isFinite(hacking)) return null;
+    if (typeof money !== "number" || !Number.isFinite(money)) return null;
+    try {
+      return {
+        state,
+        count: countOf(state, resetInfo),
+        currentNode: resetInfo.currentNode,
+        installed: resetInfo.ownedAugs,
+        hackingLevel: hacking,
+        money,
+        city,
+      };
+    } catch {
+      // A BitNode core doesn't know (another game version): nothing asked or held.
+      return null;
+    }
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
@@ -1178,6 +1237,20 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       enabled: readWorldDaemonEnabled(this.#store),
       shareBonus,
+      installing: this.#augmentationsCommitted,
+    });
+    // The travel for Tian Di Hui's invitation (#228), before the purchases: its hold keeps their money.
+    this.#travel = this.#tianDiHui.update({
+      inputs: this.#tianDiHuiInputs(),
+      stood:
+        readOwnersWork(this.#store) !== null
+          ? "your work on the dashboard (it may be in a city)"
+          : !readAugmentationsEnabled(this.#store)
+            ? "the Augmentations switch, off"
+            : this.#augmentationsCommitted
+              ? "the install of augmentations chosen (it puts the player back in Sector-12)"
+              : null,
+      nowMs: this.#lastEventAtMs,
     });
     this.#purchase = this.#choosePurchase();
     this.#backdoor = this.#backdoors.intent({
@@ -1218,6 +1291,7 @@ export class DesiredStateController {
       ...notManual(this.#augmentationIntent),
       ...notManual(this.#backdoor),
       ...notManual(this.#join),
+      ...notManual(this.#travel),
     ];
     // A queue stored under an old limit (99 before #195, 98 before #203) would make the state too long, and the Agent
     // would refuse it whole: the rules' intents wait for room, the last first.

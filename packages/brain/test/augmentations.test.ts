@@ -6,8 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   AUGMENTATION_NAMES,
+  augmentationsSoldBy,
   chooseAugmentationsToBuy,
   type FactionState,
+  isWorthInstalling,
   type MediumSnapshotData,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
@@ -586,6 +588,8 @@ describe("the progress events (#222)", () => {
         held: null,
         byDonation: 0,
         setCost: expect.closeTo(FIVE_COST, 0),
+        // CyberSec's five not owned: the hacking way lasts, so not short of Daedalus's count (#228).
+        short: null,
       },
     ]);
     // A NeuroFlux Governor level more, 5 minutes after the last recorded (the brain's time): recorded.
@@ -1812,5 +1816,60 @@ describe("the store and the figures", () => {
       formatEta(null),
       formatEta(Infinity),
     ]).toEqual(["45 s", "12 min", "3.4 h", "never", "never"]);
+  });
+});
+
+describe("short of Daedalus's count (#228)", () => {
+  const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
+  /** Run #2's 23 (2026-11-04): the four hacker factions' set with a hacking value, and NeuroFlux Governor. */
+  const RUN_2: Record<string, number> = {
+    ...Object.fromEntries(
+      [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))]
+        .filter((name) => isWorthInstalling(name))
+        .map((name) => [name, 1]),
+    ),
+    [NFG]: 124,
+  };
+  /** The four joined, Magnetism Amplifier (15,000) and Neural Wit Amplifier (5,000) reached. */
+  const FOUR = HACKERS.map((name) => ({
+    name,
+    reputation: name === "The Black Hand" ? 15_000 : name === "BitRunners" ? 5_000 : 0,
+    favor: 0,
+  }));
+  /** $250m, then $10m × 1.9: the two, dearest first. */
+  const TWO_COST = 250e6 + 10e6 * 1.9;
+  const runTwo = (fields: Parameters<typeof slow>[0] = {}) => slow({ joined: FOUR, ownedAugs: RUN_2, ...fields });
+
+  test("only no-value augmentations reachable: both counted, nothing else left, so installed after the countdown", () => {
+    const mediumData = medium({ hacking: 6_000, money: 1e9 });
+    throughCountdown({ slowData: runTwo(), mediumData });
+    const chosen = events.find((event) => event.type === "augmentationInstallChosen");
+    expect(chosen).toMatchObject({ reason: "nothing left", affordable: 2, cost: TWO_COST });
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(["Magnetism Amplifier", "Neural Wit Amplifier"]);
+    const [progress] = progressEvents();
+    expect(progress).toMatchObject({ affordable: 2, reason: "nothing left", short: { installed: 23, required: 30 } });
+    expect(describeProgress(progress as Parameters<typeof describeProgress>[0])).toMatch(
+      /; short of Daedalus's count \(23 of 30 augmentations installed\): any augmentation counts$/,
+    );
+  });
+
+  test("Daedalus inviting (the count met): the hacking-value rule, so nothing to buy or install", () => {
+    const invited = { ...runTwo(), factions: { backend: "sim", state: { joined: FOUR, invitations: ["Daedalus"], queuedAugmentations: [] }, problem: null } } as SlowSnapshotData;
+    update({ slowData: invited, mediumData: medium({ hacking: 6_000, money: 1e9 }) });
+    expect(rule.view().set).toEqual([]);
+    expect(rule.view().progress).toMatchObject({ affordable: 0, reason: null, countdown: null, short: null });
+    expect(rule.view().waitingFor).not.toMatch(/short of Daedalus/);
+  });
+
+  test("the counts take queued ones whatever their value; the lookahead's reserve counts them too", () => {
+    // Neural Wit Amplifier queued already: Magnetism Amplifier the set, two affordable.
+    update({ slowData: runTwo({ queued: ["Neural Wit Amplifier"] }), mediumData: medium({ hacking: 6_000, money: 1e9 }) });
+    expect(rule.view().progress).toMatchObject({ affordable: 2, reason: "nothing left" });
+    // Short of the money, with the income to cover it in 15 minutes: held from cloud servers (the reserve).
+    rule = newRule();
+    events.length = 0;
+    measureIncome(1e6, { joined: FOUR, ownedAugs: RUN_2, reputation: 0 }, medium({ hacking: 6_000, money: 0 }));
+    expect(rule.view().progress).toMatchObject({ affordable: 0, short: { installed: 23, required: 30 } });
+    expect(rule.reserve()).toBeCloseTo(TWO_COST, 0);
   });
 });

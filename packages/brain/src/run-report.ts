@@ -19,6 +19,7 @@ import { readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
+import { TIAN_DI_HUI_EVENT_KIND, tianDiHuiHealthLines, tianDiHuiLines } from "./daedalus-count.ts";
 import {
   BACKDOOR_OVERDUE_AFTER_MS,
   INCOME_STALLED_AFTER_MS,
@@ -612,6 +613,7 @@ function windowSection(facts: RunFacts): string[] {
     FACTION_WORK_STOPPED_EVENT_KIND,
     ...AUGMENTATION_EVENT_KINDS,
     ...WORLD_DAEMON_EVENT_KINDS,
+    TIAN_DI_HUI_EVENT_KIND,
   ];
   const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)}`);
@@ -908,7 +910,7 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (dialogs.length === 0) lines.push("    none");
   lines.push(...backdoorLines(facts));
-  lines.push(...factionLines(facts));
+  lines.push(...factionLines(facts), ...tianDiHuiLines(facts.events, formatIsoTime));
   lines.push(...facts.augmentations.actionLines(facts.events, formatIsoTime));
   lines.push(...facts.worldDaemon.pathLines(facts, facts.events, formatIsoTime));
   return lines;
@@ -1108,6 +1110,7 @@ function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string
   if (stuck === 0) lines.push("    none");
   lines.push(...backdoorHealthLines(facts, failures));
   lines.push(...factionWorkHealthLines(facts, failures));
+  lines.push(...tianDiHuiHealthLines(facts.events, failures, formatIsoTime));
   lines.push(
     ...facts.augmentations.healthLines(facts.events, {
       untilMs: facts.untilMs,

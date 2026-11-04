@@ -5,6 +5,8 @@ export {
   augmentationBuyOrder,
   type CountedPurchases,
   chooseAugmentationsToBuy,
+  type DaedalusCount,
+  daedalusCountOf,
   countdownExtensionMs,
   type Donation,
   type DonationSeller,
@@ -276,6 +278,10 @@ export {
   type FactionData,
   JOIN_FACTION_WORKER_NAME,
   type PlayerRequirement,
+  TIAN_DI_HUI,
+  TIAN_DI_HUI_CITIES,
+  TIAN_DI_HUI_HACKING,
+  TIAN_DI_HUI_MONEY,
 } from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {

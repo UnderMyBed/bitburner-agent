@@ -14,10 +14,15 @@
 // - The dashboard's switch ("Stop destroying the BitNode", `worldDaemon.enabled`), on by default, into BitNode 1
 //   (owner decision 50): phase A's exit is a live run that destroys BN1.1 on its own. Another BitNode is the owner's:
 //   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3, BN1 gives nothing: none, loudly.
+// - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
+//   within reach and where (./daedalus-count.ts's `daedalusReach`); the count and the reach under the requirement, no
+//   install under way, for `DAEDALUS_OUT_OF_REACH_AFTER_MS`, is "Daedalus out of reach": the `daedalusReach` stall, a
+//   run report failure.
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   DAEDALUS,
+  daedalusCountOf,
   daedalusMissing,
   daedalusRequirements,
   type FactionState,
@@ -32,6 +37,7 @@ import {
   WORLD_DAEMON,
   worldDaemonProblem,
 } from "@bitburner-agent/core";
+import { type DaedalusReach, daedalusReach, describeReach } from "./daedalus-count.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -77,8 +83,15 @@ export type WorldDaemonEvent =
   | { type: typeof WORLD_DAEMON_STALLED_EVENT_KIND; atMs: number; step: StallStep; sinceMs: number; detail: string }
   | { type: typeof BITNODE_DESTROY_SENT_EVENT_KIND; atMs: number; source: "brain" | "manual"; nextBitNode: number };
 
-/** The steps a stall can be on. */
-export type StallStep = "daedalus" | "redPill" | "redPillReputation" | "destroy" | "nextBitNode";
+/** The steps a stall can be on; `daedalusReach` (#228) is "Daedalus out of reach". */
+export type StallStep = "daedalusReach" | "daedalus" | "redPill" | "redPillReputation" | "destroy" | "nextBitNode";
+
+/**
+ * Short of Daedalus's count with it out of reach (#228), this long online with no install under way, is "Daedalus out
+ * of reach": 30 minutes. Right after an install no faction is joined: the hacker factions' backdoors and Tian Di Hui's
+ * travel bring them back within it.
+ */
+export const DAEDALUS_OUT_OF_REACH_AFTER_MS = 30 * 60_000;
 
 /**
  * The Red Pill reached, not installed this long after (#215 review): 15 minutes, from "reached". A6's whole commit
@@ -91,6 +104,7 @@ export const RED_PILL_REPUTATION_STALLED_AFTER_MS = 10 * 60_000;
 
 /** How long each step may take before it's `worldDaemonStalled`. The next BitNode refused is loud at once. */
 const STALLED_AFTER_MS: Record<StallStep, number> = {
+  daedalusReach: DAEDALUS_OUT_OF_REACH_AFTER_MS,
   daedalus: WORLD_DAEMON_STALLED_AFTER_MS,
   redPill: RED_PILL_INSTALL_STALLED_AFTER_MS,
   redPillReputation: RED_PILL_REPUTATION_STALLED_AFTER_MS,
@@ -123,6 +137,12 @@ export interface WorldDaemonPath {
     augmentationsRequired: number;
     /** What its invitation still needs, worded (core's `daedalusMissing`); empty when met. */
     missing: string[];
+    /** Short of the count (#228): neither joined nor invited, fewer installed than required. */
+    short: boolean;
+    /** How many more are within reach, and where (#228); null without the hacking level or the faction state. */
+    reach: DaedalusReach | null;
+    /** What else its invitation needs, the count aside (#228): the line says the count itself. */
+    needs: string[];
   } | null;
   redPill: {
     installed: boolean;
@@ -218,19 +238,35 @@ export function worldDaemonPath({
   };
   if (resetInfo !== null && !redPillInstalled) {
     const required = daedalusRequirements(resetInfo.currentNode, resetInfo.ownedSF);
-    const augmentations = Object.keys(resetInfo.ownedAugs).length;
+    const count = daedalusCountOf({
+      currentNode: resetInfo.currentNode,
+      ownedSF: resetInfo.ownedSF,
+      installed: resetInfo.ownedAugs,
+      queued: state?.queuedAugmentations ?? [],
+      joined: state?.joined ?? [],
+      invitations: state?.invitations ?? [],
+    });
+    const augmentations = count.installed;
     const person = mediumData === null ? null : workingPersonOf(mediumData);
     const money = (mediumData?.player as { money?: unknown } | undefined)?.money;
     const skills = daedalusSkillsOf(mediumData);
+    const unread = ["the player's money and hacking level in the Agent's medium snapshot"];
     path.daedalus = {
       joined: state?.joined.some((faction) => faction.name === DAEDALUS) ?? false,
       invited: state?.invitations.includes(DAEDALUS) ?? false,
       augmentations,
       augmentationsRequired: required.augmentations,
       missing:
+        skills === null || !isFiniteNumber(money) ? unread : daedalusMissing({ augmentations, money, skills }, required),
+      short: count.short,
+      reach:
+        state === null || hacking === null
+          ? null
+          : daedalusReach(state, resetInfo.currentNode, resetInfo.ownedAugs, hacking.level),
+      needs:
         skills === null || !isFiniteNumber(money)
-          ? ["the player's money and hacking level in the Agent's medium snapshot"]
-          : daedalusMissing({ augmentations, money, skills }, required),
+          ? unread
+          : daedalusMissing({ augmentations: required.augmentations, money, skills }, required),
     };
     const queued = state?.queuedAugmentations.includes(THE_RED_PILL) ?? false;
     const daedalus = state?.joined.find((faction) => faction.name === DAEDALUS) ?? null;
@@ -290,19 +326,36 @@ export function worldDaemonPath({
   return path;
 }
 
+/** Short of Daedalus's count with the reach too small to make it up (#228). */
+function outOfReach(daedalus: NonNullable<WorldDaemonPath["daedalus"]>): boolean {
+  return (
+    daedalus.short &&
+    daedalus.reach !== null &&
+    daedalus.augmentations + daedalus.reach.more < daedalus.augmentationsRequired
+  );
+}
+
 /** The path in words, a line each (#215): the dashboard's and the run report's. */
 export function describeWorldDaemonPath(path: WorldDaemonPath): string[] {
   const lines: string[] = [];
   const { daedalus, redPill, daemon } = path;
   if (daedalus !== null) {
+    const { reach } = daedalus;
     lines.push(
       `Daedalus: ${daedalus.joined ? "joined" : daedalus.invited ? "invited" : "not joined"}; ` +
         `${count(daedalus.augmentations)} of ${count(daedalus.augmentationsRequired)} augmentations installed` +
+        (!daedalus.short
+          ? ""
+          : reach === null
+            ? ", the reach not read (the hacking level or the faction state)"
+            : `, ${describeReach(reach)}${outOfReach(daedalus) ? ": Daedalus out of reach" : ""}`) +
         (daedalus.joined
           ? ""
           : daedalus.missing.length === 0
             ? "; requirements met"
-            : `; needs ${daedalus.missing.join(", ")}`),
+            : daedalus.needs.length === 0
+              ? ""
+              : `; needs ${daedalus.needs.join(", ")}`),
     );
   }
   if (redPill !== null) {
@@ -395,6 +448,8 @@ export interface WorldDaemonInputs {
   enabled: boolean;
   /** The share threads' bonus running (#224), for The Red Pill's rate; 1 when absent. */
   shareBonus?: number;
+  /** An install under way (#228): A6 committed to one. "Daedalus out of reach" waits for it. */
+  installing?: boolean;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -458,6 +513,7 @@ export class WorldDaemonRule {
     nowMs,
     enabled,
     shareBonus = 1,
+    installing = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     const hacking = hackingOf(mediumData);
@@ -483,7 +539,7 @@ export class WorldDaemonRule {
     this.#path = path;
     const blocked = path.daemon === null ? null : nextBitNodeProblem(slowData.resetInfo?.ownedSF ?? {});
     // Refused, it's logged and alerted once, at once, as the `nextBitNode` stall.
-    this.#watch(path, nowMs ?? 0, enabled, blocked);
+    this.#watch(path, nowMs ?? 0, enabled, blocked, installing);
     const ready = path.daemon !== null && path.daemon.problem === null && blocked === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       this.#asked = { lastNodeReset };
@@ -496,9 +552,16 @@ export class WorldDaemonRule {
   }
 
   /** Each step that could be done, from when; one not done its `STALLED_AFTER_MS` on is stored and logged. */
-  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean, blocked: string | null): void {
+  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean, blocked: string | null, installing: boolean): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number }>();
     const { daedalus, redPill, daemon } = path;
+    if (daedalus !== null && daedalus.reach !== null && outOfReach(daedalus) && !installing) {
+      steps.set("daedalusReach", {
+        detail:
+          `Daedalus out of reach: ${count(daedalus.augmentations)} of ${count(daedalus.augmentationsRequired)} ` +
+          `augmentations installed, ${describeReach(daedalus.reach)}`,
+      });
+    }
     if (daedalus !== null && !daedalus.joined && daedalus.missing.length === 0) {
       steps.set("daedalus", {
         detail: `Daedalus's requirements met, not joined${daedalus.invited ? " (invited)" : " (no invitation yet)"}`,

@@ -2,12 +2,14 @@
 // w0r1d_d43m0n is ready and held until the reset, and the stalls.
 import {
   AUGMENTATION_NAMES,
+  augmentationsSoldBy,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { beforeEach, describe, expect, test } from "vitest";
 import {
+  DAEDALUS_OUT_OF_REACH_AFTER_MS,
   describeWorldDaemonPath,
   HackingExpRate,
   hackingEtaSeconds,
@@ -20,6 +22,7 @@ import {
   WorldDaemonRule,
   worldDaemonPath,
 } from "../src/world-daemon.ts";
+import { WorldDaemonFold } from "../src/world-daemon-report.ts";
 
 const DAEMON = "w0r1d_d43m0n";
 const RED_PILL = "The Red Pill";
@@ -118,11 +121,17 @@ describe("the path", () => {
         "$5,000,000,000 of $100,000,000,000",
         "hacking 2,000 of 2,500 (or every combat skill 1,500)",
       ],
+      // Short (#228): nothing joined, so the hacking way is sold out; Tian Di Hui's eight within reach at hacking 50
+      // (its NeuroFlux Governor is the one installed: counted once).
+      short: true,
+      reach: { more: 8, by: [{ faction: "Tian Di Hui", count: 8 }] },
+      needs: ["$5,000,000,000 of $100,000,000,000", "hacking 2,000 of 2,500 (or every combat skill 1,500)"],
     });
     expect(path.daemon).toBeNull();
+    // The count said once (#228), with the reach.
     expect(describeWorldDaemonPath(path)).toEqual([
-      "Daedalus: not joined; 1 of 30 augmentations installed; needs 1 of 30 augmentations installed, " +
-        "$5,000,000,000 of $100,000,000,000, hacking 2,000 of 2,500 (or every combat skill 1,500)",
+      "Daedalus: not joined; 1 of 30 augmentations installed, 8 more within reach (Tian Di Hui 8): Daedalus out of " +
+        "reach; needs $5,000,000,000 of $100,000,000,000, hacking 2,000 of 2,500 (or every combat skill 1,500)",
       "The Red Pill: Daedalus not joined",
     ]);
   });
@@ -366,5 +375,75 @@ describe("a restarted brain", () => {
     expect(
       update({ slowData: slow({ ownedAugs: {}, lastNodeReset: 5_000 }), mediumData: medium({ hacking: 1 }) }),
     ).toBe(false);
+  });
+});
+
+describe("Daedalus out of reach (#228)", () => {
+  const TIAN_DI_HUI = augmentationsSoldBy("Tian Di Hui", 1, null);
+  /** Twenty-three installed, none Tian Di Hui sells (nor NeuroFlux Governor or The Red Pill). */
+  const TWENTY_THREE = Object.fromEntries(
+    AUGMENTATION_NAMES.filter((name) => name !== RED_PILL && !TIAN_DI_HUI.includes(name))
+      .slice(0, 23)
+      .map((name) => [name, 1]),
+  );
+  const short = (hacking: number) => ({
+    mediumData: medium({ hacking, money: 1e12 }),
+    slowData: slow({ ownedAugs: TWENTY_THREE }),
+  });
+  const DETAIL = "Daedalus out of reach: 23 of 30 augmentations installed, none more within reach";
+
+  test("short, and the count and the reach under 30, no install under way: the failure 30 minutes on, once", () => {
+    // Hacking 40: nothing joined, Tian Di Hui not yet within reach.
+    update({ ...short(40), nowMs: 0 });
+    expect(describeWorldDaemonPath(rule.view().path as NonNullable<ReturnType<typeof rule.view>["path"]>)[0]).toBe(
+      "Daedalus: not joined; 23 of 30 augmentations installed, none more within reach: Daedalus out of reach; needs " +
+        "hacking 40 of 2,500 (or every combat skill 1,500)",
+    );
+    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS - 1 });
+    expect(rule.stall()).toBeNull();
+    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS });
+    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
+    expect(rule.stall()).toEqual({ step: "daedalusReach", sinceMs: 0, detail: DETAIL });
+    expect(events).toEqual([
+      {
+        type: "worldDaemonStalled",
+        atMs: DAEDALUS_OUT_OF_REACH_AFTER_MS,
+        step: "daedalusReach",
+        sinceMs: 0,
+        detail: DETAIL,
+      },
+    ]);
+    expect(lines).toEqual([`world daemon: STALLED 30 min: ${DETAIL}`]);
+  });
+
+  test("quiet while the reach makes it up: Tian Di Hui's nine at hacking 50 (NeuroFlux Governor too), 32 of 30", () => {
+    update({ ...short(50), nowMs: 0 });
+    update({ ...short(50), nowMs: 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
+    expect(rule.stall()).toBeNull();
+    expect(rule.view().lines[0]).toBe(
+      "Daedalus: not joined; 23 of 30 augmentations installed, 9 more within reach (Tian Di Hui 9); needs hacking 50 " +
+        "of 2,500 (or every combat skill 1,500)",
+    );
+  });
+
+  test("an install under way waits it out, and starts it afresh", () => {
+    update({ ...short(40), nowMs: 0 });
+    update({ ...short(40), nowMs: 20 * MINUTE, installing: true });
+    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
+    expect(rule.stall()).toBeNull();
+    update({ ...short(40), nowMs: 20 * MINUTE + 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
+    expect(rule.stall()).toMatchObject({ step: "daedalusReach" });
+  });
+
+  test("the run report: a failure, said as such", () => {
+    const failures: string[] = [];
+    const stored = {
+      atMs: DAEDALUS_OUT_OF_REACH_AFTER_MS,
+      kind: "worldDaemonStalled",
+      detail: { step: "daedalusReach", sinceMs: 0, detail: DETAIL },
+    };
+    const health = new WorldDaemonFold().healthLines([stored as never], failures, (ms) => `t${ms}`);
+    expect(health[1]).toBe(`    ${DETAIL}, from t0 to at least t${DAEDALUS_OUT_OF_REACH_AFTER_MS}`);
+    expect(failures).toEqual([`${DETAIL}, from t0 to at least t${DAEDALUS_OUT_OF_REACH_AFTER_MS}`]);
   });
 });
