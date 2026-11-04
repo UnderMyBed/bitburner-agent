@@ -36,6 +36,9 @@
 //   unlockable in the BitNode), its reputation this cycle enough to unlock them at the next install, and The Red Pill's
 //   not reached, an install is chosen ("Daedalus donations", the normal countdown), if anything is to install. Once
 //   they're unlocked, The Red Pill's way donates its reputation and buys it when the money covers the donation.
+// - Short of Daedalus's count (#228, core's `daedalusCountOf`): every augmentation but NeuroFlux Governor and The Red
+//   Pill is worth installing (core's `isWorthInstalling`), in the set (hacking value first, then the cheapest), the
+//   counts and bars, the countdown, the lookahead's reserve and "nothing left"; the progress says so.
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
@@ -47,9 +50,11 @@ import {
   chooseAugmentationsToBuy,
   countdownExtensionMs,
   DAEDALUS,
+  type DaedalusCount,
   type Donation,
   type DonationSeller,
   type DonationTerms,
+  daedalusCountOf,
   daedalusMissing,
   daedalusRequirements,
   donationsUnlocked,
@@ -185,6 +190,11 @@ export interface AugmentationProgress {
   byDonation: number;
   /** What the set and its donations cost (#225 review): the run report's "donations unused" weighs what's left. */
   setCost: number;
+  /**
+   * Short of Daedalus's count (#228): installed of required, any augmentation counting; null when not. Absent in an
+   * earlier brain's progress.
+   */
+  short?: Pick<DaedalusCount, "installed" | "required"> | null;
 }
 
 export type AugmentationEvent =
@@ -548,7 +558,13 @@ export function describeProgress(progress: CountFigures & Partial<AugmentationPr
       : barFallsInMs === null && barWithNeuroFluxFallsInMs === null
         ? "; both bars are 1"
         : "";
-  return `${describeCounts(progress)}${online}${falls}`;
+  const short = progress.short;
+  const forCount =
+    short === undefined || short === null
+      ? ""
+      : `; short of Daedalus's count (${short.installed} of ${short.required} augmentations installed): any ` +
+        "augmentation counts";
+  return `${describeCounts(progress)}${online}${falls}${forCount}`;
 }
 
 /** Why the install was chosen, in words, for the log and the report; another reason, as it is. */
@@ -1234,6 +1250,15 @@ export class AugmentationRule {
     const reached = sold.filter((name) => !owned(name) && sellerOf(name) !== null);
     const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
     const hackingLevel = player.person.skills.hacking;
+    // Short of Daedalus's count (#228): any augmentation counts.
+    const count = daedalusCountOf({
+      currentNode,
+      ownedSF,
+      installed: ownedAugs,
+      joined: state.joined,
+      invitations: state.invitations,
+    });
+    const short = count.short;
     const cycle = readAugmentationCycle(this.#store);
     // Donations (#225): planned only before the commit; committed, the note's go first, and the set is what's reached.
     const terms =
@@ -1246,7 +1271,7 @@ export class AugmentationRule {
             multipliers,
           )
         : undefined;
-    let set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel, terms);
+    let set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel, terms, short);
     let setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
 
     // A donation asked for, its reputation shown before its done is reported (#225 review): recorded now, as the next
@@ -1269,7 +1294,7 @@ export class AugmentationRule {
       const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
       const budget = money - redPillAmount;
       if (redPillAmount > 0) {
-        set = chooseAugmentationsToBuy(reached, purchaseState, budget, hackingLevel, terms);
+        set = chooseAugmentationsToBuy(reached, purchaseState, budget, hackingLevel, terms, short);
         setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
       }
       const notCommitted = { set: setView, setCost: set.money, committed: false, donations: [] as Donation[] };
@@ -1315,11 +1340,12 @@ export class AugmentationRule {
           money: spare,
           neuroFluxReputation,
           donations: terms,
+          short,
         });
         const afterSet = { installed: ownedAugs, queued: [...queue, ...names] };
         const left = sold.filter(
           (name) =>
-            isWorthInstalling(name) &&
+            isWorthInstalling(name, short) &&
             !owned(name) &&
             !names.includes(name) &&
             missingPrerequisites(name, afterSet).length === 0,
@@ -1359,6 +1385,7 @@ export class AugmentationRule {
         held,
         byDonation: counts.byDonation,
         setCost: set.money + set.donationMoney,
+        short: short ? { installed: count.installed, required: count.required } : null,
       });
       const notCommittedDonations = { ...notCommitted, donations: counts.donations };
       let endgame = endgame0;
@@ -1413,7 +1440,7 @@ export class AugmentationRule {
           const spare = money + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000;
           const ahead = judge(
             spare,
-            chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel, terms),
+            chooseAugmentationsToBuy(reached, purchaseState, spare, hackingLevel, terms, short),
             AUGMENTATION_RESERVE_LOOKAHEAD_MS,
           );
           if (ahead.rule.install) reserve = ahead.counts.money;
@@ -1806,7 +1833,15 @@ export class AugmentationRule {
     if (!augmentationsSoldBy(DAEDALUS, currentNode, null).includes(THE_RED_PILL)) return { kind: "none" };
     const required = daedalusRequirements(currentNode, ownedSF);
     const skills = player.person.skills;
-    const figures = { augmentations: Object.keys(ownedAugs).length, money: player.money, skills };
+    // Installed as Daedalus counts them (#228, core's `daedalusCountOf`, A5's and A6's too): NeuroFlux Governor once.
+    const { installed } = daedalusCountOf({
+      currentNode,
+      ownedSF,
+      installed: ownedAugs,
+      joined,
+      invitations: [],
+    });
+    const figures = { augmentations: installed, money: player.money, skills };
     const missing = daedalusMissing(figures, required);
     // Held only with nothing but the money missing: a count or a skill short is missing too.
     const onlyMoney = missing.length === 0 || (missing.length === 1 && figures.money < required.money);
@@ -1964,6 +1999,7 @@ export class AugmentationRule {
       reason,
       progress.countdown?.endsAtGameMs ?? null,
       hold,
+      progress.short ?? null,
     ]);
     const counts = JSON.stringify([affordable, affordableWithNeuroFlux, byDonation]);
     const last = this.#progress;

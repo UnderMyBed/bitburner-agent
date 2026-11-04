@@ -8,6 +8,7 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  daedalusCountOf,
   donationsUnlocked,
   donationToReach,
   FACTION_NAMES,
@@ -125,6 +126,12 @@ function countsOf(fields: Record<string, unknown>) {
   >;
 }
 
+/** A stored progress's Daedalus count (#228), where it's as the brain writes it; null otherwise. */
+function shortOf(value: unknown): { installed: number; required: number } | null {
+  const { installed, required } = fieldsOf(value);
+  return isFiniteNumber(installed) && isFiniteNumber(required) ? { installed, required } : null;
+}
+
 /**
  * A stored `augmentationProgress` (#222) in words: "5 of 8 new augmentations affordable (7 of 12 with NeuroFlux), 1.2 h
  * online this cycle; the bar falls to 7 in 48 min", then the countdown or the hold.
@@ -141,6 +148,7 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
       onlineMs: number(fields.onlineMs) ?? undefined,
       barFallsInMs: number(fields.barFallsInMs),
       barWithNeuroFluxFallsInMs: number(fields.barWithNeuroFluxFallsInMs),
+      short: shortOf(fields.short),
     }) +
     (isFiniteNumber(countdown.endsInMs)
       ? `; install countdown${countdown.quick === true ? " (a quick install)" : ""}, ${formatEta(countdown.endsInMs)} ` +
@@ -153,8 +161,8 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
 /**
  * What a slow snapshot shows within reach by a donation (#225), its money aside: each augmentation worth installing,
  * not owned, its prerequisites owned, no joined seller's reputation reaching it, and sold by a joined faction taking
- * donations with them unlocked (the one with the most reputation). Empty where the snapshot doesn't say, or core
- * doesn't know what it says.
+ * donations with them unlocked (the one with the most reputation); short of Daedalus's count (#228), any counts. Empty
+ * where the snapshot doesn't say, or core doesn't know what it says.
  */
 export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
   const reading = factionReadingOf(data);
@@ -178,9 +186,17 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
     );
     const owned = (name: string) =>
       Object.hasOwn(purchaseState.installed, name) || state.queuedAugmentations.includes(name);
+    const { short } = daedalusCountOf({
+      currentNode,
+      ownedSF,
+      installed: purchaseState.installed,
+      joined: state.joined,
+      invitations: state.invitations,
+    });
     const offers: DonationOffer[] = [];
     for (const name of new Set([...shops.values()].flat())) {
-      if (!isWorthInstalling(name) || owned(name) || missingPrerequisites(name, purchaseState).length > 0) continue;
+      if (!isWorthInstalling(name, short) || owned(name) || missingPrerequisites(name, purchaseState).length > 0)
+        continue;
       const { money, reputation } = augmentationCost(name, purchaseState);
       const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
       if (sellers.some((faction) => faction.reputation >= reputation)) continue;

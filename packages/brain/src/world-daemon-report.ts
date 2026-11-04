@@ -2,6 +2,7 @@
 // w0r1d_d43m0n's hacking requirement and the ETA at the window's experience rate), the destroys sent, and each stall
 // the rule stored, a failure.
 import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import { CITY_GROUP_CHOSEN_EVENT_KIND } from "./invitations.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
@@ -42,6 +43,11 @@ export class WorldDaemonFold {
   ): string[] {
     const lines = ["  the path to the World Daemon (as the window's last snapshots show it):"];
     let described: string[];
+    // The reach counts the city group the brain chose (#228): the window's last choice.
+    const chosen = events.findLast((event) => event.kind === CITY_GROUP_CHOSEN_EVENT_KIND)?.detail as
+      | { group?: unknown }
+      | undefined;
+    const cityGroup = typeof chosen?.group === "string" ? chosen.group : null;
     try {
       described = describeWorldDaemonPath(
         worldDaemonPath({
@@ -49,6 +55,7 @@ export class WorldDaemonFold {
           mediumData: mediumLast ?? null,
           slowData: slowLast ?? null,
           expPerSecond: this.#exp.perSecond(),
+          cityGroup,
         }),
       );
     } catch (error) {
@@ -68,13 +75,19 @@ export class WorldDaemonFold {
 
   /** Section 4's lines, each stall the rule stored a failure. */
   healthLines(events: readonly StoredEvent[], failures: string[], formatTime: (ms: number) => string): string[] {
-    const lines = ["  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5):"];
+    const lines = [
+      "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5; or an install while " +
+        "short of Daedalus's count that added none to it, #228):",
+    ];
     const stalls = events.filter((event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND);
     for (const { atMs, detail } of stalls) {
       const fields = fieldsOf(detail);
+      // "Daedalus count stuck" (#228) says what it is, and when: the install it saw; every other step is a stall.
       const line =
-        `world daemon stalled: ${String(fields.detail)}, from ${formatTime(Number(fields.sinceMs))} to at least ` +
-        formatTime(atMs);
+        fields.step === "daedalusCount"
+          ? `${String(fields.detail)}, seen at ${formatTime(atMs)}`
+          : `world daemon stalled: ${String(fields.detail)}, from ${formatTime(Number(fields.sinceMs))} to at least ` +
+            formatTime(atMs);
       lines.push(`    ${line}`);
       failures.push(line);
     }

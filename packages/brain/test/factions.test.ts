@@ -2,9 +2,11 @@
 // rule's log, events and stall as the controller runs it, and what the run report reads of them.
 import {
   augmentationBitNodeMultipliers,
+  augmentationsSoldBy,
   factionReputationPerSecond,
   factionStateOf,
   hackingValue,
+  isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
   type SlowSnapshotData,
@@ -111,20 +113,34 @@ const hackingRate = (medium: MediumSnapshotData, favor = 0) =>
   });
 
 describe("chooseJoin", () => {
-  test("the first invitation from a faction without enemies, in the order invited; the city factions left", () => {
+  test("the first invitation from a faction without enemies, in the order invited; other city factions passed over", () => {
     expect(chooseJoin(["Sector-12", "CyberSec", "NiteSec"], [])).toEqual({
       next: "CyberSec",
-      leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+    });
+  });
+
+  test("the city group the brain chose (#228, decision 54): its factions joined, never another group's", () => {
+    const groupB = ["Chongqing", "New Tokyo", "Ishima"];
+    expect(chooseJoin(["Sector-12", "Chongqing", "CyberSec"], [], groupB)).toEqual({
+      next: "Chongqing",
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+    });
+    for (const other of ["Sector-12", "Aevum", "Volhaven"]) expect(chooseJoin([other], [], groupB).next).toBeNull();
+    // Only the group's factions with something of value are in the list: Ishima left out, it's passed over too.
+    expect(chooseJoin(["Ishima"], [], ["Chongqing"])).toMatchObject({
+      next: null,
+      passedOver: [{ faction: "Ishima" }],
     });
   });
 
   test("one joined is passed over, as is a name that isn't one of the game's factions; none left, none to join", () => {
-    expect(chooseJoin(["CyberSec", "Nope", "NiteSec"], ["CyberSec"])).toEqual({ next: "NiteSec", leftToOwner: [] });
-    expect(chooseJoin(["CyberSec"], ["CyberSec"])).toEqual({ next: null, leftToOwner: [] });
-    expect(chooseJoin([], [])).toEqual({ next: null, leftToOwner: [] });
+    expect(chooseJoin(["CyberSec", "Nope", "NiteSec"], ["CyberSec"])).toEqual({ next: "NiteSec", passedOver: [] });
+    expect(chooseJoin(["CyberSec"], ["CyberSec"])).toEqual({ next: null, passedOver: [] });
+    expect(chooseJoin([], [])).toEqual({ next: null, passedOver: [] });
   });
 
-  test("every one of the six city factions is left; every other faction is joined", () => {
+  test("no city group chosen: every one of the six city factions is passed over; every other faction is joined", () => {
     for (const city of ["Aevum", "Chongqing", "Ishima", "New Tokyo", "Sector-12", "Volhaven"]) {
       expect(chooseJoin([city], []).next).toBeNull();
     }
@@ -256,11 +272,21 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), slow({ joined: { "Sector-12": 0 } })).choice?.augmentation).toBe(
       "Neuralstimulator",
     );
-    // With it installed, only those without one are left: none.
-    const left = slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } });
+    // With it installed, only those without one are left: none, with Daedalus inviting (the count met, #228).
+    const left = slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 }, invitations: ["Daedalus"] });
     expect(chooseFactionWork(player(55), left)).toMatchObject({
       choice: null,
       waitingFor: "an augmentation worth working for at the joined factions",
+    });
+    // Short of Daedalus's count, the hacking way sold out (#228): any counts, the soonest first (1,250 reputation).
+    const short = chooseFactionWork(
+      player(55),
+      slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } }),
+    );
+    expect(short.choice).toMatchObject({
+      faction: "Sector-12",
+      augmentation: "Wired Reflexes",
+      count: { installed: 1, required: 30 },
     });
   });
 
@@ -657,17 +683,24 @@ describe("FactionRule", () => {
     expect(update({ slowData: invited, mediumData: { ...player(55), player: {} } }).join).toBeNull();
   });
 
-  test("an invitation from a faction with enemies is left, said in the view and logged once", () => {
+  test("a city faction not of the brain's group is passed over, said in the view and logged once; its group's joined", () => {
     const { factions, log, update } = rule();
     const invited = slow({ invitations: ["Sector-12"] });
-    expect(update({ slowData: invited }).join).toBeNull();
-    update({ slowData: invited });
-    expect(factions.view().leftToOwner).toEqual([
-      { faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] },
-    ]);
+    const cityGroup = "group B (Chongqing, New Tokyo, Ishima): 5 augmentations that count, against A 4, C 3";
+    const groupB = { cityFactions: ["Chongqing", "New Tokyo", "Ishima"], cityGroup };
+    expect(update({ slowData: invited, ...groupB }).join).toBeNull();
+    update({ slowData: invited, ...groupB });
+    expect(factions.view()).toMatchObject({
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      cityGroup,
+    });
     expect(log).toEqual([
-      "factions: Sector-12's invitation is left to you (joining it bans Chongqing, New Tokyo, Ishima, Volhaven)",
+      "factions: Sector-12's invitation not joined (it would ban Chongqing, New Tokyo, Ishima, Volhaven): " +
+        `${cityGroup} (decision 54)`,
     ]);
+    expect(update({ slowData: slow({ invitations: ["Sector-12", "Chongqing"] }), ...groupB }).join).toEqual(
+      joinIntent("Chongqing"),
+    );
   });
 
   test("work: the choice sent, stored and logged once; another target stored again; the same work type sent", () => {
@@ -782,7 +815,7 @@ describe("FactionRule", () => {
     expect(log.filter((line) => line.includes("STALLED"))).toEqual([]);
   });
 
-  test("an invitation left to the owner is logged again after a reset (#203 review): it comes again", () => {
+  test("a city faction's invitation passed over is logged again after a reset (#203 review): it comes again", () => {
     const { log, update } = rule();
     update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 1 }) });
     update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 1 }) });
@@ -877,7 +910,7 @@ describe("FactionWorkTimeline", () => {
     expect(timeline.choiceAt(35)).toBeNull();
   });
 
-  test("joins from the medium snapshots; invitations left to the owner from the slow ones", () => {
+  test("joins from the medium snapshots; the city factions' invitations from the slow ones", () => {
     const timeline = new FactionWorkTimeline([], STARTED);
     timeline.addMedium(0, player(55, { factions: ["Sector-12"] }));
     timeline.addMedium(10_000, player(55, { factions: ["Sector-12", "CyberSec"] }));
@@ -887,7 +920,14 @@ describe("FactionWorkTimeline", () => {
     ]);
     timeline.addSlow(60_000, slow({ invitations: ["Aevum", "NiteSec"] }));
     timeline.addSlow(120_000, slow({ invitations: ["Aevum"] }));
-    expect([...timeline.leftToOwner]).toEqual([["Aevum", 60_000]]);
+    expect([...timeline.passedOver]).toEqual([["Aevum", 60_000]]);
+    // Group A chosen (#228): Aevum's is its own, not passed over; Volhaven's is.
+    const chosenA = new FactionWorkTimeline(
+      [{ atMs: 0, kind: "cityGroupChosen", detail: { group: "A", factions: ["Sector-12", "Aevum"] } }],
+      STARTED,
+    );
+    chosenA.addSlow(60_000, slow({ invitations: ["Aevum", "Volhaven"] }));
+    expect([...chosenA.passedOver]).toEqual([["Volhaven", 60_000]]);
   });
 
   test("reputation gained while the brain's work is on it; on track, no stall", () => {
@@ -964,5 +1004,65 @@ describe("FactionWorkTimeline", () => {
     // Over the window from minute 3, half of 0.5/s is 150.
     timeline.addSlow(13 * 60_000, slow({ joined: { CyberSec: 3 + 150 } }));
     expect(timeline.stalls).toEqual([expect.objectContaining({ fromMs: 0, toMs: 12 * 60_000, ongoing: false })]);
+  });
+});
+
+describe("short of Daedalus's count (#228)", () => {
+  const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
+  /** Run #2's 23 (2026-11-04): the four hacker factions' set with a hacking value, and NeuroFlux Governor. */
+  const RUN_2: Record<string, number> = {
+    ...Object.fromEntries(
+      [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))]
+        .filter((name) => isWorthInstalling(name))
+        .map((name) => [name, 1]),
+    ),
+    "NeuroFlux Governor": 124,
+  };
+  const joined = (blackHand = 0) => ({ CyberSec: 0, NiteSec: 0, "The Black Hand": blackHand, BitRunners: 0 });
+
+  test("the hacking way sold out: no-value augmentations are candidates, and the work says it's for the count", () => {
+    const state = slow({ joined: joined(), installed: RUN_2 });
+    const resetInfo = resetInfoOf(state) as NonNullable<ReturnType<typeof resetInfoOf>>;
+    const factionState = factionStateOf(state) as NonNullable<ReturnType<typeof factionStateOf>>;
+    expect(workCandidates(factionState, resetInfo, 6_000)).toEqual([]);
+    expect(workCandidates(factionState, resetInfo, 6_000, true, true).map((each) => each.augmentation)).toEqual([
+      "Magnetism Amplifier",
+      "Neural Wit Amplifier",
+    ]);
+    const plan = chooseFactionWork(player(6_000), state);
+    expect(plan.choice).toMatchObject({
+      faction: "BitRunners",
+      augmentation: "Neural Wit Amplifier",
+      reputationNeeded: 5_000,
+      count: { installed: 23, required: 30 },
+    });
+    expect(describeChoice(plan.choice as FactionWorkChoice)).toMatch(
+      /^hacking for BitRunners, for Neural Wit Amplifier \(reputation 0 of 5,000, .*\), for Daedalus's count: 23 of 30 augmentations installed$/,
+    );
+  });
+
+  test("the soonest reached first: The Black Hand 1,000 from Magnetism Amplifier beats Neural Wit's 5,000", () => {
+    const plan = chooseFactionWork(player(6_000), slow({ joined: joined(14_000), installed: RUN_2 }));
+    expect(plan.choice).toMatchObject({ faction: "The Black Hand", augmentation: "Magnetism Amplifier" });
+  });
+
+  test("Daedalus inviting, or the count met: not short, and nothing worth working for", () => {
+    const invited = chooseFactionWork(
+      player(6_000),
+      slow({ joined: joined(), installed: RUN_2, invitations: ["Daedalus"] }),
+    );
+    expect(invited).toMatchObject({ choice: null });
+    // Not short, a choice carries no count.
+    const fresh = chooseFactionWork(player(55), slow({ joined: { CyberSec: 0 } }));
+    expect(fresh.choice?.count).toBeUndefined();
+  });
+
+  test("the run report reads the count back from the stored choice", () => {
+    const plan = chooseFactionWork(player(6_000), slow({ joined: joined(), installed: RUN_2 }));
+    const timeline = new FactionWorkTimeline(
+      [{ atMs: 1, kind: FACTION_WORK_CHOSEN_EVENT_KIND, detail: plan.choice }],
+      "brainStarted",
+    );
+    expect(timeline.records[0]).toMatchObject({ kind: "chosen", choice: { count: { installed: 23, required: 30 } } });
   });
 });

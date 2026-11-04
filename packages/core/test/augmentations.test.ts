@@ -24,12 +24,17 @@ import {
 import { BITNODE_COUNT } from "../src/bitnodes.ts";
 import { FACTIONS } from "../src/faction-data.ts";
 import {
+  CITY_FACTION_GROUPS,
   DAEDALUS,
   daedalusAugmentationsRequired,
   daedalusMissing,
   daedalusRequirements,
   FACTION_ENEMIES,
   FACTION_NAMES,
+  TIAN_DI_HUI,
+  TIAN_DI_HUI_CITIES,
+  TIAN_DI_HUI_HACKING,
+  TIAN_DI_HUI_MONEY,
 } from "../src/factions.ts";
 import { PINNED_GAME } from "../src/game-version.ts";
 
@@ -335,5 +340,36 @@ describe("the BitNode's multipliers, from resetInfo", () => {
       daedalusMissing({ augmentations: 30, money: 100e9, skills: { ...combat, agility: 1499 } }, required),
     ).toHaveLength(1);
     expect(daedalusRequirements(15, {}).augmentations).toBe(20);
+  });
+
+  test("the city factions' groups (#228, decision 54): the six, none an enemy within a group, all across groups", () => {
+    const all = CITY_FACTION_GROUPS.flatMap((group) => group.factions);
+    expect([...all].sort()).toEqual(Object.keys(FACTION_ENEMIES).sort());
+    for (const group of CITY_FACTION_GROUPS) {
+      for (const faction of group.factions) {
+        const enemies = FACTION_ENEMIES[faction] ?? [];
+        for (const other of all) {
+          if (other === faction) continue;
+          // An enemy exactly when in another group, both ways: the game's own lists (core's FACTIONS holds them equal).
+          expect(enemies.includes(other)).toBe(!group.factions.includes(other));
+          expect(FACTIONS[faction]?.enemies.includes(other)).toBe(!group.factions.includes(other));
+        }
+      }
+    }
+    // In the game's order of their first faction.
+    const first = CITY_FACTION_GROUPS.map((group) => Math.min(...group.factions.map((f) => FACTION_NAMES.indexOf(f))));
+    expect(first).toEqual([...first].sort((x, y) => x - y));
+  });
+
+  test("Tian Di Hui's invitation (#228): in Chongqing, New Tokyo or Ishima, hacking 50, $1m", () => {
+    expect(FACTIONS[TIAN_DI_HUI]?.inviteRequirements).toEqual([
+      { type: "someCondition", conditions: TIAN_DI_HUI_CITIES.map((city) => ({ type: "city", city })) },
+      { type: "skills", skills: { hacking: TIAN_DI_HUI_HACKING } },
+      { type: "money", money: TIAN_DI_HUI_MONEY },
+    ]);
+    expect(FACTION_ENEMIES[TIAN_DI_HUI]).toBeUndefined();
+    expect(gameSource("Faction/FactionInfo.tsx")).toContain(
+      'locatedInSomeCity(CityName.Chongqing, CityName.NewTokyo, CityName.Ishima),\n      haveSkill("hacking", 50),\n      haveMoney(1e6),',
+    );
   });
 });

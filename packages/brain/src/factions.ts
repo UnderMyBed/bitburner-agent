@@ -3,9 +3,10 @@
 // reputation A6 buys with. Choices computed from the game's formulas (owner decision 46). Also what the dashboard's
 // `factionWorkStalled` alert and the run report (#185) read of them.
 // - Joining: the `joinFaction` intent (#147), one at a time, in the order invited. A faction with enemies (the six
-//   city factions, `Faction/FactionInfo.tsx:498-552`) bans them when joined (`Faction/FactionHelpers.tsx:35-52`): left
-//   to the owner, conservatively. Of the augmentations with a hacking value, only PCMatrix (Aevum) and Neuregen Gene
-//   Modification (Chongqing) are sold by no faction without enemies.
+//   city factions, `Faction/FactionInfo.tsx:495-555`) bans them when joined (`Faction/FactionHelpers.tsx:45-47`),
+//   until the next install (`Faction/Faction.ts:77-85`): the brain joins those of the city group it chose this cycle
+//   that sell something of value (owner decision 54, ./invitations.ts), and never another group's. The irreversible
+//   gate's enemy guard stays under it (./irreversible-gate.ts).
 // - Working: an augmentation's hacking value is core's `hackingValue`. Of those a joined faction sells, not installed,
 //   queued or already within a joined seller's reputation, the one with the most value per second of work to reach its
 //   reputation, by the game's rate (core's `factionReputationPerSecond`) for the faction's best work type. NeuroFlux
@@ -19,6 +20,11 @@
 //   donations are unlocked isn't worked, nor an augmentation one sells: A6 buys its reputation. The Red Pill's work
 //   stops so too (`redPillTarget`): A6's "Daedalus donations", unless 90% of it is earned. All this only with the
 //   Augmentations switch on: off, no install or donation follows, so the work is to the augmentation's reputation.
+// - Short of Daedalus's count (#228, core's `daedalusCountOf`): every augmentation but NeuroFlux Governor and The Red
+//   Pill is a candidate (core's `isWorthInstalling`), each adding one to the count. Those with a hacking value still go
+//   first, by value a second as above (they count too, and the early game stays #203's: the brain's reading of #228);
+//   with none left to work for, the soonest reached of the rest, the work saying it's for the count.
+//   Tian Di Hui's and the city factions' invitations are ./invitations.ts's travel.
 // - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
   type AugmentationPurchaseState,
@@ -26,6 +32,9 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  CITY_FACTION_GROUPS,
+  type DaedalusCount,
+  daedalusCountOf,
   FACTION_ENEMIES,
   FACTION_NAMES,
   FACTIONS,
@@ -38,6 +47,7 @@ import {
   hackingValue,
   type Intent,
   intentId,
+  isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
   missingPrerequisites,
@@ -48,6 +58,7 @@ import {
   THE_RED_PILL,
   type WorkingPerson,
 } from "@bitburner-agent/core";
+import { CITY_GROUP_CHOSEN_EVENT_KIND, type InvitationView } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 import { workFocus } from "./work.ts";
@@ -123,8 +134,8 @@ export const FACTION_WORK_STOPPED_EVENT_KIND = "factionWorkStopped";
 
 // --- Joining ----------------------------------------------------------------------------------------------------------
 
-/** An invitation the brain leaves to the owner: its faction, and the factions joining it would ban. */
-export interface LeftInvitation {
+/** A city faction's invitation the brain doesn't join (#228): not of its city group, and those joining it would ban. */
+export interface PassedOver {
   faction: string;
   bans: string[];
 }
@@ -132,20 +143,26 @@ export interface LeftInvitation {
 export interface JoinPlan {
   /** The faction to join now, or null. */
   next: string | null;
-  /** The invitations from factions with enemies, in the order invited. */
-  leftToOwner: LeftInvitation[];
+  /** The city factions' invitations not of the brain's city group, in the order invited. */
+  passedOver: PassedOver[];
 }
 
 /**
- * The invitations not yet joined, in the order invited: the first from a faction without enemies is joined; those
- * from factions with enemies are left to the owner. A name that isn't one of the game's factions is passed over.
+ * The invitations not yet joined, in the order invited: the first from a faction without enemies, or from a city
+ * faction in `cityFactions` (the city group the brain chose, #228's), is joined; the other city factions' are passed
+ * over. A name that isn't one of the game's factions is passed over too.
  */
-export function chooseJoin(invitations: readonly string[], joined: readonly string[]): JoinPlan {
+export function chooseJoin(
+  invitations: readonly string[],
+  joined: readonly string[],
+  cityFactions: readonly string[] = [],
+): JoinPlan {
   const open = invitations.filter((faction) => FACTION_NAMES.includes(faction) && !joined.includes(faction));
+  const joins = (faction: string) => FACTION_ENEMIES[faction] === undefined || cityFactions.includes(faction);
   return {
-    next: open.find((faction) => FACTION_ENEMIES[faction] === undefined) ?? null,
-    leftToOwner: open
-      .filter((faction) => FACTION_ENEMIES[faction] !== undefined)
+    next: open.find(joins) ?? null,
+    passedOver: open
+      .filter((faction) => !joins(faction))
       .map((faction) => ({ faction, bans: [...(FACTION_ENEMIES[faction] ?? [])] })),
   };
 }
@@ -179,6 +196,8 @@ export interface FactionWorkChoice {
   target?: WorkTarget["reason"];
   augmentationReputation?: number;
   favor?: number;
+  /** Short of Daedalus's count (#228): the work is for the count, installed of required. Absent otherwise. */
+  count?: Pick<DaedalusCount, "installed" | "required">;
 }
 
 /** The reputation worked toward at a faction for an augmentation (#225), and why. */
@@ -316,13 +335,25 @@ export function chooseFactionWork(
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
     const conditions = { ...workConditionsOf(resetInfo, slowData, shareBonus), donations, ...(keep ? { keep } : {}) };
+    const count = countOf(state, resetInfo);
     const choice =
-      redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions);
+      redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions, count);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
   } catch (error) {
     return waiting(`the snapshots as core knows the game (${(error as Error).message})`, false);
   }
+}
+
+/** Daedalus's count (#228) from the faction state and the reset info: core's `daedalusCountOf`. */
+export function countOf(state: FactionState, { currentNode, ownedAugs, ownedSF }: WorkResetInfo): DaedalusCount {
+  return daedalusCountOf({
+    currentNode,
+    ownedSF,
+    installed: ownedAugs,
+    joined: state.joined,
+    invitations: state.invitations,
+  });
 }
 
 /** What a faction work rate depends on beyond the person and the faction: the run's figures and the focus. */
@@ -413,12 +444,14 @@ export interface WorkCandidate {
  * reached at any joined faction that sells it (one reached is A6's to buy). Throws for what core doesn't know.
  * Donations (#225): not one a joined faction with donations unlocked sells (A6 buys its reputation), nor at such a
  * faction; and each at its faction's `workTarget`, not one already reached there.
+ * `short` of Daedalus's count (#228): every augmentation core's `isWorthInstalling` counts then, whatever its value.
  */
 export function workCandidates(
   state: FactionState,
   { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
   hackingLevel: number,
   donations = true,
+  short = false,
 ): WorkCandidate[] {
   const { FavorToDonateToFaction } = augmentationBitNodeMultipliers(currentNode, ownedSF);
   // No gang is modelled (none in BN1): the gang's faction would take none.
@@ -448,7 +481,7 @@ export function workCandidates(
     for (const augmentation of shop) {
       if (augmentation === NEUROFLUX_GOVERNOR || owned(augmentation)) continue;
       const value = hackingValue(augmentation, hackingLevel);
-      if (!(value > 0)) continue;
+      if (!(short ? isWorthInstalling(augmentation, true) : value > 0)) continue;
       const missing = missingPrerequisites(augmentation, purchaseState);
       if (!missing.every((prerequisite) => soldByJoined(prerequisite).length > 0)) continue;
       const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
@@ -522,20 +555,30 @@ export function redPillWork(
   return best;
 }
 
-/** `chooseFactionWork`'s choice from figures already checked; null for none. */
+/**
+ * `chooseFactionWork`'s choice from figures already checked; null for none. Short of Daedalus's count (#228), every
+ * candidate adds one to it: those with a hacking value first, by value a second; with none, the soonest reached, for
+ * the count.
+ */
 function bestCandidate(
   person: WorkingPerson,
   state: FactionState,
   resetInfo: WorkResetInfo,
   conditions: WorkConditions,
+  count: DaedalusCount,
 ): FactionWorkChoice | null {
   const rates = new Map(state.joined.map((faction) => [faction.name, bestWorkRate(person, faction, conditions)]));
   let best: (FactionWorkChoice & { score: number }) | null = null;
-  for (const candidate of workCandidates(state, resetInfo, person.skills.hacking, conditions.donations)) {
+  const all = workCandidates(state, resetInfo, person.skills.hacking, conditions.donations, count.short).filter(
+    (candidate) => rates.get(candidate.faction),
+  );
+  const valued = all.filter((candidate) => candidate.value > 0);
+  const forCount = valued.length === 0 && count.short;
+  for (const candidate of forCount ? all : valued) {
     const rate = rates.get(candidate.faction);
     if (!rate) continue;
     const etaSeconds = (candidate.target.reputation - candidate.reputation) / rate.perSecond;
-    const score = candidate.value / etaSeconds;
+    const score = forCount ? -etaSeconds : candidate.value / etaSeconds;
     const better =
       best === null ||
       score > best.score ||
@@ -552,6 +595,7 @@ function bestCandidate(
         target: candidate.target.reason,
         augmentationReputation: candidate.reputationNeeded,
         favor: candidate.favor,
+        ...(forCount ? { count: { installed: count.installed, required: count.required } } : {}),
         score,
       };
     }
@@ -571,7 +615,12 @@ export interface FactionsView {
   waiting: boolean;
   /** The faction being joined, or null. */
   joining: string | null;
-  leftToOwner: LeftInvitation[];
+  /** The city factions' invitations not joined, not of the city group the brain chose (#228). */
+  passedOver: PassedOver[];
+  /** The city group the brain chose this cycle, in words (#228, ./invitations.ts), or null before it's known. */
+  cityGroup: string | null;
+  /** The travel for invitations (#228 review): the travel, the hold, or why it waits; the controller's, absent here. */
+  invitations?: InvitationView;
   /** The rule's choice, or null, and whether it's the work sent (not with the owner's work, or the switch off). */
   choice: FactionWorkChoice | null;
   sent: boolean;
@@ -611,6 +660,10 @@ export interface FactionInputs {
   enabled: boolean;
   /** The share bonus running (#224): the work's rate counts it. 1 when absent. */
   shareBonus?: number;
+  /** The city factions to join (#228): the chosen city group's that sell something of value; none when absent. */
+  cityFactions?: readonly string[];
+  /** The city group chosen, in words (#228), or null. */
+  cityGroup?: string | null;
 }
 
 const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
@@ -639,7 +692,10 @@ export function describeChoice(choice: FactionWorkChoice): string {
   return (
     `${choice.workType} for ${choice.faction}, for ${choice.augmentation} (reputation ` +
     `${formatReputation(choice.reputation)} of ${formatReputation(choice.reputationNeeded)}${target}, ` +
-    `${choice.reputationPerSecond.toFixed(2)}/s: about ${describeEta(choice.etaSeconds)})`
+    `${choice.reputationPerSecond.toFixed(2)}/s: about ${describeEta(choice.etaSeconds)})` +
+    (choice.count === undefined
+      ? ""
+      : `, for Daedalus's count: ${choice.count.installed} of ${choice.count.required} augmentations installed`)
   );
 }
 
@@ -659,10 +715,10 @@ export class FactionRule {
   readonly #emit: (event: FactionWorkEvent) => void;
   /** The faction asked to join, until a snapshot shows it joined, or its invitation is gone; or null. */
   #joining: string | null = null;
-  /** The invitations left to the owner already logged, since the game's last reset. */
-  readonly #leftLogged = new Set<string>();
+  /** The city factions' invitations passed over already logged, since the game's last reset. */
+  readonly #passedOverLogged = new Set<string>();
   /** The game's `lastAugReset` when they were logged: another (an install) logs them afresh, as they come again. */
-  #leftLoggedResetAt: number | null = null;
+  #passedOverResetAt: number | null = null;
   /** The last choice stored (faction, work type, target), "stopped", or null before any. */
   #lastStored: string | null = null;
   /** The work sent at the last update, kept against the share bonus's swings (#226's review), or null. */
@@ -681,7 +737,8 @@ export class FactionRule {
     enabled: true,
     waiting: true,
     joining: null,
-    leftToOwner: [],
+    passedOver: [],
+    cityGroup: null,
     choice: null,
     sent: false,
     waitingFor: null,
@@ -717,17 +774,17 @@ export class FactionRule {
     return { join, work };
   }
 
-  #join({ mediumData, slowData }: FactionInputs): Intent | null {
+  #join({ mediumData, slowData, cityFactions = [], cityGroup = null }: FactionInputs): Intent | null {
     const state = slowData === null ? null : (factionReadingOf(slowData)?.state ?? null);
     const joined = (mediumData?.player as { factions?: unknown } | undefined)?.factions;
     if (state === null || !Array.isArray(joined)) {
-      this.#view = { ...this.#view, joining: null, leftToOwner: [] };
+      this.#view = { ...this.#view, joining: null, passedOver: [], cityGroup };
       return null;
     }
     const resetAt = (slowData?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
-    if (typeof resetAt === "number" && resetAt !== this.#leftLoggedResetAt) {
-      this.#leftLogged.clear();
-      this.#leftLoggedResetAt = resetAt;
+    if (typeof resetAt === "number" && resetAt !== this.#passedOverResetAt) {
+      this.#passedOverLogged.clear();
+      this.#passedOverResetAt = resetAt;
     }
     const joinedNames = [
       ...joined.filter((name): name is string => typeof name === "string"),
@@ -741,11 +798,14 @@ export class FactionRule {
       this.#log(`factions: no longer joining ${this.#joining}: its invitation is gone`);
       this.#joining = null;
     }
-    const plan = chooseJoin(state.invitations, joinedNames);
-    for (const { faction, bans } of plan.leftToOwner) {
-      if (this.#leftLogged.has(faction)) continue;
-      this.#leftLogged.add(faction);
-      this.#log(`factions: ${faction}'s invitation is left to you (joining it bans ${bans.join(", ")})`);
+    const plan = chooseJoin(state.invitations, joinedNames, cityFactions);
+    for (const { faction, bans } of plan.passedOver) {
+      if (this.#passedOverLogged.has(faction)) continue;
+      this.#passedOverLogged.add(faction);
+      this.#log(
+        `factions: ${faction}'s invitation not joined (it would ban ${bans.join(", ")}): ` +
+          `${cityGroup ?? "no city group chosen"} (decision 54)`,
+      );
     }
     // Asked for until a snapshot shows it joined: the invitations are in the order received, so it stays the first.
     const next = plan.next;
@@ -753,7 +813,7 @@ export class FactionRule {
       this.#joining = next;
       this.#log(`factions: joining ${next} (its invitation)`);
     }
-    this.#view = { ...this.#view, joining: next, leftToOwner: plan.leftToOwner };
+    this.#view = { ...this.#view, joining: next, passedOver: plan.passedOver, cityGroup };
     return next === null ? null : joinIntent(next);
   }
 
@@ -873,6 +933,9 @@ function targetFieldsOf(detail: Partial<FactionWorkChoice>): Partial<FactionWork
     ...(detail.target === "donations" || detail.target === "augmentation" ? { target: detail.target } : {}),
     ...(isFiniteNumber(detail.augmentationReputation) ? { augmentationReputation: detail.augmentationReputation } : {}),
     ...(isFiniteNumber(detail.favor) ? { favor: detail.favor } : {}),
+    ...(isFiniteNumber(detail.count?.installed) && isFiniteNumber(detail.count?.required)
+      ? { count: { installed: detail.count.installed, required: detail.count.required } }
+      : {}),
   };
 }
 
@@ -891,8 +954,8 @@ const isChoice = (detail: unknown): detail is FactionWorkChoice => {
 
 /**
  * The brain's joins and faction work over a run, for the run report: the stored choices and ends (a `brainStarted`
- * ends one too, as the brain that made it is gone), the factions the medium snapshots show joined, the invitations
- * left to the owner, and, from the slow snapshots, each faction's reputation gained while the brain's work was on it,
+ * ends one too, as the brain that made it is gone), the factions the medium snapshots show joined, the city factions'
+ * invitations (#228), and, from the slow snapshots, each faction's reputation gained while the brain's work was on it,
  * and the stretches in which it rose under half the work's rate over the last `FACTION_WORK_STALLED_AFTER_MS`
  * (`underRateSince`, with the rate stored at the choice: the skills only grow, so the work earns at least that).
  */
@@ -901,8 +964,13 @@ export class FactionWorkTimeline {
   readonly records: FactionWorkRecord[] = [];
   /** Each faction the medium snapshots showed joined, and when first: null for those joined at the first one. */
   readonly joined = new Map<string, number | null>();
-  /** Each invitation from a faction with enemies the slow snapshots showed, not joined, and when first. */
-  readonly leftToOwner = new Map<string, number>();
+  /**
+   * Each city faction's invitation the slow snapshots showed (#228) that the brain passed over: not joined then, nor of
+   * the city group it had chosen by then (`cityGroupChosen`); and when first.
+   */
+  readonly passedOver = new Map<string, number>();
+  /** The city group chosen, as stored (#228), in time order. */
+  readonly #cityGroups: { atMs: number; group: string | null }[];
   /** Each faction's reputation gained while the brain's work was on it: its rises, summed (skipped readings aside). */
   readonly gained = new Map<string, number>();
   /** Each reading of the worked faction's reputation, skipped ones aside (#224: the share's gain is judged on them). */
@@ -944,6 +1012,12 @@ export class FactionWorkTimeline {
       }
     }
     this.#ends = events.filter((event) => event.kind === brainStartedKind).map((event) => event.atMs);
+    this.#cityGroups = events
+      .filter((event) => event.kind === CITY_GROUP_CHOSEN_EVENT_KIND)
+      .map(({ atMs, detail }) => {
+        const group = (detail as { group?: unknown } | null)?.group;
+        return { atMs, group: typeof group === "string" ? group : null };
+      });
   }
 
   /** The choice in force at `atMs`, or null: none yet, or ended since (stopped, or the brain started again). */
@@ -965,14 +1039,16 @@ export class FactionWorkTimeline {
     this.#firstMedium = false;
   }
 
-  /** Slow snapshots, in time order: the invitations left, and the reputation under the brain's work. */
+  /** Slow snapshots, in time order: the city invitations passed over, and the reputation under the brain's work. */
   addSlow(atMs: number, data: SlowSnapshotData): void {
     const reading = factionReadingOf(data);
     const state = reading?.state ?? null;
     if (reading === null || state === null) return;
     const joinedNow = state.joined.map((each) => each.name);
-    for (const { faction } of chooseJoin(state.invitations, joinedNow).leftToOwner) {
-      if (!this.leftToOwner.has(faction)) this.leftToOwner.set(faction, atMs);
+    const chosen = this.#cityGroups.findLast((each) => each.atMs <= atMs)?.group ?? null;
+    const ofChosen = CITY_FACTION_GROUPS.find((group) => group.name === chosen)?.factions ?? [];
+    for (const { faction } of chooseJoin(state.invitations, joinedNow, ofChosen).passedOver) {
+      if (!this.passedOver.has(faction)) this.passedOver.set(faction, atMs);
     }
     // A skipped reading (#197) is the last one again: neither a gain nor a reading of the stall's window.
     if (factionReadingKind(reading) === "skipped") return;

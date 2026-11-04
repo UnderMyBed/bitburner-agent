@@ -1175,7 +1175,7 @@ describe("factions and their work (#203)", () => {
     expect(text).toContain(
       "  factions (joins, and the brain's faction work):\n" +
         `    joined: CyberSec by ${at(30 * SECOND)}\n` +
-        `    invitations left to you (factions with enemies): Sector-12 (first seen ${at(MINUTE)})\n` +
+        `    city factions' invitations passed over (not of the city group the brain chose, decision 54): Sector-12 (first seen ${at(MINUTE)})\n` +
         "    the brain's faction work, as chosen:\n" +
         `      ${at(MINUTE)}  hacking for CyberSec, for Neurotrainer I (reputation 2 of 1,000, 0.50/s: about 33 min)\n` +
         `      ${at(10 * MINUTE + 1)}  hacking for CyberSec, for BitWire (reputation 1,000 of 1,000, 0.50/s: about 1.5 h)\n` +
@@ -1196,7 +1196,7 @@ describe("factions and their work (#203)", () => {
     snapshot("medium", 10 * SECOND, mediumData({ money: 1 }));
     const { text } = report();
     expect(text).toContain(
-      "    joined: none\n    invitations left to you (factions with enemies): none\n" +
+      "    joined: none\n    city factions' invitations passed over (not of the city group the brain chose, decision 54): none\n" +
         "    the brain's faction work, as chosen:\n      none\n    reputation gained with the brain's work on it: none",
     );
   });
@@ -1933,13 +1933,16 @@ describe("the World Daemon (#215)", () => {
     expect(text).toContain(
       [
         "  the path to the World Daemon (as the window's last snapshots show it):",
-        "    Daedalus: not joined; 1 of 30 augmentations installed; needs 1 of 30 augmentations installed, " +
-          "$1,201,000 of $100,000,000,000, hacking 12 of 2,500 (or every combat skill 1,500)",
+        // The count said once, short of it, with what's within reach and where (#228).
+        "    Daedalus: not joined; 1 of 30 augmentations installed, 24 more within reach (CyberSec 5, NiteSec 7, The " +
+          "Black Hand 6, BitRunners 6); needs $1,201,000 of $100,000,000,000, hacking 12 of 2,500 (or every combat " +
+          "skill 1,500)",
         "    The Red Pill: Daedalus not joined",
       ].join("\n"),
     );
     expect(text).toContain(
-      "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5):\n    none",
+      "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5; or an install while " +
+        "short of Daedalus's count that added none to it, #228):\n    none",
     );
     expect(failures.filter((failure) => failure.startsWith("world daemon"))).toEqual([]);
     // In sections 3 and 4, not section 1's timeline.
