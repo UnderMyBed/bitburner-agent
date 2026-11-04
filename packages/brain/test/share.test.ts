@@ -140,7 +140,7 @@ describe("sharingConfigOf", () => {
 describe("the bonus counted", () => {
   const sharing = (changes: Partial<SharingHealth>): BatcherHealth => ({
     ...newBatcherHealth("n00dles", "r", 0),
-    sharing: { wanted: true, threads: 1_000, ramGb: 4_000, bonus: 1.28, roomGb: 0, ...changes },
+    sharing: { wanted: true, threads: 1_000, ramGb: 4_000, hostsRamGb: 4_000, bonus: 1.28, roomGb: 0, ...changes },
   });
 
   test("the batcher's, while its threads run; 1 with none, without health, or with a report that isn't one", () => {
@@ -158,6 +158,13 @@ describe("the bonus counted", () => {
     expect(shareBonusOf({ ...sharing({}), atMs: 100_000 }, 101_000, true)).toBe(1);
     expect(sharingOf({ sharing: { wanted: "yes", threads: 1, ramGb: 4, bonus: 1, roomGb: 0 } })).toBeNull();
     expect(sharingOf({ sharing: { wanted: true, threads: -1, ramGb: 4, bonus: 1, roomGb: 0 } })).toBeNull();
+    // Its RAM on the batches' hosts (#230): checked; absent (a batcher before #230), all of its RAM counts.
+    const where = { wanted: true, threads: 2, ramGb: 8, bonus: 1, roomGb: 0 };
+    expect(sharingOf({ sharing: { ...where, hostsRamGb: 4 } })?.hostsRamGb).toBe(4);
+    expect(sharingOf({ sharing: where })?.hostsRamGb).toBe(8);
+    expect(sharingOf({ sharing: { ...where, hostsRamGb: -4 } })).toBeNull();
+    expect(sharingOf({ sharing: { ...where, hostsRamGb: Number.NaN } })).toBeNull();
+    expect(sharingOf({ sharing: { ...where, hostsRamGb: "4" } })).toBeNull();
   });
 
   test("the faction rule's rate and ETA count it: hacking work's x the bonus", () => {
@@ -278,7 +285,7 @@ test("the controller asks the batcher to share while faction work goes on, with 
   const health = {
     ...newBatcherHealth("n00dles", "r", 0),
     state: "batching" as const,
-    sharing: { wanted: true, threads: 8, ramGb: 32, bonus: 1 + Math.log(9) / 25, roomGb: 0 },
+    sharing: { wanted: true, threads: 8, ramGb: 32, hostsRamGb: 32, bonus: 1 + Math.log(9) / 25, roomGb: 0 },
   };
   agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }, health));
   expect(controller.shareView().sharing).toEqual(health.sharing);
@@ -308,10 +315,18 @@ describe("the run report's lines", () => {
   ): Partial<BatcherHealth> => ({
     ...newBatcherHealth("n00dles", "a", 0),
     state: "batching",
-    sharing: sharing === null ? null : { wanted: true, threads: 0, ramGb: 0, bonus: 1, roomGb: 0, ...sharing },
+    sharing:
+      sharing === null ? null : { wanted: true, threads: 0, ramGb: 0, hostsRamGb: 0, bonus: 1, roomGb: 0, ...sharing },
     ...changes,
   });
-  const sharingAt = (threads: number, bonus: number) => ({ threads, ramGb: threads * 4, bonus });
+  /** Share threads on the batches' hosts; `onHomeAt`, on home alone, beside them (#230). */
+  const sharingAt = (threads: number, bonus: number) => ({
+    threads,
+    ramGb: threads * 4,
+    hostsRamGb: threads * 4,
+    bonus,
+  });
+  const onHomeAt = (threads: number, bonus: number) => ({ ...sharingAt(threads, bonus), hostsRamGb: 0 });
 
   test("never asked: one line, no failure", () => {
     const failures: string[] = [];
@@ -350,7 +365,8 @@ describe("the run report's lines", () => {
         "the bonus at most x1.250, x1.250 on average",
       "    the brain's faction work while sharing: +150 reputation in 2 min (1.25/s, the bonus x1.250 on average); " +
         "while not: +120 in 2 min (1.00/s) (x1.25)",
-      "    while sharing: 0 late, 0 lost, 0 short; while not: 0 late, 0 lost, 0 short",
+      "    while sharing on the batches' hosts: 0 late, 0 lost, 0 short; on home alone: 0 late, 0 lost, 0 short; " +
+        "while not: 0 late, 0 lost, 0 short",
       "    idle (asked, the room free, no threads, for 10 minutes): never",
     ]);
     expect(failures).toEqual([]);
@@ -372,10 +388,14 @@ describe("the run report's lines", () => {
     );
     // A late one before sharing doesn't mute it; late and lost are the batcher's out-of-step failure, not this one.
     const line =
-      "share starved batches: 3 batches short of RAM while sharing, the first seen at 2026-01-01T00:00:04.000Z";
+      "share starved batches: 3 batches short of RAM while sharing on the batches' hosts, the first seen at " +
+      "2026-01-01T00:00:04.000Z";
     expect(failures).toEqual([line]);
     expect(lines).toContain(`    ${line}`);
-    expect(lines).toContain("    while sharing: 2 late, 0 lost, 3 short; while not: 1 late, 0 lost, 1 short");
+    expect(lines).toContain(
+      "    while sharing on the batches' hosts: 2 late, 0 lost, 3 short; on home alone: 0 late, 0 lost, 0 short; " +
+        "while not: 1 late, 0 lost, 1 short",
+    );
     // Late or lost while sharing, and short while not: no failure of its own.
     const others: string[] = [];
     sharingLines(
@@ -400,6 +420,48 @@ describe("the run report's lines", () => {
       restarted,
     );
     expect(restarted).toEqual([]);
+  });
+
+  test("short while the share is on home alone (#230): shown apart, not the share's, no failure", () => {
+    // #229's augmentations suite: home shares beside the hosts, whose reserve leaves them none, and batches come up
+    // short of their own (the same batches with sharing off).
+    const failures: string[] = [];
+    const lines = sharingLines(
+      [
+        { atMs: at(0), health: health({ wanted: true, ...onHomeAt(6, 1.08) }) },
+        { atMs: at(2), health: health({ wanted: true, ...onHomeAt(6, 1.08) }, { batchesShort: 1 }) },
+        { atMs: at(4), health: health({ wanted: true, ...onHomeAt(6, 1.08) }, { batchesShort: 2, late: 1 }) },
+        { atMs: at(6), health: health({ wanted: true }, { batchesShort: 3, late: 1 }) },
+        // Then on its hosts too: short beside it is the share's.
+        { atMs: at(8), health: health({ wanted: true, ...sharingAt(8, 1.08) }, { batchesShort: 3, late: 1 }) },
+        { atMs: at(10), health: health({ wanted: true, ...sharingAt(8, 1.08) }, { batchesShort: 4, late: 1 }) },
+      ],
+      [],
+      failures,
+    );
+    expect(lines).toContain(
+      "    while sharing on the batches' hosts: 0 late, 0 lost, 1 short; on home alone: 1 late, 0 lost, 3 short; " +
+        "while not: 0 late, 0 lost, 0 short",
+    );
+    expect(failures).toEqual([
+      "share starved batches: 1 batch short of RAM while sharing on the batches' hosts, the first seen at " +
+        "2026-01-01T00:00:10.000Z",
+    ]);
+    // A batcher before #230 doesn't say where its share is: all of it counts as on its hosts.
+    const older: string[] = [];
+    const { hostsRamGb: _hostsRamGb, ...withoutWhere } = health({ wanted: true, ...onHomeAt(6, 1.08) }).sharing ?? {};
+    sharingLines(
+      [
+        { atMs: at(0), health: { ...health(null), sharing: withoutWhere } },
+        { atMs: at(2), health: { ...health(null, { batchesShort: 1 }), sharing: withoutWhere } },
+      ],
+      [],
+      older,
+    );
+    expect(older).toEqual([
+      "share starved batches: 1 batch short of RAM while sharing on the batches' hosts, the first seen at " +
+        "2026-01-01T00:00:02.000Z",
+    ]);
   });
 
   test("a stopped batcher's last health (#226's review): its sharing not counted once 20 s old, nor its idle", () => {
@@ -470,7 +532,7 @@ test("the controller's faction work counts the bonus the batcher reports: its ra
   const health = (threads: number, bonus: number) => ({
     ...newBatcherHealth("n00dles", "r", 0),
     state: "batching" as const,
-    sharing: { wanted: true, threads, ramGb: threads * 4, bonus, roomGb: 0 },
+    sharing: { wanted: true, threads, ramGb: threads * 4, hostsRamGb: threads * 4, bonus, roomGb: 0 },
   });
   agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }, health(1_000, 1.5)));
   agent.send("medium", medium(100, rooted, ["CyberSec"]));

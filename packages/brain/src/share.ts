@@ -91,13 +91,17 @@ export function singularityInEffect(slowData: SlowSnapshotData | null): boolean 
   return info?.currentNode === 4 || (info?.ownedSF?.["4"] ?? 0) > 0;
 }
 
-/** The batcher health's sharing, or null if it says none or isn't one (the Agent's word: checked as it's read). */
+/**
+ * The batcher health's sharing, or null if it says none or isn't one (the Agent's word: checked as it's read). A
+ * batcher before #230 doesn't say how much is on its hosts: all of its RAM counts, as it could take a batch's.
+ */
 export function sharingOf(health: unknown): SharingHealth | null {
   const sharing = (health as { sharing?: unknown } | null)?.sharing as Record<string, unknown> | null | undefined;
   if (typeof sharing !== "object" || sharing === null || typeof sharing.wanted !== "boolean") return null;
-  const numbers = [sharing.threads, sharing.ramGb, sharing.bonus, sharing.roomGb];
+  const hostsRamGb = sharing.hostsRamGb === undefined ? sharing.ramGb : sharing.hostsRamGb;
+  const numbers = [sharing.threads, sharing.ramGb, hostsRamGb, sharing.bonus, sharing.roomGb];
   if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)) return null;
-  return sharing as unknown as SharingHealth;
+  return { ...(sharing as unknown as SharingHealth), hostsRamGb: hostsRamGb as number };
 }
 
 /**
