@@ -16,6 +16,7 @@ import {
   batchRamGb,
   batchThreads,
   hackSharePerThread,
+  hackThreadsForShare,
   LANDING_LOST_AFTER_MS,
   type LandingRecord,
   leastSpacingMs,
@@ -278,6 +279,41 @@ test("the batcher counts a landing out of order and desyncs, and names a record 
     await simulation.advance(5_000);
   }
   expect((await healthOf(simulation)).problem).toBeNull();
+});
+
+test("a grow short of the hack before it (#234): the money after it looked at, below full counted, then the drift", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // On home, made 1 TB: room for batches of half n00dles' money.
+  await simulation.diagnostics.setHomeRam(1_024);
+  // Figures that say n00dles grows 4 times as fast as it does: each batch's grow has about a quarter of the threads it
+  // needs. Half its money a batch, so the grow needs 8 threads (n00dles' plan, a few %, needs 1, the least there is).
+  const figures = { ...N00DLES, serverGrowth: 4 * N00DLES.serverGrowth };
+  const atFifty = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
+  const hackShare = 0.5;
+  const threads = batchThreads(figures, atFifty, hackThreadsForShare(hackShare, figures, atFifty));
+  const spacingMs = leastSpacingMs(threads, batchHoldsMs(figures, atFifty, threads), batchRamGb([512]));
+  if (spacingMs === null) throw new Error("no batch of half n00dles' money fits 512 GB");
+  const overstated = { ...n00dlesConfig(), figures, hackShare, spacingMs, hosts: ["home"] };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(overstated)] });
+  expect(error).toBeUndefined();
+  let health = await healthOf(simulation);
+  for (let waited = 0; (health.belowFullMoney ?? 0) === 0; waited += 1_000) {
+    expect(waited, "a grow short within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(1_000);
+    health = await healthOf(simulation);
+  }
+  // Looked at after its grow, n00dles was below its maximum: the grow made up for a part of the hack's half only.
+  expect(health.moneyLooks).toBeGreaterThanOrEqual(health.belowFullMoney ?? 0);
+  expect(health.leastMoneyAfterGrow).toBeLessThan(1 - hackShare / 4);
+  // The next hack takes its share of less, and its grow comes up short again: the drift reaches the bounds' floor, a
+  // desync. Told the truth, each grow leaves it full (the batcher simulation's in-step runs: `belowFullMoney` 0).
+  for (let waited = 0; health.desyncs === 0; waited += 5_000) {
+    expect(waited, "the drift a desync within 10 virtual minutes").toBeLessThan(10 * 60_000);
+    await simulation.advance(5_000);
+    health = await healthOf(simulation);
+  }
+  expect(health.outOfBounds).toBeGreaterThan(0);
 });
 
 test("an operation that dies is lost, counted 10 s after its time", async () => {

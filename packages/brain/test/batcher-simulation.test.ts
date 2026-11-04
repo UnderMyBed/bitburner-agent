@@ -97,6 +97,8 @@ test.each(SEEDS)(
     // seed 1, so at most a tenth; a stable plan trims none (packages/ingame's batcher simulation). Asked to share, it
     // never found the room, so none of these trims is the share's: those are batch-operations.test.ts's.
     expect(section).toContain("\n  short of RAM: none\n");
+    // Every batch's grow left n00dles at its maximum money (#234): no drift toward the bounds' floor.
+    expect(section).toMatch(/\n {2}money after each batch's grow \(#234\): full at all [1-9]\d* looks\n/);
     expect(last.batchesTrimmed ?? 0).toBeLessThanOrEqual(last.batchesStarted / 10);
     expect(section).toContain("  sharing spare RAM (#224):\n    asked, and never shared");
     expect(section).toContain("  problems: none");

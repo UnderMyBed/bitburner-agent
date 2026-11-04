@@ -314,12 +314,12 @@ describe("the run report's section", () => {
     const failures: string[] = [];
     const lines = batcherSection(
       [
-        { atMs: at(0), health: health("a", { batchesStarted: 1, leastSlackMs: 180.4 }) },
-        { atMs: at(1), health: health("a", { batchesStarted: 2, leastSlackMs: 116.6 }) },
+        { atMs: at(0), health: health("a", { batchesStarted: 1, leastSlackMs: 180.4, moneyLooks: 3 }) },
+        { atMs: at(1), health: health("a", { batchesStarted: 2, leastSlackMs: 116.6, moneyLooks: 5 }) },
       ],
       failures,
     );
-    expect(lines.slice(-10)).toEqual([
+    expect(lines.slice(-11)).toEqual([
       "  desyncs: none",
       "  late or lost: none",
       // The least over the window (#216's review).
@@ -327,6 +327,8 @@ describe("the run report's section", () => {
       // Never short, nor trimmed (#232).
       "  short of RAM: none",
       "  trimmed to the hosts' RAM (#232): none",
+      // Each grow left the target at its maximum (#234): 2 looks in the window.
+      "  money after each batch's grow (#234): full at all 2 looks",
       "  problems: none",
       "  sent but not running (3 fast snapshots in a row or more):",
       "    none",
@@ -371,6 +373,41 @@ describe("the run report's section", () => {
     expect(lines).toContain(`  ${line}`);
     expect(failures).toContainEqual(expect.stringMatching(/^share starved batches: 2 batches short of RAM /));
     expect(failures).toHaveLength(2);
+  });
+
+  test("money after each batch's grow (#234): below full shown, with the least; none looked at; an older batcher's", () => {
+    const failures: string[] = [];
+    const below = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { moneyLooks: 10, belowFullMoney: 1, leastMoneyAfterGrow: 0.5 }) },
+        { atMs: at(1), health: health("a", { moneyLooks: 30, belowFullMoney: 3, leastMoneyAfterGrow: 0.97 }) },
+        // Restarted, counted from 0: its least is its own.
+        { atMs: at(2), health: health("b", { moneyLooks: 10, belowFullMoney: 1, leastMoneyAfterGrow: 0.981 }) },
+        // A run that found it full has a least of 1: not the least of those below.
+        { atMs: at(3), health: health("c", { moneyLooks: 10, leastMoneyAfterGrow: 1 }) },
+      ],
+      failures,
+    );
+    // Run a counts from the window's first snapshot: 20 looks, 2 below; its least then is 97%.
+    expect(below).toContain(
+      "  money after each batch's grow (#234): below full after 3 of 40 looks (the least 97.0% of the maximum): a " +
+        "grow short of the hack before it, so the batches drift toward the bounds' floor",
+    );
+    // A line, not a failure: a drift that reaches the floor is a desync, which fails the run.
+    expect(failures).toEqual([]);
+    expect(batcherSection([{ atMs: at(0), health: health("a", {}) }])).toContain(
+      "  money after each batch's grow (#234): not looked at (no grow landed in the window)",
+    );
+    // An older batcher, which doesn't look: as none.
+    const older = {
+      ...health("a", {}),
+      moneyLooks: undefined,
+      belowFullMoney: undefined,
+      leastMoneyAfterGrow: undefined,
+    };
+    expect(batcherSection([{ atMs: at(0), health: older }])).toContain(
+      "  money after each batch's grow (#234): not looked at (no grow landed in the window)",
+    );
   });
 
   test("sent but not running for 3 fast snapshots in a row or more: each stretch a failure; 2 aren't (#211)", () => {
