@@ -93,6 +93,8 @@ test.each(SEEDS)(
     // In step throughout: the report fails nothing, section 6 included.
     expect(report.failures).toEqual([]);
     expect(section).toContain("  desyncs: none\n  late or lost: none");
+    // Every batch's grow left the target at its maximum money (#234).
+    expect(section).toMatch(/\n {2}money after each batch's grow \(#234\): full at all [1-9]\d* looks\n/);
     expect(by).toMatch(/^the batcher, /);
     expect(batcher.score).toBeGreaterThanOrEqual(LEAST_SCORE);
     expect(batcher.score).toBeGreaterThanOrEqual(LEAST_TIMES_THE_LOOP * loop.score);

@@ -152,6 +152,9 @@ test("the batcher on the real page, started as the Agent starts it: prepares n00
     expect(last?.hacksLanded).toBeGreaterThan(5);
     // On real script starts: nothing late, lost or out of order, and no desync.
     expect(last).toMatchObject({ outOfOrder: 0, late: 0, lost: 0, outOfBounds: 0, desyncs: 0, batchesShort: 0 });
+    // On the real page's timers too, each grow's money is looked at once its parts have landed, and is full (#234).
+    expect(last?.moneyLooks).toBeGreaterThan(0);
+    expect(last).toMatchObject({ moneyLooksBelowFull: 0 });
     // Every operation was called with time to spare: the start's lag stayed within the lead.
     expect(last?.leastSlackMs).toBeGreaterThanOrEqual(0);
   } finally {

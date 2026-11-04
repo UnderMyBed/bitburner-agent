@@ -228,8 +228,9 @@ function pendingAtMost(config: BatcherConfig, hacking: number): number {
 const percent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 
 /**
- * Health in step: nothing out of order, late, lost, short, skipped or out of bounds; no desync, no problem; and, the
- * plan the same throughout, no batch trimmed to the RAM (#232's review: the fit never cuts a plan its RAM holds).
+ * Health in step: nothing out of order, late, lost, short, skipped or out of bounds; no desync, no problem; the plan
+ * the same throughout, no batch trimmed to the RAM (#232's review: the fit never cuts a plan its RAM holds); and every
+ * batch's grow leaves the target at its maximum money (#234).
  */
 const IN_STEP = {
   state: "batching",
@@ -241,6 +242,8 @@ const IN_STEP = {
   batchesShort: 0,
   batchesTrimmed: 0,
   hacksSkipped: 0,
+  moneyLooksBelowFull: 0,
+  leastMoneyAfterGrow: 1,
   problem: null,
 };
 
@@ -268,6 +271,8 @@ test.each(SEEDS)(
         `${after.hacksLanded - before.hacksLanded} hack parts`,
     );
     expect(after).toMatchObject(IN_STEP);
+    // Its money looked at after the grows (#234): about one look a batch, all full.
+    expect((after.moneyLooks ?? 0) - (before.moneyLooks ?? 0)).toBeGreaterThan(5);
     // Script starts take no virtual time here, so every operation had its whole lead to spare (#211).
     expect(after.leastSlackMs).toBeGreaterThanOrEqual(BATCH_LAUNCH_LEAD_MS - 1);
     expect(after.hacksLanded - before.hacksLanded).toBeGreaterThan(5);
@@ -351,6 +356,7 @@ test.each(SEEDS)(
     // The first batcher's records, landing after it was killed, were counted and never trusted.
     expect(after.unexpected).toBeGreaterThan(0);
     expect(after).toMatchObject(IN_STEP);
+    expect((after.moneyLooks ?? 0) - (before.moneyLooks ?? 0)).toBeGreaterThan(5);
     // Script starts take no virtual time here, so every operation had its whole lead to spare (#211).
     expect(after.leastSlackMs).toBeGreaterThanOrEqual(BATCH_LAUNCH_LEAD_MS - 1);
     expect(after.hacksLanded - before.hacksLanded).toBeGreaterThan(5);

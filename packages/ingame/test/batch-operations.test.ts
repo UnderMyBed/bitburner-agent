@@ -16,6 +16,7 @@ import {
   batchRamGb,
   batchThreads,
   hackSharePerThread,
+  hackThreadsForShare,
   LANDING_LOST_AFTER_MS,
   type LandingRecord,
   leastSpacingMs,
@@ -278,6 +279,76 @@ test("the batcher counts a landing out of order and desyncs, and names a record 
     await simulation.advance(5_000);
   }
   expect((await healthOf(simulation)).problem).toBeNull();
+});
+
+/** Advances in steps of `stepMs` until `done` holds, within `withinMs`: the health then. */
+async function healthOnceThat(
+  simulation: Simulation,
+  done: (health: BatcherHealth) => boolean,
+  stepMs: number,
+  withinMs: number,
+  what: string,
+): Promise<BatcherHealth> {
+  for (let waited = 0; ; waited += stepMs) {
+    const health = await healthOf(simulation);
+    if (done(health)) return health;
+    expect(waited, `${what} within ${withinMs / 1000} virtual seconds: ${JSON.stringify(health)}`).toBeLessThan(
+      withinMs,
+    );
+    await simulation.advance(stepMs);
+  }
+}
+
+test("a grow short of the hack before it (#234): the money after it below full, counted, then the drift", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // On home, made 1 TB: room for batches of half n00dles' money, whose grow needs 8 threads (n00dles' plan, a few %,
+  // needs 1, the least there is, which no figures could make short).
+  await simulation.diagnostics.setHomeRam(1_024);
+  const atFifty = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
+  const hackShare = 0.5;
+  const configFor = (figures: typeof N00DLES): BatcherConfig => {
+    const threads = batchThreads(figures, atFifty, hackThreadsForShare(hackShare, figures, atFifty));
+    const spacingMs = leastSpacingMs(threads, batchHoldsMs(figures, atFifty, threads), batchRamGb([512]));
+    if (spacingMs === null) throw new Error("no batch of half n00dles' money fits 512 GB");
+    return { ...n00dlesConfig(), figures, hackShare, spacingMs, hosts: ["home"] };
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  // Told the truth, it prepares n00dles and batches: each grow leaves it full.
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(configFor(N00DLES))] });
+  const truthful = await healthOnceThat(simulation, (each) => (each.moneyLooks ?? 0) > 3, 1_000, 20 * 60_000, "looks");
+  expect(truthful).toMatchObject({ moneyLooksBelowFull: 0, leastMoneyAfterGrow: 1, desyncs: 0 });
+  // Then figures that say n00dles grows 4 times as fast as it does (a move, #206: n00dles is ready, so at once): each
+  // batch's grow has about a quarter of the threads it needs.
+  const overstated = configFor({ ...N00DLES, serverGrowth: 4 * N00DLES.serverGrowth });
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(overstated)] });
+  // In steps of 20 ms, under the time from one batch's grow to the next one's hack (#235's review): the look below
+  // full comes before the drift is a desync.
+  const short = await healthOnceThat(
+    simulation,
+    (each) => (each.moneyLooksBelowFull ?? 0) > 0 || each.desyncs > 0,
+    20,
+    5 * 60_000,
+    "a grow short",
+  );
+  expect(short).toMatchObject({ moneyLooksBelowFull: 1, desyncs: 0, leastMoneyAfterGrowOn: "n00dles" });
+  // The grow made up for a part of the hack's half only.
+  expect(short.leastMoneyAfterGrow).toBeLessThan(1 - hackShare / 4);
+  // The next hack takes its share of less, and its grow comes up short again: the drift reaches the bounds' floor, a
+  // desync, at a hack's start.
+  const desynced = await healthOnceThat(simulation, (each) => each.desyncs > 0, 20, 5 * 60_000, "the drift a desync");
+  expect(desynced.outOfBounds).toBeGreaterThan(0);
+  // The grows landing while it recovers aren't looked at (#235's review): their money isn't theirs to answer for.
+  const recovered = await healthOnceThat(
+    simulation,
+    (each) => each.state !== "recovering",
+    200,
+    10 * 60_000,
+    "recovered",
+  );
+  expect(recovered.moneyLooks).toBe(desynced.moneyLooks);
+  expect(recovered.growsNotLooked ?? 0).toBeGreaterThan(desynced.growsNotLooked ?? 0);
 });
 
 test("an operation that dies is lost, counted 10 s after its time", async () => {
