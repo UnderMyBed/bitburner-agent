@@ -605,10 +605,13 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const wanted = config?.sharing !== undefined;
     if (!wanted && running.length === 0) return null;
     const threads = running.reduce((sum, part) => sum + part.threads, 0);
+    // Of them, on its hosts (#230): only these can take a batch's RAM; home's share beside them can't.
+    const onHosts = running.reduce((sum, part) => sum + (hosts.includes(part.host) ? part.threads : 0), 0);
     return {
       wanted,
       threads,
       ramGb: threads * SHARE_RAM_GB,
+      hostsRamGb: onHosts * SHARE_RAM_GB,
       bonus: shareBonus(running, current().player.intelligence),
       roomGb: sharingRoomGb,
     };

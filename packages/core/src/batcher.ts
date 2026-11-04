@@ -794,8 +794,8 @@ export interface BatcherHealth {
   next?: { target: string; wavesStarted: number; ready: boolean } | null;
   /**
    * Sharing (#224): whether its config asks for it, the share threads running (started under `SHARE_TIME_MS` ago),
-   * their RAM and the bonus they give (core's `shareBonus`), and the room its last look found (the RAM a round could
-   * take); null while it neither shares nor is asked to. Absent from an older batcher.
+   * their RAM, and of it the RAM on its hosts (#230), the bonus they give (core's `shareBonus`), and the room its last
+   * look found (the RAM a round could take); null while it neither shares nor is asked to. Absent from an older batcher.
    */
   sharing?: SharingHealth | null;
   /** The game's clock when this was written. */
@@ -807,6 +807,12 @@ export interface SharingHealth {
   wanted: boolean;
   threads: number;
   ramGb: number;
+  /**
+   * The share threads' RAM on its hosts, the batches' (#230): of `ramGb`, all but home's, which shares beside them
+   * unless it is one. Only this can take a batch's RAM. Absent from a batcher before #230 (the brain's `sharingOf`
+   * counts all of `ramGb`).
+   */
+  hostsRamGb: number;
   bonus: number;
   roomGb: number;
 }

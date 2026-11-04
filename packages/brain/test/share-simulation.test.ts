@@ -118,6 +118,8 @@ test.each(SEEDS)(
     expect(during.length).toBeGreaterThan(50);
     // Sharing all the way, at a bonus worth having: millions of threads on the 25 PB the batches leave.
     expect(during.every(({ health }) => (health.sharing?.threads ?? 0) > 0)).toBe(true);
+    // On the batches' hosts, the cloud servers (#230): only there can it take a batch's RAM.
+    expect(during.every(({ health }) => (health.sharing?.hostsRamGb ?? 0) > 0)).toBe(true);
     expect(bonus).toBeGreaterThan(1.4);
     // Never more than 80% of the hosts' RAM: the threads it counts are the ones running, a round never counted twice.
     const most = Math.max(...healths.map(({ health }) => health.sharing?.ramGb ?? 0));
@@ -138,7 +140,7 @@ test.each(SEEDS)(
     );
     console.log(section);
     expect(section).toMatch(/^ {4}shared for \d+ min: threads at most [\d,]+/m);
-    expect(section).toContain("    while sharing: 0 late, 0 lost, 0 short;");
+    expect(section).toContain("    while sharing on the batches' hosts: 0 late, 0 lost, 0 short;");
     expect(section).toContain("    idle (asked, the room free, no threads, for 10 minutes): never");
     expect(report.failures.filter((failure) => /^share /.test(failure))).toEqual([]);
   },

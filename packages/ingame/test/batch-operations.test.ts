@@ -611,6 +611,8 @@ test("sharing (#224): only while batching and asked, on the room the reserve lea
       expect(power).toBeGreaterThan(1);
       expect(health.sharing.bonus).toBeCloseTo(power, 12);
       expect(health.sharing.ramGb).toBe(running.threads * 4);
+      // All of it on its hosts (#230): home, 8 GB, keeps its 8.
+      expect(health.sharing.hostsRamGb).toBe(running.threads * 4);
       bonusChecked = true;
     }
   }
@@ -688,7 +690,8 @@ test("sharing (#224) uses home's RAM above what it keeps for the Agent, beside i
   expect(threads).toBeGreaterThan(0);
   expect(threads * 4).toBeLessThanOrEqual(64 - 3.85 - 8);
   expect((await sharesRunning(simulation)).threads).toBe(0);
-  expect((await healthOf(simulation)).sharing?.threads).toBe(threads);
+  // None on its hosts (#230): home is beside them.
+  expect((await healthOf(simulation)).sharing).toMatchObject({ threads, hostsRamGb: 0 });
 });
 
 test("no share while a last wave lands, nor until the batches planned beside it have (#226's review)", async () => {
@@ -747,6 +750,53 @@ test("no share for a minute after a batch comes up short of RAM (#226's review):
     expect((await sharesRunning(simulation)).threads, `${sample + 10} s after the first short`).toBe(0);
     await simulation.advance(1_000);
   }
+});
+
+test("a batch short beside a share on home alone isn't the share's (#230): the same batches come up short without it", async () => {
+  // #229's augmentations suite: after an install, home (64 GB) shares beside the hosts, whose reserve leaves them none;
+  // batches come up short of their own, and the share was blamed. Here, a spacing planned for 4 hosts' RAM on 2.
+  const plan = batchPlan(
+    N00DLES,
+    { skills: { hacking: 50, intelligence: 0 }, mults: MULTS },
+    batchRamGb([16, 16, 16, 16]),
+  );
+  if (plan === null) throw new Error("no plan for n00dles on 64 GB");
+  const unshared = { ...n00dlesConfig(), hackShare: plan.hackShare, spacingMs: plan.spacingMs };
+  const shared = { ...unshared, sharing: { reserveGb: 1_000, homeKeptGb: 8, cores: {} } };
+  /** The batcher's first short, from its start, and its counts a minute after it. */
+  const firstShortOf = async (config: BatcherConfig) => {
+    const simulation = await gameWithScripts();
+    await simulation.diagnostics.setHomeRam(64);
+    await simulation.diagnostics.gainHackingExp(2_000);
+    const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+    expect(error).toBeUndefined();
+    const startedAt = await simulation.now();
+    let first: { afterMs: number; health: BatcherHealth } | null = null;
+    for (let waited = 0; ; waited += 1_000) {
+      expect(waited, "a batch short within 20 virtual minutes").toBeLessThan(20 * 60_000);
+      const health = await healthOf(simulation);
+      // None of its hosts' RAM shared, ever: the reserve leaves them none.
+      expect((await sharesRunning(simulation)).threads).toBe(0);
+      expect(health.sharing?.hostsRamGb ?? 0).toBe(0);
+      if (first === null && health.batchesShort > 0) first = { afterMs: (await simulation.now()) - startedAt, health };
+      if (first !== null && waited >= first.afterMs + 60_000) return { first, after: health };
+      await simulation.advance(1_000);
+    }
+  };
+  const withShare = await firstShortOf(shared);
+  // Short while home shared beside it, its health says: threads running, none of them on its hosts.
+  expect(withShare.first.health.sharing).toMatchObject({ wanted: true, hostsRamGb: 0 });
+  expect(withShare.first.health.sharing?.threads).toBeGreaterThan(0);
+  const without = await firstShortOf(unshared);
+  expect(without.first.health.sharing).toBeNull();
+  expect(without.first.afterMs).toBe(withShare.first.afterMs);
+  const counts = ({ batchesStarted, batchesShort, hacksSkipped }: BatcherHealth) => ({
+    batchesStarted,
+    batchesShort,
+    hacksSkipped,
+  });
+  expect(counts(without.first.health)).toEqual(counts(withShare.first.health));
+  expect(counts(without.after)).toEqual(counts(withShare.after));
 });
 
 test("without its share script (#224), it batches all the same, and says it can't share, loudly", async () => {

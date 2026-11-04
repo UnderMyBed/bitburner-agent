@@ -1248,7 +1248,7 @@ test("the batcher's button (#205) sends its switch; off, on with nothing sent, a
 });
 
 test("sharing spare RAM (#224): its switch, why it isn't asked, and the batcher's threads, RAM and bonus", async () => {
-  const sharing = { wanted: true, threads: 4_489_859, ramGb: 17_959_436, bonus: 1.6127, roomGb: 0 };
+  const sharing = { wanted: true, threads: 4_489_859, ramGb: 17_959_436, hostsRamGb: 17_959_436, bonus: 1.6127, roomGb: 0 };
   const shareView = { enabled: true, asked: false, why: "no faction work going on", sharing: null };
   let current: DashboardStatus = { ...BUSY_STATUS, share: shareView };
   const { document, requests } = await openPage((request) => {
