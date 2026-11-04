@@ -48,6 +48,7 @@ import {
   preparationWave,
   type RamHold,
   recordGrowsNotLooked,
+  recordHackLanded,
   recordMoneyLook,
   threadsThatFit,
 } from "../src/batcher.ts";
@@ -690,6 +691,68 @@ describe("landings", () => {
     expect(watch.latestLandAt()).toBe(5_000);
     expect(new LandingWatch().latestLandAt()).toBe(Number.NEGATIVE_INFINITY);
     expect(new LandingWatch().nextLostAtMs()).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("the order is each target's own (#236): another target's later landing makes nothing out of order", () => {
+    const watch = new LandingWatch();
+    // A dropped next target's long weaken, then a new target's batch landing before it.
+    watch.expect("next.weaken1", 9_000, "megacorp");
+    watch.expect("batch.hack", 1_000, "4sigma");
+    watch.expect("batch.weaken1", 1_020, "4sigma");
+    expect(watch.landed(record("next.weaken1", 9_000))).toEqual({ outOfOrder: false, expected: true });
+    expect(watch.landed(record("batch.hack", 1_000))).toEqual({ outOfOrder: false, expected: true });
+    // Its own order still counts.
+    watch.expect("batch.grow", 1_010, "4sigma");
+    expect(watch.landed(record("batch.weaken1", 1_020))).toEqual({ outOfOrder: false, expected: true });
+    expect(watch.landed(record("batch.grow", 1_010))).toEqual({ outOfOrder: true, expected: true });
+  });
+
+  test("the latest landing on a target (#236): in flight or landed, that target's alone; all of them without one", () => {
+    const watch = new LandingWatch();
+    watch.expect("a", 1_000, "n00dles");
+    watch.expect("b", 9_000, "harakiri-sushi");
+    expect(watch.latestLandAt("n00dles")).toBe(1_000);
+    expect(watch.latestLandAt("joesguns")).toBe(Number.NEGATIVE_INFINITY);
+    expect(watch.latestLandAt()).toBe(9_000);
+    watch.landed(record("a", 1_000));
+    expect(watch.latestLandAt("n00dles")).toBe(1_000);
+    // Lost, it's forgotten, as it is from the latest of all.
+    watch.takeLostIds(9_001 + LANDING_LOST_AFTER_MS);
+    expect(watch.latestLandAt("harakiri-sushi")).toBe(Number.NEGATIVE_INFINITY);
+    expect(watch.latestLandAt()).toBe(1_000);
+  });
+});
+
+describe("the hacks landed and the moves (#236)", () => {
+  test("the last hack; the first on the target batched after another's is a move, idle from the last before it", () => {
+    const health = newBatcherHealth("n00dles", "run", 0);
+    expect(health).toMatchObject({ lastHack: null, lastMove: null });
+    recordHackLanded(health, "n00dles", 1_000);
+    recordHackLanded(health, "n00dles", 1_500);
+    expect(health).toMatchObject({ lastHack: { target: "n00dles", atMs: 1_500 }, lastMove: null });
+    health.target = "joesguns";
+    recordHackLanded(health, "joesguns", 61_500);
+    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 61_500 });
+    expect(health.lastHack).toEqual({ target: "joesguns", atMs: 61_500 });
+    // The old target's batches still landing among the new one's: no move either way.
+    recordHackLanded(health, "n00dles", 61_600);
+    recordHackLanded(health, "joesguns", 62_000);
+    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 61_500 });
+    expect(health.lastHack).toEqual({ target: "joesguns", atMs: 62_000 });
+    // A move back.
+    health.target = "n00dles";
+    recordHackLanded(health, "n00dles", 62_100);
+    expect(health.lastMove).toEqual({ from: "joesguns", to: "n00dles", idleMs: 100, atMs: 62_100 });
+  });
+
+  test("an older batcher's health without the fields; an earlier landing drained late never moves the last back", () => {
+    const older = newBatcherHealth("n00dles", "run", 0);
+    delete older.lastHack;
+    delete older.lastMove;
+    recordHackLanded(older, "n00dles", 2_000);
+    expect(older).toMatchObject({ lastHack: { target: "n00dles", atMs: 2_000 }, lastMove: null });
+    recordHackLanded(older, "n00dles", 1_990);
+    expect(older.lastHack).toEqual({ target: "n00dles", atMs: 2_000 });
   });
 });
 

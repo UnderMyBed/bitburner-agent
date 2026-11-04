@@ -20,6 +20,7 @@ import {
   LANDING_LOST_AFTER_MS,
   type LandingRecord,
   leastSpacingMs,
+  operationTimeMs,
   SHARE_ROUND_MS,
   SHARE_SCRIPT_NAME,
   shareReserveGb,
@@ -196,9 +197,10 @@ async function batchingBatcher(simulation: Simulation): Promise<number> {
 /** The operation scripts running on the hosts: their pid, id and landing time, the latest landing last. */
 async function inFlight(
   simulation: Simulation,
+  hosts = OPERATION_HOSTS,
 ): Promise<{ pid: number; id: string; landAt: number; target: string }[]> {
   const running = [];
-  for (const host of OPERATION_HOSTS) {
+  for (const host of hosts) {
     for (const process of await simulation.ps(host)) {
       running.push({
         pid: process.pid,
@@ -1146,4 +1148,212 @@ test("without its share script (#224), it batches all the same, and says it can'
   expect(health).toMatchObject({ state: "batching", desyncs: 0, late: 0, lost: 0, batchesShort: 0 });
   expect(health.hacksLanded).toBeGreaterThan(0);
   expect((await sharesRunning(simulation)).threads).toBe(0);
+});
+
+/** Logs its argument servers' figures, as the static snapshot has them, from the game itself. */
+const FIGURES = `export async function main(ns) {
+  const figures = {};
+  for (const host of ns.args) {
+    figures[host] = {
+      moneyMax: ns.getServerMaxMoney(host),
+      minDifficulty: ns.getServerMinSecurityLevel(host),
+      requiredHackingSkill: ns.getServerRequiredHackingLevel(host),
+      serverGrowth: ns.getServerGrowth(host),
+    };
+  }
+  ns.print(JSON.stringify(figures));
+}`;
+/** Weakens and grows its target to its minimum security and maximum money: prepared, as the batcher leaves it. */
+const PREPARE_FULLY = `export async function main(ns) {
+  const [target] = ns.args;
+  const above = () => ns.getServerSecurityLevel(target) - ns.getServerMinSecurityLevel(target);
+  for (;;) {
+    if (above() > 1) await ns.weaken(target);
+    else if (ns.getServerMoneyAvailable(target) < ns.getServerMaxMoney(target)) await ns.grow(target);
+    else if (above() > 0) await ns.weaken(target);
+    else return;
+  }
+}`;
+
+/** The hacks in flight on the six hosts: each one's target and landing. */
+async function hacksInFlight(simulation: Simulation): Promise<{ target: string; landAt: number }[]> {
+  const hacks = [];
+  for (const host of SHARING_HOSTS) {
+    for (const process of await simulation.ps(host)) {
+      if (!process.filename.endsWith("/batch-hack.js")) continue;
+      hacks.push({ target: String(process.args[0]), landAt: Number(process.args[1]) });
+    }
+  }
+  return hacks;
+}
+
+/** The game's figures of `hosts`, read from the game. */
+async function figuresOf(simulation: Simulation, hosts: string[]): Promise<Record<string, BatcherConfig["figures"]>> {
+  await simulation.writeFile("home", "figures.js", FIGURES);
+  const { pid } = await simulation.run("home", "figures.js", { args: hosts });
+  await simulation.advance(1);
+  return JSON.parse(await printed(simulation, pid)) as Record<string, BatcherConfig["figures"]>;
+}
+
+test("a move to a prepared target (#236): batches at once beside a dropped next target's wave, hardly idle", {
+  timeout: 300_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const figures = await figuresOf(simulation, ["joesguns", "harakiri-sushi"]);
+  const joesguns = figures.joesguns as BatcherConfig["figures"];
+  const harakiri = figures["harakiri-sushi"] as BatcherConfig["figures"];
+  // joesguns prepared beforehand on a large home, as a next target the batcher had prepared would be. Its grows' exp
+  // takes hacking to about 170.
+  await simulation.diagnostics.setHomeRam(8_192);
+  await simulation.writeFile("home", "prepare-fully.js", PREPARE_FULLY);
+  const preparer = await simulation.run("home", "prepare-fully.js", { threads: 3_000, args: ["joesguns"] });
+  expect(preparer.error).toBeUndefined();
+  for (let waited = 0; (await simulation.ps("home")).some((each) => each.pid === preparer.pid); waited += 10_000) {
+    expect(waited, "joesguns prepared within 30 virtual minutes").toBeLessThan(30 * 60_000);
+    await simulation.advance(10_000);
+  }
+  // Batching n00dles on four fifths of the six hosts, as the brain plans the batches beside a next target.
+  const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: MULTS };
+  const ramGb = batchRamGb(SHARING_HOSTS.map(() => 16));
+  const n00dlesPlan = batchPlan(N00DLES, player, ramGb * 0.8);
+  const joesgunsPlan = batchPlan(joesguns, player, ramGb);
+  if (n00dlesPlan === null || joesgunsPlan === null) throw new Error("no plan on the six hosts");
+  const batchingN00dles: BatcherConfig = {
+    ...n00dlesConfig(),
+    hosts: SHARING_HOSTS,
+    hackShare: n00dlesPlan.hackShare,
+    spacingMs: n00dlesPlan.spacingMs,
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(batchingN00dles)] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "n00dles' hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  await simulation.advance(60_000);
+  // harakiri-sushi sent to prepare next: its first wave goes out at once on its fifth, beside batches planned a weaken
+  // ahead (#236: before, the pending orders' RAM summed left it none). A weaken at its starting security: minutes.
+  const withNext = { ...batchingN00dles, next: { target: "harakiri-sushi", figures: harakiri, ramGb: ramGb * 0.2 } };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(withNext)] });
+  await simulation.advance(1_000);
+  expect((await healthOf(simulation)).next).toEqual({ target: "harakiri-sushi", wavesStarted: 1, ready: false });
+  const harakiriWave = (await inFlight(simulation, SHARING_HOSTS)).filter((each) => each.target === "harakiri-sushi");
+  const waveLandsAt = Math.max(...harakiriWave.map((each) => each.landAt));
+  expect(waveLandsAt - (await simulation.now())).toBeGreaterThan(2 * 60_000);
+
+  // The move: to joesguns, prepared, the next dropped with its wave still out.
+  const before = await healthOf(simulation);
+  const movedAt = await simulation.now();
+  const toJoesguns: BatcherConfig = {
+    ...batchingN00dles,
+    target: "joesguns",
+    figures: joesguns,
+    hackShare: joesgunsPlan.hackShare,
+    spacingMs: joesgunsPlan.spacingMs,
+  };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(toJoesguns)] });
+  // A landing on harakiri-sushi recorded early, with its later time, as one that lands a little off its time on a
+  // busy page would be: joesguns' and n00dles' landings after it, earlier, are in order on their own targets (#236).
+  const early = harakiriWave.at(-1) as { id: string; landAt: number };
+  await simulation.run("home", "write-port.js", { args: [BATCHER_LANDING_PORT, recordJson(early.id, early.landAt)] });
+  let lastOldHackAt = 0;
+  let firstNewHackAt = Number.POSITIVE_INFINITY;
+  let silentlyWaiting = 0;
+  let saidItWaits = 0;
+  for (let elapsed = 0; elapsed < 5 * 60_000; elapsed += 2_000) {
+    await simulation.advance(2_000);
+    for (const { target, landAt } of await hacksInFlight(simulation)) {
+      if (target === "n00dles") lastOldHackAt = Math.max(lastOldHackAt, landAt);
+      if (target === "joesguns") firstNewHackAt = Math.min(firstNewHackAt, landAt);
+    }
+    // Never a silent `batching` with no batch (#236): while none fits, the problem says what holds the RAM.
+    const health = await healthOf(simulation);
+    if (health.state === "batching" && health.batchesStarted === before.batchesStarted) {
+      if (health.problem?.startsWith("no batch on joesguns fits the RAM yet: it's held by its operations on ")) {
+        saidItWaits += 1;
+      } else silentlyWaiting += 1;
+    }
+  }
+  const after = await healthOf(simulation);
+  const joesgunsWeakenMs = operationTimeMs("weaken1", joesguns, player);
+  console.log(
+    `#236's move: harakiri-sushi's wave lands ${((waveLandsAt - movedAt) / 1000).toFixed(0)} s after it; n00dles' ` +
+      `last hack ${((lastOldHackAt - movedAt) / 1000).toFixed(0)} s after it, joesguns' first ` +
+      `${((firstNewHackAt - movedAt) / 1000).toFixed(0)} s (a weaken: ${(joesgunsWeakenMs / 1000).toFixed(0)} s): idle ` +
+      `${((firstNewHackAt - lastOldHackAt) / 1000).toFixed(0)} s; ${saidItWaits} looks waiting for RAM, said so`,
+  );
+  expect(silentlyWaiting).toBe(0);
+  // joesguns' first hack lands a weaken after the move, and the seconds n00dles' batches take to free the RAM for one,
+  // long before harakiri-sushi's wave: before #236, one spacing after the wave, 194 s in, idle 161 s.
+  expect(firstNewHackAt - movedAt).toBeLessThan(joesgunsWeakenMs + 30_000);
+  expect(firstNewHackAt).toBeLessThan(waveLandsAt);
+  // Its health says the move and its idle time, as the hacks in flight showed them.
+  expect(after.lastMove).toMatchObject({ from: "n00dles", to: "joesguns" });
+  expect(after.lastMove?.idleMs).toBeCloseTo(Math.max(0, firstNewHackAt - lastOldHackAt), -1);
+  expect(after.lastMove?.idleMs).toBeLessThan(60_000);
+  expect(after.lastHack?.target).toBe("joesguns");
+  // In step, though joesguns' batches land among n00dles' and harakiri-sushi's (the order is each target's own).
+  expect(after).toMatchObject({ state: "batching", desyncs: 0, late: 0, lost: 0, outOfBounds: 0, batchesShort: 0 });
+  expect(after.batchesStarted).toBeGreaterThan(before.batchesStarted + 10);
+});
+
+test("batching with no batch that fits the RAM says so, and why (#236), until one does", async () => {
+  const simulation = await gameWithScripts();
+  // n00dles prepared by a first batcher, whose operations then all land.
+  await simulation.kill(await batchingBatcher(simulation));
+  await simulation.advance(3 * 60_000);
+  // A player's own scripts take the hosts' RAM, then a batcher starts on n00dles, prepared: it batches, and none fits.
+  const idle = await fillHosts(simulation, OPERATION_HOSTS);
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, {
+    args: [JSON.stringify(n00dlesConfig())],
+  });
+  expect(error).toBeUndefined();
+  await simulation.advance(30_000);
+  const waiting = await healthOf(simulation);
+  expect(waiting).toMatchObject({
+    state: "batching",
+    batchesStarted: 0,
+    problem: "no batch on n00dles fits the RAM yet: it's held by scripts not its own",
+  });
+  // The RAM back: batches, and the problem gone.
+  for (const pid of idle) await simulation.kill(pid);
+  await simulation.advance(30_000);
+  const batching = await healthOf(simulation);
+  expect(batching).toMatchObject({ state: "batching", problem: null, desyncs: 0, batchesShort: 0 });
+  expect(batching.batchesStarted).toBeGreaterThan(0);
+});
+
+test("a next target with no room for a wave for a minute is said (#236), until it gets one", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(n00dlesConfig())] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  // foodnstuff sent to prepare next on less RAM than a thread's: no room for a wave.
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const withNext = (ramGb: number) => ({
+    ...n00dlesConfig(),
+    next: { target: "foodnstuff", figures: foodnstuff, ramGb },
+  });
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(withNext(1))] });
+  await simulation.advance(30_000);
+  // Under a minute: not yet.
+  expect((await healthOf(simulation)).problem).toBeNull();
+  // Past it (the batcher looks again at its next wake, a minute at most): said.
+  await simulation.advance(2 * 60_000);
+  const starved = await healthOf(simulation);
+  expect(starved.next).toEqual({ target: "foodnstuff", wavesStarted: 0, ready: false });
+  expect(starved.problem).toBe("no RAM to prepare foodnstuff next beside the batches for a minute");
+  // Room for it: a wave, and the problem gone.
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(withNext(7.2))] });
+  await simulation.advance(5_000);
+  const fed = await healthOf(simulation);
+  expect(fed.next?.wavesStarted).toBeGreaterThan(0);
+  expect(fed).toMatchObject({ problem: null, desyncs: 0, batchesShort: 0 });
 });

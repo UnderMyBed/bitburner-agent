@@ -16,6 +16,7 @@ import {
   type HackingTarget,
   hackChance,
   hackSharePerThread,
+  isTargetPrepared,
   type MediumSnapshotData,
   operationTimeMs,
   preparationTimeMs,
@@ -141,6 +142,12 @@ export const BATCHER_NEXT_RAM_SHARE = 0.2;
  * as the next instead.
  */
 export const BATCHER_MOST_IDLE_MS = 5 * 60_000;
+/**
+ * The run report fails a move that left the batcher this long without a hack (#236): from the last hack on the target
+ * before to the first on the new one, twice what the brain allows a move, so a repeat of run #2's 25 minutes can't
+ * hide inside "income stalled".
+ */
+export const BATCHER_MOVE_IDLE_FAILS_AFTER_MS = 2 * BATCHER_MOST_IDLE_MS;
 
 /** A target `chooseBatcher` weighed: its plan's income, how long until it earns, and so its worth over the horizon. */
 export interface BatcherTargetWorth {
@@ -161,11 +168,16 @@ export interface BatcherTargetWorth {
  * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching`, from the batcher's
  *   health) earns at once; any other is chosen only if it earns within `BATCHER_MOST_IDLE_MS`. With none such and
  *   nothing batched (a fresh start, a handover, a restart), the soonest to earn.
+ * - **Earning through a move (#236):** while one earns (batched), another is chosen only once it's prepared (at its
+ *   minimum security and maximum money in the medium snapshot), so its first batch is a weaken away and the batches out
+ *   land meanwhile. One still to prepare is the next instead, prepared beside the batches: a move to it never stops the
+ *   income while it's prepared, as it did in run #2.
  * - **The move:** of those, the worthiest; the one sent is kept unless another is worth `BATCHER_MOVE_GAIN` times it.
  * - **The next:** of the rest, the one worth most once prepared (its income less a batch's weaken), if that's worth the
  *   move from the one chosen and it can be prepared on `BATCHER_NEXT_RAM_SHARE` of the RAM within the horizon: the
  *   batcher prepares it beside the batches, which are planned on the rest, and once it's prepared the same test moves
- *   to it, so its RAM never sits idle.
+ *   to it, so its RAM never sits idle. The next sent is kept unless another is worth `BATCHER_MOVE_GAIN` times it once
+ *   prepared (#236): a next dropped wastes its waves out, which hold their RAM for a weaken's time at its security.
  */
 export function chooseBatcher(
   staticData: StaticSnapshotData,
@@ -218,6 +230,7 @@ export function chooseBatcher(
       state: plan.batcher,
       figures,
       ramGb: plan.ramGb,
+      prepared: isTargetPrepared(figures, now),
       // Prepared beside the batches, on the next's part of the RAM, within the horizon; and its worth once it is.
       preparable: nextPrepareMs <= BATCHER_TARGET_HORIZON_MS,
       preparedWorth: plan.incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - firstBatchMs),
@@ -230,8 +243,10 @@ export function chooseBatcher(
     };
   });
   if (planned.length === 0) return { batcher: null, why: firstWhy ?? "no target can be planned" };
-  // The worthiest of those earning soon; with none such, the soonest to earn.
-  const soon = planned.filter((each) => each.weighed.untilEarningMs <= BATCHER_MOST_IDLE_MS);
+  // While one earns, it or one prepared (#236); of those, the worthiest earning soon; with none such, the soonest.
+  const earning = planned.find((each) => each.weighed.target === batching);
+  const movable = earning === undefined ? planned : planned.filter((each) => each === earning || each.prepared);
+  const soon = movable.filter((each) => each.weighed.untilEarningMs <= BATCHER_MOST_IDLE_MS);
   const soonest = [...planned].sort((a, b) => a.weighed.untilEarningMs - b.weighed.untilEarningMs)[0] as Weighed;
   const worthiest =
     soon.length === 0 ? soonest : ([...soon].sort((a, b) => b.weighed.worth - a.weighed.worth)[0] as Weighed);
@@ -240,13 +255,22 @@ export function chooseBatcher(
   const chosen =
     kept !== undefined && worthiest.weighed.worth < kept.weighed.worth * BATCHER_MOVE_GAIN ? kept : worthiest;
   const worths = planned.map((each) => each.weighed);
-  // The next target: of the rest preparable beside the batches, the worthiest once prepared, if that's worth the move.
-  const next = planned
-    .filter((each) => each.preparable && each !== chosen)
-    .sort((a, b) => b.preparedWorth - a.preparedWorth)[0];
-  if (next === undefined || next.preparedWorth < chosen.weighed.worth * BATCHER_MOVE_GAIN) {
-    return { batcher: chosen.state, worths };
-  }
+  // The next target: of the rest preparable beside the batches and worth the move once prepared, the worthiest; the
+  // one sent kept unless that's worth BATCHER_MOVE_GAIN times it (#236).
+  const nexts = planned
+    .filter(
+      (each) => each.preparable && each !== chosen && each.preparedWorth >= chosen.weighed.worth * BATCHER_MOVE_GAIN,
+    )
+    .sort((a, b) => b.preparedWorth - a.preparedWorth);
+  const sentNext = nexts.find((each) => each.weighed.target === current?.config.next?.target);
+  const worthiestNext = nexts[0];
+  const next =
+    sentNext !== undefined &&
+    worthiestNext !== undefined &&
+    worthiestNext.preparedWorth < sentNext.preparedWorth * BATCHER_MOVE_GAIN
+      ? sentNext
+      : worthiestNext;
+  if (next === undefined) return { batcher: chosen.state, worths };
   const rest = planBatcher(
     staticData,
     mediumData,
@@ -272,6 +296,8 @@ interface Weighed {
   state: BatcherState;
   figures: HackingTarget;
   ramGb: number;
+  /** At its minimum security and maximum money in the medium snapshot: batches can start at once (#236). */
+  prepared: boolean;
   preparable: boolean;
   preparedWorth: number;
   weighed: BatcherTargetWorth;

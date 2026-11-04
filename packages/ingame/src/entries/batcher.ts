@@ -78,6 +78,7 @@ import {
   hackThreadsAtLaunch,
   hackThreadsForShare,
   isOutsideBounds,
+  isTargetPrepared,
   LandingWatch,
   type LaunchOrder,
   landingOffsetMs,
@@ -92,6 +93,7 @@ import {
   preparationWave,
   type RamHold,
   recordGrowsNotLooked,
+  recordHackLanded,
   recordMoneyLook,
   SHARE_RAM_GB,
   SHARE_ROUND_MS,
@@ -119,6 +121,8 @@ const SHARE_HELD_MS = SHARE_TIME_MS;
 const SHARE_LOOK_AGAIN_MS = 100;
 /** No round this long after a batch came up short of RAM (#226's review): the batches come first. */
 const SHARE_AFTER_SHORT_MS = 60_000;
+/** A next target with no room for a wave this long is a problem (#236): the brain moves to it only once it's ready. */
+const NEXT_WITHOUT_ROOM_PROBLEM_AFTER_MS = 60_000;
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
@@ -244,7 +248,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       if (
         ns.exec(folder + operationScriptName(operation), host, options, target, landAt, BATCHER_LANDING_PORT, partId)
       ) {
-        landings.expect(partId, landAt);
+        landings.expect(partId, landAt, target);
         parts.set(partId, { host, gb: partThreads * operationRamGb(operation), landAt, target });
         wave?.add(partId);
       } else {
@@ -305,6 +309,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         health.leastSlackMs = Math.min(health.leastSlackMs ?? Number.POSITIVE_INFINITY, record.slackMs);
       }
       if (isHack && !record.skipped) {
+        recordHackLanded(health, landedOn ?? "", record.landAt);
         health.hacksLanded += 1;
         health.moneyHacked += record.result;
         if (record.result === 0) health.hacksFailed += 1;
@@ -320,6 +325,12 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   // hack hasn't gone out; and the batches whose hacks have, until their last landing, for the bounds.
   let nextBatch = 0;
   let nextLandAt = 0;
+  /**
+   * Batches planned since it last started batching, and the problem it gave while none fitted (#236): never a silent
+   * `batching` with no batch.
+   */
+  let batchesSinceStart = 0;
+  let waitingProblem: string | null = null;
   const pending: LaunchOrder[] = [];
   const batches = new Map<number, PlannedBatch>();
   let landing: { target: string; threads: BatchThreads; untilMs: number }[] = [];
@@ -436,19 +447,44 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const shareRamHeld = (): RamHold[] => shareRamHolds(sharingParts, hosts, Date.now());
 
   /**
-   * Starts batching: the first batch's operations all start from now, after anything still in flight lands, and its
-   * hack lands no sooner than `notBeforeMs`.
+   * Starts batching: the first batch's operations all start from now, after what's still in flight on its target lands
+   * (#236: never another target's, a dropped next target's long weaken, say), and its hack lands no sooner than
+   * `notBeforeMs`.
    */
   const startBatching = (notBeforeMs = 0) => {
     health.state = "batching";
     logNow = true;
     setProblem(lastingProblem);
+    batchesSinceStart = 0;
     const { figures, hackShare, spacingMs } = current();
     const player = playerNow();
     const threads = batchThreads(figures, player, hackThreadsForShare(hackShare, figures, player));
     const holds = batchHoldsMs(figures, player, threads);
     const firstLandAt = Date.now() + Math.max(...Object.values(holds));
-    nextLandAt = Math.max(firstLandAt, landings.latestLandAt() + spacingMs, notBeforeMs);
+    nextLandAt = Math.max(firstLandAt, landings.latestLandAt(current().target) + spacingMs, notBeforeMs);
+  };
+
+  /**
+   * Why no batch on the target fits yet (#236): the targets of the operations in flight that hold the RAM (a target
+   * before a move, a next target's waves), the share threads', and when the last lands.
+   */
+  const noBatchFitsYet = () => {
+    const holders = new Set<string>();
+    let lastLandAt = 0;
+    for (const { host, target, landAt } of parts.values()) {
+      if (!hosts.includes(host)) continue;
+      holders.add(target);
+      lastLandAt = Math.max(lastLandAt, landAt);
+    }
+    const held = [
+      ...(holders.size > 0 ? [`its operations on ${[...holders].sort().join(", ")}`] : []),
+      ...(shareRamHeld().length > 0 ? ["its share threads"] : []),
+    ];
+    const until = lastLandAt > 0 ? `, the last landing at ${new Date(lastLandAt).toISOString()}` : "";
+    return (
+      `no batch on ${current().target} fits the RAM yet: it's held by ${held.join(" and ") || "scripts not its own"}` +
+      until
+    );
   };
 
   /** Launches one order of a batch. */
@@ -534,9 +570,12 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       preparing = config?.next?.target === next.target ? preparingNext : new Set();
       preparingNext = new Set();
       if (health.state === "batching") health.state = "preparing";
+      if (waitingProblem !== null && health.problem === waitingProblem) setProblem(lastingProblem);
+      waitingProblem = null;
     }
     if (next.next?.target !== config?.next?.target) {
       preparingNext = new Set();
+      nextRoom(true);
       health.next = next.next === undefined ? null : { target: next.next.target, wavesStarted: 0, ready: false };
     }
     logNow = true;
@@ -555,14 +594,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
   };
 
-  /** The RAM free for a preparation wave, GB: the hosts' free, less what the orders not yet out will take. */
-  const freeForWaves = () => {
-    let reserved = 0;
-    for (const order of pending) {
-      const batch = batches.get(order.batch);
-      if (batch !== undefined) reserved += batch.threads[order.operation] * operationRamGb(order.operation);
-    }
-    return Math.max(0, batchRamGb(freeRam().map((host) => host.freeGb)) - reserved);
+  /**
+   * The RAM a preparation wave landing at `landAt` may take, GB (#236): the RAM the batches can count on, less the most
+   * the batcher holds until the wave has landed (its parts in flight, the orders of the batches planned, its share
+   * threads: #232's holds), and no more than is free now. Not every pending order's RAM summed, as before: they hold it
+   * at different times, and with batches planned a weaken ahead the sum left a next target none of its RAM.
+   */
+  const roomForWave = (landAt: number) => {
+    const now = Date.now();
+    const untilMs = landAt + 2 * BATCH_LANDING_GAP_MS + BATCH_RAM_RELEASE_MS;
+    const besideGb = capacityGb() - mostRamHeldGb([...heldRam(), ...shareRamHeld()], now, untilMs);
+    return Math.max(0, Math.min(besideGb, batchRamGb(freeRam().map((host) => host.freeGb))));
   };
 
   /**
@@ -580,8 +622,12 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const now = { money: ns.getServerMoneyAvailable(target), security: ns.getServerSecurityLevel(target) };
     health.seen = now;
     const player = playerNow();
-    // The RAM free, less what the batches out still need (a previous target's, after a move) and the next target's.
-    const usableGb = Math.max(0, freeForWaves() - (current().next?.ramGb ?? 0));
+    // Called at the security now, so their times are the longest they'll be: all land after their time from now.
+    const landAt = Date.now() + operationTimeMs("weaken1", figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
+    // The room, less the next target's: the batches out (a previous target's, after a move) keep what they need.
+    const usableGb = isTargetPrepared(figures, now)
+      ? 0
+      : Math.max(0, roomForWave(landAt) - (current().next?.ramGb ?? 0));
     const threads = preparationWave(figures, player, now, usableGb);
     if (threads === null) {
       startBatching();
@@ -594,8 +640,6 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       if (pending.length === 0) setProblem(`no RAM to prepare ${target}`);
       return;
     }
-    // Called at the security now, so their times are the longest they'll be: all land after their time from now.
-    const landAt = Date.now() + operationTimeMs("weaken1", figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
     const parts: [BatchOperation, number, number][] = [
       ["weaken1", weaken1, landAt],
       ["grow", growCount, landAt + BATCH_LANDING_GAP_MS],
@@ -631,6 +675,24 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
   };
 
+  /** Since when the next target has had no room for a wave (#236), or null; and the problem that says so, once shown. */
+  let nextWithoutRoomSince: number | null = null;
+  let nextWithoutRoomProblem: string | null = null;
+  /** Whether the next target found room for a wave, or needs none: a minute without is said, never silent (#236). */
+  const nextRoom = (found: boolean, target = "") => {
+    if (found) {
+      nextWithoutRoomSince = null;
+      if (nextWithoutRoomProblem !== null && health.problem === nextWithoutRoomProblem) setProblem(lastingProblem);
+      nextWithoutRoomProblem = null;
+      return;
+    }
+    nextWithoutRoomSince ??= Date.now();
+    if (Date.now() - nextWithoutRoomSince >= NEXT_WITHOUT_ROOM_PROBLEM_AFTER_MS && health.problem === lastingProblem) {
+      nextWithoutRoomProblem = `no RAM to prepare ${target} next beside the batches for a minute`;
+      setProblem(nextWithoutRoomProblem);
+    }
+  };
+
   /**
    * The next target (#206): a preparation wave on at most the config's RAM for it, once its last has landed, so a move
    * to it batches at once. Its operations hold RAM the batches don't plan on (the brain plans them on the rest).
@@ -640,15 +702,20 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     if (next === undefined || next.target === current().target || preparingNext.size > 0) return;
     const now = { money: ns.getServerMoneyAvailable(next.target), security: ns.getServerSecurityLevel(next.target) };
     const player = playerNow();
-    const usableGb = Math.min(next.ramGb, freeForWaves());
+    const landAt = Date.now() + operationTimeMs("weaken1", next.figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
+    // On at most its RAM, of the room beside what the batches hold until it lands (#236).
+    const usableGb = isTargetPrepared(next.figures, now) ? 0 : Math.min(next.ramGb, roomForWave(landAt));
     const threads = preparationWave(next.figures, player, now, usableGb);
     const nextHealth = health.next ?? { target: next.target, wavesStarted: 0, ready: false };
     health.next = nextHealth;
     nextHealth.ready = threads === null;
-    if (threads === null) return;
+    if (threads === null) {
+      nextRoom(true);
+      return;
+    }
     const { weaken1, grow: growCount, weaken2 } = threads;
+    nextRoom(weaken1 + growCount > 0, next.target);
     if (weaken1 + growCount === 0) return;
-    const landAt = Date.now() + operationTimeMs("weaken1", next.figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
     const parts: [BatchOperation, number, number][] = [
       ["weaken1", weaken1, landAt],
       ["grow", growCount, landAt + BATCH_LANDING_GAP_MS],
@@ -800,9 +867,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
           if (trimmed) health.batchesTrimmed = (health.batchesTrimmed ?? 0) + 1;
           if (trimmedBySharing) health.batchesTrimmedBySharing = (health.batchesTrimmedBySharing ?? 0) + 1;
           if (fitted === null) {
+            // None yet since it started batching (#236): it says what holds the RAM, and until when.
+            if (batchesSinceStart === 0 && health.problem === lastingProblem) {
+              waitingProblem = noBatchFitsYet();
+              setProblem(waitingProblem);
+            }
             nextLandAt += current().spacingMs;
             continue;
           }
+          if (waitingProblem !== null && health.problem === waitingProblem) setProblem(lastingProblem);
+          waitingProblem = null;
+          batchesSinceStart += 1;
           batches.set(nextBatch, fitted.batch);
           pending.push(...fitted.orders);
           // Planned while a last preparation wave lands, its leads cover the wave's grow, longer than the plan's: no
