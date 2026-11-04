@@ -977,8 +977,10 @@ test("a share round never takes the RAM the batches planned will hold (#232), wh
   const health = await healthOf(simulation);
   expect(health).toMatchObject({ state: "batching", batchesShort: 0, desyncs: 0, late: 0, lost: 0 });
   expect(health.hacksLanded).toBeGreaterThan(10);
-  // Nor a batch planned beside a round trimmed for its threads (#232's review): the share's failure too.
+  // Nor a batch planned beside a round trimmed for its threads (#232's review): the share's failure too. The plan the
+  // same throughout, none trimmed at all: a round's threads count as the batcher's own until their scripts end.
   expect(health.batchesTrimmedBySharing).toBe(0);
+  expect(health.batchesTrimmed).toBe(0);
   // It shared on its hosts all the same, beside the batches.
   expect(mostShared).toBeGreaterThan(0);
 });

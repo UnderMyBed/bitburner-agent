@@ -33,8 +33,8 @@ const COUNTS = [
   "batchesShort",
   "unexpected",
 ] as const;
-/** Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM (#232). */
-const NEWER_COUNTS = ["batchesTrimmed"] as const;
+/** Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM, and of them the share's (#232). */
+const NEWER_COUNTS = ["batchesTrimmed", "batchesTrimmedBySharing"] as const;
 const ALL_COUNTS = [...COUNTS, ...NEWER_COUNTS] as const;
 type Counts = Record<(typeof ALL_COUNTS)[number], number>;
 /** The counts that say the batches are out of step: each a run report failure (#206). */
@@ -219,12 +219,14 @@ export function batcherSection(
   );
   // Trimmed (#232): the batcher fits each batch to the RAM as it will be held, so a plan its hosts can't place is cut,
   // never short. A batch trimmed is income lost, not a failure: a new plan, or one at a lower hacking level, can hold
-  // more for a while than the plan's peak.
+  // more for a while than the plan's peak. Those the share's threads made smaller are shown apart (#232's review): the
+  // share's failure, `share starved batches`.
   lines.push(
     total.batchesTrimmed === 0
       ? "  trimmed to the hosts' RAM (#232): none"
       : `  trimmed to the hosts' RAM (#232): ${describeBatchCount(total.batchesTrimmed)} planned with fewer hack threads than the ` +
-          "config's share, or none",
+          `config's share, or none (${total.batchesTrimmedBySharing} for the share's threads on the batches' hosts: the ` +
+          "share's)",
   );
   // Short of RAM, a failure (#232): the batcher fits each batch to the RAM as it will be held, so one short is RAM
   // taken after it was planned (anyone else's script on its hosts), or the fit is wrong. Its hack is lost.

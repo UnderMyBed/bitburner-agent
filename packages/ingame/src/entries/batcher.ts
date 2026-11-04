@@ -91,6 +91,9 @@ import {
   SHARE_TIME_MS,
   type SharingHealth,
   shareBonus,
+  shareRamByHost,
+  shareRamHolds,
+  shareReleasedAt,
   shareRound,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
@@ -368,11 +371,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    */
   const capacityGb = () => {
     const now = Date.now();
-    const batcherOwnGb = new Map<string, number>();
+    // Its share threads too, until their scripts end (#232's review): `getServerUsedRam` counts them till then.
+    const batcherOwnGb = shareRamByHost(sharingParts, now);
     for (const { host, gb } of parts.values()) batcherOwnGb.set(host, (batcherOwnGb.get(host) ?? 0) + gb);
-    for (const { host, threads, endsAt } of sharingParts) {
-      if (endsAt > now) batcherOwnGb.set(host, (batcherOwnGb.get(host) ?? 0) + threads * SHARE_RAM_GB);
-    }
     return batchRamGb(
       hosts.map((host) => {
         const othersGb = Math.max(0, ns.getServerUsedRam(host) - (batcherOwnGb.get(host) ?? 0));
@@ -401,19 +402,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   };
 
   /**
-   * The share threads' RAM on the hosts (#224), until they end and their script's release: it ends a moment after its
-   * call (`SHARE_HELD_MS`), as an operation's does after its landing (#232's review).
+   * The share threads' RAM on the hosts (#224), until their scripts end, a moment after their call (core's
+   * `shareReleasedAt`, #232's review).
    */
-  const shareRamHeld = (): RamHold[] => {
-    const now = Date.now();
-    return sharingParts
-      .filter(({ host, endsAt }) => endsAt > now && hosts.includes(host))
-      .map(({ threads, endsAt }) => ({
-        gb: threads * SHARE_RAM_GB,
-        fromMs: now,
-        untilMs: endsAt + BATCH_RAM_RELEASE_MS,
-      }));
-  };
+  const shareRamHeld = (): RamHold[] => shareRamHolds(sharingParts, hosts, Date.now());
 
   /**
    * Starts batching: the first batch's operations all start from now, after anything still in flight lands, and its
@@ -639,8 +631,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   let sharingRoomGb = 0;
   /** The problem its last round gave (a part that wouldn't start), until a round without one; or null. */
   let sharingProblem: string | null = null;
-  /** When the share threads started last may have ended, or 0 with none. */
-  const sharingHeldUntil = () => sharingParts.reduce((latest, part) => Math.max(latest, part.endsAt), 0);
+  /** When the share threads started last may have ended and freed their RAM, or 0 with none. */
+  const sharingHeldUntil = () => sharingParts.reduce((latest, part) => Math.max(latest, shareReleasedAt(part)), 0);
 
   /**
    * A round of share (#224): only while batching, with its config's `sharing`, at most every `SHARE_ROUND_MS`, on the
@@ -649,7 +641,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    */
   const shareSpareRam = () => {
     const now = Date.now();
-    sharingParts = sharingParts.filter((part) => part.endsAt > now);
+    sharingParts = sharingParts.filter((part) => shareReleasedAt(part) > now);
     const { sharing } = current();
     if (sharing === undefined || health.state !== "batching" || now < sharingHeldOffUntil || waveLanding()) {
       sharingRoomGb = 0;
@@ -806,7 +798,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       wakeAt = Math.min(wakeAt, Math.max(nextSharingLookAt, sharingHeldOffUntil));
     }
     // Awake as share threads end (#224): its health's count falls then, and a wave waiting for them goes out.
-    for (const part of sharingParts) wakeAt = Math.min(wakeAt, part.endsAt);
+    // And as their scripts end (#232's review): their RAM is the batcher's own until then.
+    for (const part of sharingParts) {
+      wakeAt = Math.min(wakeAt, part.endsAt > Date.now() ? part.endsAt : shareReleasedAt(part));
+    }
     // Awake when a part would be lost, so it's counted then, not at the next launch.
     wakeAt = Math.min(wakeAt, landings.nextLostAtMs());
     health.batchesPending = batches.size;

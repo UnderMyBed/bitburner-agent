@@ -359,6 +359,9 @@ export {
   SHARE_TIME_MS,
   shareBonus,
   shareBonusOfPower,
+  shareRamByHost,
+  shareRamHolds,
+  shareReleasedAt,
   shareReserveGb,
   shareRound,
 } from "./share.ts";

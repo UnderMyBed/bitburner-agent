@@ -7,7 +7,7 @@
  * bonus in its faction work rate, use the same functions. Never `share` as a name in code the batcher runs: the game
  * would charge `share`'s 2.4 GB for it (Script/RamCalculations.ts:407-440).
  */
-import { threadsThatFit } from "./batcher.ts";
+import { BATCH_RAM_RELEASE_MS, type RamHold, threadsThatFit } from "./batcher.ts";
 import { coreBonus } from "./hacking-ceiling.ts";
 
 /** The share script, beside the batcher in its folder: one `await ns.share()`, then it exits (legacy's share.js). */
@@ -125,4 +125,37 @@ export function shareReserveGb(batchesPeakGb: number, nextRamGb: number): number
     0,
     Math.ceil(Math.max(0, batchesPeakGb) * (1 + SHARE_RESERVE_MARGIN) + Math.max(0, nextRamGb) - 1e-9),
   );
+}
+
+/**
+ * When a share part's script has ended and freed its RAM (#232's review): its call ends at `endsAt`, the script a
+ * moment later, as an operation's does after its landing (`BATCH_RAM_RELEASE_MS`). Until then `getServerUsedRam`
+ * counts it (killWorkerScript.ts:124), so it's still the batcher's own, never anyone else's.
+ */
+export function shareReleasedAt(part: { endsAt: number }): number {
+  return part.endsAt + BATCH_RAM_RELEASE_MS;
+}
+
+/** The share parts' RAM not yet released at `nowMs`, by host, GB (#232's review). */
+export function shareRamByHost(
+  parts: readonly { host: string; threads: number; endsAt: number }[],
+  nowMs: number,
+): Map<string, number> {
+  const byHost = new Map<string, number>();
+  for (const part of parts) {
+    if (shareReleasedAt(part) > nowMs)
+      byHost.set(part.host, (byHost.get(part.host) ?? 0) + part.threads * SHARE_RAM_GB);
+  }
+  return byHost;
+}
+
+/** The share parts' RAM on `hosts` not yet released at `nowMs`, as held from then until their release (#232). */
+export function shareRamHolds(
+  parts: readonly { host: string; threads: number; endsAt: number }[],
+  hosts: readonly string[],
+  nowMs: number,
+): RamHold[] {
+  return parts
+    .filter((part) => shareReleasedAt(part) > nowMs && hosts.includes(part.host))
+    .map((part) => ({ gb: part.threads * SHARE_RAM_GB, fromMs: nowMs, untilMs: shareReleasedAt(part) }));
 }

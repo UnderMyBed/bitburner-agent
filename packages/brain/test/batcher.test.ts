@@ -354,14 +354,15 @@ describe("the run report's section", () => {
         { atMs: at(4), health: health("a", { batchesStarted: 40, batchesShort: 5, sharing: homeAlone, atMs: at(4) }) },
         // Restarted, counted from 0; an older batcher, which doesn't say how many it trimmed.
         { atMs: at(5), health: { ...health("b", { batchesStarted: 5, batchesShort: 1 }), batchesTrimmed: undefined } },
-        { atMs: at(6), health: health("c", { batchesStarted: 5, batchesTrimmed: 2 }) },
+        { atMs: at(6), health: health("c", { batchesStarted: 5, batchesTrimmed: 2, batchesTrimmedBySharing: 1 }) },
       ],
       failures,
     );
     expect(lines[2]).toContain("6 short, 5 trimmed; ");
     expect(lines).toContain("  short of RAM: 6 batches (2 while sharing on the batches' hosts: the share's)");
     expect(lines).toContain(
-      "  trimmed to the hosts' RAM (#232): 5 batches planned with fewer hack threads than the config's share, or none",
+      "  trimmed to the hosts' RAM (#232): 5 batches planned with fewer hack threads than the config's share, or none " +
+        "(1 for the share's threads on the batches' hosts: the share's)",
     );
     const line =
       "batches short of RAM: 4 batches short (their hacks lost), not while sharing on the batches' hosts, the " +
