@@ -754,7 +754,8 @@ test("no share for a minute after a batch comes up short of RAM (#226's review):
 
 test("a batch short beside a share on home alone isn't the share's (#230): the same batches come up short without it", async () => {
   // #229's augmentations suite: after an install, home (64 GB) shares beside the hosts, whose reserve leaves them none;
-  // batches come up short of their own, and the share was blamed. Here, a spacing planned for 4 hosts' RAM on 2.
+  // batches come up short of their own, and the share was blamed. Here, a spacing planned for 4 hosts' RAM on 2, then
+  // (#231's review) a plan that fits, so the rounds start again once the hold-off after a short is over.
   const plan = batchPlan(
     N00DLES,
     { skills: { hacking: 50, intelligence: 0 }, mults: MULTS },
@@ -763,23 +764,35 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
   if (plan === null) throw new Error("no plan for n00dles on 64 GB");
   const unshared = { ...n00dlesConfig(), hackShare: plan.hackShare, spacingMs: plan.spacingMs };
   const shared = { ...unshared, sharing: { reserveGb: 1_000, homeKeptGb: 8, cores: {} } };
-  /** The batcher's first short, from its start, and its counts a minute after it. */
+  /**
+   * The batcher's first short, from its start; then, its plan made to fit (core's for the 2 hosts), its counts 4 minutes
+   * after it, past the minute's hold-off after a short (`SHARE_AFTER_SHORT_MS`), and whether home shared again by then.
+   */
   const firstShortOf = async (config: BatcherConfig) => {
     const simulation = await gameWithScripts();
     await simulation.diagnostics.setHomeRam(64);
     await simulation.diagnostics.gainHackingExp(2_000);
-    const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+    const setConfig = (next: BatcherConfig) =>
+      simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(next)] });
+    await setConfig(config);
+    const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
     expect(error).toBeUndefined();
     const startedAt = await simulation.now();
     let first: { afterMs: number; health: BatcherHealth } | null = null;
+    let sharedAgain = false;
     for (let waited = 0; ; waited += 1_000) {
       expect(waited, "a batch short within 20 virtual minutes").toBeLessThan(20 * 60_000);
       const health = await healthOf(simulation);
       // None of its hosts' RAM shared, ever: the reserve leaves them none.
       expect((await sharesRunning(simulation)).threads).toBe(0);
       expect(health.sharing?.hostsRamGb ?? 0).toBe(0);
-      if (first === null && health.batchesShort > 0) first = { afterMs: (await simulation.now()) - startedAt, health };
-      if (first !== null && waited >= first.afterMs + 60_000) return { first, after: health };
+      if (first === null && health.batchesShort > 0) {
+        first = { afterMs: (await simulation.now()) - startedAt, health };
+        const { hackShare, spacingMs } = n00dlesConfig();
+        await setConfig({ ...config, hackShare, spacingMs });
+      }
+      if (first !== null && waited > first.afterMs + 70_000 && (health.sharing?.threads ?? 0) > 0) sharedAgain = true;
+      if (first !== null && waited >= first.afterMs + 240_000) return { first, after: health, sharedAgain };
       await simulation.advance(1_000);
     }
   };
@@ -787,6 +800,7 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
   // Short while home shared beside it, its health says: threads running, none of them on its hosts.
   expect(withShare.first.health.sharing).toMatchObject({ wanted: true, hostsRamGb: 0 });
   expect(withShare.first.health.sharing?.threads).toBeGreaterThan(0);
+  expect(withShare.sharedAgain, "home shared again after the hold-off").toBe(true);
   const without = await firstShortOf(unshared);
   expect(without.first.health.sharing).toBeNull();
   expect(without.first.afterMs).toBe(withShare.first.afterMs);
@@ -797,6 +811,30 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
   });
   expect(counts(without.first.health)).toEqual(counts(withShare.first.health));
   expect(counts(without.after)).toEqual(counts(withShare.after));
+});
+
+test("a share on home and on its hosts at once (#231's review): its health counts only the hosts' part", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.setHomeRam(64);
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // No reserve: its six hosts share their free RAM, and home its RAM above the 8 kept.
+  const config = { ...n00dlesConfig(), hosts: SHARING_HOSTS, sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} } };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  let checked = false;
+  for (let waited = 0; !checked; waited += 1_000) {
+    expect(waited, "sharing on home and its hosts at once within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(1_000);
+    const onHosts = (await sharesRunning(simulation)).threads;
+    const onHome = (await simulation.ps("home"))
+      .filter((process) => process.filename.endsWith(SHARE_SCRIPT_NAME))
+      .reduce((sum, process) => sum + process.threads, 0);
+    const health = await healthOf(simulation);
+    if (onHosts === 0 || onHome === 0 || health.sharing?.threads !== onHosts + onHome) continue;
+    expect(health.sharing.hostsRamGb).toBe(onHosts * 4);
+    expect(health.sharing.ramGb).toBe((onHosts + onHome) * 4);
+    checked = true;
+  }
 });
 
 test("without its share script (#224), it batches all the same, and says it can't share, loudly", async () => {

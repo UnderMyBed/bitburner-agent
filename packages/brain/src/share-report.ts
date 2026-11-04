@@ -2,8 +2,9 @@
 // snapshots, the time it shared, its threads, RAM and bonus, and from the slow snapshots, the brain's faction work's
 // reputation while it shared against while it didn't. Two failures of their own:
 // - **share starved batches:** batches short of RAM while it shared on the batches' hosts (#226's review: on their
-//   own terms): the share took RAM a batch needed. A share on home alone, beside the hosts, can't (#230): batches short
-//   then are shown apart, the batcher's own. Late and lost, while sharing or not, are the batcher's out-of-step failure.
+//   own terms): the share took RAM a batch needed. A share on home alone, beside the hosts, can't (#230): batches
+//   short then are shown apart, the batcher's own. Late and lost, while sharing or not, are the batcher's out-of-step
+//   failure.
 // - **share idle:** asked to share while batching, with the room for a thread free, and no share threads for 10
 //   minutes: its rounds don't start.
 import { SHARE_RAM_GB, type SharingHealth } from "@bitburner-agent/core";
@@ -169,30 +170,33 @@ function reputationLine(points: Point[], readings: readonly ReputationPoint[]): 
  * for comparison, and fail as the batcher's out-of-step.
  */
 function starvedLines(points: Point[], failures: string[]): string[] {
-  const whileSharing = { late: 0, lost: 0, short: 0 };
+  const whileSharingOnHosts = { late: 0, lost: 0, short: 0 };
   const onHomeAlone = { late: 0, lost: 0, short: 0 };
   const whileNot = { late: 0, lost: 0, short: 0 };
   let firstShortAtMs: number | null = null;
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1];
     if (previous === undefined || previous.runName === null || previous.runName !== point.runName) continue;
-    const sharing = sharingOnHosts(previous) || sharingOnHosts(point);
-    const into = sharing ? whileSharing : sharingNow(previous) || sharingNow(point) ? onHomeAlone : whileNot;
+    const sharingOnTheHosts = sharingOnHosts(previous) || sharingOnHosts(point);
+    const sharingAnywhere = sharingNow(previous) || sharingNow(point);
+    let into = whileNot;
+    if (sharingOnTheHosts) into = whileSharingOnHosts;
+    else if (sharingAnywhere) into = onHomeAlone;
     into.late += Math.max(0, point.late - previous.late);
     into.lost += Math.max(0, point.lost - previous.lost);
     const short = Math.max(0, point.short - previous.short);
     into.short += short;
-    if (sharing && short > 0) firstShortAtMs ??= point.atMs;
+    if (sharingOnTheHosts && short > 0) firstShortAtMs ??= point.atMs;
   }
   const describe = ({ late, lost, short }: typeof whileNot) => `${late} late, ${lost} lost, ${short} short`;
   const lines = [
-    `    while sharing on the batches' hosts: ${describe(whileSharing)}; on home alone: ${describe(onHomeAlone)}; ` +
+    `    while sharing on the batches' hosts: ${describe(whileSharingOnHosts)}; on home alone: ${describe(onHomeAlone)}; ` +
       `while not: ${describe(whileNot)}`,
   ];
-  if (whileSharing.short > 0) {
+  if (whileSharingOnHosts.short > 0) {
     const line =
-      `share starved batches: ${whileSharing.short} batch${whileSharing.short === 1 ? "" : "es"} short of RAM while ` +
-      `sharing on the batches' hosts, the first seen at ${formatIsoTime(firstShortAtMs ?? 0)}`;
+      `share starved batches: ${whileSharingOnHosts.short} batch${whileSharingOnHosts.short === 1 ? "" : "es"} short of ` +
+      `RAM while sharing on the batches' hosts, the first seen at ${formatIsoTime(firstShortAtMs ?? 0)}`;
     lines.push(`    ${line}`);
     failures.push(line);
   }
