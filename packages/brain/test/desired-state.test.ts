@@ -89,7 +89,22 @@ const desiredStates = (connection: MemoryConnection) =>
 const network: StaticSnapshotData = { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] };
 const loopOn = { enabled: true, target: "n00dles", hosts: ["n00dles"] };
 const loopOff = { enabled: false, target: null, hosts: [] };
+/** The travel for invitations' events (#228): its own tests' (invitations.test.ts), left out of the others. */
+const isInvitationEvent = (event: { type: string }) =>
+  ["invitationTravel", "invitationWaiting", "cityGroupChosen"].includes(event.type);
 const intent = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
+/**
+ * The travel for Tian Di Hui's invitation (#228): with hacking 50 and $1.2m in Sector-12, and nothing joined (short of
+ * Daedalus's count, the hacking way sold out: its eight count) or CyberSec joined (its ADR-V1 and S.N.A have a hacking
+ * value), the brain asks for it, last.
+ */
+const TRAVEL_ISHIMA = intent({ action: "travel", args: { city: "Ishima" } });
+/**
+ * The travel for city group B's invitations (#228, owner decision 54): with $30.6m (Ishima's $30m and three tickets),
+ * the group selling the most the brain would install (nothing joined: short of Daedalus's count, the most of them; else
+ * the most hacking value, DataJack, Neuralstimulator and Neuregen), Chongqing first.
+ */
+const TRAVEL_CHONGQING = intent({ action: "travel", args: { city: "Chongqing" } });
 const buyTor = (vendor = "Alpha Enterprises") => intent({ action: "buyTor", args: { vendor } });
 const buyProgram = (program: string) => intent({ action: "buyProgram", args: { program } });
 const upgradeHomeRam = (fromRam: number, vendor = "Alpha Enterprises") =>
@@ -504,7 +519,7 @@ test("programs are bought with the hack loop off too, once the Agent's medium sn
   const connection = connectAgent();
   send(connection, "slow", slowData());
   send(connection, "medium", mediumData(1, {}, { money: 1e9 }));
-  expect(desiredStates(connection).at(-1)).toEqual({ hackLoop: loopOff, intents: [buyTor()] });
+  expect(desiredStates(connection).at(-1)).toEqual({ hackLoop: loopOff, intents: [buyTor(), TRAVEL_CHONGQING] });
 });
 
 describe("the manual queue (#141, owner decision 36)", () => {
@@ -545,8 +560,11 @@ describe("the manual queue (#141, owner decision 36)", () => {
     send(connection, "slow", slowData());
     controller.addManualIntent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } });
     send(connection, "medium", mediumData(1, { n00dles: true }, { money: 1e9 }));
-    expect(desiredStates(connection).at(-1)?.intents).toEqual([buyTor()]);
-    expect(controller.intentsView()).toMatchObject([{ id: buyTor().id, source: "manual" }]);
+    expect(desiredStates(connection).at(-1)?.intents).toEqual([buyTor(), TRAVEL_CHONGQING]);
+    expect(controller.intentsView()).toMatchObject([
+      { id: buyTor().id, source: "manual" },
+      { id: TRAVEL_CHONGQING.id, source: "travel" },
+    ]);
   });
 
   const fastWith = (...intents: IntentOutcome[]) => ({
@@ -799,7 +817,8 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toHaveLength(100);
     expect(lastIntents(connection)?.at(-1)).toEqual(buyProgram("FTPCrack.exe"));
     expect(lines.filter((line) => line.startsWith("intents:"))).toEqual([
-      "intents: the manual queue holds 99, over its 95: backdoor(CSEC) wait for room in the protocol's 100 (cancel one)",
+      "intents: the manual queue holds 99, over its 95: backdoor(CSEC), travel(Ishima) wait for room in the protocol's " +
+        "100 (cancel one)",
     ]);
   });
 
@@ -810,12 +829,13 @@ describe("backdoors for the hacker factions (#195)", () => {
     send(connection, "static", withCsec);
     send(connection, "slow", slowData());
     send(connection, "medium", csecAt(60, { money: 2_000_000 }));
-    expect(lastIntents(connection)).toEqual([buyProgram("FTPCrack.exe"), BACKDOOR_CSEC]);
+    expect(lastIntents(connection)).toEqual([buyProgram("FTPCrack.exe"), BACKDOOR_CSEC, TRAVEL_ISHIMA]);
     controller.addManualIntent({ action: "backdoor", args: { hostname: "CSEC" } });
-    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC, buyProgram("FTPCrack.exe")]);
+    expect(lastIntents(connection)).toEqual([BACKDOOR_CSEC, buyProgram("FTPCrack.exe"), TRAVEL_ISHIMA]);
     expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
       [BACKDOOR_CSEC.id, "manual"],
       ["buyProgram(FTPCrack.exe)", "purchase"],
+      [TRAVEL_ISHIMA.id, "travel"],
     ]);
   });
 
@@ -1267,7 +1287,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       const { controller, connection, sentIds } = connectedWithLoopOff();
       send(connection, "slow", slowWith());
       send(connection, "medium", richMedium(1e9));
-      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install).
+      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install); no
+      // travel for invitations either (#228): the install puts the player back in Sector-12.
       expect(sentIds()).toEqual([]);
       expect(controller.programsView().waitingFor).toBe(
         "the augmentations' install countdown (programs are lost at the install)",
@@ -1340,7 +1361,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         factions: { ...slowWith().factions, state: { joined: [], invitations: [], queuedAugmentations: [] } },
       });
       send(connection, "medium", richMedium(1e9));
+      // Nothing joined: group A (seven, as B, in fewer travels) chosen, Sector-12's $15m held here (#228); the program
+      // goes, above it.
       expect(sentIds()).toEqual([buyProgram("BruteSSH.exe").id]);
+      expect(controller.invitationsView()).toMatchObject({ travel: null, hold: 15e6 });
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(controller.augmentationReserve()).toBe(0);
     });
@@ -1348,7 +1372,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     test("the install: after the owner's queue, through the gate and a backup, as `augmentation`; stored as sent", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
       const sent: unknown[] = [];
-      controller.subscribe((event) => sent.push(event));
+      // The travel for invitations (#228) has its own tests.
+      controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
       // All five bought already, no money left: the install is what's left, once its countdown has run out (#222).
       send(connection, "slow", slowWith(FIVE));
@@ -1395,7 +1420,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     test("the install reported done with no reset in the next slow snapshot: withdrawn, alerted (#213 re-review)", async () => {
       const { controller, connection, sentIds, settleBackup } = connectedWithLoopOff();
       const sent: { type: string }[] = [];
-      controller.subscribe((event) => sent.push(event));
+      // The travel for invitations (#228) has its own tests.
+      controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
       send(connection, "slow", slowWith(FIVE));
       // The countdown from the first medium snapshot, chosen at its end (#222); the gate's two after it.
       send(connection, "medium", richMedium(0));
@@ -1594,7 +1620,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       test("once w0r1d_d43m0n is rooted at its level: into BitNode 1, through the gate and a backup, stored as sent", async () => {
         const { controller, sentIds, waitingFor, backupNow, settleBackup, daemonMedium } = withTheRedPill();
         const stored: unknown[] = [];
-        controller.subscribe((event) => stored.push(event));
+        controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium(3000, { rooted: false });
         expect(controller.intentsView().map((view) => view.id)).not.toContain(BRAINS.id);
         daemonMedium();
@@ -1645,7 +1671,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     test("its guard: what's queued before it first, then w0r1d_d43m0n's preconditions, each saying why, before any backup", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, daemonMedium, releaseDestroy } = readyToDestroy();
       const stored: unknown[] = [];
-      controller.subscribe((event) => stored.push(event));
+      controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
       controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
       controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
@@ -1831,9 +1857,9 @@ describe("factions and their work (#203)", () => {
     const lines: string[] = [];
     const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
     const events: unknown[] = [];
-    // The faction work's events: the augmentation rule's progress (#222) is its own suite's.
+    // The faction work's events: the augmentation rule's progress (#222) and the invitations' (#228) are their suites'.
     controller.subscribe((event) => {
-      if (event.type !== "augmentationProgress") events.push(event);
+      if (event.type !== "augmentationProgress" && !isInvitationEvent(event)) events.push(event);
     });
     const connection = connectAgent();
     send(connection, "static", network);
@@ -1850,7 +1876,7 @@ describe("factions and their work (#203)", () => {
     ]);
     expect(controller.factionsView()).toMatchObject({
       joining: "CyberSec",
-      leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
     });
     send(connection, "medium", withSkills(["CyberSec"]));
     expect(lastState(connection)?.intents).toEqual([]);
@@ -2290,7 +2316,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       const near = earningWithFactions(EIGHT_COST - 10e6, EIGHT);
       expect(near.controller.augmentationsView()).toMatchObject({ committed: false, progress: { countdown: null } });
       expect(near.controller.augmentationReserve()).toBeCloseTo(EIGHT_COST, 0);
-      expect(sentPurchases(near.connection)).toEqual([]);
+      expect(sentPurchases(near.connection)).toEqual([TRAVEL_CHONGQING]);
       expect(near.controller.cloudServersView().waitingFor).toMatch(
         /beyond \$2,927,417,20\d held for the augmentations to buy before the install\)$/,
       );
@@ -2298,7 +2324,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       // $40m short: not covered within the 15 minutes: nothing held back, and the largest server bought.
       const far = earningWithFactions(EIGHT_COST - 40e6, EIGHT);
       expect(far.controller.augmentationReserve()).toBe(0);
-      expect(sentPurchases(far.connection)?.map((each) => each.action)).toEqual(["buyServer"]);
+      expect(sentPurchases(far.connection)?.map((each) => each.action)).toEqual(["buyServer", "travel"]);
     });
 
     test("the install's countdown (#222): the counted purchases' money held from cloud servers and home RAM", () => {
@@ -2403,7 +2429,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       { programs: PORT_OPENER_PROGRAMS.slice(0, 4) },
       { endMoney: 249_980_000 },
     );
-    expect(sentPurchases(connection)).toEqual([]);
+    expect(sentPurchases(connection)).toEqual([TRAVEL_CHONGQING]);
     expect(controller.cloudServersView().waitingFor).toBe(
       "money for pserv-0 with 8 GB ($440,000, beyond $250,000,000 held for SQLInject.exe)",
     );
@@ -2457,7 +2483,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       send(again, "medium", medium(100e6 + minute * 60 * 512), "session-2");
     }
     // $100.3m covers 1 TB ($56.3m), not 2 TB.
-    expect(sentPurchases(again)).toEqual([buyServer("pserv-0", 1_024)]);
+    expect(sentPurchases(again)).toEqual([buyServer("pserv-0", 1_024), TRAVEL_CHONGQING]);
   });
 
   test("the owner's cloud servers are never hosts, nor upgraded; they count toward the limit", () => {
@@ -2478,5 +2504,97 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     send(again, "slow", slowData(), "session-2");
     send(again, "medium", medium(20e6), "session-2");
     expect(sentPurchases(again)).toEqual([]);
+  });
+});
+
+describe("the travel for Tian Di Hui's invitation (#228)", () => {
+  /** Hacking 100, TOR owned (BruteSSH.exe, $500k, next), home at its most RAM, in `city` with `money`. */
+  const player = (city: string, money: number) =>
+    mediumData(100, {}, { money, city, hasTorRouter: true, homeRam: 2 ** 20 });
+  const connected = () => {
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    const ids = () =>
+      desiredStates(connection)
+        .at(-1)
+        ?.intents.map((each) => each.id) ?? [];
+    return { controller, connection, ids };
+  };
+
+  test("asked for in Sector-12, last, as `travel`; in Ishima, $1m held from programs until the invitation shows", () => {
+    const { controller, connection, ids } = connected();
+    send(connection, "medium", player("Sector-12", 1_400_000));
+    expect(ids()).toEqual(["buyProgram(BruteSSH.exe)", TRAVEL_ISHIMA.id]);
+    expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
+      ["buyProgram(BruteSSH.exe)", "purchase"],
+      [TRAVEL_ISHIMA.id, "travel"],
+    ]);
+    // In Ishima: not asked again; BruteSSH.exe would leave $900k, under the $1m held.
+    send(connection, "medium", player("Ishima", 1_400_000));
+    expect(ids()).toEqual([]);
+    expect(controller.programsView().waitingFor).toBe(
+      "money above the $1,000,000 held for an invitation travelled for",
+    );
+    expect(controller.invitationsView()).toMatchObject({ travel: null, hold: 1e6 });
+    send(connection, "medium", player("Ishima", 1_500_000));
+    expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
+    // Invited: the hold over, and A5 joins it.
+    send(connection, "medium", player("Ishima", 1_400_000));
+    send(connection, "slow", {
+      ...slowData(),
+      factions: {
+        backend: "sim",
+        state: { joined: [], invitations: ["Tian Di Hui"], queuedAugmentations: [] },
+        problem: null,
+      },
+    });
+    expect(controller.invitationsView().hold).toBe(0);
+    expect(ids()).toEqual(["buyProgram(BruteSSH.exe)", "joinFaction(Tian Di Hui)"]);
+  });
+
+  test("not with the owner's work set, nor the Augmentations switch off, saying why", () => {
+    const { controller, connection, ids } = connected();
+    controller.setWork({ kind: "crime", crime: "Shoplift" });
+    send(connection, "medium", player("Sector-12", 1_400_000));
+    expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
+    expect(controller.invitationsView().waitingFor).toBe("your work on the dashboard (it may be in a city)");
+    controller.setWork(null);
+    expect(ids()).toEqual(["buyProgram(BruteSSH.exe)", TRAVEL_ISHIMA.id]);
+    controller.setAugmentationsEnabled(false);
+    expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
+    expect(controller.invitationsView().waitingFor).toBe("the Augmentations switch, off");
+  });
+});
+
+describe("the city group, the World Daemon's reach and the owner's joins (#228 review)", () => {
+  const player = (money: number) =>
+    mediumData(100, {}, { money, city: "Sector-12", hasTorRouter: true, homeRam: 2 ** 20 });
+  const connected = () => {
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    return { controller, connection };
+  };
+
+  test("the group chosen is the reach's in the World Daemon's line; the Factions view says the travel", () => {
+    const { controller, connection } = connected();
+    send(connection, "medium", player(1e9));
+    send(connection, "medium", player(1e9));
+    // A (7, as B, in fewer travels from Sector-12): its $15m held here for Sector-12's invitation.
+    expect(controller.invitationsView().cityGroup).toMatch(/^group A /);
+    expect(controller.worldDaemonView().lines[0]).toMatch(/Sector-12 \d+, Aevum \d+\)/);
+    expect(controller.factionsView().invitations).toMatchObject({ travel: null, hold: 15e6, holdIn: "Sector-12" });
+  });
+
+  test("a city faction's join the owner queued fixes its group: Volhaven's, C", () => {
+    const { controller, connection } = connected();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Volhaven" } });
+    send(connection, "medium", player(1e9));
+    expect(controller.invitationsView().cityGroup).toMatch(/^group C \(Volhaven\)/);
   });
 });

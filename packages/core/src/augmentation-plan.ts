@@ -17,9 +17,10 @@ import {
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
 } from "./augmentations.ts";
+import { THE_RED_PILL } from "./bitnodes.ts";
 import { donationToReach } from "./donations.ts";
 import { HACKING_MULTIPLIERS, hackingValue } from "./faction-work.ts";
-import { FACTION_NAMES } from "./factions.ts";
+import { DAEDALUS, daedalusAugmentationsRequired, FACTION_NAMES } from "./factions.ts";
 
 /** An augmentation's data; an unknown name throws, as in augmentations.ts. */
 function dataOf(name: string) {
@@ -35,12 +36,51 @@ const gameOrder = (name: string) => Object.keys(AUGMENTATIONS).indexOf(name);
 
 /**
  * Whether the brain installs `name` (#210): a hacking value (A5's `hackingValue`, #203, at any level) above 0, and not
- * NeuroFlux
- * Governor, which is bought last with what money is left. Combat, charisma and Hacknet augmentations, and The Red Pill,
- * have none.
+ * NeuroFlux Governor, which is bought last with what money is left. Combat, charisma and Hacknet augmentations, and The
+ * Red Pill, have none. `short` of Daedalus's count (#228, core's `daedalusCountOf`): any but NeuroFlux Governor (it
+ * counts once, `Faction/FactionJoinCondition.ts:130`) and The Red Pill (A8's), as each adds one to the count. (Legacy
+ * also takes any augmentation in some situations, `faction-manager.js:160-167`: past 40 owned, in BN6 and BN7 or with
+ * Bladeburners, or within 20 minutes of an install.)
  */
-export function isWorthInstalling(name: string): boolean {
-  return name !== NEUROFLUX_GOVERNOR && hackingValue(name, 1) > 0;
+export function isWorthInstalling(name: string, short = false): boolean {
+  // First, for its throw on a name core doesn't know (`hackingValue`'s), whatever the rest says.
+  const value = hackingValue(name, 1);
+  if (name === NEUROFLUX_GOVERNOR) return false;
+  return short ? name !== THE_RED_PILL : value > 0;
+}
+
+/** Where the player stands on Daedalus's count of installed augmentations (#228). */
+export interface DaedalusCount {
+  /** `ownedAugs`' names: NeuroFlux Governor's levels are one entry's (`Augmentation/AugmentationHelpers.ts:55-58`). */
+  installed: number;
+  /** The BitNode's (`daedalusAugmentationsRequired`). */
+  required: number;
+  /**
+   * Short of it: Daedalus neither joined nor invited, and fewer installed than required
+   * (`Faction/FactionJoinCondition.ts:130`, `p.augmentations.length >= n`). Then any augmentation is worth installing
+   * (`isWorthInstalling(name, true)`).
+   */
+  short: boolean;
+}
+
+/** The count, from the slow snapshot's reset info and faction state (#228): one rule, so A5, A6 and A8 agree. */
+export function daedalusCountOf({
+  currentNode,
+  ownedSF,
+  installed,
+  joined,
+  invitations,
+}: {
+  currentNode: number;
+  ownedSF: Readonly<Record<string, number>>;
+  installed: Readonly<Record<string, number>>;
+  joined: readonly { name: string }[];
+  invitations: readonly string[];
+}): DaedalusCount {
+  const count = Object.keys(installed).length;
+  const required = daedalusAugmentationsRequired(currentNode, ownedSF);
+  const met = joined.some((faction) => faction.name === DAEDALUS) || invitations.includes(DAEDALUS);
+  return { installed: count, required, short: !met && count < required };
 }
 
 /** The multipliers an install brings, each the product over `names` (each NeuroFlux Governor copy listed counts). */
@@ -213,6 +253,8 @@ function sellerReputations(terms: DonationTerms | undefined): (faction: string) 
  * in buy order, costs no more than the money (core's `purchaseSequenceCost`). Only those worth installing count.
  * With `donations` (#225), one no joined seller's reputation reaches is a candidate too where a seller taking donations
  * sells it: kept if the set's prices and its donations (`planDonations`) together are within the money.
+ * `short` of Daedalus's count (#228): every augmentation is worth installing (`isWorthInstalling`); those of no hacking
+ * value come after, the cheapest first, so money that can't cover all of them buys the most.
  */
 export function chooseAugmentationsToBuy(
   reached: readonly string[],
@@ -220,12 +262,13 @@ export function chooseAugmentationsToBuy(
   money: number,
   hackingLevel: number,
   donations?: DonationTerms,
+  short = false,
 ): AugmentationSet {
   const owned = (name: string) => Object.hasOwn(state.installed, name) || state.queued.includes(name);
   const available = (name: string) => reached.includes(name) || (donations?.sellers[name]?.length ?? 0) > 0;
   const sellerReputation = sellerReputations(donations);
   const candidates = [...new Set([...reached, ...Object.keys(donations?.sellers ?? {})])]
-    .filter((name) => available(name) && isWorthInstalling(name) && !owned(name))
+    .filter((name) => available(name) && isWorthInstalling(name, short) && !owned(name))
     .sort(
       (a, b) =>
         hackingValue(b, hackingLevel) - hackingValue(a, hackingLevel) ||
@@ -356,6 +399,7 @@ export interface CountedPurchases extends InstallCounts {
  * With `donations` (#225), a level beyond `neuroFluxReputation` is bought with a donation at a NeuroFlux seller taking
  * donations, the one it raises least, on top of the set's donations (legacy `faction-manager.js:822-860`): the money
  * covers its price and what its donation adds. The money then includes every donation.
+ * `short` of Daedalus's count (#228): what's queued counts whatever its value (`isWorthInstalling`).
  */
 export function affordableCounts({
   state,
@@ -364,6 +408,7 @@ export function affordableCounts({
   money,
   neuroFluxReputation,
   donations,
+  short = false,
 }: {
   state: AugmentationPurchaseState;
   installable?: readonly string[];
@@ -371,8 +416,9 @@ export function affordableCounts({
   money: number;
   neuroFluxReputation: number;
   donations?: DonationTerms;
+  short?: boolean;
 }): CountedPurchases {
-  const queuedWorth = installable.filter(isWorthInstalling).length;
+  const queuedWorth = installable.filter((name) => isWorthInstalling(name, short)).length;
   const queuedNeuroFlux = installable.filter((name) => name === NEUROFLUX_GOVERNOR).length;
   const affordable = queuedWorth + set.purchases.length;
   let queued = [...state.queued, ...set.purchases.map((purchase) => purchase.name)];

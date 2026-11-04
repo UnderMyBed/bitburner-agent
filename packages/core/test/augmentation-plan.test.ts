@@ -8,6 +8,7 @@ import {
   augmentationBuyOrder,
   chooseAugmentationsToBuy,
   countdownExtensionMs,
+  daedalusCountOf,
   hackingExpForLevel,
   INSTALL_AT_AUGMENTATIONS,
   INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX,
@@ -23,7 +24,7 @@ import {
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
 } from "../src/augmentation-plan.ts";
-import { type AugmentationPurchaseState, purchaseSequenceCost } from "../src/augmentations.ts";
+import { AUGMENTATION_NAMES, type AugmentationPurchaseState, purchaseSequenceCost } from "../src/augmentations.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -46,7 +47,7 @@ const LEVEL = 300;
 
 describe("which augmentations", () => {
   test("worth installing: a hacking value, not NeuroFlux Governor", () => {
-    expect(CYBERSEC.every(isWorthInstalling)).toBe(true);
+    expect(CYBERSEC.every((name) => isWorthInstalling(name))).toBe(true);
     expect(isWorthInstalling("Artificial Synaptic Potentiation")).toBe(true); // hacking chance, speed and exp only
     expect(isWorthInstalling("Social Negotiation Assistant (S.N.A)")).toBe(true); // faction_rep alone
     expect(isWorthInstalling("NeuroFlux Governor")).toBe(false);
@@ -55,6 +56,46 @@ describe("which augmentations", () => {
     expect(isWorthInstalling("The Red Pill")).toBe(false);
     expect(isWorthInstalling("Unstable Circadian Modulator")).toBe(false); // drawn at random
     expect(() => isWorthInstalling("Nothing")).toThrow(RangeError);
+  });
+
+  test("short of Daedalus's count (#228): any augmentation but NeuroFlux Governor and The Red Pill", () => {
+    for (const name of [...CYBERSEC, "Combat Rib I", "Speech Processor Implant", "Neural Wit Amplifier"]) {
+      expect(isWorthInstalling(name, true)).toBe(true);
+    }
+    expect(isWorthInstalling("Neural Wit Amplifier")).toBe(false);
+    expect(isWorthInstalling("NeuroFlux Governor", true)).toBe(false);
+    expect(isWorthInstalling("The Red Pill", true)).toBe(false);
+    expect(() => isWorthInstalling("Nothing", true)).toThrow(RangeError);
+  });
+
+  test("short of Daedalus's count (#228): under the BitNode's, NeuroFlux Governor once, until it invites", () => {
+    /**
+     * `count` installed: NeuroFlux Governor at 124 levels (one, `Faction/FactionJoinCondition.ts:130`), then others.
+     */
+    const installed = (count: number) =>
+      Object.fromEntries([
+        ["NeuroFlux Governor", 124],
+        ...AUGMENTATION_NAMES.filter((name) => name !== "NeuroFlux Governor")
+          .slice(0, count - 1)
+          .map((name) => [name, 1]),
+      ]);
+    const base = { currentNode: 1, ownedSF: {}, joined: [{ name: "CyberSec" }], invitations: [] };
+    expect(daedalusCountOf({ ...base, installed: installed(29) })).toEqual({
+      installed: 29,
+      required: 30,
+      short: true,
+    });
+    expect(daedalusCountOf({ ...base, installed: installed(30) })).toEqual({
+      installed: 30,
+      required: 30,
+      short: false,
+    });
+    expect(daedalusCountOf({ ...base, installed: {} })).toEqual({ installed: 0, required: 30, short: true });
+    // Joined or invited, it isn't: the count is met.
+    expect(daedalusCountOf({ ...base, installed: installed(29), joined: [{ name: "Daedalus" }] }).short).toBe(false);
+    expect(daedalusCountOf({ ...base, installed: installed(29), invitations: ["Daedalus"] }).short).toBe(false);
+    // The BitNode's requirement: BN15's 20.
+    expect(daedalusCountOf({ ...base, currentNode: 15, installed: installed(20) }).short).toBe(false);
   });
 
   test("the gains: each multiplier's product, NeuroFlux Governor once per copy", () => {
@@ -223,6 +264,39 @@ describe("the set to buy", () => {
     );
     expect(chooseAugmentationsToBuy([BITWIRE], { ...BN1, queued: [BITWIRE] }, 1e12, LEVEL).purchases).toEqual([]);
     expect(() => chooseAugmentationsToBuy(["Nothing"], BN1, 1e12, LEVEL)).toThrow(RangeError);
+  });
+
+  describe("short of Daedalus's count (#228)", () => {
+    /** Tian Di Hui's no-value three, and Neural Wit Amplifier: $2.5m, $12.5m, $50m and $10m. */
+    const WIRED = "Wired Reflexes";
+    const SPEECH = "Speech Enhancement";
+    const PROCESSOR = "Speech Processor Implant";
+    const WIT = "Neural Wit Amplifier";
+    const SNA = "Social Negotiation Assistant (S.N.A)"; // faction_rep: a hacking value, $30m
+
+    test("no-value augmentations are chosen too; not short, they aren't", () => {
+      const reached = [WIRED, SPEECH, PROCESSOR, WIT];
+      expect(chooseAugmentationsToBuy(reached, BN1, 1e12, LEVEL).purchases).toEqual([]);
+      const set = chooseAugmentationsToBuy(reached, BN1, 1e12, LEVEL, undefined, true);
+      expect(set.purchases.map((each) => each.name).sort()).toEqual([...reached].sort());
+      // NeuroFlux Governor and The Red Pill stay out, short or not.
+      expect(
+        chooseAugmentationsToBuy(["NeuroFlux Governor", "The Red Pill"], BN1, 1e12, LEVEL, undefined, true).purchases,
+      ).toEqual([]);
+    });
+
+    test("money for some: hacking value first, then the cheapest", () => {
+      // S.N.A has a value: first, whatever its price. Then by price: Wired Reflexes, Neural Wit Amplifier, Speech
+      // Enhancement, and the Speech Processor Implant ($50m) past the money. In buy order (dearest first).
+      const four = 30e6 + 12.5e6 * 1.9 + 10e6 * 1.9 ** 2 + 2.5e6 * 1.9 ** 3;
+      const set = chooseAugmentationsToBuy([PROCESSOR, SPEECH, WIT, WIRED, SNA], BN1, four, LEVEL, undefined, true);
+      expect(set.purchases.map((each) => each.name)).toEqual([SNA, SPEECH, WIT, WIRED]);
+      expect(set.money).toBeCloseTo(four, 0);
+      // $30m: Wired Reflexes, then Neural Wit ($10m + $2.5m × 1.9); Speech Enhancement with them is $40.5m, past it.
+      const cheap = chooseAugmentationsToBuy([PROCESSOR, SPEECH, WIT, WIRED], BN1, 30e6, LEVEL, undefined, true);
+      // (The dearest first would buy Speech Enhancement and Wired Reflexes.)
+      expect(cheap.purchases.map((each) => each.name)).toEqual([WIT, WIRED]);
+    });
   });
 });
 
@@ -440,6 +514,19 @@ describe("the counts", () => {
       affordableWithNeuroFlux: 1,
     });
     expect(affordableCounts({ state, set, money: set.money, neuroFluxReputation: 0 }).affordable).toBe(2);
+  });
+
+  test("short of Daedalus's count (#228): what's queued counts whatever its value", () => {
+    const state = { ...BN1, queued: ["Combat Rib I", "Neural Wit Amplifier", "NeuroFlux Governor"] };
+    const set = chooseAugmentationsToBuy([], state, 0, LEVEL);
+    expect(affordableCounts({ state, set, money: 0, neuroFluxReputation: 0 })).toMatchObject({
+      affordable: 0,
+      affordableWithNeuroFlux: 1,
+    });
+    expect(affordableCounts({ state, set, money: 0, neuroFluxReputation: 0, short: true })).toMatchObject({
+      affordable: 2,
+      affordableWithNeuroFlux: 3,
+    });
   });
 
   test("what's queued counts: those worth installing, and NeuroFlux Governor's copies with NeuroFlux; not the rest", () => {

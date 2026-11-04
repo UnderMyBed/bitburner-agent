@@ -6,9 +6,11 @@ export {
   type CountedPurchases,
   chooseAugmentationsToBuy,
   countdownExtensionMs,
+  type DaedalusCount,
   type Donation,
   type DonationSeller,
   type DonationTerms,
+  daedalusCountOf,
   hackingExpForLevel,
   INSTALL_AT_AUGMENTATIONS,
   INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX,
@@ -266,6 +268,7 @@ export {
   type WorkingPerson,
 } from "./faction-work.ts";
 export {
+  CITY_FACTION_GROUPS,
   DAEDALUS,
   type DaedalusFigures,
   daedalusAugmentationsRequired,
@@ -276,6 +279,10 @@ export {
   type FactionData,
   JOIN_FACTION_WORKER_NAME,
   type PlayerRequirement,
+  TIAN_DI_HUI,
+  TIAN_DI_HUI_CITIES,
+  TIAN_DI_HUI_HACKING,
+  TIAN_DI_HUI_MONEY,
 } from "./factions.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {

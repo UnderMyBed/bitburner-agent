@@ -145,7 +145,7 @@ export interface DashboardStatus {
     /** Each joined faction's favour after the next install and when its donations unlock (#225, `donationStatus`). */
     donations?: Record<string, string>;
   } | null;
-  /** The brain's joins and faction work (#203): its switch, the join under way, the invitations left, its choice. */
+  /** The brain's joins and faction work (#203): its switch, the join under way, its city group, its choice (#228). */
   factionWork: FactionsView;
   /** The hacking ceiling now, and what hacking earned over the last 10 minutes (#196). */
   hacking: HackingView;
