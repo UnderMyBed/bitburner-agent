@@ -705,10 +705,10 @@ export class LandingWatch {
     if (expected === undefined) return { outOfOrder: false, expected: false };
     this.#expected.delete(record.id);
     if (record.skipped) return { outOfOrder: false, expected: true };
-    const latestOn = this.#latestLandedOn.get(expected.target) ?? Number.NEGATIVE_INFINITY;
-    this.#latestLandedOn.set(expected.target, Math.max(latestOn, record.landAt));
+    const latestLandedOnTarget = this.#latestLandedOn.get(expected.target) ?? Number.NEGATIVE_INFINITY;
+    this.#latestLandedOn.set(expected.target, Math.max(latestLandedOnTarget, record.landAt));
     this.#latestLandAt = Math.max(this.#latestLandAt, record.landAt);
-    return { outOfOrder: record.landAt < latestOn, expected: true };
+    return { outOfOrder: record.landAt < latestLandedOnTarget, expected: true };
   }
 
   /** The parts not recorded long after their time, forgotten now: how many. */
@@ -854,15 +854,17 @@ export function recordMoneyLook(health: BatcherHealth, target: string, money: nu
 }
 
 /**
- * A hack landed on `target` at `atMs` (#236), in the health: the last hack (the latest landing); and the first on the
- * target batched (the health's) since another's, a move, idle from the last hack before it, on the target before. The
- * target before still lands its batches for a while, among the new one's: a hack of its then is no move, nor is the
- * new target's next. A hack that took nothing (its chance failed) counts too: the batcher is hacking that target.
+ * A hack landed on `target` at `atMs` (#236), in the health: the last hack (the latest landing); and, the first on the
+ * target batched (the health's) since that target last changed (`targetChanged`, the batcher's to say), a move, idle
+ * from the last hack before it, on whatever target that was: the same one after a detour through a target never
+ * hacked (#237's review). The target before still lands its batches for a while, among the new one's: a hack of its
+ * then is no move, nor is the new target's next. A hack that took nothing (its chance failed) counts too: the batcher
+ * is hacking that target.
  */
-export function recordHackLanded(health: BatcherHealth, target: string, atMs: number): void {
+export function recordHackLanded(health: BatcherHealth, target: string, atMs: number, targetChanged: boolean): void {
   const last = health.lastHack ?? null;
   health.lastMove ??= null;
-  if (last !== null && last.target !== target && target === health.target && health.lastMove?.to !== target) {
+  if (last !== null && targetChanged && target === health.target) {
     health.lastMove = { from: last.target, to: target, idleMs: Math.max(0, atMs - last.atMs), atMs };
   }
   if (last === null || atMs >= last.atMs) health.lastHack = { target, atMs };
@@ -1090,8 +1092,9 @@ export interface BatcherHealth {
    */
   lastHack?: { target: string; atMs: number } | null;
   /**
-   * The last move (#236): the first hack on a target other than the last hack's, `to`, landed at `atMs`, `idleMs`
-   * after the last on `from`; null before one. Absent from an older batcher.
+   * The last move (#236): the first hack on the target batched since it changed, `to`, landed at `atMs`, `idleMs`
+   * after the last hack before it, on `from` (`to` itself after a detour through a target never hacked); null before
+   * one. Kept until the next move. Absent from an older batcher.
    */
   lastMove?: { from: string; to: string; idleMs: number; atMs: number } | null;
   /**

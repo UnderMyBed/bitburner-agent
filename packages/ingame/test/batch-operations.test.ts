@@ -1243,6 +1243,12 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   const waveLandsAt = Math.max(...harakiriWave.map((each) => each.landAt));
   expect(waveLandsAt - (await simulation.now())).toBeGreaterThan(2 * 60_000);
 
+  // Right after a batch on n00dles is planned (#237's review): a wait for RAM is said at once, not 10 s on.
+  const startedBefore = (await healthOf(simulation)).batchesStarted;
+  for (let waited = 0; (await healthOf(simulation)).batchesStarted === startedBefore; waited += 100) {
+    expect(waited, "a batch planned within a minute").toBeLessThan(60_000);
+    await simulation.advance(100);
+  }
   // The move: to joesguns, prepared, the next dropped with its wave still out.
   const before = await healthOf(simulation);
   const movedAt = await simulation.now();
@@ -1287,7 +1293,7 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   expect(silentlyWaiting).toBe(0);
   // joesguns' first hack lands a weaken after the move, and the seconds n00dles' batches take to free the RAM for one,
   // long before harakiri-sushi's wave: before #236, one spacing after the wave, 194 s in, idle 161 s.
-  expect(firstNewHackAt - movedAt).toBeLessThan(joesgunsWeakenMs + 30_000);
+  expect(firstNewHackAt - movedAt).toBeLessThan(joesgunsWeakenMs + 45_000);
   expect(firstNewHackAt).toBeLessThan(waveLandsAt);
   // Its health says the move and its idle time, as the hacks in flight showed them.
   expect(after.lastMove).toMatchObject({ from: "n00dles", to: "joesguns" });
@@ -1335,10 +1341,19 @@ test("a next target with no room for a wave for a minute is said (#236), until i
     expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
     await simulation.advance(5_000);
   }
-  // foodnstuff sent to prepare next on less RAM than a thread's: no room for a wave.
+  // foodnstuff sent to prepare next on less RAM than a thread's: no room for a wave. The batches planned on the rest,
+  // as the brain plans them beside a next target.
   const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const rest = batchPlan(
+    N00DLES,
+    { skills: { hacking: 50, intelligence: 0 }, mults: MULTS },
+    batchRamGb([16, 16]) * 0.6,
+  );
+  if (rest === null) throw new Error("no plan for n00dles on the rest");
   const withNext = (ramGb: number) => ({
     ...n00dlesConfig(),
+    hackShare: rest.hackShare,
+    spacingMs: rest.spacingMs,
     next: { target: "foodnstuff", figures: foodnstuff, ramGb },
   });
   await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(withNext(1))] });
@@ -1356,4 +1371,53 @@ test("a next target with no room for a wave for a minute is said (#236), until i
   const fed = await healthOf(simulation);
   expect(fed.next?.wavesStarted).toBeGreaterThan(0);
   expect(fed).toMatchObject({ problem: null, desyncs: 0, batchesShort: 0 });
+});
+
+test("batching, a stretch with no batch that fits after the first is said too (#237's review), and clears", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(n00dlesConfig())] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  expect((await healthOf(simulation)).problem).toBeNull();
+  // A player's own scripts take each bit of RAM the batches free, every second for 100 s: no batch fits.
+  const idle: number[] = [];
+  for (const host of OPERATION_HOSTS) await simulation.writeFile(host, "idle.js", IDLE);
+  const problems = new Set<string>();
+  let saidWithinHalfAMinute = false;
+  for (let second = 0; second < 100; second++) {
+    const { pid } = await simulation.run("home", "free-ram.js", { args: OPERATION_HOSTS });
+    await simulation.advance(1);
+    const free = JSON.parse(await printed(simulation, pid)) as Record<string, number>;
+    for (const host of OPERATION_HOSTS) {
+      const threads = Math.floor((free[host] ?? 0) / 1.6 + 1e-9);
+      if (threads === 0) continue;
+      const started = await simulation.run(host, "idle.js", { threads, args: [second] });
+      expect(started.error).toBeUndefined();
+      idle.push(started.pid);
+    }
+    await simulation.advance(1_000);
+    const problem = (await healthOf(simulation)).problem;
+    if (problem !== null) problems.add(problem);
+    if (problem !== null && second < 30) saidWithinHalfAMinute = true;
+  }
+  // Said once none had fitted for a minute (not for a gap among batches in step), once, with what holds the RAM and
+  // the next of it to land.
+  const said = [...problems];
+  expect(saidWithinHalfAMinute).toBe(false);
+  expect(said).toHaveLength(1);
+  for (const problem of said) {
+    expect(problem).toMatch(
+      /^no batch on n00dles fits the RAM yet: it's held by (its operations on n00dles|scripts not its own)/,
+    );
+  }
+  // The RAM back: batches again, and the problem gone. (A batch planned before the scripts took its RAM is short: the
+  // player's doing.)
+  for (const pid of idle) await simulation.kill(pid);
+  await simulation.advance(30_000);
+  expect(await healthOf(simulation)).toMatchObject({ state: "batching", problem: null, desyncs: 0 });
 });

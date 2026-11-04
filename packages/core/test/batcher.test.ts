@@ -724,34 +724,45 @@ describe("landings", () => {
 });
 
 describe("the hacks landed and the moves (#236)", () => {
-  test("the last hack; the first on the target batched after another's is a move, idle from the last before it", () => {
+  test("the last hack; the first on the target batched after it changed is a move, idle from the last before it", () => {
     const health = newBatcherHealth("n00dles", "run", 0);
     expect(health).toMatchObject({ lastHack: null, lastMove: null });
-    recordHackLanded(health, "n00dles", 1_000);
-    recordHackLanded(health, "n00dles", 1_500);
+    recordHackLanded(health, "n00dles", 1_000, false);
+    recordHackLanded(health, "n00dles", 1_500, false);
     expect(health).toMatchObject({ lastHack: { target: "n00dles", atMs: 1_500 }, lastMove: null });
+    // Moved: the old target's batches still land, its hacks no move; the new target's first is.
     health.target = "joesguns";
-    recordHackLanded(health, "joesguns", 61_500);
-    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 61_500 });
-    expect(health.lastHack).toEqual({ target: "joesguns", atMs: 61_500 });
-    // The old target's batches still landing among the new one's: no move either way.
-    recordHackLanded(health, "n00dles", 61_600);
-    recordHackLanded(health, "joesguns", 62_000);
-    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 61_500 });
+    recordHackLanded(health, "n00dles", 1_600, true);
+    expect(health.lastMove).toBeNull();
+    recordHackLanded(health, "joesguns", 61_600, true);
+    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 61_600 });
+    expect(health.lastHack).toEqual({ target: "joesguns", atMs: 61_600 });
+    // The old target's last hacks among the new one's, after it: no move either way.
+    recordHackLanded(health, "n00dles", 61_700, false);
+    recordHackLanded(health, "joesguns", 62_000, false);
+    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 61_600 });
     expect(health.lastHack).toEqual({ target: "joesguns", atMs: 62_000 });
     // A move back.
     health.target = "n00dles";
-    recordHackLanded(health, "n00dles", 62_100);
+    recordHackLanded(health, "n00dles", 62_100, true);
     expect(health.lastMove).toEqual({ from: "joesguns", to: "n00dles", idleMs: 100, atMs: 62_100 });
+  });
+
+  test("a detour through a target never hacked (#237's review): back on the same target, still a move, with its idle", () => {
+    const health = newBatcherHealth("phantasy", "run", 0);
+    recordHackLanded(health, "phantasy", 1_000, false);
+    // To 4sigma, never hacked, and back: the first hack on phantasy since.
+    recordHackLanded(health, "phantasy", 700_000, true);
+    expect(health.lastMove).toEqual({ from: "phantasy", to: "phantasy", idleMs: 699_000, atMs: 700_000 });
   });
 
   test("an older batcher's health without the fields; an earlier landing drained late never moves the last back", () => {
     const older = newBatcherHealth("n00dles", "run", 0);
     delete older.lastHack;
     delete older.lastMove;
-    recordHackLanded(older, "n00dles", 2_000);
+    recordHackLanded(older, "n00dles", 2_000, true);
     expect(older).toMatchObject({ lastHack: { target: "n00dles", atMs: 2_000 }, lastMove: null });
-    recordHackLanded(older, "n00dles", 1_990);
+    recordHackLanded(older, "n00dles", 1_990, false);
     expect(older.lastHack).toEqual({ target: "n00dles", atMs: 2_000 });
   });
 });
