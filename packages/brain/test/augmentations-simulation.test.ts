@@ -69,10 +69,6 @@ test.each(SEEDS)(
   async (seed) => {
     const fresh = await freshStartOf({ withDesiredState: true, seed });
     const { game, brain, simulation } = fresh;
-    // Sharing off until #230 (the batcher's sharing starves batches on a small home at a cycle's start): from #228 the
-    // brain travels for Tian Di Hui at the cycle's start, and its faction work there has the batcher share on home's
-    // first few GB (`share starved batches`, a run report failure). #230 turns it back on.
-    fresh.controller().setShareEnabled(false);
     const slow = () => fresh.latest<SlowSnapshotData>("slow");
     const hacking = (medium: MediumSnapshotData | null) =>
       (medium?.player.skills as { hacking?: number } | undefined)?.hacking ?? Number.NaN;
@@ -200,6 +196,12 @@ test.each(SEEDS)(
       expect.stringMatching(
         /^ {4}\S+ {2}installed \(seen in a slow snapshot\): .*hacking ×1\.1\d\d.*the Agent disconnected at /,
       ),
+    );
+    // Sharing on (#230): Tian Di Hui's work at the cycle's start shares home beside the hosts, and no batch is short
+    // while the share is on the batches' hosts; the batcher's own short batches, if any, are shown apart.
+    expect(lines).toContainEqual(expect.stringMatching(/^ {4}shared for \d+ min: /));
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^ {4}while sharing on the batches' hosts: \d+ late, \d+ lost, 0 short; on home alone: /),
     );
     expect(failures).toEqual([]);
     console.log(
