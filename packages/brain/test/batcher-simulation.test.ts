@@ -92,6 +92,8 @@ test.each(SEEDS)(
     console.log(section);
     expect(section).toContain("batching on n00dles");
     expect(section).toContain("  desyncs: none\n  late or lost: none\n  least slack: ");
+    // No batch short of RAM (#232): each is fitted to the RAM as it will be held.
+    expect(section).toContain("\n  short of RAM: none\n");
     expect(section).toContain("  problems: none");
     // Sent and running throughout (#211): no stretch of fast snapshots with it not running.
     expect(section).toContain("  sent but not running (3 fast snapshots in a row or more):\n    none");

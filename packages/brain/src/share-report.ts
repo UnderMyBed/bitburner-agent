@@ -3,8 +3,8 @@
 // reputation while it shared against while it didn't. Two failures of their own:
 // - **share starved batches:** batches short of RAM while it shared on the batches' hosts (#226's review: on their
 //   own terms): the share took RAM a batch needed. A share on home alone, beside the hosts, can't (#230): batches
-//   short then are shown apart, the batcher's own. Late and lost, while sharing or not, are the batcher's out-of-step
-//   failure.
+//   short then are shown apart, the batcher's own (its `batches short of RAM` failure, #232). Late and lost, while
+//   sharing or not, are the batcher's out-of-step failure.
 // - **share idle:** asked to share while batching, with the room for a thread free, and no share threads for 10
 //   minutes: its rounds don't start.
 import { SHARE_RAM_GB, type SharingHealth } from "@bitburner-agent/core";
