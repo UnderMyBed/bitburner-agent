@@ -159,7 +159,7 @@ test.each(SEEDS)(
     expect(text).toMatch(/ {4}travel\(Ishima\): done after 1 try/);
     expect(text).toMatch(/hacking for Tian Di Hui, for .*, for Daedalus's count: 23 of 30 augmentations installed/);
     expect(text).toMatch(/Daedalus: (joined|invited); 33 of 30 augmentations installed/);
-    expect(failures.filter((failure) => /Daedalus out of reach|NOT INVITED/.test(failure))).toEqual([]);
+    expect(failures.filter((failure) => /Daedalus count stuck|NOT INVITED/.test(failure))).toEqual([]);
     const worked = events(FACTION_WORK_CHOSEN_EVENT_KIND).map((event) => (event.detail as { faction: string }).faction);
     console.log(
       `seed ${seed}: worked for ${[...new Set(worked)].join(", ")}; bought ${counting.length} that count ` +

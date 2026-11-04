@@ -69,9 +69,9 @@ test.each(SEEDS)(
   async (seed) => {
     const fresh = await freshStartOf({ withDesiredState: true, seed });
     const { game, brain, simulation } = fresh;
-    // Sharing off (#224 has its own suite): from #228 the brain travels for Tian Di Hui at the cycle's start, and its
-    // faction work there has the batcher share on home's first few GB, where it starves batches (`share starved
-    // batches`, a run report failure this suite isn't about).
+    // Sharing off until #230 (the batcher's sharing starves batches on a small home at a cycle's start): from #228 the
+    // brain travels for Tian Di Hui at the cycle's start, and its faction work there has the batcher share on home's
+    // first few GB (`share starved batches`, a run report failure). #230 turns it back on.
     fresh.controller().setShareEnabled(false);
     const slow = () => fresh.latest<SlowSnapshotData>("slow");
     const hacking = (medium: MediumSnapshotData | null) =>

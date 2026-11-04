@@ -89,6 +89,9 @@ const desiredStates = (connection: MemoryConnection) =>
 const network: StaticSnapshotData = { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] };
 const loopOn = { enabled: true, target: "n00dles", hosts: ["n00dles"] };
 const loopOff = { enabled: false, target: null, hosts: [] };
+/** The travel for invitations' events (#228): its own tests' (invitations.test.ts), left out of the others. */
+const isInvitationEvent = (event: { type: string }) =>
+  ["invitationTravel", "invitationWaiting", "cityGroupChosen"].includes(event.type);
 const intent = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
 /**
  * The travel for Tian Di Hui's invitation (#228): with hacking 50 and $1.2m in Sector-12, and nothing joined (short of
@@ -1284,8 +1287,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       const { controller, connection, sentIds } = connectedWithLoopOff();
       send(connection, "slow", slowWith());
       send(connection, "medium", richMedium(1e9));
-      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install); no travel
-      // for invitations either (#228): the install puts the player back in Sector-12.
+      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install); no
+      // travel for invitations either (#228): the install puts the player back in Sector-12.
       expect(sentIds()).toEqual([]);
       expect(controller.programsView().waitingFor).toBe(
         "the augmentations' install countdown (programs are lost at the install)",
@@ -1369,7 +1372,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     test("the install: after the owner's queue, through the gate and a backup, as `augmentation`; stored as sent", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
       const sent: unknown[] = [];
-      controller.subscribe((event) => sent.push(event));
+      // The travel for invitations (#228) has its own tests.
+      controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
       // All five bought already, no money left: the install is what's left, once its countdown has run out (#222).
       send(connection, "slow", slowWith(FIVE));
@@ -1416,7 +1420,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     test("the install reported done with no reset in the next slow snapshot: withdrawn, alerted (#213 re-review)", async () => {
       const { controller, connection, sentIds, settleBackup } = connectedWithLoopOff();
       const sent: { type: string }[] = [];
-      controller.subscribe((event) => sent.push(event));
+      // The travel for invitations (#228) has its own tests.
+      controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
       send(connection, "slow", slowWith(FIVE));
       // The countdown from the first medium snapshot, chosen at its end (#222); the gate's two after it.
       send(connection, "medium", richMedium(0));
@@ -1615,7 +1620,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       test("once w0r1d_d43m0n is rooted at its level: into BitNode 1, through the gate and a backup, stored as sent", async () => {
         const { controller, sentIds, waitingFor, backupNow, settleBackup, daemonMedium } = withTheRedPill();
         const stored: unknown[] = [];
-        controller.subscribe((event) => stored.push(event));
+        controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium(3000, { rooted: false });
         expect(controller.intentsView().map((view) => view.id)).not.toContain(BRAINS.id);
         daemonMedium();
@@ -1666,7 +1671,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     test("its guard: what's queued before it first, then w0r1d_d43m0n's preconditions, each saying why, before any backup", async () => {
       const { controller, connection, sentIds, waitingFor, backupNow, daemonMedium, releaseDestroy } = readyToDestroy();
       const stored: unknown[] = [];
-      controller.subscribe((event) => stored.push(event));
+      controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
       controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
       controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
       controller.addManualIntent({ action: "travel", args: { city: "Volhaven" } });
@@ -1852,9 +1857,9 @@ describe("factions and their work (#203)", () => {
     const lines: string[] = [];
     const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
     const events: unknown[] = [];
-    // The faction work's events: the augmentation rule's progress (#222) is its own suite's.
+    // The faction work's events: the augmentation rule's progress (#222) and the invitations' (#228) are their suites'.
     controller.subscribe((event) => {
-      if (event.type !== "augmentationProgress") events.push(event);
+      if (event.type !== "augmentationProgress" && !isInvitationEvent(event)) events.push(event);
     });
     const connection = connectAgent();
     send(connection, "static", network);
@@ -2561,5 +2566,35 @@ describe("the travel for Tian Di Hui's invitation (#228)", () => {
     controller.setAugmentationsEnabled(false);
     expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
     expect(controller.invitationsView().waitingFor).toBe("the Augmentations switch, off");
+  });
+});
+
+describe("the city group, the World Daemon's reach and the owner's joins (#228 review)", () => {
+  const player = (money: number) =>
+    mediumData(100, {}, { money, city: "Sector-12", hasTorRouter: true, homeRam: 2 ** 20 });
+  const connected = () => {
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", slowData());
+    return { controller, connection };
+  };
+
+  test("the group chosen is the reach's in the World Daemon's line; the Factions view says the travel", () => {
+    const { controller, connection } = connected();
+    send(connection, "medium", player(1e9));
+    send(connection, "medium", player(1e9));
+    // A (7, as B, in fewer travels from Sector-12): its $15m held here for Sector-12's invitation.
+    expect(controller.invitationsView().cityGroup).toMatch(/^group A /);
+    expect(controller.worldDaemonView().lines[0]).toMatch(/Sector-12 \d+, Aevum \d+\)/);
+    expect(controller.factionsView().invitations).toMatchObject({ travel: null, hold: 15e6, holdIn: "Sector-12" });
+  });
+
+  test("a city faction's join the owner queued fixes its group: Volhaven's, C", () => {
+    const { controller, connection } = connected();
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Volhaven" } });
+    send(connection, "medium", player(1e9));
+    expect(controller.invitationsView().cityGroup).toMatch(/^group C \(Volhaven\)/);
   });
 });

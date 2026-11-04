@@ -1833,8 +1833,15 @@ export class AugmentationRule {
     if (!augmentationsSoldBy(DAEDALUS, currentNode, null).includes(THE_RED_PILL)) return { kind: "none" };
     const required = daedalusRequirements(currentNode, ownedSF);
     const skills = player.person.skills;
-    // Installed as Daedalus counts them (#228): NeuroFlux Governor once.
-    const figures = { augmentations: Object.keys(ownedAugs).length, money: player.money, skills };
+    // Installed as Daedalus counts them (#228, core's `daedalusCountOf`, A5's and A6's too): NeuroFlux Governor once.
+    const { installed } = daedalusCountOf({
+      currentNode,
+      ownedSF,
+      installed: ownedAugs,
+      joined,
+      invitations: [],
+    });
+    const figures = { augmentations: installed, money: player.money, skills };
     const missing = daedalusMissing(figures, required);
     // Held only with nothing but the money missing: a count or a skill short is missing too.
     const onlyMoney = missing.length === 0 || (missing.length === 1 && figures.money < required.money);

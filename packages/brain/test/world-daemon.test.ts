@@ -10,7 +10,6 @@ import {
 } from "@bitburner-agent/core";
 import { beforeEach, describe, expect, test } from "vitest";
 import {
-  DAEDALUS_OUT_OF_REACH_AFTER_MS,
   describeWorldDaemonPath,
   HackingExpRate,
   hackingEtaSeconds,
@@ -69,9 +68,10 @@ function slow({
   lastNodeReset = 0,
   ownedSF = {} as Record<string, number>,
   currentNode = 1,
+  lastAugReset = 0,
 } = {}): SlowSnapshotData {
   return {
-    resetInfo: { lastAugReset: 0, lastNodeReset, currentNode, ownedAugs, ownedSF, bitNodeOptions: {} },
+    resetInfo: { lastAugReset, lastNodeReset, currentNode, ownedAugs, ownedSF, bitNodeOptions: {} },
     purchasedServers: [],
     factions: {
       backend: "sim",
@@ -123,20 +123,17 @@ describe("the path", () => {
         "$5,000,000,000 of $100,000,000,000",
         "hacking 2,000 of 2,500 (or every combat skill 1,500)",
       ],
-      // Short (#228); within reach, the hacker factions' (A3's backdoors bring them), Tian Di Hui's at hacking 50, and
-      // the city group selling the most of the rest (B; its NeuroFlux Governor is the one installed: counted once).
+      // Short (#228); within reach, the hacker factions' (A3's backdoors bring them) and Tian Di Hui's at hacking 50
+      // (its NeuroFlux Governor is the one installed: counted once); no city group chosen.
       short: true,
       reach: {
-        more: 37,
+        more: 32,
         by: [
           { faction: "CyberSec", count: 5 },
           { faction: "NiteSec", count: 7 },
           { faction: "The Black Hand", count: 6 },
           { faction: "BitRunners", count: 6 },
           { faction: "Tian Di Hui", count: 8 },
-          { faction: "Chongqing", count: 1 },
-          { faction: "New Tokyo", count: 1 },
-          { faction: "Ishima", count: 3 },
         ],
       },
       needs: ["$5,000,000,000 of $100,000,000,000", "hacking 2,000 of 2,500 (or every combat skill 1,500)"],
@@ -144,8 +141,8 @@ describe("the path", () => {
     expect(path.daemon).toBeNull();
     // The count said once (#228), with the reach.
     expect(describeWorldDaemonPath(path)).toEqual([
-      "Daedalus: not joined; 1 of 30 augmentations installed, 37 more within reach (CyberSec 5, NiteSec 7, The Black " +
-        "Hand 6, BitRunners 6, Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3); needs $5,000,000,000 of $100,000,000,000, hacking 2,000 of 2,500 (or every combat skill 1,500)",
+      "Daedalus: not joined; 1 of 30 augmentations installed, 32 more within reach (CyberSec 5, NiteSec 7, The Black " +
+        "Hand 6, BitRunners 6, Tian Di Hui 8); needs $5,000,000,000 of $100,000,000,000, hacking 2,000 of 2,500 (or every combat skill 1,500)",
       "The Red Pill: Daedalus not joined",
     ]);
   });
@@ -392,83 +389,100 @@ describe("a restarted brain", () => {
   });
 });
 
-describe("Daedalus out of reach (#228)", () => {
+describe("Daedalus count stuck (#228)", () => {
   const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
-  /** Run #2's 23: the four hacker factions' set with a hacking value, and NeuroFlux Governor. */
-  const TWENTY_THREE: Record<string, number> = {
+  /** Run #2's 23: the four hacker factions' set with a hacking value, and NeuroFlux Governor at `level`. */
+  const runTwo = (level: number, more: string[] = []): Record<string, number> => ({
     ...Object.fromEntries(
       [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))]
         .filter((name) => isWorthInstalling(name))
         .map((name) => [name, 1]),
     ),
-    "NeuroFlux Governor": 124,
-  };
-  /** BN12 at Source-File 12 level 500: 40 for Daedalus (core's `daedalusAugmentationsRequired`). */
-  const BN12 = { currentNode: 12, ownedSF: { 12: 500 } };
-  const short = (hacking: number, bitNode: { currentNode?: number; ownedSF?: Record<string, number> } = BN12) => ({
-    mediumData: medium({ hacking, money: 1e12 }),
-    slowData: slow({ ownedAugs: TWENTY_THREE, ...bitNode }),
+    ...Object.fromEntries(more.map((name) => [name, 1])),
+    "NeuroFlux Governor": level,
+  });
+  const cycle = (install: number, ownedAugs: Record<string, number>, invited = false) => ({
+    mediumData: medium({ hacking: 6_368, money: 1e12 }),
+    slowData: slow({ ownedAugs, lastAugReset: install * 10 * MINUTE, invited }),
   });
   const DETAIL =
-    "Daedalus out of reach: 23 of 40 augmentations installed, 15 more within reach (The Black Hand 1, BitRunners 1, " +
-    "Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3)";
+    "Daedalus count stuck: an install at 23 of 30 augmentations installed added none to the count (NeuroFlux " +
+    "Governor's levels count once)";
 
-  test("23 installed: run #2's", () => {
-    expect(Object.keys(TWENTY_THREE)).toHaveLength(23);
+  test("run #2's nine NeuroFlux-only installs at 23: each one fails, at once, stored and logged", () => {
+    expect(Object.keys(runTwo(1))).toHaveLength(23);
+    update({ ...cycle(0, runTwo(115)), nowMs: 0 });
+    expect(rule.stall()).toBeNull();
+    for (let install = 1; install <= 9; install++) {
+      update({ ...cycle(install, runTwo(115 + install)), nowMs: install * 10 * MINUTE });
+      update({ ...cycle(install, runTwo(115 + install)), nowMs: install * 10 * MINUTE + MINUTE });
+    }
+    const stuck = events.filter((event) => event.type === "worldDaemonStalled" && event.step === "daedalusCount");
+    expect(stuck).toHaveLength(9);
+    expect(stuck[0]).toEqual({
+      type: "worldDaemonStalled",
+      atMs: 10 * MINUTE,
+      step: "daedalusCount",
+      sinceMs: 10 * MINUTE,
+      detail: DETAIL,
+    });
+    expect(rule.stall()).toEqual({ step: "daedalusCount", sinceMs: 90 * MINUTE, detail: DETAIL });
+    expect(lines.at(-1)).toBe(`world daemon: STALLED 0 min: ${DETAIL}`);
   });
 
-  test("short, the count and the reach under the requirement, no install under way: the failure 30 minutes on, once", () => {
-    // BN12's 40: the hacker factions' two left, Tian Di Hui's eight and group B's five make 38.
-    update({ ...short(50), nowMs: 0 });
-    expect(rule.view().lines[0]).toBe(
-      `Daedalus: not joined; ${DETAIL.slice("Daedalus out of reach: ".length)}: Daedalus out of reach; needs hacking 50 ` +
-        "of 2,500 (or every combat skill 1,500)",
+  test("an install that adds to the count is quiet, and ends the last one's failure; so is one not short", () => {
+    update({ ...cycle(0, runTwo(1)), nowMs: 0 });
+    update({ ...cycle(1, runTwo(2)), nowMs: 10 * MINUTE });
+    expect(rule.stall()).toMatchObject({ step: "daedalusCount" });
+    // The simulator suite's install: Tian Di Hui's eight and two more, 23 to 33.
+    const tenMore = [...augmentationsSoldBy("Tian Di Hui", 1, null), "Neural Wit Amplifier", "Magnetism Amplifier"];
+    update({ ...cycle(2, runTwo(3, tenMore)), nowMs: 20 * MINUTE });
+    expect(rule.stall()).toBeNull();
+    // Daedalus inviting before an install: not short, so nothing to judge.
+    update({ ...cycle(3, runTwo(3), true), nowMs: 30 * MINUTE });
+    update({ ...cycle(4, runTwo(4), true), nowMs: 40 * MINUTE });
+    expect(rule.stall()).toBeNull();
+    expect(events.filter((event) => event.type === "worldDaemonStalled")).toHaveLength(1);
+  });
+
+  test("the path's line: the reach, counting the city group chosen", () => {
+    const path = (cityGroup: string | null) =>
+      describeWorldDaemonPath(
+        worldDaemonPath({ staticData: staticData(), ...cycle(0, runTwo(124)), expPerSecond: null, cityGroup }),
+      )[0];
+    expect(path(null)).toBe(
+      "Daedalus: not joined; 23 of 30 augmentations installed, 10 more within reach (The Black Hand 1, BitRunners 1, " +
+        "Tian Di Hui 8)",
     );
-    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS - 1 });
-    expect(rule.stall()).toBeNull();
-    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS });
-    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
-    expect(rule.stall()).toEqual({ step: "daedalusReach", sinceMs: 0, detail: DETAIL });
-    expect(events).toEqual([
-      {
-        type: "worldDaemonStalled",
-        atMs: DAEDALUS_OUT_OF_REACH_AFTER_MS,
-        step: "daedalusReach",
-        sinceMs: 0,
-        detail: DETAIL,
-      },
-    ]);
-    expect(lines).toEqual([`world daemon: STALLED 30 min: ${DETAIL}`]);
-  });
-
-  test("quiet while the reach makes it up: BN1's 30, run #2's end with 15 more", () => {
-    update({ ...short(50, {}), nowMs: 0 });
-    update({ ...short(50, {}), nowMs: 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
-    expect(rule.stall()).toBeNull();
-    expect(rule.view().lines[0]).toBe(
+    expect(path("B")).toBe(
       "Daedalus: not joined; 23 of 30 augmentations installed, 15 more within reach (The Black Hand 1, BitRunners 1, " +
-        "Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3); needs hacking 50 of 2,500 (or every combat skill 1,500)",
+        "Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3)",
     );
   });
 
-  test("an install under way waits it out, and starts it afresh", () => {
-    update({ ...short(50), nowMs: 0 });
-    update({ ...short(50), nowMs: 20 * MINUTE, installing: true });
-    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
-    expect(rule.stall()).toBeNull();
-    update({ ...short(50), nowMs: 20 * MINUTE + 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
-    expect(rule.stall()).toMatchObject({ step: "daedalusReach" });
-  });
-
-  test("the run report: a failure, said as such", () => {
+  test("the run report: a failure, said as such, at the install it saw", () => {
     const failures: string[] = [];
     const stored = {
-      atMs: DAEDALUS_OUT_OF_REACH_AFTER_MS,
+      atMs: 10 * MINUTE,
       kind: "worldDaemonStalled",
-      detail: { step: "daedalusReach", sinceMs: 0, detail: DETAIL },
+      detail: { step: "daedalusCount", sinceMs: 10 * MINUTE, detail: DETAIL },
     };
     const health = new WorldDaemonFold().healthLines([stored as never], failures, (ms) => `t${ms}`);
-    expect(health[1]).toBe(`    ${DETAIL}, from t0 to at least t${DAEDALUS_OUT_OF_REACH_AFTER_MS}`);
-    expect(failures).toEqual([`${DETAIL}, from t0 to at least t${DAEDALUS_OUT_OF_REACH_AFTER_MS}`]);
+    expect(health[1]).toBe(`    ${DETAIL}, seen at t${10 * MINUTE}`);
+    expect(failures).toEqual([`${DETAIL}, seen at t${10 * MINUTE}`]);
   });
+});
+
+test("the Agent gone: a step's clock not yet stored starts again with the snapshots (#228 review), the time away left out", () => {
+  const met = {
+    mediumData: medium({ hacking: 2600, money: 200e9 }),
+    slowData: slow({ ownedAugs: THIRTY, invited: true }),
+  };
+  update({ ...met, nowMs: 0 });
+  update({ ...met, mediumData: null, nowMs: MINUTE });
+  update({ ...met, nowMs: 4 * MINUTE });
+  update({ ...met, nowMs: 4 * MINUTE + WORLD_DAEMON_STALLED_AFTER_MS - 1 });
+  expect(rule.stall()).toBeNull();
+  update({ ...met, nowMs: 4 * MINUTE + WORLD_DAEMON_STALLED_AFTER_MS });
+  expect(rule.stall()).toMatchObject({ step: "daedalus", sinceMs: 4 * MINUTE });
 });

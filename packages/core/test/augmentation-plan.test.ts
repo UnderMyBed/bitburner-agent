@@ -69,7 +69,9 @@ describe("which augmentations", () => {
   });
 
   test("short of Daedalus's count (#228): under the BitNode's, NeuroFlux Governor once, until it invites", () => {
-    /** `count` installed: NeuroFlux Governor at 124 levels (one, `FactionJoinCondition.ts:130`), then others. */
+    /**
+     * `count` installed: NeuroFlux Governor at 124 levels (one, `Faction/FactionJoinCondition.ts:130`), then others.
+     */
     const installed = (count: number) =>
       Object.fromEntries([
         ["NeuroFlux Governor", 124],

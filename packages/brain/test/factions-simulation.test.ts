@@ -53,8 +53,8 @@ test.each(SEEDS)(
     const joinedAtMs = game.clock.now() - EPOCH_MS;
     await game.run(WORKED_MS);
 
-    // The brain joined once, chose CyberSec's hacking work, and logged both. Tian Di Hui too, travelled for at hacking 50
-    // and $1.2m (#228: its ADR-V1 and S.N.A have a hacking value).
+    // The brain joined once, chose CyberSec's hacking work, and logged both. Tian Di Hui too, travelled for at hacking
+    // 50 and $1.2m (#228: its ADR-V1 and S.N.A have a hacking value).
     expect(
       brain.logLines.filter((line) => line.startsWith("factions: joining ") && !line.includes("Tian Di Hui")),
     ).toEqual(["factions: joining CyberSec (its invitation)"]);

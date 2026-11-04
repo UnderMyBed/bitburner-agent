@@ -920,7 +920,14 @@ describe("FactionWorkTimeline", () => {
     ]);
     timeline.addSlow(60_000, slow({ invitations: ["Aevum", "NiteSec"] }));
     timeline.addSlow(120_000, slow({ invitations: ["Aevum"] }));
-    expect([...timeline.cityInvitations]).toEqual([["Aevum", 60_000]]);
+    expect([...timeline.passedOver]).toEqual([["Aevum", 60_000]]);
+    // Group A chosen (#228): Aevum's is its own, not passed over; Volhaven's is.
+    const chosenA = new FactionWorkTimeline(
+      [{ atMs: 0, kind: "cityGroupChosen", detail: { group: "A", factions: ["Sector-12", "Aevum"] } }],
+      STARTED,
+    );
+    chosenA.addSlow(60_000, slow({ invitations: ["Aevum", "Volhaven"] }));
+    expect([...chosenA.passedOver]).toEqual([["Volhaven", 60_000]]);
   });
 
   test("reputation gained while the brain's work is on it; on track, no stall", () => {

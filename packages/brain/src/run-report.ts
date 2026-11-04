@@ -48,6 +48,7 @@ import { HackingFold } from "./hacking-ceiling.ts";
 import {
   CITY_GROUP_CHOSEN_EVENT_KIND,
   INVITATION_TRAVEL_EVENT_KIND,
+  INVITATION_WAITING_EVENT_KIND,
   invitationHealthLines,
   invitationLines,
 } from "./invitations.ts";
@@ -620,6 +621,7 @@ function windowSection(facts: RunFacts): string[] {
     ...WORLD_DAEMON_EVENT_KINDS,
     INVITATION_TRAVEL_EVENT_KIND,
     CITY_GROUP_CHOSEN_EVENT_KIND,
+    INVITATION_WAITING_EVENT_KIND,
   ];
   const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)}`);
@@ -916,16 +918,16 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (dialogs.length === 0) lines.push("    none");
   lines.push(...backdoorLines(facts));
-  lines.push(...factionLines(facts), ...invitationLines(facts.events, formatIsoTime));
+  lines.push(...factionLines(facts), ...invitationLines(facts.events, formatIsoTime, facts.untilMs));
   lines.push(...facts.augmentations.actionLines(facts.events, formatIsoTime));
   lines.push(...facts.worldDaemon.pathLines(facts, facts.events, formatIsoTime));
   return lines;
 }
 
 /**
- * The joins and the brain's faction work (#203): the factions the medium snapshots showed joined, the invitations left
- * to the owner (a faction with enemies), each choice of work and why, or its end, and the reputation each faction
- * gained while the brain's work was on it.
+ * The joins and the brain's faction work (#203): the factions the medium snapshots showed joined, the city factions'
+ * invitations seen and not joined (#228: not of the city group the brain chose), each choice of work and why, or its
+ * end, and the reputation each faction gained while the brain's work was on it.
  */
 function factionLines({ factionWork }: RunFacts): string[] {
   const lines = ["  factions (joins, and the brain's faction work):"];
@@ -933,12 +935,12 @@ function factionLines({ factionWork }: RunFacts): string[] {
     atMs === null ? `${faction} (at the window's start)` : `${faction} by ${formatIsoTime(atMs)}`,
   );
   lines.push(`    joined: ${joined.length === 0 ? "none" : joined.join(", ")}`);
-  const city = [...factionWork.cityInvitations].map(
+  const passedOver = [...factionWork.passedOver].map(
     ([faction, atMs]) => `${faction} (first seen ${formatIsoTime(atMs)})`,
   );
   lines.push(
-    "    city factions' invitations, not joined when seen (the brain joins its city group's, decision 54): " +
-      (city.length === 0 ? "none" : city.join(", ")),
+    "    city factions' invitations passed over (not of the city group the brain chose, decision 54): " +
+      (passedOver.length === 0 ? "none" : passedOver.join(", ")),
   );
   lines.push("    the brain's faction work, as chosen:");
   for (const record of factionWork.records) {

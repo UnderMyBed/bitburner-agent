@@ -3,7 +3,7 @@
 // reputation A6 buys with. Choices computed from the game's formulas (owner decision 46). Also what the dashboard's
 // `factionWorkStalled` alert and the run report (#185) read of them.
 // - Joining: the `joinFaction` intent (#147), one at a time, in the order invited. A faction with enemies (the six
-//   city factions, `Faction/FactionInfo.tsx:495-555`) bans them when joined (`Faction/FactionHelpers.tsx:45-48`),
+//   city factions, `Faction/FactionInfo.tsx:495-555`) bans them when joined (`Faction/FactionHelpers.tsx:45-47`),
 //   until the next install (`Faction/Faction.ts:77-85`): the brain joins those of the city group it chose this cycle
 //   that sell something of value (owner decision 54, ./invitations.ts), and never another group's. The irreversible
 //   gate's enemy guard stays under it (./irreversible-gate.ts).
@@ -32,6 +32,7 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  CITY_FACTION_GROUPS,
   type DaedalusCount,
   daedalusCountOf,
   FACTION_ENEMIES,
@@ -57,6 +58,7 @@ import {
   THE_RED_PILL,
   type WorkingPerson,
 } from "@bitburner-agent/core";
+import { CITY_GROUP_CHOSEN_EVENT_KIND, type InvitationView } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 import { workFocus } from "./work.ts";
@@ -146,9 +148,9 @@ export interface JoinPlan {
 }
 
 /**
- * The invitations not yet joined, in the order invited: the first from a faction without enemies, or from a city faction
- * in `cityFactions` (the city group the brain chose, #228's), is joined; the other city factions' are passed over. A
- * name that isn't one of the game's factions is passed over too.
+ * The invitations not yet joined, in the order invited: the first from a faction without enemies, or from a city
+ * faction in `cityFactions` (the city group the brain chose, #228's), is joined; the other city factions' are passed
+ * over. A name that isn't one of the game's factions is passed over too.
  */
 export function chooseJoin(
   invitations: readonly string[],
@@ -555,8 +557,8 @@ export function redPillWork(
 
 /**
  * `chooseFactionWork`'s choice from figures already checked; null for none. Short of Daedalus's count (#228), every
- * candidate adds one to it: those with a hacking value first, by value a second; with none, the soonest reached, for the
- * count.
+ * candidate adds one to it: those with a hacking value first, by value a second; with none, the soonest reached, for
+ * the count.
  */
 function bestCandidate(
   person: WorkingPerson,
@@ -617,6 +619,8 @@ export interface FactionsView {
   passedOver: PassedOver[];
   /** The city group the brain chose this cycle, in words (#228, ./invitations.ts), or null before it's known. */
   cityGroup: string | null;
+  /** The travel for invitations (#228 review): the travel, the hold, or why it waits; the controller's, absent here. */
+  invitations?: InvitationView;
   /** The rule's choice, or null, and whether it's the work sent (not with the owner's work, or the switch off). */
   choice: FactionWorkChoice | null;
   sent: boolean;
@@ -712,9 +716,9 @@ export class FactionRule {
   /** The faction asked to join, until a snapshot shows it joined, or its invitation is gone; or null. */
   #joining: string | null = null;
   /** The city factions' invitations passed over already logged, since the game's last reset. */
-  readonly #leftLogged = new Set<string>();
+  readonly #passedOverLogged = new Set<string>();
   /** The game's `lastAugReset` when they were logged: another (an install) logs them afresh, as they come again. */
-  #leftLoggedResetAt: number | null = null;
+  #passedOverResetAt: number | null = null;
   /** The last choice stored (faction, work type, target), "stopped", or null before any. */
   #lastStored: string | null = null;
   /** The work sent at the last update, kept against the share bonus's swings (#226's review), or null. */
@@ -778,9 +782,9 @@ export class FactionRule {
       return null;
     }
     const resetAt = (slowData?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
-    if (typeof resetAt === "number" && resetAt !== this.#leftLoggedResetAt) {
-      this.#leftLogged.clear();
-      this.#leftLoggedResetAt = resetAt;
+    if (typeof resetAt === "number" && resetAt !== this.#passedOverResetAt) {
+      this.#passedOverLogged.clear();
+      this.#passedOverResetAt = resetAt;
     }
     const joinedNames = [
       ...joined.filter((name): name is string => typeof name === "string"),
@@ -796,8 +800,8 @@ export class FactionRule {
     }
     const plan = chooseJoin(state.invitations, joinedNames, cityFactions);
     for (const { faction, bans } of plan.passedOver) {
-      if (this.#leftLogged.has(faction)) continue;
-      this.#leftLogged.add(faction);
+      if (this.#passedOverLogged.has(faction)) continue;
+      this.#passedOverLogged.add(faction);
       this.#log(
         `factions: ${faction}'s invitation not joined (it would ban ${bans.join(", ")}): ` +
           `${cityGroup ?? "no city group chosen"} (decision 54)`,
@@ -960,8 +964,13 @@ export class FactionWorkTimeline {
   readonly records: FactionWorkRecord[] = [];
   /** Each faction the medium snapshots showed joined, and when first: null for those joined at the first one. */
   readonly joined = new Map<string, number | null>();
-  /** Each city faction's invitation the slow snapshots showed (#228), not joined then, and when first. */
-  readonly cityInvitations = new Map<string, number>();
+  /**
+   * Each city faction's invitation the slow snapshots showed (#228) that the brain passed over: not joined then, nor of
+   * the city group it had chosen by then (`cityGroupChosen`); and when first.
+   */
+  readonly passedOver = new Map<string, number>();
+  /** The city group chosen, as stored (#228), in time order. */
+  readonly #cityGroups: { atMs: number; group: string | null }[];
   /** Each faction's reputation gained while the brain's work was on it: its rises, summed (skipped readings aside). */
   readonly gained = new Map<string, number>();
   /** Each reading of the worked faction's reputation, skipped ones aside (#224: the share's gain is judged on them). */
@@ -1003,6 +1012,12 @@ export class FactionWorkTimeline {
       }
     }
     this.#ends = events.filter((event) => event.kind === brainStartedKind).map((event) => event.atMs);
+    this.#cityGroups = events
+      .filter((event) => event.kind === CITY_GROUP_CHOSEN_EVENT_KIND)
+      .map(({ atMs, detail }) => {
+        const group = (detail as { group?: unknown } | null)?.group;
+        return { atMs, group: typeof group === "string" ? group : null };
+      });
   }
 
   /** The choice in force at `atMs`, or null: none yet, or ended since (stopped, or the brain started again). */
@@ -1024,14 +1039,16 @@ export class FactionWorkTimeline {
     this.#firstMedium = false;
   }
 
-  /** Slow snapshots, in time order: the invitations left, and the reputation under the brain's work. */
+  /** Slow snapshots, in time order: the city invitations passed over, and the reputation under the brain's work. */
   addSlow(atMs: number, data: SlowSnapshotData): void {
     const reading = factionReadingOf(data);
     const state = reading?.state ?? null;
     if (reading === null || state === null) return;
     const joinedNow = state.joined.map((each) => each.name);
-    for (const { faction } of chooseJoin(state.invitations, joinedNow).passedOver) {
-      if (!this.cityInvitations.has(faction)) this.cityInvitations.set(faction, atMs);
+    const chosen = this.#cityGroups.findLast((each) => each.atMs <= atMs)?.group ?? null;
+    const ofChosen = CITY_FACTION_GROUPS.find((group) => group.name === chosen)?.factions ?? [];
+    for (const { faction } of chooseJoin(state.invitations, joinedNow, ofChosen).passedOver) {
+      if (!this.passedOver.has(faction)) this.passedOver.set(faction, atMs);
     }
     // A skipped reading (#197) is the last one again: neither a gain nor a reading of the stall's window.
     if (factionReadingKind(reading) === "skipped") return;

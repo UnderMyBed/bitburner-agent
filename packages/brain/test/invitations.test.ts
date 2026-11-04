@@ -21,6 +21,7 @@ import {
   describeReach,
   INVITATION_NOT_SHOWN_AFTER_MS,
   INVITATION_TRAVEL_EVENT_KIND,
+  INVITATION_WAITING_EVENT_KIND,
   type InvitationEvent,
   type InvitationInputs,
   InvitationRule,
@@ -36,7 +37,7 @@ const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
 const HACKER_SET = [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))].filter((name) =>
   isWorthInstalling(name),
 );
-/** Run #2's 23: that set, and NeuroFlux Governor at 124 levels (one, `FactionJoinCondition.ts:130`). */
+/** Run #2's 23: that set, and NeuroFlux Governor at 124 levels (one, `Faction/FactionJoinCondition.ts:130`). */
 const RUN_2: Record<string, number> = {
   ...Object.fromEntries(HACKER_SET.map((name) => [name, 1])),
   "NeuroFlux Governor": 124,
@@ -242,6 +243,14 @@ describe("the city group (owner decision 54)", () => {
     expect(chooseCityGroup([group("A", 9, 1), group("B", 0, 1), group("C", 5, 0)], volhaven)?.group).toBe("C");
   });
 
+  test("group B ending away from Ishima counts the hop back to its tech vendor in its travels and money", () => {
+    const others = ["NutriGen Implant", "Augmented Targeting I", "Combat Rib I", "INFRARET Enhancement"];
+    const installed = { ...RUN_2, ...Object.fromEntries(others.map((name) => [name, 1])) };
+    const b = cityGroupValues(inputs({ installed, state: stateOf([...HACKERS, "Tian Di Hui"]) }))[1];
+    // Chongqing alone (Neuregen): there, and back to Ishima.
+    expect(b).toMatchObject({ group: "B", factions: ["Chongqing"], travels: 2, money: 20e6 + 2 * 200e3 });
+  });
+
   test("the visits: the one where the player is first; Tian Di Hui's with B's Ishima, last, or first for A and C", () => {
     expect(visitsFor("B", ["Chongqing", "Ishima"], true, "Sector-12")).toEqual([
       { city: "Chongqing", factions: ["Chongqing"], money: 20e6 },
@@ -305,7 +314,8 @@ describe("the rule, as the controller runs it", () => {
       [2_000, "hold", "Ishima"],
       [3_000, "invited", "Ishima"],
     ]);
-    expect(lines).toEqual([
+    // The waits (the city groups' money) are their own test's.
+    expect(lines.filter((line) => !/^invitations: (waiting for|no longer waiting)/.test(line))).toEqual([
       "invitations: travelling to Ishima for Tian Di Hui's invitation (Daedalus's count: 23 of 30 installed)",
       "invitations: in Ishima: $1,000,000 held for Tian Di Hui's invitation (Daedalus's count: 23 of 30 installed)",
       "invitations: Tian Di Hui invited in Ishima",
@@ -336,8 +346,8 @@ describe("the rule, as the controller runs it", () => {
     expect(lines[0]).toBe(
       "invitations: city factions: group B (Chongqing, New Tokyo, Ishima): 5 augmentations that count, against A 4, C 3",
     );
-    // Chongqing joined, and Daedalus inviting (the count met: no longer short), so New Tokyo's NutriGen is worth nothing
-    // now; still B's to join, as chosen.
+    // Chongqing joined, and Daedalus inviting (the count met: no longer short), so New Tokyo's NutriGen is worth
+    // nothing now; still B's to join, as chosen.
     const chongqing = inputs({ state: stateOf([...HACKERS, "Chongqing"], { invitations: ["Daedalus"] }) });
     expect(chongqing.count.short).toBe(false);
     rule.update({ inputs: chongqing, stood: null, nowMs: 1_500 });
@@ -377,11 +387,13 @@ describe("the rule, as the controller runs it", () => {
     expect(phases()).toEqual([[0, "hold", "Chongqing"]]);
     rule.update({ inputs: chongqing, stood: null, nowMs: INVITATION_NOT_SHOWN_AFTER_MS });
     rule.update({ inputs: chongqing, stood: null, nowMs: INVITATION_NOT_SHOWN_AFTER_MS + MINUTE });
+    // Stored once; then that visit dropped (#228 review), on to New Tokyo.
     expect(phases()).toEqual([
       [0, "hold", "Chongqing"],
       [INVITATION_NOT_SHOWN_AFTER_MS, "notInvited", "Chongqing"],
+      [INVITATION_NOT_SHOWN_AFTER_MS + MINUTE, "travel", "New Tokyo"],
     ]);
-    expect(lines.at(-1)).toBe(
+    expect(lines.filter((line) => line.includes("NOT INVITED")).at(-1)).toBe(
       "invitations: NOT INVITED: 5 min in Chongqing with hacking 6368 and $11,000,000,000,000,000, and no Chongqing's " +
         "invitation",
     );
@@ -404,8 +416,10 @@ describe("the rule, as the controller runs it", () => {
 });
 
 describe("the reach", () => {
-  test("run #2's end: The Black Hand 1, BitRunners 1, Tian Di Hui 8, and the group selling the most of the rest", () => {
-    const reach = daedalusReach(stateOf(), 1, RUN_2, 6_368);
+  test("run #2's end: The Black Hand 1, BitRunners 1, Tian Di Hui 8, and the city group chosen (B's five)", () => {
+    // None chosen yet: no city group's.
+    expect(daedalusReach(stateOf(), 1, RUN_2, 6_368)).toMatchObject({ more: 10 });
+    const reach = daedalusReach(stateOf(), 1, RUN_2, 6_368, "B");
     expect(reach.by.slice(0, 3)).toEqual([
       { faction: "The Black Hand", count: 1 },
       { faction: "BitRunners", count: 1 },
@@ -426,8 +440,10 @@ describe("the reach", () => {
   });
 
   test("queued ones count (the next install installs them); NeuroFlux Governor once; never The Red Pill", () => {
-    const queued = daedalusReach(stateOf(HACKERS, { queued: ["Neural Wit Amplifier"] }), 1, RUN_2, 6_368);
+    const queued = daedalusReach(stateOf(HACKERS, { queued: ["Neural Wit Amplifier"] }), 1, RUN_2, 6_368, "B");
     expect(queued.more).toBe(15);
+    // Another group chosen counts its own: A's four after Tian Di Hui's.
+    expect(daedalusReach(stateOf(), 1, RUN_2, 6_368, "A").more).toBe(14);
     expect(daedalusReach(stateOf(["CyberSec"]), 1, {}, 1).by[0]).toEqual({ faction: "CyberSec", count: 6 });
     expect(daedalusReach(stateOf(["Daedalus"]), 1, RUN_2, 1).by[0]).toEqual({ faction: "Daedalus", count: 6 });
     expect(describeReach({ more: 0, by: [] })).toBe("none more within reach");
@@ -459,15 +475,35 @@ describe("what the run report says", () => {
     };
     const travel = stored(1, "travel", "Chongqing", ["Chongqing"]);
     const hold = stored(2, "hold", "Chongqing", ["Chongqing"], 20e6);
-    expect(invitationLines([chosen, travel, hold], time)).toEqual([
+    expect(invitationLines([chosen, travel, hold], time, 3)).toEqual([
       "    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54):",
       "      t0  city factions: group B (Chongqing, New Tokyo, Ishima): 5 augmentations that count, against A 4, C 3 " +
         "(the money short)",
       "      t1  travel to Chongqing for Chongqing's invitation (23 of 30 installed)",
       "      t2  $20,000,000 held in Chongqing for Chongqing's invitation",
+      "    waiting for a travel while short of Daedalus's count: none",
     ]);
-    expect(invitationLines([stored(3, "invited")], time).at(-1)).toBe("      t3  invited: Tian Di Hui, in Ishima");
-    expect(invitationLines([], time).at(-1)).toBe("      none");
+    expect(invitationLines([stored(3, "invited")], time, 4).at(-2)).toBe("      t3  invited: Tian Di Hui, in Ishima");
+    expect(invitationLines([], time, 0).at(-2)).toBe("      none");
+  });
+
+  test("the time spent waiting while short, by its reason (its figures aside), the longest first", () => {
+    const wait = (atMs: number, reason: string | null, short = true) => ({
+      atMs,
+      kind: INVITATION_WAITING_EVENT_KIND,
+      detail: { reason, short },
+    });
+    const events = [
+      wait(0, "your work on the dashboard (it may be in a city)"),
+      wait(10 * MINUTE, "$30,600,000 to travel to Chongqing for Chongqing's invitation ($1,000 now)"),
+      wait(40 * MINUTE, "$30,600,000 to travel to Chongqing for Chongqing's invitation ($5,000 now)"),
+      wait(50 * MINUTE, null),
+      wait(60 * MINUTE, "the Augmentations switch, off", false),
+    ];
+    expect(invitationLines(events, time, 120 * MINUTE).at(-1)).toBe(
+      "    waiting for a travel while short of Daedalus's count: 50 min in all ($30,600,000 to travel to Chongqing for " +
+        "Chongqing's invitation ($1,000 now): 40 min; your work on the dashboard (it may be in a city): 10 min)",
+    );
   });
 
   test("section 4: no invitation is a failure", () => {
@@ -480,5 +516,94 @@ describe("what the run report says", () => {
     const none: string[] = [];
     expect(invitationHealthLines([stored(1, "hold")], none, time).at(-1)).toBe("    none");
     expect(none).toEqual([]);
+  });
+});
+
+describe("the rule's waits, holds and the owner's joins (#228 review)", () => {
+  let lines: string[];
+  let events: InvitationEvent[];
+  let rule: InvitationRule;
+  beforeEach(() => {
+    lines = [];
+    events = [];
+    rule = new InvitationRule({ log: (line) => lines.push(line), emit: (event) => events.push(event) });
+  });
+  const kinds = (type: string) => events.filter((event) => event.type === type);
+
+  test("not invited 5 minutes into a hold: the money no longer held, that visit dropped, the next one goes", () => {
+    const chongqing = inputs({ city: "Chongqing" });
+    rule.update({ inputs: chongqing, stood: null, nowMs: 0 });
+    expect(rule.hold()).toBe(20e6);
+    rule.update({ inputs: chongqing, stood: null, nowMs: INVITATION_NOT_SHOWN_AFTER_MS });
+    // On to New Tokyo, the hold gone; Chongqing stays the group's (an invitation shown late is still joined).
+    expect(rule.update({ inputs: chongqing, stood: null, nowMs: INVITATION_NOT_SHOWN_AFTER_MS + 1 })).toEqual(
+      travelIntent("New Tokyo"),
+    );
+    expect(rule.hold()).toBe(0);
+    expect(rule.cityFactions()).toContain("Chongqing");
+    // A new cycle visits it again.
+    expect(rule.update({ inputs: inputs({ city: "Chongqing", lastAugReset: 9 }), stood: null, nowMs: 1 })).toBeNull();
+    expect(rule.hold()).toBe(20e6);
+  });
+
+  test("the Agent gone mid-hold: the clock starts again when it's back, the time away not counted", () => {
+    const chongqing = inputs({ city: "Chongqing" });
+    rule.update({ inputs: chongqing, stood: null, nowMs: 0 });
+    rule.update({ inputs: null, stood: null, nowMs: MINUTE });
+    rule.update({ inputs: chongqing, stood: null, nowMs: 30 * MINUTE });
+    rule.update({ inputs: chongqing, stood: null, nowMs: 30 * MINUTE + INVITATION_NOT_SHOWN_AFTER_MS - 1 });
+    expect(
+      events.filter((event) => event.type === INVITATION_TRAVEL_EVENT_KIND && event.phase === "notInvited"),
+    ).toEqual([]);
+    rule.update({ inputs: chongqing, stood: null, nowMs: 30 * MINUTE + INVITATION_NOT_SHOWN_AFTER_MS });
+    expect(lines.at(-1)).toMatch(/^invitations: NOT INVITED: 5 min in Chongqing/);
+  });
+
+  test("a city faction the owner queued to join fixes its group, and its city is visited", () => {
+    // Sector-12 queued by the owner: group A, though B is worth more.
+    const owners = inputs({ ownersJoins: ["Sector-12"] });
+    expect(rule.update({ inputs: owners, stood: null, nowMs: 0 })).toBeNull();
+    expect(rule.chosenGroup()).toBe("A");
+    expect(rule.cityFactions()).toContain("Sector-12");
+    // In Sector-12: its $15m held for the invitation the owner's join waits on.
+    expect(rule.hold()).toBe(15e6);
+    expect(chooseCityGroup(cityGroupValues(owners), owners.state, "B", ["Sector-12"])?.group).toBe("A");
+  });
+
+  test("a city group's trip short of its money: that money held, and the wait said, logged and stored once", () => {
+    // B chosen with $40m, the money then spent down to $1,000.
+    const state = stateOf([...HACKERS, "Ishima", "Tian Di Hui"]);
+    rule.update({ inputs: inputs({ money: 40e6, city: "Ishima", state }), stood: null, nowMs: 0 });
+    const poor = (money: number) => inputs({ money, city: "Ishima", state });
+    rule.update({ inputs: poor(1_000), stood: null, nowMs: MINUTE });
+    rule.update({ inputs: poor(2_000), stood: null, nowMs: 2 * MINUTE });
+    expect(rule.hold()).toBe(20e6 + 200e3);
+    expect(rule.view().waitingFor).toBe("$20,200,000 to travel to Chongqing for Chongqing's invitation ($2,000 now)");
+    expect(kinds(INVITATION_WAITING_EVENT_KIND)).toEqual([
+      {
+        type: INVITATION_WAITING_EVENT_KIND,
+        atMs: MINUTE,
+        reason: "$20,200,000 to travel to Chongqing for Chongqing's invitation ($1,000 now)",
+        short: true,
+      },
+    ]);
+    expect(lines.filter((line) => line.startsWith("invitations: waiting for"))).toHaveLength(1);
+    // The money back: on its way, the wait over.
+    rule.update({ inputs: poor(30e6), stood: null, nowMs: 3 * MINUTE });
+    expect(kinds(INVITATION_WAITING_EVENT_KIND).at(-1)).toMatchObject({ atMs: 3 * MINUTE, reason: null });
+    expect(lines).toContain("invitations: no longer waiting");
+  });
+
+  test("the owner's stand (their work, their travel, the switch) is a wait too; Tian Di Hui's own trip holds nothing", () => {
+    rule.update({ inputs: inputs(), stood: "your work on the dashboard (it may be in a city)", nowMs: 0 });
+    expect(kinds(INVITATION_WAITING_EVENT_KIND)).toEqual([
+      expect.objectContaining({ reason: "your work on the dashboard (it may be in a city)" }),
+    ]);
+    const fresh = new InvitationRule({});
+    expect(fresh.update({ inputs: inputs({ money: 1_100_000 }), stood: null, nowMs: 1 })).toBeNull();
+    expect(fresh.view()).toMatchObject({
+      hold: 0,
+      waitingFor: expect.stringMatching(/^\$1,200,000 to travel to Ishima /),
+    });
   });
 });

@@ -142,7 +142,7 @@ export function daedalusMissing(figures: DaedalusFigures, required: ReturnType<t
 /**
  * The six city factions in the groups that can be joined together (#228, owner decision 54): each group's factions are
  * none another's enemy, and every faction in one is an enemy of every faction in another (`FACTION_ENEMIES`,
- * `Faction/FactionInfo.tsx:495-555`). Joining one bans the other groups (`Faction/FactionHelpers.tsx:45-48`) until the
+ * `Faction/FactionInfo.tsx:495-555`). Joining one bans the other groups (`Faction/FactionHelpers.tsx:45-47`) until the
  * next install lifts every ban (`Faction/Faction.ts:77-85`), so the brain chooses one a cycle. In the game's order of
  * their first faction (Aevum, Chongqing, Volhaven): ties go to the first.
  */

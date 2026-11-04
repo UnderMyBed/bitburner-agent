@@ -38,10 +38,12 @@ const gameOrder = (name: string) => Object.keys(AUGMENTATIONS).indexOf(name);
  * Whether the brain installs `name` (#210): a hacking value (A5's `hackingValue`, #203, at any level) above 0, and not
  * NeuroFlux Governor, which is bought last with what money is left. Combat, charisma and Hacknet augmentations, and The
  * Red Pill, have none. `short` of Daedalus's count (#228, core's `daedalusCountOf`): any but NeuroFlux Governor (it
- * counts once, `FactionJoinCondition.ts:130`) and The Red Pill (A8's), as each adds one to the count (legacy
- * `faction-manager.js:160-167`, `willTakeAnyAug`).
+ * counts once, `Faction/FactionJoinCondition.ts:130`) and The Red Pill (A8's), as each adds one to the count. (Legacy
+ * also takes any augmentation in some situations, `faction-manager.js:160-167`: past 40 owned, in BN6 and BN7 or with
+ * Bladeburners, or within 20 minutes of an install.)
  */
 export function isWorthInstalling(name: string, short = false): boolean {
+  // First, for its throw on a name core doesn't know (`hackingValue`'s), whatever the rest says.
   const value = hackingValue(name, 1);
   if (name === NEUROFLUX_GOVERNOR) return false;
   return short ? name !== THE_RED_PILL : value > 0;
@@ -54,8 +56,9 @@ export interface DaedalusCount {
   /** The BitNode's (`daedalusAugmentationsRequired`). */
   required: number;
   /**
-   * Short of it: Daedalus neither joined nor invited, and fewer installed than required (`FactionJoinCondition.ts:130`,
-   * `p.augmentations.length >= n`). Then any augmentation is worth installing (`isWorthInstalling(name, true)`).
+   * Short of it: Daedalus neither joined nor invited, and fewer installed than required
+   * (`Faction/FactionJoinCondition.ts:130`, `p.augmentations.length >= n`). Then any augmentation is worth installing
+   * (`isWorthInstalling(name, true)`).
    */
   short: boolean;
 }

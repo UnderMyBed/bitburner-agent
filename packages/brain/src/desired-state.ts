@@ -2,16 +2,17 @@
 // connected Agent's snapshots, and handed to the control channel to send: the hack loop (#134) and the intents (#141):
 // the next purchase of the hacking programs (#136), home's RAM (#138) or a cloud server (#194), the next backdoor for
 // the hacker factions (#195, ./backdoors.ts), the next faction to join and the brain's faction work (#203,
-// ./factions.ts), the travel for invitations (#228, ./invitations.ts), the augmentations' purchases and
-// install (#210, ./augmentations.ts), and the owner's manual queue and
-// work. Irreversible intents wait for their guard and a save backup first (#147). Each state carries how long the Agent
-// keeps it with the brain gone (`ttlMs`, safe mode, #160). An install of augmentations (#164) or a destroy of the
-// BitNode (#175) holds back what's queued after it, and leaves the queue once a slow snapshot shows the game reset.
+// ./factions.ts), the travel for invitations (#228, ./invitations.ts), the augmentations' purchases and install (#210,
+// ./augmentations.ts), and the owner's manual queue and work. Irreversible intents wait for their guard and a save
+// backup first (#147). Each state carries how long the Agent keeps it with the brain gone (`ttlMs`, safe mode, #160).
+// An install of augmentations (#164) or a destroy of the BitNode (#175) holds back what's queued after it, and leaves
+// the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type BatcherHealth,
   type DesiredState,
   EFFECTOR_BACKENDS,
+  FACTION_ENEMIES,
   type FactionWorkType,
   type FastSnapshotData,
   factionReadingOf,
@@ -216,8 +217,9 @@ export type RuleEvent = FactionWorkEvent | AugmentationEvent | WorldDaemonEvent 
 export interface IntentView {
   id: string;
   /**
-   * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), its travel for Tian Di
-   * Hui (#228), or its augmentations' purchases and install (#210), or its destroy (#215).
+   * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), its travel for an
+   * invitation (#228: Tian Di Hui's or its city group's), or its augmentations' purchases and install (#210), or its
+   * destroy (#215).
    */
   source: "manual" | "purchase" | "backdoor" | "join" | "travel" | "augmentation" | "worldDaemon";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
@@ -567,7 +569,7 @@ export class DesiredStateController {
     return this.#worldDaemon.stall();
   }
 
-  /** Listens for the rules' events (#203, #210, #215), to store them; returns a function that stops it. */
+  /** Listens for the rules' events (#203, #210, #215, #228), to store them; returns a function that stops it. */
   subscribe(listener: (event: RuleEvent) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -654,7 +656,8 @@ export class DesiredStateController {
 
   /** What the dashboard shows of the joins and the brain's faction work (#203). */
   factionsView(): FactionsView {
-    return this.#factions.view();
+    // With the travel for invitations (#228 review): the travel, the hold, or why it waits.
+    return { ...this.#factions.view(), invitations: this.#invitations.view() };
   }
 
   /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
@@ -1171,6 +1174,16 @@ export class DesiredStateController {
     return { hackLoop: { enabled: true, target: hackLoop.target, hosts: [] }, batcher };
   }
 
+  /**
+   * An install under way (#228 review): A6 committed to one, or counting down to it. Either way it puts the player back
+   * in Sector-12 and drops every faction within minutes, so the travel for invitations stands down (but for a tech
+   * vendor). The purchases stand down at the commit alone (`#augmentationsCommitted`): in the countdown, the money held
+   * keeps them in check.
+   */
+  #installUnderWay(): boolean {
+    return this.#augmentationsCommitted || this.#augmentations.countdownReserve() > 0;
+  }
+
   /** What the travel for invitations (#228) reads of the snapshots, or null where they don't say it all. */
   #invitationInputs(): InvitationInputs | null {
     const slow = this.#slowData;
@@ -1194,6 +1207,10 @@ export class DesiredStateController {
         currentNode: resetInfo.currentNode,
         lastAugReset,
         installed: resetInfo.ownedAugs,
+        // The owner's queued joins of city factions (#228 review): one fixes the city group.
+        ownersJoins: readManualIntents(this.#store).flatMap((each) =>
+          each.action === "joinFaction" && FACTION_ENEMIES[each.args.faction] !== undefined ? [each.args.faction] : [],
+        ),
         hackingLevel: hacking,
         money,
         city,
@@ -1240,7 +1257,8 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       enabled: readWorldDaemonEnabled(this.#store),
       shareBonus,
-      installing: this.#augmentationsCommitted,
+      // The reach counts the city group the brain chose (#228 review): the last update's choice.
+      cityGroup: this.#invitations.chosenGroup(),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({
@@ -1254,7 +1272,7 @@ export class DesiredStateController {
               ? "the Augmentations switch, off"
               : null,
       // An install chosen, or counting down: it puts the player back in Sector-12 and drops every faction.
-      beforeInstall: this.#augmentationsCommitted || this.#augmentations.countdownReserve() > 0,
+      beforeInstall: this.#installUnderWay(),
       nowMs: this.#lastEventAtMs,
     });
     this.#purchase = this.#choosePurchase();
