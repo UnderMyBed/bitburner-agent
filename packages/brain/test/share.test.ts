@@ -320,7 +320,12 @@ describe("the run report's lines", () => {
     ...changes,
   });
   /** Share threads on the batches' hosts; `onHomeAt`, on home alone, beside them (#230). */
-  const sharingAt = (threads: number, bonus: number) => ({ threads, ramGb: threads * 4, hostsRamGb: threads * 4, bonus });
+  const sharingAt = (threads: number, bonus: number) => ({
+    threads,
+    ramGb: threads * 4,
+    hostsRamGb: threads * 4,
+    bonus,
+  });
   const onHomeAt = (threads: number, bonus: number) => ({ ...sharingAt(threads, bonus), hostsRamGb: 0 });
 
   test("never asked: one line, no failure", () => {
