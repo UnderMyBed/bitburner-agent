@@ -15,7 +15,7 @@
 //   (owner decision 50): phase A's exit is a live run that destroys BN1.1 on its own. Another BitNode is the owner's:
 //   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3, BN1 gives nothing: none, loudly.
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
-//   within reach and where (./daedalus-count.ts's `daedalusReach`); the count and the reach under the requirement, no
+//   within reach and where (./invitations.ts's `daedalusReach`); the count and the reach under the requirement, no
 //   install under way, for `DAEDALUS_OUT_OF_REACH_AFTER_MS`, is "Daedalus out of reach": the `daedalusReach` stall, a
 //   run report failure.
 import {
@@ -37,8 +37,8 @@ import {
   WORLD_DAEMON,
   worldDaemonProblem,
 } from "@bitburner-agent/core";
-import { type DaedalusReach, daedalusReach, describeReach } from "./daedalus-count.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
+import { type DaedalusReach, daedalusReach, describeReach } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
@@ -242,7 +242,6 @@ export function worldDaemonPath({
       currentNode: resetInfo.currentNode,
       ownedSF: resetInfo.ownedSF,
       installed: resetInfo.ownedAugs,
-      queued: state?.queuedAugmentations ?? [],
       joined: state?.joined ?? [],
       invitations: state?.invitations ?? [],
     });
@@ -257,7 +256,9 @@ export function worldDaemonPath({
       augmentations,
       augmentationsRequired: required.augmentations,
       missing:
-        skills === null || !isFiniteNumber(money) ? unread : daedalusMissing({ augmentations, money, skills }, required),
+        skills === null || !isFiniteNumber(money)
+          ? unread
+          : daedalusMissing({ augmentations, money, skills }, required),
       short: count.short,
       reach:
         state === null || hacking === null

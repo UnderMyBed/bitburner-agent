@@ -201,7 +201,7 @@ describe("waiting", () => {
     expect(update({ slowData: slow({ reputation: 0 }) }).committed).toBe(false);
     expect(rule.view().waitingFor).toBe(
       "the count to reach a bar: 0 of 8 new augmentations affordable (0 of 12 with NeuroFlux), 10 min online this " +
-        "cycle; the bar falls to 7 in 1.8 h",
+        "cycle; the bar falls to 7 in 1.8 h; short of Daedalus's count (0 of 30 augmentations installed): any augmentation counts",
     );
     expect(rule.view().progress).toMatchObject({ countdown: null, reason: null });
   });
@@ -287,7 +287,7 @@ describe("the count rule (#222)", () => {
     });
     expect(rule.view().waitingFor).toBe(
       "the count to reach a bar: 5 of 8 new augmentations affordable (7 of 12 with NeuroFlux), 0 s online this cycle; " +
-        "the bar falls to 7 in 2.0 h",
+        "the bar falls to 7 in 2.0 h; short of Daedalus's count (0 of 30 augmentations installed): any augmentation counts",
     );
     expect(readAugmentationCycle(store)).toBeNull();
     // 6 h online in slow snapshots 3 minutes apart: the bar falls to 5, the count, and the countdown starts.
@@ -588,8 +588,8 @@ describe("the progress events (#222)", () => {
         held: null,
         byDonation: 0,
         setCost: expect.closeTo(FIVE_COST, 0),
-        // CyberSec's five not owned: the hacking way lasts, so not short of Daedalus's count (#228).
-        short: null,
+        // Nothing installed: short of Daedalus's count (#228).
+        short: { installed: 0, required: 30 },
       },
     ]);
     // A NeuroFlux Governor level more, 5 minutes after the last recorded (the brain's time): recorded.
@@ -603,7 +603,7 @@ describe("the progress events (#222)", () => {
     expect(progressEvents().at(-1)).toMatchObject({ affordableWithNeuroFlux: 6, onlineMs: 5 * MINUTE });
     expect(describeProgress(progressEvents().at(-1) as never)).toBe(
       "5 of 8 new augmentations affordable (6 of 12 with NeuroFlux), 5 min online this cycle; the bar falls to 7 in " +
-        "1.9 h",
+        "1.9 h; short of Daedalus's count (0 of 30 augmentations installed): any augmentation counts",
     );
   });
 
@@ -1853,8 +1853,24 @@ describe("short of Daedalus's count (#228)", () => {
     );
   });
 
+  test('a no-value one left to work for (Neural Wit Amplifier, BitRunners at 0): not "nothing left", no install', () => {
+    const leftOne = FOUR.map((faction) => (faction.name === "BitRunners" ? { ...faction, reputation: 0 } : faction));
+    update({
+      slowData: slow({ joined: leftOne, ownedAugs: RUN_2 }),
+      mediumData: medium({ hacking: 6_000, money: 1e9 }),
+    });
+    expect(rule.view().progress).toMatchObject({ affordable: 1, reason: null, countdown: null });
+  });
+
   test("Daedalus inviting (the count met): the hacking-value rule, so nothing to buy or install", () => {
-    const invited = { ...runTwo(), factions: { backend: "sim", state: { joined: FOUR, invitations: ["Daedalus"], queuedAugmentations: [] }, problem: null } } as SlowSnapshotData;
+    const invited = {
+      ...runTwo(),
+      factions: {
+        backend: "sim",
+        state: { joined: FOUR, invitations: ["Daedalus"], queuedAugmentations: [] },
+        problem: null,
+      },
+    } as SlowSnapshotData;
     update({ slowData: invited, mediumData: medium({ hacking: 6_000, money: 1e9 }) });
     expect(rule.view().set).toEqual([]);
     expect(rule.view().progress).toMatchObject({ affordable: 0, reason: null, countdown: null, short: null });
@@ -1863,7 +1879,10 @@ describe("short of Daedalus's count (#228)", () => {
 
   test("the counts take queued ones whatever their value; the lookahead's reserve counts them too", () => {
     // Neural Wit Amplifier queued already: Magnetism Amplifier the set, two affordable.
-    update({ slowData: runTwo({ queued: ["Neural Wit Amplifier"] }), mediumData: medium({ hacking: 6_000, money: 1e9 }) });
+    update({
+      slowData: runTwo({ queued: ["Neural Wit Amplifier"] }),
+      mediumData: medium({ hacking: 6_000, money: 1e9 }),
+    });
     expect(rule.view().progress).toMatchObject({ affordable: 2, reason: "nothing left" });
     // Short of the money, with the income to cover it in 15 minutes: held from cloud servers (the reserve).
     rule = newRule();

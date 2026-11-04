@@ -5,9 +5,11 @@
 //   favour), hacking past 6,000, $2m, in Sector-12; and 20 minutes of the game's time, so no quick install (#222) takes
 //   NeuroFlux Governor alone first. The hack loop, programs, home RAM and cloud servers are off: the money is the
 //   harness's.
-// - Short of the count, the hacking way spent: the brain travels to Ishima, Tian Di Hui invites (the game's check,
-//   every 2 s) and A5 joins it, then works for it: its two with a hacking value first (#203), then, past them (a
-//   harness edit), the rest, for the count.
+// - Short of the count, nothing of the city groups' within the money: the brain travels to Ishima, Tian Di Hui invites
+//   (the game's check, every 2 s) and A5 joins it, then works for it: its two with a hacking value first (#203), then,
+//   past them (a harness edit), the rest, for the count.
+// - With $100m, the city group (owner decision 54): B, the most that count, Ishima first (the player is there), then
+//   Chongqing and New Tokyo, back to Ishima; none of A's or C's joined.
 // - A harness edit stands in for that work's hours (Tian Di Hui's reputation for all eight) and the money: A6 counts
 //   Tian Di Hui's eight and the two no-value augmentations The Black Hand and BitRunners sell (by donation), buys them
 //   and installs: 33 installed. Hacking and money edited back past Daedalus's other requirements, it invites.
@@ -15,8 +17,8 @@
 import { augmentationsSoldBy, isWorthInstalling, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
-import { TIAN_DI_HUI_EVENT_KIND } from "../src/daedalus-count.ts";
 import { FACTION_WORK_CHOSEN_EVENT_KIND } from "../src/factions.ts";
+import { CITY_GROUP_CHOSEN_EVENT_KIND, INVITATION_TRAVEL_EVENT_KIND } from "../src/invitations.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { useFreshStarts } from "./helpers/fresh-start.ts";
@@ -55,7 +57,7 @@ test("DAEDALUS_COUNT_SEEDS: seeds 1 or more, or unset for seed 1; an empty or od
 });
 
 test.each(SEEDS)(
-  "seed %i: from run #2's 23, to Ishima and Tian Di Hui, its eight and two no-value ones bought and installed, Daedalus invites",
+  "seed %i: from run #2's 23: Tian Di Hui, city group B, Tian Di Hui's eight and two no-value ones installed, Daedalus invites",
   { timeout: 300_000 },
   async (seed) => {
     expect(RUN_2).toHaveLength(23);
@@ -88,8 +90,11 @@ test.each(SEEDS)(
     await game.runUntil(() => joined().includes("Tian Di Hui"), STAGE_MS);
     expect(fresh.medium()?.player.city).toBe("Ishima");
     // The hold between, unless the slow snapshot showed the invitation before a medium one showed Ishima.
-    const phases = events(TIAN_DI_HUI_EVENT_KIND).map((event) => (event.detail as { phase: string }).phase);
-    expect([["travel", "hold", "invited"], ["travel", "invited"]]).toContainEqual(phases);
+    const phases = events(INVITATION_TRAVEL_EVENT_KIND).map((event) => (event.detail as { phase: string }).phase);
+    expect([
+      ["travel", "hold", "invited"],
+      ["travel", "invited"],
+    ]).toContainEqual(phases);
     // Its two with a hacking value first (the hacking way again, #203); a harness edit past them (6,250) leaves the
     // way spent: then the soonest of the rest, for the count.
     await game.runUntil(() => fresh.controller().factionsView().choice?.faction === "Tian Di Hui", STAGE_MS);
@@ -104,12 +109,28 @@ test.each(SEEDS)(
     );
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
 
+    // Money for a city group's invitations (#228, decision 54): B, the most that count (5, against A 4, C 3), Ishima's
+    // first (the player is there), then Chongqing and New Tokyo, back to Ishima; none of A's or C's joined.
+    await simulation.diagnostics.setMoney(100e6);
+    const groupB = ["Chongqing", "New Tokyo", "Ishima"];
+    await game.runUntil(
+      () => groupB.every((faction) => joined().includes(faction)) && fresh.medium()?.player.city === "Ishima",
+      STAGE_MS,
+    );
+    expect(events(CITY_GROUP_CHOSEN_EVENT_KIND).map((event) => event.detail)).toEqual([
+      expect.objectContaining({ group: "B", factions: groupB, short: true }),
+    ]);
+    expect(joined().filter((faction) => ["Sector-12", "Aevum", "Volhaven"].includes(faction))).toEqual([]);
+    expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
+
     // The work's hours, and the money: the count reached, bought, installed.
     await simulation.diagnostics.joinFactionWithReputation("Tian Di Hui", 80_000);
     await simulation.diagnostics.setMoney(200e9);
     const startedAt = slow()?.resetInfo.lastAugReset as number;
     await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt, STAGE_MS);
-    const bought = events(AUGMENTATION_BOUGHT_EVENT_KIND).map((event) => (event.detail as { augmentation: string }).augmentation);
+    const bought = events(AUGMENTATION_BOUGHT_EVENT_KIND).map(
+      (event) => (event.detail as { augmentation: string }).augmentation,
+    );
     const counting = bought.filter((name) => name !== "NeuroFlux Governor");
     expect(new Set(counting)).toEqual(new Set([...TIAN_DI_HUI_EIGHT, "Neural Wit Amplifier", "Magnetism Amplifier"]));
     const installed = Object.keys(slow()?.resetInfo.ownedAugs ?? {});
@@ -130,11 +151,15 @@ test.each(SEEDS)(
       sinceMs: EPOCH_MS,
       untilMs: game.clock.now(),
     });
-    expect(text).toMatch(/ {6}\S+ {2}travel to Ishima for its invitation \(23 of 30 installed; it sells 8 to install\)/);
+    expect(text).toMatch(/ {6}\S+ {2}travel to Ishima for Tian Di Hui's invitation \(23 of 30 installed\)/);
+    expect(text).toMatch(
+      / {6}\S+ {2}city factions: group B \(Chongqing, New Tokyo, Ishima\): 5 augmentations that count, against A 4, C 3/,
+    );
+    expect(text).toMatch(/ {4}travel\(Chongqing\): done after 1 try/);
     expect(text).toMatch(/ {4}travel\(Ishima\): done after 1 try/);
     expect(text).toMatch(/hacking for Tian Di Hui, for .*, for Daedalus's count: 23 of 30 augmentations installed/);
     expect(text).toMatch(/Daedalus: (joined|invited); 33 of 30 augmentations installed/);
-    expect(failures.filter((failure) => /Daedalus out of reach|Tian Di Hui NOT INVITED/.test(failure))).toEqual([]);
+    expect(failures.filter((failure) => /Daedalus out of reach|NOT INVITED/.test(failure))).toEqual([]);
     const worked = events(FACTION_WORK_CHOSEN_EVENT_KIND).map((event) => (event.detail as { faction: string }).faction);
     console.log(
       `seed ${seed}: worked for ${[...new Set(worked)].join(", ")}; bought ${counting.length} that count ` +

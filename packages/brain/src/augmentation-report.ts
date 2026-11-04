@@ -161,8 +161,8 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
 /**
  * What a slow snapshot shows within reach by a donation (#225), its money aside: each augmentation worth installing,
  * not owned, its prerequisites owned, no joined seller's reputation reaching it, and sold by a joined faction taking
- * donations with them unlocked (the one with the most reputation). Short of Daedalus's count (#228), any counts. Empty where the snapshot doesn't say, or core
- * doesn't know what it says.
+ * donations with them unlocked (the one with the most reputation); short of Daedalus's count (#228), any counts. Empty
+ * where the snapshot doesn't say, or core doesn't know what it says.
  */
 export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
   const reading = factionReadingOf(data);
@@ -190,13 +190,13 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
       currentNode,
       ownedSF,
       installed: purchaseState.installed,
-      queued: state.queuedAugmentations,
       joined: state.joined,
       invitations: state.invitations,
     });
     const offers: DonationOffer[] = [];
     for (const name of new Set([...shops.values()].flat())) {
-      if (!isWorthInstalling(name, short) || owned(name) || missingPrerequisites(name, purchaseState).length > 0) continue;
+      if (!isWorthInstalling(name, short) || owned(name) || missingPrerequisites(name, purchaseState).length > 0)
+        continue;
       const { money, reputation } = augmentationCost(name, purchaseState);
       const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
       if (sellers.some((faction) => faction.reputation >= reputation)) continue;

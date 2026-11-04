@@ -12,9 +12,7 @@ import { AUGMENTATIONS } from "./augmentation-data.ts";
 import {
   type AugmentationPurchase,
   type AugmentationPurchaseState,
-  augmentationBitNodeMultipliers,
   augmentationCost,
-  augmentationsSoldBy,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
@@ -56,13 +54,8 @@ export interface DaedalusCount {
   /** The BitNode's (`daedalusAugmentationsRequired`). */
   required: number;
   /**
-   * Short of it: Daedalus neither joined nor invited (`FactionJoinCondition.ts:130`, `p.augmentations.length >= n`),
-   * fewer installed than required, and the hacking way spent: no augmentation with a hacking value (#210's
-   * `isWorthInstalling`) that a joined faction sells is left to work for (neither installed, queued, nor within a joined
-   * seller's reputation: A5's hacking-value candidates, #203). Then any augmentation is worth installing
-   * (`isWorthInstalling(name, true)`), and A5 works for any. Not while the hacking way lasts, so the early game stays
-   * #203's and #210's: the brain's conservative reading of #228, where short of 30 from the BitNode's start would trade
-   * hacking value for cheap augmentations all BitNode long.
+   * Short of it: Daedalus neither joined nor invited, and fewer installed than required (`FactionJoinCondition.ts:130`,
+   * `p.augmentations.length >= n`). Then any augmentation is worth installing (`isWorthInstalling(name, true)`).
    */
   short: boolean;
 }
@@ -72,38 +65,19 @@ export function daedalusCountOf({
   currentNode,
   ownedSF,
   installed,
-  queued,
   joined,
   invitations,
 }: {
   currentNode: number;
   ownedSF: Readonly<Record<string, number>>;
   installed: Readonly<Record<string, number>>;
-  queued: readonly string[];
-  joined: readonly { name: string; reputation: number }[];
+  joined: readonly { name: string }[];
   invitations: readonly string[];
 }): DaedalusCount {
   const count = Object.keys(installed).length;
   const required = daedalusAugmentationsRequired(currentNode, ownedSF);
-  const met = joined.some((faction) => faction.name === DAEDALUS) || invitations.includes(DAEDALUS) || count >= required;
-  if (met) return { installed: count, required, short: false };
-  const state: AugmentationPurchaseState = {
-    installed,
-    queued,
-    sourceFile11Level: ownedSF["11"] ?? 0,
-    bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
-  };
-  // A gang's faction isn't modelled (none in BN1): gangFaction null.
-  const shops = joined
-    .filter((faction) => FACTION_NAMES.includes(faction.name))
-    .map((faction) => ({ ...faction, shop: augmentationsSoldBy(faction.name, currentNode, null) }));
-  const reached = (name: string) => {
-    const needed = augmentationCost(name, state).reputation;
-    return shops.some((faction) => faction.shop.includes(name) && faction.reputation >= needed);
-  };
-  const toWorkFor = (name: string) =>
-    isWorthInstalling(name) && !Object.hasOwn(installed, name) && !queued.includes(name) && !reached(name);
-  return { installed: count, required, short: !shops.some((faction) => faction.shop.some(toWorkFor)) };
+  const met = joined.some((faction) => faction.name === DAEDALUS) || invitations.includes(DAEDALUS);
+  return { installed: count, required, short: !met && count < required };
 }
 
 /** The multipliers an install brings, each the product over `names` (each NeuroFlux Governor copy listed counts). */

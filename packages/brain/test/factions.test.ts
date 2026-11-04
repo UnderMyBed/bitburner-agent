@@ -113,20 +113,34 @@ const hackingRate = (medium: MediumSnapshotData, favor = 0) =>
   });
 
 describe("chooseJoin", () => {
-  test("the first invitation from a faction without enemies, in the order invited; the city factions left", () => {
+  test("the first invitation from a faction without enemies, in the order invited; other city factions passed over", () => {
     expect(chooseJoin(["Sector-12", "CyberSec", "NiteSec"], [])).toEqual({
       next: "CyberSec",
-      leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+    });
+  });
+
+  test("the city group the brain chose (#228, decision 54): its factions joined, never another group's", () => {
+    const groupB = ["Chongqing", "New Tokyo", "Ishima"];
+    expect(chooseJoin(["Sector-12", "Chongqing", "CyberSec"], [], groupB)).toEqual({
+      next: "Chongqing",
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+    });
+    for (const other of ["Sector-12", "Aevum", "Volhaven"]) expect(chooseJoin([other], [], groupB).next).toBeNull();
+    // Only the group's factions with something of value are in the list: Ishima left out, it's passed over too.
+    expect(chooseJoin(["Ishima"], [], ["Chongqing"])).toMatchObject({
+      next: null,
+      passedOver: [{ faction: "Ishima" }],
     });
   });
 
   test("one joined is passed over, as is a name that isn't one of the game's factions; none left, none to join", () => {
-    expect(chooseJoin(["CyberSec", "Nope", "NiteSec"], ["CyberSec"])).toEqual({ next: "NiteSec", leftToOwner: [] });
-    expect(chooseJoin(["CyberSec"], ["CyberSec"])).toEqual({ next: null, leftToOwner: [] });
-    expect(chooseJoin([], [])).toEqual({ next: null, leftToOwner: [] });
+    expect(chooseJoin(["CyberSec", "Nope", "NiteSec"], ["CyberSec"])).toEqual({ next: "NiteSec", passedOver: [] });
+    expect(chooseJoin(["CyberSec"], ["CyberSec"])).toEqual({ next: null, passedOver: [] });
+    expect(chooseJoin([], [])).toEqual({ next: null, passedOver: [] });
   });
 
-  test("every one of the six city factions is left; every other faction is joined", () => {
+  test("no city group chosen: every one of the six city factions is passed over; every other faction is joined", () => {
     for (const city of ["Aevum", "Chongqing", "Ishima", "New Tokyo", "Sector-12", "Volhaven"]) {
       expect(chooseJoin([city], []).next).toBeNull();
     }
@@ -265,7 +279,10 @@ describe("chooseFactionWork", () => {
       waitingFor: "an augmentation worth working for at the joined factions",
     });
     // Short of Daedalus's count, the hacking way sold out (#228): any counts, the soonest first (1,250 reputation).
-    const short = chooseFactionWork(player(55), slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } }));
+    const short = chooseFactionWork(
+      player(55),
+      slow({ joined: { "Sector-12": 0 }, installed: { Neuralstimulator: 1 } }),
+    );
     expect(short.choice).toMatchObject({
       faction: "Sector-12",
       augmentation: "Wired Reflexes",
@@ -666,17 +683,24 @@ describe("FactionRule", () => {
     expect(update({ slowData: invited, mediumData: { ...player(55), player: {} } }).join).toBeNull();
   });
 
-  test("an invitation from a faction with enemies is left, said in the view and logged once", () => {
+  test("a city faction not of the brain's group is passed over, said in the view and logged once; its group's joined", () => {
     const { factions, log, update } = rule();
     const invited = slow({ invitations: ["Sector-12"] });
-    expect(update({ slowData: invited }).join).toBeNull();
-    update({ slowData: invited });
-    expect(factions.view().leftToOwner).toEqual([
-      { faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] },
-    ]);
+    const cityGroup = "group B (Chongqing, New Tokyo, Ishima): 5 augmentations that count, against A 4, C 3";
+    const groupB = { cityFactions: ["Chongqing", "New Tokyo", "Ishima"], cityGroup };
+    expect(update({ slowData: invited, ...groupB }).join).toBeNull();
+    update({ slowData: invited, ...groupB });
+    expect(factions.view()).toMatchObject({
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      cityGroup,
+    });
     expect(log).toEqual([
-      "factions: Sector-12's invitation is left to you (joining it bans Chongqing, New Tokyo, Ishima, Volhaven)",
+      "factions: Sector-12's invitation not joined (it would ban Chongqing, New Tokyo, Ishima, Volhaven): " +
+        `${cityGroup} (decision 54)`,
     ]);
+    expect(update({ slowData: slow({ invitations: ["Sector-12", "Chongqing"] }), ...groupB }).join).toEqual(
+      joinIntent("Chongqing"),
+    );
   });
 
   test("work: the choice sent, stored and logged once; another target stored again; the same work type sent", () => {
@@ -791,7 +815,7 @@ describe("FactionRule", () => {
     expect(log.filter((line) => line.includes("STALLED"))).toEqual([]);
   });
 
-  test("an invitation left to the owner is logged again after a reset (#203 review): it comes again", () => {
+  test("a city faction's invitation passed over is logged again after a reset (#203 review): it comes again", () => {
     const { log, update } = rule();
     update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 1 }) });
     update({ slowData: slow({ invitations: ["Sector-12"], lastAugReset: 1 }) });
@@ -886,7 +910,7 @@ describe("FactionWorkTimeline", () => {
     expect(timeline.choiceAt(35)).toBeNull();
   });
 
-  test("joins from the medium snapshots; invitations left to the owner from the slow ones", () => {
+  test("joins from the medium snapshots; the city factions' invitations from the slow ones", () => {
     const timeline = new FactionWorkTimeline([], STARTED);
     timeline.addMedium(0, player(55, { factions: ["Sector-12"] }));
     timeline.addMedium(10_000, player(55, { factions: ["Sector-12", "CyberSec"] }));
@@ -896,7 +920,7 @@ describe("FactionWorkTimeline", () => {
     ]);
     timeline.addSlow(60_000, slow({ invitations: ["Aevum", "NiteSec"] }));
     timeline.addSlow(120_000, slow({ invitations: ["Aevum"] }));
-    expect([...timeline.leftToOwner]).toEqual([["Aevum", 60_000]]);
+    expect([...timeline.cityInvitations]).toEqual([["Aevum", 60_000]]);
   });
 
   test("reputation gained while the brain's work is on it; on track, no stall", () => {

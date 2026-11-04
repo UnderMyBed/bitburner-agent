@@ -578,7 +578,8 @@ function render(status) {
         ];
   document.querySelector("#faction-state").replaceChildren(...factionLines);
 
-  // The brain's joins and faction work (#203): the join under way, the invitations left to you, and its choice and why.
+  // The brain's joins and faction work (#203): the join under way, its city group (#228, decision 54) and the city
+  // factions' invitations it passes over, and its choice and why.
   const rule = status.factionWork;
   enableFactionWorkNext = !rule.enabled;
   const eta = (seconds) =>
@@ -598,8 +599,9 @@ function render(status) {
   document.querySelector("#faction-rule").replaceChildren(
     element("div", `The brain's faction work: ${rule.enabled ? workLine : "off"}`, rule.enabled && rule.sent ? "ok" : "muted"),
     element("div", `Joining: ${rule.joining ?? "none"}`),
-    ...rule.leftToOwner.map((left) =>
-      element("div", `${left.faction}'s invitation is left to you: joining it bans ${left.bans.join(", ")}`, "muted"),
+    element("div", `City factions: ${rule.cityGroup ?? "not chosen yet"}`),
+    ...rule.passedOver.map((left) =>
+      element("div", `${left.faction}'s invitation not joined: another city group's (it would ban ${left.bans.join(", ")})`, "muted"),
     ),
   );
   document.querySelector("#factions button").textContent = rule.enabled

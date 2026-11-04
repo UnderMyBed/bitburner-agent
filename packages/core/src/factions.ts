@@ -140,6 +140,19 @@ export function daedalusMissing(figures: DaedalusFigures, required: ReturnType<t
 }
 
 /**
+ * The six city factions in the groups that can be joined together (#228, owner decision 54): each group's factions are
+ * none another's enemy, and every faction in one is an enemy of every faction in another (`FACTION_ENEMIES`,
+ * `Faction/FactionInfo.tsx:495-555`). Joining one bans the other groups (`Faction/FactionHelpers.tsx:45-48`) until the
+ * next install lifts every ban (`Faction/Faction.ts:77-85`), so the brain chooses one a cycle. In the game's order of
+ * their first faction (Aevum, Chongqing, Volhaven): ties go to the first.
+ */
+export const CITY_FACTION_GROUPS: readonly { name: string; factions: readonly string[] }[] = [
+  { name: "A", factions: ["Sector-12", "Aevum"] },
+  { name: "B", factions: ["Chongqing", "New Tokyo", "Ishima"] },
+  { name: "C", factions: ["Volhaven"] },
+];
+
+/**
  * Tian Di Hui (#228): no enemies, and its invitation needs the player in one of its cities, hacking 50 and $1m held at
  * the game's check (`Faction/FactionInfo.tsx:680-692`), every 10 engine cycles (`engine.tsx:154`, `:177-183`).
  */

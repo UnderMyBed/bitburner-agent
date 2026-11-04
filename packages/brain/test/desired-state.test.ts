@@ -96,6 +96,12 @@ const intent = (request: IntentRequest): Intent => ({ ...request, id: intentId(r
  * value), the brain asks for it, last.
  */
 const TRAVEL_ISHIMA = intent({ action: "travel", args: { city: "Ishima" } });
+/**
+ * The travel for city group B's invitations (#228, owner decision 54): with $30.6m (Ishima's $30m and three tickets),
+ * the group selling the most the brain would install (nothing joined: short of Daedalus's count, the most of them; else
+ * the most hacking value, DataJack, Neuralstimulator and Neuregen), Chongqing first.
+ */
+const TRAVEL_CHONGQING = intent({ action: "travel", args: { city: "Chongqing" } });
 const buyTor = (vendor = "Alpha Enterprises") => intent({ action: "buyTor", args: { vendor } });
 const buyProgram = (program: string) => intent({ action: "buyProgram", args: { program } });
 const upgradeHomeRam = (fromRam: number, vendor = "Alpha Enterprises") =>
@@ -510,7 +516,7 @@ test("programs are bought with the hack loop off too, once the Agent's medium sn
   const connection = connectAgent();
   send(connection, "slow", slowData());
   send(connection, "medium", mediumData(1, {}, { money: 1e9 }));
-  expect(desiredStates(connection).at(-1)).toEqual({ hackLoop: loopOff, intents: [buyTor()] });
+  expect(desiredStates(connection).at(-1)).toEqual({ hackLoop: loopOff, intents: [buyTor(), TRAVEL_CHONGQING] });
 });
 
 describe("the manual queue (#141, owner decision 36)", () => {
@@ -551,8 +557,11 @@ describe("the manual queue (#141, owner decision 36)", () => {
     send(connection, "slow", slowData());
     controller.addManualIntent({ action: "buyTor", args: { vendor: "Alpha Enterprises" } });
     send(connection, "medium", mediumData(1, { n00dles: true }, { money: 1e9 }));
-    expect(desiredStates(connection).at(-1)?.intents).toEqual([buyTor()]);
-    expect(controller.intentsView()).toMatchObject([{ id: buyTor().id, source: "manual" }]);
+    expect(desiredStates(connection).at(-1)?.intents).toEqual([buyTor(), TRAVEL_CHONGQING]);
+    expect(controller.intentsView()).toMatchObject([
+      { id: buyTor().id, source: "manual" },
+      { id: TRAVEL_CHONGQING.id, source: "travel" },
+    ]);
   });
 
   const fastWith = (...intents: IntentOutcome[]) => ({
@@ -1275,9 +1284,9 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       const { controller, connection, sentIds } = connectedWithLoopOff();
       send(connection, "slow", slowWith());
       send(connection, "medium", richMedium(1e9));
-      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install). Not
-      // committed, the travel for Tian Di Hui (#228) goes.
-      expect(sentIds()).toEqual([TRAVEL_ISHIMA.id]);
+      // The countdown first (#222): nothing bought in it, the programs held too (they're lost at the install); no travel
+      // for invitations either (#228): the install puts the player back in Sector-12.
+      expect(sentIds()).toEqual([]);
       expect(controller.programsView().waitingFor).toBe(
         "the augmentations' install countdown (programs are lost at the install)",
       );
@@ -1349,7 +1358,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         factions: { ...slowWith().factions, state: { joined: [], invitations: [], queuedAugmentations: [] } },
       });
       send(connection, "medium", richMedium(1e9));
-      expect(sentIds()).toEqual([buyProgram("BruteSSH.exe").id, TRAVEL_ISHIMA.id]);
+      // Nothing joined: group A (seven, as B, in fewer travels) chosen, Sector-12's $15m held here (#228); the program
+      // goes, above it.
+      expect(sentIds()).toEqual([buyProgram("BruteSSH.exe").id]);
+      expect(controller.invitationsView()).toMatchObject({ travel: null, hold: 15e6 });
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(controller.augmentationReserve()).toBe(0);
     });
@@ -1859,7 +1871,7 @@ describe("factions and their work (#203)", () => {
     ]);
     expect(controller.factionsView()).toMatchObject({
       joining: "CyberSec",
-      leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+      passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
     });
     send(connection, "medium", withSkills(["CyberSec"]));
     expect(lastState(connection)?.intents).toEqual([]);
@@ -2299,7 +2311,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       const near = earningWithFactions(EIGHT_COST - 10e6, EIGHT);
       expect(near.controller.augmentationsView()).toMatchObject({ committed: false, progress: { countdown: null } });
       expect(near.controller.augmentationReserve()).toBeCloseTo(EIGHT_COST, 0);
-      expect(sentPurchases(near.connection)).toEqual([TRAVEL_ISHIMA]);
+      expect(sentPurchases(near.connection)).toEqual([TRAVEL_CHONGQING]);
       expect(near.controller.cloudServersView().waitingFor).toMatch(
         /beyond \$2,927,417,20\d held for the augmentations to buy before the install\)$/,
       );
@@ -2322,7 +2334,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
         progress: { reason: "count reached", countdown: { endsInMs: 90_000 } },
       });
       expect(controller.augmentationReserve()).toBeCloseTo(EIGHT_COST, 0);
-      expect(sentPurchases(connection)).toEqual([TRAVEL_ISHIMA]);
+      expect(sentPurchases(connection)).toEqual([]);
       expect(controller.homeRamView().waitingFor).toBe(
         `money above the ${heldEight} held for the augmentations' install countdown`,
       );
@@ -2412,7 +2424,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       { programs: PORT_OPENER_PROGRAMS.slice(0, 4) },
       { endMoney: 249_980_000 },
     );
-    expect(sentPurchases(connection)).toEqual([]);
+    expect(sentPurchases(connection)).toEqual([TRAVEL_CHONGQING]);
     expect(controller.cloudServersView().waitingFor).toBe(
       "money for pserv-0 with 8 GB ($440,000, beyond $250,000,000 held for SQLInject.exe)",
     );
@@ -2466,7 +2478,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       send(again, "medium", medium(100e6 + minute * 60 * 512), "session-2");
     }
     // $100.3m covers 1 TB ($56.3m), not 2 TB.
-    expect(sentPurchases(again)).toEqual([buyServer("pserv-0", 1_024)]);
+    expect(sentPurchases(again)).toEqual([buyServer("pserv-0", 1_024), TRAVEL_CHONGQING]);
   });
 
   test("the owner's cloud servers are never hosts, nor upgraded; they count toward the limit", () => {
@@ -2500,7 +2512,10 @@ describe("the travel for Tian Di Hui's invitation (#228)", () => {
     const connection = connectAgent();
     send(connection, "static", network);
     send(connection, "slow", slowData());
-    const ids = () => desiredStates(connection).at(-1)?.intents.map((each) => each.id) ?? [];
+    const ids = () =>
+      desiredStates(connection)
+        .at(-1)
+        ?.intents.map((each) => each.id) ?? [];
     return { controller, connection, ids };
   };
 
@@ -2515,17 +2530,23 @@ describe("the travel for Tian Di Hui's invitation (#228)", () => {
     // In Ishima: not asked again; BruteSSH.exe would leave $900k, under the $1m held.
     send(connection, "medium", player("Ishima", 1_400_000));
     expect(ids()).toEqual([]);
-    expect(controller.programsView().waitingFor).toBe("money above the $1,000,000 held for Tian Di Hui's invitation");
-    expect(controller.tianDiHuiView()).toMatchObject({ traveling: false, hold: 1e6 });
+    expect(controller.programsView().waitingFor).toBe(
+      "money above the $1,000,000 held for an invitation travelled for",
+    );
+    expect(controller.invitationsView()).toMatchObject({ travel: null, hold: 1e6 });
     send(connection, "medium", player("Ishima", 1_500_000));
     expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
     // Invited: the hold over, and A5 joins it.
     send(connection, "medium", player("Ishima", 1_400_000));
     send(connection, "slow", {
       ...slowData(),
-      factions: { backend: "sim", state: { joined: [], invitations: ["Tian Di Hui"], queuedAugmentations: [] }, problem: null },
+      factions: {
+        backend: "sim",
+        state: { joined: [], invitations: ["Tian Di Hui"], queuedAugmentations: [] },
+        problem: null,
+      },
     });
-    expect(controller.tianDiHuiView().hold).toBe(0);
+    expect(controller.invitationsView().hold).toBe(0);
     expect(ids()).toEqual(["buyProgram(BruteSSH.exe)", "joinFaction(Tian Di Hui)"]);
   });
 
@@ -2534,11 +2555,11 @@ describe("the travel for Tian Di Hui's invitation (#228)", () => {
     controller.setWork({ kind: "crime", crime: "Shoplift" });
     send(connection, "medium", player("Sector-12", 1_400_000));
     expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
-    expect(controller.tianDiHuiView().waitingFor).toBe("your work on the dashboard (it may be in a city)");
+    expect(controller.invitationsView().waitingFor).toBe("your work on the dashboard (it may be in a city)");
     controller.setWork(null);
     expect(ids()).toEqual(["buyProgram(BruteSSH.exe)", TRAVEL_ISHIMA.id]);
     controller.setAugmentationsEnabled(false);
     expect(ids()).toEqual(["buyProgram(BruteSSH.exe)"]);
-    expect(controller.tianDiHuiView().waitingFor).toBe("the Augmentations switch, off");
+    expect(controller.invitationsView().waitingFor).toBe("the Augmentations switch, off");
   });
 });

@@ -372,7 +372,7 @@ describe("the brain's joins and faction work (#203)", () => {
     ...(work ? { work } : {}),
   });
 
-  test("its choice and why, the join under way, the invitations left to you; the work says it's the brain's", async () => {
+  test("its choice and why, the join under way, its city group and those passed over; the work says it's the brain's", async () => {
     const work = {
       desired: { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true },
       source: "brain",
@@ -383,7 +383,8 @@ describe("the brain's joins and faction work (#203)", () => {
         choice: CHOICE,
         sent: true,
         joining: "NiteSec",
-        leftToOwner: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+        passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
+        cityGroup: "group B (Chongqing, New Tokyo, Ishima): 5 augmentations that count, against A 4, C 3",
       },
       work,
     );
@@ -395,7 +396,11 @@ describe("the brain's joins and faction work (#203)", () => {
         "ok",
       ],
       ["Joining: NiteSec", ""],
-      ["Sector-12's invitation is left to you: joining it bans Chongqing, New Tokyo, Ishima, Volhaven", "muted"],
+      ["City factions: group B (Chongqing, New Tokyo, Ishima): 5 augmentations that count, against A 4, C 3", ""],
+      [
+        "Sector-12's invitation not joined: another city group's (it would ban Chongqing, New Tokyo, Ishima, Volhaven)",
+        "muted",
+      ],
     ]);
     expect(textOf(document, "#factions button")).toBe("Stop the brain's faction work");
     expect(textOf(document, "#work div")).toBe("The brain's: hacking work for CyberSec, focused: converged via ui");

@@ -68,37 +68,30 @@ describe("which augmentations", () => {
     expect(() => isWorthInstalling("Nothing", true)).toThrow(RangeError);
   });
 
-  test("short of Daedalus's count (#228): under the BitNode's, NeuroFlux once, the hacking way spent, not invited", () => {
-    /** `count` installed: NeuroFlux Governor at 124 levels (one, `FactionJoinCondition.ts:130`), then CyberSec's five. */
+  test("short of Daedalus's count (#228): under the BitNode's, NeuroFlux Governor once, until it invites", () => {
+    /** `count` installed: NeuroFlux Governor at 124 levels (one, `FactionJoinCondition.ts:130`), then others. */
     const installed = (count: number) =>
       Object.fromEntries([
         ["NeuroFlux Governor", 124],
-        ...[...CYBERSEC, ...AUGMENTATION_NAMES.filter((name) => name !== "NeuroFlux Governor" && !CYBERSEC.includes(name))]
+        ...AUGMENTATION_NAMES.filter((name) => name !== "NeuroFlux Governor")
           .slice(0, count - 1)
           .map((name) => [name, 1]),
       ]);
-    const cyberSec = (reputation = 0) => [{ name: "CyberSec", reputation }];
-    const base = { currentNode: 1, ownedSF: {}, queued: [], joined: cyberSec(), invitations: [] };
-    expect(daedalusCountOf({ ...base, installed: installed(29) })).toEqual({ installed: 29, required: 30, short: true });
-    expect(daedalusCountOf({ ...base, installed: installed(30) })).toEqual({ installed: 30, required: 30, short: false });
+    const base = { currentNode: 1, ownedSF: {}, joined: [{ name: "CyberSec" }], invitations: [] };
+    expect(daedalusCountOf({ ...base, installed: installed(29) })).toEqual({
+      installed: 29,
+      required: 30,
+      short: true,
+    });
+    expect(daedalusCountOf({ ...base, installed: installed(30) })).toEqual({
+      installed: 30,
+      required: 30,
+      short: false,
+    });
+    expect(daedalusCountOf({ ...base, installed: {} })).toEqual({ installed: 0, required: 30, short: true });
     // Joined or invited, it isn't: the count is met.
-    expect(daedalusCountOf({ ...base, installed: installed(29), joined: [{ name: "Daedalus", reputation: 0 }] }).short).toBe(
-      false,
-    );
+    expect(daedalusCountOf({ ...base, installed: installed(29), joined: [{ name: "Daedalus" }] }).short).toBe(false);
     expect(daedalusCountOf({ ...base, installed: installed(29), invitations: ["Daedalus"] }).short).toBe(false);
-    // The hacking way not spent: CyberSec sells one of its five not installed, Gen II (18,750), to work for. Queued,
-    // or its reputation reached (A6 buys it), it's spent.
-    const four = installed(5);
-    expect(Object.hasOwn(four, GEN_II)).toBe(false);
-    expect(daedalusCountOf({ ...base, installed: four }).short).toBe(false);
-    expect(daedalusCountOf({ ...base, installed: four, joined: cyberSec(18_749) }).short).toBe(false);
-    expect(daedalusCountOf({ ...base, installed: four, joined: cyberSec(18_750) }).short).toBe(true);
-    expect(daedalusCountOf({ ...base, installed: four, queued: [GEN_II] }).short).toBe(true);
-    // A joined faction selling no hacking value (Slum Snakes' combat ones) leaves it spent; nothing joined too.
-    expect(daedalusCountOf({ ...base, installed: four, joined: [{ name: "Slum Snakes", reputation: 0 }] }).short).toBe(
-      true,
-    );
-    expect(daedalusCountOf({ ...base, installed: {}, joined: [] })).toEqual({ installed: 0, required: 30, short: true });
     // The BitNode's requirement: BN15's 20.
     expect(daedalusCountOf({ ...base, currentNode: 15, installed: installed(20) }).short).toBe(false);
   });

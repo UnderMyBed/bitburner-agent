@@ -5,12 +5,12 @@ export {
   augmentationBuyOrder,
   type CountedPurchases,
   chooseAugmentationsToBuy,
-  type DaedalusCount,
-  daedalusCountOf,
   countdownExtensionMs,
+  type DaedalusCount,
   type Donation,
   type DonationSeller,
   type DonationTerms,
+  daedalusCountOf,
   hackingExpForLevel,
   INSTALL_AT_AUGMENTATIONS,
   INSTALL_AT_AUGMENTATIONS_WITH_NEUROFLUX,
@@ -268,6 +268,7 @@ export {
   type WorkingPerson,
 } from "./faction-work.ts";
 export {
+  CITY_FACTION_GROUPS,
   DAEDALUS,
   type DaedalusFigures,
   daedalusAugmentationsRequired,

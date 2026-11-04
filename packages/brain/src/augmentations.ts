@@ -1255,7 +1255,6 @@ export class AugmentationRule {
       currentNode,
       ownedSF,
       installed: ownedAugs,
-      queued: queue,
       joined: state.joined,
       invitations: state.invitations,
     });

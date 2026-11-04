@@ -3,6 +3,7 @@
 import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
+  isWorthInstalling,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,
@@ -67,9 +68,10 @@ function slow({
   queued = [] as string[],
   lastNodeReset = 0,
   ownedSF = {} as Record<string, number>,
+  currentNode = 1,
 } = {}): SlowSnapshotData {
   return {
-    resetInfo: { lastAugReset: 0, lastNodeReset, currentNode: 1, ownedAugs, ownedSF, bitNodeOptions: {} },
+    resetInfo: { lastAugReset: 0, lastNodeReset, currentNode, ownedAugs, ownedSF, bitNodeOptions: {} },
     purchasedServers: [],
     factions: {
       backend: "sim",
@@ -121,17 +123,29 @@ describe("the path", () => {
         "$5,000,000,000 of $100,000,000,000",
         "hacking 2,000 of 2,500 (or every combat skill 1,500)",
       ],
-      // Short (#228): nothing joined, so the hacking way is sold out; Tian Di Hui's eight within reach at hacking 50
-      // (its NeuroFlux Governor is the one installed: counted once).
+      // Short (#228); within reach, the hacker factions' (A3's backdoors bring them), Tian Di Hui's at hacking 50, and
+      // the city group selling the most of the rest (B; its NeuroFlux Governor is the one installed: counted once).
       short: true,
-      reach: { more: 8, by: [{ faction: "Tian Di Hui", count: 8 }] },
+      reach: {
+        more: 37,
+        by: [
+          { faction: "CyberSec", count: 5 },
+          { faction: "NiteSec", count: 7 },
+          { faction: "The Black Hand", count: 6 },
+          { faction: "BitRunners", count: 6 },
+          { faction: "Tian Di Hui", count: 8 },
+          { faction: "Chongqing", count: 1 },
+          { faction: "New Tokyo", count: 1 },
+          { faction: "Ishima", count: 3 },
+        ],
+      },
       needs: ["$5,000,000,000 of $100,000,000,000", "hacking 2,000 of 2,500 (or every combat skill 1,500)"],
     });
     expect(path.daemon).toBeNull();
     // The count said once (#228), with the reach.
     expect(describeWorldDaemonPath(path)).toEqual([
-      "Daedalus: not joined; 1 of 30 augmentations installed, 8 more within reach (Tian Di Hui 8): Daedalus out of " +
-        "reach; needs $5,000,000,000 of $100,000,000,000, hacking 2,000 of 2,500 (or every combat skill 1,500)",
+      "Daedalus: not joined; 1 of 30 augmentations installed, 37 more within reach (CyberSec 5, NiteSec 7, The Black " +
+        "Hand 6, BitRunners 6, Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3); needs $5,000,000,000 of $100,000,000,000, hacking 2,000 of 2,500 (or every combat skill 1,500)",
       "The Red Pill: Daedalus not joined",
     ]);
   });
@@ -379,30 +393,41 @@ describe("a restarted brain", () => {
 });
 
 describe("Daedalus out of reach (#228)", () => {
-  const TIAN_DI_HUI = augmentationsSoldBy("Tian Di Hui", 1, null);
-  /** Twenty-three installed, none Tian Di Hui sells (nor NeuroFlux Governor or The Red Pill). */
-  const TWENTY_THREE = Object.fromEntries(
-    AUGMENTATION_NAMES.filter((name) => name !== RED_PILL && !TIAN_DI_HUI.includes(name))
-      .slice(0, 23)
-      .map((name) => [name, 1]),
-  );
-  const short = (hacking: number) => ({
+  const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
+  /** Run #2's 23: the four hacker factions' set with a hacking value, and NeuroFlux Governor. */
+  const TWENTY_THREE: Record<string, number> = {
+    ...Object.fromEntries(
+      [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))]
+        .filter((name) => isWorthInstalling(name))
+        .map((name) => [name, 1]),
+    ),
+    "NeuroFlux Governor": 124,
+  };
+  /** BN12 at Source-File 12 level 500: 40 for Daedalus (core's `daedalusAugmentationsRequired`). */
+  const BN12 = { currentNode: 12, ownedSF: { 12: 500 } };
+  const short = (hacking: number, bitNode: { currentNode?: number; ownedSF?: Record<string, number> } = BN12) => ({
     mediumData: medium({ hacking, money: 1e12 }),
-    slowData: slow({ ownedAugs: TWENTY_THREE }),
+    slowData: slow({ ownedAugs: TWENTY_THREE, ...bitNode }),
   });
-  const DETAIL = "Daedalus out of reach: 23 of 30 augmentations installed, none more within reach";
+  const DETAIL =
+    "Daedalus out of reach: 23 of 40 augmentations installed, 15 more within reach (The Black Hand 1, BitRunners 1, " +
+    "Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3)";
 
-  test("short, and the count and the reach under 30, no install under way: the failure 30 minutes on, once", () => {
-    // Hacking 40: nothing joined, Tian Di Hui not yet within reach.
-    update({ ...short(40), nowMs: 0 });
-    expect(describeWorldDaemonPath(rule.view().path as NonNullable<ReturnType<typeof rule.view>["path"]>)[0]).toBe(
-      "Daedalus: not joined; 23 of 30 augmentations installed, none more within reach: Daedalus out of reach; needs " +
-        "hacking 40 of 2,500 (or every combat skill 1,500)",
+  test("23 installed: run #2's", () => {
+    expect(Object.keys(TWENTY_THREE)).toHaveLength(23);
+  });
+
+  test("short, the count and the reach under the requirement, no install under way: the failure 30 minutes on, once", () => {
+    // BN12's 40: the hacker factions' two left, Tian Di Hui's eight and group B's five make 38.
+    update({ ...short(50), nowMs: 0 });
+    expect(rule.view().lines[0]).toBe(
+      `Daedalus: not joined; ${DETAIL.slice("Daedalus out of reach: ".length)}: Daedalus out of reach; needs hacking 50 ` +
+        "of 2,500 (or every combat skill 1,500)",
     );
-    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS - 1 });
+    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS - 1 });
     expect(rule.stall()).toBeNull();
-    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS });
-    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
+    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS });
+    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
     expect(rule.stall()).toEqual({ step: "daedalusReach", sinceMs: 0, detail: DETAIL });
     expect(events).toEqual([
       {
@@ -416,22 +441,22 @@ describe("Daedalus out of reach (#228)", () => {
     expect(lines).toEqual([`world daemon: STALLED 30 min: ${DETAIL}`]);
   });
 
-  test("quiet while the reach makes it up: Tian Di Hui's nine at hacking 50 (NeuroFlux Governor too), 32 of 30", () => {
-    update({ ...short(50), nowMs: 0 });
-    update({ ...short(50), nowMs: 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
+  test("quiet while the reach makes it up: BN1's 30, run #2's end with 15 more", () => {
+    update({ ...short(50, {}), nowMs: 0 });
+    update({ ...short(50, {}), nowMs: 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
     expect(rule.stall()).toBeNull();
     expect(rule.view().lines[0]).toBe(
-      "Daedalus: not joined; 23 of 30 augmentations installed, 9 more within reach (Tian Di Hui 9); needs hacking 50 " +
-        "of 2,500 (or every combat skill 1,500)",
+      "Daedalus: not joined; 23 of 30 augmentations installed, 15 more within reach (The Black Hand 1, BitRunners 1, " +
+        "Tian Di Hui 8, Chongqing 1, New Tokyo 1, Ishima 3); needs hacking 50 of 2,500 (or every combat skill 1,500)",
     );
   });
 
   test("an install under way waits it out, and starts it afresh", () => {
-    update({ ...short(40), nowMs: 0 });
-    update({ ...short(40), nowMs: 20 * MINUTE, installing: true });
-    update({ ...short(40), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
+    update({ ...short(50), nowMs: 0 });
+    update({ ...short(50), nowMs: 20 * MINUTE, installing: true });
+    update({ ...short(50), nowMs: DAEDALUS_OUT_OF_REACH_AFTER_MS + MINUTE });
     expect(rule.stall()).toBeNull();
-    update({ ...short(40), nowMs: 20 * MINUTE + 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
+    update({ ...short(50), nowMs: 20 * MINUTE + 2 * DAEDALUS_OUT_OF_REACH_AFTER_MS });
     expect(rule.stall()).toMatchObject({ step: "daedalusReach" });
   });
 
