@@ -5,15 +5,19 @@ import {
   BATCH_LANDING_GAP_MS,
   BATCH_LAUNCH_LEAD_MS,
   BATCH_OPERATIONS,
+  BATCH_RAM_RELEASE_MS,
   BATCH_WEAKEN_RAM_GB,
   type BatchThreads,
   batchBounds,
+  batchFits,
   batchHoldsMs,
   batchOrders,
   batchPeakRamGb,
   batchPlan,
   batchRamGb,
+  batchRamHolds,
   batchThreads,
+  fitBatch,
   GROW_MARGIN,
   growThreads,
   hackSharePerThread,
@@ -25,11 +29,13 @@ import {
   LANDING_LOST_AFTER_MS,
   LandingWatch,
   landingOffsetMs,
+  largestBatchThatFits,
   launchLeadMs,
   leastSpacingMs,
   MAX_BATCH_SHARE,
   MIN_BATCH_SPACING_MS,
   MOST_PREPARATION_WAVES,
+  mostRamHeldGb,
   newBatcherHealth,
   operationRamGb,
   operationScriptName,
@@ -39,6 +45,7 @@ import {
   placeThreads,
   preparationTimeMs,
   preparationWave,
+  type RamHold,
   threadsThatFit,
 } from "../src/batcher.ts";
 import { growthLogPerThread } from "../src/hack-loop.ts";
@@ -291,15 +298,25 @@ describe("hackThreadsAtLaunch: a hack replanned when it goes out, as the hacking
 });
 
 describe("the plan", () => {
-  const holds = { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 };
+  // Each held its release longer (#232): 1, 4, 3.2 and 4 s in all.
+  const holds = {
+    hack: 1_000 - BATCH_RAM_RELEASE_MS,
+    weaken1: 4_000 - BATCH_RAM_RELEASE_MS,
+    grow: 3_200 - BATCH_RAM_RELEASE_MS,
+    weaken2: 4_000 - BATCH_RAM_RELEASE_MS,
+  };
   const threads: BatchThreads = { hack: 10, weaken1: 1, grow: 20, weaken2: 2 };
   /** One batch's operations at once: 10 x 1.75 + 1 x 1.8 + 20 x 1.8 + 2 x 1.8. */
   const oneBatchGb = 17.5 + 1.8 + 36 + 3.6;
 
-  test("the peak: each operation's RAM times the batches running it at once, ⌈hold / spacing⌉", () => {
+  test("the peak: each operation's RAM times the batches running it at once, ⌈(hold + release) / spacing⌉", () => {
     expect(batchPeakRamGb(threads, holds, 4_000)).toBeCloseTo(oneBatchGb, 9);
     // At 1 s: 1 hack, 4 weaken1, 4 grows, 4 weaken2 at once.
     expect(batchPeakRamGb(threads, holds, 1_000)).toBeCloseTo(17.5 + 4 * 1.8 + 4 * 36 + 4 * 3.6, 9);
+    // A hold of exactly the spacing (#232): the next batch's starts before this one's script has ended and freed its
+    // RAM (killWorkerScript.ts:124), so two run at once.
+    const exact = { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 };
+    expect(batchPeakRamGb(threads, exact, 4_000)).toBeCloseTo(17.5 + 2 * 1.8 + 36 + 2 * 3.6, 9);
   });
 
   test("the least spacing that fits; null when one batch doesn't; never under the minimum", () => {
@@ -361,9 +378,56 @@ describe("the plan", () => {
 });
 
 describe("placement", () => {
-  test("batchRamGb: each host's whole threads of 1.8 GB, as exec counts them", () => {
-    expect(batchRamGb([16, 16, 4, 2, 1])).toBeCloseTo(14.4 + 14.4 + 3.6 + 1.8, 9);
+  test("batchRamGb: each host's RAM less one 1.8 GB thread, on hosts with room for one (#232)", () => {
+    expect(batchRamGb([16, 16, 4, 2, 1])).toBeCloseTo(14.2 + 14.2 + 2.2 + 0.2, 9);
     expect(batchRamGb([])).toBe(0);
+  });
+
+  test("whole threads (#232): the free RAM can hold more than an operation and still not place it", () => {
+    // Four 64 GB hosts, each holding 15 hacks and 20 weakens: 1.75 GB free on each, 7 GB in all, and no weaken thread
+    // fits on any (NetscriptWorker.ts:110-117). Counting each host's whole 1.8 GB threads (63 GB of 64), the RAM
+    // held and one weaken more fit (249 + 1.8 <= 252); counting a thread less on each host, they don't.
+    const hosts = ["a", "b", "c", "d"].map((host) => ({ host, freeGb: 64 - 15 * 1.75 - 20 * 1.8 }));
+    expect(placeThreads(hosts, 1, BATCH_WEAKEN_RAM_GB)).toBeNull();
+    const heldGb = 4 * (15 * 1.75 + 20 * 1.8);
+    expect(heldGb + BATCH_WEAKEN_RAM_GB).toBeLessThanOrEqual(4 * threadsThatFit(64, 1.8) * 1.8);
+    expect(heldGb + BATCH_WEAKEN_RAM_GB).toBeGreaterThan(batchRamGb([64, 64, 64, 64]));
+  });
+
+  test("within batchRamGb, every operation places, split across hosts, over a seeded sweep of fills (#232)", () => {
+    const random = seeded(232);
+    for (let round = 0; round < 300; round += 1) {
+      const sizes = Array.from({ length: 1 + Math.floor(random() * 30) }, () =>
+        random() < 0.2 ? Math.floor(random() * 400) / 100 : 2 ** (1 + Math.floor(random() * 8)),
+      );
+      const free = sizes.map((ramGb, index) => ({ host: `h${index}`, freeGb: ramGb }));
+      const capacityGb = batchRamGb(sizes);
+      const running: { gb: number; parts: { host: string; gb: number }[] }[] = [];
+      let heldGb = 0;
+      for (let operation = 0; operation < 200; operation += 1) {
+        // Now and then one lands, and its parts free their RAM.
+        if (running.length > 0 && random() < 0.3) {
+          const [landed] = running.splice(Math.floor(random() * running.length), 1);
+          for (const part of landed?.parts ?? []) {
+            const host = free.find((each) => each.host === part.host) as { freeGb: number };
+            host.freeGb = Math.round((host.freeGb + part.gb) * 100) / 100;
+          }
+          heldGb -= landed?.gb ?? 0;
+        }
+        const ramGb = random() < 0.5 ? BATCH_HACK_RAM_GB : BATCH_WEAKEN_RAM_GB;
+        const threads = 1 + Math.floor(random() * 40);
+        if (heldGb + threads * ramGb > capacityGb + 1e-9) continue;
+        const placed = placeThreads(free, threads, ramGb);
+        expect(placed, `${threads} x ${ramGb} GB with ${heldGb} of ${capacityGb} GB held`).not.toBeNull();
+        const parts = (placed ?? []).map((part) => ({ host: part.host, gb: part.threads * ramGb }));
+        for (const part of parts) {
+          const host = free.find((each) => each.host === part.host) as { freeGb: number };
+          host.freeGb = Math.round((host.freeGb - part.gb) * 100) / 100;
+        }
+        running.push({ gb: threads * ramGb, parts });
+        heldGb += threads * ramGb;
+      }
+    }
   });
 
   test("threadsThatFit: as exec counts, roundToTwo(ram x threads) <= free + 0.001 (NetscriptWorker.ts:110-117)", () => {
@@ -414,6 +478,96 @@ describe("placement", () => {
         expect(Math.round(part.threads * ramGb * 100) / 100).toBeLessThanOrEqual(host.freeGb + 0.001);
       }
     }
+  });
+});
+
+describe("fitting a batch to the RAM as it will be held (#232)", () => {
+  const hold = (gb: number, fromMs: number, untilMs: number): RamHold => ({ gb, fromMs, untilMs });
+
+  test("mostRamHeldGb: the most held at once over [from, until), each hold over [its from, its until)", () => {
+    const holds = [hold(10, 0, 100), hold(5, 50, 150), hold(7, 100, 200)];
+    expect(mostRamHeldGb(holds, 0, 300)).toBe(15);
+    // At 100 the first has ended as the third starts: 5 + 7.
+    expect(mostRamHeldGb(holds, 100, 300)).toBe(12);
+    expect(mostRamHeldGb(holds, 150, 300)).toBe(7);
+    expect(mostRamHeldGb(holds, 0, 50)).toBe(10);
+    expect(mostRamHeldGb(holds, 200, 300)).toBe(0);
+    expect(mostRamHeldGb([], 0, 100)).toBe(0);
+  });
+
+  test("batchRamHolds: each order's RAM from its start (not before now) to its landing and release", () => {
+    const threads: BatchThreads = { hack: 10, weaken1: 1, grow: 20, weaken2: 2 };
+    const orders = batchOrders(3, 10_000, { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 });
+    const holds = batchRamHolds(threads, orders, 6_500);
+    expect(holds).toEqual(
+      expect.arrayContaining([
+        { gb: 10 * BATCH_HACK_RAM_GB, fromMs: 9_000, untilMs: 10_000 + BATCH_RAM_RELEASE_MS },
+        { gb: BATCH_WEAKEN_RAM_GB, fromMs: 6_500, untilMs: 10_020 + BATCH_RAM_RELEASE_MS },
+        { gb: 20 * BATCH_GROW_RAM_GB, fromMs: 6_840, untilMs: 10_040 + BATCH_RAM_RELEASE_MS },
+        { gb: 2 * BATCH_WEAKEN_RAM_GB, fromMs: 6_500, untilMs: 10_060 + BATCH_RAM_RELEASE_MS },
+      ]),
+    );
+    expect(holds).toHaveLength(4);
+  });
+
+  test("batchFits: the batch and all that's held at once, at every moment it holds RAM, within the capacity", () => {
+    const threads: BatchThreads = { hack: 10, weaken1: 1, grow: 20, weaken2: 2 };
+    const orders = batchOrders(0, 10_000, { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 });
+    const oneBatchGb = 17.5 + 1.8 + 36 + 3.6;
+    expect(batchFits(threads, orders, [], oneBatchGb, 6_000)).toBe(true);
+    expect(batchFits(threads, orders, [], oneBatchGb - 0.01, 6_000)).toBe(false);
+    // Something held only while the hack is: the hack's moment is the batch's peak.
+    expect(batchFits(threads, orders, [hold(1, 9_500, 9_600)], oneBatchGb, 6_000)).toBe(false);
+    // Held only before the batch starts, or only after its RAM is released: no matter.
+    expect(batchFits(threads, orders, [hold(100, 0, 6_000)], oneBatchGb, 6_000)).toBe(true);
+    expect(batchFits(threads, orders, [hold(100, 10_080, 20_000)], oneBatchGb, 6_000)).toBe(true);
+    // Held while only the weakens and the grow run (before the hack starts at 9 s): the hack's 17.5 GB of room.
+    expect(batchFits(threads, orders, [hold(17.5, 6_000, 9_000)], oneBatchGb, 6_000)).toBe(true);
+    expect(batchFits(threads, orders, [hold(17.6, 6_000, 9_000)], oneBatchGb, 6_000)).toBe(false);
+  });
+
+  test("largestBatchThatFits: the most hack threads, up to the plan's, whose batch fits; null when 1 doesn't", () => {
+    const holds = { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 };
+    const planOf = (hackThreads: number) => {
+      const threads = batchThreads(zer0, player(300), hackThreads);
+      return { threads, orders: batchOrders(0, 10_000, holds) };
+    };
+    const gbOf = (hackThreads: number) => batchPeakRamGb(planOf(hackThreads).threads, holds, 1e9);
+    expect(largestBatchThatFits(40, planOf, [], gbOf(40), 0)?.threads.hack).toBe(40);
+    expect(largestBatchThatFits(40, planOf, [], gbOf(40) - 0.01, 0)?.threads.hack).toBe(39);
+    expect(largestBatchThatFits(40, planOf, [], gbOf(17), 0)?.threads.hack).toBe(17);
+    expect(largestBatchThatFits(40, planOf, [], gbOf(1), 0)?.threads.hack).toBe(1);
+    expect(largestBatchThatFits(40, planOf, [], gbOf(1) - 0.01, 0)).toBeNull();
+  });
+
+  test("fitBatch: trimmed, and the share's doing only if, without its threads, the batch would be larger", () => {
+    const holds = { hack: 1_000, weaken1: 4_000, grow: 3_200, weaken2: 4_000 };
+    const planOf = (hackThreads: number) => {
+      const threads = batchThreads(zer0, player(300), hackThreads);
+      return { threads, orders: batchOrders(0, 10_000, holds) };
+    };
+    const gbOf = (hackThreads: number) => batchPeakRamGb(planOf(hackThreads).threads, holds, 1e9);
+    const capacityGb = gbOf(40);
+    // Room for all of it.
+    expect(fitBatch(40, planOf, [], [], capacityGb, 0)).toMatchObject({ trimmed: false, trimmedBySharing: false });
+    // Share threads held while the hack runs: trimmed for them.
+    const shareWhileHacking = hold(gbOf(40) - gbOf(30), 9_000, 9_500);
+    const bySharing = fitBatch(40, planOf, [shareWhileHacking], [shareWhileHacking], capacityGb, 0);
+    expect(bySharing).toMatchObject({ trimmed: true, trimmedBySharing: true });
+    expect(bySharing.batch?.threads.hack).toBe(30);
+    // Something else held then, and share threads only while the weakens run, with room beside them: trimmed the
+    // same without the share, so not its doing.
+    const other = hold(gbOf(40) - gbOf(30), 9_000, 9_500);
+    const shareEarly = hold(1, 6_100, 6_200);
+    const notBySharing = fitBatch(40, planOf, [other, shareEarly], [shareEarly], capacityGb, 0);
+    expect(notBySharing).toMatchObject({ trimmed: true, trimmedBySharing: false });
+    expect(notBySharing.batch?.threads.hack).toBe(30);
+    // None fits: trimmed to nothing.
+    expect(fitBatch(40, planOf, [], [], gbOf(1) - 0.01, 0)).toEqual({
+      batch: null,
+      trimmed: true,
+      trimmedBySharing: false,
+    });
   });
 });
 

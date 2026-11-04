@@ -2,9 +2,9 @@
 // snapshots, the time it shared, its threads, RAM and bonus, and from the slow snapshots, the brain's faction work's
 // reputation while it shared against while it didn't. Two failures of their own:
 // - **share starved batches:** batches short of RAM while it shared on the batches' hosts (#226's review: on their
-//   own terms): the share took RAM a batch needed. A share on home alone, beside the hosts, can't (#230): batches
-//   short then are shown apart, the batcher's own. Late and lost, while sharing or not, are the batcher's out-of-step
-//   failure.
+//   own terms), or trimmed for its threads there (#232's review): the share took RAM a batch needed. A share on home
+//   alone, beside the hosts, can't (#230): batches short then are shown apart, the batcher's own (its `batches short
+//   of RAM` failure, #232). Late and lost, while sharing or not, are the batcher's out-of-step failure.
 // - **share idle:** asked to share while batching, with the room for a thread free, and no share threads for 10
 //   minutes: its rounds don't start.
 import { SHARE_RAM_GB, type SharingHealth } from "@bitburner-agent/core";
@@ -26,6 +26,8 @@ interface Point {
   late: number;
   lost: number;
   short: number;
+  /** Batches trimmed for the share's threads on the batches' hosts (#232's review); 0 from an older batcher. */
+  trimmedBySharing: number;
   sharing: SharingHealth | null;
 }
 
@@ -68,6 +70,7 @@ function pointsOf(points: { atMs: number; health: unknown }[]): Point[] {
         late: count(fields.late),
         lost: count(fields.lost),
         short: count(fields.batchesShort),
+        trimmedBySharing: count(fields.batchesTrimmedBySharing),
         sharing: stale ? null : sharingOf(health),
       },
     ];
@@ -164,45 +167,58 @@ function reputationLine(points: Point[], readings: readonly ReputationPoint[]): 
 /**
  * Late, lost and short while sharing on the batches' hosts (a fast snapshot interval with share threads there at
  * either end), while sharing on home alone, and while not; `share starved batches`, a failure, when batches came up
- * short of RAM while sharing on their hosts (#226's review): a share there takes only what the reserve leaves, so a
- * short batch beside one is the share's doing, or the reserve's. Home's share, beside the hosts, can't take a
+ * short of RAM while sharing on their hosts (#226's review), or were trimmed for the share's threads there (#232's
+ * review, the batcher's own count: planned larger without them): a share there takes only what the reserve leaves,
+ * so a batch starved beside one is the share's doing, or the reserve's. Home's share, beside the hosts, can't take a
  * batch's RAM (#230: #229's augmentations suite has the same batches short with sharing off). Late and lost are shown
- * for comparison, and fail as the batcher's out-of-step.
+ * for comparison, and fail as the batcher's out-of-step. Each run's counts as the batcher's section takes them: from
+ * the window's first snapshot, and from 0 for a run that starts later (its first snapshot judged by its own sharing).
  */
 function starvedLines(points: Point[], failures: string[]): string[] {
   const whileSharingOnHosts = { late: 0, lost: 0, short: 0 };
   const onHomeAlone = { late: 0, lost: 0, short: 0 };
   const whileNot = { late: 0, lost: 0, short: 0 };
-  let firstShortAtMs: number | null = null;
+  let trimmedBySharing = 0;
+  let firstStarvedAtMs: number | null = null;
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1];
-    if (previous === undefined || previous.runName === null || previous.runName !== point.runName) continue;
-    const sharingOnTheHosts = sharingOnHosts(previous) || sharingOnHosts(point);
-    const sharingAnywhere = sharingNow(previous) || sharingNow(point);
+    if (previous === undefined || point.runName === null) continue;
+    const sameRun = previous.runName === point.runName;
+    const before = sameRun ? previous : { late: 0, lost: 0, short: 0, trimmedBySharing: 0 };
+    const sharingOnTheHosts = (sameRun && sharingOnHosts(previous)) || sharingOnHosts(point);
+    const sharingAnywhere = (sameRun && sharingNow(previous)) || sharingNow(point);
     let into = whileNot;
     if (sharingOnTheHosts) into = whileSharingOnHosts;
     else if (sharingAnywhere) into = onHomeAlone;
-    into.late += Math.max(0, point.late - previous.late);
-    into.lost += Math.max(0, point.lost - previous.lost);
-    const short = Math.max(0, point.short - previous.short);
+    into.late += Math.max(0, point.late - before.late);
+    into.lost += Math.max(0, point.lost - before.lost);
+    const short = Math.max(0, point.short - before.short);
     into.short += short;
-    if (sharingOnTheHosts && short > 0) firstShortAtMs ??= point.atMs;
+    const trimmed = Math.max(0, point.trimmedBySharing - before.trimmedBySharing);
+    trimmedBySharing += trimmed;
+    if ((sharingOnTheHosts && short > 0) || trimmed > 0) firstStarvedAtMs ??= point.atMs;
   }
   const describe = ({ late, lost, short }: typeof whileNot) => `${late} late, ${lost} lost, ${short} short`;
   const lines = [
     `    while sharing on the batches' hosts: ${describe(whileSharingOnHosts)}; on home alone: ${describe(onHomeAlone)}; ` +
       `while not: ${describe(whileNot)}`,
   ];
-  if (whileSharingOnHosts.short > 0) {
+  const describeBatchCount = (count: number) => `${count} batch${count === 1 ? "" : "es"}`;
+  const starved = [
+    ...(whileSharingOnHosts.short > 0 ? [`${describeBatchCount(whileSharingOnHosts.short)} short of RAM`] : []),
+    ...(trimmedBySharing > 0
+      ? [`${describeBatchCount(trimmedBySharing)} trimmed to the RAM its threads left (#232)`]
+      : []),
+  ];
+  if (starved.length > 0) {
     const line =
-      `share starved batches: ${whileSharingOnHosts.short} batch${whileSharingOnHosts.short === 1 ? "" : "es"} short of ` +
-      `RAM while sharing on the batches' hosts, the first seen at ${formatIsoTime(firstShortAtMs ?? 0)}`;
+      `share starved batches: ${starved.join(" and ")} while sharing on the batches' hosts, the first seen at ` +
+      formatIsoTime(firstStarvedAtMs ?? 0);
     lines.push(`    ${line}`);
     failures.push(line);
   }
   return lines;
 }
-
 /**
  * Stretches asked to share while batching, with the room for a thread, and none running, of `SHARE_IDLE_AFTER_MS` or
  * more: `share idle`, a failure each.

@@ -51,6 +51,13 @@ export const BATCH_LANDING_GAP_MS = 20;
 /** The least time between one batch's hack and the next's: its four landings, δ apart, never interleave. */
 export const MIN_BATCH_SPACING_MS = 4 * BATCH_LANDING_GAP_MS;
 /**
+ * How long after its landing an operation's RAM is counted held (#232): its script frees it once its call has landed
+ * and its record is written (NetscriptWorker.ts:147-148, killWorkerScript.ts:124), within a ms in the simulator
+ * (batch-operations.test.ts), so a start planned for the same moment may find it still held. δ, the slip a landing
+ * already has before its batch is out of step.
+ */
+export const BATCH_RAM_RELEASE_MS = BATCH_LANDING_GAP_MS;
+/**
  * How long before its time an operation is started, beyond what security above the minimum may add: for the start's
  * lag (a module's compile and `main`, NetscriptWorker.ts:48-67) and the batcher's own wake-ups. The operation waits
  * the rest out itself (`additionalMsec`), so this only costs RAM.
@@ -305,7 +312,8 @@ export function batchHoldsMs(
 
 /**
  * The RAM batches every `spacingMs` hold at their peak, GB: each operation's threads x RAM, times the batches whose
- * same operation runs at once, ⌈its hold / the spacing⌉.
+ * same operation runs at once, ⌈(its hold + its release, `BATCH_RAM_RELEASE_MS`) / the spacing⌉ (#232: a hold of
+ * exactly the spacing has two at once while one's script ends).
  */
 export function batchPeakRamGb(
   threads: BatchThreads,
@@ -314,7 +322,8 @@ export function batchPeakRamGb(
 ): number {
   let peak = 0;
   for (const operation of BATCH_OPERATIONS) {
-    peak += threads[operation] * operationRamGb(operation) * Math.ceil(holdsMs[operation] / spacingMs - 1e-9);
+    const atOnce = Math.ceil((holdsMs[operation] + BATCH_RAM_RELEASE_MS) / spacingMs - 1e-9);
+    peak += threads[operation] * operationRamGb(operation) * atOnce;
   }
   return peak;
 }
@@ -328,7 +337,8 @@ export function leastSpacingMs(
   holdsMs: Record<BatchOperation, number>,
   ramGb: number,
 ): number | null {
-  const longest = Math.max(...BATCH_OPERATIONS.map((operation) => holdsMs[operation]));
+  // One batch alone: each operation's RAM released before the next batch's starts.
+  const longest = Math.max(...BATCH_OPERATIONS.map((operation) => holdsMs[operation])) + BATCH_RAM_RELEASE_MS;
   const fits = (spacingMs: number) => batchPeakRamGb(threads, holdsMs, spacingMs) <= ramGb;
   if (!fits(Math.max(longest, MIN_BATCH_SPACING_MS))) return null;
   if (fits(MIN_BATCH_SPACING_MS)) return MIN_BATCH_SPACING_MS;
@@ -381,15 +391,18 @@ export function batchPlan(target: HackingTarget, player: HackingPlayer, ramGb: n
 }
 
 /**
- * The RAM batches can use on hosts of these sizes, GB: each one's whole threads of the largest operation script
- * (`BATCH_WEAKEN_RAM_GB`, 1.8) at that size, as `exec` counts them (`threadsThatFit`). A 16 GB host holds 8 threads,
- * 14.4 GB: what `batchPlan` is given. (A1's `usableRamGb` counts the 1.7 GB hack script's, for the ceiling.)
+ * The RAM batches can count on, on hosts of these sizes (or with this much free of anything else), GB (#232): each
+ * one's less a thread of the largest operation script (`BATCH_WEAKEN_RAM_GB`, 1.8), on those with room for one. What
+ * `batchPlan` is given, and what the batcher fits each batch to (`batchFits`). An operation's threads go whole on one
+ * host or split across them (`placeThreads`), and `exec` runs a script only in its host's own free RAM
+ * (NetscriptWorker.ts:110-117): each host's free RAM then holds its whole threads and under one more, so an operation
+ * whose RAM, with all else of the batches' held, is within this always finds the room. Each host's whole 1.8 GB
+ * threads (#204's count) isn't enough: hack's 1.75 GB beside them leaves up to 1.75 GB a host that a grow or weaken
+ * can't use (#229's suite: a hack 4 threads short with 194 GB free over 28 hosts). (A1's `usableRamGb` counts the
+ * 1.7 GB hack script's whole threads, for the ceiling.)
  */
 export function batchRamGb(hostsRamGb: number[]): number {
-  return hostsRamGb.reduce(
-    (total, ramGb) => total + threadsThatFit(ramGb, BATCH_WEAKEN_RAM_GB) * BATCH_WEAKEN_RAM_GB,
-    0,
-  );
+  return hostsRamGb.reduce((total, ramGb) => total + Math.max(0, ramGb - BATCH_WEAKEN_RAM_GB), 0);
 }
 
 /** A host's free RAM, GB. */
@@ -433,6 +446,127 @@ export function placeThreads(
     if (left === 0) return parts;
   }
   return null;
+}
+
+/** RAM held, or to be, over [`fromMs`, `untilMs`), GB: an operation's part from its start to its landing's release. */
+export interface RamHold {
+  gb: number;
+  fromMs: number;
+  untilMs: number;
+}
+
+/** The most RAM `holds` hold at once at any moment of [`fromMs`, `untilMs`), GB: a sweep of their starts and ends. */
+export function mostRamHeldGb(holds: readonly RamHold[], fromMs: number, untilMs: number): number {
+  let held = 0;
+  const changes: [number, number][] = [];
+  for (const { gb, fromMs: start, untilMs: end } of holds) {
+    if (end <= fromMs || start >= untilMs || !(gb > 0)) continue;
+    if (start <= fromMs) held += gb;
+    else changes.push([start, gb]);
+    if (end < untilMs) changes.push([end, -gb]);
+  }
+  // At the same moment, one ends before another starts.
+  changes.sort(([atMs, changeGb], [otherAtMs, otherChangeGb]) => atMs - otherAtMs || changeGb - otherChangeGb);
+  let mostHeld = held;
+  for (const [, changeGb] of changes) {
+    held += changeGb;
+    mostHeld = Math.max(mostHeld, held);
+  }
+  return mostHeld;
+}
+
+/**
+ * A batch's RAM as its orders will hold it (#232): each operation's threads x RAM, from its start (`launchAt`, or
+ * `nowMs` for one already due) to its landing and `BATCH_RAM_RELEASE_MS`.
+ */
+export function batchRamHolds(threads: BatchThreads, orders: readonly LaunchOrder[], nowMs: number): RamHold[] {
+  return orders.map(({ operation, launchAt, landAt }) => ({
+    gb: threads[operation] * operationRamGb(operation),
+    fromMs: Math.max(launchAt, nowMs),
+    untilMs: landAt + BATCH_RAM_RELEASE_MS,
+  }));
+}
+
+/**
+ * Whether a batch fits (#232): at every moment it holds RAM, it and all else `held` then (the operations in flight,
+ * the orders of the batches planned, share threads) are within `capacityGb` (`batchRamGb` of the hosts' RAM less what
+ * isn't the batcher's). The brain's plan peaks within it as long as every batch is its own, at its level (`batchPlan`);
+ * the batches planned before a new plan, or at a lower hacking level (whose leads are longer), may not (#229's suite:
+ * 2 to 3% over, as cloud servers were bought back after an install).
+ */
+export function batchFits(
+  threads: BatchThreads,
+  orders: readonly LaunchOrder[],
+  held: readonly RamHold[],
+  capacityGb: number,
+  nowMs: number,
+): boolean {
+  const batchHolds = batchRamHolds(threads, orders, nowMs);
+  if (batchHolds.length === 0) return true;
+  const fromMs = Math.min(...batchHolds.map((each) => each.fromMs));
+  const untilMs = Math.max(...batchHolds.map((each) => each.untilMs));
+  return mostRamHeldGb([...held, ...batchHolds], fromMs, untilMs) <= capacityGb + 1e-9;
+}
+
+/**
+ * The batch with the most hack threads, `mostHack` at most, that fits (`batchFits`), each planned by `planOf`; null
+ * when one of 1 doesn't. A batch's RAM only grows with its hack threads (`batchThreads`), so a binary search.
+ */
+export function largestBatchThatFits<Batch extends { threads: BatchThreads; orders: LaunchOrder[] }>(
+  mostHack: number,
+  planOf: (hackThreads: number) => Batch,
+  held: readonly RamHold[],
+  capacityGb: number,
+  nowMs: number,
+): Batch | null {
+  const fitsBeside = (batch: Batch) => batchFits(batch.threads, batch.orders, held, capacityGb, nowMs);
+  const asPlanned = planOf(Math.max(1, Math.floor(mostHack)));
+  if (fitsBeside(asPlanned)) return asPlanned;
+  let fitting: Batch | null = null;
+  let low = 1;
+  let high = Math.max(1, Math.floor(mostHack)) - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const batch = planOf(middle);
+    if (fitsBeside(batch)) {
+      fitting = batch;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return fitting;
+}
+
+/**
+ * A batch fitted to the RAM (#232): the largest that fits beside `held` (`largestBatchThatFits`); whether it was
+ * trimmed (fewer hack threads than `plannedHack`, or none); and whether the share's threads did it (#232's review):
+ * beside `held` without `shareHeld` (those of `held` that are share threads), it would have been larger.
+ */
+export function fitBatch<Batch extends { threads: BatchThreads; orders: LaunchOrder[] }>(
+  plannedHack: number,
+  planOf: (hackThreads: number) => Batch,
+  held: readonly RamHold[],
+  shareHeld: readonly RamHold[],
+  capacityGb: number,
+  nowMs: number,
+): { batch: Batch | null; trimmed: boolean; trimmedBySharing: boolean } {
+  // Destructured: the batcher runs this, and the game would charge hack's RAM for the name (RamCalculations.ts:436).
+  const hackOf = (batch: Batch | null) => {
+    const { hack: hackThreads } = batch?.threads ?? { hack: 0 };
+    return hackThreads;
+  };
+  const batch = largestBatchThatFits(plannedHack, planOf, held, capacityGb, nowMs);
+  const trimmed = hackOf(batch) < Math.max(1, Math.floor(plannedHack));
+  if (!trimmed || shareHeld.length === 0) return { batch, trimmed, trimmedBySharing: false };
+  const unshared = largestBatchThatFits(
+    plannedHack,
+    planOf,
+    held.filter((each) => !shareHeld.includes(each)),
+    capacityGb,
+    nowMs,
+  );
+  return { batch, trimmed, trimmedBySharing: hackOf(unshared) > hackOf(batch) };
 }
 
 /** A target ready for batches: at its minimum security and maximum money. */
@@ -751,6 +885,17 @@ export interface BatcherHealth {
   /** Batches with an operation the hosts' RAM couldn't hold (their hack skipped). */
   batchesShort: number;
   /**
+   * Batches planned with fewer hack threads than the config's share, or not at all (#232): the hosts' RAM, as the
+   * batches planned and in flight will hold it, didn't hold the plan's (core's `largestBatchThatFits`). Absent from an
+   * older batcher.
+   */
+  batchesTrimmed?: number;
+  /**
+   * Of them, those the share took the RAM of (#232's review): with share threads on its hosts, and planned larger
+   * without them. The share's failure, as a batch short beside it is. Absent from an older batcher.
+   */
+  batchesTrimmedBySharing?: number;
+  /**
    * Hacks landed, a part a host where one was split across hosts, and those that took nothing (the chance failed),
    * and the money they took.
    */
@@ -826,6 +971,8 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     wavesStarted: 0,
     batchesStarted: 0,
     batchesShort: 0,
+    batchesTrimmed: 0,
+    batchesTrimmedBySharing: 0,
     hacksLanded: 0,
     hacksFailed: 0,
     moneyHacked: 0,

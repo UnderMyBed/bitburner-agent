@@ -1,11 +1,13 @@
 // The run report's batcher section (#205): what the batcher's health in the fast snapshots says, hour by hour, and its
-// desyncs and problems; out of step (a desync, or an operation late or lost) fails the run (#206). Its counts are each
-// run's, from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a
-// run already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
+// desyncs and problems; out of step (a desync, or an operation late or lost) fails the run (#206), and so does a batch
+// short of RAM, except while sharing on the batches' hosts, the share's failure (#232). Its counts are each run's,
+// from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
+// already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
 // (#224).
 import type { BatcherHealth } from "@bitburner-agent/core";
 import { BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
+import { sharingOf } from "./share.ts";
 import { type ReputationPoint, sharingLines } from "./share-report.ts";
 
 /** One fast snapshot's batcher health, as stored (the Agent's word: checked as it's read). */
@@ -31,7 +33,10 @@ const COUNTS = [
   "batchesShort",
   "unexpected",
 ] as const;
-type Counts = Record<(typeof COUNTS)[number], number>;
+/** Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM, and of them the share's (#232). */
+const NEWER_COUNTS = ["batchesTrimmed", "batchesTrimmedBySharing"] as const;
+const ALL_COUNTS = [...COUNTS, ...NEWER_COUNTS] as const;
+type Counts = Record<(typeof ALL_COUNTS)[number], number>;
 /** The counts that say the batches are out of step: each a run report failure (#206). */
 const OUT_OF_STEP = ["desyncs", "late", "lost"] as const;
 
@@ -47,9 +52,19 @@ function healthOf(value: unknown): BatcherHealth | null {
     : null;
 }
 
-const zero = (): Counts => Object.fromEntries(COUNTS.map((count) => [count, 0])) as Counts;
+const zero = (): Counts => Object.fromEntries(ALL_COUNTS.map((count) => [count, 0])) as Counts;
 const countsOf = (health: BatcherHealth): Counts =>
-  Object.fromEntries(COUNTS.map((count) => [count, health[count]])) as Counts;
+  Object.fromEntries(
+    ALL_COUNTS.map((count) => {
+      const value = health[count];
+      return [count, typeof value === "number" && Number.isFinite(value) ? value : 0];
+    }),
+  ) as Counts;
+/** Share threads on the batches' hosts (#230): a batch short then is the share's (`share starved batches`). */
+const sharingOnHosts = (health: BatcherHealth | undefined) => {
+  const sharing = sharingOf(health ?? null);
+  return sharing !== null && sharing.threads > 0 && sharing.hostsRamGb > 0;
+};
 
 /**
  * The batcher wanted and not running for `BATCHER_NOT_RUNNING_AFTER` fast snapshots in a row or more (#211), each
@@ -127,8 +142,14 @@ export function batcherSection(
   const firstMs = (healths[0] as { atMs: number }).atMs;
   const hours = new Map<number, { counts: Counts; targets: Set<string>; states: Set<string> }>();
   const lastOfRun = new Map<string, Counts>();
+  const lastHealthOfRun = new Map<string, BatcherHealth>();
   const problems = new Map<string, number>();
   let firstOutOfStepMs: number | null = null;
+  // Short of RAM (#232): while sharing on the batches' hosts, at either end of the interval (the share's failure, as
+  // share-report.ts counts it), or not (the batcher's own).
+  let shortWhileSharing = 0;
+  let shortOwn = 0;
+  let firstShortOwnMs: number | null = null;
   for (const { atMs, health } of healths) {
     const hour = Math.floor((atMs - firstMs) / HOUR_MS);
     const bucket = hours.get(hour) ?? { counts: zero(), targets: new Set<string>(), states: new Set<string>() };
@@ -136,11 +157,19 @@ export function batcherSection(
     // A run already under way at the window's first snapshot counts from there (#211): what it did before isn't the
     // window's. One that starts later counts from 0.
     const before = lastOfRun.get(health.runName) ?? (atMs === firstMs ? countsOf(health) : zero());
-    for (const count of COUNTS) bucket.counts[count] += Math.max(0, health[count] - before[count]);
+    const now = countsOf(health);
+    for (const count of ALL_COUNTS) bucket.counts[count] += Math.max(0, now[count] - before[count]);
     if (firstOutOfStepMs === null && OUT_OF_STEP.some((count) => health[count] > before[count])) {
       firstOutOfStepMs = atMs;
     }
-    lastOfRun.set(health.runName, countsOf(health));
+    const short = Math.max(0, now.batchesShort - before.batchesShort);
+    if (sharingOnHosts(lastHealthOfRun.get(health.runName)) || sharingOnHosts(health)) shortWhileSharing += short;
+    else if (short > 0) {
+      shortOwn += short;
+      firstShortOwnMs ??= atMs;
+    }
+    lastOfRun.set(health.runName, now);
+    lastHealthOfRun.set(health.runName, health);
     if (health.target) bucket.targets.add(health.target);
     bucket.states.add(health.state);
     if (health.problem !== null && !problems.has(health.problem)) problems.set(health.problem, atMs);
@@ -148,11 +177,12 @@ export function batcherSection(
   lines.push(`  runs: ${lastOfRun.size}; per hour, from ${formatIsoTime(firstMs)}:`);
   const total = zero();
   for (const [hour, { counts, targets, states }] of [...hours].sort(([a], [b]) => a - b)) {
-    for (const count of COUNTS) total[count] += counts[count];
+    for (const count of ALL_COUNTS) total[count] += counts[count];
     lines.push(
       `    hour ${hour + 1}: ${[...states].join(", ")} on ${[...targets].join(", ") || "no target"}; ` +
         `${counts.batchesStarted} batches, ${counts.hacksLanded} hack parts landed ($${Math.round(counts.moneyHacked)}), ` +
-        `${counts.hacksFailed} failed, ${counts.hacksSkipped} skipped, ${counts.batchesShort} short; ` +
+        `${counts.hacksFailed} failed, ${counts.hacksSkipped} skipped, ${counts.batchesShort} short, ` +
+        `${counts.batchesTrimmed} trimmed; ` +
         `${counts.desyncs} desync${counts.desyncs === 1 ? "" : "s"} (${counts.outOfOrder} out of order, ${counts.outOfBounds} out of bounds), ` +
         `${counts.late} late, ${counts.lost} lost, ${counts.unexpected} records of another run`,
     );
@@ -177,6 +207,33 @@ export function batcherSection(
       `batcher out of step: ${total.desyncs} desync${total.desyncs === 1 ? "" : "s"} (${total.outOfOrder} out of order, ${total.outOfBounds} out of ` +
       `bounds), ${total.late} late, ${total.lost} lost, the first seen at ` +
       formatIsoTime(firstOutOfStepMs ?? firstMs);
+    lines.push(`  ${line}`);
+    failures.push(line);
+  }
+  const describeBatchCount = (count: number) => `${count} batch${count === 1 ? "" : "es"}`;
+  lines.push(
+    total.batchesShort === 0
+      ? "  short of RAM: none"
+      : `  short of RAM: ${describeBatchCount(total.batchesShort)} (${shortWhileSharing} while sharing on the batches' hosts: ` +
+          "the share's)",
+  );
+  // Trimmed (#232): the batcher fits each batch to the RAM as it will be held, so a plan its hosts can't place is cut,
+  // never short. A batch trimmed is income lost, not a failure: a new plan, or one at a lower hacking level, can hold
+  // more for a while than the plan's peak. Those the share's threads made smaller are shown apart (#232's review): the
+  // share's failure, `share starved batches`.
+  lines.push(
+    total.batchesTrimmed === 0
+      ? "  trimmed to the hosts' RAM (#232): none"
+      : `  trimmed to the hosts' RAM (#232): ${describeBatchCount(total.batchesTrimmed)} planned with fewer hack threads than the ` +
+          `config's share, or none (${total.batchesTrimmedBySharing} for the share's threads on the batches' hosts: the ` +
+          "share's)",
+  );
+  // Short of RAM, a failure (#232): the batcher fits each batch to the RAM as it will be held, so one short is RAM
+  // taken after it was planned (anyone else's script on its hosts), or the fit is wrong. Its hack is lost.
+  if (shortOwn > 0) {
+    const line =
+      `batches short of RAM: ${describeBatchCount(shortOwn)} short (their hacks lost), not while sharing on the batches' hosts, ` +
+      `the first seen at ${formatIsoTime(firstShortOwnMs ?? firstMs)}`;
     lines.push(`  ${line}`);
     failures.push(line);
   }

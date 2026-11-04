@@ -31,14 +31,17 @@ const SEEDS = scoreSeeds(process.env.BATCHER_SCORE_SEEDS);
  */
 const RUN_MS = 30 * 60_000;
 /**
- * The least the batcher's best 10 minutes may score, of A1's measure: seeds 1 to 8 gave 27.5–30.7% at #206; this is
- * 3 points under the worst, so an engine bump can move it a little without failing, and it's still well above the
- * hack loop's best 10 minutes on any seed (18.3–19.9%, #196).
+ * The least the batcher's best 10 minutes may score, of A1's measure: seeds 1 to 8 gave 27.5–30.7% at #206, and
+ * 28.0–30.2% since #232 counted each host a thread short; this is 3 points under the worst, so an engine bump can move
+ * it a little without failing, and it's still well above the hack loop's best 10 minutes on any seed (18.3–19.9%,
+ * #196).
  */
 const LEAST_SCORE = 0.245;
 /**
  * How many times the hack loop's best 10 minutes the batcher's must be on each seed: #206's criterion as the owner
- * amended it (2026-10-29, owner decision 49), for 1.48–1.84× over seeds 1 to 8.
+ * amended it (2026-10-29, owner decision 49), for 1.48–1.84× over seeds 1 to 8 at #206, and 1.41–1.82× since #232.
+ * Seed 4's margin is thin, 1.41× (28.0% against the hack loop's 19.9%): the seeds swing about ±1.5 points, more than
+ * #232's cost (0.4 on average), so a change to the batcher runs all 8 seeds and reports seed 4's.
  */
 const LEAST_TIMES_THE_LOOP = 1.4;
 

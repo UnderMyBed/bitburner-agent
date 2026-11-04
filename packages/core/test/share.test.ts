@@ -3,7 +3,7 @@
 // faction-work-parity.test.ts checks the bonus and the rate against the engine's own while share threads run.
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import { parseBatcherConfig } from "../src/batcher.ts";
+import { BATCH_RAM_RELEASE_MS, parseBatcherConfig } from "../src/batcher.ts";
 import { factionReputationPerCycle, factionReputationPerSecond, type WorkingPerson } from "../src/faction-work.ts";
 import {
   effectiveShareThreads,
@@ -15,6 +15,9 @@ import {
   SHARE_TIME_MS,
   shareBonus,
   shareBonusOfPower,
+  shareRamByHost,
+  shareRamHolds,
+  shareReleasedAt,
   shareReserveGb,
   shareRound,
 } from "../src/share.ts";
@@ -211,4 +214,31 @@ test("the config's sharing (#224): its reserve, home's kept RAM and the cores; a
       reason: `the config's sharing has no ${reason}`,
     });
   }
+});
+
+test("a share part's RAM (#232's review): the batcher's own until its script ends, its release after its call", () => {
+  const parts = [
+    { host: "a", threads: 2, endsAt: 10_000 },
+    { host: "a", threads: 1, endsAt: 20_000 },
+    { host: "home", threads: 5, endsAt: 10_000 },
+  ];
+  expect(shareReleasedAt({ endsAt: 10_000 })).toBe(10_000 + BATCH_RAM_RELEASE_MS);
+  // Its call over, its script not yet ended: still held, as `getServerUsedRam` counts it.
+  const justAfter = 10_000 + BATCH_RAM_RELEASE_MS / 2;
+  expect(shareRamByHost(parts, justAfter)).toEqual(
+    new Map([
+      ["a", 3 * SHARE_RAM_GB],
+      ["home", 5 * SHARE_RAM_GB],
+    ]),
+  );
+  expect(shareRamHolds(parts, ["a"], justAfter)).toEqual([
+    { gb: 2 * SHARE_RAM_GB, fromMs: justAfter, untilMs: 10_000 + BATCH_RAM_RELEASE_MS },
+    { gb: SHARE_RAM_GB, fromMs: justAfter, untilMs: 20_000 + BATCH_RAM_RELEASE_MS },
+  ]);
+  // Released: gone.
+  const released = 10_000 + BATCH_RAM_RELEASE_MS;
+  expect(shareRamByHost(parts, released)).toEqual(new Map([["a", SHARE_RAM_GB]]));
+  expect(shareRamHolds(parts, ["a", "home"], released)).toEqual([
+    { gb: SHARE_RAM_GB, fromMs: released, untilMs: 20_000 + BATCH_RAM_RELEASE_MS },
+  ]);
 });

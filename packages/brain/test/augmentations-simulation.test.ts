@@ -198,11 +198,14 @@ test.each(SEEDS)(
       ),
     );
     // Sharing on (#230): Tian Di Hui's work at the cycle's start shares home beside the hosts, and no batch is short
-    // while the share is on the batches' hosts; the batcher's own short batches, if any, are shown apart.
+    // while the share is on the batches' hosts.
     expect(lines).toContainEqual(expect.stringMatching(/^ {4}shared for \d+ min: /));
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}while sharing on the batches' hosts: \d+ late, \d+ lost, 0 short; on home alone: /),
     );
+    // No batch short of RAM at all (#232): as the cloud servers are bought back after the install, the plan grows to
+    // most of the hosts' RAM, and the batcher fits each batch to the RAM as it will be held (seeds 1 to 5).
+    expect(lines).toContain("  short of RAM: none");
     expect(failures).toEqual([]);
     console.log(
       `seed ${seed}: hacking ${levelBefore} 17 min after the start, ${levelAfter} 20 min after the install (home ` +

@@ -92,6 +92,13 @@ test.each(SEEDS)(
     console.log(section);
     expect(section).toContain("batching on n00dles");
     expect(section).toContain("  desyncs: none\n  late or lost: none\n  least slack: ");
+    // No batch short of RAM (#232): each is fitted to the RAM as it will be held. Trimmed only while a new plan's
+    // batches land beside the old one's (#232's review): the brain replans as cloud servers are bought, 9 of 117 on
+    // seed 1, so at most a tenth; a stable plan trims none (packages/ingame's batcher simulation). Asked to share, it
+    // never found the room, so none of these trims is the share's: those are batch-operations.test.ts's.
+    expect(section).toContain("\n  short of RAM: none\n");
+    expect(last.batchesTrimmed ?? 0).toBeLessThanOrEqual(last.batchesStarted / 10);
+    expect(section).toContain("  sharing spare RAM (#224):\n    asked, and never shared");
     expect(section).toContain("  problems: none");
     // Sent and running throughout (#211): no stretch of fast snapshots with it not running.
     expect(section).toContain("  sent but not running (3 fast snapshots in a row or more):\n    none");

@@ -319,11 +319,14 @@ describe("the run report's section", () => {
       ],
       failures,
     );
-    expect(lines.slice(-8)).toEqual([
+    expect(lines.slice(-10)).toEqual([
       "  desyncs: none",
       "  late or lost: none",
       // The least over the window (#216's review).
       "  least slack: 117 ms (an operation's time to spare when it was called; under 0 is late)",
+      // Never short, nor trimmed (#232).
+      "  short of RAM: none",
+      "  trimmed to the hosts' RAM (#232): none",
       "  problems: none",
       "  sent but not running (3 fast snapshots in a row or more):",
       "    none",
@@ -332,6 +335,42 @@ describe("the run report's section", () => {
       "    never asked, and no share threads",
     ]);
     expect(failures).toEqual([]);
+  });
+
+  test("short of RAM (#232): a failure, unless sharing on the batches' hosts (the share's failure); trimmed shown", () => {
+    const onHosts = { wanted: true, threads: 4, ramGb: 16, hostsRamGb: 16, bonus: 1.05, roomGb: 0 };
+    const homeAlone = { ...onHosts, hostsRamGb: 0 };
+    // Each health written at its snapshot: an older one's sharing is a stopped batcher's, not counted (#226's review).
+    const failures: string[] = [];
+    const lines = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { batchesStarted: 10 }) },
+        { atMs: at(1), health: health("a", { batchesStarted: 20, batchesShort: 2, batchesTrimmed: 3 }) },
+        // A share on the batches' hosts at either end: the share's (`share starved batches`).
+        { atMs: at(2), health: health("a", { batchesStarted: 30, batchesShort: 3, sharing: onHosts, atMs: at(2) }) },
+        // Shared on them at the interval's start only: still the share's.
+        { atMs: at(3), health: health("a", { batchesStarted: 35, batchesShort: 4, sharing: homeAlone, atMs: at(3) }) },
+        // Home alone sharing, at both ends, can't take their RAM (#230): the batcher's.
+        { atMs: at(4), health: health("a", { batchesStarted: 40, batchesShort: 5, sharing: homeAlone, atMs: at(4) }) },
+        // Restarted, counted from 0; an older batcher, which doesn't say how many it trimmed.
+        { atMs: at(5), health: { ...health("b", { batchesStarted: 5, batchesShort: 1 }), batchesTrimmed: undefined } },
+        { atMs: at(6), health: health("c", { batchesStarted: 5, batchesTrimmed: 2, batchesTrimmedBySharing: 1 }) },
+      ],
+      failures,
+    );
+    expect(lines[2]).toContain("6 short, 5 trimmed; ");
+    expect(lines).toContain("  short of RAM: 6 batches (2 while sharing on the batches' hosts: the share's)");
+    expect(lines).toContain(
+      "  trimmed to the hosts' RAM (#232): 5 batches planned with fewer hack threads than the config's share, or none " +
+        "(1 for the share's threads on the batches' hosts: the share's)",
+    );
+    const line =
+      "batches short of RAM: 4 batches short (their hacks lost), not while sharing on the batches' hosts, the " +
+      "first seen at 2026-01-01T00:01:00.000Z";
+    expect(failures).toContain(line);
+    expect(lines).toContain(`  ${line}`);
+    expect(failures).toContainEqual(expect.stringMatching(/^share starved batches: 2 batches short of RAM /));
+    expect(failures).toHaveLength(2);
   });
 
   test("sent but not running for 3 fast snapshots in a row or more: each stretch a failure; 2 aren't (#211)", () => {
