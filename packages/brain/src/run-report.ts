@@ -11,11 +11,12 @@ import {
   type IntentOutcome,
   type MediumSnapshotData,
   type SlowSnapshotData,
+  SNAPSHOT_TIER_PERIOD_MS,
   type StaticSnapshotData,
   type WorkOutcome,
 } from "@bitburner-agent/core";
 import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline, donationStatus } from "./augmentation-report.ts";
-import { readAugmentationsEnabled } from "./augmentations.ts";
+import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
@@ -59,10 +60,39 @@ import {
 } from "./record-channel-events.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
+import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
 import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
 
 /** An Agent disconnect with no reconnect within this is a failure, unless the run ended there. */
 export const RECONNECT_WITHIN_MS = 60_000;
+/**
+ * The longest heartbeat gap a reload the brain caused explains (#240): up to it, shown as expected, not counted. What
+ * the game does: an install kills every script (`Augmentation/AugmentationHelpers.ts:76`), a destroy at the BitVerse
+ * (`ui/GameRoot.tsx:256-257`) and again entering the next BitNode (`RedPill.tsx:60`); Singularity starts the next Agent
+ * 500 ms on (`NetscriptFunctions/Singularity.ts:210,1192`), the page's restart timer once the Terminal is back, after
+ * the BitVerse's cinematic and portal for a destroy. A deploy restarts the Agent alone. Run #3's gaps were 6.1 s (a
+ * deploy), 9.5 s and 13.1 s (destroys), its installs' about 4.5 s: a minute is over 4 times the longest, and a
+ * disconnect's own allowance (`RECONNECT_WITHIN_MS`). Longer, something besides the reload held it up: a failure.
+ */
+export const RELOAD_GAP_BOUND_MS = 60_000;
+/**
+ * How long before a gap's start a reload's event explains it (#240). A destroy goes out, the Agent's next round (2 s)
+ * starts its worker, and the worker types the hops and the backdoor (about 3 s at its required level) before the
+ * BitVerse kills it; an install's clicks are quicker. Run #3's destroys went out 4.4 s and 4.7 s before their gaps.
+ */
+export const RELOAD_LEAD_MS = 10_000;
+/**
+ * How far into a gap a reload's event may be and still explain it: one fast snapshot's period. The brain tells the
+ * Agent to restart onto a deploy as it records `deployed`, so the old Agent's last snapshot is at most a period before
+ * (run #3's, 0.4 s). A deploy later in a gap followed it: a reload of the game's own connects RFA again, which deploys.
+ */
+const RELOAD_LAG_MS = SNAPSHOT_TIER_PERIOD_MS.fast;
+/** The events a reload follows, and what reloads (#240). */
+const RELOAD_EVENTS: Record<string, { what: string; after: string }> = {
+  [BITNODE_DESTROY_SENT_EVENT_KIND]: { what: "the game reloading", after: "a destroy sent" },
+  [AUGMENTATION_INSTALL_SENT_EVENT_KIND]: { what: "the game reloading", after: "an install sent" },
+  deployed: { what: "the Agent restarting", after: "a deploy" },
+};
 /** How far before the window section 1 looks for an earlier brain start, to say the window may not be the whole run. */
 export const EARLIER_START_LOOKBACK_MS = 24 * 60 * 60_000;
 /** How much of a handled dialog's text the report quotes. */
@@ -1303,7 +1333,8 @@ function explainSilence(facts: RunFacts, fromMs: number, toMs: number): string {
 /**
  * The gaps in the heartbeat from the first fast snapshot to the run's last record, as `npm run gaps` finds them. The
  * silence before the first (the game starting, the Agent deployed) and after the last record (the run stopped) is
- * shown, not counted.
+ * shown, not counted. So is a gap a reload the brain caused explains (#240): one that follows a destroy or an install
+ * sent, or a deploy (`reloadAt`), ends with the Agent connected again, and is at most `RELOAD_GAP_BOUND_MS` long.
  */
 function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: string[]): { lines: string[]; gaps: Gap[] } {
   const times = facts.fast.map(({ atMs }) => atMs);
@@ -1329,11 +1360,49 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
     const line =
       `gap: ${formatIsoTime(gap.fromMs)} to ${formatIsoTime(gap.toMs)} (${formatSeconds(gap.lengthMs)})` +
       explainSilence(facts, gap.fromMs, gap.toMs);
-    lines.push(`    ${line}`);
-    failures.push(line);
+    const reload = reloadAt(facts, gap.fromMs, gap.toMs);
+    if (reload === null) {
+      lines.push(`    ${line}`);
+      failures.push(line);
+      continue;
+    }
+    const reloading = `${reload.what} after ${reload.after} at ${formatIsoTime(reload.atMs)}`;
+    // The new Agent's connect, which the snapshot ending the gap follows.
+    const reconnected = facts.events.some(
+      (event) => event.kind === "agentConnected" && event.atMs >= gap.fromMs && event.atMs <= gap.toMs,
+    );
+    if (reconnected && gap.lengthMs <= RELOAD_GAP_BOUND_MS) {
+      lines.push(`    ${line} (expected: ${reloading})`);
+      continue;
+    }
+    const failure =
+      `${line} (not expected: ${reloading}, but ` +
+      (reconnected ? `longer than the ${formatDuration(RELOAD_GAP_BOUND_MS)} allowed)` : "no Agent connected in it)");
+    lines.push(`    ${failure}`);
+    failures.push(failure);
   }
   if (report.gaps.length === 0) lines.push("    no gaps");
   return { lines, gaps: report.gaps };
+}
+
+/**
+ * The reload the brain caused that a silence from `fromMs` to `toMs` follows (#240): the latest destroy or install sent,
+ * or deploy, from `RELOAD_LEAD_MS` before its start to `RELOAD_LAG_MS` into it; or null.
+ */
+function reloadAt(facts: RunFacts, fromMs: number, toMs: number): { atMs: number; what: string; after: string } | null {
+  const near = facts.events.filter(
+    (event) =>
+      Object.hasOwn(RELOAD_EVENTS, event.kind) &&
+      event.atMs >= fromMs - RELOAD_LEAD_MS &&
+      event.atMs <= Math.min(fromMs + RELOAD_LAG_MS, toMs),
+  );
+  const latest = near.reduce<StoredEvent | null>(
+    (found, event) => (found === null || event.atMs >= found.atMs ? event : found),
+    null,
+  );
+  return latest === null
+    ? null
+    : { atMs: latest.atMs, ...(RELOAD_EVENTS[latest.kind] as { what: string; after: string }) };
 }
 
 /**
@@ -1353,12 +1422,15 @@ function disconnectLines(facts: RunFacts, failures: string[]): string[] {
     if (reconnect || deadlineMs > facts.untilMs || endMs <= disconnect.atMs) continue;
     count++;
     const next = facts.events.find((event) => event.kind === "agentConnected" && event.atMs > deadlineMs);
+    // A reload the brain caused just before it (#240): the disconnect was expected, not its length.
+    const reload = reloadAt(facts, disconnect.atMs, disconnect.atMs);
     const line =
       `Agent disconnected at ${formatIsoTime(disconnect.atMs)} (session ` +
       `${displayValue(fieldsOf(disconnect.detail).agentSessionId)}) ` +
       (next ? `and reconnected only at ${formatIsoTime(next.atMs)}` : "and never reconnected in the window") +
       // What happened meanwhile, the disconnect and the reconnect themselves aside.
-      explainSilence(facts, disconnect.atMs + 1, next ? next.atMs - 1 : endMs);
+      explainSilence(facts, disconnect.atMs + 1, next ? next.atMs - 1 : endMs) +
+      (reload === null ? "" : `; just before it, ${reload.after} at ${formatIsoTime(reload.atMs)}`);
     lines.push(`    ${line}`);
     failures.push(line);
   }

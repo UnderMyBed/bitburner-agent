@@ -587,6 +587,167 @@ describe("each failure is a FAIL, with its line", () => {
     ]);
   });
 
+  describe("a reload the brain caused, after a destroy, an install or a deploy, is an expected gap (#240)", () => {
+    type Recorded = [offsetMs: number, kind: string, detail: unknown];
+    /**
+     * Run #3's shape: the fast snapshots stop at 60 s and start again at `toMs` (off the 2 s grid where the issue's gap
+     * was), the Agent disconnecting at 61 s and a new session connecting just before `toMs`. `holding` is the intent
+     * the Agent held until the gap, and `reload` the event recorded with them, all in time order as the brain stores
+     * them.
+     */
+    function reloadGap(
+      toMs: number,
+      { holding = null, reload = null }: { holding?: string | null; reload?: Recorded | null } = {},
+    ) {
+      cleanRun({
+        skipFast: (offsetMs) => offsetMs > 60 * SECOND && offsetMs < toMs,
+        fast: (offsetMs) => fastData({ intents: holding !== null && offsetMs <= 60 * SECOND ? [intent(holding)] : [] }),
+      });
+      if ((toMs - 10 * SECOND) % (2 * SECOND) !== 0) snapshot("fast", toMs, fastData());
+      const recorded: Recorded[] = [
+        [61 * SECOND, "agentDisconnected", { agentSessionId: "session-1" }],
+        [toMs - 500, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} }],
+        ...(reload === null ? [] : [reload]),
+      ];
+      for (const [offsetMs, kind, detail] of recorded.sort(([a], [b]) => a - b)) event(offsetMs, kind, detail);
+    }
+    const during = (toMs: number) =>
+      `during it: agentDisconnected at ${at(61 * SECOND)}, agentConnected at ${at(toMs - 500)}`;
+    const destroySent = (offsetMs: number): Recorded => [
+      offsetMs,
+      "bitNodeDestroySent",
+      { source: "brain", nextBitNode: 2 },
+    ];
+    const deployed = (offsetMs: number): Recorded => [
+      offsetMs,
+      "deployed",
+      { deploymentId: "dep-c", replacedDeploymentId: "dep-b" },
+    ];
+    const unexplained = (toMs: number) =>
+      `gap: ${at(60 * SECOND)} to ${at(toMs)} (${((toMs - 60 * SECOND) / 1000).toFixed(1)} s); ${during(toMs)}`;
+
+    test.each([
+      ["9.5 s", 55.6 * SECOND, 69.5 * SECOND],
+      ["13.1 s", 55.3 * SECOND, 73.1 * SECOND],
+    ])(
+      "run #3's destroys: a %s gap, the destroy sent 4-5 s before it, is shown as expected, not a failure",
+      (_, sentMs, toMs) => {
+        reloadGap(toMs, { holding: "destroyBitNode(2)", reload: destroySent(sentMs) });
+        const { text, failures } = verdict();
+        expect(failures).toEqual([]);
+        expect(text).toContain(
+          `\n    ${unexplained(toMs)}; before it, the Agent held destroyBitNode(2) (expected: the game reloading after ` +
+            `a destroy sent at ${at(sentMs)})\n`,
+        );
+      },
+    );
+
+    test("run #3's deploy: a 6.1 s gap, the deploy recorded 0.4 s into it, is shown as expected, not a failure", () => {
+      reloadGap(66.1 * SECOND, { reload: deployed(60.4 * SECOND) });
+      const { text, failures } = verdict();
+      expect(failures).toEqual([]);
+      expect(text).toContain(
+        `\n    gap: ${at(60 * SECOND)} to ${at(66.1 * SECOND)} (6.1 s); during it: deployed at ` +
+          `${at(60.4 * SECOND)}, agentDisconnected at ${at(61 * SECOND)}, agentConnected at ${at(65.6 * SECOND)} ` +
+          `(expected: the Agent restarting after a deploy at ${at(60.4 * SECOND)})\n`,
+      );
+    });
+
+    test("an install's: a gap after the install went out is shown as expected, not a failure", () => {
+      reloadGap(70 * SECOND, {
+        holding: "installAugmentations()",
+        reload: [57 * SECOND, "augmentationInstallSent", { source: "brain", queued: ["BitWire"] }],
+      });
+      // The reset, seen: the install isn't "not seen done".
+      const reset = slowData();
+      snapshot("slow", 72 * SECOND, { ...reset, resetInfo: { ...reset.resetInfo, lastAugReset: T0 + 69 * SECOND } });
+      const { text, failures } = verdict();
+      expect(failures).toEqual([]);
+      expect(text).toContain(
+        `\n    ${unexplained(70 * SECOND)}; before it, the Agent held installAugmentations() (expected: the game ` +
+          `reloading after an install sent at ${at(57 * SECOND)})\n`,
+      );
+    });
+
+    test("a reload's gap of exactly the bound, 1 min, is expected", () => {
+      reloadGap(120 * SECOND, { holding: "destroyBitNode(2)", reload: destroySent(55 * SECOND) });
+      expect(verdict().failures).toEqual([]);
+    });
+
+    test("a reload's gap over the bound fails, naming the reload, as does the disconnect over 60 s", () => {
+      reloadGap(122 * SECOND, { holding: "destroyBitNode(2)", reload: destroySent(55 * SECOND) });
+      expect(verdict().failures).toEqual([
+        `${unexplained(122 * SECOND)}; before it, the Agent held destroyBitNode(2) (not expected: the game ` +
+          `reloading after a destroy sent at ${at(55 * SECOND)}, but longer than the 1 min allowed)`,
+        `Agent disconnected at ${at(61 * SECOND)} (session session-1) and reconnected only at ` +
+          `${at(121.5 * SECOND)}; nothing recorded during it; before it, the Agent held destroyBitNode(2); just ` +
+          `before it, a destroy sent at ${at(55 * SECOND)}`,
+      ]);
+    });
+
+    test("a reload's gap that doesn't end with the Agent reconnected fails, naming the reload", () => {
+      cleanRun({ skipFast: (offsetMs) => offsetMs > 60 * SECOND && offsetMs < 70 * SECOND });
+      event(...destroySent(55 * SECOND));
+      // A connect just before the gap, and one just after it, are neither in it.
+      event(59 * SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+      event(71 * SECOND, "agentConnected", { agentSessionId: "session-3", deploymentId: "dep-b", game: {} });
+      expect(verdict().failures).toEqual([
+        `gap: ${at(60 * SECOND)} to ${at(70 * SECOND)} (10.0 s); nothing recorded during it (not expected: the ` +
+          `game reloading after a destroy sent at ${at(55 * SECOND)}, but no Agent connected in it)`,
+      ]);
+    });
+
+    test("a reload sent 10 s before the gap explains it", () => {
+      reloadGap(70 * SECOND, { reload: destroySent(50 * SECOND) });
+      expect(verdict().failures).toEqual([]);
+    });
+
+    test("a reload sent more than 10 s before the gap doesn't: the gap fails as unexplained", () => {
+      reloadGap(70 * SECOND, { reload: destroySent(49.9 * SECOND) });
+      expect(verdict().failures).toEqual([unexplained(70 * SECOND)]);
+    });
+
+    test("a deploy one fast snapshot's period (2 s) into the gap explains it", () => {
+      reloadGap(70 * SECOND, { reload: deployed(62 * SECOND) });
+      expect(verdict().failures).toEqual([]);
+    });
+
+    test("a deploy later in the gap doesn't: the game's own reload, a crash say, deploys too", () => {
+      reloadGap(70 * SECOND, { reload: deployed(62.1 * SECOND) });
+      expect(verdict().failures).toEqual([
+        `gap: ${at(60 * SECOND)} to ${at(70 * SECOND)} (10.0 s); during it: agentDisconnected at ${at(61 * SECOND)}, ` +
+          `deployed at ${at(62.1 * SECOND)}, agentConnected at ${at(69.5 * SECOND)}`,
+      ]);
+    });
+
+    test("the latest reload before a gap is the one named", () => {
+      reloadGap(70 * SECOND, { reload: destroySent(52 * SECOND) });
+      event(...deployed(55 * SECOND));
+      expect(report().text).toContain(`(expected: the Agent restarting after a deploy at ${at(55 * SECOND)})\n`);
+    });
+
+    test("a gap with nothing explaining it still fails, the Agent reconnected or not", () => {
+      reloadGap(70 * SECOND);
+      expect(verdict().failures).toEqual([unexplained(70 * SECOND)]);
+    });
+
+    test("an Agent disconnect just after a reload, with no reconnect within 60 s, names the reload", () => {
+      cleanRun();
+      event(...destroySent(5 * MINUTE - 4 * SECOND));
+      event(5 * MINUTE, "agentDisconnected", { agentSessionId: "session-1" });
+      event(5 * MINUTE + 61 * SECOND, "agentConnected", {
+        agentSessionId: "session-2",
+        deploymentId: "dep-b",
+        game: {},
+      });
+      expect(verdict().failures).toEqual([
+        `Agent disconnected at ${at(5 * MINUTE)} (session session-1) and reconnected only at ` +
+          `${at(5 * MINUTE + 61 * SECOND)}; nothing recorded during it; just before it, a destroy sent at ` +
+          `${at(5 * MINUTE - 4 * SECOND)}`,
+      ]);
+    });
+  });
+
   const HEADING =
     "  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; 3 or more is a failure):";
 
