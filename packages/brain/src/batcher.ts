@@ -179,12 +179,18 @@ export interface BatcherTargetWorth {
  *   stops the income while it's prepared, as it did in run #2.
  * - **The move:** of those, the worthiest; the one sent is kept unless another is worth `BATCHER_MOVE_GAIN` times it.
  * - **The next:** of the rest, the one worth most once prepared (its income less a batch's weaken), if that's worth the
- *   move from the one chosen and it can be prepared within the horizon on the RAM the chosen one's batches leave, at
- *   least `BATCHER_NEXT_RAM_SHARE` of it (#237's review): the batcher prepares it beside the batches, which are planned
- *   on the rest, and once it's prepared the same test moves to it, so its RAM never sits idle. On that RAM, any target
- *   the rule before #236 would have moved to (prepared on it within `BATCHER_MOST_IDLE_MS`) is preparable, so no
- *   better target is left without a path to it. The next sent is kept unless another is worth `BATCHER_MOVE_GAIN` times it once
- *   prepared (#236): a next dropped wastes its waves out, which hold their RAM for a weaken's time at its security.
+ *   move from the one chosen and it can be prepared within the horizon on its RAM: while the chosen one earns, what its
+ *   batches leave, at least `BATCHER_NEXT_RAM_SHARE` of it (#237's review); otherwise that share alone, as the chosen
+ *   one prepares on the rest (#237's re-review). The batcher prepares it beside the batches, which are planned on the
+ *   rest, and once it's prepared the same test moves to it, so its RAM never sits idle. While one earns, any target the
+ *   rule before #236 would have moved to (prepared within `BATCHER_MOST_IDLE_MS` on the RAM the batches leave) is
+ *   preparable, so no better target is left without a path to it. The next sent is kept unless another is worth
+ *   `BATCHER_MOVE_GAIN` times it once prepared (#236): a next dropped wastes its waves out, which hold their RAM for a
+ *   weaken's time at its security.
+ * - **A next it never moves to (#237's re-review):** one whose weaken at its minimum security is more than
+ *   `BATCHER_MOST_IDLE_MS` longer than the earning target's is prepared, kept as the next and never moved to while that
+ *   one earns, since the move would leave the brain that long without income; the brain's log shows it as the next
+ *   throughout. It predates #236.
  */
 export function chooseBatcher(
   staticData: StaticSnapshotData,
@@ -268,9 +274,12 @@ export function chooseBatcher(
   const chosen =
     kept !== undefined && worthiest.weighed.worth < kept.weighed.worth * BATCHER_MOVE_GAIN ? kept : worthiest;
   const worths = planned.map((each) => each.weighed);
-  // The next target's RAM: what the chosen one's batches leave, at least BATCHER_NEXT_RAM_SHARE of it (#237's review);
-  // the batches are planned on four fifths as before: the same plan as on their peak, where that is less.
-  const nextShare = Math.max(BATCHER_NEXT_RAM_SHARE, 1 - chosen.peakRamGb / chosen.ramGb);
+  // The next target's RAM: what the chosen one's batches leave, at least BATCHER_NEXT_RAM_SHARE of it (#237's review),
+  // while it's the one earning; otherwise (nothing batched yet, or a move to it under way) a fifth, as it has its own
+  // preparation to do on the rest (#237's re-review). The batches are planned on four fifths as before: the same plan
+  // as on their peak, where that is less.
+  const leftShare = 1 - chosen.peakRamGb / chosen.ramGb;
+  const nextShare = chosen === earning ? Math.max(BATCHER_NEXT_RAM_SHARE, leftShare) : BATCHER_NEXT_RAM_SHARE;
   const nextGb = (each: Weighed) => each.ramGb * nextShare;
   // Of the rest preparable on it within the horizon and worth the move once prepared, the worthiest; the one sent kept
   // unless that's worth BATCHER_MOVE_GAIN times it (#236).

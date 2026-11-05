@@ -855,18 +855,20 @@ export function recordMoneyLook(health: BatcherHealth, target: string, money: nu
 
 /**
  * A hack landed on `target` at `atMs` (#236), in the health: the last hack (the latest landing); and, the first on the
- * target batched (the health's) since that target last changed (`targetChanged`, the batcher's to say), a move, idle
- * from the last hack before it, on whatever target that was: the same one after a detour through a target never
- * hacked (#237's review). The target before still lands its batches for a while, among the new one's: a hack of its
- * then is no move, nor is the new target's next. A hack that took nothing (its chance failed) counts too: the batcher
- * is hacking that target.
+ * target batched (the health's) since that target last changed (`targetChangedSinceHack`, which the batcher sets on a
+ * new target, and this clears), a move, idle from the last hack before it, on whatever target that was: the same one
+ * after a detour through a target never hacked (#237's review). The target before still lands its batches for a
+ * while, among the new one's: a hack of its then is no move, nor is the new target's next. A hack that took nothing
+ * (its chance failed) counts too: the batcher is hacking that target.
  */
-export function recordHackLanded(health: BatcherHealth, target: string, atMs: number, targetChanged: boolean): void {
+export function recordHackLanded(health: BatcherHealth, target: string, atMs: number): void {
   const last = health.lastHack ?? null;
   health.lastMove ??= null;
-  if (last !== null && targetChanged && target === health.target) {
+  const onTarget = target === health.target;
+  if (last !== null && health.targetChangedSinceHack === true && onTarget) {
     health.lastMove = { from: last.target, to: target, idleMs: Math.max(0, atMs - last.atMs), atMs };
   }
+  if (onTarget) health.targetChangedSinceHack = false;
   if (last === null || atMs >= last.atMs) health.lastHack = { target, atMs };
 }
 
@@ -1098,6 +1100,11 @@ export interface BatcherHealth {
    */
   lastMove?: { from: string; to: string; idleMs: number; atMs: number } | null;
   /**
+   * Whether the target batched has changed since the last hack on it (#237's re-review): a move under way, the report's
+   * to show while it lasts, a detour back to the same target too. Absent from an older batcher, which counts as false.
+   */
+  targetChangedSinceHack?: boolean;
+  /**
    * Sharing (#224): whether its config asks for it, the share threads running (started under `SHARE_TIME_MS` ago),
    * their RAM, and of it the RAM on its hosts (#230), the bonus they give (core's `shareBonus`), and the room its
    * last look found (the RAM a round could take); null while it neither shares nor is asked to. Absent from an older
@@ -1158,6 +1165,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     next: null,
     lastHack: null,
     lastMove: null,
+    targetChangedSinceHack: false,
     sharing: null,
     atMs,
   };

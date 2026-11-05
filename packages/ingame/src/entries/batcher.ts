@@ -315,8 +315,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         health.leastSlackMs = Math.min(health.leastSlackMs ?? Number.POSITIVE_INFINITY, record.slackMs);
       }
       if (isHack && !record.skipped) {
-        recordHackLanded(health, landedOn ?? "", record.landAt, targetChangedSinceHack);
-        if (landedOn === health.target) targetChangedSinceHack = false;
+        recordHackLanded(health, landedOn ?? "", record.landAt);
         health.hacksLanded += 1;
         health.moneyHacked += record.result;
         if (record.result === 0) health.hacksFailed += 1;
@@ -339,8 +338,6 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   let batchesSinceStart = 0;
   let lastBatchPlannedAt = 0;
   let waitingProblem: string | null = null;
-  /** Whether the target batched has changed since the last hack on it (#237's review): its next hack's is a move. */
-  let targetChangedSinceHack = false;
   const pending: LaunchOrder[] = [];
   const batches = new Map<number, PlannedBatch>();
   let landing: { target: string; threads: BatchThreads; untilMs: number }[] = [];
@@ -594,7 +591,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       if (health.state === "batching") health.state = "preparing";
       if (waitingProblem !== null && health.problem === waitingProblem) setProblem(lastingProblem);
       waitingProblem = null;
-      targetChangedSinceHack = true;
+      // A move under way until the new target's first hack (#237's review), in its health (#237's re-review).
+      health.targetChangedSinceHack = true;
     }
     if (next.next?.target !== config?.next?.target) {
       preparingNext = new Set();

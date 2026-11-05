@@ -236,14 +236,22 @@ class MoveFold {
   moves(resetsMs: readonly number[]): Move[] {
     const moves = [...this.#moves.values()];
     const resetBetween = (fromMs: number, toMs: number) => resetsMs.some((each) => each > fromMs && each <= toMs);
+    // The latest last hack of the runs before (#237's re-review): a run with none between two that hack, a crash loop,
+    // doesn't break the join.
+    let before: { target: string; atMs: number } | null = null;
     this.#runs.forEach((run, index) => {
       const health = run.last;
       const { lastHack } = run;
-      const before = index > 0 ? this.#runs[index - 1]?.lastHack : null;
+      const carried = before;
+      if (lastHack !== null) before = lastHack;
       if (lastHack !== null) {
-        // Under way within the run: its target not hacked since the last hack on another.
+        // Under way within the run: the target batched changed since the last hack on it, as its health says (#237's
+        // re-review: a detour back to the same target too); an older batcher's, its target not hacked since another's.
         const movedTo = lastMoveOf(health)?.to;
-        if (lastHack.target !== health.target && movedTo !== health.target) {
+        const changed = health.targetChangedSinceHack;
+        const underWay =
+          typeof changed === "boolean" ? changed : lastHack.target !== health.target && movedTo !== health.target;
+        if (underWay) {
           moves.push({
             from: lastHack.target,
             to: health.target,
@@ -254,24 +262,28 @@ class MoveFold {
           });
         }
       }
-      if (before === null || before === undefined) return;
+      if (index === 0 || carried === null) return;
       const first = run.firstHack;
       if (first !== null) {
-        if (first.target !== before.target && !resetBetween(before.atMs, first.atMs)) {
+        if (first.target !== carried.target && !resetBetween(carried.atMs, first.atMs)) {
           moves.push({
-            from: before.target,
+            from: carried.target,
             to: first.target,
-            sinceMs: before.atMs,
+            sinceMs: carried.atMs,
             untilMs: first.atMs,
             done: true,
             acrossRestart: true,
           });
         }
-      } else if (health.target !== before.target && !resetBetween(before.atMs, run.lastAtMs)) {
+      } else if (
+        index === this.#runs.length - 1 &&
+        health.target !== carried.target &&
+        !resetBetween(carried.atMs, run.lastAtMs)
+      ) {
         moves.push({
-          from: before.target,
+          from: carried.target,
           to: health.target,
-          sinceMs: before.atMs,
+          sinceMs: carried.atMs,
           untilMs: run.lastAtMs,
           done: false,
           acrossRestart: true,

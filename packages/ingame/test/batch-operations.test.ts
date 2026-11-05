@@ -1292,7 +1292,9 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   );
   expect(silentlyWaiting).toBe(0);
   // joesguns' first hack lands a weaken after the move, and the seconds n00dles' batches take to free the RAM for one,
-  // long before harakiri-sushi's wave: before #236, one spacing after the wave, 194 s in, idle 161 s.
+  // long before harakiri-sushi's wave: before #236, one spacing after the wave, 194 s in, idle 161 s. Those seconds are
+  // about 30 (15 looks): the move comes right after a batch is planned (#237's review), so n00dles' batches hold the
+  // most RAM then; 45 s leaves a margin over them (before that change, the move came anywhere in a spacing: 14 s).
   expect(firstNewHackAt - movedAt).toBeLessThan(joesgunsWeakenMs + 45_000);
   expect(firstNewHackAt).toBeLessThan(waveLandsAt);
   // Its health says the move and its idle time, as the hacks in flight showed them.
@@ -1420,4 +1422,54 @@ test("batching, a stretch with no batch that fits after the first is said too (#
   for (const pid of idle) await simulation.kill(pid);
   await simulation.advance(30_000);
   expect(await healthOf(simulation)).toMatchObject({ state: "batching", problem: null, desyncs: 0 });
+});
+
+test("a next target on all the RAM the batches leave (#237's re-review): prepared beside them, no batch trimmed", {
+  timeout: 300_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // A home of 1 PB, late in a cycle: n00dles' batches leave most of it idle.
+  const homeGb = 1_048_576;
+  await simulation.diagnostics.setHomeRam(homeGb);
+  const figures = await figuresOf(simulation, ["harakiri-sushi"]);
+  const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: MULTS };
+  // The RAM the batches count on, less the batcher's own on home (it runs there).
+  const ramGb = batchRamGb([homeGb - 8]);
+  const plan = batchPlan(N00DLES, player, ramGb);
+  if (plan === null) throw new Error("no plan for n00dles on home");
+  const leftGb = ramGb - plan.peakRamGb;
+  expect(leftGb).toBeGreaterThan(ramGb * 0.2);
+  const batching: BatcherConfig = {
+    ...n00dlesConfig(),
+    hosts: ["home"],
+    hackShare: plan.hackShare,
+    spacingMs: plan.spacingMs,
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(batching)] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "n00dles' hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  await simulation.advance(60_000);
+  // harakiri-sushi to prepare next on all the RAM n00dles' batches leave, as the brain sends it while n00dles earns.
+  const before = await healthOf(simulation);
+  const withNext = {
+    ...batching,
+    next: { target: "harakiri-sushi", figures: figures["harakiri-sushi"], ramGb: leftGb },
+  };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(withNext)] });
+  await simulation.advance(5 * 60_000);
+  const after = await healthOf(simulation);
+  console.log(
+    `#237's next on the leftover RAM: ${Math.round(leftGb)} of ${Math.round(ramGb)} GB; next ${JSON.stringify(after.next)}; ` +
+      `${after.batchesStarted - before.batchesStarted} batches, ${(after.batchesTrimmed ?? 0) - (before.batchesTrimmed ?? 0)} trimmed`,
+  );
+  expect(after.next?.wavesStarted).toBeGreaterThan(0);
+  expect(after.batchesStarted).toBeGreaterThan(before.batchesStarted + 10);
+  // The batches keep their RAM: none trimmed or short beside the next's waves, all in step.
+  expect(after.batchesTrimmed).toBe(before.batchesTrimmed);
+  expect(after).toMatchObject({ batchesShort: 0, desyncs: 0, late: 0, lost: 0, problem: null });
 });

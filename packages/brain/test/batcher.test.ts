@@ -510,7 +510,10 @@ describe("the run report's section", () => {
         },
         // A restarted batcher's move, not done at the window's end: 11 minutes so far.
         { atMs: at(41), health: health("b", { target: "megacorp", ...hackAt("megacorp", 41) }) },
-        { atMs: at(52), health: health("b", { target: "ecorp", ...hackAt("megacorp", 41) }) },
+        {
+          atMs: at(52),
+          health: health("b", { target: "ecorp", ...hackAt("megacorp", 41), targetChangedSinceHack: true }),
+        },
       ],
       failures,
     );
@@ -583,6 +586,37 @@ describe("the run report's section", () => {
     expect(installed).toContain("  moves (#236): none");
   });
 
+  test("moves (#237's re-review): a run with no hack between two is no break in the join; a detour shows under way", () => {
+    const failures: string[] = [];
+    // A crash loop: a hacks n00dles, b never hacks, c first hacks phantasy 20 minutes in.
+    const chain = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { lastHack: { target: "n00dles", atMs: at(0) } }) },
+        { atMs: at(2), health: health("b", { target: "phantasy" }) },
+        { atMs: at(5), health: health("b", { target: "phantasy" }) },
+        { atMs: at(21), health: health("c", { target: "phantasy", lastHack: { target: "phantasy", atMs: at(20) } }) },
+      ],
+      failures,
+    );
+    expect(chain.filter((line) => line.includes("→"))).toEqual([
+      "    n00dles → phantasy at 2026-01-01T00:20:00.000Z: idle 20.0 min, across a restart",
+      "  batcher idle on a move: n00dles → phantasy, 20.0 min without a hack, from 2026-01-01T00:00:00.000Z to " +
+        "2026-01-01T00:20:00.000Z (more than 10 min)",
+    ]);
+    // Detours under way at the window's end, as the health says: phantasy → 4sigma → phantasy, 4sigma never hacked;
+    // and 4sigma → phantasy → 4sigma, phantasy never hacked. Each back on the target last hacked.
+    for (const target of ["phantasy", "4sigma"]) {
+      const detour = batcherSection([
+        { atMs: at(0), health: health("a", { target, lastHack: { target, atMs: at(0) } }) },
+        {
+          atMs: at(12),
+          health: health("a", { target, lastHack: { target, atMs: at(0) }, targetChangedSinceHack: true }),
+        },
+      ]);
+      expect(detour).toContain(`    ${target} → ${target}, not done at 2026-01-01T00:12:00.000Z: idle 12.0 min so far`);
+    }
+  });
+
   test("moves (#237's review): a last hack or a move that isn't one, as the Agent sent it, is left out", () => {
     const failures: string[] = [];
     const lines = batcherSection(
@@ -609,7 +643,14 @@ describe("the run report's section", () => {
     const underWay = batcherSection(
       [
         { atMs: at(0), health: health("a", { lastHack: { target: "n00dles", atMs: at(0) } }) },
-        { atMs: at(4), health: health("a", { target: "joesguns", lastHack: { target: "n00dles", atMs: at(0) } }) },
+        {
+          atMs: at(4),
+          health: health("a", {
+            target: "joesguns",
+            lastHack: { target: "n00dles", atMs: at(0) },
+            targetChangedSinceHack: true,
+          }),
+        },
       ],
       failures,
     );
@@ -1128,6 +1169,12 @@ describe("chooseBatcher, a target move (#236)", () => {
     // The batches planned on the rest: n00dles' own plan, which that RAM holds.
     expect(chosen.batcher.config.spacingMs).toBe(sent.batcher.config.spacingMs);
     expect(chosen.batcher.config.hackShare).toBe(sent.batcher.config.hackShare);
+    // Nothing batched yet (#237's re-review: a fresh start, after an install or a restart, a move under way): n00dles
+    // still to start, so no leftover is known; the next is weighed on a fifth, where it isn't preparable, and n00dles'
+    // own preparation keeps the rest.
+    const starting = chosenOf(network, data, null, null);
+    expect(starting.batcher.config.target).toBe("n00dles");
+    expect(starting.batcher.config.next).toBeUndefined();
   });
 
   test("a prepared target whose weaken is over BATCHER_MOST_IDLE_MS (#237's review): its idle is the weaken past the batches'", () => {
