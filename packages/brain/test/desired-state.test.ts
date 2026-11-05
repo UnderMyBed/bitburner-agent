@@ -2618,13 +2618,17 @@ describe("Daedalus count stuck, judged on A6's commit's facts (#238)", () => {
       problem: null,
     },
   });
-  /** A6's commit, the install asked for, with `within` and $45m of NeuroFlux Governor levels; then the reset. */
-  const installFrom = (within: { augmentation: string; faction: string; money: number }[]) => {
+  /**
+   * A6's commit, the install asked for (or not), with `within` and $45m left after the set, or no facts (null); then
+   * the reset.
+   */
+  const installFrom = (
+    within: { augmentation: string; faction: string; money: number }[] | null,
+    installing = true,
+  ) => {
     store.setSetting("hackLoop.enabled", "false");
-    store.setSetting(
-      "augmentations.cycle",
-      JSON.stringify({ lastAugReset: 0, installing: true, countWithinReach: { neuroFluxMoney: 45e6, within } }),
-    );
+    const countFacts = within === null ? {} : { countFacts: { moneyAfterSet: 45e6, within } };
+    store.setSetting("augmentations.cycle", JSON.stringify({ lastAugReset: 0, installing, ...countFacts }));
     const controller = new DesiredStateController({ channel, store });
     const stored: { type: string }[] = [];
     controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
@@ -2637,7 +2641,7 @@ describe("Daedalus count stuck, judged on A6's commit's facts (#238)", () => {
     return { controller, stored };
   };
 
-  test("one that counts its NeuroFlux money would have bought, passed over: stuck, naming it", () => {
+  test("one that counts the money left after the set would have bought, passed over: stuck, naming it", () => {
     const { controller } = installFrom([{ augmentation: "Neurotrainer II", faction: "NiteSec", money: 45e6 }]);
     expect(controller.worldDaemonStall()).toMatchObject({
       step: "daedalusCount",
@@ -2655,6 +2659,25 @@ describe("Daedalus count stuck, judged on A6's commit's facts (#238)", () => {
       {
         detail:
           "installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within reach",
+      },
+    ]);
+  });
+
+  test("A6's install asked for, its commit's facts lost (#238 review): stuck", () => {
+    expect(installFrom(null).controller.worldDaemonStall()?.detail).toBe(
+      "Daedalus count stuck: an install at 6 of 30 augmentations installed added none to the count (NeuroFlux " +
+        "Governor's levels count once), A6's install, with no facts from its commit of what counts within reach",
+    );
+  });
+
+  test("a commit with no facts, its install not asked for (yours, mid-commit): not judged", () => {
+    const { controller, stored } = installFrom(null, false);
+    expect(controller.worldDaemonStall()).toBeNull();
+    expect(stored.filter((event) => event.type === "daedalusCountNeuroFluxOnly")).toMatchObject([
+      {
+        detail:
+          "installed NeuroFlux Governor only at 6 of 30 augmentations installed: no facts from A6's commit (yours, " +
+          "the switch off, or an earlier brain's), so not judged",
       },
     ]);
   });

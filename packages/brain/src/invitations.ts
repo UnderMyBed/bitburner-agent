@@ -31,8 +31,8 @@
 //   tech vendor, so home's RAM is still bought before it. The irreversible gate's enemy guard stays under the joins.
 // - The reach: how many more augmentations the brain could still install, and where: the joined factions, those
 //   inviting without enemies, the hacker factions (A3's backdoors), Tian Di Hui once the hacking level allows it, and
-//   the city group chosen. A line of the World Daemon's path; its failure is an install that adds none to the count
-//   (./world-daemon.ts).
+//   the city group chosen. A line of the World Daemon's path; its failure is an install that adds none to the count,
+//   passing over one that counts (#238, ./world-daemon.ts).
 import {
   augmentationsSoldBy,
   CITY_FACTION_GROUPS,

@@ -68,7 +68,8 @@ test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd 
 });
 
 test.each(SEEDS)(
-  "seed %i: from a fresh start, CyberSec's five, home RAM and NeuroFlux Governor bought and installed, the Agent back",
+  "seed %i: from a fresh start, CyberSec's five, home RAM and NeuroFlux Governor installed, the Agent back; then a " +
+    "NeuroFlux-only install at 6 of 30, information, not a failure",
   { timeout: 300_000 },
   async (seed) => {
     const fresh = await freshStartOf({ withDesiredState: true, seed });

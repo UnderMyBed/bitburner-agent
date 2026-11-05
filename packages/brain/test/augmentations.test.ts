@@ -8,6 +8,7 @@ import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
+  donationToReach,
   type FactionState,
   isWorthInstalling,
   type MediumSnapshotData,
@@ -364,7 +365,7 @@ describe("the count rule (#222)", () => {
       donations: [],
       reason: "nothing left",
       // Short of Daedalus's count (#238): nothing else reached at CyberSec, no NeuroFlux Governor level.
-      countWithinReach: { neuroFluxMoney: 0, within: [] },
+      countFacts: { moneyAfterSet: 0, within: [] },
     });
     expect(events.at(-1)).toMatchObject({ type: "augmentationInstallChosen", reason: "nothing left", cost: FIVE_COST });
     expect(lines).toEqual([
@@ -1029,7 +1030,7 @@ describe("committed", () => {
       neuroFluxTarget: 4,
       donations: [],
       reason: "nothing left",
-      countWithinReach: { neuroFluxMoney: expect.any(Number), within: [] },
+      countFacts: { moneyAfterSet: expect.any(Number), within: [] },
     });
     rule = newRule();
     // $1b now covers NeuroFlux Governor, but the install is out.
@@ -1910,7 +1911,7 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
     rule = newRule();
   };
 
-  test("nothing else joined: a NeuroFlux-only commit with nothing that counts within reach, and its levels' money", () => {
+  test("nothing else joined: a NeuroFlux-only commit, nothing within reach, and the money left after the set", () => {
     longCycle();
     throughCountdown({
       slowData: slow({ reputation: 18_750, ownedAugs: SIX }),
@@ -1918,10 +1919,12 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
     });
     expect(rule.view().set).toEqual([]);
     expect(readAugmentationCycle(store)).toMatchObject({ neuroFluxTarget: 3, reason: "count reached" });
-    const facts = readAugmentationCycle(store)?.countWithinReach;
+    const facts = readAugmentationCycle(store)?.countFacts;
     expect(facts?.within).toEqual([]);
-    expect(facts?.neuroFluxMoney).toBeCloseTo(THREE_LEVELS, 0);
-    expect(rule.countWithinReach()).toEqual(facts);
+    // All $10m (#238 review): not the $6.7m the three levels take, as the fourth's $8.7m isn't covered.
+    expect(facts?.moneyAfterSet).toBe(10e6);
+    expect(THREE_LEVELS).toBeLessThan(10e6 - 3e6);
+    expect(rule.countFacts()).toEqual(facts);
   });
 
   test("The Black Hand's three reached beyond the money: each, whatever its value, at its price and seller", () => {
@@ -1932,8 +1935,8 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
       { name: "The Black Hand", reputation: 15_000, favor: 0 },
     ];
     throughCountdown({ slowData: slow({ joined, ownedAugs: SIX }), mediumData: medium({ money: 10e6 }) });
-    expect(rule.countWithinReach()).toEqual({
-      neuroFluxMoney: expect.closeTo(THREE_LEVELS, 0),
+    expect(rule.countFacts()).toEqual({
+      moneyAfterSet: 10e6,
       within: [
         { augmentation: "Artificial Synaptic Potentiation", faction: "The Black Hand", money: 80e6 },
         { augmentation: "Embedded Netburner Module", faction: "The Black Hand", money: 250e6 },
@@ -1960,7 +1963,33 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
       mediumData: medium({ hacking: 6_000, money: 1e9 }),
     });
     expect(rule.view().set.map((each) => each.augmentation)).toEqual(["Magnetism Amplifier"]);
-    expect(rule.countWithinReach()).toEqual({ neuroFluxMoney: 0, within: [] });
+    // $1b less Magnetism Amplifier's $250m.
+    expect(rule.countFacts()).toEqual({ moneyAfterSet: 750e6, within: [] });
+  });
+
+  test("donations (favour 150 at NiteSec): the set's donation off the money; those reached by one, listed", () => {
+    longCycle();
+    // NiteSec at 9,999: Artificial Synaptic Potentiation reached, Neurotrainer II a reputation short (by donation).
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 9_999, favor: 150 },
+    ];
+    throughCountdown({ slowData: slow({ joined, ownedAugs: SIX }), mediumData: medium({ money: 200e6 }) });
+    const chosen = events.find((event) => event.type === "augmentationInstallChosen");
+    expect(chosen).toMatchObject({
+      set: [{ augmentation: "Artificial Synaptic Potentiation" }, { augmentation: "Neurotrainer II" }],
+    });
+    const donated = chosen?.type === "augmentationInstallChosen" ? chosen.donations : [];
+    expect(donated).toEqual([{ faction: "NiteSec", reputation: 10_000, amount: donationToReach(1, 1, 1) }]);
+    const facts = rule.countFacts();
+    expect(facts?.moneyAfterSet).toBeCloseTo(200e6 - (chosen as { cost: number }).cost - donationToReach(1, 1, 1), 0);
+    // The rest NiteSec sells by donation, priced after the set's two, with the donation from 9,999: the cheapest first.
+    expect(facts?.within[0]).toEqual({
+      augmentation: "Embedded Netburner Module",
+      faction: "NiteSec",
+      money: 250e6 * 1.9 ** 2 + donationToReach(15_000 - 9_999, 1, 1),
+    });
+    expect(facts?.within.every((each) => each.faction === "NiteSec")).toBe(true);
   });
 
   test("not short (Daedalus inviting): no facts kept; a note's facts not the brain's fail", () => {
@@ -1978,11 +2007,11 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
       },
     } as SlowSnapshotData;
     throughCountdown({ slowData: invited, mediumData: medium({ money: 10e6 }) });
-    expect(readAugmentationCycle(store)).not.toHaveProperty("countWithinReach");
-    expect(rule.countWithinReach()).toBeNull();
+    expect(readAugmentationCycle(store)).not.toHaveProperty("countFacts");
+    expect(rule.countFacts()).toBeNull();
     store.setSetting(
       AUGMENTATION_CYCLE_SETTING,
-      JSON.stringify({ lastAugReset: 0, installing: false, countWithinReach: { neuroFluxMoney: 1, within: [{}] } }),
+      JSON.stringify({ lastAugReset: 0, installing: false, countFacts: { moneyAfterSet: 1, within: [{}] } }),
     );
     expect(() => readAugmentationCycle(store)).toThrow("isn't a note the brain wrote");
   });

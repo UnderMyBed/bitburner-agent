@@ -480,6 +480,19 @@ describe("what counts within reach at a commit (#238): Daedalus count stuck's fa
     // NiteSec's donation is least: 6,750 short, not CyberSec's 13,750.
     expect(within).toEqual([{ augmentation: GEN_II, faction: "NiteSec", money: 125_000_000 + 6_750_010_000 }]);
   });
+
+  test("by donation too: never one missing a prerequisite, one owned or queued, or NeuroFlux", () => {
+    const nitesec = [{ faction: "NiteSec", reputation: 0 }];
+    const donations = terms({ [GEN_II]: nitesec, [BITWIRE]: nitesec, [NEUROFLUX_GOVERNOR]: nitesec });
+    // Gen I neither installed nor queued: Gen II isn't within reach, by donation or not; BitWire is queued.
+    expect(countablesWithinReach({ reached: [], state: { ...BN1, queued: [BITWIRE] }, donations })).toEqual([]);
+    // Gen I queued (the set's): Gen II is, at its price after it.
+    const afterGenI = countablesWithinReach({ reached: [], state: { ...BN1, queued: [GEN_I] }, donations });
+    expect(afterGenI).toEqual([
+      { augmentation: BITWIRE, faction: "NiteSec", money: 10_000_000 * 1.9 + 3_750_010_000 },
+      { augmentation: GEN_II, faction: "NiteSec", money: 125_000_000 * 1.9 + 18_750_010_000 },
+    ]);
+  });
 });
 
 describe("the experience for a level", () => {

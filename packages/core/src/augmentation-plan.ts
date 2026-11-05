@@ -324,10 +324,10 @@ export interface CountableWithinReach {
 /**
  * What a commit while short of Daedalus's count leaves within reach that would add to it (#238), the facts "Daedalus
  * count stuck" judges an install that added none on: each of `reached` (a joined seller's reputation covers it) or of
- * `donations`' sellers, not NeuroFlux Governor (its levels count once, `Faction/FactionJoinCondition.ts:130`), not
- * owned or queued in `state` (the set's purchases queued there), its prerequisites owned or queued. Whatever its
- * hacking value: `isWorthInstalling` isn't asked, so a rule that passes one over (run #2's: A6 bought only hacking
- * value while short) can't hide it. The cheapest first.
+ * `donations`' sellers, not NeuroFlux Governor (its levels are one entry, `Augmentation/AugmentationHelpers.ts:55-58`,
+ * so it adds none once installed), not owned or queued in `state` (the set's purchases queued there), its
+ * prerequisites owned or queued. Whatever its hacking value: `isWorthInstalling` isn't asked, so a rule that passes one
+ * over (run #2's: A6 bought only hacking value while short) can't hide it. The cheapest first.
  */
 export function countablesWithinReach({
   reached,
@@ -338,20 +338,22 @@ export function countablesWithinReach({
   state: AugmentationPurchaseState;
   donations?: DonationTerms;
 }): CountableWithinReach[] {
-  const owned = (name: string) => Object.hasOwn(state.installed, name) || state.queued.includes(name);
-  const ready = (name: string) =>
-    name !== NEUROFLUX_GOVERNOR && !owned(name) && missingPrerequisites(name, state).length === 0;
+  const ownedOrQueued = (name: string) => Object.hasOwn(state.installed, name) || state.queued.includes(name);
+  const wouldAddToCount = (name: string) =>
+    name !== NEUROFLUX_GOVERNOR && !ownedOrQueued(name) && missingPrerequisites(name, state).length === 0;
   const reachedNames = reached.map((each) => each.augmentation);
   const within: CountableWithinReach[] = reached
-    .filter(({ augmentation }) => ready(augmentation))
+    .filter(({ augmentation }) => wouldAddToCount(augmentation))
     .map(({ augmentation, faction }) => ({
       augmentation,
       faction,
       money: augmentationCost(augmentation, state).money,
     }));
   for (const [name, sellers] of Object.entries(donations?.sellers ?? {})) {
-    if (donations === undefined || reachedNames.includes(name) || !ready(name)) continue;
-    // The seller whose donation is least (`planDonations`' choice), for this one alone.
+    if (donations === undefined || reachedNames.includes(name) || !wouldAddToCount(name)) continue;
+    // The seller whose donation is least (`planDonations`' choice), for this one alone, from its reputation now: a
+    // donation the set plans at that faction isn't counted, so the money may be overstated (the guard weaker, never a
+    // false "stuck").
     const cost = augmentationCost(name, state);
     const seller = cheapestSeller(sellers, cost.reputation, new Map());
     if (seller === null) continue;

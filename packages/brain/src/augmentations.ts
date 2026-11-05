@@ -465,23 +465,24 @@ export interface AugmentationCycle {
    * Short of Daedalus's count at the commit (#238): what counts within reach then, for "Daedalus count stuck". Absent
    * when not short, or in an earlier brain's note.
    */
-  countWithinReach?: CountWithinReach;
+  countFacts?: CountFacts;
 }
 
 /**
- * At a commit while short of Daedalus's count (#238): what its NeuroFlux Governor levels cost (and their donations),
- * and each augmentation that would add to the count left within reach beyond the set (core's
- * `countablesWithinReach`). The World Daemon judges an install that added none to the count on them.
+ * At a commit while short of Daedalus's count (#238): the money left after the set (and its donations), what
+ * NeuroFlux Governor's levels and home's RAM then take; and each augmentation that would add to the count left within
+ * reach beyond the set (core's `countablesWithinReach`). The World Daemon judges an install that added none to the
+ * count on them: one whose money is no more than what was left, A6's set should have taken (#238 review).
  */
-export interface CountWithinReach {
-  neuroFluxMoney: number;
+export interface CountFacts {
+  moneyAfterSet: number;
   within: CountableWithinReach[];
 }
 
-const isCountWithinReach = (value: unknown): value is CountWithinReach => {
-  const { neuroFluxMoney, within } = (value ?? {}) as Partial<CountWithinReach>;
+const isCountFacts = (value: unknown): value is CountFacts => {
+  const { moneyAfterSet, within } = (value ?? {}) as Partial<CountFacts>;
   return (
-    isFiniteNumber(neuroFluxMoney) &&
+    isFiniteNumber(moneyAfterSet) &&
     Array.isArray(within) &&
     within.every(
       (each) =>
@@ -505,7 +506,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     donations?: unknown;
     reason?: unknown;
     redPill?: unknown;
-    countWithinReach?: unknown;
+    countFacts?: unknown;
   };
   let note: Note | null;
   try {
@@ -518,7 +519,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
   const donations = note?.donations;
   const reason = note?.reason;
   const redPill = note?.redPill;
-  const countWithinReach = note?.countWithinReach;
+  const countFacts = note?.countFacts;
   if (
     !isFiniteNumber(note?.lastAugReset) ||
     typeof installing !== "boolean" ||
@@ -526,7 +527,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     (donations !== undefined && !(Array.isArray(donations) && donations.every(isDonation))) ||
     (reason !== undefined && typeof reason !== "string") ||
     (redPill !== undefined && typeof redPill !== "string") ||
-    (countWithinReach !== undefined && !isCountWithinReach(countWithinReach))
+    (countFacts !== undefined && !isCountFacts(countFacts))
   ) {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't a note the brain wrote`);
   }
@@ -537,7 +538,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     ...(donations === undefined ? {} : { donations: donations as Donation[] }),
     ...(reason === undefined ? {} : { reason: reason as InstallReason }),
     ...(redPill === undefined ? {} : { redPill: redPill as string }),
-    ...(countWithinReach === undefined ? {} : { countWithinReach: countWithinReach as CountWithinReach }),
+    ...(countFacts === undefined ? {} : { countFacts: countFacts as CountFacts }),
   };
 }
 
@@ -838,11 +839,14 @@ export class AugmentationRule {
     const asked = this.#asked;
     if (asked !== null && doneIds.has(asked.intent.id) && !this.#recorded.has(asked.intent.id)) return true;
     // The install reported done (nothing to install, says the game): watched for the reset from now.
-    return this.#installDone === null && doneIds.has(AUGMENTATION_INSTALL_INTENT.id) && this.#installAskedFor();
+    return this.#installDone === null && doneIds.has(AUGMENTATION_INSTALL_INTENT.id) && this.installAskedFor();
   }
 
-  /** The install asked for: here, or in the commit's note (a restarted brain's, before its first decision). */
-  #installAskedFor(): boolean {
+  /**
+   * The install asked for: here, or in the commit's note (a restarted brain's, before its first decision). The World
+   * Daemon's too (#238 review): an install while short with no `countFacts` is A6's, and stuck.
+   */
+  installAskedFor(): boolean {
     return this.#installing || readAugmentationCycle(this.#store)?.installing === true;
   }
 
@@ -874,8 +878,8 @@ export class AugmentationRule {
    * What counts within reach at the commit, short of Daedalus's count (#238), from the commit's note until the game
    * resets; null without a commit, or one not short. The World Daemon's facts for "Daedalus count stuck".
    */
-  countWithinReach(): CountWithinReach | null {
-    return readAugmentationCycle(this.#store)?.countWithinReach ?? null;
+  countFacts(): CountFacts | null {
+    return readAugmentationCycle(this.#store)?.countFacts ?? null;
   }
 
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
@@ -1066,7 +1070,7 @@ export class AugmentationRule {
    * alerted.
    */
   #watchInstallDone(doneIds: ReadonlySet<string>, slowGameTimeMs: number | null, atMs: number): void {
-    if (!this.#installAskedFor()) {
+    if (!this.installAskedFor()) {
       this.#installDone = null;
       return;
     }
@@ -1553,13 +1557,13 @@ export class AugmentationRule {
         reason = ruleReason;
       }
       const donations = withDonation(counts.donations, redPillDonation);
-      // Short (#238): what counts within reach beyond the set, whatever `isWorthInstalling` says, and what NeuroFlux
-      // Governor's levels take (the counts' money less the set's and its donations).
-      const countWithinReach: CountWithinReach | undefined = short
+      // Short (#238): what counts within reach beyond the set, whatever `isWorthInstalling` says, and the money left
+      // after the set and its donations (#238 review: not the levels', which stop short of the next one).
+      const countFacts: CountFacts | undefined = short
         ? {
-            neuroFluxMoney: counts.money - set.money - set.donationMoney,
+            moneyAfterSet: budget - set.money - set.donationMoney,
             within: countablesWithinReach({
-              reached: reached.map((augmentation) => ({ augmentation, faction: sellerOf(augmentation) ?? "" })),
+              reached: reached.map((augmentation) => ({ augmentation, faction: sellerOf(augmentation) as string })),
               state: { ...purchaseState, queued: [...queue, ...set.purchases.map((purchase) => purchase.name)] },
               donations: terms,
             }),
@@ -1572,7 +1576,7 @@ export class AugmentationRule {
         donations,
         reason,
         ...(redPillDonation === null ? {} : { redPill: redPillDonation.faction }),
-        ...(countWithinReach === undefined ? {} : { countWithinReach }),
+        ...(countFacts === undefined ? {} : { countFacts }),
       });
       this.#installing = false;
       this.#progress = null;
