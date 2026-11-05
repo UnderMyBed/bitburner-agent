@@ -18,6 +18,13 @@ import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline, donationStatus } from "
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
+import {
+  type ClockIncident,
+  findClockIncidents,
+  incidentLines,
+  type SnapshotTime,
+  WeakenTimes,
+} from "./clock-incidents.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
 import {
   BACKDOOR_OVERDUE_AFTER_MS,
@@ -35,7 +42,6 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
-import { findGameFreezes, freezeLines, type GameFreeze, type SnapshotTime, WeakenTimes } from "./game-freeze.ts";
 import {
   DEFAULT_GAP_THRESHOLD_MS,
   describePageHeap,
@@ -107,7 +113,8 @@ export interface RunReport {
   failures: string[];
   /**
    * One line per warning (#241, owner decision 55): what went wrong for a reason outside the brain, and was put right
-   * by itself (a batcher out of step after a game freeze, batching again). WARN with no failure; listed after FAIL's.
+   * by itself (a batcher out of step after a clock step or page stall, batching again, or not yet seen to). WARN with
+   * no failure; listed after FAIL's.
    */
   warnings: string[];
 }
@@ -310,7 +317,7 @@ interface FastPoint {
   atMs: number;
   /** The game's time it was taken (#241). */
   gameTimeMs: number;
-  /** The tiers it says failed last round (#241: a medium snapshot retried is no freeze). */
+  /** The tiers it says failed last round (#241: a medium snapshot retried is no page stall). */
   degradedTiers: unknown;
   pageHeapUsedBytes: unknown;
   homeRamUsed: unknown;
@@ -373,9 +380,9 @@ interface RunFacts extends RunWindow {
   fast: FastPoint[];
   mediumFirst: MediumSnapshotData | undefined;
   mediumLast: MediumSnapshotData | undefined;
-  /** The medium snapshots' times (#241), for game freezes. */
+  /** The medium snapshots' times (#241), for clock steps and page stalls. */
   mediumTimes: SnapshotTime[];
-  /** A weaken's time on a target over the window (#241), to attribute the batcher's desyncs to a freeze. */
+  /** A weaken's time on a target over the window (#241), to put the batcher's desyncs down to an incident. */
   weakenTimes: WeakenTimes;
   /** The medium snapshots' money, where it's a number. */
   money: MoneyPoint[];
@@ -564,8 +571,8 @@ export function runReport(
   }
   const failures: string[] = [];
   const warnings: string[] = [];
-  // The game's freezes (#241): section 4 lists them, section 6 attributes the batcher's desyncs to them.
-  const freezes = findGameFreezes({
+  // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
+  const incidents = findClockIncidents({
     medium: facts.mediumTimes,
     fast: facts.fast,
     restartsMs: facts.events.filter((event) => RESTART_EVENT_KINDS.includes(event.kind)).map(({ atMs }) => atMs),
@@ -580,7 +587,7 @@ export function runReport(
     "",
     ...actionsSection(facts),
     "",
-    ...healthSection(facts, gapThresholdMs, failures, freezes),
+    ...healthSection(facts, gapThresholdMs, failures, incidents),
     "",
     ...withWhoHacked(facts.hacking.section(failures), facts),
     "",
@@ -589,7 +596,7 @@ export function runReport(
       failures,
       facts.factionWork.readings,
       facts.resetsMs,
-      { freezes, weakenMs: (target, atMs) => facts.weakenTimes.weakenMs(target, atMs), warnings },
+      { incidents, weakenMs: (target, atMs) => facts.weakenTimes.weakenMs(target, atMs), warnings },
     ),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
@@ -614,9 +621,6 @@ function withWhoHacked(lines: string[], facts: RunFacts): string[] {
 }
 
 // --- Formatting -------------------------------------------------------------------------------------------------------
-
-// "29 s", "10 min", "24 min 20 s", "1 h 14 min": ./gap-report.ts's, where the batcher's section can share it (#241).
-export { formatDuration };
 
 const UNKNOWN = "unknown";
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -1150,14 +1154,14 @@ function healthSection(
   facts: RunFacts,
   gapThresholdMs: number,
   failures: string[],
-  freezes: readonly GameFreeze[],
+  incidents: readonly ClockIncident[],
 ): string[] {
   const lines = ["4. Health"];
   const heartbeat = heartbeatLines(facts, gapThresholdMs, failures);
   lines.push(...heartbeat.lines);
   lines.push(`  ${describePageHeap(facts.fast.map((point) => point.pageHeapUsedBytes).filter(isNumber))}`);
-  // Game freezes (#241): each, and 3 or more in an hour a failure.
-  lines.push(...freezeLines(freezes, failures));
+  // Clock steps and page stalls (#241): each, and 3 or more in an hour a failure.
+  lines.push(...incidentLines(incidents, failures));
   lines.push(...stallLines(facts, heartbeat.gaps, failures));
 
   lines.push(`  stuck intents (${INTENT_STUCK_AFTER_TRIES} tries or more, not done at the last look):`);
