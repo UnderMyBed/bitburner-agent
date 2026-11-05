@@ -5,7 +5,7 @@
 // already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
 // (#224).
 import type { BatcherHealth } from "@bitburner-agent/core";
-import { BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
+import { BATCHER_MOVE_IDLE_FAILS_AFTER_MS, BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
 import { sharingOf } from "./share.ts";
 import { type ReputationPoint, sharingLines } from "./share-report.ts";
@@ -159,14 +159,184 @@ function moneyAfterGrows(
 }
 
 /**
+ * A move (#236): from the last hack on `from` to the first on `to`, or, not done, to `untilMs` with none yet; joined
+ * across a batcher's restart by the report (#237's review).
+ */
+interface Move {
+  from: string;
+  to: string;
+  sinceMs: number;
+  untilMs: number;
+  done: boolean;
+  acrossRestart: boolean;
+}
+
+/** A health's last hack (#236), if it is one (the Agent's word: checked as it's read, #237's review). */
+function lastHackOf(health: BatcherHealth): { target: string; atMs: number } | null {
+  const { target, atMs } = (health.lastHack ?? {}) as Record<string, unknown>;
+  return typeof target === "string" && isFiniteNumber(atMs) ? { target, atMs } : null;
+}
+
+/** A health's last move (#236), if it is one. */
+function lastMoveOf(health: BatcherHealth): { from: string; to: string; idleMs: number; atMs: number } | null {
+  const { from, to, idleMs, atMs } = (health.lastMove ?? {}) as Record<string, unknown>;
+  if (typeof from !== "string" || typeof to !== "string" || !isFiniteNumber(idleMs) || !isFiniteNumber(atMs)) {
+    return null;
+  }
+  return { from, to, idleMs, atMs };
+}
+
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/**
+ * The moves over the window (#236): each finished one a health's `lastMove` showed, once, if it finished in the window
+ * (#237's review: the health keeps it until the next); each run's last move still under way (its target not yet
+ * hacked since the last hack on another); and, across a restart with no install between (#237's review: the new run
+ * starts with no last hack), the last hack of the run before to the first of the next, on another target.
+ */
+class MoveFold {
+  readonly #moves = new Map<string, Move>();
+  readonly #runs: {
+    runName: string;
+    firstHack: { target: string; atMs: number } | null;
+    lastHack: { target: string; atMs: number } | null;
+    lastAtMs: number;
+    last: BatcherHealth;
+  }[] = [];
+  #firstMs: number | null = null;
+  reporting = false;
+
+  add(atMs: number, health: BatcherHealth): void {
+    this.#firstMs ??= atMs;
+    if (health.lastHack !== undefined) this.reporting = true;
+    const hack = lastHackOf(health);
+    let run = this.#runs.at(-1);
+    if (run?.runName !== health.runName) {
+      run = { runName: health.runName, firstHack: null, lastHack: null, lastAtMs: atMs, last: health };
+      this.#runs.push(run);
+    }
+    run.firstHack ??= hack;
+    if (hack !== null) run.lastHack = hack;
+    run.lastAtMs = atMs;
+    run.last = health;
+    const move = lastMoveOf(health);
+    if (move !== null && move.atMs >= this.#firstMs) {
+      this.#moves.set(`${health.runName} ${move.atMs}`, {
+        from: move.from,
+        to: move.to,
+        sinceMs: move.atMs - move.idleMs,
+        untilMs: move.atMs,
+        done: true,
+        acrossRestart: false,
+      });
+    }
+  }
+
+  /** The moves, with those under way at each run's last snapshot and those across a restart, given the installs. */
+  moves(resetsMs: readonly number[]): Move[] {
+    const moves = [...this.#moves.values()];
+    const resetBetween = (fromMs: number, toMs: number) => resetsMs.some((each) => each > fromMs && each <= toMs);
+    // The latest last hack of the runs before (#237's re-review): a run with none between two that hack, a crash loop,
+    // doesn't break the join.
+    let before: { target: string; atMs: number } | null = null;
+    this.#runs.forEach((run, index) => {
+      const health = run.last;
+      const { lastHack } = run;
+      const carried = before;
+      if (lastHack !== null) before = lastHack;
+      if (lastHack !== null) {
+        // Under way within the run: the target batched changed since the last hack on it, as its health says (#237's
+        // re-review: a detour back to the same target too); an older batcher's, its target not hacked since another's.
+        const movedTo = lastMoveOf(health)?.to;
+        const changed = health.targetChangedSinceHack;
+        const underWay =
+          typeof changed === "boolean" ? changed : lastHack.target !== health.target && movedTo !== health.target;
+        if (underWay) {
+          moves.push({
+            from: lastHack.target,
+            to: health.target,
+            sinceMs: lastHack.atMs,
+            untilMs: run.lastAtMs,
+            done: false,
+            acrossRestart: false,
+          });
+        }
+      }
+      if (index === 0 || carried === null) return;
+      const first = run.firstHack;
+      if (first !== null) {
+        if (first.target !== carried.target && !resetBetween(carried.atMs, first.atMs)) {
+          moves.push({
+            from: carried.target,
+            to: first.target,
+            sinceMs: carried.atMs,
+            untilMs: first.atMs,
+            done: true,
+            acrossRestart: true,
+          });
+        }
+      } else if (
+        index === this.#runs.length - 1 &&
+        health.target !== carried.target &&
+        !resetBetween(carried.atMs, run.lastAtMs)
+      ) {
+        moves.push({
+          from: carried.target,
+          to: health.target,
+          sinceMs: carried.atMs,
+          untilMs: run.lastAtMs,
+          done: false,
+          acrossRestart: true,
+        });
+      }
+    });
+    return moves;
+  }
+}
+
+/**
+ * Section 6's moves (#236), each with its idle time, and a failure for each past `BATCHER_MOVE_IDLE_FAILS_AFTER_MS`:
+ * those its health's `lastMove` showed (each once), and each run's last in the window still under way (its target
+ * not yet hacked, since the last hack on another). An older batcher's health has neither, and says so.
+ */
+function moveLines(moves: Move[], anyReporting: boolean, failures: string[]): string[] {
+  if (!anyReporting) return ["  moves (#236): not reported (an older batcher)"];
+  if (moves.length === 0) return ["  moves (#236): none"];
+  const lines = ["  moves (#236), from the last hack on the target before to the first on the new one:"];
+  const minutes = (ms: number) => `${(ms / 60_000).toFixed(1)} min`;
+  const failed: string[] = [];
+  for (const { from, to, sinceMs, untilMs, done, acrossRestart } of [...moves].sort((a, b) => a.untilMs - b.untilMs)) {
+    const idle = minutes(untilMs - sinceMs);
+    const restart = acrossRestart ? ", across a restart" : "";
+    lines.push(
+      done
+        ? `    ${from} → ${to} at ${formatIsoTime(untilMs)}: idle ${idle}${restart}`
+        : `    ${from} → ${to}, not done at ${formatIsoTime(untilMs)}: idle ${idle} so far${restart}`,
+    );
+    if (untilMs - sinceMs <= BATCHER_MOVE_IDLE_FAILS_AFTER_MS) continue;
+    const limit = `more than ${BATCHER_MOVE_IDLE_FAILS_AFTER_MS / 60_000} min`;
+    const line =
+      `batcher idle on a move: ${from} → ${to}, ${idle} without a hack, from ${formatIsoTime(sinceMs)} to ` +
+      `${formatIsoTime(untilMs)}${done ? "" : ", not done"} (${limit})`;
+    failed.push(line);
+  }
+  // The failures after the moves, as the section's others follow their lines.
+  lines.push(...failed.map((line) => `  ${line}`));
+  failures.push(...failed);
+  return lines;
+}
+
+/**
  * The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen, and any stretch it was
  * sent but not running, which fails the run (`failures`); then its sharing (#224), with the brain's worked faction's
- * reputation (`readings`).
+ * reputation (`readings`). Its moves (#236) are joined across a batcher's restart, but not across an install
+ * (`resetsMs`, the game's `lastAugReset` times in the slow snapshots): a new cycle starts from nothing.
  */
 export function batcherSection(
   points: BatcherPoint[],
   failures: string[] = [],
   readings: readonly ReputationPoint[] = [],
+  resetsMs: readonly number[] = [],
 ): string[] {
   const lines = ["6. The batcher (#205, #206)"];
   const notRunning = notRunningLines(points, failures);
@@ -196,6 +366,8 @@ export function batcherSection(
   const runsBelowFull = new Set<string>();
   // An older batcher doesn't look (#235's review): none of its healths has the count.
   let anyLooking = false;
+  // The moves (#236).
+  const moveFold = new MoveFold();
   for (const { atMs, health } of healths) {
     const hour = Math.floor((atMs - firstMs) / HOUR_MS);
     const bucket = hours.get(hour) ?? { counts: zero(), targets: new Set<string>(), states: new Set<string>() };
@@ -224,6 +396,7 @@ export function batcherSection(
     }
     lastOfRun.set(health.runName, now);
     lastHealthOfRun.set(health.runName, health);
+    moveFold.add(atMs, health);
     if (health.target) bucket.targets.add(health.target);
     bucket.states.add(health.state);
     if (health.problem !== null && !problems.has(health.problem)) problems.set(health.problem, atMs);
@@ -296,6 +469,7 @@ export function batcherSection(
   // floor. A line, not a failure: one that reaches the floor is a desync, which fails the run; this shows it earlier.
   const afterGrows = moneyAfterGrows(anyLooking, total, runsBelowFull.size, leastMoneyBelowFull);
   lines.push(`  money after each batch's grow (#234): ${afterGrows}`);
+  lines.push(...moveLines(moveFold.moves(resetsMs), moveFold.reporting, failures));
   lines.push(problems.size === 0 ? "  problems: none" : "  problems:");
   for (const [problem, atMs] of problems) lines.push(`    from ${formatIsoTime(atMs)}: ${problem}`);
   lines.push(...notRunning);

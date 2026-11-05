@@ -146,6 +146,7 @@ export {
   preparationWave,
   type RamHold,
   recordGrowsNotLooked,
+  recordHackLanded,
   recordMoneyLook,
   type SharingConfig,
   type SharingHealth,
