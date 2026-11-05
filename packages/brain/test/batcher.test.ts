@@ -8,6 +8,7 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   BATCHER_RAM_BUDGET_GB,
+  type BatchShort,
   batchPlan,
   batchRamGb,
   CONTROL_PROTOCOL_VERSION,
@@ -323,13 +324,15 @@ describe("the run report's section", () => {
       ],
       failures,
     );
-    expect(lines.slice(-12)).toEqual([
+    expect(lines.slice(-13)).toEqual([
       "  desyncs: none",
       "  late or lost: none",
       // The least over the window (#216's review).
       "  least slack: 117 ms (an operation's time to spare when it was called; under 0 is late)",
       // Never short, nor trimmed (#232).
       "  short of RAM: none",
+      // Nothing waited for RAM at its time (#246).
+      "  waited for RAM (#246): none",
       "  trimmed to the hosts' RAM (#232): none",
       // Each grow left the target at its maximum (#234): 2 looks in the window.
       "  money after each batch's grow (#234): full at all 2 looks",
@@ -379,6 +382,84 @@ describe("the run report's section", () => {
     expect(lines).toContain(`  ${line}`);
     expect(failures).toContainEqual(expect.stringMatching(/^share starved batches: 2 batches short of RAM /));
     expect(failures).toHaveLength(2);
+  });
+
+  test("short of RAM (#246): each short the healths keep, once, with what held the RAM; the waits for it", () => {
+    const short = (atMs: number, changes: Partial<BatchShort> = {}): BatchShort => ({
+      atMs,
+      target: "n00dles",
+      operation: "weaken1",
+      threads: 12,
+      waitedMs: 100.4,
+      freeGb: 9.6,
+      largestFreeGb: 3.5,
+      pastLandingGb: 21.6,
+      othersGb: 0,
+      sharingGb: 0,
+      failedOn: null,
+      ...changes,
+    });
+    const failures: string[] = [];
+    const lines = batcherSection(
+      [
+        // Under way at the window's start: its short and its longest wait before it aren't the window's.
+        {
+          atMs: at(0),
+          health: health("a", { batchesShort: 1, shorts: [short(at(-1))], ramWaits: 2, longestRamWaitMs: 90 }),
+        },
+        {
+          atMs: at(1),
+          health: health("a", {
+            batchesShort: 2,
+            shorts: [short(at(-1)), short(at(0.5))],
+            ramWaits: 5,
+            longestRamWaitMs: 40.2,
+          }),
+        },
+        // Kept again in the next health: listed once. One the Agent wrote wrong is left out.
+        {
+          atMs: at(2),
+          health: health("a", {
+            batchesShort: 3,
+            shorts: [short(at(-1)), short(at(0.5)), short(at(1.5), { operation: "hack", othersGb: 4.8 })],
+            ramWaits: 5,
+            longestRamWaitMs: 40.2,
+          }),
+        },
+        {
+          atMs: at(3),
+          health: {
+            ...health("b", { batchesShort: 1, ramWaits: 1, longestRamWaitMs: 60 }),
+            shorts: [
+              { ...short(at(2.5)), failedOn: "foodnstuff" },
+              { ...short(at(2.6)), atMs: "junk" },
+            ],
+          },
+        },
+      ],
+      failures,
+    );
+    const from = lines.indexOf("  short of RAM: 3 batches (0 while sharing on the batches' hosts: the share's)");
+    expect(from).toBeGreaterThan(0);
+    expect(lines.slice(from + 1, from + 5)).toEqual([
+      "    at 2026-01-01T00:00:30.000Z: weaken1 of 12 threads on n00dles, 100 ms past its time; 9.6 GB free (3.5 GB " +
+        "at most on a host); held by its operations past their landing 21.6 GB, by scripts not its own 0 GB, by its " +
+        "share threads 0 GB",
+      "    at 2026-01-01T00:01:30.000Z: hack of 12 threads on n00dles, 100 ms past its time; 9.6 GB free (3.5 GB at " +
+        "most on a host); held by its operations past their landing 21.6 GB, by scripts not its own 4.8 GB, by its " +
+        "share threads 0 GB",
+      "    at 2026-01-01T00:02:30.000Z: weaken1 of 12 threads on n00dles, 100 ms past its time; 9.6 GB free (3.5 GB " +
+        "at most on a host); held by its operations past their landing 21.6 GB, by scripts not its own 0 GB, by its " +
+        "share threads 0 GB; exec failed on foodnstuff",
+      // The waits in the window: run a's 3 since its first snapshot, run b's 1; the longest of those that rose.
+      "  waited for RAM (#246): 4 operations found no room at their time and started once it freed, the longest 60 ms " +
+        "past it",
+    ]);
+    // Still a failure (#232).
+    expect(failures).toContainEqual(expect.stringMatching(/^batches short of RAM: 3 batches short /));
+    // An older batcher says nothing of waits.
+    const older = batcherSection([{ atMs: at(0), health: { ...health("c", {}), ramWaits: undefined } }]);
+    expect(older).toContain("  waited for RAM (#246): not reported (an older batcher)");
   });
 
   test("money after each batch's grow (#234): below full, with the run's least so far and its target", () => {

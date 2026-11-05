@@ -64,6 +64,15 @@ export const BATCH_RAM_RELEASE_MS = BATCH_LANDING_GAP_MS;
  */
 export const BATCH_LAUNCH_LEAD_MS = 200;
 /**
+ * How long past its time an operation that finds no room waits for it (#246), tried again at each landing and every
+ * `BATCH_RAM_WAIT_LOOK_MS`: half its lead, the other half kept for the start's lag, so it still lands on time. The RAM
+ * its batch was fitted to may free late: on a busy page the game's timers fire late, so an operation's script can end
+ * well past its landing and the `BATCH_RAM_RELEASE_MS` counted for it (run #3's shorts as its next target changed).
+ */
+export const BATCH_RAM_WAIT_MS = BATCH_LAUNCH_LEAD_MS / 2;
+/** While an operation waits for room (#246), how often the batcher looks again, beside each landing's record. */
+export const BATCH_RAM_WAIT_LOOK_MS = 5;
+/**
  * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the
  * hack's start and its landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking). The hack's threads
  * are replanned when it starts (`hackThreadsAtLaunch`), so the margin covers a hack's time, a quarter of a weaken's.
@@ -1111,8 +1120,55 @@ export interface BatcherHealth {
    * batcher.
    */
   sharing?: SharingHealth | null;
+  /**
+   * Operations that found no room at their time and waited for it (#246), then started: how many, and the longest
+   * wait, ms (null before one). Absent from an older batcher.
+   */
+  ramWaits?: number;
+  longestRamWaitMs?: number | null;
+  /**
+   * The last `BATCH_SHORTS_KEPT` batches short of RAM (#246), oldest first: when, what wasn't placed, and what held
+   * the RAM, so the run report says each. Absent from an older batcher.
+   */
+  shorts?: BatchShort[];
   /** The game's clock when this was written. */
   atMs: number;
+}
+
+/** How many batches short of RAM (#246) the health keeps: the run report lists each it sees. */
+export const BATCH_SHORTS_KEPT = 5;
+
+/**
+ * A batch short of RAM (#246): the operation that didn't start, when, and how long it had waited past its time for
+ * room; the hosts' free RAM then (in all, and the most on one host); and what held their RAM beside the batcher's
+ * operations in flight: those of its operations past their landing and its release that hadn't yet recorded it (on a
+ * busy page their scripts end late), scripts not its own, and its share threads. `failedOn` is the host whose `exec`
+ * failed, or null when no host had the room.
+ */
+export interface BatchShort {
+  atMs: number;
+  target: string;
+  operation: BatchOperation;
+  threads: number;
+  waitedMs: number;
+  freeGb: number;
+  largestFreeGb: number;
+  pastLandingGb: number;
+  othersGb: number;
+  sharingGb: number;
+  failedOn: string | null;
+}
+
+/** A batch short of RAM (#246), in the health: counted, and kept among the last `BATCH_SHORTS_KEPT`. */
+export function recordShort(health: BatcherHealth, short: BatchShort): void {
+  health.batchesShort += 1;
+  health.shorts = [...(health.shorts ?? []), short].slice(-BATCH_SHORTS_KEPT);
+}
+
+/** An operation that waited `waitedMs` past its time for room (#246), then started, in the health. */
+export function recordRamWait(health: BatcherHealth, waitedMs: number): void {
+  health.ramWaits = (health.ramWaits ?? 0) + 1;
+  health.longestRamWaitMs = Math.max(health.longestRamWaitMs ?? 0, waitedMs);
 }
 
 /** The batcher's sharing, in its health (#224). */
@@ -1167,6 +1223,9 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     lastMove: null,
     targetChangedSinceHack: false,
     sharing: null,
+    ramWaits: 0,
+    longestRamWaitMs: null,
+    shorts: [],
     atMs,
   };
 }

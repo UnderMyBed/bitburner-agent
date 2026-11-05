@@ -29,6 +29,10 @@
 //   hold at once (core's `largestBatchThatFits`: the parts in flight, the orders of the batches planned, the share
 //   threads), counted a thread short on each host (`batchRamGb`): fewer hack threads, or none that time, never short.
 //   A new plan, or batches planned at a lower hacking level, may hold more than the plan's peak for a while.
+// - **Waiting for RAM that frees late (#246):** an operation that finds no room at its time waits for it, tried again
+//   at each landing and every `BATCH_RAM_WAIT_LOOK_MS`, up to `BATCH_RAM_WAIT_MS` past its time (half its lead): on a
+//   busy page the game's timers fire late, so a landed operation's script can still hold the RAM its batch was fitted
+//   to. Past that, the batch is short, and its health keeps when, what, and what held the RAM (`shorts`).
 // - **Checked, loudly:** every landing is recorded on the landing port, cleared when it starts; each id starts with
 //   this run's name, so a previous run's records are only counted (unexpected), never trusted. One before a landing
 //   already recorded on its target is out of order (#236: a move's batches land among another target's), one started
@@ -59,6 +63,8 @@ import {
   BATCH_LANDING_GAP_MS,
   BATCH_LAUNCH_LEAD_MS,
   BATCH_RAM_RELEASE_MS,
+  BATCH_RAM_WAIT_LOOK_MS,
+  BATCH_RAM_WAIT_MS,
   BATCH_WEAKEN_SCRIPT_NAME,
   BATCHER_CONFIG_PORT,
   BATCHER_HEALTH_PORT,
@@ -66,6 +72,7 @@ import {
   type BatcherConfig,
   type BatcherHealth,
   type BatchOperation,
+  type BatchShort,
   type BatchThreads,
   batchBounds,
   batchHoldsMs,
@@ -99,6 +106,8 @@ import {
   recordGrowsNotLooked,
   recordHackLanded,
   recordMoneyLook,
+  recordRamWait,
+  recordShort,
   SHARE_RAM_GB,
   SHARE_ROUND_MS,
   SHARE_SCRIPT_NAME,
@@ -235,8 +244,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
 
   /**
    * Starts an operation's threads on the free RAM, landing at `landAt`, each part's id added to `wave` when given (a
-   * preparation wave waits for its own; a batch's grow is looked at once its own have landed, #234); false if they
-   * didn't all start.
+   * preparation wave waits for its own; a batch's grow is looked at once its own have landed, #234). Whether they all
+   * started; if not, the host whose `exec` failed, or null when the hosts hadn't the room and none started (#246).
    */
   const launch = (
     operation: BatchOperation,
@@ -245,9 +254,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     id: string,
     target: string,
     wave?: Set<string>,
-  ): boolean => {
+  ): { started: boolean; failedOn: string | null } => {
     const placed = placeThreads(freeRam(), threads, operationRamGb(operation));
-    if (placed === null) return false;
+    if (placed === null) return { started: false, failedOn: null };
     for (const [part, { host, threads: partThreads }] of placed.entries()) {
       const partId = `${runName}.${id}.${part}`;
       const options = { threads: partThreads, temporary: true };
@@ -258,10 +267,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         parts.set(partId, { host, gb: partThreads * operationRamGb(operation), landAt, target });
         wave?.add(partId);
       } else {
-        return false;
+        return { started: false, failedOn: host };
       }
     }
-    return true;
+    return { started: true, failedOn: null };
   };
 
   const desync = () => {
@@ -339,6 +348,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   let lastBatchPlannedAt = 0;
   let waitingProblem: string | null = null;
   const pending: LaunchOrder[] = [];
+  /** The orders due that found no room and wait for it (#246), until they start or their wait is over. */
+  const waitingForRam = new Set<LaunchOrder>();
   const batches = new Map<number, PlannedBatch>();
   let landing: { target: string; threads: BatchThreads; untilMs: number }[] = [];
   /** No share round before this (#226's review): a batch came up short, or batches planned beside a wave still land. */
@@ -506,18 +517,58 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     );
   };
 
-  /** Launches one order of a batch. */
-  const launchOrder = (order: LaunchOrder) => {
+  /**
+   * A batch short of RAM (#246), as the hosts are now: the hosts' free RAM, and what holds the rest beside its
+   * operations in flight (those past their landing and its release not yet recorded, which a busy page's late timers
+   * leave; scripts not its own; its share threads).
+   */
+  const shortNow = (order: LaunchOrder, threads: number, target: string, failedOn: string | null): BatchShort => {
+    const now = Date.now();
+    const free = freeRam().map((host) => Math.max(0, host.freeGb));
+    const sharingByHost = shareRamByHost(sharingParts, now);
+    const ownByHost = new Map(sharingByHost);
+    let pastLandingGb = 0;
+    for (const { host, gb, landAt } of parts.values()) {
+      if (!hosts.includes(host)) continue;
+      ownByHost.set(host, (ownByHost.get(host) ?? 0) + gb);
+      if (landAt + BATCH_RAM_RELEASE_MS <= now) pastLandingGb += gb;
+    }
+    const sumOf = (values: number[]) => values.reduce((total, each) => total + each, 0);
+    return {
+      atMs: now,
+      target,
+      operation: order.operation,
+      threads,
+      waitedMs: Math.max(0, now - order.launchAt),
+      freeGb: sumOf(free),
+      largestFreeGb: Math.max(0, ...free),
+      pastLandingGb,
+      othersGb: sumOf(hosts.map((host) => Math.max(0, ns.getServerUsedRam(host) - (ownByHost.get(host) ?? 0)))),
+      sharingGb: sumOf(hosts.map((host) => sharingByHost.get(host) ?? 0)),
+      failedOn,
+    };
+  };
+
+  /**
+   * Launches one order of a batch: false while it waits for room (#246), to be tried again. One the hosts haven't the
+   * room for waits, at most `BATCH_RAM_WAIT_MS` past its time: the RAM its batch was fitted to may free late (on a busy
+   * page the game's timers fire late, so a landed operation's script can still hold it). Past that, the batch is short.
+   */
+  const launchOrder = (order: LaunchOrder): boolean => {
     const batch = batches.get(order.batch);
-    if (batch === undefined) return;
+    if (batch === undefined) {
+      waitingForRam.delete(order);
+      return true;
+    }
     let threads = batch.threads[order.operation];
-    if (order.operation === "hack") {
-      // The hack is a batch's last order out.
-      batches.delete(order.batch);
-      // After a desync no hack goes out; after a move (#206) the batches out still hack their own target.
+    const isHack = order.operation === "hack";
+    if (isHack) {
+      // After a desync no hack goes out; after a move (#206) the batches out still hack their own target. The hack is a
+      // batch's last order out.
       if (batch.short || health.state === "recovering") {
+        batches.delete(order.batch);
         health.hacksSkipped += 1;
-        return;
+        return true;
       }
       const player = playerNow();
       landing = landing.filter((each) => each.untilMs >= Date.now());
@@ -529,21 +580,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       };
       health.seen = seen;
       if (isOutsideBounds(bounds, seen)) {
+        batches.delete(order.batch);
         health.outOfBounds += 1;
         health.hacksSkipped += 1;
         desync();
-        return;
+        return true;
       }
       threads = hackThreadsAtLaunch(threads, batch.plannedShare, batch.figures, player);
-      landing.push({
-        target: batch.target,
-        threads: batch.threads,
-        untilMs: order.landAt + landingOffsetMs("weaken2"),
-      });
     }
     // A grow's parts (#234): its money is looked at once they've all landed.
     const growParts = order.operation === "grow" ? new Set<string>() : undefined;
-    const started = launch(
+    const { started, failedOn } = launch(
       order.operation,
       threads,
       order.landAt,
@@ -551,18 +598,33 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       batch.target,
       growParts,
     );
+    // None started for want of room, with time to wait: tried again at the next landing, or soon.
+    if (!started && failedOn === null && Date.now() < order.launchAt + BATCH_RAM_WAIT_MS) {
+      waitingForRam.add(order);
+      return false;
+    }
+    if (waitingForRam.delete(order) && started) recordRamWait(health, Date.now() - order.launchAt);
+    if (isHack) {
+      batches.delete(order.batch);
+      landing.push({
+        target: batch.target,
+        threads: batch.threads,
+        untilMs: order.landAt + landingOffsetMs("weaken2"),
+      });
+    }
     if (started && growParts !== undefined) {
       growLandings.started(String(order.batch), batch.target, batch.figures.moneyMax, order.landAt, growParts);
     }
     // A hack that didn't all start is skipped too: what of it started still lands, and is counted as it does.
-    if (!started && order.operation === "hack") health.hacksSkipped += 1;
+    if (!started && isHack) health.hacksSkipped += 1;
     if (!started && !batch.short) {
       batch.short = true;
-      health.batchesShort += 1;
+      recordShort(health, shortNow(order, threads, batch.target, failedOn));
       logNow = true;
       // No share for a while (#226's review): whatever took the RAM, the batches have it first.
       sharingHeldOffUntil = Math.max(sharingHeldOffUntil, Date.now() + SHARE_AFTER_SHORT_MS);
     }
+    return true;
   };
 
   /**
@@ -669,7 +731,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     let problem: string | null = lastingProblem;
     for (const [operation, operationThreads, operationLandAt] of parts) {
       const id = `p${wave}.${operation}`;
-      if (operationThreads > 0 && !launch(operation, operationThreads, operationLandAt, id, target, preparing)) {
+      if (
+        operationThreads > 0 &&
+        !launch(operation, operationThreads, operationLandAt, id, target, preparing).started
+      ) {
         problem = `a preparation ${operation} of ${operationThreads} threads wouldn't start`;
       }
     }
@@ -921,10 +986,15 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     // The batches planned go out in every state, a previous target's too after a move (#206).
     pending.sort((a, b) => a.launchAt - b.launchAt || a.landAt - b.landAt);
+    // Those that find no room wait first in line (#246), tried again at the next landing's record, or soon.
+    const waiting: LaunchOrder[] = [];
     while (pending.length > 0 && (pending[0] as LaunchOrder).launchAt <= Date.now()) {
-      launchOrder(pending.shift() as LaunchOrder);
+      const order = pending.shift() as LaunchOrder;
+      if (!launchOrder(order)) waiting.push(order);
     }
     if (pending.length > 0) wakeAt = Math.min(wakeAt, (pending[0] as LaunchOrder).launchAt);
+    if (waiting.length > 0) wakeAt = Math.min(wakeAt, Date.now() + BATCH_RAM_WAIT_LOOK_MS);
+    pending.unshift(...waiting);
     if (health.state === "recovering" && pending.length === 0 && landings.inFlight() === 0) {
       health.state = "preparing";
       batches.clear();

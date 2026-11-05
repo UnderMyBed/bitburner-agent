@@ -6,7 +6,10 @@ import {
   BATCH_LAUNCH_LEAD_MS,
   BATCH_OPERATIONS,
   BATCH_RAM_RELEASE_MS,
+  BATCH_RAM_WAIT_MS,
+  BATCH_SHORTS_KEPT,
   BATCH_WEAKEN_RAM_GB,
+  type BatchShort,
   type BatchThreads,
   batchBounds,
   batchFits,
@@ -50,6 +53,8 @@ import {
   recordGrowsNotLooked,
   recordHackLanded,
   recordMoneyLook,
+  recordRamWait,
+  recordShort,
   threadsThatFit,
 } from "../src/batcher.ts";
 import { growthLogPerThread } from "../src/hack-loop.ts";
@@ -1034,5 +1039,46 @@ describe("preparationTimeMs, weaken alone (#216's review)", () => {
       0,
     );
     expect(preparationTimeMs(joesguns, player(100), now, 100)).toBeCloseTo(expected, 6);
+  });
+});
+
+describe("a batch short of RAM, and an operation that waited for it (#246)", () => {
+  const short = (atMs: number): BatchShort => ({
+    atMs,
+    target: "n00dles",
+    operation: "grow",
+    threads: 4,
+    waitedMs: BATCH_RAM_WAIT_MS,
+    freeGb: 3.2,
+    largestFreeGb: 1.6,
+    pastLandingGb: 7.2,
+    othersGb: 0,
+    sharingGb: 0,
+    failedOn: null,
+  });
+
+  test("an operation waits half its launch lead for room, the other half kept for the start's lag", () => {
+    expect(BATCH_RAM_WAIT_MS).toBe(BATCH_LAUNCH_LEAD_MS / 2);
+  });
+
+  test("each short counted, the last few kept, oldest first; an older health's count goes on", () => {
+    const health = newBatcherHealth("n00dles", "r", 0);
+    expect(health).toMatchObject({ batchesShort: 0, shorts: [], ramWaits: 0, longestRamWaitMs: null });
+    for (let each = 1; each <= BATCH_SHORTS_KEPT + 2; each++) recordShort(health, short(each));
+    expect(health.batchesShort).toBe(BATCH_SHORTS_KEPT + 2);
+    expect(health.shorts?.map((each) => each.atMs)).toEqual([3, 4, 5, 6, 7]);
+    const older = { ...newBatcherHealth("n00dles", "r", 0), batchesShort: 2, shorts: undefined };
+    recordShort(older, short(9));
+    expect(older).toMatchObject({ batchesShort: 3, shorts: [short(9)] });
+  });
+
+  test("each wait counted, with the longest", () => {
+    const health = newBatcherHealth("n00dles", "r", 0);
+    recordRamWait(health, 30);
+    recordRamWait(health, 12.5);
+    expect(health).toMatchObject({ ramWaits: 2, longestRamWaitMs: 30 });
+    const older = { ...newBatcherHealth("n00dles", "r", 0), ramWaits: undefined, longestRamWaitMs: undefined };
+    recordRamWait(older, 4);
+    expect(older).toMatchObject({ ramWaits: 1, longestRamWaitMs: 4 });
   });
 });

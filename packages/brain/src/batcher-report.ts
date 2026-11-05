@@ -4,7 +4,7 @@
 // from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
 // already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
 // (#224).
-import type { BatcherHealth } from "@bitburner-agent/core";
+import type { BatcherHealth, BatchShort } from "@bitburner-agent/core";
 import { BATCHER_MOVE_IDLE_FAILS_AFTER_MS, BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
 import { sharingOf } from "./share.ts";
@@ -36,9 +36,10 @@ const COUNTS = [
 /**
  * Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM, and of them the share's (#232); its
  * looks at the target's money after each batch's grow, those below its maximum (#234), and the grows not looked at
- * (#235's review).
+ * (#235's review); and the operations that waited for RAM at their time (#246).
  */
 const NEWER_COUNTS = [
+  "ramWaits",
   "batchesTrimmed",
   "batchesTrimmedBySharing",
   "moneyLooks",
@@ -326,6 +327,43 @@ function moveLines(moves: Move[], anyReporting: boolean, failures: string[]): st
   return lines;
 }
 
+/** The shorts a health keeps (#246), those that read as one: the Agent's word, so checked as it's read. */
+function shortsOf(health: BatcherHealth): BatchShort[] {
+  const shorts: unknown = health.shorts;
+  if (!Array.isArray(shorts)) return [];
+  const numbers = ["atMs", "threads", "waitedMs", "freeGb", "largestFreeGb", "pastLandingGb", "othersGb", "sharingGb"];
+  return shorts.filter((each): each is BatchShort => {
+    if (typeof each !== "object" || each === null) return false;
+    const fields = each as Record<string, unknown>;
+    return (
+      numbers.every((name) => typeof fields[name] === "number" && Number.isFinite(fields[name])) &&
+      typeof fields.operation === "string" &&
+      typeof fields.target === "string" &&
+      (fields.failedOn === null || typeof fields.failedOn === "string")
+    );
+  });
+}
+
+const gb = (value: number) => `${Number(value.toFixed(2))} GB`;
+
+/**
+ * Each batch short of RAM the healths kept (#246), in time order: what didn't start, how long it had waited for room,
+ * the hosts' free RAM then, and what held the rest beside the batcher's operations in flight. Its own operations past
+ * their landing are RAM a busy page freed late; scripts not its own, or its share threads, took RAM after it planned.
+ */
+function shortLines(shorts: BatchShort[]): string[] {
+  return [...shorts]
+    .sort((a, b) => a.atMs - b.atMs)
+    .map(
+      (each) =>
+        `    at ${formatIsoTime(each.atMs)}: ${each.operation} of ${each.threads} threads on ${each.target}, ` +
+        `${Math.round(each.waitedMs)} ms past its time; ${gb(each.freeGb)} free (${gb(each.largestFreeGb)} at most on ` +
+        `a host); held by its operations past their landing ${gb(each.pastLandingGb)}, by scripts not its own ` +
+        `${gb(each.othersGb)}, by its share threads ${gb(each.sharingGb)}` +
+        (each.failedOn === null ? "" : `; exec failed on ${each.failedOn}`),
+    );
+}
+
 /**
  * The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen, and any stretch it was
  * sent but not running, which fails the run (`failures`); then its sharing (#224), with the brain's worked faction's
@@ -360,6 +398,11 @@ export function batcherSection(
   let shortWhileSharing = 0;
   let shortOwn = 0;
   let firstShortOwnMs: number | null = null;
+  // Each short the healths keep (#246), once, new since the run's health before (a run under way at the window's first
+  // snapshot: its shorts before it aren't the window's); the operations that waited for RAM, and the longest wait.
+  const shorts: BatchShort[] = [];
+  let anyWaitReporting = false;
+  let longestRamWaitMs = 0;
   // The least money after a grow (#234), of the healths whose count below full rose: each run's least so far, which
   // only falls, so a run under way at the window's start may give one from before it. And the runs below.
   let leastMoneyBelowFull: { share: number; target: string | null } | null = null;
@@ -387,6 +430,13 @@ export function batcherSection(
       firstShortOwnMs ??= atMs;
     }
     if (typeof health.moneyLooks === "number") anyLooking = true;
+    const previous = lastHealthOfRun.get(health.runName);
+    const keptBefore = previous !== undefined ? shortsOf(previous) : atMs === firstMs ? shortsOf(health) : [];
+    for (const each of shortsOf(health)) {
+      if (!keptBefore.some((kept) => kept.atMs === each.atMs && kept.operation === each.operation)) shorts.push(each);
+    }
+    if (typeof health.ramWaits === "number") anyWaitReporting = true;
+    if (now.ramWaits > before.ramWaits) longestRamWaitMs = Math.max(longestRamWaitMs, health.longestRamWaitMs ?? 0);
     const { leastMoneyAfterGrow, leastMoneyAfterGrowOn } = health;
     if (now.moneyLooksBelowFull > before.moneyLooksBelowFull && typeof leastMoneyAfterGrow === "number") {
       runsBelowFull.add(health.runName);
@@ -443,6 +493,15 @@ export function batcherSection(
       ? "  short of RAM: none"
       : `  short of RAM: ${describeBatchCount(total.batchesShort)} (${shortWhileSharing} while sharing on the batches' hosts: ` +
           "the share's)",
+  );
+  lines.push(...shortLines(shorts));
+  lines.push(
+    !anyWaitReporting
+      ? "  waited for RAM (#246): not reported (an older batcher)"
+      : total.ramWaits === 0
+        ? "  waited for RAM (#246): none"
+        : `  waited for RAM (#246): ${total.ramWaits} operation${total.ramWaits === 1 ? "" : "s"} found no room at their ` +
+          `time and started once it freed, the longest ${Math.round(longestRamWaitMs)} ms past it`,
   );
   // Trimmed (#232): the batcher fits each batch to the RAM as it will be held, so a plan its hosts can't place is cut,
   // never short. A batch trimmed is income lost, not a failure: a new plan, or one at a lower hacking level, can hold
