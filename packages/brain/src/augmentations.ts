@@ -47,7 +47,9 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  type CountableWithinReach,
   chooseAugmentationsToBuy,
+  countablesWithinReach,
   countdownExtensionMs,
   DAEDALUS,
   type DaedalusCount,
@@ -459,7 +461,34 @@ export interface AugmentationCycle {
    * called off.
    */
   redPill?: string;
+  /**
+   * Short of Daedalus's count at the commit (#238): what counts within reach then, for "Daedalus count stuck". Absent
+   * when not short, or in an earlier brain's note.
+   */
+  countWithinReach?: CountWithinReach;
 }
+
+/**
+ * At a commit while short of Daedalus's count (#238): what its NeuroFlux Governor levels cost (and their donations),
+ * and each augmentation that would add to the count left within reach beyond the set (core's
+ * `countablesWithinReach`). The World Daemon judges an install that added none to the count on them.
+ */
+export interface CountWithinReach {
+  neuroFluxMoney: number;
+  within: CountableWithinReach[];
+}
+
+const isCountWithinReach = (value: unknown): value is CountWithinReach => {
+  const { neuroFluxMoney, within } = (value ?? {}) as Partial<CountWithinReach>;
+  return (
+    isFiniteNumber(neuroFluxMoney) &&
+    Array.isArray(within) &&
+    within.every(
+      (each) =>
+        typeof each?.augmentation === "string" && typeof each.faction === "string" && isFiniteNumber(each.money),
+    )
+  );
+};
 
 const isDonation = (value: unknown): value is Donation => {
   const { faction, reputation, amount } = (value ?? {}) as Partial<Donation>;
@@ -476,6 +505,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     donations?: unknown;
     reason?: unknown;
     redPill?: unknown;
+    countWithinReach?: unknown;
   };
   let note: Note | null;
   try {
@@ -488,13 +518,15 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
   const donations = note?.donations;
   const reason = note?.reason;
   const redPill = note?.redPill;
+  const countWithinReach = note?.countWithinReach;
   if (
     !isFiniteNumber(note?.lastAugReset) ||
     typeof installing !== "boolean" ||
     (target !== undefined && !(Number.isInteger(target) && (target as number) >= 0)) ||
     (donations !== undefined && !(Array.isArray(donations) && donations.every(isDonation))) ||
     (reason !== undefined && typeof reason !== "string") ||
-    (redPill !== undefined && typeof redPill !== "string")
+    (redPill !== undefined && typeof redPill !== "string") ||
+    (countWithinReach !== undefined && !isCountWithinReach(countWithinReach))
   ) {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't a note the brain wrote`);
   }
@@ -505,6 +537,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     ...(donations === undefined ? {} : { donations: donations as Donation[] }),
     ...(reason === undefined ? {} : { reason: reason as InstallReason }),
     ...(redPill === undefined ? {} : { redPill: redPill as string }),
+    ...(countWithinReach === undefined ? {} : { countWithinReach: countWithinReach as CountWithinReach }),
   };
 }
 
@@ -835,6 +868,14 @@ export class AugmentationRule {
    */
   countdownReserve(): number {
     return this.#enabled && this.#countdown !== null ? this.#view.reserve : 0;
+  }
+
+  /**
+   * What counts within reach at the commit, short of Daedalus's count (#238), from the commit's note until the game
+   * resets; null without a commit, or one not short. The World Daemon's facts for "Daedalus count stuck".
+   */
+  countWithinReach(): CountWithinReach | null {
+    return readAugmentationCycle(this.#store)?.countWithinReach ?? null;
   }
 
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
@@ -1512,6 +1553,18 @@ export class AugmentationRule {
         reason = ruleReason;
       }
       const donations = withDonation(counts.donations, redPillDonation);
+      // Short (#238): what counts within reach beyond the set, whatever `isWorthInstalling` says, and what NeuroFlux
+      // Governor's levels take (the counts' money less the set's and its donations).
+      const countWithinReach: CountWithinReach | undefined = short
+        ? {
+            neuroFluxMoney: counts.money - set.money - set.donationMoney,
+            within: countablesWithinReach({
+              reached: reached.map((augmentation) => ({ augmentation, faction: sellerOf(augmentation) ?? "" })),
+              state: { ...purchaseState, queued: [...queue, ...set.purchases.map((purchase) => purchase.name)] },
+              donations: terms,
+            }),
+          }
+        : undefined;
       writeAugmentationCycle(this.#store, {
         lastAugReset: resetInfo.lastAugReset,
         installing: false,
@@ -1519,6 +1572,7 @@ export class AugmentationRule {
         donations,
         reason,
         ...(redPillDonation === null ? {} : { redPill: redPillDonation.faction }),
+        ...(countWithinReach === undefined ? {} : { countWithinReach }),
       });
       this.#installing = false;
       this.#progress = null;

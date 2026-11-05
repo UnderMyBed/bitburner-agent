@@ -2598,3 +2598,64 @@ describe("the city group, the World Daemon's reach and the owner's joins (#228 r
     expect(controller.invitationsView().cityGroup).toMatch(/^group C \(Volhaven\)/);
   });
 });
+
+describe("Daedalus count stuck, judged on A6's commit's facts (#238)", () => {
+  /** CyberSec's five and NeuroFlux Governor installed: 6 of 30. */
+  const SIX = {
+    ...Object.fromEntries(
+      ["Cranial Signal Processors - Gen I", "Cranial Signal Processors - Gen II", "BitWire"].map((name) => [name, 1]),
+    ),
+    "Synaptic Enhancement Implant": 1,
+    "Neurotrainer I": 1,
+    "NeuroFlux Governor": 1,
+  };
+  const slowAt = (lastAugReset: number, queued: string[]) => ({
+    ...slowData(),
+    resetInfo: { ...slowData().resetInfo, lastAugReset, ownedAugs: SIX },
+    factions: {
+      backend: "sim",
+      state: { joined: [{ name: "CyberSec", reputation: 0, favor: 0 }], invitations: [], queuedAugmentations: queued },
+      problem: null,
+    },
+  });
+  /** A6's commit, the install asked for, with `within` and $45m of NeuroFlux Governor levels; then the reset. */
+  const installFrom = (within: { augmentation: string; faction: string; money: number }[]) => {
+    store.setSetting("hackLoop.enabled", "false");
+    store.setSetting(
+      "augmentations.cycle",
+      JSON.stringify({ lastAugReset: 0, installing: true, countWithinReach: { neuroFluxMoney: 45e6, within } }),
+    );
+    const controller = new DesiredStateController({ channel, store });
+    const stored: { type: string }[] = [];
+    controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "medium", mediumData(100, {}, { money: 0 }));
+    send(connection, "slow", slowAt(0, Array(12).fill("NeuroFlux Governor")));
+    expect(controller.worldDaemonStall()).toBeNull();
+    send(connection, "slow", slowAt(60_000, []));
+    return { controller, stored };
+  };
+
+  test("one that counts its NeuroFlux money would have bought, passed over: stuck, naming it", () => {
+    const { controller } = installFrom([{ augmentation: "Neurotrainer II", faction: "NiteSec", money: 45e6 }]);
+    expect(controller.worldDaemonStall()).toMatchObject({
+      step: "daedalusCount",
+      detail: expect.stringContaining(
+        "at 6 of 30 augmentations installed added none to the count (NeuroFlux Governor's",
+      ),
+    });
+    expect(controller.worldDaemonStall()?.detail).toContain("passing over Neurotrainer II (NiteSec, $45,000,000)");
+  });
+
+  test("nothing that counts within reach: information, no stall", () => {
+    const { controller, stored } = installFrom([]);
+    expect(controller.worldDaemonStall()).toBeNull();
+    expect(stored.filter((event) => event.type === "daedalusCountNeuroFluxOnly")).toMatchObject([
+      {
+        detail:
+          "installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within reach",
+      },
+    ]);
+  });
+});

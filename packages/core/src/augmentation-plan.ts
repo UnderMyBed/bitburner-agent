@@ -312,6 +312,56 @@ function withPrerequisites(name: string, state: AugmentationPurchaseState, chose
   return add(name) ? bundle : null;
 }
 
+/** An augmentation that would add one to Daedalus's count, within reach at an install's commit (#238). */
+export interface CountableWithinReach {
+  augmentation: string;
+  /** The joined seller whose reputation reaches it, or the one taking donations whose donation would. */
+  faction: string;
+  /** Its price after what's queued (the set's purchases too), and that donation's money (0 when reached). */
+  money: number;
+}
+
+/**
+ * What a commit while short of Daedalus's count leaves within reach that would add to it (#238), the facts "Daedalus
+ * count stuck" judges an install that added none on: each of `reached` (a joined seller's reputation covers it) or of
+ * `donations`' sellers, not NeuroFlux Governor (its levels count once, `Faction/FactionJoinCondition.ts:130`), not
+ * owned or queued in `state` (the set's purchases queued there), its prerequisites owned or queued. Whatever its
+ * hacking value: `isWorthInstalling` isn't asked, so a rule that passes one over (run #2's: A6 bought only hacking
+ * value while short) can't hide it. The cheapest first.
+ */
+export function countablesWithinReach({
+  reached,
+  state,
+  donations,
+}: {
+  reached: readonly { augmentation: string; faction: string }[];
+  state: AugmentationPurchaseState;
+  donations?: DonationTerms;
+}): CountableWithinReach[] {
+  const owned = (name: string) => Object.hasOwn(state.installed, name) || state.queued.includes(name);
+  const ready = (name: string) =>
+    name !== NEUROFLUX_GOVERNOR && !owned(name) && missingPrerequisites(name, state).length === 0;
+  const reachedNames = reached.map((each) => each.augmentation);
+  const within: CountableWithinReach[] = reached
+    .filter(({ augmentation }) => ready(augmentation))
+    .map(({ augmentation, faction }) => ({
+      augmentation,
+      faction,
+      money: augmentationCost(augmentation, state).money,
+    }));
+  for (const [name, sellers] of Object.entries(donations?.sellers ?? {})) {
+    if (donations === undefined || reachedNames.includes(name) || !ready(name)) continue;
+    // The seller whose donation is least (`planDonations`' choice), for this one alone.
+    const cost = augmentationCost(name, state);
+    const seller = cheapestSeller(sellers, cost.reputation, new Map());
+    if (seller === null) continue;
+    const missing = cost.reputation - seller.reputation;
+    const donation = missing > 0 ? donationToReach(missing, donations.factionRep, donations.factionWorkRepGain) : 0;
+    within.push({ augmentation: name, faction: seller.faction, money: cost.money + donation });
+  }
+  return within.sort((a, b) => a.money - b.money || gameOrder(a.augmentation) - gameOrder(b.augmentation));
+}
+
 /**
  * The hacking experience a level needs at a multiplier: the game's `calculateExp` (`PersonObjects/formulas/skill.ts:
  * 17-27`), the inverse of `calculateSkill`'s `mult × (32 ln(exp + 534.6) − 200)` (`:7-15`), never below 0.

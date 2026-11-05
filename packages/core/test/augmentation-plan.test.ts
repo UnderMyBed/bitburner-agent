@@ -7,6 +7,7 @@ import {
   affordableCounts,
   augmentationBuyOrder,
   chooseAugmentationsToBuy,
+  countablesWithinReach,
   countdownExtensionMs,
   daedalusCountOf,
   hackingExpForLevel,
@@ -24,7 +25,12 @@ import {
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
 } from "../src/augmentation-plan.ts";
-import { AUGMENTATION_NAMES, type AugmentationPurchaseState, purchaseSequenceCost } from "../src/augmentations.ts";
+import {
+  AUGMENTATION_NAMES,
+  type AugmentationPurchaseState,
+  NEUROFLUX_GOVERNOR,
+  purchaseSequenceCost,
+} from "../src/augmentations.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -414,6 +420,65 @@ describe("donations (#225): what a donation brings within reach", () => {
       donations: donating,
     });
     expect(counts).toMatchObject({ affordable: 2, neuroFluxLevels: 1, byDonation: 2, donationMoney: 18_750_010_000 });
+  });
+});
+
+describe("what counts within reach at a commit (#238): Daedalus count stuck's facts", () => {
+  const RIB = "Combat Rib I";
+  const SPEECH = "Speech Processor Implant";
+  const terms = (sellers: Record<string, { faction: string; reputation: number }[]>) => ({
+    sellers,
+    neuroFluxSellers: [],
+    factionRep: 1,
+    factionWorkRepGain: 1,
+  });
+
+  test("nothing reached, nothing to donate for: none (the early NeuroFlux-only install, CyberSec's five owned)", () => {
+    const installed = Object.fromEntries(CYBERSEC.map((name) => [name, 1]));
+    expect(countablesWithinReach({ reached: [], state: { ...BN1, installed } })).toEqual([]);
+  });
+
+  test("each reached one, whatever its hacking value, at its price then; the cheapest first", () => {
+    // After two purchases: each price × 1.9².
+    const state = { ...BN1, queued: [GEN_I, BITWIRE] };
+    expect(
+      countablesWithinReach({
+        reached: [
+          { augmentation: SPEECH, faction: "Tian Di Hui" },
+          { augmentation: RIB, faction: "The Black Hand" },
+        ],
+        state,
+      }),
+    ).toEqual([
+      { augmentation: RIB, faction: "The Black Hand", money: 23_750_000 * 1.9 ** 2 },
+      { augmentation: SPEECH, faction: "Tian Di Hui", money: 50_000_000 * 1.9 ** 2 },
+    ]);
+  });
+
+  test("never NeuroFlux Governor, one owned or queued (the set's too), or one whose prerequisites aren't", () => {
+    const reached = [NEUROFLUX_GOVERNOR, GEN_I, GEN_II, SPEECH, "Combat Rib II"].map((augmentation) => ({
+      augmentation,
+      faction: "NiteSec",
+    }));
+    const state = { ...BN1, installed: { [GEN_I]: 1 }, queued: [SPEECH] };
+    // Gen II's Gen I is installed; Combat Rib II's Combat Rib I isn't.
+    expect(countablesWithinReach({ reached, state }).map((each) => each.augmentation)).toEqual([GEN_II]);
+  });
+
+  test("one no reputation reaches, sold by a faction taking donations: its price and the donation, at that faction", () => {
+    // Gen II's 18,750 at NiteSec's 12,000: 6,750 at $1m each and $10k for a hundredth more.
+    const within = countablesWithinReach({
+      reached: [],
+      state: { ...BN1, installed: { [GEN_I]: 1 } },
+      donations: terms({
+        [GEN_II]: [
+          { faction: "CyberSec", reputation: 5_000 },
+          { faction: "NiteSec", reputation: 12_000 },
+        ],
+      }),
+    });
+    // NiteSec's donation is least: 6,750 short, not CyberSec's 13,750.
+    expect(within).toEqual([{ augmentation: GEN_II, faction: "NiteSec", money: 125_000_000 + 6_750_010_000 }]);
   });
 });
 

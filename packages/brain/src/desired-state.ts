@@ -1259,6 +1259,8 @@ export class DesiredStateController {
       shareBonus,
       // The reach counts the city group the brain chose (#228 review): the last update's choice.
       cityGroup: this.#invitations.chosenGroup(resetTimeOf(this.#slowData, "lastAugReset")),
+      // A6's commit's facts while short (#238): an install that added none to the count is judged on them.
+      countWithinReach: this.#augmentations.countWithinReach(),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

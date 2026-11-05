@@ -2,13 +2,16 @@
 // w0r1d_d43m0n is ready and held until the reset, and the stalls.
 import {
   AUGMENTATION_NAMES,
+  augmentationCost,
   augmentationsSoldBy,
+  countablesWithinReach,
   isWorthInstalling,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { beforeEach, describe, expect, test } from "vitest";
+import type { CountWithinReach } from "../src/augmentations.ts";
 import {
   describeWorldDaemonPath,
   HackingExpRate,
@@ -22,7 +25,7 @@ import {
   WorldDaemonRule,
   worldDaemonPath,
 } from "../src/world-daemon.ts";
-import { WorldDaemonFold } from "../src/world-daemon-report.ts";
+import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "../src/world-daemon-report.ts";
 
 const DAEMON = "w0r1d_d43m0n";
 const RED_PILL = "The Red Pill";
@@ -389,8 +392,9 @@ describe("a restarted brain", () => {
   });
 });
 
-describe("Daedalus count stuck (#228)", () => {
+describe("Daedalus count stuck (#228, #238)", () => {
   const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
+  const NFG = "NeuroFlux Governor";
   /** Run #2's 23: the four hacker factions' set with a hacking value, and NeuroFlux Governor at `level`. */
   const runTwo = (level: number, more: string[] = []): Record<string, number> => ({
     ...Object.fromEntries(
@@ -399,28 +403,64 @@ describe("Daedalus count stuck (#228)", () => {
         .map((name) => [name, 1]),
     ),
     ...Object.fromEntries(more.map((name) => [name, 1])),
-    "NeuroFlux Governor": level,
+    [NFG]: level,
   });
-  /** A cycle's slow snapshot: NeuroFlux Governor queued for the install that ends it, unless `queued` says else. */
+  const stateOf = (installed: Record<string, number>) => ({
+    installed,
+    queued: [],
+    sourceFile11Level: 0,
+    bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+  });
+  /** A NeuroFlux Governor level's price over `installed`: what the commit's one level costs. */
+  const levelPrice = (installed: Record<string, number>) => augmentationCost(NFG, stateOf(installed)).money;
+  /**
+   * Run #2's commits (A6 then bought only hacking value): the four joined with the reputation for all they sell, so
+   * what they sell not installed is within reach (core's `countablesWithinReach`), and a NeuroFlux Governor level.
+   */
+  const runTwoReach = (installed: Record<string, number>): CountWithinReach => ({
+    neuroFluxMoney: levelPrice(installed),
+    within: countablesWithinReach({
+      reached: HACKERS.flatMap((faction) =>
+        augmentationsSoldBy(faction, 1, null).map((augmentation) => ({ augmentation, faction })),
+      ),
+      state: stateOf(installed),
+    }),
+  });
+  /**
+   * A cycle's slow snapshot: NeuroFlux Governor queued for the install that ends it, unless `queued` says else; A6's
+   * commit's facts, run #2's unless `reach` says else.
+   */
   const cycle = (
     install: number,
     ownedAugs: Record<string, number>,
     invited = false,
-    queued = ["NeuroFlux Governor"],
+    queued = [NFG],
+    reach: CountWithinReach | null = runTwoReach(ownedAugs),
   ) => ({
     mediumData: medium({ hacking: 6_368, money: 1e12 }),
     slowData: slow({ ownedAugs, lastAugReset: install * 10 * MINUTE, invited, queued }),
+    countWithinReach: reach,
   });
-  const DETAIL =
+  const dollars = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
+  /** Run #2's failure at an install from `level`: the two no-value ones the four sold, passed over. */
+  const detail = (level: number) =>
     "Daedalus count stuck: an install at 23 of 30 augmentations installed added none to the count (NeuroFlux " +
-    "Governor's levels count once)";
+    "Governor's levels count once), passing over Neural Wit Amplifier (BitRunners, $10,000,000), Magnetism Amplifier " +
+    `(The Black Hand, $250,000,000), which its NeuroFlux Governor levels' ${dollars(levelPrice(runTwo(level)))} would ` +
+    "have bought";
+  const neuroFluxOnly = () => events.filter((event) => event.type === "daedalusCountNeuroFluxOnly");
 
-  test("run #2's nine NeuroFlux-only installs at 23: each one fails, at once, stored and logged", () => {
+  test("run #2's nine NeuroFlux-only installs at 23, two that count passed over: each one fails, at once", () => {
     expect(Object.keys(runTwo(1))).toHaveLength(23);
+    expect(runTwoReach(runTwo(115)).within.map((each) => each.augmentation)).toEqual([
+      "Neural Wit Amplifier",
+      "Magnetism Amplifier",
+    ]);
     update({ ...cycle(0, runTwo(115)), nowMs: 0 });
     expect(rule.stall()).toBeNull();
     for (let install = 1; install <= 9; install++) {
-      update({ ...cycle(install, runTwo(115 + install)), nowMs: install * 10 * MINUTE });
+      // At the install A6's note is gone (the game reset): judged on its facts before it, then the next commit's.
+      update({ ...cycle(install, runTwo(115 + install), false, [NFG], null), nowMs: install * 10 * MINUTE });
       update({ ...cycle(install, runTwo(115 + install)), nowMs: install * 10 * MINUTE + MINUTE });
     }
     const stuck = events.filter((event) => event.type === "worldDaemonStalled" && event.step === "daedalusCount");
@@ -430,34 +470,110 @@ describe("Daedalus count stuck (#228)", () => {
       atMs: 10 * MINUTE,
       step: "daedalusCount",
       sinceMs: 10 * MINUTE,
-      detail: DETAIL,
+      detail: detail(115),
     });
-    expect(rule.stall()).toEqual({ step: "daedalusCount", sinceMs: 90 * MINUTE, detail: DETAIL });
-    expect(lines.at(-1)).toBe(`world daemon: STALLED 0 min: ${DETAIL}`);
+    expect(rule.stall()).toEqual({ step: "daedalusCount", sinceMs: 90 * MINUTE, detail: detail(123) });
+    expect(lines.at(-1)).toBe(`world daemon: STALLED 0 min: ${detail(123)}`);
+    expect(neuroFluxOnly()).toEqual([]);
+  });
+
+  test("the early NeuroFlux-only install (CyberSec's five, nothing else within reach): information, not a failure", () => {
+    const SIX = { ...Object.fromEntries(augmentationsSoldBy("CyberSec", 1, null).map((name) => [name, 1])), [NFG]: 1 };
+    expect(Object.keys(SIX)).toHaveLength(6);
+    update({ ...cycle(1, SIX, false, Array(13).fill(NFG), { neuroFluxMoney: 5e9, within: [] }), nowMs: 0 });
+    update({ ...cycle(2, { ...SIX, [NFG]: 14 }, false, [], null), nowMs: 10 * MINUTE });
+    expect(rule.stall()).toBeNull();
+    expect(events.filter((event) => event.type === "worldDaemonStalled")).toEqual([]);
+    const said =
+      "installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within reach";
+    expect(neuroFluxOnly()).toEqual([
+      {
+        type: "daedalusCountNeuroFluxOnly",
+        atMs: 10 * MINUTE,
+        installed: 6,
+        required: 30,
+        reach: { neuroFluxMoney: 5e9, within: [] },
+        detail: said,
+      },
+    ]);
+    expect(lines).toEqual([`world daemon: ${said}`]);
+    // Once an install: the next update with the same lastAugReset judges nothing.
+    update({ ...cycle(2, { ...SIX, [NFG]: 14 }), nowMs: 11 * MINUTE });
+    expect(neuroFluxOnly()).toHaveLength(1);
+  });
+
+  test("the money decides: one that counts costing more than the NeuroFlux levels isn't stuck; as much is", () => {
+    const within = [{ augmentation: "Neurotrainer II", faction: "NiteSec", money: 45e6 }];
+    // $1 short: information, naming the cheapest within reach.
+    update({ ...cycle(0, runTwo(1), false, [NFG], { neuroFluxMoney: 45e6 - 1, within }), nowMs: 0 });
+    update({ ...cycle(1, runTwo(2)), nowMs: 10 * MINUTE });
+    expect(rule.stall()).toBeNull();
+    expect(neuroFluxOnly().map((event) => event.detail)).toEqual([
+      "installed NeuroFlux Governor only at 23 of 30 augmentations installed: nothing that counts within its money: " +
+        "the cheapest within reach, Neurotrainer II (NiteSec, $45,000,000), costs more than its NeuroFlux Governor " +
+        "levels' $44,999,999",
+    ]);
+    // As much as the levels cost: they'd have bought it, so stuck.
+    update({ ...cycle(1, runTwo(2), false, [NFG], { neuroFluxMoney: 45e6, within }), nowMs: 15 * MINUTE });
+    update({ ...cycle(2, runTwo(3)), nowMs: 20 * MINUTE });
+    expect(rule.stall()?.detail).toBe(
+      "Daedalus count stuck: an install at 23 of 30 augmentations installed added none to the count (NeuroFlux " +
+        "Governor's levels count once), passing over Neurotrainer II (NiteSec, $45,000,000), which its NeuroFlux " +
+        "Governor levels' $45,000,000 would have bought",
+    );
+  });
+
+  test("past three passed over, how many more; only those the money covered are named", () => {
+    const at = (augmentation: string, money: number) => ({ augmentation, faction: "Tian Di Hui", money });
+    const within = [
+      at("Wired Reflexes", 2.5e6),
+      at("Speech Enhancement", 12.5e6),
+      at("Nuoptimal Nootropic Injector Implant", 20e6),
+      at("Speech Processor Implant", 50e6),
+      at("Nanofiber Weave", 125e6),
+    ];
+    update({ ...cycle(0, runTwo(1), false, [NFG], { neuroFluxMoney: 60e6, within }), nowMs: 0 });
+    update({ ...cycle(1, runTwo(2)), nowMs: 10 * MINUTE });
+    expect(rule.stall()?.detail).toMatch(
+      /passing over Wired Reflexes \(Tian Di Hui, \$2,500,000\), Speech Enhancement \(Tian Di Hui, \$12,500,000\), Nuoptimal Nootropic Injector Implant \(Tian Di Hui, \$20,000,000\) and 1 more, which/,
+    );
+  });
+
+  test("an install A6 didn't commit (yours, Augmentations off): not judged, said so", () => {
+    update({ ...cycle(0, runTwo(1), false, [NFG], null), nowMs: 0 });
+    update({ ...cycle(1, runTwo(2), false, [NFG], null), nowMs: 10 * MINUTE });
+    expect(rule.stall()).toBeNull();
+    expect(neuroFluxOnly().map((event) => event.detail)).toEqual([
+      "installed NeuroFlux Governor only at 23 of 30 augmentations installed: not the brain's install (no commit of " +
+        "A6's while short), so not judged",
+    ]);
   });
 
   test("an install that adds to the count is quiet, and ends the last one's failure; so is one not short", () => {
-    update({ ...cycle(0, runTwo(1)), nowMs: 0 });
-    update({ ...cycle(1, runTwo(2)), nowMs: 10 * MINUTE });
+    // Run #2's: NeuroFlux Governor's levels at 116, dear enough to have bought both passed over.
+    update({ ...cycle(0, runTwo(116)), nowMs: 0 });
+    update({ ...cycle(1, runTwo(117)), nowMs: 10 * MINUTE });
     expect(rule.stall()).toMatchObject({ step: "daedalusCount" });
     // The simulator suite's install: Tian Di Hui's eight and two more, 23 to 33.
     const tenMore = [...augmentationsSoldBy("Tian Di Hui", 1, null), "Neural Wit Amplifier", "Magnetism Amplifier"];
-    update({ ...cycle(2, runTwo(3, tenMore)), nowMs: 20 * MINUTE });
+    update({ ...cycle(2, runTwo(118, tenMore)), nowMs: 20 * MINUTE });
     expect(rule.stall()).toBeNull();
     // Daedalus inviting before an install: not short, so nothing to judge.
-    update({ ...cycle(3, runTwo(3), true), nowMs: 30 * MINUTE });
-    update({ ...cycle(4, runTwo(4), true), nowMs: 40 * MINUTE });
+    update({ ...cycle(3, runTwo(118), true), nowMs: 30 * MINUTE });
+    update({ ...cycle(4, runTwo(119), true), nowMs: 40 * MINUTE });
     expect(rule.stall()).toBeNull();
     expect(events.filter((event) => event.type === "worldDaemonStalled")).toHaveLength(1);
+    expect(neuroFluxOnly()).toEqual([]);
   });
 
   test("a reset with nothing queued before it (a soft reset, an older save) isn't an install: quiet", () => {
-    update({ ...cycle(0, runTwo(1), false, []), nowMs: 0 });
-    update({ ...cycle(1, runTwo(1), false, []), nowMs: 10 * MINUTE });
+    update({ ...cycle(0, runTwo(116), false, []), nowMs: 0 });
+    update({ ...cycle(1, runTwo(116), false, []), nowMs: 10 * MINUTE });
     expect(rule.stall()).toBeNull();
+    expect(neuroFluxOnly()).toEqual([]);
     // With something queued, the same reset is an install, and stuck.
-    update({ ...cycle(1, runTwo(1)), nowMs: 15 * MINUTE });
-    update({ ...cycle(2, runTwo(2)), nowMs: 20 * MINUTE });
+    update({ ...cycle(1, runTwo(116)), nowMs: 15 * MINUTE });
+    update({ ...cycle(2, runTwo(117)), nowMs: 20 * MINUTE });
     expect(rule.stall()).toMatchObject({ step: "daedalusCount" });
   });
 
@@ -476,16 +592,29 @@ describe("Daedalus count stuck (#228)", () => {
     );
   });
 
-  test("the run report: a failure, said as such, at the install it saw", () => {
+  test("the run report: stuck a failure, said as such, at the install it saw; NeuroFlux only, section 3's line", () => {
     const failures: string[] = [];
+    const DETAIL = detail(115);
     const stored = {
       atMs: 10 * MINUTE,
       kind: "worldDaemonStalled",
       detail: { step: "daedalusCount", sinceMs: 10 * MINUTE, detail: DETAIL },
     };
-    const health = new WorldDaemonFold().healthLines([stored as never], failures, (ms) => `t${ms}`);
+    const said =
+      "installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within reach";
+    const information = { atMs: 20 * MINUTE, kind: "daedalusCountNeuroFluxOnly", detail: { detail: said } };
+    const fold = new WorldDaemonFold();
+    const health = fold.healthLines([stored, information] as never, failures, (ms) => `t${ms}`);
     expect(health[1]).toBe(`    ${DETAIL}, seen at t${10 * MINUTE}`);
+    expect(health).toHaveLength(2);
     expect(failures).toEqual([`${DETAIL}, seen at t${10 * MINUTE}`]);
+    const path = fold.pathLines(
+      { staticLast: undefined, mediumLast: undefined, slowLast: undefined },
+      [stored, information] as never,
+      (ms) => `t${ms}`,
+    );
+    expect(path.at(-1)).toBe(`    t${20 * MINUTE}  ${said}`);
+    expect(WORLD_DAEMON_EVENT_KINDS).toContain("daedalusCountNeuroFluxOnly");
   });
 });
 

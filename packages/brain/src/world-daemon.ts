@@ -17,7 +17,10 @@
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
-//   is "Daedalus count stuck": the `daedalusCount` stall, at once, a run report failure.
+//   is "Daedalus count stuck" (the `daedalusCount` stall, at once, a run report failure) only if something that counts
+//   was passed over (#238): A6's commit recorded one within reach whose money its NeuroFlux Governor levels' covered.
+//   Else it's an early NeuroFlux-only install with nothing that counts within reach, as the multipliers climb to the
+//   next factions: `daedalusCountNeuroFluxOnly`, the run report's information.
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
@@ -37,6 +40,7 @@ import {
   WORLD_DAEMON,
   worldDaemonProblem,
 } from "@bitburner-agent/core";
+import type { CountWithinReach } from "./augmentations.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { type DaedalusReach, daedalusReach, describeReach } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
@@ -78,10 +82,24 @@ export const HACKING_EXP_GAP_MS = 3 * 60_000;
 export const WORLD_DAEMON_STALLED_EVENT_KIND = "worldDaemonStalled";
 /** Stored by the controller as a destroy goes out (its reset note written): the brain's, or the owner's. */
 export const BITNODE_DESTROY_SENT_EVENT_KIND = "bitNodeDestroySent";
+/**
+ * An install while short of Daedalus's count that added none to it with nothing that counts passed over (#238): the
+ * run report's information, never a failure.
+ */
+export const DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND = "daedalusCountNeuroFluxOnly";
 
 export type WorldDaemonEvent =
   | { type: typeof WORLD_DAEMON_STALLED_EVENT_KIND; atMs: number; step: StallStep; sinceMs: number; detail: string }
-  | { type: typeof BITNODE_DESTROY_SENT_EVENT_KIND; atMs: number; source: "brain" | "manual"; nextBitNode: number };
+  | { type: typeof BITNODE_DESTROY_SENT_EVENT_KIND; atMs: number; source: "brain" | "manual"; nextBitNode: number }
+  | {
+      type: typeof DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND;
+      atMs: number;
+      installed: number;
+      required: number;
+      /** A6's facts at the commit, or null for an install it didn't commit (yours). */
+      reach: CountWithinReach | null;
+      detail: string;
+    };
 
 /** The steps a stall can be on; `daedalusCount` (#228) is "Daedalus count stuck": an install that added none. */
 export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy" | "nextBitNode";
@@ -162,6 +180,26 @@ export interface WorldDaemonPath {
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
+
+/** "Neural Wit Amplifier (BitRunners, $10,000,000)": the first three, then how many more. */
+function describeWithin(within: CountWithinReach["within"]): string {
+  const named = within
+    .slice(0, 3)
+    .map(({ augmentation, faction, money }) => `${augmentation} (${faction}, ${formatMoney(money)})`);
+  return within.length > 3 ? `${named.join(", ")} and ${within.length - 3} more` : named.join(", ");
+}
+
+/** Why an install that added none isn't stuck (#238): nothing within reach, or nothing its NeuroFlux money covered. */
+function describeNothingWithin(reach: CountWithinReach | null): string {
+  if (reach === null) return "not the brain's install (no commit of A6's while short), so not judged";
+  const [nearest] = reach.within;
+  if (nearest === undefined) return "nothing that counts within reach";
+  return (
+    `nothing that counts within its money: the cheapest within reach, ${describeWithin([nearest])}, costs more ` +
+    `than its NeuroFlux Governor levels' ${formatMoney(reach.neuroFluxMoney)}`
+  );
+}
 
 /** The medium snapshot's hacking level, or null; and its experience, or null (only the ETA needs it). */
 function hackingOf(mediumData: MediumSnapshotData | null) {
@@ -439,6 +477,11 @@ export interface WorldDaemonInputs {
   shareBonus?: number;
   /** The city group the brain chose this cycle (#228, ./invitations.ts), for the reach; none when absent. */
   cityGroup?: string | null;
+  /**
+   * A6's commit's facts while short of Daedalus's count (#238, `AugmentationRule.countWithinReach`): what counts within
+   * reach, and what NeuroFlux Governor's levels cost; null without a commit (none when absent).
+   */
+  countWithinReach?: CountWithinReach | null;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -454,8 +497,15 @@ export class WorldDaemonRule {
   #ready = new Map<StallStep, { sinceMs: number; stored: boolean; detail: string }>();
   /** Daedalus's reputation while The Red Pill is short, and when it last rose (or was first seen). */
   #reputation: { value: number; risenAtMs: number } | null = null;
-  /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`. */
-  #count: { lastAugReset: number; installed: number; required: number; short: boolean; queued: number } | null = null;
+  /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`; A6's commit's facts (#238). */
+  #count: {
+    lastAugReset: number;
+    installed: number;
+    required: number;
+    short: boolean;
+    queued: number;
+    reach: CountWithinReach | null;
+  } | null = null;
   /**
    * The last install while short that added none to the count (#228), while its cycle lasts: "Daedalus count stuck".
    */
@@ -509,6 +559,7 @@ export class WorldDaemonRule {
     enabled,
     shareBonus = 1,
     cityGroup = null,
+    countWithinReach = null,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     const hacking = hackingOf(mediumData);
@@ -546,7 +597,7 @@ export class WorldDaemonRule {
       return this.#asked !== null;
     }
     this.#path = path;
-    this.#watchCount(path, slowData, nowMs ?? 0);
+    this.#watchCount(path, slowData, nowMs ?? 0, countWithinReach);
     const blocked = path.daemon === null ? null : nextBitNodeProblem(slowData.resetInfo?.ownedSF ?? {});
     // Refused, it's logged and alerted once, at once, as the `nextBitNode` stall.
     this.#watch(path, nowMs ?? 0, enabled, blocked);
@@ -567,8 +618,11 @@ export class WorldDaemonRule {
    * per install, from the slow snapshots' `lastAugReset`: a restarted brain judges the installs it sees. A reset with
    * nothing queued before it isn't an install (#228 re-review): a soft reset (`installAugmentations(true)`,
    * `GameRoot.tsx:297-299`, `Singularity.ts:185-193`, `PlayerObjectGeneralMethods.ts:126`), or an older save loaded.
+   * Stuck only if A6's commit (`reach`, #238) passed over something that counts: within reach, its money no more than
+   * what the NeuroFlux Governor levels cost, so they were bought in its place. Else an early NeuroFlux-only install,
+   * nothing that counts within reach (or within its money): `daedalusCountNeuroFluxOnly`, information.
    */
-  #watchCount(path: WorldDaemonPath, slowData: SlowSnapshotData, nowMs: number): void {
+  #watchCount(path: WorldDaemonPath, slowData: SlowSnapshotData, nowMs: number, reach: CountWithinReach | null): void {
     const lastAugReset = slowData.resetInfo?.lastAugReset;
     const daedalus = path.daedalus;
     if (!isFiniteNumber(lastAugReset) || daedalus === null) {
@@ -578,15 +632,32 @@ export class WorldDaemonRule {
     }
     const before = this.#count;
     if (before !== null && before.lastAugReset !== lastAugReset) {
-      const stuck = before.short && before.queued > 0 && daedalus.augmentations <= before.installed;
-      this.#stuck = stuck
-        ? {
-            atMs: nowMs,
-            detail:
-              `Daedalus count stuck: an install at ${count(before.installed)} of ${count(before.required)} ` +
-              "augmentations installed added none to the count (NeuroFlux Governor's levels count once)",
-          }
-        : null;
+      const none = before.short && before.queued > 0 && daedalus.augmentations <= before.installed;
+      const neuroFluxMoney = before.reach?.neuroFluxMoney ?? 0;
+      const passedOver = before.reach?.within.filter((each) => each.money <= neuroFluxMoney) ?? [];
+      const at = `${count(before.installed)} of ${count(before.required)} augmentations installed`;
+      this.#stuck =
+        none && passedOver.length > 0
+          ? {
+              atMs: nowMs,
+              detail:
+                `Daedalus count stuck: an install at ${at} added none to the count (NeuroFlux Governor's levels count ` +
+                `once), passing over ${describeWithin(passedOver)}, which its NeuroFlux Governor levels' ` +
+                `${formatMoney(neuroFluxMoney)} would have bought`,
+            }
+          : null;
+      if (none && passedOver.length === 0) {
+        const detail = `installed NeuroFlux Governor only at ${at}: ${describeNothingWithin(before.reach)}`;
+        this.#log(`world daemon: ${detail}`);
+        this.#emit({
+          type: DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
+          atMs: nowMs,
+          installed: before.installed,
+          required: before.required,
+          reach: before.reach,
+          detail,
+        });
+      }
     }
     this.#count = {
       lastAugReset,
@@ -594,6 +665,7 @@ export class WorldDaemonRule {
       required: daedalus.augmentationsRequired,
       short: daedalus.short,
       queued: factionReadingOf(slowData)?.state?.queuedAugmentations.length ?? 0,
+      reach,
     };
   }
 
