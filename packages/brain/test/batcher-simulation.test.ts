@@ -182,3 +182,29 @@ test("instructions only from the brain it's connected to (#211): one that sends 
     running.push(...(await simulation.ps(host)).map((process) => process.filename));
   expect(running.filter((file) => file.endsWith(`/${BATCHER_SCRIPT_NAME}`))).toEqual([]);
 });
+
+/** The longest a fresh start's first move may leave the batcher without a hack (#236): run #2 had 25 minutes. */
+const FIRST_MOVE_IDLE_AT_MOST_MS = 3 * 60_000;
+
+test("a fresh start's first move (#236): to a target prepared as the next, hardly idle, and the report shows it", {
+  timeout: 600_000,
+}, async () => {
+  const fresh = await freshStartOf({ withDesiredState: true });
+  const { game, data } = fresh;
+  const health = () => fresh.latest<FastSnapshotData>("fast")?.batcher ?? null;
+  // Seed 1 batches n00dles, then moves at about 50 minutes, before A6's first install.
+  await game.runUntil(() => (health()?.lastMove ?? null) !== null, 60 * 60_000);
+  const moved = health() as BatcherHealth;
+  const move = moved.lastMove as NonNullable<BatcherHealth["lastMove"]>;
+  await game.run(60_000);
+  const report = runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() });
+  const section = report.text.slice(report.text.indexOf("6. The batcher"), report.text.indexOf("Verdict"));
+  console.log(`#236: ${((move.atMs - EPOCH_MS) / 60_000).toFixed(1)} min in, ${JSON.stringify(move)}\n${section}`);
+  // From n00dles to the target prepared beside its batches as the next: a weaken from the move to the first hack.
+  expect(move.from).toBe("n00dles");
+  expect(move.idleMs).toBeLessThan(FIRST_MOVE_IDLE_AT_MOST_MS);
+  const line = `    n00dles → ${move.to} at ${new Date(move.atMs).toISOString()}: idle ${(move.idleMs / 60_000).toFixed(1)} min`;
+  expect(section).toContain(line);
+  expect(section).toContain("  desyncs: none\n  late or lost: none");
+  expect(report.failures.filter((failure) => failure.startsWith("batcher"))).toEqual([]);
+});

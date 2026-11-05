@@ -4,14 +4,15 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-  FactionState,
-  FactionStateReading,
-  FastSnapshotData,
-  IntentOutcome,
-  MediumSnapshotData,
-  SlowSnapshotData,
-  StaticSnapshotData,
+import {
+  type FactionState,
+  type FactionStateReading,
+  type FastSnapshotData,
+  type IntentOutcome,
+  type MediumSnapshotData,
+  newBatcherHealth,
+  type SlowSnapshotData,
+  type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAugmentationsEnabled } from "../src/augmentations.ts";
@@ -1988,5 +1989,53 @@ describe("the World Daemon (#215)", () => {
       "world daemon stalled: w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed, from " +
         `${at(10 * MINUTE)} to at least ${at(15 * MINUTE)}`,
     );
+  });
+});
+
+describe("section 6's moves across a batcher's restart (#237's review)", () => {
+  /**
+   * A run whose batcher hacks phantasy until 5 minutes in, then restarts on n00dles, which it first hacks 17 minutes in:
+   * 12 minutes without a hack, joined across the restart; or, with an install between (`installedAtMs`), not a move.
+   */
+  function restartedRun(installedAtMs: number | null) {
+    const health = (offsetMs: number) => {
+      const before = offsetMs < 5 * MINUTE;
+      const lastHack = before
+        ? { target: "phantasy", atMs: T0 + offsetMs }
+        : offsetMs >= 17 * MINUTE
+          ? { target: "n00dles", atMs: T0 + offsetMs }
+          : null;
+      return {
+        ...newBatcherHealth(before ? "phantasy" : "n00dles", before ? "a" : "b", 0),
+        state: "batching" as const,
+        lastHack,
+      };
+    };
+    cleanRun({
+      fast: (offsetMs) =>
+        fastData({
+          game: { money: offsetMs, homeRamUsed: 4, homeMaxRam: 8, homeProcesses: [] },
+          batcher: health(offsetMs),
+        }),
+    });
+    if (installedAtMs !== null) {
+      const installed = slowData();
+      installed.resetInfo.lastAugReset = T0 + installedAtMs;
+      snapshot("slow", installedAtMs + 30 * SECOND, installed);
+    }
+  }
+
+  test("joined across the restart: idle past 10 minutes, a failure", () => {
+    restartedRun(null);
+    const { text, failures } = report();
+    expect(text).toMatch(/\n {4}phantasy → n00dles at \S+: idle 12\.\d min, across a restart\n/);
+    expect(failures.some((failure) => failure.startsWith("batcher idle on a move: phantasy → n00dles"))).toBe(true);
+  });
+
+  test("an install between: a new cycle, not a move", () => {
+    restartedRun(6 * MINUTE);
+    const { text, failures } = report();
+    expect(text).toContain("\n  moves (#236): none\n");
+    expect(failures.filter((failure) => failure.startsWith("batcher idle on a move"))).toEqual([]);
   });
 });

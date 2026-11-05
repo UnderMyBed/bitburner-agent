@@ -16,6 +16,7 @@ import {
   type MediumSnapshotData,
   newBatcherHealth,
   operationTimeMs,
+  preparationTimeMs,
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
@@ -24,6 +25,7 @@ import {
   BATCHER_ENABLED_SETTING,
   BATCHER_MOST_IDLE_MS,
   BATCHER_MOVE_GAIN,
+  BATCHER_MOVE_IDLE_FAILS_AFTER_MS,
   BATCHER_NEXT_RAM_SHARE,
   BATCHER_TARGET_HORIZON_MS,
   type BatcherTargetWorth,
@@ -321,7 +323,7 @@ describe("the run report's section", () => {
       ],
       failures,
     );
-    expect(lines.slice(-11)).toEqual([
+    expect(lines.slice(-12)).toEqual([
       "  desyncs: none",
       "  late or lost: none",
       // The least over the window (#216's review).
@@ -331,6 +333,8 @@ describe("the run report's section", () => {
       "  trimmed to the hosts' RAM (#232): none",
       // Each grow left the target at its maximum (#234): 2 looks in the window.
       "  money after each batch's grow (#234): full at all 2 looks",
+      // No move in the window (#236).
+      "  moves (#236): none",
       "  problems: none",
       "  sent but not running (3 fast snapshots in a row or more):",
       "    none",
@@ -459,6 +463,220 @@ describe("the run report's section", () => {
       growsNotLooked: undefined,
     };
     expect(line([older])).toBe("  money after each batch's grow (#234): not reported (an older batcher)");
+  });
+
+  test("each move with its idle time (#236); one past BATCHER_MOVE_IDLE_FAILS_AFTER_MS, done or not, a failure", () => {
+    const failures: string[] = [];
+    const hackAt = (target: string, minutes: number) => ({ lastHack: { target, atMs: at(minutes) } });
+    const move = (from: string, to: string, fromMinutes: number, toMinutes: number) => ({
+      lastMove: { from, to, idleMs: (toMinutes - fromMinutes) * 60_000, atMs: at(toMinutes) },
+    });
+    const lines = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { ...hackAt("n00dles", 0) }) },
+        // A move to phantasy, idle 1.5 minutes: seen in two snapshots, listed once.
+        {
+          atMs: at(10),
+          health: health("a", {
+            target: "phantasy",
+            ...hackAt("phantasy", 10),
+            ...move("n00dles", "phantasy", 8.5, 10),
+          }),
+        },
+        {
+          atMs: at(11),
+          health: health("a", {
+            target: "phantasy",
+            ...hackAt("phantasy", 11),
+            ...move("n00dles", "phantasy", 8.5, 10),
+          }),
+        },
+        // Run #2's: 25.6 minutes, through a target never hacked (4sigma).
+        {
+          atMs: at(20),
+          health: health("a", {
+            target: "4sigma",
+            ...hackAt("phantasy", 13.5),
+            ...move("n00dles", "phantasy", 8.5, 10),
+          }),
+        },
+        {
+          atMs: at(40),
+          health: health("a", {
+            target: "megacorp",
+            ...hackAt("megacorp", 39.1),
+            ...move("phantasy", "megacorp", 13.5, 39.1),
+          }),
+        },
+        // A restarted batcher's move, not done at the window's end: 11 minutes so far.
+        { atMs: at(41), health: health("b", { target: "megacorp", ...hackAt("megacorp", 41) }) },
+        {
+          atMs: at(52),
+          health: health("b", { target: "ecorp", ...hackAt("megacorp", 41), targetChangedSinceHack: true }),
+        },
+      ],
+      failures,
+    );
+    const from = lines.indexOf("  moves (#236), from the last hack on the target before to the first on the new one:");
+    expect(lines.slice(from, from + 4)).toEqual([
+      "  moves (#236), from the last hack on the target before to the first on the new one:",
+      "    n00dles → phantasy at 2026-01-01T00:10:00.000Z: idle 1.5 min",
+      "    phantasy → megacorp at 2026-01-01T00:39:06.000Z: idle 25.6 min",
+      "    megacorp → ecorp, not done at 2026-01-01T00:52:00.000Z: idle 11.0 min so far",
+    ]);
+    expect(failures).toEqual([
+      "batcher idle on a move: phantasy → megacorp, 25.6 min without a hack, from 2026-01-01T00:13:30.000Z to " +
+        "2026-01-01T00:39:06.000Z (more than 10 min)",
+      "batcher idle on a move: megacorp → ecorp, 11.0 min without a hack, from 2026-01-01T00:41:00.000Z to " +
+        "2026-01-01T00:52:00.000Z, not done (more than 10 min)",
+    ]);
+    expect(lines).toContain(`  ${failures[0]}`);
+    expect(BATCHER_MOVE_IDLE_FAILS_AFTER_MS).toBe(2 * BATCHER_MOST_IDLE_MS);
+  });
+
+  test("moves (#237's review): one done before the window isn't the window's; one across a restart is joined", () => {
+    const failures: string[] = [];
+    // Run #2's 25.6-minute move ended before the window: kept in the health until the next move, it isn't listed.
+    const old = { from: "phantasy", to: "megacorp", idleMs: 25.6 * 60_000, atMs: at(-21) };
+    const later = batcherSection(
+      [
+        {
+          atMs: at(0),
+          health: health("a", { target: "megacorp", lastHack: { target: "megacorp", atMs: at(0) }, lastMove: old }),
+        },
+        {
+          atMs: at(30),
+          health: health("a", { target: "megacorp", lastHack: { target: "megacorp", atMs: at(30) }, lastMove: old }),
+        },
+      ],
+      failures,
+    );
+    expect(later).toContain("  moves (#236): none");
+    expect(failures).toEqual([]);
+    // A restart between the last hack on n00dles and the first on phantasy: the new run starts with no last hack, so
+    // the report joins them; one still under way at the window's end is joined too.
+    const joined = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { lastHack: { target: "n00dles", atMs: at(0) } }) },
+        { atMs: at(2), health: health("b", { target: "phantasy" }) },
+        { atMs: at(13), health: health("b", { target: "phantasy", lastHack: { target: "phantasy", atMs: at(12.5) } }) },
+        { atMs: at(14), health: health("c", { target: "megacorp" }) },
+        { atMs: at(26), health: health("c", { target: "megacorp" }) },
+      ],
+      failures,
+    );
+    expect(joined.filter((line) => line.includes("→"))).toEqual([
+      "    n00dles → phantasy at 2026-01-01T00:12:30.000Z: idle 12.5 min, across a restart",
+      "    phantasy → megacorp, not done at 2026-01-01T00:26:00.000Z: idle 13.5 min so far, across a restart",
+      "  batcher idle on a move: n00dles → phantasy, 12.5 min without a hack, from 2026-01-01T00:00:00.000Z to " +
+        "2026-01-01T00:12:30.000Z (more than 10 min)",
+      "  batcher idle on a move: phantasy → megacorp, 13.5 min without a hack, from 2026-01-01T00:12:30.000Z to " +
+        "2026-01-01T00:26:00.000Z, not done (more than 10 min)",
+    ]);
+    // An install between the two isn't a move: the new cycle starts from nothing.
+    const installed = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { target: "phantasy", lastHack: { target: "phantasy", atMs: at(0) } }) },
+        { atMs: at(14), health: health("b", { lastHack: { target: "n00dles", atMs: at(13) } }) },
+      ],
+      [],
+      [],
+      [at(1)],
+    );
+    expect(installed).toContain("  moves (#236): none");
+  });
+
+  test("moves (#237's re-review): a run with no hack between two is no break in the join; a detour shows under way", () => {
+    const failures: string[] = [];
+    // A crash loop: a hacks n00dles, b never hacks, c first hacks phantasy 20 minutes in.
+    const chain = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { lastHack: { target: "n00dles", atMs: at(0) } }) },
+        { atMs: at(2), health: health("b", { target: "phantasy" }) },
+        { atMs: at(5), health: health("b", { target: "phantasy" }) },
+        { atMs: at(21), health: health("c", { target: "phantasy", lastHack: { target: "phantasy", atMs: at(20) } }) },
+      ],
+      failures,
+    );
+    expect(chain.filter((line) => line.includes("→"))).toEqual([
+      "    n00dles → phantasy at 2026-01-01T00:20:00.000Z: idle 20.0 min, across a restart",
+      "  batcher idle on a move: n00dles → phantasy, 20.0 min without a hack, from 2026-01-01T00:00:00.000Z to " +
+        "2026-01-01T00:20:00.000Z (more than 10 min)",
+    ]);
+    // Detours under way at the window's end, as the health says: phantasy → 4sigma → phantasy, 4sigma never hacked;
+    // and 4sigma → phantasy → 4sigma, phantasy never hacked. Each back on the target last hacked.
+    for (const target of ["phantasy", "4sigma"]) {
+      const detour = batcherSection([
+        { atMs: at(0), health: health("a", { target, lastHack: { target, atMs: at(0) } }) },
+        {
+          atMs: at(12),
+          health: health("a", { target, lastHack: { target, atMs: at(0) }, targetChangedSinceHack: true }),
+        },
+      ]);
+      expect(detour).toContain(`    ${target} → ${target}, not done at 2026-01-01T00:12:00.000Z: idle 12.0 min so far`);
+    }
+  });
+
+  test("moves (#237's review): a last hack or a move that isn't one, as the Agent sent it, is left out", () => {
+    const failures: string[] = [];
+    const lines = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { lastHack: { target: "n00dles", atMs: Number.NaN } }) },
+        {
+          atMs: at(20),
+          health: {
+            ...health("a", { target: "joesguns", lastHack: { target: "joesguns", atMs: at(20) } }),
+            lastMove: { from: "n00dles", to: "joesguns", idleMs: "a while", atMs: at(20) },
+          },
+        },
+      ],
+      failures,
+    );
+    expect(lines.filter((line) => line.includes("NaN") || line.includes("→"))).toEqual([]);
+    expect(failures).toEqual([]);
+  });
+
+  test("moves (#236): none; a move under way within the limit isn't a failure; an older batcher's", () => {
+    const failures: string[] = [];
+    const quiet = batcherSection([{ atMs: at(0), health: health("a", {}) }], failures);
+    expect(quiet).toContain("  moves (#236): none");
+    const underWay = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { lastHack: { target: "n00dles", atMs: at(0) } }) },
+        {
+          atMs: at(4),
+          health: health("a", {
+            target: "joesguns",
+            lastHack: { target: "n00dles", atMs: at(0) },
+            targetChangedSinceHack: true,
+          }),
+        },
+      ],
+      failures,
+    );
+    expect(underWay).toContain("    n00dles → joesguns, not done at 2026-01-01T00:04:00.000Z: idle 4.0 min so far");
+    expect(failures).toEqual([]);
+    // Done, n00dles' batches still landing among joesguns': its last hack is n00dles', and the move isn't under way.
+    const landing = batcherSection([
+      { atMs: at(3), health: health("a", { lastHack: { target: "n00dles", atMs: at(3) } }) },
+      {
+        atMs: at(5),
+        health: health("a", {
+          target: "joesguns",
+          lastHack: { target: "n00dles", atMs: at(5) },
+          lastMove: { from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: at(4.9) },
+        }),
+      },
+    ]);
+    expect(landing.filter((line) => line.includes("→"))).toEqual([
+      "    n00dles → joesguns at 2026-01-01T00:04:54.000Z: idle 1.0 min",
+    ]);
+    const older = health("a", {});
+    delete older.lastHack;
+    delete older.lastMove;
+    expect(batcherSection([{ atMs: at(0), health: older }])).toContain(
+      "  moves (#236): not reported (an older batcher)",
+    );
   });
 
   test("sent but not running for 3 fast snapshots in a row or more: each stretch a failure; 2 aren't (#211)", () => {
@@ -838,6 +1056,146 @@ describe("chooseBatcher, review fixes (#216)", () => {
     const alone = worthOf(chosenOf(choiceNetwork, data, null, null), "rich");
     const beside = worthOf(chosenOf(choiceNetwork, data, "n00dles", "n00dles"), "rich");
     expect(beside.untilEarningMs).toBeGreaterThan(alone.untilEarningMs);
+  });
+});
+
+describe("chooseBatcher, a target move (#236)", () => {
+  const chosenOf = (
+    staticData: StaticSnapshotData,
+    data: MediumSnapshotData,
+    current: ReturnType<typeof planBatcher>["batcher"],
+    batching: string | null,
+  ) => {
+    const chosen = chooseBatcher(staticData, data, CHOICE_HOSTS, current ?? null, batching);
+    if (chosen.batcher === null) throw new Error(chosen.why);
+    return chosen;
+  };
+  const worthOf = (chosen: { worths: BatcherTargetWorth[] }, target: string) =>
+    chosen.worths.find((each) => each.target === target) as BatcherTargetWorth;
+
+  test("while a target earns, a move goes only to one prepared; one still to prepare is the next, moved to when ready", () => {
+    // Rich (an easier one) nearly grown, at its minimum: a wave beside n00dles' batches, then a weaken, within
+    // BATCHER_MOST_IDLE_MS, and worth the move. Before #236 the brain moved at once, and nothing new was batched while
+    // it was prepared.
+    const easier = { ...RICH, requiredHackingSkill: 20 };
+    const network: StaticSnapshotData = { servers: [staticServer("n00dles", N00DLES), staticServer("rich", easier)] };
+    const data = choiceMedium(RICH.moneyMax * 0.98, RICH.minDifficulty);
+    const n00dlesSent = planBatcher(network, data, "n00dles", CHOICE_HOSTS).batcher;
+    const chosen = chosenOf(network, data, n00dlesSent, "n00dles");
+    const rich = worthOf(chosen, "rich");
+    expect(rich.untilEarningMs).toBeGreaterThan(operationTimeMs("weaken1", easier, PLAYER_100));
+    expect(rich.untilEarningMs).toBeLessThanOrEqual(BATCHER_MOST_IDLE_MS);
+    expect(rich.worth).toBeGreaterThanOrEqual(worthOf(chosen, "n00dles").worth * BATCHER_MOVE_GAIN);
+    expect(chosen.batcher.config.target).toBe("n00dles");
+    expect(chosen.batcher.config.next?.target).toBe("rich");
+    // Prepared: the move, its first batch a weaken away.
+    const prepared = choiceMedium(RICH.moneyMax, RICH.minDifficulty);
+    expect(chosenOf(network, prepared, chosen.batcher, "n00dles").batcher.config.target).toBe("rich");
+    // With nothing batched (a fresh start, a handover, a move under way), the soon one, still to prepare, as before.
+    expect(chosenOf(network, data, null, null).batcher.config.target).toBe("rich");
+  });
+
+  test("the next target is kept unless another is worth BATCHER_MOVE_GAIN times it once prepared: its waves out", () => {
+    // Two rich targets half grown, at three times their minimum: each the next, by its worth once prepared.
+    const rival = (moneyMax: number): StaticSnapshotData => ({
+      servers: [
+        staticServer("n00dles", N00DLES),
+        staticServer("rich", RICH),
+        staticServer("rival", { ...RICH, moneyMax }),
+      ],
+    });
+    const at = (staticData: StaticSnapshotData) => {
+      const data = choiceMedium(RICH.moneyMax / 2, 3 * RICH.minDifficulty);
+      const rich = data.servers.find((server) => server.hostname === "rich");
+      const rivalMax = Number(staticData.servers.find((server) => server.hostname === "rival")?.moneyMax);
+      data.servers.push({ ...rich, hostname: "rival", moneyAvailable: rivalMax / 2 } as (typeof data.servers)[number]);
+      const preparedWorth = (target: string) => {
+        const plan = planBatcher(staticData, data, target, CHOICE_HOSTS);
+        const figures = staticData.servers.find((server) => server.hostname === target) as unknown as typeof RICH;
+        const weakenMs = operationTimeMs("weaken1", figures, PLAYER_100);
+        return plan.batcher === null ? 0 : plan.incomePerSecond * (BATCHER_TARGET_HORIZON_MS - weakenMs);
+      };
+      return { data, preparedWorth };
+    };
+    // The rival a little richer: worth more once prepared, but not BATCHER_MOVE_GAIN times rich, the next sent.
+    const close = rival(RICH.moneyMax * 1.1);
+    const { data, preparedWorth } = at(close);
+    expect(preparedWorth("rival")).toBeGreaterThan(preparedWorth("rich"));
+    expect(preparedWorth("rival")).toBeLessThan(preparedWorth("rich") * BATCHER_MOVE_GAIN);
+    const fresh = chosenOf(close, data, planBatcher(close, data, "n00dles", CHOICE_HOSTS).batcher, "n00dles");
+    expect(fresh.batcher.config.next?.target).toBe("rival");
+    const sent = fresh.batcher;
+    const richNext = {
+      ...sent,
+      config: { ...sent.config, next: { ...sent.config.next, target: "rich", figures: RICH } },
+    };
+    const kept = chosenOf(close, data, richNext as typeof sent, "n00dles");
+    expect(kept.batcher.config.next?.target).toBe("rich");
+    // Far richer: worth the waste, so it's the next.
+    const far = rival(RICH.moneyMax * 3);
+    const farAt = at(far);
+    expect(farAt.preparedWorth("rival")).toBeGreaterThanOrEqual(farAt.preparedWorth("rich") * BATCHER_MOVE_GAIN);
+    expect(chosenOf(far, farAt.data, richNext as typeof sent, "n00dles").batcher.config.next?.target).toBe("rival");
+  });
+
+  test("the next is prepared on the RAM the batches leave, a fifth at least (#237's review): a slow grower has a path", () => {
+    // Two 256 TB hosts, late in a cycle: n00dles' batches leave most of them idle. A slow grower with no money at its
+    // minimum security of 30 is prepared within the horizon on what they leave, but not on a fifth. Before, it was
+    // never the next, and never moved to.
+    const slow = { moneyMax: 1e12, minDifficulty: 30, requiredHackingSkill: 1, serverGrowth: 1 };
+    const network: StaticSnapshotData = { servers: [staticServer("n00dles", N00DLES), staticServer("slow", slow)] };
+    const data = choiceMedium(0, 1);
+    data.servers = data.servers.map((server) =>
+      server.hostname === "rich"
+        ? { ...server, hostname: "slow", moneyAvailable: 0, hackDifficulty: 30 }
+        : server.hostname.startsWith("pserv-")
+          ? { ...server, maxRam: 262_144 }
+          : server,
+    );
+    const sent = planBatcher(network, data, "n00dles", CHOICE_HOSTS);
+    const whole = planBatcher(network, data, "slow", CHOICE_HOSTS);
+    if (sent.batcher === null || whole.batcher === null) throw new Error("no plan");
+    const leftGb = whole.ramGb - sent.peakRamGb;
+    const now = { money: 0, security: 30 };
+    expect(leftGb).toBeGreaterThan(whole.ramGb * BATCHER_NEXT_RAM_SHARE);
+    expect(preparationTimeMs(slow, PLAYER_100, now, whole.ramGb * BATCHER_NEXT_RAM_SHARE)).toBeGreaterThan(
+      BATCHER_TARGET_HORIZON_MS,
+    );
+    expect(preparationTimeMs(slow, PLAYER_100, now, leftGb)).toBeLessThanOrEqual(BATCHER_TARGET_HORIZON_MS);
+    const chosen = chosenOf(network, data, sent.batcher, "n00dles");
+    expect(chosen.batcher.config.target).toBe("n00dles");
+    expect(chosen.batcher.config.next).toMatchObject({ target: "slow", figures: slow });
+    expect(chosen.batcher.config.next?.ramGb).toBeCloseTo(leftGb, 3);
+    // The batches planned on the rest: n00dles' own plan, which that RAM holds.
+    expect(chosen.batcher.config.spacingMs).toBe(sent.batcher.config.spacingMs);
+    expect(chosen.batcher.config.hackShare).toBe(sent.batcher.config.hackShare);
+    // Nothing batched yet (#237's re-review: a fresh start, after an install or a restart, a move under way): n00dles
+    // still to start, so no leftover is known; the next is weighed on a fifth, where it isn't preparable, and n00dles'
+    // own preparation keeps the rest.
+    const starting = chosenOf(network, data, null, null);
+    expect(starting.batcher.config.target).toBe("n00dles");
+    expect(starting.batcher.config.next).toBeUndefined();
+  });
+
+  test("a prepared target whose weaken is over BATCHER_MOST_IDLE_MS (#237's review): its idle is the weaken past the batches'", () => {
+    // Rich prepared, at a level where its weaken takes over 5 minutes; n00dles batched lands its batches for a weaken
+    // of its own meanwhile, so the move leaves the difference without a hack.
+    const player = 50;
+    const slowWeaken = { ...RICH, moneyMax: 100_000_000_000, minDifficulty: 11 };
+    const network: StaticSnapshotData = {
+      servers: [staticServer("n00dles", N00DLES), staticServer("rich", slowWeaken)],
+    };
+    const data = choiceMedium(slowWeaken.moneyMax, slowWeaken.minDifficulty);
+    data.player = { ...data.player, skills: { hacking: player, intelligence: 0 } };
+    const at50 = { skills: { hacking: player, intelligence: 0 }, mults: MULTS };
+    const richWeakenMs = operationTimeMs("weaken1", slowWeaken, at50);
+    const n00dlesWeakenMs = operationTimeMs("weaken1", N00DLES, at50);
+    expect(richWeakenMs).toBeGreaterThan(BATCHER_MOST_IDLE_MS);
+    expect(richWeakenMs - n00dlesWeakenMs).toBeLessThanOrEqual(BATCHER_MOST_IDLE_MS);
+    const sent = planBatcher(network, data, "n00dles", CHOICE_HOSTS).batcher;
+    const chosen = chosenOf(network, data, sent, "n00dles");
+    expect(worthOf(chosen, "rich").worth).toBeGreaterThanOrEqual(worthOf(chosen, "n00dles").worth * BATCHER_MOVE_GAIN);
+    expect(chosen.batcher.config.target).toBe("rich");
   });
 });
 

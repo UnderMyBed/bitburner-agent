@@ -369,6 +369,8 @@ interface RunFacts extends RunWindow {
   backdoors: BackdoorTimeline;
   slowFirst: SlowSnapshotData | undefined;
   slowLast: SlowSnapshotData | undefined;
+  /** The installs' times, the slow snapshots' `lastAugReset`s: section 6 joins no move across one (#237's review). */
+  resetsMs: number[];
   /** The faction state over the slow snapshots (#197). */
   factionState: FactionStateFolding;
   /** The joins and the brain's faction work (#203), over the events and the medium and slow snapshots. */
@@ -429,6 +431,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const factionWork = new FactionWorkTimeline(events, BRAIN_STARTED_EVENT_KIND);
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
+    const resetsMs = new Set<number>();
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
@@ -437,6 +440,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
+      const lastAugReset = data.resetInfo?.lastAugReset;
+      if (typeof lastAugReset === "number" && Number.isFinite(lastAugReset)) resetsMs.add(lastAugReset);
       factionState.add(atMs, data);
       factionWork.addSlow(atMs, data);
       augmentations.addSlow(atMs, data, gameTimeMs);
@@ -497,6 +502,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       backdoors,
       slowFirst,
       slowLast,
+      resetsMs: [...resetsMs],
       factionState,
       factionWork,
       augmentations,
@@ -549,6 +555,7 @@ export function runReport(
       facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
       failures,
       facts.factionWork.readings,
+      facts.resetsMs,
     ),
     "",
     failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
