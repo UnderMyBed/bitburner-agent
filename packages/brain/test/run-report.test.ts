@@ -2039,3 +2039,149 @@ describe("section 6's moves across a batcher's restart (#237's review)", () => {
     expect(failures.filter((failure) => failure.startsWith("batcher idle on a move"))).toEqual([]);
   });
 });
+
+describe("a game freeze behind the batcher's desyncs (#241, owner decision 55)", () => {
+  /**
+   * Run #3's shape (2026-11-05, E0), on this file's clock: the Agent's rounds every 2 s, slow for one medium tick (five
+   * rounds of 2.548 s: the medium snapshots' game time 12.7 s apart from 11:41.77) and stopped once (a 5 s fast
+   * interval from 12:06.51); 1,615 desyncs on the-hub from 12:13.51 (16 late, 24 lost), the batcher recovering, then
+   * preparing, and batching again at 13:49.51, in step to the end at 30 min. `freezeAlso` adds a 5 s fast interval
+   * from each offset; `noFreeze` keeps every round at 2 s; `mediumRetriedAt` fails the medium tier at that round and
+   * the next, the fast snapshots after each saying so, and sends it the round after.
+   */
+  const END_MS = 30 * MINUTE;
+  function freezeRun({ freezeAlso = [] as number[], noFreeze = false, mediumRetriedAt = null as number | null } = {}) {
+    const rounds: number[] = [];
+    let offsetMs = 1_770;
+    const step = (ms: number) => {
+      rounds.push(offsetMs);
+      offsetMs += ms;
+    };
+    while (offsetMs < 701_770) step(2_000);
+    for (let round = 0; round < 5; round++) step(noFreeze ? 2_000 : 2_548);
+    while (offsetMs <= END_MS) {
+      const stops = (!noFreeze && offsetMs === 726_510) || freezeAlso.includes(offsetMs);
+      step(stops ? 5_000 : 2_000);
+    }
+    const OUT = { desyncs: 1615, outOfOrder: 1615, late: 16, lost: 24 };
+    const health = (atMs: number) => {
+      const first = rounds.find((each) => each > 732_000) as number;
+      const [state, counts] =
+        atMs < first
+          ? (["batching", {}] as const)
+          : atMs === first
+            ? (["recovering", { desyncs: 1000, outOfOrder: 1000 }] as const)
+            : atMs < 800_000
+              ? (["recovering", OUT] as const)
+              : atMs < 829_000
+                ? (["preparing", OUT] as const)
+                : (["batching", OUT] as const);
+      return { ...newBatcherHealth("the-hub", "r1", 0), state, batchesStarted: Math.floor(atMs / 1_000), ...counts };
+    };
+    event(0, "brainStarted", { release: "r" });
+    event(SECOND, "agentConnected", { agentSessionId: "session-1", deploymentId: "dep", game: { version: "3.0.1" } });
+    snapshot(
+      "static",
+      rounds[0] as number,
+      {
+        servers: [
+          { ...staticServer("home"), purchasedByPlayer: true, moneyMax: 0 },
+          staticServer("the-hub", { requiredHackingSkill: 300, minDifficulty: 20 }),
+        ],
+      },
+      T0 + (rounds[0] as number),
+    );
+    rounds.forEach((roundMs, index) => {
+      const retried = mediumRetriedAt !== null && index > mediumRetriedAt && index <= mediumRetriedAt + 2;
+      const degradedTiers = retried ? (["medium"] as const) : [];
+      snapshot(
+        "fast",
+        roundMs,
+        fastData({ batcher: health(roundMs), degradedTiers: [...degradedTiers] }),
+        T0 + roundMs,
+      );
+      const sendsMedium =
+        mediumRetriedAt === null
+          ? index % 5 === 0
+          : index === mediumRetriedAt + 2 || (index % 5 === 0 && index !== mediumRetriedAt);
+      if (!sendsMedium) return;
+      const medium = mediumData({ money: 1_000 + roundMs });
+      const player = {
+        ...medium.player,
+        skills: { hacking: 600, intelligence: 0 },
+        mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+      };
+      snapshot("medium", roundMs, { ...medium, player }, T0 + roundMs);
+    });
+  }
+  const freezeWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + END_MS + 30 * SECOND } as const;
+  const WARNING =
+    "batcher out of step after a game freeze: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on " +
+    `the-hub, the first seen at ${at(733_510)}, after a game freeze of ~3.0 s from ${at(726_510)} to ${at(731_510)} ` +
+    `(within a weaken there, 7 min 57 s); recovered in 1 min 36 s: batching again at ${at(829_510)}, and nothing out ` +
+    "of step in the 10 min after";
+
+  test("run #3: both freezes in section 4, the desyncs attributed to the second, recovered: WARN, not FAIL", () => {
+    freezeRun();
+    const { text, failures, warnings } = runReport(store, freezeWindow);
+    expect(failures).toEqual([]);
+    expect(warnings).toEqual([WARNING]);
+    expect(text).toContain(
+      `\n    ~2.7 s from ${at(701_770)} to ${at(714_510)}: the medium snapshots' game time 12.7 s apart (10 s due)\n` +
+        `    ~3.0 s from ${at(726_510)} to ${at(731_510)}: the medium snapshots' game time 13.0 s apart (10 s due); ` +
+        "the fast snapshots' game time 5.0 s apart (2 s due)\n",
+    );
+    expect(text).toContain(`\n  ${WARNING}\n`);
+    expect(text.split("\n").slice(-2)).toEqual(["Verdict: WARN", `  warning: ${WARNING}`]);
+  });
+
+  test("the same desyncs with no freeze: FAIL, as before", () => {
+    freezeRun({ noFreeze: true });
+    const { text, failures, warnings } = runReport(store, freezeWindow);
+    expect(warnings).toEqual([]);
+    expect(failures).toEqual([
+      "batcher out of step: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub, the first " +
+        `seen at ${at(733_770)}; no game freeze before it`,
+    ]);
+    expect(text).toContain("game freezes (#241");
+    expect(text).toMatch(/game freezing"\):\n {4}none\n/);
+  });
+
+  test("a silence with a restart event in it isn't a freeze: the desyncs are the first freeze's then", () => {
+    freezeRun();
+    event(728_000, "deployed", { deploymentId: "dep-c", replacedDeploymentId: "dep" });
+    const { text, failures, warnings } = runReport(store, freezeWindow);
+    expect(failures).toEqual([]);
+    expect(text).not.toContain(`~3.0 s from ${at(726_510)}`);
+    expect(warnings).toEqual([
+      WARNING.replace(`~3.0 s from ${at(726_510)} to ${at(731_510)}`, `~2.7 s from ${at(701_770)} to ${at(714_510)}`),
+    ]);
+  });
+
+  test("a medium snapshot the tier retried twice (14 s apart, the fast snapshots saying so) isn't a freeze", () => {
+    freezeRun({ noFreeze: true, mediumRetriedAt: 400 });
+    const { text } = runReport(store, freezeWindow);
+    expect(text).toMatch(/game freezing"\):\n {4}none\n/);
+  });
+
+  test("3 freezes within an hour: FAIL as game freezing, the batcher's warning still listed", () => {
+    freezeRun({ freezeAlso: [1_201_510, 1_500_510] });
+    const { text, failures, warnings } = runReport(store, freezeWindow);
+    const freezing =
+      `game freezing: 4 game freezes from ${at(701_770)} to ${at(1_505_510)}, 3 or more within an hour ` +
+      "(the longest ~3.0 s)";
+    expect(failures).toEqual([freezing]);
+    expect(warnings).toEqual([WARNING]);
+    expect(text.split("\n").slice(-3)).toEqual(["Verdict: FAIL", `  ${freezing}`, `  warning: ${WARNING}`]);
+  });
+
+  test("the command exits 0 on WARN", () => {
+    freezeRun();
+    const output = execFileSync(
+      process.execPath,
+      [REPORT_CLI, "--data-dir", directory, "--since", at(0), "--until", at(END_MS + 30 * SECOND)],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+    expect(output).toContain(`Verdict: WARN\n  warning: ${WARNING}`);
+  });
+});

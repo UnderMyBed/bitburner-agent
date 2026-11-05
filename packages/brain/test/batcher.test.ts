@@ -40,6 +40,7 @@ import {
 } from "../src/batcher.ts";
 import { batcherSection, whoHacked } from "../src/batcher-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
+import type { GameFreeze } from "../src/game-freeze.ts";
 import { chooseHackHosts } from "../src/hack-loop.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -307,8 +308,8 @@ describe("the run report's section", () => {
     expect(lines).toContain("  desyncs: 1 (0 out of order, 1 out of bounds)");
     // Out of step: a failure, from the snapshot that first showed it.
     expect(failures).toEqual([
-      "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost, the first seen at " +
-        "2026-01-01T01:10:00.000Z",
+      "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen " +
+        "at 2026-01-01T01:10:00.000Z; no game freeze before it",
     ]);
     expect(lines).toContain(`  ${failures[0]}`);
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
@@ -926,8 +927,193 @@ describe("the run report's section, out of step (#206)", () => {
     );
     // When the first was seen, not the last.
     expect(failures).toEqual([
-      "batcher out of step: 0 desyncs (0 out of order, 0 out of bounds), 1 late, 2 lost, the first seen at " +
-        "1970-01-01T00:01:00.000Z",
+      "batcher out of step: 0 desyncs (0 out of order, 0 out of bounds), 1 late, 2 lost on n00dles, the first seen " +
+        "at 1970-01-01T00:01:00.000Z; no game freeze before it",
+    ]);
+  });
+});
+
+describe("the run report's section, out of step after a game freeze (#241, owner decision 55)", () => {
+  // Run #3's shape (2026-11-05): a freeze of ~3 s from 17:12:06.51 to 17:12:11.51; 1,615 desyncs on the-hub from
+  // 17:12:13.51 (16 late, 24 lost), recovering, preparing, and batching again at 17:13:49.51; nothing since.
+  const T0 = Date.parse("2026-11-05T17:00:00Z");
+  const at = (offsetMs: number) => T0 + offsetMs;
+  const iso = (offsetMs: number) => new Date(T0 + offsetMs).toISOString();
+  const WEAKEN_MS = 477_000;
+  const FREEZE: GameFreeze = {
+    fromMs: at(726_510),
+    toMs: at(731_510),
+    lengthMs: 3_000,
+    evidence: ["the fast snapshots' game time 5.0 s apart (2 s due)"],
+  };
+  const health = (state: "batching" | "recovering" | "preparing", changes = {}) => ({
+    ...newBatcherHealth("the-hub", "r1", 0),
+    state,
+    batchesStarted: 900,
+    ...changes,
+  });
+  const OUT = { desyncs: 1615, outOfOrder: 1615, late: 16, lost: 24 };
+  /** The run: in step to 17:12, the freeze's desyncs, then batching again at `recoveredMs` and looked at to `lastMs`. */
+  const run = ({
+    recoveredMs = 829_510,
+    lastMs = 1_500_000,
+    after = [] as { atMs: number; health: unknown }[],
+  } = {}) => [
+    { atMs: at(700_000), health: health("batching") },
+    { atMs: at(733_510), health: health("recovering", { desyncs: 1000, outOfOrder: 1000 }) },
+    { atMs: at(760_000), health: health("recovering", OUT) },
+    { atMs: at(800_000), health: health("preparing", OUT) },
+    ...(recoveredMs <= lastMs ? [{ atMs: at(recoveredMs), health: health("batching", OUT) }] : []),
+    ...after,
+    { atMs: at(lastMs), health: health(recoveredMs <= lastMs ? "batching" : "recovering", OUT) },
+  ];
+  const section = (
+    points: { atMs: number; health: unknown }[],
+    freezes: GameFreeze[] = [FREEZE],
+    weakenMs: number | null = WEAKEN_MS,
+  ) => {
+    const failures: string[] = [];
+    const warnings: string[] = [];
+    const lines = batcherSection(points, failures, [], [], { freezes, weakenMs: () => weakenMs, warnings });
+    return { lines, failures, warnings };
+  };
+  const COUNTS = "1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub";
+  const AFTER_THE_FREEZE = `after a game freeze of ~3.0 s from ${iso(726_510)} to ${iso(731_510)} (within a weaken there, 7 min 57 s)`;
+
+  test("attributed, batching again and in step for 10 minutes: a warning naming the freeze, not a failure", () => {
+    const { lines, failures, warnings } = section(run());
+    const warning =
+      `batcher out of step after a game freeze: ${COUNTS}, the first seen at ${iso(733_510)}, ${AFTER_THE_FREEZE}; ` +
+      `recovered in 1 min 36 s: batching again at ${iso(829_510)}, and nothing out of step in the 10 min after`;
+    expect(warnings).toEqual([warning]);
+    expect(failures).toEqual([]);
+    expect(lines).toContain(`  ${warning}`);
+    // The counts are still shown.
+    expect(lines).toContain("  desyncs: 1615 (1615 out of order, 0 out of bounds)");
+  });
+
+  test("no freeze in the window, or none within a weaken before the first desync: a failure, as before", () => {
+    expect(section(run(), []).failures).toEqual([
+      `batcher out of step: ${COUNTS}, the first seen at ${iso(733_510)}; no game freeze before it`,
+    ]);
+    // A weaken of 1 s: the freeze ended 2 s before the first desync.
+    expect(section(run(), [FREEZE], 1_000).failures).toEqual([
+      `batcher out of step: ${COUNTS}, the first seen at ${iso(733_510)}; no game freeze within a weaken there ` +
+        `(1 s) before it (the last, ~3.0 s from ${iso(726_510)} to ${iso(731_510)})`,
+    ]);
+    // A freeze after the first desync isn't its cause.
+    const later = { ...FREEZE, fromMs: at(733_511), toMs: at(740_000) };
+    expect(section(run(), [later]).failures[0]).toMatch(/; no game freeze before it$/);
+    expect(section(run(), [later]).warnings).toEqual([]);
+  });
+
+  test("a freeze, but a weaken's time there unknown: a failure, never a guess", () => {
+    expect(section(run(), [FREEZE], null).failures).toEqual([
+      `batcher out of step: ${COUNTS}, the first seen at ${iso(733_510)}; a game freeze of ~3.0 s from ` +
+        `${iso(726_510)} to ${iso(731_510)} before it, but a weaken's time on the-hub is unknown (no static snapshot ` +
+        "with its figures, or no medium snapshot with the player's)",
+    ]);
+  });
+
+  test("the first desync seen as the freeze ends, or a weaken after it, is the freeze's", () => {
+    const freeze = (toMs: number) => ({ ...FREEZE, fromMs: at(toMs - 5_000), toMs: at(toMs) });
+    expect(section(run(), [freeze(733_510)]).warnings).toHaveLength(1);
+    expect(section(run(), [freeze(733_510 - WEAKEN_MS)]).warnings).toHaveLength(1);
+    expect(section(run(), [freeze(733_510 - WEAKEN_MS - 1)]).warnings).toEqual([]);
+  });
+
+  test("still recovering at the last look: a failure, as before", () => {
+    const { failures, warnings } = section(run({ recoveredMs: Number.POSITIVE_INFINITY, lastMs: 900_000 }));
+    expect(warnings).toEqual([]);
+    expect(failures).toEqual([
+      `batcher out of step after a game freeze, not recovered: ${COUNTS}, the first seen at ${iso(733_510)}, ` +
+        `${AFTER_THE_FREEZE}; not batching again by the last look, at ${iso(900_000)}`,
+    ]);
+  });
+
+  test("batching again only more than 10 minutes after the freeze: a failure", () => {
+    // 10 minutes after the freeze's end is batching again in time.
+    expect(section(run({ recoveredMs: 731_510 + 10 * 60_000, lastMs: 2_000_000 })).warnings).toHaveLength(1);
+    const { failures } = section(run({ recoveredMs: 731_510 + 10 * 60_000 + 1, lastMs: 2_000_000 }));
+    expect(failures).toEqual([
+      `batcher out of step after a game freeze, not recovered: ${COUNTS}, the first seen at ${iso(733_510)}, ` +
+        `${AFTER_THE_FREEZE}; batching again only at ${iso(1_331_511)}, 10 min after the freeze (more than 10 min)`,
+    ]);
+  });
+
+  test("out of step again within 10 minutes of batching again: a failure, with when", () => {
+    const again = { atMs: at(1_000_000), health: health("batching", { ...OUT, desyncs: 1616, outOfBounds: 1 }) };
+    const { failures, warnings } = section(
+      run({ after: [again] }).map((point) => {
+        // The last look carries the new count on.
+        return point.atMs === at(1_500_000) ? { ...point, health: again.health } : point;
+      }),
+    );
+    expect(warnings).toEqual([]);
+    expect(failures).toEqual([
+      "batcher out of step after a game freeze, not recovered: 1616 desyncs (1615 out of order, 1 out of bounds), " +
+        `16 late, 24 lost on the-hub, the first seen at ${iso(733_510)}, ${AFTER_THE_FREEZE}; out of step again at ` +
+        `${iso(1_000_000)}, 2 min 50 s after batching again at ${iso(829_510)} (within 10 min)`,
+    ]);
+  });
+
+  test("out of step more than 10 minutes after batching again is another stretch, judged on its own", () => {
+    const again = health("batching", { ...OUT, desyncs: 1616, outOfBounds: 1 });
+    const points = [...run({ lastMs: 1_500_000 }), { atMs: at(1_600_000), health: again }];
+    const { failures, warnings } = section(points);
+    expect(warnings).toHaveLength(1);
+    expect(failures).toEqual([
+      "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on the-hub, the first seen " +
+        `at ${iso(1_600_000)}; no game freeze within a weaken there (7 min 57 s) before it (the last, ~3.0 s from ` +
+        `${iso(726_510)} to ${iso(731_510)})`,
+    ]);
+  });
+
+  test("the window's last look under 10 minutes after batching again: not yet a warning, a failure", () => {
+    const { failures, warnings } = section(run({ lastMs: 829_510 + 5 * 60_000 }));
+    expect(warnings).toEqual([]);
+    expect(failures).toEqual([
+      `batcher out of step after a game freeze, not recovered: ${COUNTS}, the first seen at ${iso(733_510)}, ` +
+        `${AFTER_THE_FREEZE}; batching again at ${iso(829_510)}, but the last look, at ${iso(1_129_510)}, is 5 min ` +
+        "after it: under the 10 min in step a freeze's warning needs",
+    ]);
+  });
+
+  test("late or lost alone, never leaving batching, is batching again once a weaken after the freeze has passed", () => {
+    const batching = (changes = {}) => health("batching", changes);
+    const points = [
+      { atMs: at(700_000), health: batching() },
+      { atMs: at(733_510), health: batching({ late: 2 }) },
+      { atMs: at(735_510), health: batching({ late: 2 }) },
+      // Lost 10 s after its landing, still within the freeze's weaken: the same stretch.
+      { atMs: at(745_510), health: batching({ late: 2, lost: 1 }) },
+      // Past the weaken, not yet a part's loss after it: still settling.
+      { atMs: at(731_510 + WEAKEN_MS + 5_000), health: batching({ late: 2, lost: 1 }) },
+      { atMs: at(731_510 + WEAKEN_MS + 10_000), health: batching({ late: 2, lost: 1 }) },
+      { atMs: at(2_000_000), health: batching({ late: 2, lost: 1 }) },
+    ];
+    const { failures, warnings } = section(points);
+    expect(failures).toEqual([]);
+    expect(warnings).toEqual([
+      "batcher out of step after a game freeze: 0 desyncs (0 out of order, 0 out of bounds), 2 late, 1 lost on " +
+        `the-hub, the first seen at ${iso(733_510)}, ${AFTER_THE_FREEZE}; recovered in 8 min 5 s: batching again at ` +
+        `${iso(1_218_510)}, and nothing out of step in the 10 min after`,
+    ]);
+  });
+
+  test("two runs, one attributed and one not: a warning and a failure", () => {
+    const other = (changes = {}) => ({ ...newBatcherHealth("n00dles", "r2", 0), state: "batching", ...changes });
+    const points = [
+      ...run(),
+      { atMs: at(1_600_000), health: other() },
+      { atMs: at(2_400_000), health: other({ desyncs: 1, outOfBounds: 1, state: "recovering" }) },
+    ];
+    const { failures, warnings } = section(points);
+    expect(warnings).toHaveLength(1);
+    expect(failures).toEqual([
+      "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen " +
+        `at ${iso(2_400_000)}; no game freeze within a weaken there (7 min 57 s) before it (the last, ~3.0 s from ` +
+        `${iso(726_510)} to ${iso(731_510)})`,
     ]);
   });
 });

@@ -35,10 +35,12 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
+import { findGameFreezes, freezeLines, type GameFreeze, type SnapshotTime, WeakenTimes } from "./game-freeze.ts";
 import {
   DEFAULT_GAP_THRESHOLD_MS,
   describePageHeap,
   findGaps,
+  formatDuration,
   formatIsoTime,
   formatSeconds,
   type Gap,
@@ -101,8 +103,13 @@ export interface RunWindow {
 export interface RunReport {
   /** The whole report, the verdict last. */
   text: string;
-  /** One line per failure; none is PASS. */
+  /** One line per failure; none is PASS, or WARN with warnings. */
   failures: string[];
+  /**
+   * One line per warning (#241, owner decision 55): what went wrong for a reason outside the brain, and was put right
+   * by itself (a batcher out of step after a game freeze, batching again). WARN with no failure; listed after FAIL's.
+   */
+  warnings: string[];
 }
 
 /** When the newest run of the brain started (its `brainStarted` event), or null if it never has. */
@@ -301,6 +308,10 @@ class FactionStateFolding {
 /** What the report keeps of each fast snapshot: not the home processes, the bulk of it. */
 interface FastPoint {
   atMs: number;
+  /** The game's time it was taken (#241). */
+  gameTimeMs: number;
+  /** The tiers it says failed last round (#241: a medium snapshot retried is no freeze). */
+  degradedTiers: unknown;
   pageHeapUsedBytes: unknown;
   homeRamUsed: unknown;
   intents: IntentOutcome[];
@@ -362,6 +373,10 @@ interface RunFacts extends RunWindow {
   fast: FastPoint[];
   mediumFirst: MediumSnapshotData | undefined;
   mediumLast: MediumSnapshotData | undefined;
+  /** The medium snapshots' times (#241), for game freezes. */
+  mediumTimes: SnapshotTime[];
+  /** A weaken's time on a target over the window (#241), to attribute the batcher's desyncs to a freeze. */
+  weakenTimes: WeakenTimes;
   /** The medium snapshots' money, where it's a number. */
   money: MoneyPoint[];
   targets: MovedServers[];
@@ -413,8 +428,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const hacking = new HackingFold(playersServers);
     // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
-    if (isObject(staticBefore?.data))
+    const weakenTimes = new WeakenTimes();
+    if (isObject(staticBefore?.data)) {
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+      weakenTimes.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+    }
     // The newest static snapshot, for which servers are the game's: the hack loop's hosts (#194).
     let staticLast = isObject(staticBefore?.data) ? (staticBefore.data as StaticSnapshotData) : undefined;
     const backdoors = new BackdoorTimeline();
@@ -422,6 +440,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       snapshotCount++;
       staticLast = data;
       hacking.addStatic(atMs, data);
+      weakenTimes.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
@@ -456,8 +475,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const inference = new HackTargetInference(playersServers);
     const cloudServerChanges = new CloudServerChanges(cloudServers);
     const worldDaemon = new WorldDaemonFold();
-    for (const { atMs, data } of ofTier<MediumSnapshotData>("medium")) {
+    const mediumTimes: SnapshotTime[] = [];
+    for (const { atMs, gameTimeMs, data } of ofTier<MediumSnapshotData>("medium")) {
       worldDaemon.addMedium(atMs, data);
+      mediumTimes.push({ atMs, gameTimeMs });
+      weakenTimes.addMedium(atMs, data);
       snapshotCount++;
       mediumFirst ??= data;
       mediumLast = data;
@@ -471,10 +493,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       augmentations.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
-    for (const { atMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
+    for (const { atMs, gameTimeMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
       fast.push({
         atMs,
+        gameTimeMs,
+        degradedTiers: data.degradedTiers,
         pageHeapUsedBytes: data.pageHeapUsedBytes,
         homeRamUsed: data.game?.homeRamUsed,
         intents: Array.isArray(data.intents) ? data.intents.filter((outcome) => typeof outcome?.id === "string") : [],
@@ -497,6 +521,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       fast,
       mediumFirst,
       mediumLast,
+      mediumTimes,
+      weakenTimes,
       money,
       targets: inference.stretches,
       backdoors,
@@ -537,6 +563,13 @@ export function runReport(
     );
   }
   const failures: string[] = [];
+  const warnings: string[] = [];
+  // The game's freezes (#241): section 4 lists them, section 6 attributes the batcher's desyncs to them.
+  const freezes = findGameFreezes({
+    medium: facts.mediumTimes,
+    fast: facts.fast,
+    restartsMs: facts.events.filter((event) => RESTART_EVENT_KINDS.includes(event.kind)).map(({ atMs }) => atMs),
+  });
   const lines = [
     `Run report (${window.environment}) from ${formatIsoTime(window.sinceMs)} to ${formatIsoTime(window.untilMs)} ` +
       `(${formatDuration(window.untilMs - window.sinceMs)})`,
@@ -547,7 +580,7 @@ export function runReport(
     "",
     ...actionsSection(facts),
     "",
-    ...healthSection(facts, gapThresholdMs, failures),
+    ...healthSection(facts, gapThresholdMs, failures, freezes),
     "",
     ...withWhoHacked(facts.hacking.section(failures), facts),
     "",
@@ -556,12 +589,14 @@ export function runReport(
       failures,
       facts.factionWork.readings,
       facts.resetsMs,
+      { freezes, weakenMs: (target, atMs) => facts.weakenTimes.weakenMs(target, atMs), warnings },
     ),
     "",
-    failures.length === 0 ? "Verdict: PASS" : "Verdict: FAIL",
+    failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
     ...failures.map((failure) => `  ${failure}`),
+    ...warnings.map((warning) => `  warning: ${warning}`),
   ];
-  return { text: lines.join("\n"), failures };
+  return { text: lines.join("\n"), failures, warnings };
 }
 
 /**
@@ -580,16 +615,8 @@ function withWhoHacked(lines: string[], facts: RunFacts): string[] {
 
 // --- Formatting -------------------------------------------------------------------------------------------------------
 
-/** "29 s", "10 min", "24 min 20 s", "1 h 14 min": to the second under an hour, to the minute over. */
-export function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.round(durationMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours} h ${minutes} min`;
-  if (minutes > 0) return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`;
-  return `${seconds} s`;
-}
+// "29 s", "10 min", "24 min 20 s", "1 h 14 min": ./gap-report.ts's, where the batcher's section can share it (#241).
+export { formatDuration };
 
 const UNKNOWN = "unknown";
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -1119,11 +1146,18 @@ function cloudServerLines(facts: RunFacts): string[] {
 // --- 4. Health --------------------------------------------------------------------------------------------------------
 
 /** Each check prints what it found, and adds a line to `failures` for each failure. */
-function healthSection(facts: RunFacts, gapThresholdMs: number, failures: string[]): string[] {
+function healthSection(
+  facts: RunFacts,
+  gapThresholdMs: number,
+  failures: string[],
+  freezes: readonly GameFreeze[],
+): string[] {
   const lines = ["4. Health"];
   const heartbeat = heartbeatLines(facts, gapThresholdMs, failures);
   lines.push(...heartbeat.lines);
   lines.push(`  ${describePageHeap(facts.fast.map((point) => point.pageHeapUsedBytes).filter(isNumber))}`);
+  // Game freezes (#241): each, and 3 or more in an hour a failure.
+  lines.push(...freezeLines(freezes, failures));
   lines.push(...stallLines(facts, heartbeat.gaps, failures));
 
   lines.push(`  stuck intents (${INTENT_STUCK_AFTER_TRIES} tries or more, not done at the last look):`);
