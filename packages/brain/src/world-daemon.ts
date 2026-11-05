@@ -17,7 +17,11 @@
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
-//   is "Daedalus count stuck": the `daedalusCount` stall, at once, a run report failure.
+//   is "Daedalus count stuck" (the `daedalusCount` stall, at once, a run report failure) only if it passed over one
+//   that counts (#238): A6's commit recorded one within reach that the money left after its set would have bought; or
+//   A6 installed and its commit kept no facts. Else it's an early NeuroFlux-only install with nothing that counts
+//   within reach, as the multipliers climb to the next factions: `daedalusCountNeuroFluxOnly`, the report's
+//   information.
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
@@ -37,6 +41,7 @@ import {
   WORLD_DAEMON,
   worldDaemonProblem,
 } from "@bitburner-agent/core";
+import type { CountFacts } from "./augmentations.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { type DaedalusReach, daedalusReach, describeReach } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
@@ -78,12 +83,29 @@ export const HACKING_EXP_GAP_MS = 3 * 60_000;
 export const WORLD_DAEMON_STALLED_EVENT_KIND = "worldDaemonStalled";
 /** Stored by the controller as a destroy goes out (its reset note written): the brain's, or the owner's. */
 export const BITNODE_DESTROY_SENT_EVENT_KIND = "bitNodeDestroySent";
+/**
+ * An install while short of Daedalus's count that added none to it with nothing that counts passed over (#238): the
+ * run report's information, never a failure.
+ */
+export const DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND = "daedalusCountNeuroFluxOnly";
 
 export type WorldDaemonEvent =
   | { type: typeof WORLD_DAEMON_STALLED_EVENT_KIND; atMs: number; step: StallStep; sinceMs: number; detail: string }
-  | { type: typeof BITNODE_DESTROY_SENT_EVENT_KIND; atMs: number; source: "brain" | "manual"; nextBitNode: number };
+  | { type: typeof BITNODE_DESTROY_SENT_EVENT_KIND; atMs: number; source: "brain" | "manual"; nextBitNode: number }
+  | {
+      type: typeof DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND;
+      atMs: number;
+      installed: number;
+      required: number;
+      /** A6's commit's facts, or null for an install without them (yours, the switch off, an earlier brain's). */
+      countFacts: CountFacts | null;
+      detail: string;
+    };
 
-/** The steps a stall can be on; `daedalusCount` (#228) is "Daedalus count stuck": an install that added none. */
+/**
+ * The steps a stall can be on; `daedalusCount` (#228) is "Daedalus count stuck": an install that added none, passing
+ * over one that counts (#238).
+ */
 export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy" | "nextBitNode";
 
 /**
@@ -162,6 +184,28 @@ export interface WorldDaemonPath {
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
+
+/** "Neural Wit Amplifier (BitRunners, $10,000,000)": the first three, then how many more. */
+function describeWithin(within: CountFacts["within"]): string {
+  const named = within
+    .slice(0, 3)
+    .map(({ augmentation, faction, money }) => `${augmentation} (${faction}, ${formatMoney(money)})`);
+  return within.length > 3 ? `${named.join(", ")} and ${within.length - 3} more` : named.join(", ");
+}
+
+/** Why an install that added none isn't stuck (#238): nothing within reach, or within the money left after the set. */
+function describeNothingWithin(countFacts: CountFacts | null): string {
+  if (countFacts === null) {
+    return "no facts from A6's commit (yours, the switch off, or an earlier brain's), so not judged";
+  }
+  const [nearest] = countFacts.within;
+  if (nearest === undefined) return "nothing that counts within reach";
+  return (
+    `nothing that counts within its money: the cheapest within reach, ${describeWithin([nearest])}, costs more ` +
+    `than the ${formatMoney(countFacts.moneyAfterSet)} left after the set`
+  );
+}
 
 /** The medium snapshot's hacking level, or null; and its experience, or null (only the ETA needs it). */
 function hackingOf(mediumData: MediumSnapshotData | null) {
@@ -439,6 +483,13 @@ export interface WorldDaemonInputs {
   shareBonus?: number;
   /** The city group the brain chose this cycle (#228, ./invitations.ts), for the reach; none when absent. */
   cityGroup?: string | null;
+  /**
+   * A6's commit's facts while short of Daedalus's count (#238, `AugmentationRule.countFacts`): what counts within
+   * reach, and the money left after the set; null without a commit (none when absent).
+   */
+  countFacts?: CountFacts | null;
+  /** A6 asked for its install (#238 review, `AugmentationRule.installAskedFor`): an install with no facts is its. */
+  augmentationsInstalling?: boolean;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -454,10 +505,19 @@ export class WorldDaemonRule {
   #ready = new Map<StallStep, { sinceMs: number; stored: boolean; detail: string }>();
   /** Daedalus's reputation while The Red Pill is short, and when it last rose (or was first seen). */
   #reputation: { value: number; risenAtMs: number } | null = null;
-  /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`. */
-  #count: { lastAugReset: number; installed: number; required: number; short: boolean; queued: number } | null = null;
+  /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`; A6's commit's facts (#238). */
+  #count: {
+    lastAugReset: number;
+    installed: number;
+    required: number;
+    short: boolean;
+    queued: number;
+    countFacts: CountFacts | null;
+    augmentationsInstalling: boolean;
+  } | null = null;
   /**
-   * The last install while short that added none to the count (#228), while its cycle lasts: "Daedalus count stuck".
+   * The last install while short that added none to the count (#228), passing over one that counts (#238), while its
+   * cycle lasts: "Daedalus count stuck".
    */
   #stuck: { atMs: number; detail: string } | null = null;
 
@@ -509,6 +569,8 @@ export class WorldDaemonRule {
     enabled,
     shareBonus = 1,
     cityGroup = null,
+    countFacts = null,
+    augmentationsInstalling = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     const hacking = hackingOf(mediumData);
@@ -546,7 +608,7 @@ export class WorldDaemonRule {
       return this.#asked !== null;
     }
     this.#path = path;
-    this.#watchCount(path, slowData, nowMs ?? 0);
+    this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
     const blocked = path.daemon === null ? null : nextBitNodeProblem(slowData.resetInfo?.ownedSF ?? {});
     // Refused, it's logged and alerted once, at once, as the `nextBitNode` stall.
     this.#watch(path, nowMs ?? 0, enabled, blocked);
@@ -563,12 +625,24 @@ export class WorldDaemonRule {
 
   /**
    * Daedalus's count across an install (#228): one while short (the count as last seen before it, Daedalus neither
-   * joined nor invited) that leaves the count where it was is "Daedalus count stuck", for the cycle after it. Judged
+   * joined nor invited) that leaves the count where it was, passing over one that counts (#238), is "Daedalus count
+   * stuck", for the cycle after it. Judged
    * per install, from the slow snapshots' `lastAugReset`: a restarted brain judges the installs it sees. A reset with
    * nothing queued before it isn't an install (#228 re-review): a soft reset (`installAugmentations(true)`,
    * `GameRoot.tsx:297-299`, `Singularity.ts:185-193`, `PlayerObjectGeneralMethods.ts:126`), or an older save loaded.
+   * Stuck only if it passed over one that counts (#238): A6's commit's `countFacts` hold one within reach whose money
+   * is no more than what was left after the set, so A6's set should have taken it; or A6 asked for the install and its
+   * commit kept no facts (a regression that loses them can't hide a stall). Else an early NeuroFlux-only install, with
+   * nothing that counts within reach (or within the money), or one without A6's facts (yours, the switch off, an
+   * earlier brain's): `daedalusCountNeuroFluxOnly`, information.
    */
-  #watchCount(path: WorldDaemonPath, slowData: SlowSnapshotData, nowMs: number): void {
+  #watchCount(
+    path: WorldDaemonPath,
+    slowData: SlowSnapshotData,
+    nowMs: number,
+    countFacts: CountFacts | null,
+    augmentationsInstalling: boolean,
+  ): void {
     const lastAugReset = slowData.resetInfo?.lastAugReset;
     const daedalus = path.daedalus;
     if (!isFiniteNumber(lastAugReset) || daedalus === null) {
@@ -578,15 +652,40 @@ export class WorldDaemonRule {
     }
     const before = this.#count;
     if (before !== null && before.lastAugReset !== lastAugReset) {
-      const stuck = before.short && before.queued > 0 && daedalus.augmentations <= before.installed;
-      this.#stuck = stuck
-        ? {
-            atMs: nowMs,
-            detail:
-              `Daedalus count stuck: an install at ${count(before.installed)} of ${count(before.required)} ` +
-              "augmentations installed added none to the count (NeuroFlux Governor's levels count once)",
-          }
-        : null;
+      const addedNoneToCount = before.short && before.queued > 0 && daedalus.augmentations <= before.installed;
+      const facts = before.countFacts;
+      const moneyAfterSet = facts?.moneyAfterSet ?? 0;
+      const passedOver = facts?.within.filter((each) => each.money <= moneyAfterSet) ?? [];
+      const countDescription = `${count(before.installed)} of ${count(before.required)} augmentations installed`;
+      const stuckBecause = !addedNoneToCount
+        ? null
+        : passedOver.length > 0
+          ? `passing over ${describeWithin(passedOver)}, which the money left after the set ` +
+            `(${formatMoney(moneyAfterSet)}) would have bought`
+          : facts === null && before.augmentationsInstalling
+            ? "A6's install, with no facts from its commit of what counts within reach"
+            : null;
+      this.#stuck =
+        stuckBecause === null
+          ? null
+          : {
+              atMs: nowMs,
+              detail:
+                `Daedalus count stuck: an install at ${countDescription} added none to the count (NeuroFlux ` +
+                `Governor's levels count once), ${stuckBecause}`,
+            };
+      if (addedNoneToCount && stuckBecause === null) {
+        const detail = `installed NeuroFlux Governor only at ${countDescription}: ${describeNothingWithin(facts)}`;
+        this.#log(`world daemon: ${detail}`);
+        this.#emit({
+          type: DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
+          atMs: nowMs,
+          installed: before.installed,
+          required: before.required,
+          countFacts: facts,
+          detail,
+        });
+      }
     }
     this.#count = {
       lastAugReset,
@@ -594,6 +693,8 @@ export class WorldDaemonRule {
       required: daedalus.augmentationsRequired,
       short: daedalus.short,
       queued: factionReadingOf(slowData)?.state?.queuedAugmentations.length ?? 0,
+      countFacts,
+      augmentationsInstalling,
     };
   }
 

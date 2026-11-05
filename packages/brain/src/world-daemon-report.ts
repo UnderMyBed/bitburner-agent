@@ -1,11 +1,13 @@
 // The World Daemon in the run report (#215): the path as the window's last snapshots show it (Daedalus, The Red Pill,
 // w0r1d_d43m0n's hacking requirement and the ETA at the window's experience rate), the destroys sent, and each stall
-// the rule stored, a failure.
+// the rule stored, a failure; an install while short of Daedalus's count that added none with nothing that counts
+// passed over (#238), information.
 import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { CITY_GROUP_CHOSEN_EVENT_KIND } from "./invitations.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
+  DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
   describeWorldDaemonPath,
   HackingExpRate,
   WORLD_DAEMON_STALLED_EVENT_KIND,
@@ -13,7 +15,11 @@ import {
 } from "./world-daemon.ts";
 
 /** The World Daemon's events (#215): section 3's and 4's, so left out of section 1's timeline. */
-export const WORLD_DAEMON_EVENT_KINDS = [WORLD_DAEMON_STALLED_EVENT_KIND, BITNODE_DESTROY_SENT_EVENT_KIND];
+export const WORLD_DAEMON_EVENT_KINDS = [
+  WORLD_DAEMON_STALLED_EVENT_KIND,
+  BITNODE_DESTROY_SENT_EVENT_KIND,
+  DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
+];
 
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
@@ -27,7 +33,10 @@ export class WorldDaemonFold {
     if (typeof exp === "number" && Number.isFinite(exp)) this.#exp.add(atMs, exp);
   }
 
-  /** Section 3's lines: the path as of the last snapshots, then each destroy sent. */
+  /**
+   * Section 3's lines: the path as of the last snapshots, then each destroy sent, and each install while short that
+   * added none to the count with nothing that counts passed over (#238).
+   */
   pathLines(
     {
       staticLast,
@@ -70,6 +79,9 @@ export class WorldDaemonFold {
           `BitNode ${String(fields.nextBitNode)}`,
       );
     }
+    for (const { atMs, detail } of events.filter((event) => event.kind === DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND)) {
+      lines.push(`    ${formatTime(atMs)}  ${String(fieldsOf(detail).detail)}`);
+    }
     return lines;
   }
 
@@ -77,7 +89,7 @@ export class WorldDaemonFold {
   healthLines(events: readonly StoredEvent[], failures: string[], formatTime: (ms: number) => string): string[] {
     const lines = [
       "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5; or an install while " +
-        "short of Daedalus's count that added none to it, #228):",
+        "short of Daedalus's count that added none to it, passing over one that counts, #228, #238):",
     ];
     const stalls = events.filter((event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND);
     for (const { atMs, detail } of stalls) {

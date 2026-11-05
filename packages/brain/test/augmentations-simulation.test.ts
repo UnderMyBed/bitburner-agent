@@ -9,6 +9,8 @@
 //   through the Agent's `sim` effector, then home's RAM, then NeuroFlux Governor, and installs through the gate and
 //   a save backup; the game starts boot.js after the reset, and the next Agent connects.
 // - After the reset, the player's multipliers are the five's and NeuroFlux Governor's, and home has its new RAM.
+// - On to the second install (#238): NeuroFlux Governor's levels alone at 6 of 30, with nothing that counts within
+//   reach. The report says so as information, and doesn't fail "Daedalus count stuck" (#229's check did).
 // CI runs seed 1; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
 import type { MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -56,6 +58,8 @@ const NEUROFLUX_LEVEL_1 = 750_000 * 1.9 ** 5;
  */
 const HOME_RAM_INCOME_SLACK = 5_000_000;
 const NEUROFLUX = 1.01000262;
+/** From the first cycle's checks to the second install: about 35 virtual minutes on seeds 1 to 5 (#238). */
+const SECOND_INSTALL_WITHIN_MS = 45 * MINUTE;
 
 test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd entry fails loudly", () => {
   expect(augmentationSeeds(undefined)).toEqual([1]);
@@ -64,7 +68,8 @@ test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd 
 });
 
 test.each(SEEDS)(
-  "seed %i: from a fresh start, CyberSec's five, home RAM and NeuroFlux Governor bought and installed, the Agent back",
+  "seed %i: from a fresh start, CyberSec's five, home RAM and NeuroFlux Governor installed, the Agent back; then a " +
+    "NeuroFlux-only install at 6 of 30, information, not a failure",
   { timeout: 300_000 },
   async (seed) => {
     const fresh = await freshStartOf({ withDesiredState: true, seed });
@@ -207,6 +212,25 @@ test.each(SEEDS)(
     // most of the hosts' RAM, and the batcher fits each batch to the RAM as it will be held (seeds 1 to 5).
     expect(lines).toContain("  short of RAM: none");
     expect(failures).toEqual([]);
+
+    // The second install (#238), NeuroFlux Governor's levels alone on seeds 1 to 5: the factions joined this cycle
+    // (NiteSec, The Black Hand, Tian Di Hui, group B, CyberSec again) have too little reputation for anything they sell
+    // that isn't owned, so nothing that counts is within reach. That's section 3's information, not a failure.
+    await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? resetAt) !== resetAt, SECOND_INSTALL_WITHIN_MS);
+    expect(slow()?.resetInfo.lastAugReset).not.toBe(resetAt);
+    await game.run(MINUTE);
+    expect(Object.keys(slow()?.resetInfo.ownedAugs ?? {})).toHaveLength(6);
+    const second = runReport(fresh.data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() });
+    expect(second.text.split("\n")).toContainEqual(
+      expect.stringMatching(
+        /^ {4}\S+ {2}installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within reach$/,
+      ),
+    );
+    expect(brain.logLines).toContain(
+      "world daemon: installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within " +
+        "reach",
+    );
+    expect(second.failures).toEqual([]);
     console.log(
       `seed ${seed}: hacking ${levelBefore} 17 min after the start, ${levelAfter} 20 min after the install (home ` +
         `${homeRamBefore} GB, then ${homeRam()} GB); ` +

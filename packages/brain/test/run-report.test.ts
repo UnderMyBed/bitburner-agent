@@ -1943,7 +1943,7 @@ describe("the World Daemon (#215)", () => {
     );
     expect(text).toContain(
       "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5; or an install while " +
-        "short of Daedalus's count that added none to it, #228):\n    none",
+        "short of Daedalus's count that added none to it, passing over one that counts, #228, #238):\n    none",
     );
     expect(failures.filter((failure) => failure.startsWith("world daemon"))).toEqual([]);
     // In sections 3 and 4, not section 1's timeline.

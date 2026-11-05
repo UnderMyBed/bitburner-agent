@@ -8,6 +8,7 @@ import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
+  donationToReach,
   type FactionState,
   isWorthInstalling,
   type MediumSnapshotData,
@@ -363,6 +364,8 @@ describe("the count rule (#222)", () => {
       neuroFluxTarget: 0,
       donations: [],
       reason: "nothing left",
+      // Short of Daedalus's count (#238): nothing else reached at CyberSec, no NeuroFlux Governor level.
+      countFacts: { moneyAfterSet: 0, within: [] },
     });
     expect(events.at(-1)).toMatchObject({ type: "augmentationInstallChosen", reason: "nothing left", cost: FIVE_COST });
     expect(lines).toEqual([
@@ -1027,6 +1030,7 @@ describe("committed", () => {
       neuroFluxTarget: 4,
       donations: [],
       reason: "nothing left",
+      countFacts: { moneyAfterSet: expect.any(Number), within: [] },
     });
     rule = newRule();
     // $1b now covers NeuroFlux Governor, but the install is out.
@@ -1890,5 +1894,125 @@ describe("short of Daedalus's count (#228)", () => {
     measureIncome(1e6, { joined: FOUR, ownedAugs: RUN_2, reputation: 0 }, medium({ hacking: 6_000, money: 0 }));
     expect(rule.view().progress).toMatchObject({ affordable: 0, short: { installed: 23, required: 30 } });
     expect(rule.reserve()).toBeCloseTo(TWO_COST, 0);
+  });
+});
+
+describe("what counts within reach at a commit while short (#238): Daedalus count stuck's facts", () => {
+  /** CyberSec's five and NeuroFlux Governor installed: the extended runs' second cycle, at 6 of 30. */
+  const SIX = { ...Object.fromEntries(FIVE.map((name) => [name, 1])), [NFG]: 1 };
+  /** NeuroFlux Governor's levels 2 to 4 with $10m: 750k × 1.14ᵏ, × 1.9 for each bought before. */
+  const THREE_LEVELS = [1, 2, 3].reduce((sum, k) => sum + 750_000 * 1.14 ** k * 1.9 ** (k - 1), 0);
+  /** 22 hours online: both bars at 1, so NeuroFlux Governor's levels alone install. */
+  const longCycle = () => {
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: 22 * HOUR, lastGameTimeMs: gameTimeMs }),
+    );
+    rule = newRule();
+  };
+
+  test("nothing else joined: a NeuroFlux-only commit, nothing within reach, and the money left after the set", () => {
+    longCycle();
+    throughCountdown({
+      slowData: slow({ reputation: 18_750, ownedAugs: SIX }),
+      mediumData: medium({ money: 10e6 }),
+    });
+    expect(rule.view().set).toEqual([]);
+    expect(readAugmentationCycle(store)).toMatchObject({ neuroFluxTarget: 3, reason: "count reached" });
+    const facts = readAugmentationCycle(store)?.countFacts;
+    expect(facts?.within).toEqual([]);
+    // All $10m (#238 review): not the $6.7m the three levels take, as the fourth's $8.7m isn't covered.
+    expect(facts?.moneyAfterSet).toBe(10e6);
+    expect(THREE_LEVELS).toBeLessThan(10e6 - 3e6);
+    expect(rule.countFacts()).toEqual(facts);
+  });
+
+  test("The Black Hand's three reached beyond the money: each, whatever its value, at its price and seller", () => {
+    longCycle();
+    // At 15,000: Artificial Synaptic Potentiation, Embedded Netburner Module, Magnetism Amplifier (no hacking value).
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "The Black Hand", reputation: 15_000, favor: 0 },
+    ];
+    throughCountdown({ slowData: slow({ joined, ownedAugs: SIX }), mediumData: medium({ money: 10e6 }) });
+    expect(rule.countFacts()).toEqual({
+      moneyAfterSet: 10e6,
+      within: [
+        { augmentation: "Artificial Synaptic Potentiation", faction: "The Black Hand", money: 80e6 },
+        { augmentation: "Embedded Netburner Module", faction: "The Black Hand", money: 250e6 },
+        { augmentation: "Magnetism Amplifier", faction: "The Black Hand", money: 250e6 },
+      ],
+    });
+  });
+
+  test("the set's own purchases aren't within reach; reached ones left over are, priced after the set", () => {
+    // Run #2's 23, BitRunners at 0 (Neural Wit Amplifier not reached): Magnetism Amplifier the set.
+    const HACKERS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners"];
+    const runTwo: Record<string, number> = {
+      ...Object.fromEntries(
+        [...new Set(HACKERS.flatMap((faction) => augmentationsSoldBy(faction, 1, null)))]
+          .filter((name) => isWorthInstalling(name))
+          .map((name) => [name, 1]),
+      ),
+      [NFG]: 124,
+    };
+    const joined = HACKERS.map((name) => ({ name, reputation: name === "The Black Hand" ? 15_000 : 0, favor: 0 }));
+    longCycle();
+    throughCountdown({
+      slowData: slow({ joined, ownedAugs: runTwo }),
+      mediumData: medium({ hacking: 6_000, money: 1e9 }),
+    });
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(["Magnetism Amplifier"]);
+    // $1b less Magnetism Amplifier's $250m.
+    expect(rule.countFacts()).toEqual({ moneyAfterSet: 750e6, within: [] });
+  });
+
+  test("donations (favour 150 at NiteSec): the set's donation off the money; those reached by one, listed", () => {
+    longCycle();
+    // NiteSec at 9,999: Artificial Synaptic Potentiation reached, Neurotrainer II a reputation short (by donation).
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: "NiteSec", reputation: 9_999, favor: 150 },
+    ];
+    throughCountdown({ slowData: slow({ joined, ownedAugs: SIX }), mediumData: medium({ money: 200e6 }) });
+    const chosen = events.find((event) => event.type === "augmentationInstallChosen");
+    expect(chosen).toMatchObject({
+      set: [{ augmentation: "Artificial Synaptic Potentiation" }, { augmentation: "Neurotrainer II" }],
+    });
+    const donated = chosen?.type === "augmentationInstallChosen" ? chosen.donations : [];
+    expect(donated).toEqual([{ faction: "NiteSec", reputation: 10_000, amount: donationToReach(1, 1, 1) }]);
+    const facts = rule.countFacts();
+    expect(facts?.moneyAfterSet).toBeCloseTo(200e6 - (chosen as { cost: number }).cost - donationToReach(1, 1, 1), 0);
+    // The rest NiteSec sells by donation, priced after the set's two, with the donation from 9,999: the cheapest first.
+    expect(facts?.within[0]).toEqual({
+      augmentation: "Embedded Netburner Module",
+      faction: "NiteSec",
+      money: 250e6 * 1.9 ** 2 + donationToReach(15_000 - 9_999, 1, 1),
+    });
+    expect(facts?.within.every((each) => each.faction === "NiteSec")).toBe(true);
+  });
+
+  test("not short (Daedalus inviting): no facts kept; a note's facts not the brain's fail", () => {
+    longCycle();
+    const invited = {
+      ...slow({ reputation: 18_750, ownedAugs: SIX }),
+      factions: {
+        backend: "sim",
+        state: {
+          joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }],
+          invitations: ["Daedalus"],
+          queuedAugmentations: [],
+        },
+        problem: null,
+      },
+    } as SlowSnapshotData;
+    throughCountdown({ slowData: invited, mediumData: medium({ money: 10e6 }) });
+    expect(readAugmentationCycle(store)).not.toHaveProperty("countFacts");
+    expect(rule.countFacts()).toBeNull();
+    store.setSetting(
+      AUGMENTATION_CYCLE_SETTING,
+      JSON.stringify({ lastAugReset: 0, installing: false, countFacts: { moneyAfterSet: 1, within: [{}] } }),
+    );
+    expect(() => readAugmentationCycle(store)).toThrow("isn't a note the brain wrote");
   });
 });

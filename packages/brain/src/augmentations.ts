@@ -47,7 +47,9 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  type CountableWithinReach,
   chooseAugmentationsToBuy,
+  countablesWithinReach,
   countdownExtensionMs,
   DAEDALUS,
   type DaedalusCount,
@@ -459,7 +461,35 @@ export interface AugmentationCycle {
    * called off.
    */
   redPill?: string;
+  /**
+   * Short of Daedalus's count at the commit (#238): what counts within reach then, for "Daedalus count stuck". Absent
+   * when not short, or in an earlier brain's note.
+   */
+  countFacts?: CountFacts;
 }
+
+/**
+ * At a commit while short of Daedalus's count (#238): the money left after the set (and its donations), what
+ * NeuroFlux Governor's levels and home's RAM then take; and each augmentation that would add to the count left within
+ * reach beyond the set (core's `countablesWithinReach`). The World Daemon judges an install that added none to the
+ * count on them: one whose money is no more than what was left, A6's set should have taken (#238 review).
+ */
+export interface CountFacts {
+  moneyAfterSet: number;
+  within: CountableWithinReach[];
+}
+
+const isCountFacts = (value: unknown): value is CountFacts => {
+  const { moneyAfterSet, within } = (value ?? {}) as Partial<CountFacts>;
+  return (
+    isFiniteNumber(moneyAfterSet) &&
+    Array.isArray(within) &&
+    within.every(
+      (each) =>
+        typeof each?.augmentation === "string" && typeof each.faction === "string" && isFiniteNumber(each.money),
+    )
+  );
+};
 
 const isDonation = (value: unknown): value is Donation => {
   const { faction, reputation, amount } = (value ?? {}) as Partial<Donation>;
@@ -476,6 +506,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     donations?: unknown;
     reason?: unknown;
     redPill?: unknown;
+    countFacts?: unknown;
   };
   let note: Note | null;
   try {
@@ -488,13 +519,15 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
   const donations = note?.donations;
   const reason = note?.reason;
   const redPill = note?.redPill;
+  const countFacts = note?.countFacts;
   if (
     !isFiniteNumber(note?.lastAugReset) ||
     typeof installing !== "boolean" ||
     (target !== undefined && !(Number.isInteger(target) && (target as number) >= 0)) ||
     (donations !== undefined && !(Array.isArray(donations) && donations.every(isDonation))) ||
     (reason !== undefined && typeof reason !== "string") ||
-    (redPill !== undefined && typeof redPill !== "string")
+    (redPill !== undefined && typeof redPill !== "string") ||
+    (countFacts !== undefined && !isCountFacts(countFacts))
   ) {
     throw new Error(`the store's ${AUGMENTATION_CYCLE_SETTING} isn't a note the brain wrote`);
   }
@@ -505,6 +538,7 @@ export function readAugmentationCycle(store: TelemetryStore): AugmentationCycle 
     ...(donations === undefined ? {} : { donations: donations as Donation[] }),
     ...(reason === undefined ? {} : { reason: reason as InstallReason }),
     ...(redPill === undefined ? {} : { redPill: redPill as string }),
+    ...(countFacts === undefined ? {} : { countFacts: countFacts as CountFacts }),
   };
 }
 
@@ -805,11 +839,14 @@ export class AugmentationRule {
     const asked = this.#asked;
     if (asked !== null && doneIds.has(asked.intent.id) && !this.#recorded.has(asked.intent.id)) return true;
     // The install reported done (nothing to install, says the game): watched for the reset from now.
-    return this.#installDone === null && doneIds.has(AUGMENTATION_INSTALL_INTENT.id) && this.#installAskedFor();
+    return this.#installDone === null && doneIds.has(AUGMENTATION_INSTALL_INTENT.id) && this.installAskedFor();
   }
 
-  /** The install asked for: here, or in the commit's note (a restarted brain's, before its first decision). */
-  #installAskedFor(): boolean {
+  /**
+   * The install asked for: here, or in the commit's note (a restarted brain's, before its first decision). The World
+   * Daemon's too (#238 review): an install while short with no `countFacts` is A6's, and stuck.
+   */
+  installAskedFor(): boolean {
     return this.#installing || readAugmentationCycle(this.#store)?.installing === true;
   }
 
@@ -835,6 +872,14 @@ export class AugmentationRule {
    */
   countdownReserve(): number {
     return this.#enabled && this.#countdown !== null ? this.#view.reserve : 0;
+  }
+
+  /**
+   * What counts within reach at the commit, short of Daedalus's count (#238), from the commit's note until the game
+   * resets; null without a commit, or one not short. The World Daemon's facts for "Daedalus count stuck".
+   */
+  countFacts(): CountFacts | null {
+    return readAugmentationCycle(this.#store)?.countFacts ?? null;
   }
 
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
@@ -1025,7 +1070,7 @@ export class AugmentationRule {
    * alerted.
    */
   #watchInstallDone(doneIds: ReadonlySet<string>, slowGameTimeMs: number | null, atMs: number): void {
-    if (!this.#installAskedFor()) {
+    if (!this.installAskedFor()) {
       this.#installDone = null;
       return;
     }
@@ -1512,6 +1557,18 @@ export class AugmentationRule {
         reason = ruleReason;
       }
       const donations = withDonation(counts.donations, redPillDonation);
+      // Short (#238): what counts within reach beyond the set, whatever `isWorthInstalling` says, and the money left
+      // after the set and its donations (#238 review: not the levels', which stop short of the next one).
+      const countFacts: CountFacts | undefined = short
+        ? {
+            moneyAfterSet: budget - set.money - set.donationMoney,
+            within: countablesWithinReach({
+              reached: reached.map((augmentation) => ({ augmentation, faction: sellerOf(augmentation) as string })),
+              state: { ...purchaseState, queued: [...queue, ...set.purchases.map((purchase) => purchase.name)] },
+              donations: terms,
+            }),
+          }
+        : undefined;
       writeAugmentationCycle(this.#store, {
         lastAugReset: resetInfo.lastAugReset,
         installing: false,
@@ -1519,6 +1576,7 @@ export class AugmentationRule {
         donations,
         reason,
         ...(redPillDonation === null ? {} : { redPill: redPillDonation.faction }),
+        ...(countFacts === undefined ? {} : { countFacts }),
       });
       this.#installing = false;
       this.#progress = null;
