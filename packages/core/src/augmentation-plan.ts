@@ -580,6 +580,68 @@ export function installRule(inputs: InstallRuleInputs): InstallRule {
 }
 
 /**
+ * The longest an install is held for Daedalus's count (#243): about one cycle's cost, what an install that leaves the
+ * count one short wastes. Run #3's BN1.2 (2026-11-05) installed at 29 of 30 at 17:49, The Black Hand's augmentation
+ * 17 minutes off by work; the next cycle, 17:52 to 18:20, 28 minutes of restart, rejoining and the hacking ramp,
+ * existed only to buy it. Held past this, the wait costs more than the cycle it saves.
+ */
+export const DAEDALUS_COUNT_HOLD_MS = 30 * 60_000;
+
+/** An augmentation that would add one to Daedalus's count, not owned, queued or in the set, and when it can be (#243). */
+export interface CountableToCome {
+  augmentation: string;
+  /** The joined faction it's bought from. */
+  faction: string;
+  /** How: its reputation earned by work at `faction`, a donation there (#225), or, its reputation reached, the money. */
+  way: "work" | "donation" | "money";
+  /** Until it can be bought: its reputation at the work's rate and its money at the income, the later; or Infinity. */
+  etaMs: number;
+}
+
+/** An install held for Daedalus's count (#243): the augmentation it waits for, and the hold's window in time online. */
+export interface DaedalusCountHold<T extends CountableToCome = CountableToCome> {
+  next: T;
+  sinceOnlineMs: number;
+  untilOnlineMs: number;
+}
+
+/**
+ * Whether to hold an install the count rule chose, short of Daedalus's count (#243): held if it would leave the count
+ * one short (`installed`'s names with `installing`'s, NeuroFlux Governor's levels one entry,
+ * `Augmentation/AugmentationHelpers.ts:55-58`; `Faction/FactionJoinCondition.ts:130`) and the soonest of `toCome` can
+ * be bought within the hold's window: `DAEDALUS_COUNT_HOLD_MS` of time online from `heldSinceOnlineMs`, the cycle's
+ * first hold (now, for none), never restarted, so no hold outlasts it. Null otherwise. Two or more short aren't held:
+ * the rest seldom fits a cycle's cost, and their ETAs together (the work one faction at a time, each purchase dearer by
+ * 1.9) aren't modelled, so the install goes on.
+ */
+export function daedalusCountHold<T extends CountableToCome>({
+  installed,
+  installing,
+  required,
+  toCome,
+  onlineMs,
+  heldSinceOnlineMs,
+}: {
+  installed: Readonly<Record<string, number>>;
+  installing: readonly string[];
+  required: number;
+  toCome: readonly T[];
+  onlineMs: number;
+  heldSinceOnlineMs: number | null;
+}): DaedalusCountHold<T> | null {
+  const after = new Set([...Object.keys(installed), ...installing]).size;
+  if (required - after !== 1) return null;
+  const sinceOnlineMs = heldSinceOnlineMs ?? onlineMs;
+  const untilOnlineMs = sinceOnlineMs + DAEDALUS_COUNT_HOLD_MS;
+  // Infinity (never) is last, and never within the window.
+  const next = [...toCome].sort(
+    (a, b) => a.etaMs - b.etaMs || gameOrder(a.augmentation) - gameOrder(b.augmentation),
+  )[0];
+  if (next === undefined || onlineMs + next.etaMs > untilOnlineMs) return null;
+  return { next, sinceOnlineMs, untilOnlineMs };
+}
+
+/**
  * How long a countdown runs from now once the count rises during it (`autopilot.js:972-976`): the countdown (90 s, or
  * 30 s for a quick install: the legacy scripts lower the option to 30 s, `:944-945`) less a share for each extension so
  * far, of `barWithNeuroFlux`, never under 10 s. The caller never shortens a deadline already set (`:976`).

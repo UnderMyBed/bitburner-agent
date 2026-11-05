@@ -39,23 +39,33 @@
 // - Short of Daedalus's count (#228, core's `daedalusCountOf`): every augmentation but NeuroFlux Governor and The Red
 //   Pill is worth installing (core's `isWorthInstalling`), in the set (hacking value first, then the cheapest), the
 //   counts and bars, the countdown, the lookahead's reserve and "nothing left"; the progress says so.
+// - Held for Daedalus's count (#243, core's `daedalusCountHold`): an install the count rule chose that would leave the
+//   count one short is held while the last can be bought within the hold's window (`DAEDALUS_COUNT_HOLD_MS`, 30 min
+//   online from the cycle's first hold, kept in the store): its reputation by work at A5's rate for its seller, or a
+//   donation, and the money at the income (`countablesToCome`). No countdown meanwhile; the countdown's money (or the
+//   set's and the last's, if more) held back from cloud servers and home RAM; the progress, the dashboard and the log
+//   say so, and when it's over.
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
   acceptsDonations,
   affordableCounts,
   augmentationBitNodeMultipliers,
+  augmentationBuyOrder,
   augmentationCost,
   augmentationsSoldBy,
+  type CountableToCome,
   type CountableWithinReach,
   chooseAugmentationsToBuy,
   countablesWithinReach,
   countdownExtensionMs,
   DAEDALUS,
+  DAEDALUS_COUNT_HOLD_MS,
   type DaedalusCount,
   type Donation,
   type DonationSeller,
   type DonationTerms,
+  daedalusCountHold,
   daedalusCountOf,
   daedalusMissing,
   daedalusRequirements,
@@ -81,9 +91,10 @@ import {
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
+  type WorkingPerson,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
-import { redPillTarget, workingPersonOf } from "./factions.ts";
+import { bestWorkRate, redPillTarget, type WorkConditions, workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -110,6 +121,12 @@ export const AUGMENTATION_CYCLE_SETTING = "augmentations.cycle";
  * since the last install (`advanceOnlineClock`), keyed by that install's `lastAugReset`.
  */
 export const AUGMENTATION_ONLINE_SETTING = "augmentations.online";
+
+/**
+ * The hold for Daedalus's count (#243), kept in the store so a restarted brain doesn't start its window again: the
+ * cycle's `lastAugReset`, and the time online at its first hold.
+ */
+export const AUGMENTATION_COUNT_HOLD_SETTING = "augmentations.countHold";
 
 /** How long the income is measured over: the slow snapshots' money sources across 10 minutes. */
 export const AUGMENTATION_INCOME_WINDOW_MS = 10 * 60_000;
@@ -197,7 +214,15 @@ export interface AugmentationProgress {
    * earlier brain's progress.
    */
   short?: Pick<DaedalusCount, "installed" | "required"> | null;
+  /**
+   * The install held for Daedalus's count (#243): the augmentation it waits for (`CountableToCome`), its money, and
+   * what's left of the hold's window; null when not. Absent in an earlier brain's progress.
+   */
+  countHold?: CountHoldView | null;
 }
+
+/** An install held for Daedalus's count (#243), as the progress gives it. */
+export type CountHoldView = CountableToCome & { money: number; leftMs: number };
 
 export type AugmentationEvent =
   | {
@@ -712,6 +737,127 @@ export function readOnlineClock(store: TelemetryStore): OnlineClock | null {
   return { lastAugReset, onlineMs, lastGameTimeMs };
 }
 
+/** The hold's window as stored (#243), or null; a value the brain didn't write fails, as the clock does. */
+export function readCountHold(store: TelemetryStore): { lastAugReset: number; sinceOnlineMs: number } | null {
+  const value = store.getSetting(AUGMENTATION_COUNT_HOLD_SETTING);
+  if (value === null) return null;
+  let hold: { lastAugReset?: unknown; sinceOnlineMs?: unknown } | null;
+  try {
+    hold = JSON.parse(value) as typeof hold;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_COUNT_HOLD_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, sinceOnlineMs } = hold ?? {};
+  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(sinceOnlineMs) || sinceOnlineMs < 0) {
+    throw new Error(`the store's ${AUGMENTATION_COUNT_HOLD_SETTING} isn't a hold the brain wrote`);
+  }
+  return { lastAugReset, sinceOnlineMs };
+}
+
+/** An augmentation to come for Daedalus's count (#243), with its money: what it adds to the set's, with any donation. */
+export type ToCome = CountableToCome & { money: number };
+
+/**
+ * Each augmentation a joined faction sells that would add one to Daedalus's count after an install (#243): not
+ * NeuroFlux Governor or The Red Pill, not owned or queued (`state`'s queue) or in `set`, its prerequisites owned,
+ * queued or in the set; and when it can be bought, the later of its reputation and its money:
+ * - its reputation: reached at a joined seller (`way` "money"); else a seller taking donations (`terms`, the one whose
+ *   donation is least, `donationToReach`, from its reputation now) at once; else by work, the soonest at A5's rate
+ *   for a seller (`bestWorkRate`, the work's formula; the share's bonus left out, the safe side);
+ * - its money: the set with it, in buy order (`augmentationBuyOrder`: a dear one goes first), with the set's donations
+ *   and its own, beyond `money`, at `income` a second; with none measured, only what `money` covers (else Infinity).
+ */
+export function countablesToCome({
+  sold,
+  state,
+  set,
+  joined,
+  shops,
+  terms,
+  person,
+  conditions,
+  money,
+  income,
+}: {
+  sold: readonly string[];
+  state: AugmentationPurchaseState;
+  set: AugmentationSet;
+  joined: readonly JoinedFaction[];
+  shops: ReadonlyMap<string, readonly string[]>;
+  terms: DonationTerms | undefined;
+  person: WorkingPerson;
+  conditions: WorkConditions;
+  money: number;
+  income: number | null;
+}): ToCome[] {
+  const setNames = set.purchases.map((purchase) => purchase.name);
+  const afterSet = { ...state, queued: [...state.queued, ...setNames] };
+  const toCome: ToCome[] = [];
+  for (const name of sold) {
+    if (name === NEUROFLUX_GOVERNOR || name === THE_RED_PILL) continue;
+    if (Object.hasOwn(afterSet.installed, name) || afterSet.queued.includes(name)) continue;
+    if (missingPrerequisites(name, afterSet).length > 0) continue;
+    const { reputation } = augmentationCost(name, afterSet);
+    const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
+    let way: CountableToCome["way"] = "money";
+    let faction = sellers.find((seller) => seller.reputation >= reputation)?.name;
+    let donation = 0;
+    let reputationMs = 0;
+    if (faction === undefined) {
+      const donor = (terms?.sellers[name] ?? [])
+        .map((seller) => ({
+          faction: seller.faction,
+          amount: donationToReach(
+            reputation - seller.reputation,
+            terms?.factionRep ?? 1,
+            terms?.factionWorkRepGain ?? 1,
+          ),
+        }))
+        .sort((a, b) => a.amount - b.amount)[0];
+      if (donor !== undefined) {
+        way = "donation";
+        faction = donor.faction;
+        donation = donor.amount;
+      } else {
+        way = "work";
+        reputationMs = Number.POSITIVE_INFINITY;
+        for (const seller of sellers) {
+          const rate = bestWorkRate(person, seller, conditions);
+          if (rate === null) continue;
+          const ms = ((reputation - seller.reputation) / rate.perSecond) * 1000;
+          if (ms < reputationMs) {
+            reputationMs = ms;
+            faction = seller.name;
+          }
+        }
+        if (faction === undefined) continue;
+      }
+    }
+    const withIt = purchaseSequenceCost(augmentationBuyOrder([...setNames, name]), state).money;
+    const extra = withIt - set.money + donation;
+    const missing = set.money + set.donationMoney + extra - money;
+    const moneyMs =
+      missing <= 0 ? 0 : income !== null && income > 0 ? (missing / income) * 1000 : Number.POSITIVE_INFINITY;
+    toCome.push({ augmentation: name, faction, way, etaMs: Math.max(reputationMs, moneyMs), money: extra });
+  }
+  return toCome;
+}
+
+/** "Daedalus's count reachable this cycle, The Black Hand in ~17 min (by work at The Black Hand, $7,168,…; …)". */
+export function describeCountHold(hold: CountHoldView, count: Pick<DaedalusCount, "required">): string {
+  const how =
+    hold.way === "work"
+      ? `by work at ${hold.faction}`
+      : hold.way === "donation"
+        ? `by a donation to ${hold.faction}`
+        : `at ${hold.faction}, its reputation reached`;
+  return (
+    `Daedalus's count reachable this cycle, ${hold.augmentation} in ~${formatEta(hold.etaMs)} (${how}, ` +
+    `${formatMoney(hold.money)}; ${count.required - 1} of ${count.required} after this install; held ` +
+    `${formatEta(DAEDALUS_COUNT_HOLD_MS)} at most, ${formatEta(hold.leftMs)} left)`
+  );
+}
+
 /** The intent buying `augmentation` from `faction` (`level` 1 but for NeuroFlux Governor). */
 export function purchaseIntent(faction: string, augmentation: string, level: number): Intent {
   const args = { faction, augmentation, level };
@@ -794,6 +940,8 @@ export class AugmentationRule {
   #installing = false;
   /** Why no install is chosen on The Red Pill's way (#215), as last logged: logged as it starts. */
   #holding: HoldReason | null = null;
+  /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
+  #countHeld: CountHoldView | null = null;
   /** Daedalus's $100b, held back for its invitation (#215), or 0: home RAM keeps it too (#215 review). */
   #daedalusHold = 0;
   /** The Red Pill's donation's money, held back (#225 review), or 0. */
@@ -868,10 +1016,11 @@ export class AugmentationRule {
 
   /**
    * The money held in the install's countdown (#222): what the counted purchases cost, from cloud servers (`reserve`)
-   * and home RAM alike, as the legacy scripts' reserve.txt holds it from every purchase (`autopilot.js:983`); else 0.
+   * and home RAM alike, as the legacy scripts' reserve.txt holds it from every purchase (`autopilot.js:983`); while an
+   * install is held for Daedalus's count (#243), the set's and the one it waits for; else 0.
    */
   countdownReserve(): number {
-    return this.#enabled && this.#countdown !== null ? this.#view.reserve : 0;
+    return this.#enabled && (this.#countdown !== null || this.#countHeld !== null) ? this.#view.reserve : 0;
   }
 
   /**
@@ -921,6 +1070,9 @@ export class AugmentationRule {
     const { enabled, homeRamEnabled, destroyWanted } = inputs;
     this.#daedalusHold = 0;
     this.#redPillHold = 0;
+    // Held again only by this update's decision (#243).
+    const countHeldBefore = this.#countHeld;
+    this.#countHeld = null;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
     // Nothing asked for now; the last purchase asked for is kept, so its done is recorded when it's reported (after a
@@ -981,6 +1133,7 @@ export class AugmentationRule {
         atMs,
         homeRamEnabled,
         destroyWanted,
+        countHeldBefore,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1235,6 +1388,7 @@ export class AugmentationRule {
     atMs,
     homeRamEnabled,
     destroyWanted,
+    countHeldBefore,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1246,6 +1400,7 @@ export class AugmentationRule {
     atMs: number;
     homeRamEnabled: boolean;
     destroyWanted: boolean;
+    countHeldBefore: CountHoldView | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -1407,7 +1562,11 @@ export class AugmentationRule {
         return { counts, rule };
       };
       const { counts, rule } = judge(budget, set);
-      const progress = (held: string | null, reason: InstallReason | null = rule.reason): AugmentationProgress => ({
+      const progress = (
+        held: string | null,
+        reason: InstallReason | null = rule.reason,
+        countHold: CountHoldView | null = null,
+      ): AugmentationProgress => ({
         lastAugReset: resetInfo.lastAugReset,
         affordable: rule.affordable,
         affordableWithNeuroFlux: rule.affordableWithNeuroFlux,
@@ -1431,6 +1590,7 @@ export class AugmentationRule {
         byDonation: counts.byDonation,
         setCost: set.money + set.donationMoney,
         short: short ? { installed: count.installed, required: count.required } : null,
+        countHold,
       });
       const notCommittedDonations = { ...notCommitted, donations: counts.donations };
       let endgame = endgame0;
@@ -1469,6 +1629,70 @@ export class AugmentationRule {
       // Daedalus's favour (#225) installs through the normal countdown, whatever the count.
       const countdownReason: InstallReason | null =
         endgame.kind === "daedalusDonations" ? "Daedalus donations" : rule.install ? rule.reason : null;
+      // Daedalus's count (#243): an install the count rule chose that would leave the count one short is held while the
+      // last can be bought within the hold's window, the cycle's first hold's, kept in the store.
+      const setNames = set.purchases.map((purchase) => purchase.name);
+      const installing = [...installable, ...setNames, ...(counts.neuroFluxLevels > 0 ? [NEUROFLUX_GOVERNOR] : [])];
+      const stored = readCountHold(this.#store);
+      const heldSinceOnlineMs = stored?.lastAugReset === resetInfo.lastAugReset ? stored.sinceOnlineMs : null;
+      const countHold =
+        short && countdownReason !== null && endgame.kind !== "redPill"
+          ? daedalusCountHold({
+              installed: ownedAugs,
+              installing,
+              required: count.required,
+              toCome: countablesToCome({
+                sold,
+                state: purchaseState,
+                set,
+                joined,
+                shops,
+                terms,
+                person: player.person,
+                conditions: workConditionsOf(resetInfo, slowData),
+                money: budget,
+                income: this.#income(),
+              }),
+              onlineMs,
+              heldSinceOnlineMs,
+            })
+          : null;
+      if (countHold !== null) {
+        if (heldSinceOnlineMs === null) {
+          this.#store.setSetting(
+            AUGMENTATION_COUNT_HOLD_SETTING,
+            JSON.stringify({ lastAugReset: resetInfo.lastAugReset, sinceOnlineMs: countHold.sinceOnlineMs }),
+          );
+        }
+        const view: CountHoldView = { ...countHold.next, leftMs: countHold.untilOnlineMs - onlineMs };
+        const words = describeCountHold(view, count);
+        if (countHeldBefore === null) this.#log(`augmentations: install held for Daedalus's count: ${words}`);
+        this.#countHeld = view;
+        this.#cancelCountdown(`held for Daedalus's count, ${view.augmentation} in ~${formatEta(view.etaMs)}`);
+        const held = progress(words, countdownReason, view);
+        this.#recordProgress(held, `daedalusCount: ${view.augmentation}`, atMs);
+        return this.#ask(null, {
+          ...notCommittedDonations,
+          progress: held,
+          // As the countdown holds (the counted purchases' money, so the rule goes on saying install), or the set's and
+          // the last's if more: from cloud servers and home RAM alike (`countdownReserve`).
+          reserve: Math.max(counts.money, set.money + set.donationMoney + view.money),
+          waitingFor: `the install held for Daedalus's count: ${words}`,
+        });
+      }
+      if (countHeldBefore !== null) {
+        const after = new Set([...Object.keys(ownedAugs), ...installing]).size;
+        const why = !short
+          ? "Daedalus's count met"
+          : countdownReason === null
+            ? "the rule no longer says install"
+            : after >= count.required
+              ? "the count reached at this install"
+              : heldSinceOnlineMs !== null && onlineMs >= heldSinceOnlineMs + DAEDALUS_COUNT_HOLD_MS
+                ? `its ${formatEta(DAEDALUS_COUNT_HOLD_MS)} are up`
+                : `${countHeldBefore.augmentation} isn't within what's left of its ${formatEta(DAEDALUS_COUNT_HOLD_MS)}`;
+        this.#log(`augmentations: the hold for Daedalus's count is over: ${why}`);
+      }
       let redPillDonation: Donation | null = null;
       if (endgame.kind === "redPill") {
         // No countdown for The Red Pill: #215's install, at once (the legacy scripts start one, never extended, `:963-968`).

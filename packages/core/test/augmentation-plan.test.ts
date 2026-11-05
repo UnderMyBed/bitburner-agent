@@ -9,6 +9,8 @@ import {
   chooseAugmentationsToBuy,
   countablesWithinReach,
   countdownExtensionMs,
+  DAEDALUS_COUNT_HOLD_MS,
+  daedalusCountHold,
   daedalusCountOf,
   hackingExpForLevel,
   INSTALL_AT_AUGMENTATIONS,
@@ -724,6 +726,87 @@ describe("the rule", () => {
     // A level to buy, or one thing queued, is something.
     expect(installRule(inputs({ ...phantom, neuroFluxLevels: 1 })).install).toBe(true);
     expect(installRule(inputs({ ...phantom, installing: 1 })).install).toBe(true);
+  });
+});
+
+describe("the hold for Daedalus's count (#243)", () => {
+  /** Run #3's 17:49 (2026-11-05): 25 installed, the set's four take it to 29 of 30. */
+  const COUNTABLE = AUGMENTATION_NAMES.filter((name) => isWorthInstalling(name, true));
+  const TWENTY_FIVE = Object.fromEntries(COUNTABLE.slice(0, 25).map((name) => [name, 1]));
+  const FOUR = COUNTABLE.slice(25, 29);
+  /** The Black Hand: 48,648 short at 46.9 a second, 1,038 s. */
+  const BLACK_HAND = {
+    augmentation: "The Black Hand",
+    faction: "The Black Hand",
+    way: "work",
+    etaMs: 1_038_000,
+  } as const;
+  const hold = (fields: Partial<Parameters<typeof daedalusCountHold>[0]> = {}) =>
+    daedalusCountHold({
+      installed: TWENTY_FIVE,
+      installing: FOUR,
+      required: 30,
+      toCome: [BLACK_HAND],
+      onlineMs: 2 * HOUR,
+      heldSinceOnlineMs: null,
+      ...fields,
+    });
+
+  test("about one cycle's cost: run #3's cycle that existed only to buy the 30th was 28 minutes", () => {
+    expect(DAEDALUS_COUNT_HOLD_MS).toBe(30 * MINUTE);
+  });
+
+  test("run #3's 17:49: one short after the install, The Black Hand 17 min off, so held for 30 min from now", () => {
+    expect(hold()).toEqual({ next: BLACK_HAND, sinceOnlineMs: 2 * HOUR, untilOnlineMs: 2 * HOUR + 30 * MINUTE });
+    // Each way counts: a donation, or the money alone at the income.
+    for (const way of ["donation", "money"] as const) {
+      expect(hold({ toCome: [{ ...BLACK_HAND, way }] })?.next.way).toBe(way);
+    }
+  });
+
+  test("the soonest of those to come; a tie to the game's order; one never reached (Infinity) isn't", () => {
+    const later = { ...BLACK_HAND, augmentation: "Neural Wit Amplifier", faction: "BitRunners", etaMs: 1_200_000 };
+    const never = { ...BLACK_HAND, augmentation: "Magnetism Amplifier", etaMs: Number.POSITIVE_INFINITY };
+    expect(hold({ toCome: [never, later, BLACK_HAND] })?.next).toEqual(BLACK_HAND);
+    expect(hold({ toCome: [never, later] })?.next).toEqual(later);
+    expect(hold({ toCome: [never] })).toBeNull();
+    expect(hold({ toCome: [] })).toBeNull();
+    const tie = { ...BLACK_HAND, augmentation: COUNTABLE[0] as string };
+    expect(hold({ toCome: [BLACK_HAND, tie] })?.next).toEqual(tie);
+  });
+
+  test("never past the window: an ETA beyond it isn't held; the cycle's first hold starts it, never restarted", () => {
+    expect(hold({ toCome: [{ ...BLACK_HAND, etaMs: 30 * MINUTE }] })).not.toBeNull();
+    expect(hold({ toCome: [{ ...BLACK_HAND, etaMs: 30 * MINUTE + 1 }] })).toBeNull();
+    // Held since 20 minutes ago: 10 minutes left, so 17 minutes off isn't, 10 is.
+    const since = { onlineMs: 2 * HOUR, heldSinceOnlineMs: 2 * HOUR - 20 * MINUTE };
+    expect(hold(since)).toBeNull();
+    expect(hold({ ...since, toCome: [{ ...BLACK_HAND, etaMs: 10 * MINUTE }] })).toEqual({
+      next: { ...BLACK_HAND, etaMs: 10 * MINUTE },
+      sinceOnlineMs: 2 * HOUR - 20 * MINUTE,
+      untilOnlineMs: 2 * HOUR + 10 * MINUTE,
+    });
+    // At its end, nothing is held, even what's due at once.
+    const over = { onlineMs: 2 * HOUR, heldSinceOnlineMs: 2 * HOUR - 30 * MINUTE - 1 };
+    expect(hold({ ...over, toCome: [{ ...BLACK_HAND, etaMs: 0 }] })).toBeNull();
+  });
+
+  test("only one short after the install: the count reached, or two short, aren't held", () => {
+    expect(hold({ installing: [...FOUR, "The Black Hand"] })).toBeNull();
+    expect(hold({ installing: FOUR.slice(0, 3) })).toBeNull();
+    // NeuroFlux Governor's levels are one entry: installed already, more levels add none; new, one.
+    expect(
+      hold({ installed: { ...TWENTY_FIVE, [NEUROFLUX_GOVERNOR]: 3 }, installing: [...FOUR, NEUROFLUX_GOVERNOR] }),
+    ).toBeNull();
+    expect(
+      hold({
+        installed: { ...TWENTY_FIVE, [NEUROFLUX_GOVERNOR]: 3 },
+        installing: [...FOUR.slice(0, 3), NEUROFLUX_GOVERNOR],
+      }),
+    ).not.toBeNull();
+    expect(hold({ installing: [...FOUR.slice(0, 3), NEUROFLUX_GOVERNOR, NEUROFLUX_GOVERNOR] })).not.toBeNull();
+    // What's queued and installed already (an `installing` name owned) counts once.
+    expect(hold({ installing: [...FOUR, COUNTABLE[0] as string] })).not.toBeNull();
   });
 });
 

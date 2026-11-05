@@ -13,9 +13,11 @@ import {
   isWorthInstalling,
   type MediumSnapshotData,
   type SlowSnapshotData,
+  type WorkingPerson,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
+  AUGMENTATION_COUNT_HOLD_SETTING,
   AUGMENTATION_CYCLE_SETTING,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_ONLINE_SETTING,
@@ -31,8 +33,10 @@ import {
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
+  readCountHold,
   readOnlineClock,
 } from "../src/augmentations.ts";
+import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
@@ -593,6 +597,8 @@ describe("the progress events (#222)", () => {
         setCost: expect.closeTo(FIVE_COST, 0),
         // Nothing installed: short of Daedalus's count (#228).
         short: { installed: 0, required: 30 },
+        // No install held for the count (#243).
+        countHold: null,
       },
     ]);
     // A NeuroFlux Governor level more, 5 minutes after the last recorded (the brain's time): recorded.
@@ -2014,5 +2020,260 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
       JSON.stringify({ lastAugReset: 0, installing: false, countFacts: { moneyAfterSet: 1, within: [{}] } }),
     );
     expect(() => readAugmentationCycle(store)).toThrow("isn't a note the brain wrote");
+  });
+});
+
+describe("held for Daedalus's count (#243)", () => {
+  const TBH = "The Black Hand";
+  const BLACK_HAND_SHOP = augmentationsSoldBy(TBH, 1, null);
+  const CYBERSEC_SHOP = augmentationsSoldBy("CyberSec", 1, null);
+  /** Augmentations sold by neither joined faction, to fill the count. */
+  const FILLERS = AUGMENTATION_NAMES.filter(
+    (name) =>
+      isWorthInstalling(name, true) &&
+      !BLACK_HAND_SHOP.includes(name) &&
+      !CYBERSEC_SHOP.includes(name) &&
+      name !== "Neural Wit Amplifier",
+  );
+  /**
+   * Run #3's 17:49 (2026-11-05), synthetic: 25 installed (all The Black Hand sells but its own augmentation, CyberSec's
+   * Gen I and II, NeuroFlux Governor and fillers sold by neither); Neural Wit Amplifier queued; CyberSec's other three
+   * reached, so the install takes it to 29 of 30. The 30th is "The Black Hand" (100,000), worked for.
+   */
+  const OWNED: Record<string, number> = Object.fromEntries(
+    [...BLACK_HAND_SHOP.filter((name) => name !== TBH && name !== NFG), GEN_I, GEN_II, NFG, ...FILLERS]
+      .slice(0, 25)
+      .map((name) => [name, name === NFG ? 5 : 1]),
+  );
+  const THREE = ["BitWire", "Synaptic Enhancement Implant", "Neurotrainer I"];
+  /** The three after Neural Wit Amplifier, dearest first; with The Black Hand, it first; what it adds. */
+  const THREE_COST = 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3;
+  const WITH_BLACK_HAND = 550e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+  const BLACK_HAND_MONEY = WITH_BLACK_HAND - THREE_COST;
+  const MONEY = WITH_BLACK_HAND + 10e6;
+
+  function runThree({
+    reputation = 0,
+    favor = 0,
+    queued = ["Neural Wit Amplifier"],
+    invitations = [] as string[],
+    ownedAugs = OWNED,
+    earned = 0,
+  } = {}): SlowSnapshotData {
+    const data = slow({
+      joined: [
+        { name: "CyberSec", reputation: 18_750, favor: 0 },
+        { name: TBH, reputation, favor },
+      ],
+      queued,
+      ownedAugs,
+      earned,
+    });
+    const state = data.factions?.state as FactionState;
+    return { ...data, factions: { backend: "sim", state: { ...state, invitations }, problem: null } };
+  }
+  /** The work's rate at The Black Hand (A5's formula, hacking 300): what the hold's ETA is worked at. */
+  const RATE = (
+    bestWorkRate(
+      workingPersonOf(medium()) as WorkingPerson,
+      { name: TBH, reputation: 0, favor: 0 },
+      workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow()),
+    ) as { perSecond: number }
+  ).perSecond;
+  /** The Black Hand's reputation `etaMs` off by work. */
+  const reputationFor = (etaMs: number) => 100_000 - (RATE * etaMs) / 1000;
+  /** 8 h online (`hours`): the bar is 4, so the four count. */
+  const online = (hours = 8) => {
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: hours * HOUR, lastGameTimeMs: gameTimeMs }),
+    );
+    rule = newRule();
+  };
+  /** A minute on: the next slow snapshot, a minute more online. */
+  const minuteOn = (fields: Parameters<typeof runThree>[0] = {}, money = MONEY) => {
+    gameTimeMs += MINUTE;
+    return update({ slowData: runThree(fields), mediumData: medium({ money }) });
+  };
+  const chosen = () => events.filter((event) => event.type === "augmentationInstallChosen");
+  const heldLines = () => lines.filter((line) => line.startsWith("augmentations: install held for Daedalus's count"));
+
+  test("the fixture: 25 installed, the install takes it to 29 of 30, The Black Hand the 30th, worked for", () => {
+    expect(Object.keys(OWNED)).toHaveLength(25);
+    expect(OWNED).toMatchObject({ [GEN_I]: 1, [GEN_II]: 1, [NFG]: 5 });
+    expect(OWNED).not.toHaveProperty(TBH);
+    expect(RATE).toBeGreaterThan(0);
+  });
+
+  test("run #3's 17:49: held, The Black Hand ~17 min off by work; no countdown, no install; its money held back", () => {
+    online();
+    const ask = minuteOn({ reputation: reputationFor(17 * MINUTE) });
+    expect(ask).toEqual({ intent: null, install: false, committed: false });
+    const view = rule.view();
+    expect(view.set.map((each) => each.augmentation)).toEqual(THREE);
+    expect(view.progress).toMatchObject({ affordable: 4, bar: 4, reason: "count reached", countdown: null });
+    expect(view.progress?.held).toBe(
+      "Daedalus's count reachable this cycle, The Black Hand in ~17 min (by work at The Black Hand, " +
+        `${dollars(BLACK_HAND_MONEY)}; 29 of 30 after this install; held 30 min at most, 30 min left)`,
+    );
+    expect(view.progress?.countHold).toEqual({
+      augmentation: TBH,
+      faction: TBH,
+      way: "work",
+      etaMs: expect.closeTo(17 * MINUTE, -3),
+      money: BLACK_HAND_MONEY,
+      leftMs: 30 * MINUTE,
+    });
+    expect(view.waitingFor).toBe(`the install held for Daedalus's count: ${view.progress?.held}`);
+    // Held from cloud servers and home RAM alike: the counted purchases' money (the set and NeuroFlux Governor's
+    // levels), or the set's and The Black Hand's, the more.
+    expect(rule.reserve()).toBeCloseTo(WITH_BLACK_HAND, 0);
+    expect(dollars(BLACK_HAND_MONEY)).toBe("$1,111,159,900");
+    expect(rule.countdownReserve()).toBe(rule.reserve());
+    expect(heldLines()).toEqual([`augmentations: install held for Daedalus's count: ${view.progress?.held}`]);
+    expect(chosen()).toEqual([]);
+    expect(rule.countFacts()).toBeNull();
+    // The progress event says so, for the run report.
+    expect(progressEvents().at(-1)).toMatchObject({ held: view.progress?.held, countHold: { augmentation: TBH } });
+    // With $10b, the levels the money covers cost more: their money held, as the countdown would.
+    minuteOn({ reputation: reputationFor(16 * MINUTE) }, 10e9);
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    expect(rule.reserve()).toBeGreaterThan(2 * WITH_BLACK_HAND);
+  });
+
+  test("its reputation reached: the hold over, logged; the countdown, then the install of all five, 30 of 30", () => {
+    online();
+    minuteOn({ reputation: reputationFor(10 * MINUTE) });
+    expect(rule.view().progress?.countHold?.augmentation).toBe(TBH);
+    minuteOn({ reputation: 100_000 });
+    expect(lines).toContain("augmentations: the hold for Daedalus's count is over: the count reached at this install");
+    expect(rule.view().progress).toMatchObject({ affordable: 5, held: null, countHold: null });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(rule.countdownReserve()).toBeGreaterThan(0);
+    gameTimeMs += 90_000;
+    update({ slowData: runThree({ reputation: 100_000 }), mediumData: medium({ money: MONEY }) });
+    expect(chosen()).toEqual([expect.objectContaining({ reason: "count reached", affordable: 5 })]);
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual([TBH, ...THREE]);
+    expect(heldLines()).toHaveLength(1);
+  });
+
+  test("never past its 30 min: the ETA no longer fitting what's left ends it; the window never restarts", () => {
+    online();
+    // 5 min off (a second less, so floating point never decides), the reputation not rising (the work elsewhere):
+    // held to 25 minutes of the 30.
+    const fiveOff = reputationFor(5 * MINUTE - 1_000);
+    minuteOn({ reputation: fiveOff });
+    for (let minute = 1; minute <= 25; minute += 1) {
+      minuteOn({ reputation: fiveOff });
+      expect(rule.view().progress?.countHold).not.toBeNull();
+    }
+    expect(rule.view().progress?.held).toMatch(/held 30 min at most, 5 min left\)$/);
+    expect(heldLines()).toHaveLength(1);
+    minuteOn({ reputation: fiveOff });
+    expect(rule.view().progress).toMatchObject({ held: null, countHold: null, reason: "count reached" });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(lines).toContain(
+      "augmentations: the hold for Daedalus's count is over: The Black Hand isn't within what's left of its 30 min",
+    );
+    // Seconds off now, but the window is the cycle's first, never restarted: 30 min from the hold's start, it's over.
+    minuteOn({ reputation: reputationFor(1_000) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    // The countdown the hold's end started is called off.
+    expect(rule.view().progress?.countdown).toBeNull();
+    for (let minute = 28; minute <= 30; minute += 1) minuteOn({ reputation: reputationFor(1_000) });
+    expect(rule.view().progress?.countHold).toBeNull();
+    expect(lines).toContain("augmentations: the hold for Daedalus's count is over: its 30 min are up");
+    // On to the install at 29, its facts recorded, as #238 has them.
+    gameTimeMs += 90_000;
+    update({ slowData: runThree({ reputation: reputationFor(1_000) }), mediumData: medium({ money: MONEY }) });
+    expect(chosen()).toEqual([expect.objectContaining({ reason: "count reached", affordable: 4 })]);
+    expect(rule.countFacts()).not.toBeNull();
+  });
+
+  test("a restarted brain keeps the hold's window (in the store): it never outlasts 30 min online", () => {
+    online();
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    for (let minute = 1; minute <= 20; minute += 1) minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 10 * MINUTE });
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 9 * MINUTE });
+    // A window the brain didn't write fails, as the commit's note does.
+    store.setSetting(AUGMENTATION_COUNT_HOLD_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    expect(() => readCountHold(store)).toThrow("isn't a hold the brain wrote");
+    // Another cycle's window is none of this one's.
+    store.setSetting(AUGMENTATION_COUNT_HOLD_SETTING, JSON.stringify({ lastAugReset: -1, sinceOnlineMs: 0 }));
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 30 * MINUTE });
+  });
+
+  test("not held: two short, Daedalus inviting, or the last more than 30 min off", () => {
+    // Two short: nothing queued, the three alone, the bar 3 at 10 h.
+    online(10);
+    minuteOn({ reputation: reputationFor(MINUTE), queued: [] });
+    expect(rule.view().progress).toMatchObject({ affordable: 3, reason: "count reached", countHold: null });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    // Daedalus inviting: not short, the hacking-value rule.
+    online();
+    minuteOn({ reputation: reputationFor(MINUTE), invitations: ["Daedalus"] });
+    expect(rule.view().progress?.countHold).toBeNull();
+    // 31 min off by work.
+    online();
+    minuteOn({ reputation: reputationFor(31 * MINUTE) });
+    expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(heldLines()).toEqual([]);
+  });
+
+  test("by the money (#228: whatever its value): Magnetism Amplifier's reputation reached, its money at the income", () => {
+    // Magnetism Amplifier not installed (a filler in its place); The Black Hand at 15,000 reaches it.
+    const ownedAugs = { ...OWNED, [FILLERS.find((name) => !Object.hasOwn(OWNED, name)) as string]: 1 };
+    delete ownedAugs["Magnetism Amplifier"];
+    expect(Object.keys(ownedAugs)).toHaveLength(25);
+    // Bought with the three, it goes first: $614,670,900 in all, $541,159,900 more than the three.
+    const withMagnetism = 250e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+    const money = withMagnetism - 60e6;
+    online();
+    // No income measured yet: not reachable by the money, not held.
+    minuteOn({ reputation: 15_000, ownedAugs }, money);
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(THREE);
+    expect(rule.view().progress?.countHold).toBeNull();
+    // $100k a second: 10 minutes for the $60m short. The income measured first, with no money (nothing to install).
+    online();
+    for (let minute = 0; minute <= 10; minute += 1) {
+      minuteOn({ reputation: 15_000, ownedAugs, earned: minute * 6e6 }, minute < 10 ? 0 : money);
+    }
+    expect(rule.view().progress?.countHold).toEqual({
+      augmentation: "Magnetism Amplifier",
+      faction: TBH,
+      way: "money",
+      etaMs: expect.closeTo(10 * MINUTE, -3),
+      money: withMagnetism - THREE_COST,
+      leftMs: expect.any(Number),
+    });
+    expect(rule.view().progress?.held).toMatch(
+      /^Daedalus's count reachable this cycle, Magnetism Amplifier in ~10 min \(at The Black Hand, its reputation reached, /,
+    );
+  });
+
+  test("by a donation (#225): The Black Hand's donations unlocked, its price and donation at the income", () => {
+    const donation = donationToReach(100_000 - 50_000, 1, 1);
+    // $1m short of it alone (its value first, it would take the three's money); with the three, $140,670,900 short.
+    const money = 550e6 * 1.9 + donation - 1e6;
+    online();
+    for (let minute = 0; minute <= 10; minute += 1) {
+      minuteOn({ reputation: 50_000, favor: 150, earned: minute * 6e6 }, minute < 10 ? 0 : money);
+    }
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(THREE);
+    expect(rule.view().progress?.countHold).toEqual({
+      augmentation: TBH,
+      faction: TBH,
+      way: "donation",
+      etaMs: expect.closeTo(1_406_709, -3),
+      money: BLACK_HAND_MONEY + donation,
+      leftMs: expect.any(Number),
+    });
+    expect(rule.view().progress?.held).toMatch(/The Black Hand in ~23 min \(by a donation to The Black Hand, /);
   });
 });
