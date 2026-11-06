@@ -26,6 +26,7 @@ import {
   type AugmentationInputs,
   AugmentationRule,
   advanceOnlineClock,
+  countablesToCome,
   describeProgress,
   describeReason,
   earnedOf,
@@ -2208,7 +2209,12 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 30 * MINUTE });
   });
 
-  test("not held: two short, Daedalus inviting, or the last more than 30 min off", () => {
+  test("not held: the rule not saying install, two short, Daedalus inviting, or the last more than 30 min off", () => {
+    // One short after the install, the last a minute off, but 4 affordable under the bar of 7 at 2 h: no hold, no install.
+    online(2);
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress).toMatchObject({ affordable: 4, bar: 7, reason: null, countHold: null, held: null });
+    expect(rule.view().waitingFor).toMatch(/^the count to reach a bar: /);
     // Two short: nothing queued, the three alone, the bar 3 at 10 h.
     online(10);
     minuteOn({ reputation: reputationFor(MINUTE), queued: [] });
@@ -2224,6 +2230,34 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
     expect(rule.view().progress?.countdown).not.toBeNull();
     expect(heldLines()).toEqual([]);
+  });
+
+  test("what's to come: never NeuroFlux Governor or The Red Pill, though reached and within the money", () => {
+    const toCome = countablesToCome({
+      sold: [NFG, "The Red Pill", TBH],
+      state: {
+        // NeuroFlux Governor not installed yet: its levels add one, but it isn't one to wait for (A6 buys it last).
+        installed: Object.fromEntries(Object.entries(OWNED).filter(([name]) => name !== NFG)),
+        queued: [],
+        sourceFile11Level: 0,
+        bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+      },
+      set: { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] },
+      joined: [
+        { name: TBH, reputation: 3e6, favor: 0 },
+        { name: "Daedalus", reputation: 3e6, favor: 0 },
+      ],
+      shops: new Map([
+        [TBH, BLACK_HAND_SHOP],
+        ["Daedalus", augmentationsSoldBy("Daedalus", 1, null)],
+      ]),
+      terms: undefined,
+      person: workingPersonOf(medium()) as WorkingPerson,
+      conditions: workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow()),
+      money: 1e12,
+      income: null,
+    });
+    expect(toCome).toEqual([{ augmentation: TBH, faction: TBH, way: "money", etaMs: 0, money: 550e6 }]);
   });
 
   test("by the money (#228: whatever its value): Magnetism Amplifier's reputation reached, its money at the income", () => {
