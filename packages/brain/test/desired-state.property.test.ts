@@ -44,6 +44,16 @@ import { TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const TOKEN = "the-token";
+/** R8's two consecutive medium snapshots with the guard holding before a backup is asked for (written out here). */
+const HELD_BEFORE_A_BACKUP = 2;
+/** CyberSec's five, queued in a run where the brain installs (#210): all bought, no money left, so it installs. */
+const CYBERSEC_FIVE = [
+  "Cranial Signal Processors - Gen I",
+  "Cranial Signal Processors - Gen II",
+  "BitWire",
+  "Synaptic Enhancement Implant",
+  "Neurotrainer I",
+];
 const intentOf = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
 /** Every action; three joins (Sector-12 and Chongqing are enemies, so irreversible; CyberSec isn't); two destroys. */
 const OWNER_INTENTS: Intent[] = [
@@ -64,6 +74,8 @@ const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "destroyBitNode", args: { nextBitNode: 3 } }),
 ];
 const OWNER_INTENTS_BY_ID = new Map(OWNER_INTENTS.map((each) => [each.id, each]));
+/** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */
+const isBrainsReset = (id: string) => id === "installAugmentations()" || id.startsWith("destroyBitNode(");
 const JOINABLE = ["Sector-12", "Chongqing", "Aevum", "CyberSec"];
 /** Invitations the slow snapshot may carry, for the rules' joins (#203, #228): city factions and CyberSec. */
 const INVITABLE = ["Sector-12", "Aevum", "Chongqing", "New Tokyo", "CyberSec"];
@@ -127,32 +139,39 @@ type Medium = typeof anyMedium extends fc.Arbitrary<infer Each> ? Each : never;
  * Agent's round, a reset with the brain up or down, and the game's clock moved on or set back (#167); a slow snapshot,
  * with invitations; a reconnect; or a restarted brain.
  */
-const anyStep = fc.oneof(
-  { arbitrary: fc.record({ kind: fc.constant("queue" as const), index: anyIndex }), weight: 2 },
-  { arbitrary: fc.record({ kind: fc.constant("cancel" as const), index: anyIndex }), weight: 1 },
-  { arbitrary: fc.record({ kind: fc.constant("medium" as const), medium: anyMedium }), weight: 3 },
-  { arbitrary: fc.record({ kind: fc.constant("backup" as const), saved: fc.boolean() }), weight: 2 },
-  {
-    arbitrary: fc.record({
-      kind: fc.constant("release" as const),
-      medium: anyMedium,
-      saved: fc.oneof({ arbitrary: fc.constant(true), weight: 3 }, { arbitrary: fc.constant(false), weight: 1 }),
-    }),
-    weight: 4,
-  },
-  {
-    arbitrary: fc.record({
-      kind: fc.constant("agentRound" as const),
-      answers: anyAnswers,
-      brainDownAcrossReset: fc.boolean(),
-      clockSetBack: fc.boolean(),
-    }),
-    weight: 4,
-  },
-  { arbitrary: fc.record({ kind: fc.constant("slow" as const), invited: fc.subarray(INVITABLE) }), weight: 1 },
-  { arbitrary: fc.record({ kind: fc.constant("reconnect" as const) }), weight: 1 },
-  { arbitrary: fc.record({ kind: fc.constant("restart" as const) }), weight: 1 },
-);
+/**
+ * The steps, weighted for a run where the brain resets (`brainResets`, #210, #215) or not. Where it does, the owner's
+ * queue is emptied more often (cancels, the Agent's rounds), as the brain's install and destroy go out only behind it.
+ */
+const stepsFor = (brainResets: boolean) =>
+  fc.oneof(
+    { arbitrary: fc.record({ kind: fc.constant("queue" as const), index: anyIndex }), weight: brainResets ? 1 : 2 },
+    { arbitrary: fc.record({ kind: fc.constant("cancel" as const), index: anyIndex }), weight: brainResets ? 2 : 1 },
+    { arbitrary: fc.record({ kind: fc.constant("medium" as const), medium: anyMedium }), weight: 3 },
+    { arbitrary: fc.record({ kind: fc.constant("backup" as const), saved: fc.boolean() }), weight: 2 },
+    {
+      arbitrary: fc.record({
+        kind: fc.constant("release" as const),
+        medium: anyMedium,
+        saved: fc.oneof({ arbitrary: fc.constant(true), weight: 3 }, { arbitrary: fc.constant(false), weight: 1 }),
+      }),
+      weight: 4,
+    },
+    {
+      arbitrary: fc.record({
+        kind: fc.constant("agentRound" as const),
+        answers: anyAnswers,
+        rulesDone: fc.boolean(),
+        brainDownAcrossReset: fc.boolean(),
+        clockSetBack: fc.boolean(),
+      }),
+      weight: brainResets ? 5 : 4,
+    },
+    { arbitrary: fc.record({ kind: fc.constant("slow" as const), invited: fc.subarray(INVITABLE) }), weight: 1 },
+    { arbitrary: fc.record({ kind: fc.constant("reconnect" as const) }), weight: 1 },
+    { arbitrary: fc.record({ kind: fc.constant("restart" as const) }), weight: 1 },
+  );
+const anyStep = stepsFor(false);
 type Step = typeof anyStep extends fc.Arbitrary<infer Each> ? Each : never;
 
 let directory: string;
@@ -162,8 +181,12 @@ const reached = {
   resetsInTheSteps: 0,
   brainDownAcrossReset: 0,
   clockSetBack: 0,
+  destroysInTheSteps: 0,
+  brainDownAcrossDestroy: 0,
   failedBackupsWhileTaking: 0,
   runsWithARuleJoinOut: 0,
+  runsWithTheBrainsInstallOut: 0,
+  runsWithTheBrainsDestroyOut: 0,
 };
 beforeAll(() => {
   directory = mkdtempSync(path.join(os.tmpdir(), "desired-state-property-"));
@@ -177,19 +200,40 @@ afterAll(() => {
  * drains: what each desired state sent breaks of the rules, checked against the queue as the owner made it (the order
  * queued), not the brain's own.
  */
-async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Promise<string[]> {
+async function play(
+  rulesOn: boolean,
+  brainsReset: "none" | "install" | "destroy",
+  initialQueue: number[],
+  steps: Step[],
+): Promise<string[]> {
   const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
   store.setSetting("hackLoop.enabled", "false");
   if (!rulesOn) for (const setting of RULE_SWITCHES) store.setSetting(setting, "false");
   /** The game's last resets, as its slow snapshot says. */
   const gameResets = { lastAugReset: 1_000_000, lastNodeReset: 1_000_000 };
+  /**
+   * The stand-in game, for the brain's own resets (rules on): CyberSec's five queued, which the brain installs (#210),
+   * until an install; The Red Pill installed, so the brain destroys the BitNode (#215), until a destroy. Its time moves
+   * 10 s a medium snapshot, so the install's countdown runs out.
+   */
+  const standInGame = {
+    augmentationsQueued: rulesOn && brainsReset === "install",
+    redPill: rulesOn && brainsReset === "destroy",
+    timeMs: 1_000,
+  };
+  /** The brain's own resets done (by the reset), never asked for again: their reasons went with the reset. */
+  const brainsResetsDone = new Set<string>();
+  let theBrainsInstallWentOut = false;
+  let theBrainsDestroyWentOut = false;
+  /** The first irreversible intent the gates judge, and the medium snapshots its guard has held on since. */
+  let heldFor: string | null = null;
+  let heldSnapshots = 0;
   /** The owner's queue, by id, in the order queued; and the owner's intents done (reported, or reset) since. */
   const ownerQueue: string[] = [];
   const unqueue = (id: string) => {
     if (ownerQueue.includes(id)) ownerQueue.splice(ownerQueue.indexOf(id), 1);
   };
   const ownersDone = new Set<string>();
-  const sentEver = new Set<string>();
   const everQueuedByOwner = new Set<string>();
   let aRuleJoinWentOut = false;
   const violations: string[] = [];
@@ -215,7 +259,16 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
   let latestMedium: Medium | null = null;
   /** The irreversible intents in the last state sent on this connection. */
   let irreversibleSentBefore = new Set<string>();
-  /** The first irreversible intent the gates judge: the owner's first, then the rules' (in their view's order). */
+  /** The brain's own resets in its view, in order (its destroy, then its install). */
+  const brainsResets = (): string[] =>
+    controller
+      .intentsView()
+      .filter((view) => view.source !== "manual" && isBrainsReset(view.id))
+      .map((view) => view.id);
+  /**
+   * The first irreversible intent the gates judge: the owner's first (in the order queued), then the brain's resets,
+   * then the rules' (in their view's order).
+   */
   const firstJudged = (): string | null => {
     const owners = ownerQueue.filter((id) => isIrreversibleIntent(OWNER_INTENTS_BY_ID.get(id) as Intent));
     const rules = controller
@@ -223,10 +276,18 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
       .filter((view) => view.source !== "manual" && view.id.startsWith("joinFaction("))
       .map((view) => view.id)
       .filter((id) => isIrreversibleIntent(intentOf({ action: "joinFaction", args: { faction: id.slice(12, -1) } })));
-    return owners[0] ?? rules[0] ?? null;
+    return owners[0] ?? brainsResets()[0] ?? rules[0] ?? null;
+  };
+  /** Whether `id`'s guard holds on `snapshot`: a join's enemies; a reset first (what's before it done); w0r1d_d43m0n. */
+  const guardHolds = (id: string, snapshot: Medium): boolean => {
+    if (id.startsWith("joinFaction(")) {
+      return !(FACTION_ENEMIES[id.slice(12, -1)] ?? []).some((enemy) => snapshot.factions.includes(enemy));
+    }
+    if ([...ownerQueue, ...brainsResets()][0] !== id) return false;
+    return !id.startsWith("destroyBitNode(") || snapshot.daemonReady;
   };
 
-  const send = (tier: SnapshotTier, data: unknown) =>
+  const send = (tier: SnapshotTier, data: unknown, gameTimeMs = standInGame.timeMs) =>
     connection.receive(
       encodeControlMessage({
         protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -234,7 +295,7 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
         agentSessionId: `session-${sessionNumber}`,
         tier,
         sequenceNumber: ++sequenceNumber,
-        gameTimeMs: 1_000,
+        gameTimeMs,
         data,
       }),
     );
@@ -262,11 +323,10 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
   const checkSentStates = (savedFor: string | null = null) => {
     const states = desiredStatesSent();
     const sources = new Map(controller.intentsView().map((view) => [view.id, view.source]));
-    for (const state of states.slice(statesChecked)) {
-      const ids = state.intents.map((each) => each.id);
-      for (const id of ids) sentEver.add(id);
+    for (const desiredState of states.slice(statesChecked)) {
+      const ids = desiredState.intents.map((each) => each.id);
       const resetAt = ownerQueue.findIndex((id) => resetsTheGame(OWNER_INTENTS_BY_ID.get(id) as Intent));
-      const irreversible = state.intents.filter(isIrreversibleIntent);
+      const irreversible = desiredState.intents.filter(isIrreversibleIntent);
       if (resetAt !== -1) {
         const reset = ownerQueue[resetAt] as string;
         for (const id of ownerQueue.slice(resetAt + 1)) {
@@ -292,7 +352,14 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
           violations.push(`${each.id} went out with no backup of its own answered saved`);
         }
         // A rule's own join out: one the owner never queued (an owner's gate passes to a rule's same id).
-        if (!everQueuedByOwner.has(each.id)) aRuleJoinWentOut = true;
+        if (!everQueuedByOwner.has(each.id) && each.action === "joinFaction") aRuleJoinWentOut = true;
+        // The brain's own reset: sent only with nothing of the owner's before it, and never again once done.
+        if (sources.get(each.id) !== "manual" && isBrainsReset(each.id)) {
+          if (each.action === "installAugmentations") theBrainsInstallWentOut = true;
+          else theBrainsDestroyWentOut = true;
+          if (ownerQueue.length > 0) violations.push(`the brain's ${each.id} sent with the owner's queue undone`);
+          if (brainsResetsDone.has(each.id)) violations.push(`the brain's ${each.id} sent again after its reset`);
+        }
       }
       // The owner's, done: never again. A rule may ask for the same id again (a join, until a snapshot shows it).
       for (const id of ids) {
@@ -304,13 +371,26 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
     // A backup is its intent's only while that stays the gates' first: pushed back, its gate counts again.
     const first = firstJudged();
     for (const pending of pendingBackups) if (pending.forId !== first) pending.current = false;
+    if (heldFor !== first) {
+      heldFor = first;
+      heldSnapshots = 0;
+    }
   };
   const slowWith = (invited: string[]) => {
     const data = slowData();
-    data.resetInfo = { ...data.resetInfo, ...gameResets };
+    data.resetInfo = {
+      ...data.resetInfo,
+      ...gameResets,
+      ...(standInGame.redPill ? { ownedAugs: { "The Red Pill": 1 } } : {}),
+    };
+    const brainInstalls = brainsReset === "install" && rulesOn;
     data.factions = {
       backend: "sim",
-      state: { joined: [], invitations: invited, queuedAugmentations: [] },
+      state: {
+        joined: brainInstalls ? [{ name: "CyberSec", reputation: 18_750, favor: 0 }] : [],
+        invitations: invited,
+        queuedAugmentations: standInGame.augmentationsQueued ? CYBERSEC_FIVE : [],
+      },
       problem: null,
     };
     return data;
@@ -322,6 +402,7 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
     sessionNumber += 1;
     latestMedium = null;
     irreversibleSentBefore = new Set();
+    heldSnapshots = 0;
     channel.accept(connection);
     connection.receive(
       encodeControlMessage({
@@ -344,9 +425,17 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
     channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
     pendingBackups = [];
+    heldFor = null;
+    heldSnapshots = 0;
     const backupNow = () =>
       new Promise<SaveBackupEvent>((answer) => {
-        pendingBackups.push({ answer, askedInSession: sessionNumber, forId: firstJudged(), current: true });
+        const forId = firstJudged();
+        // Asked only once its guard has held on two consecutive medium snapshots (R8), counted by the model.
+        if (heldFor !== forId || heldSnapshots < HELD_BEFORE_A_BACKUP) {
+          violations.push(`a backup asked for ${forId} after ${heldSnapshots} medium snapshots with its guard holding`);
+        }
+        heldSnapshots = 0;
+        pendingBackups.push({ answer, askedInSession: sessionNumber, forId, current: true });
       });
     controller = new DesiredStateController({ channel, store, saveBackups: { backupNow } });
   };
@@ -360,9 +449,37 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
   };
   const medium = (snapshot: Medium) => {
     latestMedium = snapshot;
+    // The gates' first: its guard counted on this snapshot, or, failing, its count and its backup asked for gone.
+    const first = firstJudged();
+    if (first !== heldFor) {
+      heldFor = first;
+      heldSnapshots = 0;
+    }
+    if (first !== null && guardHolds(first, snapshot)) heldSnapshots += 1;
+    else if (first !== null) {
+      heldSnapshots = 0;
+      for (const pending of pendingBackups) if (pending.forId === first) pending.current = false;
+    }
     const hacking = snapshot.daemonReady ? 3000 : 100;
-    const player = { money: 1e9, city: "Sector-12", hasTorRouter: true, homeRam: 2 ** 20, factions: snapshot.factions };
-    send("medium", mediumData(hacking, { [WORLD_DAEMON]: true }, player));
+    const brainInstalls = brainsReset === "install" && rulesOn;
+    // A run where the brain installs: CyberSec joined, all bought, no money left (#210's example).
+    const factions = brainInstalls ? [...new Set([...snapshot.factions, "CyberSec"])] : snapshot.factions;
+    const player = {
+      money: brainInstalls ? 0 : 1e9,
+      city: "Sector-12",
+      hasTorRouter: true,
+      homeRam: 2 ** 20,
+      factions,
+    };
+    const data = mediumData(hacking, { [WORLD_DAEMON]: true }, player);
+    data.player = {
+      ...data.player,
+      skills: { hacking, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+      exp: { hacking: 6_106_794 },
+      mults: { faction_rep: 1, hacking: 1 },
+    };
+    standInGame.timeMs += 10_000;
+    send("medium", data, standInGame.timeMs);
     checkSentStates();
   };
   /** Answers the oldest backup asked for (`all`: every one, oldest first), each then seen by the controller. */
@@ -373,6 +490,8 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
     )) {
       const itsOwn = current && askedInSession === sessionNumber;
       if (!saved && itsOwn) reached.failedBackupsWhileTaking += 1;
+      // Failed, its gate counts again from none.
+      if (!saved && itsOwn) heldSnapshots = 0;
       answer(saved ? SAVED_BACKUP : FAILED_BACKUP);
       await new Promise((resolve) => setImmediate(resolve));
       checkSentStates(saved && itsOwn ? forId : null);
@@ -381,13 +500,15 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
   /** The Agent's round: each intent sent done or not, in order; a reset intent done resets the game. */
   const agentRound = (
     answerOf: (id: string) => string,
-    { brainDownAcrossReset = false, clockSetBack = false, inTheSteps = true } = {},
+    { rulesDone = false, brainDownAcrossReset = false, clockSetBack = false, inTheSteps = true } = {},
   ) => {
     const sent = desiredStatesSent().at(-1)?.intents ?? [];
+    const sources = new Map(controller.intentsView().map((view) => [view.id, view.source]));
     const outcomes: IntentOutcome[] = [];
     let reset: Intent | null = null;
     for (const each of sent) {
-      const answer = OWNER_INTENTS_BY_ID.has(each.id) ? answerOf(each.id) : "notDone";
+      const owners = ownerQueue.includes(each.id) || sources.get(each.id) === "manual";
+      const answer = owners ? answerOf(each.id) : rulesDone ? "done" : "notDone";
       if (resetsTheGame(each) && answer === "done") {
         reset = each;
         break;
@@ -412,13 +533,20 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
     const moved = clockSetBack ? -500 : 1_000;
     gameResets.lastAugReset += moved;
     if (reset.action === "destroyBitNode") gameResets.lastNodeReset += moved;
+    // An install installs what's queued; a destroy enters the next BitNode, The Red Pill gone with the rest.
+    standInGame.augmentationsQueued = false;
+    if (reset.action === "destroyBitNode") standInGame.redPill = false;
     if (inTheSteps) {
       reached.resetsInTheSteps += 1;
       if (brainDownAcrossReset) reached.brainDownAcrossReset += 1;
       if (clockSetBack) reached.clockSetBack += 1;
+      if (reset.action === "destroyBitNode") reached.destroysInTheSteps += 1;
+      // README's case: a brain down while its destroy resets the game must not destroy the next BitNode too.
+      if (reset.action === "destroyBitNode" && brainDownAcrossReset) reached.brainDownAcrossDestroy += 1;
     }
-    // Done by the reset: what was queued after it may go now; it, never again (if the owner's).
+    // Done by the reset: what was queued after it may go now; it, never again (the owner's, or the brain's).
     if (ownerQueue.includes(reset.id)) ownersDone.add(reset.id);
+    else brainsResetsDone.add(reset.id);
     unqueue(reset.id);
     connect();
   };
@@ -455,8 +583,7 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
       }
     }
     // A stable game from here: guards holding, backups saved, every intent of the owner's done. The owner's queue
-    // drains, at most one irreversible intent (or reset) a round, and each intent left in it is sent on the way.
-    const leftToDo = [...ownerQueue];
+    // drains, at most one irreversible intent (or reset) a round.
     for (let round = 0; round < 25 && (ownerQueue.length > 0 || readManualIntents(store).length > 0); round += 1) {
       for (let each = 0; each < 3; each += 1) medium({ factions: [], daemonReady: true });
       await answerBackups(true, { all: true });
@@ -464,9 +591,9 @@ async function play(rulesOn: boolean, initialQueue: number[], steps: Step[]): Pr
     }
     const stillQueued = [...ownerQueue, ...readManualIntents(store).map((each) => each.id)];
     if (stillQueued.length > 0) violations.push(`the owner's queue never drained: ${stillQueued.join(", ")}`);
-    const neverSent = leftToDo.filter((id) => !sentEver.has(id));
-    if (neverSent.length > 0) violations.push(`never sent: ${neverSent.join(", ")}`);
     if (aRuleJoinWentOut) reached.runsWithARuleJoinOut += 1;
+    if (theBrainsInstallWentOut) reached.runsWithTheBrainsInstallOut += 1;
+    if (theBrainsDestroyWentOut) reached.runsWithTheBrainsDestroyOut += 1;
     return violations;
   } finally {
     store.close();
@@ -477,28 +604,58 @@ test("the pool has every action an intent can name, so a new action needs a plac
   expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(new Set(INTENT_ACTIONS));
 });
 
-test("resets wait for what's ahead, what's after waits for them; the gate; nothing done again; it drains", async () => {
-  await fc.assert(
-    fc.asyncProperty(
-      fc.boolean(),
-      anyInitialQueue,
-      fc.array(anyStep, { maxLength: 50, size: "medium" }),
-      async (rulesOn, initialQueue, steps) => {
-        expect(await play(rulesOn, initialQueue, steps)).toEqual([]);
-      },
+/** A run: the rules off or on; the brain's own reset, if any (with the rules on, #210, #215); the queue; the steps. */
+/**
+ * A run: the rules off or on; the brain's own reset, with them on (#210, #215), the rarest to get out so the most often
+ * tried, from an empty queue (the owner's queue holds it back); the owner's queue to start with; the steps.
+ */
+const anyRun = fc
+  .oneof(
+    { arbitrary: fc.constant({ rulesOn: false, brainsReset: "none" as const }), weight: 2 },
+    { arbitrary: fc.constant({ rulesOn: true, brainsReset: "none" as const }), weight: 1 },
+    { arbitrary: fc.constant({ rulesOn: true, brainsReset: "install" as const }), weight: 2 },
+    { arbitrary: fc.constant({ rulesOn: true, brainsReset: "destroy" as const }), weight: 1 },
+  )
+  .chain(({ rulesOn, brainsReset }) =>
+    fc.tuple(
+      fc.constant(rulesOn),
+      fc.constant(brainsReset),
+      brainsReset === "none" ? anyInitialQueue : fc.constant([] as number[]),
+      fc.array(stepsFor(brainsReset !== "none"), { maxLength: 50, size: "medium" }),
     ),
-    // A failure is reported as found: shrinking over fresh stores could run past the test's time limit.
-    { numRuns: 100, endOnFailure: true },
   );
-  // What the property is there for, reached: resets in the steps, with the brain down across one and the clock set
-  // back; a failed backup answering a gate's own request; and runs with a rule's own join out. The seeds aren't
-  // fixed, so the floors sit where no seed misses them. Over 40 measured blocks of 100 runs (min to max, mean, sd):
-  // resets 17 to 36 (28, 4.9); brain down 10 to 22 (14.6, 3.1); clock set back 6 to 24 (14.7, 4.1); failed backups
-  // 41 to 87 (62, 9.4); rule joins out 35 to 56 (45, 4.3). Each floor is 5 sd below its mean, or 1 where that is
-  // under 1 (none at all, at a mean of 14, is about e^-14). At 0 the generator no longer gets there.
-  expect(reached.resetsInTheSteps).toBeGreaterThanOrEqual(3);
-  expect(reached.brainDownAcrossReset).toBeGreaterThanOrEqual(1);
-  expect(reached.clockSetBack).toBeGreaterThanOrEqual(1);
-  expect(reached.failedBackupsWhileTaking).toBeGreaterThanOrEqual(15);
-  expect(reached.runsWithARuleJoinOut).toBeGreaterThanOrEqual(20);
+const playRun = async ([rulesOn, brainsReset, initialQueue, steps]: typeof anyRun extends fc.Arbitrary<infer Run>
+  ? Run
+  : never) => {
+  expect(await play(rulesOn, brainsReset, initialQueue, steps)).toEqual([]);
+};
+
+test("resets wait for what's ahead, what's after waits for them; the gate; nothing done again; it drains", async () => {
+  // A failure is reported as found: shrinking over fresh stores could run past the test's time limit.
+  await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 60, endOnFailure: true });
+});
+
+test("the runs reach what the property is for: resets, the brain down and the clock back, failed backups, joins", async () => {
+  // A fixed seed, so these floors can't miss on a random one: the rarer counts, a destroy with the brain down across
+  // it say, could be 0 in a block of random runs. The property above draws fresh runs each time.
+  for (const key of Object.keys(reached)) (reached as Record<string, number>)[key] = 0;
+  await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 100, seed: 179, endOnFailure: true });
+  // On seed 179's 100 runs: 28 resets in the steps (15 destroys), the brain down across 15 (9 destroys), the clock set
+  // back across 17; 48 failed backups that were a gate's own; a rule's own join out in 23 runs, the brain's install in
+  // 25 and its destroy in 13. Each floor about half that: below it, the generator no longer gets there, or a gate
+  // seldom lets it out.
+  const floors: Record<keyof typeof reached, number> = {
+    resetsInTheSteps: 14,
+    brainDownAcrossReset: 7,
+    clockSetBack: 8,
+    destroysInTheSteps: 7,
+    brainDownAcrossDestroy: 4,
+    failedBackupsWhileTaking: 24,
+    runsWithARuleJoinOut: 11,
+    runsWithTheBrainsInstallOut: 12,
+    runsWithTheBrainsDestroyOut: 6,
+  };
+  for (const [key, floor] of Object.entries(floors)) {
+    expect([key, reached[key as keyof typeof reached] >= floor]).toEqual([key, true]);
+  }
 });

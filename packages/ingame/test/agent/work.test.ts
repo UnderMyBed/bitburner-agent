@@ -343,27 +343,30 @@ describe("properties (#179): the work converges, and isn't restarted once it has
         fc.option(anyWork, { freq: 5 }),
         fc.constantFrom(...ANSWERS),
         async (before, wanted, heldAnswer) => {
-          const game: StandInGame = { doing: null, focus: false, starts: 0 };
+          const standInGame: StandInGame = { doing: null, focus: false, starts: 0 };
           let answer: Answer = "notConverged";
-          const { work, round, calls } = activityWith((workerFile, workerArguments) => {
+          /** Each run the stand-in worker was asked for: the work and its focus. */
+          const asked: { doing: string; focus: boolean }[] = [];
+          const { work, round } = activityWith((workerFile, workerArguments) => {
+            const run = workOfRun(workerFile, workerArguments);
+            asked.push(run);
             if (answer === "busy") return "busy";
             if (answer === "cantStart") return "no report";
             if (answer === "notConverged") return { done: false, problem: "not yet" };
-            const asked = workOfRun(workerFile, workerArguments);
-            if (game.doing !== asked.doing) {
-              game.doing = asked.doing;
-              game.focus = true;
-              game.starts += 1;
+            if (standInGame.doing !== run.doing) {
+              standInGame.doing = run.doing;
+              standInGame.focus = true;
+              standInGame.starts += 1;
             }
-            game.focus = asked.focus;
+            standInGame.focus = run.focus;
             return CONVERGED;
           });
           for (const step of before) {
             if (step.kind === "desire") work.desire(step.work === null ? null : structuredClone(step.work));
             else if (step.kind === "forget") work.forget();
             else if (step.kind === "owner") {
-              game.doing = step.work === null ? null : doingOf(step.work);
-              game.focus = step.work?.focus ?? false;
+              standInGame.doing = step.work === null ? null : doingOf(step.work);
+              standInGame.focus = step.work?.focus ?? false;
             } else {
               answer = step.answer;
               await round(step.short ? 500 : ROUND_MS);
@@ -372,33 +375,38 @@ describe("properties (#179): the work converges, and isn't restarted once it has
           // From here the brain keeps sending the same work, or none (afresh, as off the wire), and each worker
           // answers the same: within the 30 s between looks and one more round, the outcome is that answer's.
           answer = heldAnswer;
-          const gameBefore = { ...game };
+          const askedBefore = asked.length;
           for (let each = 0; each < 16; each += 1) {
             work.desire(wanted === null ? null : structuredClone(wanted));
             await round();
           }
+          // Every run asked for from here is for the work wanted, at its focus; none at all with none wanted.
+          const askedSince = asked.slice(askedBefore);
+          const wantedRun = wanted === null ? null : { doing: doingOf(wanted), focus: wanted.focus };
+          expect(askedSince.filter((run) => JSON.stringify(run) !== JSON.stringify(wantedRun))).toEqual([]);
           if (wanted === null) {
             // None wanted: the game's work left alone, nothing reported.
+            expect(askedSince).toEqual([]);
             expect(work.outcome()).toBeNull();
           } else if (heldAnswer === "converges") {
-            expect([game.doing, game.focus]).toEqual([doingOf(wanted), wanted.focus]);
+            expect([standInGame.doing, standInGame.focus]).toEqual([doingOf(wanted), wanted.focus]);
             expect(work.outcome()).toEqual({ converged: true, problem: null, backend: "ui" });
           } else {
-            // Not converged, by the worker's word or for want of one: the game untouched, and said so.
-            expect(game).toEqual(gameBefore);
+            // Not converged, by the worker's word or for want of one: looked at, and said so.
+            expect(askedSince.length).toBeGreaterThanOrEqual(1);
             expect(work.outcome()).toMatchObject({ converged: false, problem: expect.any(String), backend: "ui" });
           }
           // And kept: the outcome doesn't change, nothing is started again, and it's looked at as its answer says.
           const settled = work.outcome();
-          const startsBefore = game.starts;
-          const callsBefore = calls().length;
+          const startsBefore = standInGame.starts;
+          const askedBeforeKept = asked.length;
           for (let each = 0; each < 30; each += 1) {
             work.desire(wanted === null ? null : structuredClone(wanted));
             await round();
           }
           expect(work.outcome()).toEqual(settled);
-          expect(game.starts).toBe(startsBefore);
-          expect(calls().length - callsBefore).toBe(wanted === null ? 0 : LOOKS_IN_30[heldAnswer]);
+          expect(standInGame.starts).toBe(startsBefore);
+          expect(asked.length - askedBeforeKept).toBe(wanted === null ? 0 : LOOKS_IN_30[heldAnswer]);
         },
       ),
       { numRuns: 200 },

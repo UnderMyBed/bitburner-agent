@@ -485,12 +485,12 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
    */
   function steppedRunner() {
     let answersNow: Answer[] = Array(POOL.length).fill("notDone");
-    const runs: string[] = [];
+    const workerRuns: string[] = [];
     const reportedDone = new Set<string>();
     const runner = runnerWith((workerFile, workerArguments) => {
       const index = poolIndex(workerFile, workerArguments);
       const { id } = POOL[index] as Intent;
-      runs.push(id);
+      workerRuns.push(id);
       if (answersNow[index] === "done") reportedDone.add(id);
       return reportOf(answersNow[index] as Answer);
     }).runner;
@@ -515,7 +515,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     const answerWith = (answers: Answer[]) => {
       answersNow = answers;
     };
-    return { runner, runs, reportedDone, fullRound, desire, play, answerWith };
+    return { runner, workerRuns, reportedDone, fullRound, desire, play, answerWith };
   }
 
   test("the pool has every action an intent can name (a new one needs a place here), each its own run", async () => {
@@ -534,7 +534,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
   test("idempotent: one reported done never runs again while it stays sent, and only what's sent runs", async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(anyStep, { maxLength: 40, size: "medium" }), async (steps) => {
-        const { runs, reportedDone, play } = steppedRunner();
+        const { workerRuns, reportedDone, play } = steppedRunner();
         let sent = new Set<string>();
         const wrongRuns: string[] = [];
         let runsSeen = 0;
@@ -544,11 +544,11 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
           if (step.kind === "desire") sent = new Set(step.intents.map((each) => each.id));
           else if (step.kind === "forget") sent = new Set();
           await play(step, () => {
-            for (const id of runs.slice(runsSeen)) {
+            for (const id of workerRuns.slice(runsSeen)) {
               if (doneBefore.has(id) && sent.has(id)) wrongRuns.push(`${id}, done, ran again`);
               if (!sent.has(id)) wrongRuns.push(`${id}, not sent, ran`);
             }
-            runsSeen = runs.length;
+            runsSeen = workerRuns.length;
           });
         }
         expect(wrongRuns).toEqual([]);
@@ -569,7 +569,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
         anyIntents,
         anyStableAnswers,
         async (before, finalIntents, stableAnswers) => {
-          const { runner, runs, reportedDone, fullRound, desire, play, answerWith } = steppedRunner();
+          const { runner, workerRuns, reportedDone, fullRound, desire, play, answerWith } = steppedRunner();
           for (const step of before) await play(step);
           // From here the brain keeps sending the same intents, and each worker answers the same: within the retry
           // period (15 rounds) and one more, each outcome is the worker's. One the stand-in already reported done, and
@@ -585,13 +585,13 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
           );
           // And stays: no outcome changes but for the tries, sent afresh each round or not.
           const settled = runner.outcomes().map(({ tries: _tries, ...rest }) => rest);
-          const runsBefore = runs.length;
+          const runsBefore = workerRuns.length;
           for (let each = 0; each < 30; each += 1) {
             if (each % 2 === 0) desire(finalIntents);
             await fullRound();
           }
           expect(runner.outcomes().map(({ tries: _tries, ...rest }) => rest)).toEqual(settled);
-          const runsAfter = runs.slice(runsBefore);
+          const runsAfter = workerRuns.slice(runsBefore);
           for (const { id } of finalIntents) {
             const expected = alreadyDone.has(id) ? 0 : RUNS_IN_30[stableOf(id)];
             expect([id, runsAfter.filter((run) => run === id).length]).toEqual([id, expected]);
