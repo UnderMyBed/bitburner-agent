@@ -1319,11 +1319,13 @@ export interface SharingHealth {
    */
   possibleBonus?: number;
   /**
-   * Home's RAM, and of it the RAM free beyond what home keeps for the Agent (the config's `homeKeptGb`), at its last
-   * look, GB (#242): home sitting idle while asked shows here, whatever the room. Absent from a batcher before #242.
+   * Home's RAM, of it the RAM free beyond what home keeps for the Agent, and what it keeps (the config's
+   * `homeKeptGb`), at its last look, GB (#242): home sitting idle while asked shows here, whatever the room. Absent
+   * from a batcher before #242.
    */
   homeGb?: number;
   homeFreeGb?: number;
+  homeKeptGb?: number;
 }
 
 /** A new batcher's health. */

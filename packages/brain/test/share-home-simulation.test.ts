@@ -133,7 +133,9 @@ test.each(SEEDS)(
     );
     console.log(section);
     expect(section).toMatch(/^ {4}the bonus while asked \(#242\): x1\.3\d\d on average, of x1\.3\d\d possible/m);
-    expect(section).toContain("    home idle while asked (over half its RAM free, for 5 minutes, #242): never");
+    expect(section).toContain(
+      "    home idle while asked (over half of what it may share free, for 5 minutes, #242): never",
+    );
     expect(report.failures.filter((failure) => /^share /.test(failure))).toEqual([]);
   },
 );

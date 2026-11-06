@@ -59,6 +59,28 @@ export function singularityWorkerMostRamGb(budgetGb: number): number {
   return SCRIPT_BASE_RAM_GB + SINGULARITY_MOST_RAM_MULTIPLIER * (budgetGb - SCRIPT_BASE_RAM_GB);
 }
 
+/**
+ * The largest Singularity worker's RAM at SF4.3 or in BN4, GB: the destroy's 33.9
+ * (`SINGULARITY_DESTROY_BITNODE_WORKER_NAME`), ram-budget.json's, which the ingame RAM test measures; a core test checks
+ * it's the largest there. With less of SF4, `singularityWorkerRamGb` at the game's multiplier says at most what it takes:
+ * the base isn't multiplied, nor its functions not Singularity's.
+ */
+export const SINGULARITY_LARGEST_WORKER_GB = 33.9;
+
+/**
+ * What the game multiplies a Singularity function's RAM by (`SF4Cost`, Netscript/RamCostGenerator.ts:82-95): 1 in BN4
+ * or with SF4.3, 4 with SF4.2, 16 with SF4.1 (or none, where no Singularity worker runs).
+ */
+export function singularityRamMultiplier(bitNode: number, sf4Level: number): number {
+  if (bitNode === 4 || sf4Level >= 3) return 1;
+  return sf4Level === 2 ? 4 : SINGULARITY_MOST_RAM_MULTIPLIER;
+}
+
+/** A Singularity worker's RAM with `budgetGb` at SF4.3, at `multiplier`: the base isn't multiplied, its functions are. */
+export function singularityWorkerRamGb(budgetGb: number, multiplier: number): number {
+  return SCRIPT_BASE_RAM_GB + multiplier * (budgetGb - SCRIPT_BASE_RAM_GB);
+}
+
 /** Every Singularity worker: they fit a home only with SF4.3 or in BN4, so RAM checks of a fresh save leave them out. */
 export function singularityWorkerFileNames(): string[] {
   return [

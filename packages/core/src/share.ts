@@ -80,11 +80,11 @@ export interface HostRamUse {
  * (theirs and the next target's, `shareReserveGb`), no more than takes their use to `SHARE_MOST_USE` of their RAM; and
  * that of any other host (home, beside them), less `homeKeptGb` on home (the Agent's and its workers'). The cap counts
  * the batches' hosts alone (#242): it leaves the batches room on their own hosts, and home's share can't take theirs
- * (#230). Counted over all the hosts, it let run #3's batches on 82% of 26.2 PB of cloud servers leave 1 PB of home
- * idle for 51 minutes. At most `mostThreads` threads (a round takes half of what the share may hold, #242). The other
- * hosts first, then the batches' hosts with the least free first, so the large keep room for whole batch operations
- * (`placeThreads`), never more on them than their room; whole threads (`threadsThatFit`). None when the room holds no
- * thread.
+ * (#230). Counted over all the hosts, it let run #3's batches on over about 82% of 26.2 PB of cloud servers leave
+ * 0.5–1 PB of home idle for 51 minutes. At most `mostThreads` threads (a round takes half of what the share may hold,
+ * #242). The other hosts first, then the batches' hosts with the least free first, so the large keep room for whole
+ * batch operations (`placeThreads`), never more on them than their room; whole threads (`threadsThatFit`). None when
+ * the room holds no thread.
  */
 export function shareRound(
   hosts: readonly HostRamUse[],
@@ -137,9 +137,12 @@ export function shareRound(
  * `SHARE_ROUND_MS` apart, half a call's time, so the threads run in two halves: as one ends, the other still holds, and
  * the bonus never falls to ×1.0 while the RAM it held comes back (run #3: ×1.0 in up to 39% of an hour's fast
  * snapshots), only to half its threads' (ln 2/25, 0.028, less). A round on all the room, as before, left nothing
- * sharing from its threads' end until the next round could take their RAM.
+ * sharing from its threads' end until the next round could take their RAM. None while a half is ending
+ * (`halfEnding`), whatever room another host has: its RAM comes back a moment later, and a round on what's left beside
+ * it would leave the halves uneven.
  */
-export function shareRoundThreads(heldThreads: number, roomThreads: number): number {
+export function shareRoundThreads(heldThreads: number, roomThreads: number, halfEnding = false): number {
+  if (halfEnding) return 0;
   const room = Math.max(0, Math.floor(roomThreads));
   return Math.min(room, Math.ceil((Math.max(0, heldThreads) + room) / 2));
 }

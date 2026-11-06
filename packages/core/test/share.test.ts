@@ -3,6 +3,7 @@
 // faction-work-parity.test.ts checks the bonus and the rate against the engine's own while share threads run.
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
+import { SINGULARITY_LARGEST_WORKER_GB, singularityRamMultiplier, singularityWorkerRamGb } from "../src/backends.ts";
 import { BATCH_RAM_RELEASE_MS, parseBatcherConfig } from "../src/batcher.ts";
 import { factionReputationPerCycle, factionReputationPerSecond, type WorkingPerson } from "../src/faction-work.ts";
 import {
@@ -36,6 +37,24 @@ test("the constants are the pinned game's and legacy's: 10 s a call, 2.4 GB for 
   expect(SHARE_RAM_GB).toBe(1.6 + 2.4);
   expect(SHARE_ROUND_MS).toBe(5_000);
   expect(SHARE_MOST_USE).toBe(0.8);
+});
+
+test("Singularity workers' RAM (#242's review): the largest is ram-budget.json's destroy, times the SF4 multiplier", () => {
+  const budget = JSON.parse(readFileSync(new URL("../../ingame/ram-budget.json", import.meta.url), "utf8")) as Record<
+    string,
+    number
+  >;
+  const singularity = Object.entries(budget).filter(([name]) => name.startsWith("singularity-"));
+  expect(singularity.length).toBeGreaterThan(10);
+  expect(Math.max(...singularity.map(([, gb]) => gb))).toBe(SINGULARITY_LARGEST_WORKER_GB);
+  // SF4Cost (Netscript/RamCostGenerator.ts:82-95): 1 in BN4 or at SF4.3, 4 at SF4.2, 16 at SF4.1.
+  expect(source("Netscript/RamCostGenerator.ts")).toContain("if (sf4 <= 1) {\n      return cost * 16;");
+  expect(singularityRamMultiplier(4, 0)).toBe(1);
+  expect(singularityRamMultiplier(1, 3)).toBe(1);
+  expect(singularityRamMultiplier(1, 2)).toBe(4);
+  expect(singularityRamMultiplier(1, 1)).toBe(16);
+  expect(singularityWorkerRamGb(33.9, 1)).toBeCloseTo(33.9, 9);
+  expect(singularityWorkerRamGb(33.9, 16)).toBeCloseTo(1.6 + 16 * 32.3, 9);
 });
 
 test("a host's effective share threads: threads × the intelligence bonus at weight 2 × its core bonus", () => {
@@ -179,6 +198,9 @@ test("a round starts half of what the share may hold, so two halves overlap (#24
   expect(shareRoundThreads(900, 100)).toBe(100);
   // Odd figures, whole threads.
   expect(shareRoundThreads(-3, 10.9)).toBe(5);
+  // A half ending (#242's review): none, though another host has room; its RAM comes back a moment later.
+  expect(shareRoundThreads(500, 300, true)).toBe(0);
+  expect(shareRoundThreads(500, 300, false)).toBe(300);
   // Two halves a round apart, each running a call's time: a round's every `SHARE_ROUND_MS`, half a call's 10 s.
   expect(2 * SHARE_ROUND_MS).toBe(SHARE_TIME_MS);
 });

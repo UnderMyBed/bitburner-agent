@@ -34,6 +34,7 @@ import {
   sharingConfigOf,
   sharingOf,
   singularityInEffect,
+  singularityRamMultiplierOf,
   writeShareEnabled,
 } from "../src/share.ts";
 import { SHARE_IDLE_AFTER_MS, sharingLines } from "../src/share-report.ts";
@@ -83,6 +84,14 @@ test("Singularity in effect (#226's review): in BN4, or with SF4", () => {
   expect(singularityInEffect(slow(4, {}))).toBe(true);
   expect(singularityInEffect(slow(1, { 4: 1 }))).toBe(true);
   expect(singularityInEffect(null)).toBe(false);
+  // Its functions' RAM multiplier (#242's review: RamCostGenerator.ts:82-95), or null without it.
+  expect(singularityRamMultiplierOf(slow(1, {}))).toBeNull();
+  expect(singularityRamMultiplierOf(slow(4, {}))).toBe(1);
+  expect(singularityRamMultiplierOf(slow(4, { 4: 1 }))).toBe(1);
+  expect(singularityRamMultiplierOf(slow(1, { 4: 1 }))).toBe(16);
+  expect(singularityRamMultiplierOf(slow(1, { 4: 2 }))).toBe(4);
+  expect(singularityRamMultiplierOf(slow(1, { 4: 3 }))).toBe(1);
+  expect(singularityRamMultiplierOf(null)).toBeNull();
 });
 
 test("faction work goes on: the work sent is faction work, and the Agent says the game shows it", () => {
@@ -115,11 +124,14 @@ describe("sharingConfigOf", () => {
       homeKeptGb: SHARE_HOME_KEPT_GB,
       cores: {},
     });
-    // Home keeps 4 times the Agent's 8 GB free of share threads (#226's review); all of it with Singularity.
+    // Home keeps 4 times the Agent's 8 GB free of share threads (#226's review); with Singularity, the most its largest
+    // worker, the destroy's 33.9 GB at SF4.3, takes at the SF4 level owned beside that (#242's review): not all of home.
     expect(SHARE_HOME_KEPT_GB).toBe(4 * HOME_KEPT_FOR_THE_AGENT_GB);
     const withHome = medium(50, { foodnstuff: true, CSEC: true }, [], 2 ** 20);
-    expect(sharingConfigOf(config, withHome, true)?.homeKeptGb).toBe(2 ** 20);
-    expect(sharingConfigOf(config, withHome, false)?.homeKeptGb).toBe(SHARE_HOME_KEPT_GB);
+    expect(sharingConfigOf(config, withHome, 1)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 33.9, 9);
+    expect(sharingConfigOf(config, withHome, 4)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 1.6 + 4 * 32.3, 9);
+    expect(sharingConfigOf(config, withHome, 16)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 1.6 + 16 * 32.3, 9);
+    expect(sharingConfigOf(config, withHome, null)?.homeKeptGb).toBe(SHARE_HOME_KEPT_GB);
     expect(shareReserveGb(plan.peakRamGb, 0)).toBeGreaterThanOrEqual(plan.peakRamGb * 1.25);
     const next = { target: "foodnstuff", figures: N00DLES, ramGb: 6.4 };
     expect(sharingConfigOf({ ...config, next }, data)?.reserveGb).toBe(shareReserveGb(plan.peakRamGb, 6.4));
@@ -363,11 +375,13 @@ describe("the run report's lines", () => {
       "  sharing spare RAM (#224):",
       "    shared for 4 min: threads at most 2,000, 1,009 on average; RAM at most 8,000 GB, 4,036 GB on average; " +
         "the bonus at most x1.250, x1.250 on average",
+      "    the bonus while asked (#242): not judged: a batcher before #242 doesn't say the bonus possible",
       "    the brain's faction work while sharing: +150 reputation in 2 min (1.25/s, the bonus x1.250 on average); " +
         "while not: +120 in 2 min (1.00/s) (x1.25)",
       "    while sharing on the batches' hosts: 0 late, 0 lost, 0 short; on home alone: 0 late, 0 lost, 0 short; " +
         "while not: 0 late, 0 lost, 0 short",
       "    idle (asked, the room free, no threads, for 10 minutes): never",
+      "    home idle while asked (#242): not judged: a batcher before #242 doesn't say home's RAM",
     ]);
     expect(failures).toEqual([]);
   });
@@ -378,65 +392,109 @@ describe("the run report's lines", () => {
     for (let second = 0; second <= 720; second += 2) {
       const sharing =
         second <= 360
-          ? { wanted: true, possibleBonus: 1.4, homeGb: 1_000, homeFreeGb: 900 }
-          : { wanted: true, ...sharingAt(1_000, 1.4), possibleBonus: 1.42, homeGb: 1_000, homeFreeGb: 0 };
+          ? { wanted: true, possibleBonus: 1.4, homeGb: 1_032, homeFreeGb: 900, homeKeptGb: 32 }
+          : {
+              wanted: true,
+              ...sharingAt(1_000, 1.4),
+              possibleBonus: 1.42,
+              homeGb: 1_032,
+              homeFreeGb: 0,
+              homeKeptGb: 32,
+            };
       points.push({ atMs: at(second), health: health(sharing, { atMs: at(second) }) });
     }
     const failures: string[] = [];
     const lines = sharingLines(points, [], failures);
     const line =
       "share left home idle from 2026-01-01T00:00:00.000Z to 2026-01-01T00:06:00.000Z (6 min): asked, and over half " +
-      "of home's 1,000 GB free beyond what it keeps";
+      "of the 1,000 GB home may share free";
     expect(failures).toEqual([line]);
     expect(lines).toEqual([
       "  sharing spare RAM (#224):",
       "    shared for 6 min: threads at most 1,000, 1,000 on average; RAM at most 4,000 GB, 4,000 GB on average; " +
         "the bonus at most x1.400, x1.400 on average",
-      "    the bonus while asked (#242): x1.200 on average, of x1.410 possible on the RAM free; at x1.000 for 6 min " +
-        "(50% of 12 min asked)",
+      "    the bonus while asked (#242): x1.200 on average, of x1.410 possible under the share's rules; at x1.000 for " +
+        "6 min (50% of 12 min asked)",
       "    the brain's faction work while sharing: none to judge",
       "    while sharing on the batches' hosts: 0 late, 0 lost, 0 short; on home alone: 0 late, 0 lost, 0 short; " +
         "while not: 0 late, 0 lost, 0 short",
       "    idle (asked, the room free, no threads, for 10 minutes): never",
       `    ${line}`,
     ]);
-    // Under 5 minutes, or broken by a gap in the fast snapshots: no failure, and a line saying so.
-    const short: string[] = [];
-    const brief = points.filter(({ atMs }) => atMs < at(60) || atMs > at(120));
-    expect(sharingLines(brief, [], short)).toContain(
-      "    home idle while asked (over half its RAM free, for 5 minutes, #242): never",
+    const idleFor = (sharing: Partial<SharingHealth>, lastSecond: number) => {
+      const found: string[] = [];
+      const each = [];
+      for (let second = 0; second <= lastSecond; second += 2) {
+        each.push({
+          atMs: at(second),
+          health: health({ wanted: true, possibleBonus: 1, ...sharing }, { atMs: at(second) }),
+        });
+      }
+      return { lines: sharingLines(each, [], found), failures: found };
+    };
+    const idleHome = { homeGb: 1_032, homeFreeGb: 900, homeKeptGb: 32 };
+    // Exactly 5 minutes is a failure; a moment under isn't.
+    expect(idleFor(idleHome, 300).failures).toHaveLength(1);
+    expect(idleFor(idleHome, 298).failures).toEqual([]);
+    expect(idleFor(idleHome, 298).lines).toContain(
+      "    home idle while asked (over half of what it may share free, for 5 minutes, #242): never",
     );
-    expect(short).toEqual([]);
-    // Exactly half free isn't over half; not asked isn't idle.
-    const half: string[] = [];
-    const halfPoints = points.map(({ atMs, health: each }) => ({
-      atMs,
-      health: { ...each, sharing: { ...(each.sharing as SharingHealth), homeFreeGb: 500 } },
-    }));
-    sharingLines(halfPoints, [], half);
-    const unasked = points.map(({ atMs, health: each }) => ({
-      atMs,
-      health: { ...each, sharing: { ...(each.sharing as SharingHealth), wanted: false } },
-    }));
-    sharingLines(unasked, [], half);
-    expect(half).toEqual([]);
+    // Half of what home may share (its RAM beyond what it keeps), not of its RAM (#242's review): a 64 GB home keeping
+    // 32 fails with 17 GB free, not with 16; one that keeps all of it, or under a thread, never.
+    expect(idleFor({ homeGb: 64, homeFreeGb: 17, homeKeptGb: 32 }, 300).failures).toHaveLength(1);
+    expect(idleFor({ homeGb: 64, homeFreeGb: 16, homeKeptGb: 32 }, 300).failures).toEqual([]);
+    expect(idleFor({ homeGb: 64, homeFreeGb: 3, homeKeptGb: 61 }, 300).failures).toEqual([]);
+    // Not asked isn't idle; a gap in the fast snapshots breaks a stretch.
+    expect(idleFor({ ...idleHome, wanted: false }, 400).failures).toEqual([]);
+    const gapped: string[] = [];
+    sharingLines(
+      points.filter(({ atMs }) => atMs < at(60) || atMs > at(120)),
+      [],
+      gapped,
+    );
+    expect(gapped).toEqual([]);
   });
 
-  test("#242: a batcher before it says no bonus possible nor home's RAM: neither line; odd figures aren't kept", () => {
-    const lines = sharingLines(
-      [0, 2, 4].map((second) => ({ atMs: at(second), health: health({}) })),
-      [],
-      [],
+  test("#242: a batcher before it says no bonus possible nor home's RAM: not judged; odd figures aren't kept", () => {
+    const old = [0, 2, 4].map((second) => ({ atMs: at(second), health: health({}) }));
+    const lines = sharingLines(old, [], []);
+    expect(lines).toContain(
+      "    the bonus while asked (#242): not judged: a batcher before #242 doesn't say the bonus possible",
     );
-    expect(lines.some((each) => /#242/.test(each))).toBe(false);
+    expect(lines).toContain(
+      "    home idle while asked (#242): not judged: a batcher before #242 doesn't say home's RAM",
+    );
+    // Never asked: neither line.
+    const unasked = [0, 2].map((second) => ({
+      atMs: at(second),
+      health: health({ wanted: false, ...sharingAt(5, 1.1) }),
+    }));
+    expect(sharingLines(unasked, [], []).some((each) => /#242/.test(each))).toBe(false);
+    // An older batcher, then a newer one: judged on the newer's.
+    const mixed = [
+      ...old,
+      ...[6, 8].map((second) => ({
+        atMs: at(second),
+        health: health({ possibleBonus: 1.2, homeGb: 64, homeFreeGb: 0, homeKeptGb: 32 }),
+      })),
+    ];
+    expect(sharingLines(mixed, [], [])).toEqual(
+      expect.arrayContaining([
+        "    the bonus while asked (#242): x1.000 on average, of x1.200 possible under the share's rules; at x1.000 for " +
+          "0 min (100% of 0 min asked)",
+        "    home idle while asked (over half of what it may share free, for 5 minutes, #242): never",
+      ]),
+    );
     expect(sharingOf(health({ possibleBonus: Number.NaN, homeGb: 64, homeFreeGb: -1 }))).not.toHaveProperty(
       "possibleBonus",
     );
     expect(sharingOf(health({ homeGb: 64, homeFreeGb: -1 }))).not.toHaveProperty("homeGb");
-    expect(sharingOf(health({ possibleBonus: 1.2, homeGb: 64, homeFreeGb: 12 }))).toMatchObject({
+    expect(sharingOf(health({ homeKeptGb: -1 }))).not.toHaveProperty("homeKeptGb");
+    expect(sharingOf(health({ possibleBonus: 1.2, homeGb: 64, homeFreeGb: 12, homeKeptGb: 32 }))).toMatchObject({
       possibleBonus: 1.2,
       homeGb: 64,
       homeFreeGb: 12,
+      homeKeptGb: 32,
     });
   });
 
