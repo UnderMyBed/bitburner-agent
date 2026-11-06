@@ -7,6 +7,7 @@ import {
   affordableCounts,
   augmentationBuyOrder,
   chooseAugmentationsToBuy,
+  countAfterInstall,
   countablesWithinReach,
   countdownExtensionMs,
   DAEDALUS_COUNT_HOLD_MS,
@@ -33,6 +34,7 @@ import {
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
 } from "../src/augmentations.ts";
+import { daedalusRequirements, daedalusSkillsReached } from "../src/factions.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -746,26 +748,39 @@ describe("the hold for Daedalus's count (#243)", () => {
       installed: TWENTY_FIVE,
       installing: FOUR,
       required: 30,
+      skillsReached: true,
       toCome: [BLACK_HAND],
       onlineMs: 2 * HOUR,
       heldSinceOnlineMs: null,
       ...fields,
     });
 
-  test("about one cycle's cost: run #3's cycle that existed only to buy the 30th was 28 minutes", () => {
-    expect(DAEDALUS_COUNT_HOLD_MS).toBe(30 * MINUTE);
+  test("one cycle's cost less a margin: run #3's cycle spent on the 30th was 28 minutes; 8 for four held back", () => {
+    expect(DAEDALUS_COUNT_HOLD_MS).toBe(20 * MINUTE);
   });
 
-  test("run #3's 17:49: one short after the install, The Black Hand 17 min off, so held for 30 min from now", () => {
-    expect(hold()).toEqual({ next: BLACK_HAND, sinceOnlineMs: 2 * HOUR, untilOnlineMs: 2 * HOUR + 30 * MINUTE });
-    // Each way counts: a donation, or the money alone at the income.
-    for (const way of ["donation", "money"] as const) {
-      expect(hold({ toCome: [{ ...BLACK_HAND, way }] })?.next.way).toBe(way);
-    }
+  test("run #3's 17:49: one short after the install, The Black Hand 17 min off, so held for 20 min from now", () => {
+    expect(hold()).toEqual({ next: BLACK_HAND, sinceOnlineMs: 2 * HOUR, untilOnlineMs: 2 * HOUR + 20 * MINUTE });
+  });
+
+  test("only once this cycle has reached Daedalus's hacking or combat requirement: else the count isn't what's missing", () => {
+    expect(hold({ skillsReached: false })).toBeNull();
+    const figures = (hacking: number, combat: number) => ({
+      hacking,
+      strength: combat,
+      defense: combat,
+      dexterity: combat,
+      agility: combat,
+    });
+    const required = daedalusRequirements(1, {});
+    expect(daedalusSkillsReached(figures(2500, 1), required)).toBe(true);
+    expect(daedalusSkillsReached(figures(2499, 1), required)).toBe(false);
+    expect(daedalusSkillsReached(figures(1, 1500), required)).toBe(true);
+    expect(daedalusSkillsReached({ ...figures(1, 1500), agility: 1499 }, required)).toBe(false);
   });
 
   test("the soonest of those to come; a tie to the game's order; one never reached (Infinity) isn't", () => {
-    const later = { ...BLACK_HAND, augmentation: "Neural Wit Amplifier", faction: "BitRunners", etaMs: 1_200_000 };
+    const later = { ...BLACK_HAND, augmentation: "Neural Wit Amplifier", faction: "BitRunners", etaMs: 1_100_000 };
     const never = { ...BLACK_HAND, augmentation: "Magnetism Amplifier", etaMs: Number.POSITIVE_INFINITY };
     expect(hold({ toCome: [never, later, BLACK_HAND] })?.next).toEqual(BLACK_HAND);
     expect(hold({ toCome: [never, later] })?.next).toEqual(later);
@@ -776,18 +791,18 @@ describe("the hold for Daedalus's count (#243)", () => {
   });
 
   test("never past the window: an ETA beyond it isn't held; the cycle's first hold starts it, never restarted", () => {
-    expect(hold({ toCome: [{ ...BLACK_HAND, etaMs: 30 * MINUTE }] })).not.toBeNull();
-    expect(hold({ toCome: [{ ...BLACK_HAND, etaMs: 30 * MINUTE + 1 }] })).toBeNull();
-    // Held since 20 minutes ago: 10 minutes left, so 17 minutes off isn't, 10 is.
-    const since = { onlineMs: 2 * HOUR, heldSinceOnlineMs: 2 * HOUR - 20 * MINUTE };
+    expect(hold({ toCome: [{ ...BLACK_HAND, etaMs: 20 * MINUTE }] })).not.toBeNull();
+    expect(hold({ toCome: [{ ...BLACK_HAND, etaMs: 20 * MINUTE + 1 }] })).toBeNull();
+    // Held since 10 minutes ago: 10 minutes left, so 17 minutes off isn't, 10 is.
+    const since = { onlineMs: 2 * HOUR, heldSinceOnlineMs: 2 * HOUR - 10 * MINUTE };
     expect(hold(since)).toBeNull();
     expect(hold({ ...since, toCome: [{ ...BLACK_HAND, etaMs: 10 * MINUTE }] })).toEqual({
       next: { ...BLACK_HAND, etaMs: 10 * MINUTE },
-      sinceOnlineMs: 2 * HOUR - 20 * MINUTE,
+      sinceOnlineMs: 2 * HOUR - 10 * MINUTE,
       untilOnlineMs: 2 * HOUR + 10 * MINUTE,
     });
     // At its end, nothing is held, even what's due at once.
-    const over = { onlineMs: 2 * HOUR, heldSinceOnlineMs: 2 * HOUR - 30 * MINUTE - 1 };
+    const over = { onlineMs: 2 * HOUR, heldSinceOnlineMs: 2 * HOUR - 20 * MINUTE - 1 };
     expect(hold({ ...over, toCome: [{ ...BLACK_HAND, etaMs: 0 }] })).toBeNull();
   });
 
@@ -807,6 +822,7 @@ describe("the hold for Daedalus's count (#243)", () => {
     expect(hold({ installing: [...FOUR.slice(0, 3), NEUROFLUX_GOVERNOR, NEUROFLUX_GOVERNOR] })).not.toBeNull();
     // What's queued and installed already (an `installing` name owned) counts once.
     expect(hold({ installing: [...FOUR, COUNTABLE[0] as string] })).not.toBeNull();
+    expect(countAfterInstall(TWENTY_FIVE, [...FOUR, COUNTABLE[0] as string, NEUROFLUX_GOVERNOR])).toBe(30);
   });
 });
 

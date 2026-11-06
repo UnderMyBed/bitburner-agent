@@ -7,15 +7,18 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   AUGMENTATION_NAMES,
+  augmentationsSoldBy,
   CONTROL_PROTOCOL_VERSION,
   chooseAugmentationsToBuy,
   type DesiredState,
   encodeControlMessage,
+  factionReputationPerSecond,
   INSTALL_COUNTDOWN_MS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,
   intentId,
+  isWorthInstalling,
   PORT_OPENER_PROGRAMS,
   type SnapshotTier,
   type StaticSnapshotData,
@@ -2346,6 +2349,74 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       // The switch off: nothing held, home's RAM upgraded.
       controller.setAugmentationsEnabled(false);
       expect(sentPurchases(connection)?.map((each) => each.action)).toEqual(["upgradeHomeRam"]);
+    });
+
+    test("an install held for Daedalus's count (#243 review): A5 works for its seller, invitation travel goes on", () => {
+      // 25 installed (none of group B's but those The Black Hand sells too), CyberSec's other three reached and Neural Wit Amplifier queued: 29 of 30. The
+      // Black Hand's own augmentation 5 minutes off at A5's rate, hacking 2,500 (Daedalus's), 8 h online.
+      const TBH = "The Black Hand";
+      const shopOf = (faction: string) => augmentationsSoldBy(faction, 1, null);
+      const groupB = ["Chongqing", "New Tokyo", "Ishima"].flatMap(shopOf);
+      const fillers = AUGMENTATION_NAMES.filter(
+        (name) =>
+          isWorthInstalling(name, true) &&
+          ![...shopOf(TBH), ...shopOf("CyberSec"), ...groupB, "Neural Wit Amplifier"].includes(name),
+      );
+      const owned = Object.fromEntries(
+        [
+          ...shopOf(TBH).filter((name) => name !== TBH && name !== "NeuroFlux Governor"),
+          "Cranial Signal Processors - Gen I",
+          "Cranial Signal Processors - Gen II",
+          "NeuroFlux Governor",
+          ...fillers,
+        ]
+          .slice(0, 25)
+          .map((name) => [name, 1]),
+      );
+      expect(Object.keys(owned)).toHaveLength(25);
+      const player = (data: ReturnType<typeof medium>) => ({
+        ...data,
+        player: {
+          ...data.player,
+          skills: { hacking: 2_500, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+          exp: { hacking: Math.exp(2_700 / 32) - 534.6 },
+          mults: { faction_rep: 1, hacking: 1 },
+        },
+      });
+      const rate = factionReputationPerSecond(
+        { skills: player(medium(0)).player.skills, mults: { faction_rep: 1 } },
+        "hacking",
+        { favor: 0, sourceFile15Level: 0, factionWorkRepGain: 1, focused: true, implant: false },
+      );
+      const slow = {
+        ...slowData(),
+        resetInfo: { ...slowData().resetInfo, ownedAugs: owned },
+        factions: {
+          backend: "sim",
+          state: {
+            joined: [
+              { name: "CyberSec", reputation: 18_750, favor: 0 },
+              { name: TBH, reputation: 100_000 - rate * 300, favor: 0 },
+            ],
+            invitations: [],
+            queuedAugmentations: ["Neural Wit Amplifier"],
+          },
+          problem: null,
+        },
+      };
+      store.setSetting(
+        "augmentations.online",
+        JSON.stringify({ lastAugReset: 0, onlineMs: 8 * 3_600_000, lastGameTimeMs: 7 * 3_600_000 }),
+      );
+      const controller = new DesiredStateController({ channel, store });
+      const connection = connectAgent();
+      send(connection, "static", network);
+      sendAt(connection, "slow", slow, 7 * 3_600_000 + MINUTE);
+      send(connection, "medium", player(medium(1.5e9)));
+      expect(controller.augmentationsView().progress?.countHold).toMatchObject({ augmentation: TBH, way: "work" });
+      expect(controller.factionsView().choice).toMatchObject({ faction: TBH, augmentation: TBH, held: true });
+      // Not an install under way: the travel for group B's invitations goes on.
+      expect(sentPurchases(connection)).toContainEqual(TRAVEL_CHONGQING);
     });
 
     test("an install chosen: no cloud server at all, saying why, and the augmentation bought instead", () => {

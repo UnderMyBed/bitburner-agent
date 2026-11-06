@@ -248,14 +248,20 @@ test.each(SEEDS)(
 
 // --- Held for Daedalus's count (#243): run #3's 17:49 in the engine, on to Daedalus's invitation --------------------
 
-/** `AUGMENTATION_DAEDALUS`: set (to anything), on to Daedalus's invitation; unset (CI), to the install. */
-const TO_DAEDALUS = process.env.AUGMENTATION_DAEDALUS !== undefined;
+/** `AUGMENTATION_DAEDALUS`: 1, on to Daedalus's invitation; unset or 0 (CI), to the install. Anything else fails loudly. */
+function toDaedalus(text: string | undefined): boolean {
+  if (text === undefined || text === "0") return false;
+  if (text === "1") return true;
+  throw new Error(`AUGMENTATION_DAEDALUS is ${JSON.stringify(text)}: give 1, or 0 (or leave it unset)`);
+}
+const TO_DAEDALUS = toDaedalus(process.env.AUGMENTATION_DAEDALUS);
 const BLACK_HAND = "The Black Hand";
 /**
  * Before the Agent, harness edits stand in for the run so far: 25 installed, the cheap ones every faction the brain
  * could join soon sells (so none comes within reach in the hold, and Tian Di Hui isn't visited): The Black Hand's all
  * but its own augmentation, Tian Di Hui's eight, city group A's (Sector-12 and Aevum, joined, banning B and C), Gen I
- * and NeuroFlux Governor. So A5's only work is The Black Hand's augmentation.
+ * and NeuroFlux Governor. At the edit, hacking past 2500 too: Daedalus's requirement reached this cycle, so the count
+ * is what's missing (the hold's condition, #243 review).
  */
 const RUN_3_INSTALLED = [
   ...augmentationsSoldBy(BLACK_HAND, 1, null).filter((name) => name !== BLACK_HAND && name !== "NeuroFlux Governor"),
@@ -279,18 +285,27 @@ const REACHED_FOUR = [
   "Neurotrainer II",
   "Neural-Retention Enhancement",
 ];
-/** The Black Hand's augmentation this far off by A5's work when the four are reached: run #3's was 17 minutes. */
-const BLACK_HAND_OFF_MS = 15 * MINUTE;
+/**
+ * The Black Hand's augmentation this far off by A5's work when the four are reached: run #3's was 17 minutes; 12 here,
+ * within the 20-minute hold with room for the purchases and the work's start.
+ */
+const BLACK_HAND_OFF_MS = 12 * MINUTE;
 /**
  * The hacking ramp after an install, a harness edit standing in for it (the same in both runs, as the suite can't run
  * the hours to hacking 2500): this long after each reset, hacking past 2500 and $200b (Daedalus's other two
  * requirements, `FactionInfo.tsx:141-142`). About run #3's 28-minute cycle less the work and purchases in it.
  */
 const RAMP_MS = 20 * MINUTE;
-const PAST_2500_EXP = 1e30;
+/** Hacking experience past level 2500 at any multiplier from 1 (`calculateSkill`: 32 × ln(exp + 534.6) − 200). */
+const PAST_2500_EXP = 1e40;
 /** Each stage's bound: the hold and the install; on to Daedalus, the cycles to its invitation. */
 const HELD_WITHIN_MS = 45 * MINUTE;
 const DAEDALUS_WITHIN_MS = 3 * 60 * MINUTE;
+
+test("AUGMENTATION_DAEDALUS: 1 on, unset or 0 off; anything else fails loudly", () => {
+  expect([toDaedalus(undefined), toDaedalus("0"), toDaedalus("1")]).toEqual([false, false, true]);
+  for (const odd of ["", "true", "2"]) expect(() => toDaedalus(odd)).toThrow(/AUGMENTATION_DAEDALUS/);
+});
 
 test.each(SEEDS)(
   "seed %i: at 25 of 30 with four reached, the install held for The Black Hand (#243), then 30 installed" +
@@ -319,24 +334,31 @@ test.each(SEEDS)(
       notes.push(line);
       if (process.env.AUGMENTATION_DAEDALUS_LOG) appendFileSync(process.env.AUGMENTATION_DAEDALUS_LOG, `${line}\n`);
     };
-    // Sharing off, so A5's rate is A6's (the share's bonus left out); the money kept until the hold or the commit.
+    // Sharing off, so A5's rate is A6's (the share's bonus left out); the money kept until the hold or the commit, and
+    // no install before the edit (a quick install of NeuroFlux Governor's levels would reset its hacking level).
     const controller = fresh.controller();
+    controller.setAugmentationsEnabled(false);
     controller.setShareEnabled(false);
     controller.setProgramsEnabled(false);
     controller.setHomeRamEnabled(false);
     controller.setCloudServersEnabled(false);
 
-    // A5 works for The Black Hand's augmentation, the only one worth working for; at its rate, the harness puts it
-    // 15 minutes off, the four within reach, and the money for them and it.
-    // 15 minutes in, the hacking level climbing slower (its rate with it).
+    // 15 minutes in, hacking past 2500; a minute on, A5's hacking work at a faction (CyberSec, joined by its backdoor),
+    // at favour 0: The Black Hand's rate too. At it, the harness puts The Black Hand's augmentation 12 minutes off, the
+    // four within reach, and the money for them and it. The hold then has A5 work for The Black Hand.
     await game.run(15 * MINUTE);
-    await game.runUntil(() => controller.factionsView().choice?.augmentation === BLACK_HAND, 10 * MINUTE);
+    await simulation.diagnostics.gainHackingExp(PAST_2500_EXP);
+    await game.run(MINUTE);
+    await game.runUntil(() => controller.factionsView().choice?.workType === "hacking", 10 * MINUTE);
+    expect((fresh.medium()?.player.skills as { hacking?: number } | undefined)?.hacking).toBeGreaterThanOrEqual(2500);
+    expect(controller.factionsView().choice?.favor).toBe(0);
     const rate = controller.factionsView().choice?.reputationPerSecond as number;
     expect(rate).toBeGreaterThan(0);
     await simulation.diagnostics.joinFactionWithReputation(BLACK_HAND, 100_000 - (rate * BLACK_HAND_OFF_MS) / 1000);
     await simulation.diagnostics.joinFactionWithReputation("CyberSec", 18_750);
     await simulation.diagnostics.joinFactionWithReputation("NiteSec", 20_000);
     await simulation.diagnostics.setMoney(50e9);
+    controller.setAugmentationsEnabled(true);
     const editedAtMs = game.clock.now();
     note(`seed ${seed}: edited at ${at(editedAtMs)}, The Black Hand at ${rate.toFixed(2)} a second`);
     const held = () => controller.augmentationsView().progress?.countHold != null;
@@ -348,7 +370,7 @@ test.each(SEEDS)(
     // Each install's time and count; the hacking ramp's stand-in after each; Daedalus's invitation.
     const startedAt = slow()?.resetInfo.lastAugReset as number;
     let lastReset = startedAt;
-    let resetSeenAtMs: number | null = null;
+    const resetsSeenAtMs: number[] = [];
     let ramped = true;
     const installs: string[] = [];
     const daedalusSeen = () => {
@@ -362,12 +384,14 @@ test.each(SEEDS)(
       const reset = slow()?.resetInfo.lastAugReset as number;
       if (reset !== lastReset) {
         lastReset = reset;
-        resetSeenAtMs = game.clock.now();
+        const seenAtMs = game.clock.now();
+        resetsSeenAtMs.push(seenAtMs);
         ramped = false;
-        installs.push(`${at(resetSeenAtMs)}: ${installedCount()}`);
-        note(`seed ${seed}: install seen at ${at(resetSeenAtMs)}, ${installedCount()} installed`);
+        installs.push(`${at(seenAtMs)}: ${installedCount()}`);
+        note(`seed ${seed}: install seen at ${at(seenAtMs)}, ${installedCount()} installed`);
       }
-      if (!ramped && resetSeenAtMs !== null && game.clock.now() >= resetSeenAtMs + RAMP_MS) {
+      const lastSeenAtMs = resetsSeenAtMs.at(-1);
+      if (!ramped && lastSeenAtMs !== undefined && game.clock.now() >= lastSeenAtMs + RAMP_MS) {
         ramped = true;
         await simulation.diagnostics.gainHackingExp(PAST_2500_EXP);
         await simulation.diagnostics.setMoney(200e9);
@@ -414,7 +438,7 @@ test.each(SEEDS)(
       ),
     );
     expect(failures).toEqual([]);
-    const heldMs = (resetSeenAtMs as unknown as number) - editedAtMs;
+    const heldMs = (resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs;
     note(`seed ${seed}: held, then installed at 30: ${(heldMs / MINUTE).toFixed(1)} min from the edit to the reset`);
 
     if (TO_DAEDALUS) {

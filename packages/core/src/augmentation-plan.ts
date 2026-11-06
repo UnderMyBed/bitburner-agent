@@ -580,12 +580,21 @@ export function installRule(inputs: InstallRuleInputs): InstallRule {
 }
 
 /**
- * The longest an install is held for Daedalus's count (#243): about one cycle's cost, what an install that leaves the
- * count one short wastes. Run #3's BN1.2 (2026-11-05) installed at 29 of 30 at 17:49, The Black Hand's augmentation
- * 17 minutes off by work; the next cycle, 17:52 to 18:20, 28 minutes of restart, rejoining and the hacking ramp,
- * existed only to buy it. Held past this, the wait costs more than the cycle it saves.
+ * The longest an install is held for Daedalus's count (#243): one cycle's cost less a margin. Run #3's BN1.2
+ * (2026-11-05) installed at 29 of 30 at 17:49, The Black Hand's augmentation 17 minutes off by work; the next cycle,
+ * 17:52 to 18:20, 28 minutes of restart, rejoining and the hacking ramp, existed only to buy it. A hold saves that
+ * cycle less itself, and holds back the install's multipliers meanwhile (the four in run #3's set): 8 minutes' margin
+ * for those, so a hold at its longest still saves time.
  */
-export const DAEDALUS_COUNT_HOLD_MS = 30 * 60_000;
+export const DAEDALUS_COUNT_HOLD_MS = 20 * 60_000;
+
+/**
+ * Daedalus's count after an install (#243): `installed`'s names with `installing`'s, each once (NeuroFlux Governor's
+ * levels are one entry, `Augmentation/AugmentationHelpers.ts:55-58`; `Faction/FactionJoinCondition.ts:130`).
+ */
+export function countAfterInstall(installed: Readonly<Record<string, number>>, installing: readonly string[]): number {
+  return new Set([...Object.keys(installed), ...installing]).size;
+}
 
 /** One that would add to Daedalus's count, not owned, queued or in the set, and when it can be bought (#243). */
 export interface CountableToCome {
@@ -607,8 +616,9 @@ export interface DaedalusCountHold<T extends CountableToCome = CountableToCome> 
 
 /**
  * Whether to hold an install the count rule chose, short of Daedalus's count (#243): held if it would leave the count
- * one short (`installed`'s names with `installing`'s, NeuroFlux Governor's levels one entry,
- * `Augmentation/AugmentationHelpers.ts:55-58`; `Faction/FactionJoinCondition.ts:130`) and the soonest of `toCome` can
+ * one short (`countAfterInstall`), this cycle has reached Daedalus's hacking or combat requirement (`skillsReached`,
+ * core's `daedalusSkillsReached`: skills only rise across an install, so the next cycle reaches it again, and the
+ * count is then what's missing; else a hold only delays the install's multipliers), and the soonest of `toCome` can
  * be bought within the hold's window: `DAEDALUS_COUNT_HOLD_MS` of time online from `heldSinceOnlineMs`, the cycle's
  * first hold (now, for none), never restarted, so no hold outlasts it. Null otherwise. Two or more short aren't held:
  * the rest seldom fits a cycle's cost, and their ETAs together (the work one faction at a time, each purchase dearer by
@@ -618,6 +628,7 @@ export function daedalusCountHold<T extends CountableToCome>({
   installed,
   installing,
   required,
+  skillsReached,
   toCome,
   onlineMs,
   heldSinceOnlineMs,
@@ -625,12 +636,12 @@ export function daedalusCountHold<T extends CountableToCome>({
   installed: Readonly<Record<string, number>>;
   installing: readonly string[];
   required: number;
+  skillsReached: boolean;
   toCome: readonly T[];
   onlineMs: number;
   heldSinceOnlineMs: number | null;
 }): DaedalusCountHold<T> | null {
-  const after = new Set([...Object.keys(installed), ...installing]).size;
-  if (required - after !== 1) return null;
+  if (!skillsReached || required - countAfterInstall(installed, installing) !== 1) return null;
   const sinceOnlineMs = heldSinceOnlineMs ?? onlineMs;
   const untilOnlineMs = sinceOnlineMs + DAEDALUS_COUNT_HOLD_MS;
   // Infinity (never) is last, and never within the window.
