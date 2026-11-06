@@ -39,10 +39,22 @@ test("20 virtual minutes from a fresh start: the hack loop's progress, its purch
   expect(line("    cycle 1 from ")).toMatch(/, not ended in the window$/);
   expect(line("      held back by: ")).toBeDefined();
   expect(line("    n00dles: ")).toBeDefined();
-  // The purchases, each done on its first try through the simulator's own effectors.
+  // The purchases, counted by action (#245), each done on its first try through the simulator's own effectors (its
+  // line, with --verbose).
+  expect(line("  intents: ")).toMatch(/^ {2}intents: \d+, by action and outcome \(--verbose lists each\):$/);
+  expect(line("    buyTor: ")).toBe("    buyTor: 1 done");
+  expect(line("    buyProgram: ")).toMatch(/^ {4}buyProgram: \d+ done$/);
+  expect(line("    upgradeHomeRam: ")).toMatch(/^ {4}upgradeHomeRam: \d+ done$/);
+  const verbose = runReport(
+    fresh.data.store,
+    { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() },
+    { verbose: true },
+  );
+  const verboseLines = verbose.text.split("\n");
   for (const id of ["buyTor(Alpha Enterprises)", "buyProgram(BruteSSH.exe)", "upgradeHomeRam(8, Alpha Enterprises)"]) {
-    expect(line(`    ${id}: `)).toMatch(/: done after 1 try \(sim\); done by /);
+    expect(verboseLines.find((each) => each.startsWith(`    ${id}: `))).toMatch(/: done after 1 try \(sim\); done by /);
   }
+  expect(verbose.failures).toEqual(failures);
   // Health: a steady heartbeat, money rising, nothing stuck.
   expect(text).toContain("    longest interval 2.0 s\n    no gaps");
   expect(text).toContain(

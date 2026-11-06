@@ -120,12 +120,13 @@ test.each(SEEDS)(
     const spent = on.cloud.servers.reduce((total, server) => total + server.ram, 0) * CLOUD_SERVER_PRICE_PER_GB;
     console.log(`seed ${seed}: spent on servers ${millions(spent)}, earned less that ${millions(on.earned - spent)}`);
     seedsRun.push({ offEarned: off.earned, onEarnedLessSpent: on.earned - spent });
-    // The run report over the run with them: each purchase with its RAM and price, the hosts' RAM, and PASS.
-    const report = runReport(on.fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: on.fresh.game.clock.now(),
-    });
+    // The run report over the run with them: the fleet in the cycle (#245), each purchase with its RAM and price with
+    // --verbose, the hosts' RAM, and PASS.
+    const reportWindow = { environment: "E1", sinceMs: EPOCH_MS, untilMs: on.fresh.game.clock.now() } as const;
+    expect(runReport(on.fresh.data.store, reportWindow).text).toMatch(
+      /\n {4}BN1\.1 1, .+?: none → \d+ servers?, [\d.]+ GB \(\d+ bought, \d+ upgraded, \$[\d,]+\)\n {4}in all: /,
+    );
+    const report = runReport(on.fresh.data.store, reportWindow, { verbose: true });
     expect(report.text).toMatch(/\n {4}\S+ {2}pserv-0 bought, \d+ GB, \$[\d,]+\n/);
     expect(report.text).toMatch(/\n {4}in all: \d+ bought, \d+ upgraded, \$[\d,]+\n/);
     expect(report.text).toMatch(

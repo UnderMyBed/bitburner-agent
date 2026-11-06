@@ -245,22 +245,29 @@ export interface MovedServers {
  * The hack loop's target over time, inferred, one medium snapshot at a time: a server's money and security change only
  * when a script hacks, grows or weakens it, so the game's servers whose money or security moved between consecutive
  * medium snapshots are the ones being worked. An inference, not a record: the owner's own scripts move servers too.
- * Stretches where nothing moved don't end one. `ignored` are the player's own servers (home, purchased).
+ * Stretches where nothing moved don't end one. `ignored` are the player's own servers (home, purchased). Two snapshots
+ * with a reset between them (`resetsMs`: an install or a destroy, which puts every server's money and security back)
+ * aren't compared (#245): that move is the reset's, every server at once, not the hack loop's.
  */
 class HackTargetInference {
   readonly stretches: MovedServers[] = [];
   #before: Map<string, string> | null = null;
+  #beforeMs = Number.NEGATIVE_INFINITY;
   readonly #ignored: ReadonlySet<string>;
+  readonly #resetsMs: readonly number[];
 
-  constructor(ignored: ReadonlySet<string>) {
+  constructor(ignored: ReadonlySet<string>, resetsMs: readonly number[] = []) {
     this.#ignored = ignored;
+    this.#resetsMs = resetsMs;
   }
 
   add(atMs: number, data: MediumSnapshotData): void {
-    const before = this.#before;
+    const [before, beforeMs] = [this.#before, this.#beforeMs];
     const after = serverStates(data);
     this.#before = after;
+    this.#beforeMs = atMs;
     if (before === null) return;
+    if (this.#resetsMs.some((resetMs) => resetMs > beforeMs && resetMs <= atMs)) return;
     const moved = [...after]
       .filter(
         ([hostname, state]) => !this.#ignored.has(hostname) && before.has(hostname) && before.get(hostname) !== state,
@@ -278,8 +285,9 @@ class HackTargetInference {
 export function inferHackTargets(
   medium: { atMs: number; data: MediumSnapshotData }[],
   ignored: ReadonlySet<string>,
+  resetsMs: readonly number[] = [],
 ): MovedServers[] {
-  const inference = new HackTargetInference(ignored);
+  const inference = new HackTargetInference(ignored, resetsMs);
   for (const { atMs, data } of medium) inference.add(atMs, data);
   return inference.stretches;
 }
@@ -386,12 +394,28 @@ interface FastPoint {
   batcherDeploy: unknown;
 }
 
+/** A stretch of the batcher's health naming one target (#245): from its first look to its last, before another. */
+interface BatcherTarget {
+  target: string;
+  fromMs: number;
+  toMs: number;
+}
+
 /** A cloud server bought (`fromRam` null) or upgraded (#194), as the medium snapshots show it. */
 export interface CloudServerChange {
   atMs: number;
   hostname: string;
   fromRam: number | null;
   toRam: number;
+  /** The fleet, the cloud servers the medium snapshots show, in the snapshot before this one and in this one (#245). */
+  fleetBefore: CloudFleet;
+  fleetAfter: CloudFleet;
+}
+
+/** How many cloud servers, and their RAM in all. */
+interface CloudFleet {
+  count: number;
+  ram: number;
 }
 
 /**
@@ -410,22 +434,30 @@ class CloudServerChanges {
     this.#cloudServers = cloudServers;
   }
 
+  #fleet(): CloudFleet {
+    return { count: this.#ram.size, ram: [...this.#ram.values()].reduce((total, ram) => total + ram, 0) };
+  }
+
   add(atMs: number, data: MediumSnapshotData): void {
     const seen = new Set<string>();
+    const fleetBefore = this.#fleet();
+    const changes: Omit<CloudServerChange, "fleetBefore" | "fleetAfter">[] = [];
     for (const server of Array.isArray(data?.servers) ? data.servers : []) {
       if (typeof server?.hostname !== "string" || !this.#cloudServers.has(server.hostname)) continue;
       if (!isNumber(server.maxRam)) continue;
       const before = this.#ram.get(server.hostname);
       if (before === undefined && !this.#first) {
-        this.changes.push({ atMs, hostname: server.hostname, fromRam: null, toRam: server.maxRam });
+        changes.push({ atMs, hostname: server.hostname, fromRam: null, toRam: server.maxRam });
       } else if (before !== undefined && server.maxRam > before) {
-        this.changes.push({ atMs, hostname: server.hostname, fromRam: before, toRam: server.maxRam });
+        changes.push({ atMs, hostname: server.hostname, fromRam: before, toRam: server.maxRam });
       }
       this.#ram.set(server.hostname, server.maxRam);
       seen.add(server.hostname);
     }
     for (const hostname of [...this.#ram.keys()]) if (!seen.has(hostname)) this.#ram.delete(hostname);
     this.#first = false;
+    const fleetAfter = this.#fleet();
+    for (const change of changes) this.changes.push({ ...change, fleetBefore, fleetAfter });
   }
 }
 
@@ -459,6 +491,8 @@ interface RunFacts extends RunWindow {
   /** The medium snapshots' money, where it's a number. */
   money: MoneyPoint[];
   targets: MovedServers[];
+  /** The batcher's target as its health in the fast snapshots says, each stretch of it (#245); none before #205. */
+  batcherTargets: BatcherTarget[];
   /** The hacker factions' servers' backdoors over the medium snapshots (#195). */
   backdoors: BackdoorTimeline;
   slowFirst: SlowSnapshotData | undefined;
@@ -578,7 +612,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let mediumFirst: MediumSnapshotData | undefined;
     let mediumLast: MediumSnapshotData | undefined;
     const money: MoneyPoint[] = [];
-    const inference = new HackTargetInference(playersServers);
+    // The slow snapshots are read: the cycles say where each reset is (#245).
+    const inference = new HackTargetInference(playersServers, cycles.resetsMs());
     const cloudServerChanges = new CloudServerChanges(cloudServers);
     const worldDaemon = new WorldDaemonFold();
     const mediumTimes: SnapshotTime[] = [];
@@ -603,8 +638,15 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       augmentations.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
+    const batcherTargets: BatcherTarget[] = [];
     for (const { atMs, gameTimeMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
+      const target = isObject(data.batcher) ? fieldsOf(data.batcher).target : undefined;
+      if (typeof target === "string") {
+        const last = batcherTargets.at(-1);
+        if (last?.target === target) last.toMs = atMs;
+        else batcherTargets.push({ target, fromMs: atMs, toMs: atMs });
+      }
       cycles.addFast(atMs, gameTimeMs, data.batcher);
       const segment = segmentAt(cycles.bitNodeIndexAt(atMs));
       if (!segment.fastSeen) segment.homeRamUsedFirst = data.game?.homeRamUsed;
@@ -642,6 +684,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       weakenTimes,
       money,
       targets: inference.stretches,
+      batcherTargets,
       backdoors,
       slowFirst,
       slowLast,
@@ -670,12 +713,15 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
 
 /**
  * The run report for a window of the store. Throws for a window that ends before it starts, or one with nothing in it:
- * it would check nothing, and must never pass.
+ * it would check nothing, and must never pass. By default, section 3's busiest blocks (the intents, the cloud servers,
+ * the augmentations, the dialogs, the faction work) and section 2's hack loop target are summarised; `verbose` (the
+ * command's --verbose) lists each line instead (#245: run #3's 12.4 h was 3,270 lines, most of them those). Either way
+ * the checks (sections 4 to 6), the failures, the warnings and the verdict are the same.
  */
 export function runReport(
   store: TelemetryStore,
   window: RunWindow,
-  { gapThresholdMs = DEFAULT_GAP_THRESHOLD_MS }: { gapThresholdMs?: number } = {},
+  { gapThresholdMs = DEFAULT_GAP_THRESHOLD_MS, verbose = false }: { gapThresholdMs?: number; verbose?: boolean } = {},
 ): RunReport {
   if (!(window.sinceMs < window.untilMs)) throw new RangeError("the window must end after it starts");
   const facts = readFacts(store, window);
@@ -696,18 +742,27 @@ export function runReport(
   const lines = [
     `Run report (${window.environment}) from ${formatIsoTime(window.sinceMs)} to ${formatIsoTime(window.untilMs)} ` +
       `(${formatDuration(window.untilMs - window.sinceMs)})`,
+    ...(verbose
+      ? []
+      : [
+          "(summaries: --verbose lists each intent, cloud server bought or upgraded, augmentation decision and " +
+            "purchase, dialog handled, faction work choice and inferred hack target; #245)",
+        ]),
     "",
     ...windowSection(facts),
     "",
-    ...progressSection(facts),
+    ...progressSection(facts, verbose),
     "",
     ...facts.cycles.section(facts.factionWork.readings),
     "",
-    ...actionsSection(facts),
+    ...actionsSection(facts, verbose),
     "",
     ...healthSection(facts, gapThresholdMs, failures, incidents),
     "",
-    ...withWhoHacked(facts.hacking.section(failures), facts),
+    ...withWhoHacked(
+      facts.hacking.section(failures, (fromMs, toMs) => facts.cycles.heldBackBetween(fromMs, toMs)),
+      facts,
+    ),
     "",
     ...batcherSection(
       facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
@@ -870,9 +925,9 @@ function describeChange(first: string, last: string): string {
 /**
  * Start to end, from the first and last snapshots of each tier, a BitNode at a time (#244: never across a destroy,
  * which starts money, hacking and the rest again), each with its milestones; then the hack loop's target over the
- * window.
+ * window: the batcher's own, where its health says (#245), the inferred one with `verbose`; else inferred.
  */
-function progressSection(facts: RunFacts): string[] {
+function progressSection(facts: RunFacts, verbose: boolean): string[] {
   const lines = ["2. Progress, first snapshot → last, in each BitNode", facts.cycles.bitNodesLine()];
   for (const { index, segment } of facts.segments) {
     const bitNode = facts.cycles.bitNodes[index];
@@ -880,17 +935,24 @@ function progressSection(facts: RunFacts): string[] {
     lines.push(...segmentProgressLines(facts, segment).map((line) => `  ${line}`));
     lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
   }
-  lines.push(
+  const inferred = [
     "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
-      "(the owner's own scripts would show too):",
+      "(the owner's own scripts would show too; not across an install or a destroy):",
+    ...facts.targets.map(
+      (stretch) =>
+        `    ${stretch.servers.join(" + ")}: ${formatIsoTime(stretch.fromMs)} to ${formatIsoTime(stretch.toMs)}`,
+    ),
+  ];
+  if (facts.targets.length === 0) inferred.push("    none moved");
+  if (facts.batcherTargets.length === 0) return [...lines, ...inferred];
+  lines.push(
+    "  the batcher's targets, from its health in the fast snapshots" +
+      (verbose ? ":" : " (--verbose adds the hack loop's target inferred from the servers):"),
   );
-  for (const stretch of facts.targets) {
-    lines.push(
-      `    ${stretch.servers.join(" + ")}: ${formatIsoTime(stretch.fromMs)} to ${formatIsoTime(stretch.toMs)}`,
-    );
+  for (const { target, fromMs, toMs } of facts.batcherTargets) {
+    lines.push(`    ${target}: ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)}`);
   }
-  if (facts.targets.length === 0) lines.push("    none moved");
-  return lines;
+  return verbose ? [...lines, ...inferred] : lines;
 }
 
 /** One BitNode's progress (#244), first snapshot → last of each tier in it. */
@@ -1040,16 +1102,93 @@ function describeIntent(outcome: IntentOutcome): string {
   return outcome.done ? `done after ${tries}${problem}` : `not done, ${tries}${problem}`;
 }
 
-function actionsSection(facts: RunFacts): string[] {
-  const lines = ["3. Actions", "  intents:"];
+/** An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …". */
+function describeEpisode({ id, outcome, firstSeenMs, doneAtMs }: IntentEpisode): string {
+  const when = doneAtMs === null ? `first seen ${formatIsoTime(firstSeenMs)}` : `done by ${formatIsoTime(doneAtMs)}`;
+  return `    ${id}: ${describeIntent(outcome)}; ${when}`;
+}
+
+/** "3 tries", "1 choice": a count and its noun. */
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+/** Counts of each, the most first, ties in the order first seen: "hacking for NiteSec ×19, hacking for CyberSec ×10" */
+function countEach(items: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
+  return [...counts]
+    .sort(([, a], [, b]) => b - a)
+    .map(([item, count]) => `${item} ×${count}`)
+    .join(", ");
+}
+
+/**
+ * The intents (#245): with `verbose`, each episode; else counts by action (the id's name before its arguments) and
+ * outcome, the most first, then each episode not done, done after more than one try, or done with a problem.
+ */
+function intentLines(facts: RunFacts, verbose: boolean): string[] {
   const episodes = intentEpisodes(facts);
-  for (const { id, outcome, firstSeenMs, doneAtMs } of episodes) {
-    const when = doneAtMs === null ? `first seen ${formatIsoTime(firstSeenMs)}` : `done by ${formatIsoTime(doneAtMs)}`;
-    lines.push(`    ${id}: ${describeIntent(outcome)}; ${when}`);
+  if (verbose) return ["  intents:", ...(episodes.length === 0 ? ["    none"] : episodes.map(describeEpisode))];
+  const lines = [`  intents: ${episodes.length}, by action and outcome (--verbose lists each):`];
+  const byAction = new Map<string, { done: number; withProblem: number; notDone: number }>();
+  for (const { id, outcome } of episodes) {
+    const action = id.split("(")[0] ?? id;
+    const counts = byAction.get(action) ?? { done: 0, withProblem: 0, notDone: 0 };
+    byAction.set(action, counts);
+    if (!outcome.done) counts.notDone += 1;
+    else {
+      counts.done += 1;
+      if (outcome.problem !== null) counts.withProblem += 1;
+    }
+  }
+  const total = ({ done, notDone }: { done: number; notDone: number }) => done + notDone;
+  const ranked = [...byAction].sort(([a, x], [b, y]) => total(y) - total(x) || (a < b ? -1 : a > b ? 1 : 0));
+  for (const [action, { done, withProblem, notDone }] of ranked) {
+    const outcomes = [
+      ...(done > 0 ? [`${done} done${withProblem > 0 ? ` (${withProblem} with a problem)` : ""}`] : []),
+      ...(notDone > 0 ? [`${notDone} not done`] : []),
+    ];
+    lines.push(`    ${action}: ${outcomes.join(", ")}`);
   }
   if (episodes.length === 0) lines.push("    none");
+  lines.push("  intents not done, done after more than one try, or done with a problem:");
+  const notable = episodes.filter(({ outcome }) => !outcome.done || outcome.tries > 1 || outcome.problem !== null);
+  lines.push(...(notable.length === 0 ? ["    none"] : notable.map(describeEpisode)));
+  return lines;
+}
 
-  lines.push(...cloudServerLines(facts));
+/**
+ * The dialogs the Agent handled (#245): with `verbose`, each, quoted; else counts by kind, the most first, and the
+ * dialogs not handled, left blocking the page (section 4's failures).
+ */
+function dialogLines(facts: RunFacts, verbose: boolean): string[] {
+  const dialogs = facts.events.filter((event) => event.kind === "gameDialog");
+  const kindOf = (detail: unknown) => displayValue((fieldsOf(detail) as Partial<HandledDialog>).kind);
+  if (verbose) {
+    const lines = ["  dialogs handled:"];
+    for (const { atMs, detail } of dialogs) {
+      const text = displayValue((fieldsOf(detail) as Partial<HandledDialog>).text);
+      lines.push(`    ${formatIsoTime(atMs)}  ${kindOf(detail)}: ${quote(text, DIALOG_QUOTE_LENGTH)}`);
+    }
+    if (dialogs.length === 0) lines.push("    none");
+    return lines;
+  }
+  const lines = ["  dialogs handled, by kind (--verbose lists each):"];
+  const counts = new Map<string, number>();
+  for (const { detail } of dialogs) counts.set(kindOf(detail), (counts.get(kindOf(detail)) ?? 0) + 1);
+  for (const [kind, count] of [...counts].sort(([, a], [, b]) => b - a)) lines.push(`    ${kind}: ${count}`);
+  if (dialogs.length === 0) lines.push("    none");
+  lines.push("  dialogs not handled (left blocking the page; section 4's failures):");
+  const blocking = blockingEpisodes(facts);
+  for (const { dialog, fromMs, toMs } of blocking) {
+    lines.push(`    from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)}: ${quote(dialog, BLOCKING_QUOTE_LENGTH)}`);
+  }
+  if (blocking.length === 0) lines.push("    none");
+  return lines;
+}
+
+function actionsSection(facts: RunFacts, verbose: boolean): string[] {
+  const lines = ["3. Actions", ...intentLines(facts, verbose)];
+
+  lines.push(...cloudServerLines(facts, verbose));
 
   lines.push("  work, as it changed:");
   let previous: string | undefined;
@@ -1078,18 +1217,10 @@ function actionsSection(facts: RunFacts): string[] {
   }
   if (promotions.length === 0) lines.push("    none");
 
-  lines.push("  dialogs handled:");
-  const dialogs = facts.events.filter((event) => event.kind === "gameDialog");
-  for (const { atMs, detail } of dialogs) {
-    const dialog = fieldsOf(detail) as Partial<HandledDialog>;
-    lines.push(
-      `    ${formatIsoTime(atMs)}  ${displayValue(dialog.kind)}: ${quote(displayValue(dialog.text), DIALOG_QUOTE_LENGTH)}`,
-    );
-  }
-  if (dialogs.length === 0) lines.push("    none");
+  lines.push(...dialogLines(facts, verbose));
   lines.push(...backdoorLines(facts));
   lines.push(
-    ...factionLines(facts),
+    ...factionLines(facts, verbose),
     ...invitationLines(
       facts.events,
       formatIsoTime,
@@ -1097,7 +1228,11 @@ function actionsSection(facts: RunFacts): string[] {
       facts.events.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND).map((event) => event.atMs),
     ),
   );
-  lines.push(...facts.augmentations.actionLines(facts.events, formatIsoTime));
+  lines.push(
+    ...(verbose
+      ? facts.augmentations.actionLines(facts.events, formatIsoTime)
+      : facts.augmentations.summaryLines(facts.events, formatIsoTime, (atMs) => facts.cycles.cycleLabelAt(atMs))),
+  );
   lines.push(...facts.worldDaemon.pathLines(facts, facts.events, formatIsoTime));
   return lines;
 }
@@ -1105,9 +1240,10 @@ function actionsSection(facts: RunFacts): string[] {
 /**
  * The joins and the brain's faction work (#203): the factions the medium snapshots showed joined, the city factions'
  * invitations seen and not joined (#228: not of the city group the brain chose), each choice of work and why, or its
- * end, and the reputation each faction gained while the brain's work was on it.
+ * end, and the reputation each faction gained while the brain's work was on it. The choices: with `verbose`, each; else
+ * a line a cycle, counted (#245).
  */
-function factionLines({ factionWork }: RunFacts): string[] {
+function factionLines({ factionWork, cycles }: RunFacts, verbose: boolean): string[] {
   const lines = ["  factions (joins, and the brain's faction work):"];
   const joined = [...factionWork.joined].map(([faction, atMs]) =>
     atMs === null ? `${faction} (at the window's start)` : `${faction} by ${formatIsoTime(atMs)}`,
@@ -1120,11 +1256,29 @@ function factionLines({ factionWork }: RunFacts): string[] {
     "    city factions' invitations passed over (not of the city group the brain chose, decision 54): " +
       (passedOver.length === 0 ? "none" : passedOver.join(", ")),
   );
-  lines.push("    the brain's faction work, as chosen:");
-  for (const record of factionWork.records) {
-    lines.push(
-      `      ${formatIsoTime(record.atMs)}  ${record.kind === "chosen" ? describeChoice(record.choice) : `stopped (${record.reason})`}`,
-    );
+  if (verbose) {
+    lines.push("    the brain's faction work, as chosen:");
+    for (const record of factionWork.records) {
+      const what = record.kind === "chosen" ? describeChoice(record.choice) : `stopped (${record.reason})`;
+      lines.push(`      ${formatIsoTime(record.atMs)}  ${what}`);
+    }
+  } else {
+    lines.push("    the brain's faction work, by cycle (--verbose lists each choice):");
+    const byCycle = new Map<string, { chosen: string[]; stopped: string[] }>();
+    for (const record of factionWork.records) {
+      const label = cycles.cycleLabelAt(record.atMs);
+      const tally = byCycle.get(label) ?? { chosen: [], stopped: [] };
+      byCycle.set(label, tally);
+      if (record.kind === "chosen") tally.chosen.push(`${record.choice.workType} for ${record.choice.faction}`);
+      else tally.stopped.push(record.reason);
+    }
+    for (const [label, { chosen, stopped }] of byCycle) {
+      const parts = [
+        chosen.length === 0 ? "no choice" : `${plural(chosen.length, "choice", "choices")}: ${countEach(chosen)}`,
+        ...(stopped.length === 0 ? [] : [`stopped ${stopped.length} (${countEach(stopped)})`]),
+      ];
+      lines.push(`      ${label}: ${parts.join("; ")}`);
+    }
   }
   if (factionWork.records.length === 0) lines.push("      none");
   const gained = [...factionWork.gained].map(([faction, reputation]) => `${faction} +${formatReputation(reputation)}`);
@@ -1244,24 +1398,50 @@ function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
 }
 
 /**
- * The cloud servers bought or upgraded (#194), each with its RAM and price, and the total. The price is BN1's (the
- * brain's rule knows no other yet): in another BitNode, unknown.
+ * The cloud servers bought or upgraded (#194), each with its RAM and price (with `verbose`), or the fleet a line a
+ * cycle (#245: its size before the cycle's first change and after its last, a change of the fleet's total at most once
+ * a cycle), and the total. The price is BN1's (the brain's rule knows no other yet): in another BitNode, unknown.
  */
-function cloudServerLines(facts: RunFacts): string[] {
-  const lines = ["  cloud servers bought or upgraded (from the medium snapshots):"];
+function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
+  const lines = [
+    "  cloud servers bought or upgraded (from the medium snapshots)" +
+      (verbose ? ":" : ", the fleet by cycle (--verbose lists each):"),
+  ];
   const currentNode = facts.slowLast?.resetInfo?.currentNode;
   const priceOf = ({ fromRam, toRam }: CloudServerChange) =>
     currentNode === 1 ? cloudServerPrice(toRam) - (fromRam === null ? 0 : cloudServerPrice(fromRam)) : null;
   let total = 0;
+  const byCycle = new Map<string, CloudServerChange[]>();
   for (const change of facts.cloudServerChanges) {
     const price = priceOf(change);
     total += price ?? 0;
+    const label = facts.cycles.cycleLabelAt(change.atMs);
+    const group = byCycle.get(label) ?? [];
+    group.push(change);
+    byCycle.set(label, group);
+    if (!verbose) continue;
     const what =
       change.fromRam === null
         ? `${change.hostname} bought, ${formatGigabytes(change.toRam)}`
         : `${change.hostname} upgraded, ${formatGigabytes(change.fromRam)} → ${formatGigabytes(change.toRam)}`;
     const cost = price === null ? `price unknown in BitNode ${displayValue(currentNode)}` : formatMoney(price);
     lines.push(`    ${formatIsoTime(change.atMs)}  ${what}, ${cost}`);
+  }
+  const fleet = ({ count, ram }: CloudFleet) =>
+    count === 0 ? "none" : `${plural(count, "server", "servers")}, ${formatGigabytes(ram)}`;
+  for (const [label, changes] of verbose ? [] : byCycle) {
+    const [first, last] = [changes[0], changes.at(-1)] as [CloudServerChange, CloudServerChange];
+    const bought = changes.filter((change) => change.fromRam === null).length;
+    const span =
+      first.atMs === last.atMs
+        ? `at ${formatIsoTime(first.atMs)}`
+        : `${formatIsoTime(first.atMs)} to ${formatIsoTime(last.atMs)}`;
+    const cost =
+      currentNode === 1 ? `, ${formatMoney(changes.reduce((sum, each) => sum + (priceOf(each) ?? 0), 0))}` : "";
+    lines.push(
+      `    ${label}, ${span}: ${fleet(first.fleetBefore)} → ${fleet(last.fleetAfter)} (${bought} bought, ` +
+        `${changes.length - bought} upgraded${cost})`,
+    );
   }
   if (facts.cloudServerChanges.length === 0) {
     lines.push("    none");

@@ -95,11 +95,12 @@ test.each(SEEDS)(
       augmentation: "Neurotrainer I",
       reputationNeeded: 1_000,
     });
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // The join's intent and each choice, as lines with --verbose (#245).
+    const { text, failures } = runReport(
+      fresh.data.store,
+      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
+      { verbose: true },
+    );
     const lines = text.split("\n");
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}joinFaction\(CyberSec\): done after 1 try \(sim\); done by /),

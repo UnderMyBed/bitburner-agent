@@ -1,6 +1,7 @@
-// npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [--environment E0]
+// npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [--environment E0] [--verbose]
 // The run report (#185): what a run did and what went wrong, from the store (run-report.ts). Without --since, the
-// window starts at the newest brain start; without --until, it ends now.
+// window starts at the newest brain start; without --until, it ends now. Section 3's busiest blocks are summarised;
+// --verbose lists each intent, purchase, dialog and choice instead (#245). The checks and the verdict are the same.
 // Exits 0 on PASS or WARN (warnings only, #241), 1 on FAIL, 2 when it couldn't run: no store, no brain start to begin
 // from, a window that ends before it starts, or one with nothing recorded in it.
 import process from "node:process";
@@ -20,7 +21,7 @@ try {
   try {
     const sinceMs = sinceText ? parseIsoTime(sinceText, "--since") : newestBrainStartMs(store, environment);
     if (sinceMs === null) throw new Error(`no brain start (${environment}) in the store: give --since <ISO time>`);
-    const report = runReport(store, { environment, sinceMs, untilMs });
+    const report = runReport(store, { environment, sinceMs, untilMs }, { verbose: argv.includes("--verbose") });
     console.log(report.text);
     process.exitCode = report.failures.length === 0 ? 0 : 1;
   } finally {

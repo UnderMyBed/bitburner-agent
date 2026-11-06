@@ -158,6 +158,18 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
   );
 }
 
+/** A donation not shown, or an install with no reset, in words: section 3 lists each, summarised or not (#245). */
+function anomalyOf(kind: string, fields: Record<string, unknown>): string {
+  if (kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND) {
+    return (
+      `donation not shown: ${describeDonation(fields as never)}, the faction state showing ` +
+      formatReputation(fields.shown)
+    );
+  }
+  const queued = Array.isArray(fields.queued) ? fields.queued.map(String) : [];
+  return `install reported done but the game didn't reset (queue: ${describeAugmentations(queued)})`;
+}
+
 /**
  * What a slow snapshot shows within reach by a donation (#225), its money aside: each augmentation worth installing,
  * not owned, its prerequisites owned, no joined seller's reputation reaching it, and sold by a joined faction taking
@@ -386,10 +398,7 @@ export class AugmentationTimeline {
             formatReputation(fields.after),
         });
       } else if (kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND) {
-        entries.push({
-          atMs,
-          text: `donation not shown: ${describeDonation(fields as never)}, the faction state showing ${formatReputation(fields.shown)}`,
-        });
+        entries.push({ atMs, text: anomalyOf(kind, fields) });
       } else if (kind === AUGMENTATION_PROGRESS_EVENT_KIND) {
         entries.push({ atMs, text: `progress: ${describeStoredProgress(fields)}` });
       } else if (kind === AUGMENTATION_BOUGHT_EVENT_KIND) {
@@ -410,11 +419,7 @@ export class AugmentationTimeline {
       } else if (kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) {
         entries.push({ atMs, text: `install cycle called off: ${String(fields.reason)}` });
       } else if (kind === AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND) {
-        const queued = Array.isArray(fields.queued) ? fields.queued.map(String) : [];
-        entries.push({
-          atMs,
-          text: `install reported done but the game didn't reset (queue: ${describeAugmentations(queued)})`,
-        });
+        entries.push({ atMs, text: anomalyOf(kind, fields) });
       }
     }
     for (const install of this.installs) {
@@ -434,6 +439,117 @@ export class AugmentationTimeline {
     const lines = ["  augmentations (the brain's install decisions and purchases, and the installs):"];
     for (const { atMs, text } of entries) lines.push(`    ${formatTime(atMs)}  ${text}`);
     if (entries.length === 0) lines.push("    none");
+    return lines;
+  }
+
+  /**
+   * Section 3's summary (#245; `actionLines` with --verbose): a line a cycle (`cycleOf` names it, as 2b does) with the
+   * set bought, NeuroFlux Governor's levels as one count, and its total price; the installs chosen and called off; the
+   * donations; the installs sent. A donation not shown, or an install with no reset, is listed under its cycle all the
+   * same. The progress events and the installs seen are left out: 2b says how each cycle went and what it installed.
+   */
+  summaryLines(
+    events: readonly StoredEvent[],
+    formatTime: (ms: number) => string,
+    cycleOf: (atMs: number) => string,
+  ): string[] {
+    interface Tally {
+      bought: string[];
+      levels: number[];
+      spent: number;
+      chosen: number;
+      /** The reasons the installs were chosen for, as stored ("count reached"), each once. */
+      reasons: string[];
+      calledOff: number;
+      donations: number;
+      donated: number;
+      sent: string[];
+      anomalies: string[];
+    }
+    const cycles = new Map<string, Tally>();
+    const tallyOf = (atMs: number) => {
+      const label = cycleOf(atMs);
+      const known = cycles.get(label);
+      if (known !== undefined) return known;
+      const tally: Tally = {
+        bought: [],
+        levels: [],
+        spent: 0,
+        chosen: 0,
+        reasons: [],
+        calledOff: 0,
+        donations: 0,
+        donated: 0,
+        sent: [],
+        anomalies: [],
+      };
+      cycles.set(label, tally);
+      return tally;
+    };
+    for (const { atMs, kind, detail } of [...events].sort((a, b) => a.atMs - b.atMs)) {
+      const fields = fieldsOf(detail);
+      if (kind === AUGMENTATION_BOUGHT_EVENT_KIND) {
+        const tally = tallyOf(atMs);
+        if (fields.augmentation === NEUROFLUX_GOVERNOR) tally.levels.push(Number(fields.level));
+        else tally.bought.push(String(fields.augmentation));
+        if (isFiniteNumber(fields.price)) tally.spent += fields.price;
+      } else if (kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) {
+        const tally = tallyOf(atMs);
+        tally.chosen += 1;
+        const reason = typeof fields.reason === "string" ? fields.reason : "reason not stored";
+        if (!tally.reasons.includes(reason)) tally.reasons.push(reason);
+      } else if (kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) {
+        tallyOf(atMs).calledOff += 1;
+      } else if (kind === AUGMENTATION_DONATED_EVENT_KIND) {
+        const tally = tallyOf(atMs);
+        tally.donations += 1;
+        if (isFiniteNumber(fields.amount)) tally.donated += fields.amount;
+      } else if (kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND) {
+        tallyOf(atMs).sent.push(fields.source === "manual" ? "yours" : "the brain's");
+      } else if (
+        kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND ||
+        kind === AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND
+      ) {
+        tallyOf(atMs).anomalies.push(`      ${formatTime(atMs)}  ${anomalyOf(kind, fields)}`);
+      }
+    }
+    const lines = [
+      "  augmentations, by cycle: the set bought, NeuroFlux Governor's levels as one count (--verbose lists each " +
+        "decision and purchase):",
+    ];
+    const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+    for (const [label, tally] of cycles) {
+      const count = tally.bought.length + tally.levels.length;
+      const levels = tally.levels.filter(Number.isFinite);
+      const neuroFlux =
+        tally.levels.length === 0
+          ? []
+          : [
+              `${NEUROFLUX_GOVERNOR} ×${tally.levels.length}` +
+                (levels.length !== tally.levels.length
+                  ? ""
+                  : levels.length === 1
+                    ? ` (level ${levels[0]})`
+                    : ` (levels ${Math.min(...levels)}–${Math.max(...levels)})`),
+            ];
+      const set = [...(tally.bought.length === 0 ? [] : [describeAugmentations(tally.bought)]), ...neuroFlux];
+      const parts = [
+        count === 0 ? "bought none" : `bought ${count} for ${formatMoney(tally.spent)}: ${set.join(", ")}`,
+      ];
+      if (tally.chosen > 0 || tally.calledOff > 0) {
+        parts.push(
+          plural(tally.chosen, "install chosen", "installs chosen") +
+            (tally.reasons.length > 0 ? ` (${tally.reasons.join(", ")})` : "") +
+            (tally.calledOff > 0 ? `, ${tally.calledOff} called off` : ""),
+        );
+      }
+      if (tally.donations > 0) {
+        parts.push(`${plural(tally.donations, "donation", "donations")}, ${formatMoney(tally.donated)}`);
+      }
+      if (tally.sent.length > 0) parts.push(`install sent (${tally.sent.join(", ")})`);
+      lines.push(`    ${label}: ${parts.join("; ")}`, ...tally.anomalies);
+    }
+    if (cycles.size === 0) lines.push("    none");
     return lines;
   }
 

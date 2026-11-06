@@ -108,12 +108,12 @@ test.each(SEEDS)(
       .map((event) => (event.detail as { faction: string }).faction);
     expect(worked).not.toContain("CyberSec");
 
-    // The run report: the donation, and no donation failure.
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // The run report: the donation (its line, with --verbose: #245), and no donation failure.
+    const { text, failures } = runReport(
+      fresh.data.store,
+      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
+      { verbose: true },
+    );
     expect(text).toMatch(
       / {4}\S+ {2}donated \$[\d,]+ to CyberSec \(for 18,750 reputation\): reputation 5,\d{3} → 18,7\d\d/,
     );
@@ -155,8 +155,12 @@ test.each(SEEDS)(
     const reputation = factionStateOf(slow())?.joined.find((each) => each.name === "BitRunners")?.reputation as number;
     expect(reputation).toBeGreaterThanOrEqual(306_374);
     expect(reputation).toBeLessThan(306_374 + 100);
-    // The run report says why the target, and the favour it makes.
-    const { text } = runReport(fresh.data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() });
+    // The run report says why the target (the choice's line, with --verbose: #245), and the favour it makes.
+    const { text } = runReport(
+      fresh.data.store,
+      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
+      { verbose: true },
+    );
     expect(text).toMatch(
       /hacking for BitRunners, for .* \(reputation 306,3\d\d of 306,374: donations at the next install, .* at [\d,]+; favour 100\.0, 150\.0 after the next install at it, /,
     );

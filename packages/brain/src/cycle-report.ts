@@ -417,6 +417,29 @@ export class BitNodeCycles {
     return this.#cycles.findLast((cycle) => cycle.startMs <= atMs);
   }
 
+  /**
+   * The cycle `atMs` falls in as 2b's summary names it, "BN1.1 2", for section 3's summaries (#245); "before BN1.1 1"
+   * before the first, or "the window" with no cycle seen (no slow snapshot).
+   */
+  cycleLabelAt(atMs: number): string {
+    const index = this.#cycles.findLastIndex((cycle) => cycle.startMs <= atMs);
+    const cycle = this.#cycles[index];
+    if (cycle !== undefined) return this.#labelOf(cycle, index);
+    const first = this.#cycles[0];
+    return first === undefined ? "the window" : `before ${this.#labelOf(first, 0)}`;
+  }
+
+  /** "BN1.1 2": the BitNode's label and the cycle's number in it. */
+  #labelOf(cycle: Cycle, index: number): string {
+    const number = this.#cycles.filter((each, at) => each.bitNode === cycle.bitNode && at <= index).length;
+    return `${this.bitNodes[cycle.bitNode]?.label ?? "?"} ${number}`;
+  }
+
+  /** Where each cycle starts (an install or a destroy), by the brain's clock, in order (#245). */
+  resetsMs(): number[] {
+    return this.#cycles.map((cycle) => cycle.startMs);
+  }
+
   /** A reset's time by the brain's clock: the game's, moved by this snapshot's clocks' offset, within the bounds. */
   static #startOf(resetMs: number, atMs: number, gameTimeMs: number, earliestMs: number): number {
     const offset = atMs - gameTimeMs;
@@ -795,7 +818,7 @@ export class BitNodeCycles {
     const targets =
       cycle.shareCount === 0 ? "not recorded" : cycle.targets.length === 0 ? "none" : cycle.targets.join(", ");
     lines.push(`  the batcher's targets: ${targets}`);
-    const label = `${this.bitNodes[cycle.bitNode]?.label ?? "?"} ${number}`;
+    const label = this.#labelOf(cycle, index);
     const short = endedBy.replace(/^ended by an? /, "").replace("not ended in the window", "not ended");
     return {
       label,
@@ -919,6 +942,60 @@ export class BitNodeCycles {
       line: shares.join(", ") + (unjudged > 0 ? `; ${unjudged} not judged (no faction state or money)` : ""),
       top: top === undefined ? "—" : `${top} ${percent(top)}%`,
     };
+  }
+
+  /**
+   * What held the cycles back from `fromMs` to `toMs`, for section 5's hours (#245): 2b's judgements made in it, by
+   * time online, the most first. Where that isn't money, income wasn't what the cycle waited on, and the most money
+   * unspent in it (while judged: once an install is chosen, the set's buying spends it) says so: "held back by
+   * reputation, not income (92% of 55 min online judged in the hour; count 8%); most money unspent $766,000,000". Or
+   * "held back by money: income (…)", or "reputation and money: income too", or not judged.
+   */
+  heldBackBetween(fromMs: number, toMs: number): string {
+    const totals = new Map<CycleAnswer, number>();
+    let judged = 0;
+    let made = 0;
+    let answered = 0;
+    let unspent: number | null = null;
+    const inside = (atMs: number) => atMs >= fromMs && atMs < toMs;
+    for (const cycle of this.#cycles) {
+      const progress = this.#progressOf(cycle);
+      for (const judgement of cycle.judgements.filter((each) => inside(each.atMs))) {
+        made += 1;
+        const answer = this.#answerAt(cycle, judgement, progress);
+        if (answer === null) continue;
+        answered += 1;
+        judged += judgement.onlineMs;
+        totals.set(answer, (totals.get(answer) ?? 0) + judgement.onlineMs);
+      }
+      for (const { atMs, money } of cycle.medium) {
+        if (money === null || !inside(atMs) || atMs > cycle.chosenAtMs) continue;
+        unspent = Math.max(unspent ?? money, money);
+      }
+    }
+    if (judged === 0) {
+      const why =
+        made === 0
+          ? "no slow snapshot judged: its install already chosen, or none"
+          : answered === 0
+            ? "no faction state or money"
+            : "no time online between its slow snapshots";
+      return `held back by: not judged in the hour (${why})`;
+    }
+    const ranked = ANSWER_ORDER.filter((answer) => (totals.get(answer) ?? 0) > 0).sort(
+      (a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0),
+    );
+    const percent = (answer: CycleAnswer) => `${Math.round((100 * (totals.get(answer) ?? 0)) / judged)}%`;
+    const [top, ...others] = ranked as [CycleAnswer, ...CycleAnswer[]];
+    const shares =
+      `${percent(top)} of ${formatDuration(judged)} online judged in the hour` +
+      others.map((answer) => `; ${answer} ${percent(answer)}`).join("");
+    if (top === "money") return `held back by money: income (${shares})`;
+    if (top === "reputation and money") return `held back by reputation and money: income too (${shares})`;
+    return (
+      `held back by ${top}, not income (${shares}); most money unspent ` +
+      (unspent === null ? "not recorded" : formatMoney(unspent))
+    );
   }
 
   /** One judgement's answer (`CycleAnswer`), or null where it can't be judged. */
