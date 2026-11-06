@@ -8,21 +8,28 @@ import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
+  DAEDALUS_COUNT_HOLD_MS,
   donationToReach,
   type FactionState,
   factionReputationPerSecond,
   isWorthInstalling,
   type MediumSnapshotData,
+  PORT_OPENER_PROGRAMS,
   type SlowSnapshotData,
+  TOR_ROUTER,
   type WorkingPerson,
 } from "@bitburner-agent/core";
+import * as model from "@bitburner-agent/model";
+import { type Countdown, countHoldOf, holdsOf, installClock, installDecision } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   AUGMENTATION_COUNT_HOLD_SETTING,
   AUGMENTATION_CYCLE_SETTING,
+  AUGMENTATION_INCOME_WINDOW_MS,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_ONLINE_SETTING,
   AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
+  AUGMENTATION_RESERVE_LOOKAHEAD_MS,
   type AugmentationEvent,
   type AugmentationInputs,
   AugmentationRule,
@@ -38,7 +45,9 @@ import {
   readCountHold,
   readOnlineClock,
 } from "../src/augmentations.ts";
+import * as cloud from "../src/cloud-servers.ts";
 import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions.ts";
+import { PURCHASE_PRICES } from "../src/programs.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
@@ -2542,5 +2551,162 @@ describe("held for Daedalus's count (#243)", () => {
       way: "donation",
       money: expect.closeTo(withIt - setPrice + both - setsOwn, 0),
     });
+  });
+
+  test("brain against the fast model (#263): the hold, its window, and the money taken as coming after a restart", () => {
+    // 26 installed (Neural Wit Amplifier among them: the model buys at the commit, so nothing's queued), Magnetism
+    // Amplifier reached at The Black Hand and $60m short at $100k/s; the install would take the count to 29 of 30.
+    const ownedAugs = { ...withoutMagnetism(), "Neural Wit Amplifier": 1 };
+    const withMagnetism = 250e6 + 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3;
+    const money = withMagnetism - 60e6;
+    const fields = (earned: number) => ({ reputation: 15_000, queued: [], ownedAugs, earned });
+    const joined = [
+      { name: "CyberSec", reputation: 18_750, favor: 0 },
+      { name: TBH, reputation: 15_000, favor: 0 },
+    ];
+    /** The model's hold on the same inputs as the brain's last update, its income and the hold's start given. */
+    const modelHold = (income: number | null, heldSinceOnlineMs: number | null, onlineMs: number) =>
+      countHoldOf({
+        installed: ownedAugs,
+        joined,
+        currentNode: 1,
+        ownedSF: {},
+        decision: installDecision({
+          installed: ownedAugs,
+          joined,
+          currentNode: 1,
+          ownedSF: {},
+          money,
+          hacking: HACKING,
+          factionRep: 1,
+          onlineMs,
+          sinceResetMs: gameTimeMs,
+        }),
+        money,
+        income,
+        person: workingPersonOf(playerWith(money)) as WorkingPerson,
+        conditions: workConditionsOf({ currentNode: 1, ownedAugs, ownedSF: {} }, runThree(fields(0))),
+        onlineMs,
+        heldSinceOnlineMs,
+      });
+    // 10 h online: the bar is 3, so the three count.
+    online(10);
+    for (let minute = 0; minute <= 10; minute += 1) minuteOn(fields(minute * 6e6), minute < 10 ? 0 : money);
+    const first = rule.view().progress;
+    expect(first).toMatchObject({ affordable: 3, bar: 3, reason: "count reached" });
+    expect(first?.countHold).toMatchObject({ augmentation: "Magnetism Amplifier", way: "money" });
+    const held = modelHold(100e3, null, first?.onlineMs ?? 0);
+    expect(held?.next).toMatchObject({ augmentation: "Magnetism Amplifier", faction: TBH, way: "money" });
+    expect(held?.next.etaMs).toBeCloseTo(first?.countHold?.etaMs ?? 0, -3);
+    expect((held?.untilOnlineMs ?? 0) - (first?.onlineMs ?? 0)).toBe(first?.countHold?.leftMs);
+    // Restarted: no income for 10 minutes, the window open: the money taken as coming (`assumeMoney`), both held on.
+    rule = newRule();
+    minuteOn(fields(11 * 6e6), money);
+    const restarted = rule.view().progress;
+    const since = readCountHold(store)?.sinceOnlineMs ?? null;
+    expect(restarted?.countHold).toMatchObject({ way: "money", leftMs: 19 * MINUTE });
+    const assumed = modelHold(null, since, restarted?.onlineMs ?? 0);
+    expect(assumed?.next).toMatchObject({ augmentation: "Magnetism Amplifier", way: "money", etaMs: 0 });
+    expect((assumed?.untilOnlineMs ?? 0) - (restarted?.onlineMs ?? 0)).toBe(19 * MINUTE);
+    // No hold under way, no income: nothing taken as coming, no hold (the brain's first minutes above); the window
+    // over, none; an income of nothing measured, none (the brain's at 21 minutes).
+    expect(modelHold(null, null, restarted?.onlineMs ?? 0)).toBeNull();
+    expect(modelHold(null, since, (since ?? 0) + DAEDALUS_COUNT_HOLD_MS)).toBeNull();
+    expect(modelHold(0, since, restarted?.onlineMs ?? 0)).toBeNull();
+  });
+});
+
+describe("brain against the fast model (#263): the A6 state the model copies, on the same inputs", () => {
+  /** The model's decision on what the brain's update read: eight reached, `money`, at the brain's clocks. */
+  const modelDecision = (money: number, onlineMs: number, income: number | null = null) =>
+    installDecision({
+      installed: {},
+      joined: EIGHT_JOINED,
+      currentNode: 1,
+      ownedSF: {},
+      money,
+      hacking: 300,
+      factionRep: 1,
+      onlineMs,
+      sinceResetMs: gameTimeMs,
+      income,
+    });
+  const eight = (extra = 0) => ({
+    slowData: slow({ joined: EIGHT_JOINED }),
+    mediumData: medium({ money: EIGHT_COST + SLACK + extra }),
+  });
+
+  test("the countdown: started, extended as the count rises, never shortened, ended; its money held meanwhile", () => {
+    const startedAt = gameTimeMs;
+    let clock: Countdown | null = null;
+    const both = level1After(8) + level2After(8);
+    for (const [atMs, extra] of [
+      [0, 0],
+      [30_000, level1After(8)],
+      [32_000, both],
+      [112_499, both],
+      [112_500, both],
+    ] as const) {
+      gameTimeMs = startedAt + atMs;
+      update(eight(extra));
+      // The brain's clock online: from 0 at its first update, the game's time on since.
+      const decision = modelDecision(EIGHT_COST + SLACK + extra, atMs);
+      const step = installClock(clock, decision.reason, decision, gameTimeMs);
+      clock = step.countdown;
+      const committed = readAugmentationCycle(store) !== null;
+      expect(step.install, `${atMs} ms`).toBe(committed);
+      if (committed) continue;
+      const countdown = rule.view().progress?.countdown;
+      expect(clock?.endsAtMs, `${atMs} ms`).toBe(countdown?.endsAtGameMs);
+      expect(clock?.extensions, `${atMs} ms`).toBe(countdown?.extensions);
+      expect(holdsOf(decision, clock !== null, null).fromHomeRam, `${atMs} ms`).toBeCloseTo(rule.countdownReserve(), 0);
+    }
+    expect(readAugmentationCycle(store)).not.toBeNull();
+  });
+
+  test("called off as the count falls under the bar, nothing held; started afresh over it", () => {
+    const startedAt = gameTimeMs;
+    let clock: Countdown | null = null;
+    for (const [atMs, extra] of [
+      [0, 0],
+      [10_000, -20e6],
+      [20_000, 0],
+    ] as const) {
+      gameTimeMs = startedAt + atMs;
+      update(eight(extra));
+      const decision = modelDecision(EIGHT_COST + SLACK + extra, atMs);
+      clock = installClock(clock, decision.reason, decision, gameTimeMs).countdown;
+      expect(clock?.endsAtMs ?? null, `${atMs} ms`).toBe(rule.view().progress?.countdown?.endsAtGameMs ?? null);
+      expect(holdsOf(decision, clock !== null, null).fromHomeRam, `${atMs} ms`).toBeCloseTo(rule.countdownReserve(), 0);
+    }
+  });
+
+  test("the lookahead's reserve before the countdown: from cloud servers alone, at the income over the window", () => {
+    for (const [short, perSecond] of [
+      [10e6, 20_000],
+      [30e6, 20_000],
+      [10e6, 0],
+    ] as const) {
+      rule = newRule();
+      measureIncome(perSecond, { joined: EIGHT_JOINED }, medium({ money: EIGHT_COST - short }));
+      const decision = modelDecision(EIGHT_COST - short, rule.view().progress?.onlineMs ?? 0, perSecond);
+      expect(decision.reason).toBeNull();
+      const holds = holdsOf(decision, false, null);
+      expect(holds.fromCloudServers, `$${short} short at $${perSecond}/s`).toBeCloseTo(rule.reserve(), 0);
+      expect(holds.fromHomeRam).toBe(rule.countdownReserve());
+    }
+  });
+
+  test("the constants the model copies are the brain's", () => {
+    expect(model.AUGMENTATION_RESERVE_LOOKAHEAD_MS).toBe(AUGMENTATION_RESERVE_LOOKAHEAD_MS);
+    expect(model.INCOME_WINDOW_MS).toBe(AUGMENTATION_INCOME_WINDOW_MS);
+    expect(model.CLOUD_SERVER_INCOME_WINDOW_MS).toBe(cloud.CLOUD_SERVER_INCOME_WINDOW_MS);
+    expect(model.CLOUD_SERVER_LIMIT).toBe(cloud.CLOUD_SERVER_LIMIT);
+    expect(model.CLOUD_SERVER_PAYBACK_LIMIT_MS).toBe(cloud.CLOUD_SERVER_PAYBACK_LIMIT_MS);
+    expect(model.CLOUD_SERVER_PRICE_PER_GB).toBe(cloud.CLOUD_SERVER_PRICE_PER_GB);
+    expect(model.CLOUD_SERVER_RESERVE_HORIZON_MS).toBe(cloud.CLOUD_SERVER_RESERVE_HORIZON_MS);
+    expect(model.MIN_CLOUD_SERVER_RAM).toBe(cloud.MIN_CLOUD_SERVER_RAM);
+    // The programs in the order the brain buys them (TOR first, then core's port openers), at the brain's prices.
+    expect(model.PROGRAM_PRICES).toEqual([TOR_ROUTER, ...PORT_OPENER_PROGRAMS].map((item) => PURCHASE_PRICES[item]));
   });
 });

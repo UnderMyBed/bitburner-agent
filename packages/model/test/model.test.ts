@@ -24,7 +24,7 @@ import {
   installDecision,
   measuredAt,
   multipliersOf,
-  programsPrice,
+  portsOpen,
   READ_MINUTES,
   RUN_3_CYCLES,
   RUN_3_POLICY,
@@ -42,10 +42,10 @@ import { RUN_3_BN1_2 } from "./fixtures.ts";
 const MINUTE_MS = 60_000;
 const curves = new Curves(CALIBRATION);
 /** Run #3's model, and each step's hacking level and money by its time. */
-const steps = new Map<number, { hacking: number; money: number }>();
+const steps = new Map<number, { hacking: number; money: number; ports: number }>();
 const run3 = runModel(RUN_3_BN1_2.start, {
   policy: RUN_3_POLICY,
-  onStep: ({ atMs, hacking, money }) => steps.set(atMs, { hacking, money }),
+  onStep: ({ atMs, hacking, money, purse }) => steps.set(atMs, { hacking, money, ports: portsOpen(purse) }),
 });
 
 describe("the calibration", () => {
@@ -78,7 +78,7 @@ describe("the calibration", () => {
 
   test("the curve's constants are the fit's: a local best of the error on run #3's level and money, cycles 1-6", () => {
     // The error the fit minimised: over every reading of run #3's cycles 1-6, the mean |ln| of the level's ratio and a
-    // third of the mean |log10| of the money's (floored at $1m), the model at the same minute of the same cycle.
+    // third of the mean |log10| of the gross income's (floored at $1m), the model at the same minute of the same cycle.
     const error = (calibration: Partial<typeof CALIBRATION>) => {
       const seen = new Map<string, { hacking: number; money: number }>();
       let cycle = 0;
@@ -86,10 +86,10 @@ describe("the calibration", () => {
       runModel(RUN_3_BN1_2.start, {
         policy: RUN_3_POLICY,
         calibration,
-        onStep: ({ onlineMs, hacking, money }) => {
+        onStep: ({ onlineMs, hacking, gross }) => {
           if (onlineMs < last) cycle += 1;
           last = onlineMs;
-          seen.set(`${cycle}:${onlineMs / MINUTE_MS}`, { hacking, money });
+          seen.set(`${cycle}:${onlineMs / MINUTE_MS}`, { hacking, money: gross });
         },
       });
       let level = 0;
@@ -108,18 +108,21 @@ describe("the calibration", () => {
       return (level + money / 3) / readings;
     };
     const fitted = error({});
-    // 0.19 at the fit (11% on the level, ×1.8 on the money).
-    expect(fitted).toBeLessThan(0.2);
+    // 0.2003 at the fit (12% on the level, ×1.8 on the money; #263 refitted it once home's RAM came from the cash), a
+    // local best by coordinate descent at these steps; the bound keeps the fit within a thousandth of it.
+    expect(fitted).toBeLessThan(0.201);
     const { expPaceExponent, moneyPaceExponent, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
+    // The refit's own steps: ±0.0625 on the exponents (0.5625, #260's, among them), ±0.05 on the first cycle's
+    // speed, ×2 and ÷2 on home's RAM (256 GB, #260's, among them).
     for (const neighbour of [
-      { expPaceExponent: expPaceExponent - 0.125 },
-      { expPaceExponent: expPaceExponent + 0.125 },
-      { moneyPaceExponent: moneyPaceExponent - 0.125 },
-      { moneyPaceExponent: moneyPaceExponent + 0.125 },
-      { firstCycleSpeed: firstCycleSpeed - 0.1 },
-      { firstCycleSpeed: firstCycleSpeed + 0.1 },
-      { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 4 },
-      { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 4 },
+      { expPaceExponent: expPaceExponent - 0.0625 },
+      { expPaceExponent: expPaceExponent + 0.0625 },
+      { moneyPaceExponent: moneyPaceExponent - 0.0625 },
+      { moneyPaceExponent: moneyPaceExponent + 0.0625 },
+      { firstCycleSpeed: firstCycleSpeed - 0.05 },
+      { firstCycleSpeed: firstCycleSpeed + 0.05 },
+      { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 2 },
+      { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 2 },
     ]) {
       expect(fitted, JSON.stringify(neighbour)).toBeLessThanOrEqual(error(neighbour));
     }
@@ -281,7 +284,7 @@ describe("the model", () => {
     }
   });
 
-  test("joins a hacker faction at the first step its server's level and its programs' money are both reached", () => {
+  test("joins a hacker faction at the first step its server's level and its port openers bought are both reached", () => {
     for (const { faction, hacking, ports } of HACKER_FACTION_JOINS) {
       const joins = run3.events.filter((event) => event.kind === "joined" && event.faction === faction);
       expect(joins.length).toBeGreaterThan(0);
@@ -291,9 +294,9 @@ describe("the model", () => {
         // The step before an install's next is the cycle before's: no comparison across an install.
         const afterInstall = run3.cycles.some((cycle) => cycle.endMs === atMs - MINUTE_MS);
         expect(now?.hacking).toBeGreaterThanOrEqual(hacking);
-        expect(now?.money).toBeGreaterThanOrEqual(programsPrice(ports));
+        expect(now?.ports).toBeGreaterThanOrEqual(ports);
         if (!afterInstall) {
-          expect((before?.hacking ?? 0) < hacking || (before?.money ?? 0) < programsPrice(ports)).toBe(true);
+          expect((before?.hacking ?? 0) < hacking || (before?.ports ?? 0) < ports).toBe(true);
         }
       }
     }
@@ -348,8 +351,11 @@ describe("the model", () => {
         factionRep: 4,
         onlineMs: 5 * MINUTE_MS,
       });
-    // 2.5m reputation at $1m a reputation over faction_rep 4: $625b, and a hair.
-    expect(decide(624e9)).toBeNull();
+    // 2.5m reputation at $1m a reputation over faction_rep 4: $625b, and a hair. Held: nothing installs, its money
+    // held.
+    expect(decide(624e9)).toMatchObject({ reason: null, names: [], neuroFluxLevels: 0 });
+    expect(decide(624e9).endgameHold).toBeGreaterThan(0);
+    expect(decide(626e9).endgameHold).toBeNull();
     expect(decide(626e9)?.reason).toBe("The Red Pill");
     expect(decide(626e9)?.names).toContain("The Red Pill");
   });

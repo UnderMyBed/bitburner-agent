@@ -1,12 +1,13 @@
 /**
- * The cycle model's calibration (#260): what core's formulas can't say, each a named constant or table citing where it
- * comes from. The money and the hacking level are inputs measured from run #3 and fitted (the reference cycles, the
- * paces, the first cycle's speed); the share is run #3's own a cycle; the joins' levels are the game's. What the
- * validation tests is the rules of reputation, favour, buying and installing that run on them.
- * - The hacking level and the money over a cycle: run #3's own cycles (`RUN_3_CYCLES`), divided by each cycle's
+ * The cycle model's calibration (#260, #263): what core's formulas can't say, each a named constant or table citing
+ * where it comes from. The gross income and the hacking level are inputs measured from run #3 and fitted (the reference
+ * cycles, the paces, the first cycle's speed); the share is the game's for the cycle's RAM, a fitted share of it in
+ * threads; the joins' levels are the game's. What the validation tests is the rules that run on them.
+ * - The hacking level and the gross income over a cycle: run #3's own cycles (`RUN_3_CYCLES`), divided by each cycle's
  *   multipliers into one curve at multiplier 1, run faster or slower by each cycle's level, hacking speed and home RAM
  *   (`Curves`). A curve, not a table a cycle, so a policy that makes cycles longer or shorter (#247) still has one.
- * - The share bonus while working, run #3's own a cycle (`RUN_3_SHARE_BONUS`).
+ * - The share bonus while working: from the cycle's RAM (`shareRamShare`), or run #3's own a cycle
+ *   (`RUN_3_SHARE_BONUS`).
  * - When each hacker faction is joined (`HACKER_FACTION_JOINS`); core's invitation rules for the rest.
  */
 
@@ -170,14 +171,16 @@ export interface Calibration {
    * The cycles of run #3 the curves are made of (1-based), and the multipliers the model itself runs each at, on its
    * run of run #3: checked equal by test/model.test.ts. Each cycle's level (through the game's skill formula,
    * `hackingExpForLevel`) and income, divided by them, is a curve at multiplier 1; the curve is their median a minute.
-   * Read to 120 min (cycles 5 and 6); past it, linear at the last slope, 105 to 120 min (#263 bounds it): the model's
-   * own 5th cycle runs past it, to 133-138 min.
+   * Read to 120 min (cycles 5 and 6); past it, linear at the last slope, 105 to 120 min, flagged and bounded (#263,
+   * `EXTRAPOLATION_BOUND_MIN`). Assumed multipliers: what run #3 installed a cycle isn't known yet.
    */
   referenceCycles: readonly { cycle: number; multipliers: CycleMultipliers }[];
   /**
-   * How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. Fitted, with
-   * `fullSpeedHomeRamGb` and the paces, on run #3's cycles 1 to 6 (the model's 7th on is another cycle than run #3's):
-   * the mean error at each reading, 11% on the level and ×1.8 on the money (which spans 12 orders of magnitude).
+   * How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. Fitted,
+   * with `fullSpeedHomeRamGb` and the paces, on run #3's cycles 1 to 6 (the model's 7th on is another cycle than run
+   * #3's), refitted by #263 once home's RAM came from the cash: the mean error at each reading, 12% on the level and
+   * ×1.8 on the gross income (which spans 12 orders of magnitude). BN1.2's home starts at 32 GB, so 8 GB is out of its
+   * range.
    */
   firstCycleSpeed: number;
   /** Home's RAM from which a cycle runs at the reference cycles' pace (`firstCycleSpeed`'s other end). */
@@ -191,8 +194,16 @@ export interface Calibration {
    */
   expPaceExponent: number;
   moneyPaceExponent: number;
-  /** The share bonus while working, by cycle (`RUN_3_SHARE_BONUS`); past the list, its last. */
+  /** The share bonus while working, by cycle (`RUN_3_SHARE_BONUS`); past the list, its last: `share: "index"` only. */
   shareBonusByCycle: readonly number[];
+  /**
+   * The share of home's and the cloud servers' RAM in share threads while working (`shareBonusOfState`, #263): the
+   * game's formula on this constant. The real share is what the batches leave (at most 80% of their hosts' use, core's
+   * `shareRound`), which rises late in a cycle as the batches need less, so a constant reads low in cycles 5 and 6 (an
+   * average of 1.43 against run #3's 1.49 and 1.55). Fitted on run #3's share a cycle, cycles 1 to 6: 6% mean error
+   * (3% without the 4th, whose 1.16 its brain's share before #242 made, not its RAM).
+   */
+  shareRamShare: number;
 }
 
 export const CALIBRATION: Calibration = {
@@ -203,18 +214,28 @@ export const CALIBRATION: Calibration = {
     { cycle: 6, multipliers: { hacking: 2.8541, hacking_exp: 3.7007, hacking_speed: 2.0035, hacking_money: 2.5329 } },
   ],
   firstCycleSpeed: 0.8,
-  fullSpeedHomeRamGb: 256,
-  expPaceExponent: 0.5625,
+  fullSpeedHomeRamGb: 512,
+  expPaceExponent: 0.625,
   moneyPaceExponent: 0.5,
   shareBonusByCycle: RUN_3_SHARE_BONUS,
+  shareRamShare: 0.01,
 };
 
 /**
+ * The world servers' RAM the hack loop roots with `ports` port openers, GB, by the ports (0 to 5): every server of the
+ * game's that needs no more (`Server/data/servers.ts`, `numOpenPortsRequired`; NUKE checks the ports alone,
+ * `NetscriptFunctions.ts:541-544`, and the hack loop roots by them, packages/ingame/src/entries/hack-loop-root.ts), its
+ * RAM 2^`maxRamExponent`, the mean of a range drawn per save. The hack loop's hosts with the cloud servers (the brain's
+ * `hackLoopHosts`): the cloud payback's income a GB is over them all (#263 review). The game's; a test recomputes them.
+ */
+export const ROOTED_WORLD_RAM_GB_BY_PORTS: readonly number[] = [100, 236, 454, 907.0667, 1406.1333, 3168.8];
+
+/**
  * When each hacker faction is joined (#195's backdoors): once the hacking level reaches its server's
- * `requiredHackingSkill` and the money has bought the TOR router and the port openers it needs. Each server's level is
- * drawn per save in a range (`Server/data/servers.ts:1430-1517`); the model takes the top of each (CSEC 51-60,
- * avmnite-02h 202-220, I.I.I.I 340-365, run4theh111z 505-550), the safe side. Run #3 joined BitRunners at hacking
- * about 588 (#247), the simulator at 540.
+ * `requiredHackingSkill` and the TOR router and the port openers it needs are bought. Each server's level is drawn per
+ * save in a range (`Server/data/servers.ts:1430-1517`); the model takes the top of each (CSEC 51-60, avmnite-02h
+ * 202-220, I.I.I.I 340-365, run4theh111z 505-550), the safe side. Run #3 joined BitRunners at hacking about 588 (#247),
+ * the simulator at 540.
  */
 export const HACKER_FACTION_JOINS: readonly { faction: string; hacking: number; ports: number }[] = [
   { faction: "CyberSec", hacking: 60, ports: 1 },

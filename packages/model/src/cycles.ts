@@ -1,7 +1,7 @@
 /**
- * The cycle model (#260, the fast model's first slice, #13): BN1 stepped a minute at a time from the BitNode's start to
- * its destroy, install to install, with the brain's own choices made by core's own functions on the model's state, so
- * it can't drift from the brain:
+ * The cycle model (the fast model, #13: slice 1, #260; slice 2, part 1, #263): BN1 stepped a minute at a time from the
+ * BitNode's start to its destroy, install to install, with the brain's own choices made by core's own functions on the
+ * model's state, so it can't drift from the brain:
  * - A5's work (core's `factionWorkChoice`: the most hacking value per second of work, The Red Pill first, toward
  *   donations' favour, the count; `factionReputationPerSecond` at the modelled level, `faction_rep` and favour);
  * - the joins: the hacker factions by their servers (`HACKER_FACTION_JOINS`), Tian Di Hui, the city group (core's
@@ -10,7 +10,11 @@
  *   "Daedalus donations", and `installJudgement`), and #243's hold (`countHoldOf`: `daedalusCountHold` with
  *   `countablesToCome`), as packages/brain/src/augmentations.ts runs them;
  * - at each install, the favour (`favorAfterInstall`), the multipliers (`installGains`, SF1's bonus) and home's RAM.
- * What core can't say, the hacking level and the money over a cycle, is calibrated (./calibration.ts, ./curves.ts).
+ * What core can't say, the hacking level and the gross income over a cycle, is calibrated (./calibration.ts,
+ * ./curves.ts). #263: the money in hand is the gross less the brain's purchases through the cycle (./money.ts); the
+ * share bonus is the game's formula on a fitted share of the cycle's RAM; A6's countdown, holds and lookahead follow
+ * the brain's, tested against it on the same inputs (packages/brain/test/augmentations.test.ts and
+ * desired-state.test.ts); cycles past the curves' range are flagged and bounded.
  * Not wired into the brain's choices (owner decision 46: phase B replaces a choice only where it measurably beats it).
  */
 import {
@@ -23,13 +27,16 @@ import {
   chooseCityGroup,
   cityGroupValues,
   countablesToCome,
+  countdownExtensionMs,
   DAEDALUS,
+  DAEDALUS_COUNT_HOLD_MS,
   daedalusCountHold,
   daedalusCountOf,
   daedalusRequirements,
   daedalusSkillsReached,
   donationsUnlocked,
   donationTermsOf,
+  type EndgameHold,
   type FactionState,
   type FactionWorkChoice,
   factionWorkChoice,
@@ -45,6 +52,8 @@ import {
   passiveFactionReputationPerSecond,
   QUICK_INSTALL_COUNTDOWN_MS,
   reputationToUnlockDonations,
+  SHARE_RAM_GB,
+  shareBonusOfPower,
   THE_RED_PILL,
   TIAN_DI_HUI,
   TIAN_DI_HUI_HACKING,
@@ -53,8 +62,18 @@ import {
   type WorkConditions,
   type WorkingPerson,
 } from "@bitburner-agent/core";
-import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS } from "./calibration.ts";
+import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS, ROOTED_WORLD_RAM_GB_BY_PORTS } from "./calibration.ts";
 import { type Clocks, Curves, homeRamAfter, measuredAt } from "./curves.ts";
+import {
+  cloudRamOf,
+  freshPurse,
+  type Holds,
+  NO_HOLDS,
+  PROGRAM_PRICES,
+  type Purse,
+  portsOpen,
+  spendThroughCycle,
+} from "./money.ts";
 
 const MINUTE_MS = 60_000;
 
@@ -118,9 +137,21 @@ export interface ModelCycle {
   /** Daedalus's count after the install (`ownedAugs`' names, NeuroFlux Governor once). */
   countAfter: number;
   hackingAtEnd: number;
+  /** The money in hand before the commit (the gross less what the brain spent through the cycle, `money.ts`). */
   moneyAtEnd: number;
+  /** The game's hacking income since the install, gross (`moneySources.hacking`). */
+  grossAtEnd: number;
+  /** What the commit spent: the set, NeuroFlux Governor's levels and the donations (home's RAM then has the rest). */
+  commitMoney: number;
   /** Home's RAM after the cycle. */
   homeRamGb: number;
+  /**
+   * Minutes of the cycle past its curve's last reading (`Curves.lastMinute`, or a measured cycle's end), each clock's
+   * more: extrapolated at the last slope, so less sure (#263). 0 for none.
+   */
+  extrapolatedMinutes: number;
+  /** The share bonus while working, the cycle's average over the minutes worked (`shareBonusOfState`). */
+  shareBonus: number;
   /** The multipliers the cycle ran at. */
   multipliers: Multipliers;
   /** By joined faction: the reputation earned, the favour after the install, the minutes worked and the best rate. */
@@ -145,7 +176,19 @@ export interface ModelRun {
   events: ModelEvent[];
   /** The destroy (w0r1d_d43m0n's level reached with The Red Pill installed), or null within the horizon. */
   destroyedAtMs: number | null;
+  /**
+   * The cycles (1-based) extrapolated past `EXTRAPOLATION_BOUND_MIN` (#263): out of the curves' range, so a run with
+   * any isn't to be trusted, and a comparison says so. Empty for none.
+   */
+  outOfRange: number[];
 }
+
+/**
+ * How far past its last reading a curve is trusted, minutes (#263): half the 120 min it spans. Past the last reading
+ * each clock runs on at the last slope (RAM at its most, a steady income), which holds for a while; a cycle further out
+ * is flagged out of range (`ModelRun.outOfRange`).
+ */
+export const EXTRAPOLATION_BOUND_MIN = 60;
 
 export interface ModelOptions {
   policy?: CyclePolicy;
@@ -160,8 +203,30 @@ export interface ModelOptions {
   horizonMs?: number;
   /** The step: a minute. */
   stepMs?: number;
-  /** Each step's figures, for a trace. */
-  onStep?: (step: { atMs: number; onlineMs: number; hacking: number; money: number; clocks: Clocks }) => void;
+  /**
+   * The money: "cash", the gross less what the brain spends through the cycle (`money.ts`, #263), or "gross", the
+   * cycle's hacking income as slice 1 had it (#260), kept for the paired comparison's structural variant.
+   */
+  money?: "cash" | "gross";
+  /**
+   * The share bonus: "state", from the RAM the cycle's purse holds (`shareBonusOfState`, #263), or "index", run
+   * #3's own by install index (`RUN_3_SHARE_BONUS`), as slice 1 had it, kept for the paired comparison's structural
+   * variant.
+   */
+  share?: "state" | "index";
+  /** Each step's figures, for a trace: `money` in hand, of `gross`, and the share bonus while working. */
+  onStep?: (step: {
+    atMs: number;
+    onlineMs: number;
+    hacking: number;
+    money: number;
+    gross: number;
+    /** The gross income a second over the brain's 10-minute window, null till it's full. */
+    income: number | null;
+    shareBonus: number;
+    purse: Readonly<Purse>;
+    clocks: Clocks;
+  }) => void;
   /** Each step's work (A5's choice, or a policy's grind) and the factions joined then, for a trace. */
   onWork?: (step: { atMs: number; choice: FactionWorkChoice | null; joined: readonly JoinedFaction[] }) => void;
 }
@@ -181,11 +246,9 @@ export function multipliersOf(installed: Readonly<Record<string, number>>, sourc
   return Object.fromEntries(HACKING_MULTIPLIERS.map((key) => [key, gains[key] * bonus])) as Multipliers;
 }
 
-/** The TOR router (`Constants.ts:44`) and the port openers, cheapest first (`DarkWeb/DarkWebItems.ts:6-10`). */
-const TOR_ROUTER_PRICE = 200e3;
-const PORT_OPENER_PRICES = [500e3, 1.5e6, 5e6, 30e6, 250e6];
+/** What the TOR router and `ports` port openers cost together (`PROGRAM_PRICES`). */
 export function programsPrice(ports: number): number {
-  return TOR_ROUTER_PRICE + PORT_OPENER_PRICES.slice(0, ports).reduce((sum, each) => sum + each, 0);
+  return PROGRAM_PRICES.slice(0, ports + 1).reduce((sum, each) => sum + each, 0);
 }
 
 /** w0r1d_d43m0n's level: 3000 × the BitNode's `WorldDaemonDifficulty`, 1 in BN1 (`Server/ServerHelpers.ts:383-385`). */
@@ -208,30 +271,58 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   const favor = new Map<string, number>();
   const cycles: ModelCycle[] = [];
   const events: ModelEvent[] = [];
-  let homeRamGb = startHomeRamGb(sourceFile1Level);
+  const byCash = (options.money ?? "cash") === "cash";
+  const byState = (options.share ?? "state") === "state";
+  let purse = freshPurse(startHomeRamGb(sourceFile1Level));
   let destroyedAtMs: number | null = null;
   // The cycle's state.
   let cycleStartMs = 0;
   let clocks: Clocks = { exp: 0, money: 0 };
   let joined: JoinedFaction[] = [];
   let cityGroup: string | null = null;
-  let countdownEndsMs: number | null = null;
+  let countdown: Countdown | null = null;
   let heldSinceOnlineMs: number | null = null;
   let held: { faction: string; augmentation: string } | null = null;
-  let lastMoney = 0;
+  let holds: Holds = NO_HOLDS;
+  // The game's count of income since the install, sampled each step: nothing at the install.
+  let incomeSamples: { onlineMs: number; gross: number }[] = [{ onlineMs: 0, gross: 0 }];
   let stats = freshStats();
 
   for (let now = 0; now <= horizonMs; now += stepMs) {
     const onlineMs = now - cycleStartMs;
     const multipliers = multipliersOf(installed, sourceFile1Level);
-    if (onlineMs > 0) clocks = curves.advanceClocks(clocks, stepMs, multipliers, homeRamGb);
+    if (onlineMs > 0) clocks = curves.advanceClocks(clocks, stepMs, multipliers, purse.homeRamGb);
     const measured = options.measured?.[cycles.length];
     const reading = measured === undefined ? null : measuredAt(measured.points, onlineMs / MINUTE_MS);
     const hacking = reading?.hacking ?? curves.hackingLevelAt(clocks.exp, multipliers);
-    const money = reading?.money ?? curves.moneyAt(clocks.money, multipliers);
-    const income = onlineMs > 0 ? (Math.max(0, money - lastMoney) / stepMs) * 1000 : null;
-    lastMoney = money;
-    options.onStep?.({ atMs: now, onlineMs, hacking, money, clocks });
+    const gross = reading?.money ?? curves.moneyAt(clocks.money, multipliers);
+    // Past the curve's last reading, or the measured cycle's end: extrapolated (#263).
+    const lastMinute = measured === undefined ? curves.lastMinute : (measured.points.at(-1)?.[0] ?? 0);
+    const minutesIntoCurve = measured === undefined ? Math.max(clocks.exp, clocks.money) : onlineMs / MINUTE_MS;
+    if (minutesIntoCurve > lastMinute) {
+      stats.extrapolatedMinutes = Math.max(stats.extrapolatedMinutes, minutesIntoCurve - lastMinute);
+    }
+    // The income over the brain's window (`AUGMENTATION_INCOME_WINDOW_MS`, the cloud servers' too): from the newest
+    // sample at or before the window's start, as the brain keeps them (`HackLoopIncome.add`); null till it spans it.
+    incomeSamples.push({ onlineMs, gross });
+    while ((incomeSamples[1]?.onlineMs ?? Number.POSITIVE_INFINITY) <= onlineMs - INCOME_WINDOW_MS) {
+      incomeSamples.shift();
+    }
+    const oldest = incomeSamples[0] as { onlineMs: number; gross: number };
+    const income =
+      onlineMs - oldest.onlineMs >= INCOME_WINDOW_MS
+        ? (Math.max(0, gross - oldest.gross) / (onlineMs - oldest.onlineMs)) * 1000
+        : null;
+    // What the brain spends through the cycle, the hack loop's hosts the world servers its ports root and the cloud
+    // servers. The money in hand is what's left (#263); with `money: "gross"`, A6 and the joins see the gross instead.
+    const ports = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
+    purse = spendThroughCycle(purse, gross, income, onlineMs, holds, ROOTED_WORLD_RAM_GB_BY_PORTS[ports] as number);
+    const cash = gross - purse.spent;
+    const money = byCash ? cash : gross;
+    const shareBonus = byState
+      ? shareBonusOfState(purse, curves.calibration)
+      : shareBonusOf(curves.calibration, cycles.length);
+    options.onStep?.({ atMs: now, onlineMs, hacking, money, gross, income, shareBonus, purse, clocks });
     if (Object.hasOwn(installed, THE_RED_PILL) && hacking >= WORLD_DAEMON_HACKING) {
       destroyedAtMs = now;
       events.push({ atMs: now, kind: "destroyed" });
@@ -245,7 +336,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       events.push({ atMs: now, kind: "joined", faction: name });
     };
     for (const { faction, hacking: level, ports } of HACKER_FACTION_JOINS) {
-      if (hacking >= level && money >= programsPrice(ports)) join(faction);
+      // Its server's port openers bought (#263), the TOR router first.
+      if (hacking >= level && portsOpen(purse) >= ports) join(faction);
     }
     // Tian Di Hui: hacking 50 and $1m held in one of its cities, a ticket away (`Faction/FactionInfo.tsx:680-692`).
     if (hacking >= TIAN_DI_HUI_HACKING && money >= TIAN_DI_HUI_MONEY + TRAVEL_COST) join(TIAN_DI_HUI);
@@ -287,7 +379,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       factionWorkRepGain: bitNode.FactionWorkRepGain,
       favorToDonateToFaction: bitNode.FavorToDonateToFaction,
       donations: true,
-      shareBonus: shareBonusOf(curves.calibration, cycles.length),
+      shareBonus,
     };
     const resetInfo = { currentNode, ownedAugs: installed, ownedSF: { ...ownedSF } };
     const view: PolicyView = { atMs: now, onlineMs, hacking, money, installed, joined, multipliers };
@@ -295,7 +387,10 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       grindWork(policy, view, person, conditions, bitNode.FavorToDonateToFaction) ??
       factionWorkChoice(person, state(), resetInfo, conditions, count(), held);
     options.onWork?.({ atMs: now, choice, joined });
-    if (choice !== null) work(choice);
+    if (choice !== null) {
+      work(choice);
+      stats.shareBonusSum += shareBonus;
+    }
     // Every other joined faction gains passive reputation (`processPassiveFactionRepGain`, special ones and a gang's
     // aside). In the model it tips A5's ties toward the faction joined longer: NiteSec over BitRunners in cycles 3-4.
     const passiveGain = factionPassiveRepGainOf(currentNode, bitNode.FactionWorkRepGain);
@@ -329,15 +424,17 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       hacking,
       factionRep: multipliers.faction_rep,
       onlineMs,
+      income,
     });
-    let reason: ModelInstallReason | null = decision?.reason ?? null;
-    if (policy.install !== undefined && decision !== null && reason !== "The Red Pill") {
+    let reason: ModelInstallReason | null = decision.reason;
+    if (policy.install !== undefined && decision.endgameHold === null && reason !== "The Red Pill") {
       reason = policy.install(view, decision.reason) ? (decision.reason ?? "policy") : null;
     }
     // #243's hold: an install the count rule chose that would leave Daedalus's count one short.
     held = null;
-    if (reason !== null && decision !== null && policy.daedalusCountHold && isCountRule(reason)) {
-      const hold = countHoldOf({
+    let countHeld: ReturnType<typeof countHoldOf> = null;
+    if (reason !== null && policy.daedalusCountHold && isCountRule(reason)) {
+      countHeld = countHoldOf({
         installed,
         joined,
         currentNode,
@@ -350,27 +447,26 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
         onlineMs,
         heldSinceOnlineMs,
       });
-      if (hold !== null) {
-        heldSinceOnlineMs = hold.sinceOnlineMs;
-        held = { faction: hold.next.faction, augmentation: hold.next.augmentation };
+      if (countHeld !== null) {
+        heldSinceOnlineMs = countHeld.sinceOnlineMs;
+        held = { faction: countHeld.next.faction, augmentation: countHeld.next.augmentation };
         stats.heldMinutes += stepMs / MINUTE_MS;
         reason = null;
       }
     }
-    if (reason === null || decision === null || decision.names.length + decision.neuroFluxLevels === 0) {
-      countdownEndsMs = null;
-      continue;
-    }
-    // The countdown (90 s, 30 s for a quick install; none for The Red Pill), called off if the rule stops saying so.
-    // At a minute's step the install comes at the first step past its end: 90 s is 2 minutes, a minute late at most.
-    // Kept from the first time the rule says install, as the brain's is; its extensions (`countdownExtensionMs`) aren't
-    // modelled.
-    const countdownMs =
-      reason === "The Red Pill" ? 0 : reason === "quick install" ? QUICK_INSTALL_COUNTDOWN_MS : INSTALL_COUNTDOWN_MS;
-    countdownEndsMs ??= now + countdownMs;
-    if (now >= countdownEndsMs) install(now, reason, decision, hacking, money, multipliers);
+    const clockStep = installClock(countdown, reason, decision, now);
+    countdown = clockStep.countdown;
+    // What the next step's purchases leave alone (packages/brain/src/desired-state.ts `#chooseProgramOrHomeRam`,
+    // `#reserveForOtherPurchase`): an endgame hold's (Daedalus's $100b, The Red Pill's donation), the countdown's or
+    // #243's hold's money from everything, and the lookahead's from cloud servers.
+    holds = holdsOf(decision, countdown !== null, countHeld);
+    if (clockStep.install && reason !== null) install(now, reason, decision, hacking, money, cash, gross, multipliers);
   }
-  return { policy: policy.name, cycles, events, destroyedAtMs };
+  // The cycles out of the curves' range, the one under way at the horizon or the destroy too.
+  const outOfRange = [...cycles.map((each) => each.extrapolatedMinutes), stats.extrapolatedMinutes].flatMap(
+    (minutes, index) => (minutes > EXTRAPOLATION_BOUND_MIN ? [index + 1] : []),
+  );
+  return { policy: policy.name, cycles, events, destroyedAtMs, outOfRange };
 
   function work(choice: FactionWorkChoice): void {
     joined = joined.map((each) =>
@@ -390,6 +486,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     decision: InstallDecision,
     hacking: number,
     money: number,
+    cash: number,
+    gross: number,
     multipliers: Multipliers,
   ): void {
     const reputation: Record<string, number> = {};
@@ -408,7 +506,11 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       installed[NEUROFLUX_GOVERNOR] = (installed[NEUROFLUX_GOVERNOR] ?? 0) + decision.neuroFluxLevels;
     }
     const countAfter = Object.keys(installed).length;
-    homeRamGb = homeRamAfter(homeRamGb, money);
+    // The commit: the donations and the set, then home's RAM with the money above the levels' (an install keeps it),
+    // then the levels. From the cash in hand, whichever money A6 saw: the purse has spent through the cycle either way.
+    const homeRamGb = homeRamAtCommit(purse.homeRamGb, cash, decision.money);
+    const { shareBonusSum, ...cycleStats } = stats;
+    const minutesWorked = Object.values(stats.workMinutes).reduce((sum, each) => sum + each, 0);
     cycles.push({
       startMs: cycleStartMs,
       endMs: now,
@@ -418,23 +520,38 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       countAfter,
       hackingAtEnd: hacking,
       moneyAtEnd: money,
+      grossAtEnd: gross,
+      commitMoney: decision.money,
       homeRamGb,
       multipliers,
       reputation,
       favorAfter,
-      ...stats,
+      ...cycleStats,
+      shareBonus: minutesWorked > 0 ? shareBonusSum / ((minutesWorked * MINUTE_MS) / stepMs) : 1,
     });
     events.push({ atMs: now, kind: "install", reason, count: countAfter });
     cycleStartMs = now;
     clocks = { exp: 0, money: 0 };
     joined = [];
     cityGroup = null;
-    countdownEndsMs = null;
+    countdown = null;
     heldSinceOnlineMs = null;
     held = null;
-    lastMoney = 0;
+    holds = NO_HOLDS;
+    // Programs and cloud servers are lost at an install; home's RAM is kept (`Prestige.ts`).
+    purse = freshPurse(homeRamGb);
+    incomeSamples = [{ onlineMs: 0, gross: 0 }];
     stats = freshStats();
   }
+}
+
+/**
+ * Home's RAM after the commit (packages/brain/src/augmentations.ts `#decide`, committed, `:1809-1823`): the donations
+ * and the set first, then home's RAM with only the money above what NeuroFlux Governor's levels hold (`neuroFluxHeld`),
+ * then the levels; an install keeps it. `commitMoney` is what the counted purchases cost, the donations included.
+ */
+export function homeRamAtCommit(homeRamGb: number, money: number, commitMoney: number): number {
+  return homeRamAfter(homeRamGb, money - commitMoney);
 }
 
 function freshStats() {
@@ -443,7 +560,95 @@ function freshStats() {
     bestRatePerSecond: {} as Record<string, number>,
     donationTargetMinutes: 0,
     heldMinutes: 0,
+    extrapolatedMinutes: 0,
+    shareBonusSum: 0,
   };
+}
+
+/** The install's countdown under way (packages/brain/src/augmentations.ts `#decide`'s `#countdown`). */
+export interface Countdown {
+  endsAtMs: number;
+  lengthMs: number;
+  extensions: number;
+  /** The count with NeuroFlux Governor when last seen: a rise extends it. */
+  count: number;
+}
+
+/**
+ * The install's countdown, a step on (packages/brain/src/augmentations.ts `#decide`, `:1604-1690`): none for The Red
+ * Pill (installed at once); started at the rule's install (90 s, 30 s for a quick install); while it runs, a rise in
+ * the count with NeuroFlux Governor extends it (core's `countdownExtensionMs`, never shortened); called off when the
+ * rule stops saying install (`reason` null), or with nothing to install. At a minute's step the install comes at the
+ * first step at or past its end: 90 s is 2 minutes, a minute late at most.
+ */
+export function installClock(
+  countdown: Countdown | null,
+  reason: ModelInstallReason | null,
+  decision: Pick<InstallDecision, "names" | "neuroFluxLevels" | "affordableWithNeuroFlux" | "barWithNeuroFlux">,
+  nowMs: number,
+): { countdown: Countdown | null; install: boolean } {
+  if (reason === null || decision.names.length + decision.neuroFluxLevels === 0) {
+    return { countdown: null, install: false };
+  }
+  if (reason === "The Red Pill") return { countdown: null, install: true };
+  let next: Countdown;
+  if (countdown === null) {
+    const lengthMs = reason === "quick install" ? QUICK_INSTALL_COUNTDOWN_MS : INSTALL_COUNTDOWN_MS;
+    next = { endsAtMs: nowMs + lengthMs, lengthMs, extensions: 0, count: decision.affordableWithNeuroFlux };
+  } else if (decision.affordableWithNeuroFlux > countdown.count) {
+    const extensions = countdown.extensions + 1;
+    const endsAtMs = nowMs + countdownExtensionMs(countdown.lengthMs, extensions, decision.barWithNeuroFlux);
+    next = {
+      ...countdown,
+      extensions,
+      endsAtMs: Math.max(countdown.endsAtMs, endsAtMs),
+      count: decision.affordableWithNeuroFlux,
+    };
+  } else next = { ...countdown, count: decision.affordableWithNeuroFlux };
+  return nowMs >= next.endsAtMs ? { countdown: null, install: true } : { countdown: next, install: false };
+}
+
+/**
+ * What the brain's purchases leave alone after A6's decision (packages/brain/src/desired-state.ts
+ * `#chooseProgramOrHomeRam`, `:973-1017`, and `#reserveForOtherPurchase`; augmentations.ts `reserve`,
+ * `countdownReserve`, `daedalusHold`, `redPillHold`): an endgame hold's money from home's RAM and cloud servers, and
+ * from programs too for The Red Pill's donation only (Daedalus's $100b doesn't hold programs); in the countdown, the
+ * counted purchases' money from home's RAM and cloud servers, and no program; held for Daedalus's count (#243), the
+ * counted purchases' money or the set's and the last's, if more, and no program; else the lookahead's reserve from
+ * cloud servers alone.
+ */
+export function holdsOf(
+  decision: Pick<InstallDecision, "endgameHold" | "endgameHoldFor" | "money" | "set" | "lookahead">,
+  countdownUnderWay: boolean,
+  countHeld: { next: { money: number } } | null,
+): Holds {
+  if (decision.endgameHold !== null) {
+    const fromPrograms = decision.endgameHoldFor === "redPill" ? decision.endgameHold : 0;
+    return {
+      fromHomeRam: decision.endgameHold,
+      fromPrograms,
+      fromCloudServers: decision.endgameHold,
+      countdownUnderWay: false,
+    };
+  }
+  if (countHeld !== null) {
+    const held = Math.max(decision.money, decision.set.money + decision.set.donationMoney + countHeld.next.money);
+    return { fromHomeRam: held, fromPrograms: 0, fromCloudServers: held, countdownUnderWay: true };
+  }
+  if (countdownUnderWay) {
+    return { fromHomeRam: decision.money, fromPrograms: 0, fromCloudServers: decision.money, countdownUnderWay: true };
+  }
+  return { fromHomeRam: 0, fromPrograms: 0, fromCloudServers: decision.lookahead, countdownUnderWay: false };
+}
+
+/**
+ * The share bonus while working, from the cycle's RAM (#263; core's `shareBonusOfPower`, the game's
+ * `calculateShareBonus`): `Calibration.shareRamShare` of home's and the cloud servers' RAM in share threads of
+ * `SHARE_RAM_GB` each. The RAM, not the install index (#260's), so a policy that moves the installs gets its own.
+ */
+export function shareBonusOfState(purse: Purse, calibration: Calibration): number {
+  const ram = purse.homeRamGb + cloudRamOf(purse);
+  return shareBonusOfPower(1 + (calibration.shareRamShare * ram) / SHARE_RAM_GB);
 }
 
 function isCountRule(reason: ModelInstallReason): boolean {
@@ -494,14 +699,34 @@ export interface InstallDecision {
   neuroFluxLevels: number;
   set: ReturnType<typeof chooseAugmentationsToBuy>;
   terms: ReturnType<typeof donationTermsOf>;
+  /** What the counted purchases cost: the set, the levels and the donations (core's `affordableCounts`). */
+  money: number;
+  /** The count with NeuroFlux Governor's levels, and its bar (core's `installRule`): the countdown's extensions. */
+  affordableWithNeuroFlux: number;
+  barWithNeuroFlux: number;
+  /** An endgame hold's money (A8: Daedalus's $100b, The Red Pill's donation), or null for none: then no install. */
+  endgameHold: number | null;
+  /** What the endgame holds for (core's `augmentationEndgame`'s `why`), or null for no hold. */
+  endgameHoldFor: EndgameHold["why"] | null;
+  /**
+   * The lookahead's reserve (#213, #222), held from cloud servers before the rule says install: the counted purchases'
+   * money for an install the rule would choose with `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0.
+   */
+  lookahead: number;
 }
+
+/** The brain's lookahead for its reserve (packages/brain/src/augmentations.ts `AUGMENTATION_RESERVE_LOOKAHEAD_MS`). */
+export const AUGMENTATION_RESERVE_LOOKAHEAD_MS = 15 * 60_000;
+/** The brain's income window (augmentations.ts `AUGMENTATION_INCOME_WINDOW_MS`, cloud-servers.ts's too). */
+export const INCOME_WINDOW_MS = 10 * 60_000;
 
 /**
  * A6's decision before the commit, as the brain makes it (packages/brain/src/augmentations.ts), with core's own
  * functions (#260): the shops (`augmentationShops`), A8's endgame ahead of the count rule (`augmentationEndgame`), the
  * set the money covers less The Red Pill's donation (`chooseAugmentationsToBuy`), and the counts and the rule on it
- * (`installJudgement`). The model buys at the commit, so nothing is queued or installable through a cycle, and it has
- * no purchase reported but unshown. Null where no install can be: an endgame hold.
+ * (`installJudgement`); with no install, the lookahead's reserve at `income` (#263). The model buys at the commit, so
+ * nothing is queued or installable through a cycle, and it has no purchase reported but unshown. An endgame hold
+ * installs nothing (`endgameHold`).
  */
 export function installDecision({
   installed,
@@ -512,6 +737,8 @@ export function installDecision({
   hacking,
   factionRep,
   onlineMs,
+  income = null,
+  sinceResetMs = onlineMs,
 }: {
   installed: Readonly<Record<string, number>>;
   joined: readonly JoinedFaction[];
@@ -521,7 +748,10 @@ export function installDecision({
   hacking: number;
   factionRep: number;
   onlineMs: number;
-}): InstallDecision | null {
+  income?: number | null;
+  /** The game's time since the install: a quick install's limit too (the brain's); the model's is `onlineMs`. */
+  sinceResetMs?: number;
+}): InstallDecision {
   const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
   const state = purchaseStateOf(installed, ownedSF, multipliers);
   const owned = (name: string) => Object.hasOwn(installed, name);
@@ -548,28 +778,54 @@ export function installDecision({
     // The destroy is the model's at w0r1d_d43m0n's level.
     destroyWanted: true,
   });
-  if (endgame.kind === "hold") return null;
   const budget = money - (endgame.kind === "redPill" ? (endgame.donation?.amount ?? 0) : 0);
   const set = chooseAugmentationsToBuy(shops.reached, state, budget, hacking, terms, count.short);
   const names = set.purchases.map((purchase) => purchase.name);
-  if (endgame.kind === "redPill") {
-    return { reason: "The Red Pill", names: [...names, THE_RED_PILL], neuroFluxLevels: 0, set, terms };
+  const noCounts = { neuroFluxLevels: 0, affordableWithNeuroFlux: 0, barWithNeuroFlux: 0, lookahead: 0 };
+  if (endgame.kind === "hold") {
+    const held = { endgameHold: endgame.reserve, endgameHoldFor: endgame.why };
+    return { reason: null, names: [], set, terms, money: 0, ...held, ...noCounts };
   }
-  const { counts, rule } = installJudgement({
-    state,
-    installable: [],
+  if (endgame.kind === "redPill") {
+    const redPill = { names: [...names, THE_RED_PILL], set, terms, endgameHold: null, endgameHoldFor: null };
+    return { reason: "The Red Pill", ...redPill, ...noCounts, money: set.money + set.donationMoney };
+  }
+  const judge = (spare: number, covered: typeof set, laterMs = 0) =>
+    installJudgement({
+      state,
+      installable: [],
+      set: covered,
+      money: spare,
+      shops,
+      owned,
+      terms,
+      short: count.short,
+      onlineMs: onlineMs + laterMs,
+      sinceResetMs: sinceResetMs + laterMs,
+    });
+  const { counts, rule } = judge(budget, set);
+  const reason = endgame.kind === "daedalusDonations" ? "Daedalus donations" : rule.install ? rule.reason : null;
+  // No install: the money the rule would install with in the lookahead, held from cloud servers (#213, #222).
+  let lookahead = 0;
+  if (reason === null && income !== null && income > 0) {
+    const spare = budget + (income * AUGMENTATION_RESERVE_LOOKAHEAD_MS) / 1000;
+    const covered = chooseAugmentationsToBuy(shops.reached, state, spare, hacking, terms, count.short);
+    const ahead = judge(spare, covered, AUGMENTATION_RESERVE_LOOKAHEAD_MS);
+    if (ahead.rule.install) lookahead = ahead.counts.money;
+  }
+  return {
+    reason,
+    names,
+    neuroFluxLevels: counts.neuroFluxLevels,
     set,
-    money: budget,
-    shops,
-    owned,
     terms,
-    short: count.short,
-    onlineMs,
-    sinceResetMs: onlineMs,
-  });
-  const neuroFluxLevels = counts.neuroFluxLevels;
-  if (endgame.kind === "daedalusDonations") return { reason: "Daedalus donations", names, neuroFluxLevels, set, terms };
-  return { reason: rule.install ? rule.reason : null, names, neuroFluxLevels, set, terms };
+    money: counts.money,
+    affordableWithNeuroFlux: rule.affordableWithNeuroFlux,
+    barWithNeuroFlux: rule.barWithNeuroFlux,
+    endgameHold: null,
+    endgameHoldFor: null,
+    lookahead,
+  };
 }
 
 /** The share bonus in the cycle after `installs` installs: the calibration's for that cycle, past its list the last. */
@@ -630,6 +886,8 @@ export function countHoldOf({
       work: { owners: null, brainWorks: true },
       money,
       income,
+      // The window open, the money taken as coming while there's no income (the brain's, `:1550-1551`).
+      assumeMoney: heldSinceOnlineMs !== null && onlineMs < heldSinceOnlineMs + DAEDALUS_COUNT_HOLD_MS,
     }),
     onlineMs,
     heldSinceOnlineMs,

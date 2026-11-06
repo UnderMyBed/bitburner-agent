@@ -12,7 +12,9 @@ import {
   chooseAugmentationsToBuy,
   type DesiredState,
   encodeControlMessage,
+  type FactionState,
   factionReputationPerSecond,
+  HOME_RAM_LIMIT,
   INSTALL_COUNTDOWN_MS,
   type Intent,
   type IntentOutcome,
@@ -23,6 +25,7 @@ import {
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
+import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
@@ -112,6 +115,20 @@ const buyTor = (vendor = "Alpha Enterprises") => intent({ action: "buyTor", args
 const buyProgram = (program: string) => intent({ action: "buyProgram", args: { program } });
 const upgradeHomeRam = (fromRam: number, vendor = "Alpha Enterprises") =>
   intent({ action: "upgradeHomeRam", args: { fromRam, vendor } });
+/** The purchases' actions: programs, home's RAM and cloud servers. */
+const PURCHASE_ACTIONS = ["buyTor", "buyProgram", "upgradeHomeRam", "buyServer", "upgradeServer"];
+/** The fast model's purchase (#263, `nextPurchase`) as the brain's intent, from `purse` (the brain's `pserv-<n>`). */
+const brainIntentOf = (purchase: Purchase, purse: Purse): Intent => {
+  if (purchase.kind === "program") {
+    return purse.programs === 0 ? buyTor() : buyProgram(PORT_OPENER_PROGRAMS[purse.programs - 1] as string);
+  }
+  if (purchase.kind === "homeRam") return upgradeHomeRam(purchase.fromRamGb);
+  const hostname = `pserv-${purchase.serverIndex ?? purse.cloudServersRamGb.length}`;
+  const args = { hostname, ram: purchase.ramGb };
+  return purchase.serverIndex === null
+    ? intent({ action: "buyServer", args })
+    : intent({ action: "upgradeServer", args });
+};
 
 test("on: nothing until the connected Agent's own static and medium snapshots, then the target and hosts", () => {
   const controller = new DesiredStateController({ channel, store });
@@ -1554,6 +1571,55 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.augmentationReserve()).toBe(2_500_000_010_000);
     });
 
+    /** TOR owned, no port opener, home at 1 TB: the purse the brain's snapshots below show. */
+    const ENDGAME_PURSE: Purse = { spent: 0, programs: 1, cloudServersRamGb: [], homeRamGb: 1024 };
+    /** The fast model's next purchase (#263) on the same state: its own A6 decision, its holds. */
+    const modelsPurchase = (installed: Record<string, number>, joined: FactionState["joined"], money: number) => {
+      const decision = installDecision({
+        installed,
+        joined,
+        currentNode: 1,
+        ownedSF: {},
+        money,
+        hacking: 2600,
+        factionRep: 1,
+        onlineMs: 0,
+      });
+      return { decision, purchase: nextPurchase(ENDGAME_PURSE, money, null, 0, holdsOf(decision, false, null), 0) };
+    };
+    const purchasesSent = (connection: MemoryConnection) =>
+      (desiredStates(connection).at(-1)?.intents ?? []).filter((each) => PURCHASE_ACTIONS.includes(each.action));
+
+    test("brain against the fast model (#263): Daedalus's $100b holds home's RAM, not BruteSSH.exe", () => {
+      const thirty = Object.fromEntries(
+        AUGMENTATION_NAMES.filter((name) => name !== "The Red Pill" && name !== "NeuroFlux Governor")
+          .slice(0, 30)
+          .map((name) => [name, 1]),
+      );
+      const { connection } = connectedWithLoopOff();
+      const slow = slowWith();
+      send(connection, "slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: thirty } });
+      send(connection, "medium", { ...lateMedium(101e9, { hacking: 2600, homeRam: 1024 }), programs: [] });
+      const model = modelsPurchase(thirty, slow.factions.state.joined, 101e9);
+      expect(model.decision).toMatchObject({ endgameHold: 100e9, endgameHoldFor: "daedalus" });
+      expect(purchasesSent(connection)).toEqual([buyProgram("BruteSSH.exe")]);
+      expect(model.purchase === null ? null : brainIntentOf(model.purchase, ENDGAME_PURSE)).toEqual(
+        buyProgram("BruteSSH.exe"),
+      );
+    });
+
+    test("brain against the fast model (#263): The Red Pill's donation holds home's RAM and programs alike", () => {
+      const { connection } = connectedWithLoopOff();
+      const slow = slowWith();
+      const joined = [{ name: "Daedalus", reputation: 0, favor: 150 }];
+      send(connection, "slow", { ...slow, factions: { ...slow.factions, state: { ...slow.factions.state, joined } } });
+      send(connection, "medium", { ...lateMedium(2e12, { hacking: 2600, homeRam: 1024 }), programs: [] });
+      const model = modelsPurchase({}, joined, 2e12);
+      expect(model.decision).toMatchObject({ endgameHold: 2_500_000_010_000, endgameHoldFor: "redPill" });
+      expect(purchasesSent(connection)).toEqual([]);
+      expect(model.purchase).toBeNull();
+    });
+
     test("the owner's install queued too: one install, the owner's", () => {
       const { controller, connection } = connectedWithLoopOff();
       controller.addManualIntent({ action: "installAugmentations", args: {} });
@@ -2351,6 +2417,36 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       expect(sentPurchases(connection)?.map((each) => each.action)).toEqual(["upgradeHomeRam"]);
     });
 
+    test("brain against the fast model (#263): in the countdown, home's RAM under the held money waits; off, it goes", () => {
+      const controller = new DesiredStateController({ channel, store });
+      const connection = connectAgent();
+      send(connection, "static", network);
+      sendAt(connection, "slow", slowAt(EIGHT), 7 * 3_600_000);
+      const money = EIGHT_COST + 1_000;
+      send(connection, "medium", withPlayer(medium(money, { homeRam: 8 })));
+      const joined = EIGHT.map((each) => ({ ...each, favor: 0 }));
+      const decision = installDecision({
+        installed: {},
+        joined,
+        currentNode: 1,
+        ownedSF: {},
+        money,
+        hacking: 300,
+        factionRep: 1,
+        onlineMs: 0,
+        sinceResetMs: 7 * 3_600_000,
+      });
+      expect(decision.reason).toBe("count reached");
+      // Every program owned, home at 8 GB: the brain's purse.
+      const purse: Purse = { spent: 0, programs: 1 + PORT_OPENER_PROGRAMS.length, cloudServersRamGb: [], homeRamGb: 8 };
+      const held = nextPurchase(purse, money, null, 0, holdsOf(decision, true, null), 4);
+      expect(held).toBeNull();
+      expect(sentPurchases(connection)).toEqual([]);
+      controller.setAugmentationsEnabled(false);
+      const free = nextPurchase(purse, money, null, 0, NO_HOLDS, 4) as Purchase;
+      expect(sentPurchases(connection)).toEqual([brainIntentOf(free, purse)]);
+    });
+
     test("an install held for Daedalus's count (#243 review): A5 works for its seller; travel goes on", () => {
       // 25 installed (none of group B's but those The Black Hand sells too), CyberSec's other three reached and Neural
       // Wit Amplifier queued: 29 of 30. The
@@ -2523,6 +2619,38 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     expect(homeRam.controller.cloudServersView().waitingFor).toMatch(/held for home RAM to 4 GB/);
     homeRam.controller.setHomeRamEnabled(false);
     expect(homeRam.controller.cloudServersView().waitingFor).toBe("money for pserv-0 with 8 GB ($440,000)");
+  });
+
+  test("brain against the fast model (#263): the same purchase from the same purse, money and income", () => {
+    /** BruteSSH.exe $100,000 short, within a minute at $4,096 a second; home's 4 GB $1,120 short, within one at $512. */
+    const near = { perSecond: 4_096, endMoney: 400_000 };
+    const cheapHome = { endMoney: 100_000 };
+    const states: [string, number, Options, { perSecond?: number; endMoney?: number | null }][] = [
+      ["an empty cloud, every program, no home RAM to buy", 10e6, {}, {}],
+      ["a program the money covers goes first", 10e6, { programs: ["BruteSSH.exe"] }, {}],
+      ["the next program, far off, isn't held back", 1e6, { programs: PORT_OPENER_PROGRAMS.slice(0, 4) }, {}],
+      ["money short of BruteSSH.exe, within a minute: held back", 0, { programs: [], noodlesRam: 32 }, near],
+      ["home RAM to 4 GB short, within a minute: held back", 0, { programs: ["BruteSSH.exe"], homeRam: 2 }, cheapHome],
+      ["home RAM the money covers, cheaper than the program", 1.2e6, { programs: ["BruteSSH.exe"], homeRam: 8 }, {}],
+      ["a large world against a small income: no payback", 1e9, { noodlesRam: 2 ** 14 }, {}],
+      ["only the least server the money covers: 8 GB", 0, {}, { endMoney: 450_000 }],
+    ];
+    for (const [label, money, options, earned] of states) {
+      const run = earning(money, options, earned);
+      const brains = (sentPurchases(run.connection) ?? []).filter((each) => PURCHASE_ACTIONS.includes(each.action));
+      const perSecond = earned.perSecond ?? 512;
+      const purse = {
+        spent: 0,
+        programs: 1 + (options.programs ?? PORT_OPENER_PROGRAMS).length,
+        cloudServersRamGb: Object.values(options.cloud ?? {}),
+        // No home in the snapshot: the brain buys none, as at the game's limit.
+        homeRamGb: options.homeRam ?? HOME_RAM_LIMIT,
+      };
+      const cash = earned.endMoney ?? money + 10 * 60 * perSecond;
+      const models = nextPurchase(purse, cash, perSecond, 30 * MINUTE, NO_HOLDS, options.noodlesRam ?? 4);
+      expect(brains, label).toEqual(models === null ? [] : [brainIntentOf(models, purse)]);
+      run.connection.dropFromGameSide();
+    }
   });
 
   test("a cloud purchase not done, with a problem (not enough money, say), is no problem noted: it's tried again", () => {

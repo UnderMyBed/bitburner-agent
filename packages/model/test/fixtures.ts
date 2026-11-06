@@ -60,8 +60,41 @@ export const RUN_3_PER_CYCLE = [
   { lengthMin: 18.5, count: 36, faction: "Aevum", reputation: 96_187, rate: 106.28, favorAfter: null, hacking: 4690 },
 ] as const;
 
-/** BitRunners' favour after the 4th install in run #3 (#247: "favour 4.8" at 13:13; the table's 4.76). */
-export const RUN_3_BITRUNNERS_FAVOR_AFTER_4 = 4.76;
+/**
+ * Run #3's cash in hand (the medium snapshots' `player.money`) a cycle, cycles 1 to 6, [minutes after the install,
+ * money], at the readings the cycle lasted to (its end left out: that's after the commit's purchases). The
+ * coordinator's read-only extract on #263:
+ * https://github.com/UnderMyBed/bitburner-agent/issues/263#issuecomment-6681259933.
+ * The slow snapshots' sources lag the medium's by up to a few minutes, so in a cycle's steep minutes the two don't
+ * compare.
+ */
+export const RUN_3_CASH: readonly (readonly (readonly [number, number])[])[] = [
+  [5, 10, 15, 20, 30].map((minutes, index) => [minutes, [1262, 1.43e6, 2.64e6, 16.55e6, 195.61e6][index] as number]),
+  [5, 10, 15, 20, 30, 45].map((minutes, index) => [
+    minutes,
+    [78_905, 4.74e6, 7.68e6, 58.56e6, 45.72e9, 4.33e12][index] as number,
+  ]),
+  [5, 10, 15, 20, 30, 45, 60, 75].map((minutes, index) => [
+    minutes,
+    [416_351, 8.47e6, 74.79e6, 198.21e6, 887.82e9, 17.68e12, 35.43e12, 85.59e12][index] as number,
+  ]),
+  [5, 10, 15, 20, 30, 45, 60, 75, 90].map((minutes, index) => [
+    minutes,
+    [613_611, 63.94e6, 220.54e6, 131.5e9, 5.53e12, 28.3e12, 50.21e12, 176.88e12, 303.64e12][index] as number,
+  ]),
+  [5, 10, 15, 20, 30, 45, 60, 75, 90, 105, 120].map((minutes, index) => [
+    minutes,
+    [1.46e6, 216.33e6, 290.74e6, 537.14e9, 10.88e12, 83.52e12, 213.71e12, 345.27e12, 476.88e12, 608.38e12, 738.34e12][
+      index
+    ] as number,
+  ]),
+  [5, 10, 15, 20, 30, 45, 60, 75, 90, 105, 120].map((minutes, index) => [
+    minutes,
+    [4.75e6, 597.46e6, 263.97e6, 131.13e9, 24.61e12, 71.26e12, 117.46e12, 164.27e12, 210.95e12, 257.3e12, 294.97e12][
+      index
+    ] as number,
+  ]),
+];
 
 /**
  * Run #3's BN1.2 phases (#244's table), each ending at an install: 11 h 17 min from 08:46 to the destroy at 20:03.
