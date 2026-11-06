@@ -1,7 +1,8 @@
 /**
  * The cycle model's calibration (#260): what core's formulas can't say, each a named constant or table citing where it
- * comes from. Fitted, all of it, and said so: the model's money and hacking are inputs measured from run #3, and what
- * the validation tests is the rules of reputation, favour, buying and installing that run on them.
+ * comes from. The money and the hacking level are inputs measured from run #3 and fitted (the reference cycles, the
+ * paces, the first cycle's speed); the share is run #3's own a cycle; the joins' levels are the game's. What the
+ * validation tests is the rules of reputation, favour, buying and installing that run on them.
  * - The hacking level and the money over a cycle: run #3's own cycles (`RUN_3_CYCLES`), divided by each cycle's
  *   multipliers into one curve at multiplier 1, run faster or slower by each cycle's level, hacking speed and home RAM
  *   (`Curves`). A curve, not a table a cycle, so a policy that makes cycles longer or shorter (#247) still has one.
@@ -12,8 +13,8 @@
 /**
  * Run #3's BN1.2 (E0, main 7c741cc, 2026-11-05), each cycle from its install: [minutes, hacking level, the game's
  * hacking income since the install (`moneySources.hacking`, which an install resets)], at 5, 10, 15, 20, 30, 45, 60,
- * 75, 90, 105 and 120 min while the cycle lasted, and at its end. Read from the store, read-only, by the coordinator
- * (#262's review, `run3-cycle-curves.txt`); never by the model's tests.
+ * 75, 90, 105 and 120 min while the cycle lasted, and at its end. Read from the store, read-only, by the coordinator,
+ * and posted on #260: https://github.com/UnderMyBed/bitburner-agent/issues/260#issuecomment-6680681582.
  */
 export const RUN_3_CYCLES: readonly { lengthMin: number; points: readonly (readonly [number, number, number])[] }[] = [
   {
@@ -155,73 +156,6 @@ export const RUN_3_CYCLES: readonly { lengthMin: number; points: readonly (reado
  */
 export const RUN_3_SHARE_BONUS: readonly number[] = [1.07, 1.26, 1.39, 1.16, 1.49, 1.55, 1.45, 1.41, 1.5, 1.51];
 
-/**
- * The simulator's first three cycles (#247's feasibility probe: seed 1, main 412d97b, a fresh 8 GB BN1.1 start, every
- * rule on, its progress line every 5 virtual minutes): [minutes since the cycle began, hacking level, money]. Cycle 1
- * began at 0, cycle 2 at the install at about 57 min, cycle 3 at the install at about 122 min. Not calibration: an
- * independent check that the curves fitted on BN1.2 carry to a fresh BN1.1 (test/validation.test.ts).
- */
-export const SIMULATOR_CYCLES: readonly {
-  startMin: number;
-  points: readonly (readonly [number, number, number])[];
-}[] = [
-  {
-    startMin: 0,
-    points: [
-      [5, 7, 1.26e3],
-      [10, 27, 3.04e5],
-      [15, 59, 1.6e6],
-      [20, 100, 9.17e5],
-      [25, 135, 1.2e6],
-      [30, 164, 9.98e6],
-      [35, 191, 4.64e7],
-      [40, 222, 4.82e7],
-      [45, 254, 1.78e8],
-      [50, 286, 1.21e9],
-      [55, 292, 5.06e9],
-    ],
-  },
-  {
-    startMin: 57,
-    points: [
-      [3, 8, 1.26e3],
-      [8, 38, 9.68e5],
-      [13, 101, 2.96e6],
-      [18, 171, 8.73e6],
-      [23, 218, 3.63e7],
-      [28, 268, 5.14e7],
-      [33, 305, 6.85e8],
-      [38, 346, 2.68e10],
-      [43, 419, 1.9e11],
-      [48, 460, 4.33e11],
-      [53, 479, 2.27e12],
-      [58, 484, 2.79e12],
-      [63, 497, 3.41e12],
-    ],
-  },
-  {
-    startMin: 122,
-    points: [
-      [3, 1, 1.26e3],
-      [8, 38, 3.52e5],
-      [13, 120, 2.45e6],
-      [18, 206, 7.16e6],
-      [23, 277, 5.9e7],
-      [28, 357, 3.69e8],
-      [33, 389, 1.35e10],
-      [38, 491, 2.49e11],
-      [43, 540, 2.06e12],
-      [48, 556, 3.41e12],
-      [53, 575, 7.0e12],
-      [58, 589, 9.55e11],
-      [63, 589, 9.55e11],
-      [68, 597, 7.34e12],
-      [73, 608, 1.74e13],
-      [78, 616, 2.75e13],
-    ],
-  },
-];
-
 /** The multipliers a cycle ran at, as the model computes them (core's `installGains` and SF1's bonus). */
 export interface CycleMultipliers {
   hacking: number;
@@ -236,9 +170,15 @@ export interface Calibration {
    * The cycles of run #3 the curves are made of (1-based), and the multipliers the model itself runs each at, on its
    * run of run #3: checked equal by test/model.test.ts. Each cycle's level (through the game's skill formula,
    * `hackingExpForLevel`) and income, divided by them, is a curve at multiplier 1; the curve is their median a minute.
+   * Read to 120 min (cycles 5 and 6); past it, linear at the last slope, 105 to 120 min (#263 bounds it): the model's
+   * own 5th cycle runs past it, to 133-138 min.
    */
   referenceCycles: readonly { cycle: number; multipliers: CycleMultipliers }[];
-  /** How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. */
+  /**
+   * How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. Fitted, with
+   * `fullSpeedHomeRamGb` and the paces, on run #3's cycles 1 to 6 (the model's 7th on is another cycle than run #3's):
+   * the mean error at each reading, 11% on the level and ×1.8 on the money (which spans 12 orders of magnitude).
+   */
   firstCycleSpeed: number;
   /** Home's RAM from which a cycle runs at the reference cycles' pace (`firstCycleSpeed`'s other end). */
   fullSpeedHomeRamGb: number;
@@ -262,10 +202,10 @@ export const CALIBRATION: Calibration = {
     { cycle: 5, multipliers: { hacking: 2.2613, hacking_exp: 3.1379, hacking_speed: 1.7787, hacking_money: 1.6434 } },
     { cycle: 6, multipliers: { hacking: 2.8541, hacking_exp: 3.7007, hacking_speed: 2.0035, hacking_money: 2.5329 } },
   ],
-  firstCycleSpeed: 0.65,
+  firstCycleSpeed: 0.8,
   fullSpeedHomeRamGb: 256,
-  expPaceExponent: 0.5,
-  moneyPaceExponent: 0.375,
+  expPaceExponent: 0.5625,
+  moneyPaceExponent: 0.5,
   shareBonusByCycle: RUN_3_SHARE_BONUS,
 };
 

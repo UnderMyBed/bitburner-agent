@@ -6,9 +6,9 @@
  *   donations' favour, the count; `factionReputationPerSecond` at the modelled level, `faction_rep` and favour);
  * - the joins: the hacker factions by their servers (`HACKER_FACTION_JOINS`), Tian Di Hui, the city group (core's
  *   `cityGroupValues` and `chooseCityGroup`, owner decision 54), Daedalus by its requirements (`daedalusRequirements`);
- * - A6's purchases and install (`chooseAugmentationsToBuy`, `affordableCounts`, `installRule`, the donations' terms,
- *   `daedalusCountHold` with `countablesToCome`), and A8's The Red Pill and "Daedalus donations" (`redPillTarget`), as
- *   packages/brain/src/augmentations.ts runs them;
+ * - A6's decision before the commit (core's `augmentationShops`, `augmentationEndgame` with A8's The Red Pill and
+ *   "Daedalus donations", and `installJudgement`), and #243's hold (`countHoldOf`: `daedalusCountHold` with
+ *   `countablesToCome`), as packages/brain/src/augmentations.ts runs them;
  * - at each install, the favour (`favorAfterInstall`), the multipliers (`installGains`, SF1's bonus) and home's RAM.
  * What core can't say, the hacking level and the money over a cycle, is calibrated (./calibration.ts, ./curves.ts).
  * Not wired into the brain's choices (owner decision 46: phase B replaces a choice only where it measurably beats it).
@@ -298,10 +298,11 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       factionWorkChoice(person, state(), resetInfo, conditions, count(), held);
     options.onWork?.({ atMs: now, choice, joined });
     if (choice !== null) work(choice);
-    // Every other joined faction gains passive reputation (`processPassiveFactionRepGain`): it breaks A5's ties
-    // between two factions selling the same augmentation toward the one joined longer, as in run #3.
+    // Every other joined faction gains passive reputation (`processPassiveFactionRepGain`, special ones and a gang's
+    // aside). In the model it tips A5's ties toward the faction joined longer: NiteSec over BitRunners in cycles 3-4.
+    const passiveGain = factionPassiveRepGainOf(currentNode, bitNode.FactionWorkRepGain);
     joined = joined.map((each) =>
-      each.name === choice?.faction
+      each.name === choice?.faction || SPECIAL_FACTIONS.includes(each.name)
         ? each
         : {
             ...each,
@@ -313,6 +314,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
                 conditions.sourceFile15Level,
                 conditions.factionWorkRepGain,
                 conditions.shareBonus,
+                passiveGain,
               ) *
                 stepMs) /
                 1000,
@@ -337,7 +339,19 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     // #243's hold: an install the count rule chose that would leave Daedalus's count one short.
     held = null;
     if (reason !== null && decision !== null && policy.daedalusCountHold && isCountRule(reason)) {
-      const hold = countHold(decision, money, income, person, conditions, onlineMs);
+      const hold = countHoldOf({
+        installed,
+        joined,
+        currentNode,
+        ownedSF,
+        decision,
+        money,
+        income,
+        person,
+        conditions,
+        onlineMs,
+        heldSinceOnlineMs,
+      });
       if (hold !== null) {
         heldSinceOnlineMs = hold.sinceOnlineMs;
         held = { faction: hold.next.faction, augmentation: hold.next.augmentation };
@@ -370,44 +384,6 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     workMinutes[choice.faction] = (workMinutes[choice.faction] ?? 0) + stepMs / MINUTE_MS;
     bestRatePerSecond[choice.faction] = Math.max(bestRatePerSecond[choice.faction] ?? 0, choice.reputationPerSecond);
     if (choice.target === "donations") stats.donationTargetMinutes += stepMs / MINUTE_MS;
-  }
-
-  /** The brain's hold (A6's `countablesToCome` and core's `daedalusCountHold`), A5 working for the held one. */
-  function countHold(
-    decision: InstallDecision,
-    money: number,
-    income: number | null,
-    person: WorkingPerson,
-    conditions: WorkConditions,
-    onlineMs: number,
-  ) {
-    const state = purchaseStateOf(installed, ownedSF, bitNode);
-    const working = joined.filter((faction) => FACTION_NAMES.includes(faction.name));
-    const shops = new Map(working.map((each) => [each.name, augmentationsSoldBy(each.name, currentNode, null)]));
-    const sold = [...new Set([...shops.values()].flat())];
-    const required = daedalusRequirements(currentNode, ownedSF);
-    return daedalusCountHold({
-      installed,
-      installing: [...decision.names, ...(decision.neuroFluxLevels > 0 ? [NEUROFLUX_GOVERNOR] : [])],
-      required: required.augmentations,
-      skillsReached: daedalusSkillsReached(person.skills, required),
-      toCome: countablesToCome({
-        sold,
-        state,
-        set: decision.set,
-        joined: working,
-        shops,
-        terms: decision.terms,
-        person,
-        // As the brain's: `workConditionsOf` without the share's bonus, the safe side (#243).
-        conditions: { ...conditions, shareBonus: 1 },
-        work: { owners: null, brainWorks: true },
-        money,
-        income,
-      }),
-      onlineMs,
-      heldSinceOnlineMs,
-    });
   }
 
   function install(
@@ -603,3 +579,69 @@ export function shareBonusOf(calibration: Calibration, installs: number): number
   const { shareBonusByCycle } = calibration;
   return shareBonusByCycle[Math.min(installs, shareBonusByCycle.length - 1)] ?? 1;
 }
+
+/**
+ * The brain's hold for Daedalus's count (#243, owner decision 56) on the model's state: core's `daedalusCountHold`,
+ * the countables to come by core's `countablesToCome` over core's `augmentationShops`, A5 working for the held one.
+ * The work's rate leaves the share's bonus out, as the brain's does (`workConditionsOf` without it: the safe side).
+ */
+export function countHoldOf({
+  installed,
+  joined,
+  currentNode,
+  ownedSF,
+  decision,
+  money,
+  income,
+  person,
+  conditions,
+  onlineMs,
+  heldSinceOnlineMs,
+}: {
+  installed: Readonly<Record<string, number>>;
+  joined: readonly JoinedFaction[];
+  currentNode: number;
+  ownedSF: Readonly<Record<string, number>>;
+  decision: Pick<InstallDecision, "names" | "neuroFluxLevels" | "set" | "terms">;
+  money: number;
+  income: number | null;
+  person: WorkingPerson;
+  conditions: WorkConditions;
+  onlineMs: number;
+  heldSinceOnlineMs: number | null;
+}) {
+  const state = purchaseStateOf(installed, ownedSF, augmentationBitNodeMultipliers(currentNode, ownedSF));
+  const shops = augmentationShops(joined, currentNode, state, (name) => Object.hasOwn(installed, name));
+  const required = daedalusRequirements(currentNode, ownedSF);
+  return daedalusCountHold({
+    installed,
+    installing: [...decision.names, ...(decision.neuroFluxLevels > 0 ? [NEUROFLUX_GOVERNOR] : [])],
+    required: required.augmentations,
+    skillsReached: daedalusSkillsReached(person.skills, required),
+    toCome: countablesToCome({
+      sold: shops.sold,
+      state,
+      set: decision.set,
+      joined: shops.joined,
+      shops: shops.shops,
+      terms: decision.terms,
+      person,
+      conditions: { ...conditions, shareBonus: 1 },
+      work: { owners: null, brainWorks: true },
+      money,
+      income,
+    }),
+    onlineMs,
+    heldSinceOnlineMs,
+  });
+}
+
+/** The BitNode's `FactionPassiveRepGain` (`BitNode/BitNode.tsx:587`, `:967`): 0 in BN2, BN12's `dec`, else 1. */
+export function factionPassiveRepGainOf(currentNode: number, factionWorkRepGain: number): number {
+  if (currentNode === 2) return 0;
+  // BN12's `dec` is its FactionWorkRepGain too (`BitNode/BitNode.tsx:926`, `:968`).
+  return currentNode === 12 ? factionWorkRepGain : 1;
+}
+
+/** No passive reputation for these (`info.special`, `Faction/FactionInfo.tsx:714`, `:775`, `:810`). */
+export const SPECIAL_FACTIONS: readonly string[] = ["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"];

@@ -2,6 +2,10 @@
 // game's rules.
 import { readFileSync } from "node:fs";
 import {
+  AUGMENTATIONS,
+  augmentationBitNodeMultipliers,
+  chooseAugmentationsToBuy,
+  factionReputationPerSecond,
   favorAfterInstall,
   HACKING_MULTIPLIERS,
   hackingExpForLevel,
@@ -12,6 +16,8 @@ import { describe, expect, test } from "vitest";
 import {
   CALIBRATION,
   Curves,
+  countHoldOf,
+  factionPassiveRepGainOf,
   HACKER_FACTION_JOINS,
   hackingLevelOf,
   homeRamAfter,
@@ -24,6 +30,7 @@ import {
   RUN_3_POLICY,
   RUN_3_SHARE_BONUS,
   runModel,
+  SPECIAL_FACTIONS,
   shareBonusOf,
   sourceFile1Bonus,
   startHomeRamGb,
@@ -69,8 +76,8 @@ describe("the calibration", () => {
     }
   });
 
-  test("the curve's constants are the fit's: each a local best of the error on run #3's own level and money", () => {
-    // The error the fit minimised: over every reading of run #3's ten cycles, the mean |ln| of the level's ratio and a
+  test("the curve's constants are the fit's: a local best of the error on run #3's level and money, cycles 1-6", () => {
+    // The error the fit minimised: over every reading of run #3's cycles 1-6, the mean |ln| of the level's ratio and a
     // third of the mean |log10| of the money's (floored at $1m), the model at the same minute of the same cycle.
     const error = (calibration: Partial<typeof CALIBRATION>) => {
       const seen = new Map<string, { hacking: number; money: number }>();
@@ -88,7 +95,8 @@ describe("the calibration", () => {
       let level = 0;
       let money = 0;
       let readings = 0;
-      for (const [index, { points }] of RUN_3_CYCLES.entries()) {
+      // Run #3's cycles 1 to 6: from the 7th, the model's cycle is another than run #3's.
+      for (const [index, { points }] of RUN_3_CYCLES.slice(0, 6).entries()) {
         for (const [minutes, actualLevel, income] of points) {
           const step = seen.get(`${index + 1}:${minutes}`);
           if (step === undefined || !READ_MINUTES.includes(minutes)) continue;
@@ -100,8 +108,8 @@ describe("the calibration", () => {
       return (level + money / 3) / readings;
     };
     const fitted = error({});
-    // 0.29 at the fit (13% on the level, ×3 on the money); without the money's pace, 0.38.
-    expect(fitted).toBeLessThan(0.3);
+    // 0.19 at the fit (11% on the level, ×1.8 on the money).
+    expect(fitted).toBeLessThan(0.2);
     const { expPaceExponent, moneyPaceExponent, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
     for (const neighbour of [
       { expPaceExponent: expPaceExponent - 0.125 },
@@ -212,16 +220,25 @@ describe("the model", () => {
       expect(cycle.installed.length + cycle.neuroFluxLevels).toBeGreaterThan(0);
       expect(cycle.endMs).toBeGreaterThan(cycle.startMs);
     }
-    // CyberSec is joined afresh in the 2nd cycle, and its reputation there is no more than one cycle's work at its
-    // best rate and a cycle's passive gain (at most a tenth of it, `processPassiveFactionRepGain`).
-    const second = run3.cycles[1];
-    const lengthS = ((second?.endMs ?? 0) - (second?.startMs ?? 0)) / 1000;
-    expect(
-      run3.events.some(
-        (event) => event.kind === "joined" && event.faction === "CyberSec" && event.atMs > (second?.startMs ?? 0),
-      ),
-    ).toBe(true);
-    expect(second?.reputation.CyberSec ?? 0).toBeLessThanOrEqual((second?.bestRatePerSecond.CyberSec ?? 0) * lengthS);
+    // At each cycle's first step with a faction joined, before any work, every joined faction's reputation is 0: an
+    // install drops every faction (`Faction/Faction.ts:77-85`), and a join starts from none.
+    const firstJoined = new Map<number, { name: string; reputation: number }[]>();
+    runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      onWork: ({ atMs, joined }) => {
+        const cycle = run3.cycles.filter((each) => each.endMs < atMs).length;
+        if (joined.length > 0 && !firstJoined.has(cycle)) firstJoined.set(cycle, [...joined]);
+      },
+    });
+    expect(firstJoined.size).toBe(run3.cycles.length + 1);
+    for (const joined of firstJoined.values()) for (const { reputation } of joined) expect(reputation).toBe(0);
+  });
+
+  test("the BitNode's passive reputation: 0 in BN2, BN12's dec, else 1; none for the special factions", () => {
+    expect(factionPassiveRepGainOf(1, 1)).toBe(1);
+    expect(factionPassiveRepGainOf(2, 0.5)).toBe(0);
+    expect(factionPassiveRepGainOf(12, 1 / 1.02)).toBe(1 / 1.02);
+    expect(SPECIAL_FACTIONS).toEqual(["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"]);
   });
 
   test("a favour grind naming a faction not joined leaves A5's choice", () => {
@@ -232,7 +249,7 @@ describe("the model", () => {
   });
 
   test("passive reputation at the joined factions not worked for (`processPassiveFactionRepGain`)", () => {
-    // Tian Di Hui is joined in the 1st cycle and barely worked: its reputation is passive, a percent of its rate.
+    // The factions joined in the 1st cycle and never worked for: their reputation is passive, and more than none.
     const first = run3.cycles[0];
     const passive = Object.entries(first?.reputation ?? {}).filter(
       ([faction]) => !(faction in (first?.workMinutes ?? {})),
@@ -337,6 +354,77 @@ describe("the model", () => {
     expect(decide(626e9)?.names).toContain("The Red Pill");
   });
 
+  test("#243's hold: one short of the count, the last by work at its seller within the window, at the share-less rate", () => {
+    // 28 installed (all The Black Hand sells but its own), BitWire to install: 29 of 30, one short.
+    const theBlackHands = [
+      "Artificial Synaptic Potentiation",
+      "Enhanced Myelin Sheathing",
+      "DataJack",
+      "Embedded Netburner Module",
+      "Embedded Netburner Module Core Implant",
+      "Neuralstimulator",
+      "Cranial Signal Processors - Gen I",
+      "Cranial Signal Processors - Gen II",
+      "Cranial Signal Processors - Gen III",
+      "Cranial Signal Processors - Gen IV",
+      "Magnetism Amplifier",
+    ];
+    const others = Object.keys(AUGMENTATIONS).filter(
+      (name) =>
+        !theBlackHands.includes(name) &&
+        ![NEUROFLUX_GOVERNOR, "The Red Pill", "The Black Hand", "BitWire"].includes(name),
+    );
+    const installed = Object.fromEntries(
+      [...theBlackHands, ...others.slice(0, 28 - theBlackHands.length)].map((name) => [name, 1]),
+    );
+    const joined = [{ name: "The Black Hand", reputation: 90_000, favor: 0 }];
+    const person = {
+      skills: { hacking: 3000, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+      mults: { faction_rep: 2 },
+    };
+    const conditions = {
+      sourceFile15Level: 0,
+      focused: true,
+      implant: false,
+      factionWorkRepGain: 1,
+      favorToDonateToFaction: 1,
+      donations: true,
+      shareBonus: 1.45,
+    };
+    const state = {
+      installed,
+      queued: [],
+      sourceFile11Level: 0,
+      bitNodeMultipliers: augmentationBitNodeMultipliers(1, {}),
+    };
+    const decision = {
+      names: ["BitWire"],
+      neuroFluxLevels: 0,
+      set: chooseAugmentationsToBuy([], state, 0, 3000),
+      terms: undefined,
+    };
+    const hold = (onlineMs: number, heldSinceOnlineMs: number | null) =>
+      countHoldOf({
+        installed,
+        joined,
+        currentNode: 1,
+        ownedSF: {},
+        decision,
+        money: 1e15,
+        income: null,
+        person,
+        conditions,
+        onlineMs,
+        heldSinceOnlineMs,
+      });
+    const held = hold(0, null);
+    expect(held?.next).toMatchObject({ augmentation: "The Black Hand", faction: "The Black Hand", way: "work" });
+    // 10,000 reputation at the work's rate without the share's bonus (×1.45 would make it 1.45 times as soon).
+    const rate = factionReputationPerSecond(person, "hacking", { ...conditions, favor: 0, shareBonus: 1 });
+    expect(held?.next.etaMs).toBeCloseTo((10_000 / rate) * 1000, 3);
+    // The window: 20 minutes from the first hold, never restarted.
+    expect(hold(19 * 60_000, 0)).toBeNull();
+  });
   test("today's policy is run #3's on this path: no install in it would leave Daedalus's count one short (#243)", () => {
     // The model's 7th install takes the count from 25 to 34, past 29, so #243's hold never arises on run #3's path
     // (run #3's own 7th took it to 29). The hold's wiring is checked by the probes, not by a run in reach.

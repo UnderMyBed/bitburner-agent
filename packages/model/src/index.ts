@@ -5,7 +5,6 @@ export {
   HACKER_FACTION_JOINS,
   RUN_3_CYCLES,
   RUN_3_SHARE_BONUS,
-  SIMULATOR_CYCLES,
 } from "./calibration.ts";
 export {
   type Clocks,
@@ -18,6 +17,8 @@ export {
 } from "./curves.ts";
 export {
   type CyclePolicy,
+  countHoldOf,
+  factionPassiveRepGainOf,
   type InstallDecision,
   installDecision,
   type ModelCycle,
@@ -32,6 +33,7 @@ export {
   programsPrice,
   RUN_3_POLICY,
   runModel,
+  SPECIAL_FACTIONS,
   shareBonusOf,
   sourceFile1Bonus,
   startHomeRamGb,
