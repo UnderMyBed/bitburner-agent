@@ -985,7 +985,7 @@ function progressSection(facts: RunFacts, verbose: boolean): string[] {
   for (const { index, segment } of facts.segments) {
     const bitNode = facts.cycles.bitNodes[index];
     lines.push(`  ${bitNode?.label ?? facts.cycles.labelBefore()}, first snapshot → last:`);
-    lines.push(...segmentProgressLines(facts, segment).map((line) => `  ${line}`));
+    lines.push(...segmentProgressLines(facts, segment, verbose).map((line) => `  ${line}`));
     lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
   }
   const inferred = [
@@ -1008,8 +1008,34 @@ function progressSection(facts: RunFacts, verbose: boolean): string[] {
   return verbose ? [...lines, ...inferred] : lines;
 }
 
-/** One BitNode's progress (#244), first snapshot → last of each tier in it. */
-function segmentProgressLines(facts: RunFacts, segment: ProgressSegment): string[] {
+/** A first → last list in full under this long; longer, by default, its counts and what changed (#245). */
+const LIST_IN_FULL_UNDER = 100;
+/** How many names a long list's change gives before "and N more". */
+const LIST_CHANGES_NAMED = 6;
+
+/**
+ * A list first → last (#244's progress): in full, "none → BruteSSH.exe", with `verbose` or under `LIST_IN_FULL_UNDER`
+ * characters; else (#245: run #3's installed augmentations were 1,871 characters, both sides in full) the counts and
+ * the names added and gone: "31 → 36 (+ The Red Pill, …, and 2 more)", or "36 (unchanged)".
+ */
+function describeListChange(first: readonly string[], last: readonly string[], verbose: boolean): string {
+  const whole = describeChange(listOrNone([...first]), listOrNone([...last]));
+  if (verbose || whole.length < LIST_IN_FULL_UNDER) return whole;
+  const named = (names: string[]) =>
+    names.slice(0, LIST_CHANGES_NAMED).join(", ") +
+    (names.length > LIST_CHANGES_NAMED ? `, and ${names.length - LIST_CHANGES_NAMED} more` : "");
+  const added = last.filter((name) => !first.includes(name));
+  const gone = first.filter((name) => !last.includes(name));
+  const changes = [
+    ...(added.length > 0 ? [`+ ${named(added)}`] : []),
+    ...(gone.length > 0 ? [`− ${named(gone)}`] : []),
+  ];
+  if (changes.length === 0) return `${last.length} (unchanged)`;
+  return `${first.length} → ${last.length} (${changes.join("; ")})`;
+}
+
+/** One BitNode's progress (#244), first snapshot → last of each tier in it; long lists summarised by default (#245). */
+function segmentProgressLines(facts: RunFacts, segment: ProgressSegment, verbose: boolean): string[] {
   const lines: string[] = [];
   const first = segment.mediumFirst;
   const last = segment.mediumLast;
@@ -1038,9 +1064,7 @@ function segmentProgressLines(facts: RunFacts, segment: ProgressSegment): string
   if (first !== undefined && last !== undefined) {
     const yesOrNo = (data: MediumSnapshotData) => (data.hasTorRouter ? "yes" : "no");
     lines.push(`  TOR router: ${describeChange(yesOrNo(first), yesOrNo(last))}`);
-    lines.push(
-      `  port openers: ${describeChange(listOrNone(namesOf(first.programs)), listOrNone(namesOf(last.programs)))}`,
-    );
+    lines.push(`  port openers: ${describeListChange(namesOf(first.programs), namesOf(last.programs), verbose)}`);
     const rooted = (data: MediumSnapshotData) =>
       (Array.isArray(data.servers) ? data.servers : []).filter(
         (server) => server?.hasAdminRights === true && !facts.playersServers.has(server.hostname),
@@ -1057,9 +1081,9 @@ function segmentProgressLines(facts: RunFacts, segment: ProgressSegment): string
     const [playerFirst, playerLast] = [playerOf(first), playerOf(last)];
     lines.push(`  city: ${describeChange(displayValue(playerFirst.city), displayValue(playerLast.city))}`);
     lines.push(
-      `  factions: ${describeChange(listOrNone(namesOf(playerFirst.factions)), listOrNone(namesOf(playerLast.factions)))}`,
+      `  factions: ${describeListChange(namesOf(playerFirst.factions), namesOf(playerLast.factions), verbose)}`,
     );
-    lines.push(`  jobs: ${describeChange(listOrNone(jobsOf(playerFirst.jobs)), listOrNone(jobsOf(playerLast.jobs)))}`);
+    lines.push(`  jobs: ${describeListChange(jobsOf(playerFirst.jobs), jobsOf(playerLast.jobs), verbose)}`);
   }
   const { slowFirst, slowLast } = segment;
   if (slowFirst === undefined || slowLast === undefined) {
@@ -1067,16 +1091,14 @@ function segmentProgressLines(facts: RunFacts, segment: ProgressSegment): string
   } else {
     const augmentations = (data: SlowSnapshotData) => Object.keys(fieldsOf(data.resetInfo?.ownedAugs)).sort();
     lines.push(
-      `  installed augmentations: ${describeChange(listOrNone(augmentations(slowFirst)), listOrNone(augmentations(slowLast)))}`,
+      `  installed augmentations: ${describeListChange(augmentations(slowFirst), augmentations(slowLast), verbose)}`,
     );
     lines.push(
       `  BitNode: ${describeChange(displayValue(slowFirst.resetInfo?.currentNode), displayValue(slowLast.resetInfo?.currentNode))}`,
     );
+    lines.push(`  Source-Files: ${describeListChange(sourceFilesOf(slowFirst), sourceFilesOf(slowLast), verbose)}`);
     lines.push(
-      `  Source-Files: ${describeChange(listOrNone(sourceFilesOf(slowFirst)), listOrNone(sourceFilesOf(slowLast)))}`,
-    );
-    lines.push(
-      `  purchased servers: ${describeChange(listOrNone(namesOf(slowFirst.purchasedServers)), listOrNone(namesOf(slowLast.purchasedServers)))}`,
+      `  purchased servers: ${describeListChange(namesOf(slowFirst.purchasedServers), namesOf(slowLast.purchasedServers), verbose)}`,
     );
     lines.push(...factionProgressLines(segment.factionState, slowLast));
   }
@@ -1332,7 +1354,7 @@ function actionsSection(facts: RunFacts, verbose: boolean): string[] {
   if (promotions.length === 0) lines.push("    none");
 
   lines.push(...dialogLines(facts, verbose));
-  lines.push(...backdoorLines(facts));
+  lines.push(...backdoorLines(facts, verbose));
   lines.push(
     ...factionLines(facts, verbose),
     ...invitationLines(
@@ -1360,10 +1382,21 @@ function actionsSection(facts: RunFacts, verbose: boolean): string[] {
  */
 function factionLines({ factionWork, cycles }: RunFacts, verbose: boolean): string[] {
   const lines = ["  factions (joins, and the brain's faction work):"];
-  const joined = [...factionWork.joined].map(([faction, atMs]) =>
-    atMs === null ? `${faction} (at the window's start)` : `${faction} by ${formatIsoTime(atMs)}`,
-  );
-  lines.push(`    joined: ${joined.length === 0 ? "none" : joined.join(", ")}`);
+  if (verbose || factionWork.joined.size === 0) {
+    const joined = [...factionWork.joined].map(([faction, atMs]) =>
+      atMs === null ? `${faction} (at the window's start)` : `${faction} by ${formatIsoTime(atMs)}`,
+    );
+    lines.push(`    joined: ${joined.length === 0 ? "none" : joined.join(", ")}`);
+  } else {
+    // Each faction's first join, counted by the cycle it was in (#245: run #3's, with each time, was 2,000 characters).
+    const cycleOf = ([, atMs]: [string, number | null]) =>
+      atMs === null ? "at the window's start" : cycles.cycleLabelAt(atMs);
+    const byCycle = [...Map.groupBy(factionWork.joined, cycleOf)].map(([label, joins]) => `${label}: ${joins.length}`);
+    lines.push(
+      `    joined: ${plural(factionWork.joined.size, "faction", "factions")}, each first in: ${byCycle.join(", ")} ` +
+        "(--verbose lists each with when)",
+    );
+  }
   const passedOver = [...factionWork.passedOver].map(
     ([faction, atMs]) => `${faction} (first seen ${formatIsoTime(atMs)})`,
   );
@@ -1423,11 +1456,67 @@ function factionWorkHealthLines({ factionWork }: RunFacts, failures: string[]): 
 }
 
 /**
- * The hacker factions' servers (#195): when the medium snapshots first showed each backdoored (or gone again, after a
+ * The hacker factions' servers by default (#245: run #3's each repeated every reset, about 2,000 characters a line): a
+ * line a server, backdoored at the window's start or not; in how many cycles it was backdoored in the window, how
+ * long after the cycle's start (the least and the most, and where the most was); not backdoored at the end if the
+ * last reset left it so; and its faction's invitations, or none seen after a backdoor.
+ */
+function backdoorSummaryLines(facts: RunFacts): string[] {
+  const lines = ["  backdoors (the hacker factions' servers, for their invitations; --verbose lists each change):"];
+  const { backdoors } = facts;
+  const firstMs = backdoors.firstMediumAtMs;
+  if (firstMs === null) return [...lines, "    no medium snapshot"];
+  for (const { hostname, faction } of HACKER_FACTION_SERVERS) {
+    const changes = backdoors.changesOf(hostname);
+    if (changes.length === 0) {
+      lines.push(`    ${hostname}: not in the medium snapshots`);
+      continue;
+    }
+    const atStart = changes.find((change) => change.atMs === firstMs);
+    const parts = atStart === undefined ? [] : [`${atStart.installed ? "" : "not "}backdoored at the window's start`];
+    const backdoored = changes.filter((change) => change.installed && change.atMs !== firstMs);
+    const afterStart = backdoored.flatMap(({ atMs }) => {
+      const startMs = facts.cycles.cycleStartAt(atMs);
+      return startMs === null ? [] : [{ atMs, afterMs: atMs - startMs }];
+    });
+    if (backdoored.length > 0 && afterStart.length < backdoored.length) {
+      // No cycle seen (no slow snapshot) for one of them: how many, without the timing.
+      parts.push(`backdoored ${plural(backdoored.length, "time", "times")}`);
+    } else if (backdoored.length > 0) {
+      const longest = afterStart.reduce((most, each) => (each.afterMs > most.afterMs ? each : most));
+      const least = Math.min(...afterStart.map(({ afterMs }) => afterMs));
+      parts.push(
+        `backdoored in ${plural(backdoored.length, "cycle", "cycles")}, ${formatDuration(least)} to ` +
+          `${formatDuration(longest.afterMs)} after the cycle's start (the most in ${facts.cycles.cycleLabelAt(longest.atMs)})`,
+      );
+    }
+    const last = changes.at(-1);
+    if (last !== undefined && !last.installed && last.atMs !== firstMs) {
+      parts.push(`not backdoored since ${formatIsoTime(last.atMs)} (a reset)`);
+    }
+    const invited = facts.events.filter((event) => {
+      const dialog = fieldsOf(event.detail);
+      return (
+        event.kind === "gameDialog" &&
+        dialog.kind === "factionInvitation" &&
+        typeof dialog.text === "string" &&
+        dialog.text.includes(faction)
+      );
+    }).length;
+    if (invited > 0) parts.push(`${faction}'s invitation ${plural(invited, "time", "times")}`);
+    else if (backdoored.length > 0) parts.push(`no invitation from ${faction} seen`);
+    lines.push(`    ${hostname}: ${parts.join("; ")}`);
+  }
+  return lines;
+}
+
+/**
+ * The hacker factions' servers (#195), with --verbose: when the medium snapshots first showed each backdoored (or gone again, after a
  * reset), and the invitation that followed, where the Agent handled its dialog: a `gameDialog` event of kind
  * `factionInvitation` naming the faction ("Would you like to join CyberSec?").
  */
-function backdoorLines(facts: RunFacts): string[] {
+function backdoorLines(facts: RunFacts, verbose: boolean): string[] {
+  if (!verbose) return backdoorSummaryLines(facts);
   const lines = ["  backdoors (the hacker factions' servers, for their invitations):"];
   const { backdoors } = facts;
   if (backdoors.firstMediumAtMs === null) return [...lines, "    no medium snapshot"];

@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  AUGMENTATION_NAMES,
   type FactionState,
   type FactionStateReading,
   type FastSnapshotData,
@@ -1368,7 +1369,13 @@ describe("backdoors for the hacker factions (#195)", () => {
     });
     event(55 * SECOND, "gameDialog", { kind: "factionInvitation", text: INVITED });
     event(56 * SECOND, "gameDialog", { kind: "alert", text: "Would you like to join NiteSec? (not an invitation)" });
-    const { text, failures } = report();
+    // By default (#245), a line a server; no slow snapshot, so no cycle to time it by.
+    expect(report().text).toContain(
+      "  backdoors (the hacker factions' servers, for their invitations; --verbose lists each change):\n" +
+        "    CSEC: not backdoored at the window's start; backdoored 1 time; CyberSec's invitation 1 time\n" +
+        "    avmnite-02h: not backdoored at the window's start\n",
+    );
+    const { text, failures } = report({ verbose: true });
     expect(text).toContain(
       "  backdoors (the hacker factions' servers, for their invitations):\n" +
         `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; CyberSec's invitation at ` +
@@ -1386,6 +1393,9 @@ describe("backdoors for the hacker factions (#195)", () => {
   test("one backdoored with no invitation seen says so", () => {
     hackerRun({ csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= MINUTE }) });
     expect(report().text).toContain(
+      "    CSEC: not backdoored at the window's start; backdoored 1 time; no invitation from CyberSec seen",
+    );
+    expect(report({ verbose: true }).text).toContain(
       `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; no invitation from CyberSec seen`,
     );
   });
@@ -1393,6 +1403,7 @@ describe("backdoors for the hacker factions (#195)", () => {
   test("one backdoored before the window: its invitation came before too", () => {
     hackerRun({ csec: () => ({ rooted: true, backdoored: true }) });
     expect(report().text).toContain("    CSEC: backdoored at the window's start\n");
+    expect(report({ verbose: true }).text).toContain("    CSEC: backdoored at the window's start\n");
   });
 
   test("overdue: rooted, at its level and not backdoored for 5 minutes or more", () => {
@@ -1458,7 +1469,10 @@ describe("backdoors for the hacker factions (#195)", () => {
       csec: (offsetMs) => ({ rooted: true, backdoored: !reset(offsetMs) }),
       intents: (offsetMs) => (offsetMs > 10 * MINUTE && offsetMs < 12 * MINUTE ? [intent(BACKDOOR_CSEC)] : []),
     });
-    const { text, failures } = report();
+    expect(report().text).toContain(
+      "    CSEC: backdoored at the window's start; backdoored 1 time; no invitation from CyberSec seen\n",
+    );
+    const { text, failures } = report({ verbose: true });
     expect(failures).toEqual([]);
     expect(text).toContain(
       `    CSEC: backdoored at the window's start; not backdoored from ${at(10 * MINUTE)} (a reset); backdoored by ` +
@@ -1515,7 +1529,7 @@ describe("backdoors for the hacker factions (#195)", () => {
   test("no medium snapshot: said so", () => {
     event(0, "brainStarted", { release: "r" });
     snapshot("fast", 10 * SECOND, fastData());
-    expect(report().text).toContain(
+    expect(report({ verbose: true }).text).toContain(
       "  backdoors (the hacker factions' servers, for their invitations):\n    no medium snapshot",
     );
   });
@@ -2653,14 +2667,24 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
   describe("a run of many cycles: each block a line a cycle, however busy each cycle is", () => {
     const CYCLE_MS = 10 * MINUTE;
     /**
-     * `cycles` cycles of 10 minutes, a destroy after the third (BN1.2 from there), each as busy as `busyness` says:
-     * that many ui backdoors (routine), cloud server purchases, changes of work, alerts, faction work choices,
-     * NeuroFlux Governor levels and invitation travels. One change of work a cycle has a problem.
+     * `cycles` cycles of 10 minutes, a destroy before the sixth and the eleventh (BN1.2, BN1.3), each as busy as
+     * `busyness` says: that many ui backdoors (routine), cloud server purchases, changes of work, alerts, faction work
+     * choices, NeuroFlux Governor levels and invitation travels. One change of work a cycle has a problem. And what
+     * comes again each reset (#245's second round, run #3's longest lines): CSEC backdoored 2 min after each cycle's
+     * start and 10 s later each cycle, the factions joined growing a minute at a time from 2, 3 more augmentations
+     * installed at each install, and 25 cloud servers.
      */
     function cyclesRun(cycles: number, busyness: number) {
       const startOf = (cycle: number) => cycle * CYCLE_MS;
       const cycleAt = (offsetMs: number) => Math.floor(offsetMs / CYCLE_MS);
-      const destroyMs = startOf(3);
+      const bitNodeStart = (cycle: number) => (cycle < 5 ? 0 : cycle < 10 ? 5 : 10);
+      const FACTIONS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners", "Tian Di Hui", "Sector-12"];
+      const factionsOf = (inCycle: number) =>
+        [...FACTIONS, "Aevum", "Netburners", "Daedalus", "Chongqing", "Ishima"].slice(
+          0,
+          2 + Math.floor(inCycle / MINUTE),
+        );
+      const cloudNames = Array.from({ length: 25 }, (_, index) => "pserv-" + index);
       const untilMs = startOf(cycles);
       event(0, "brainStarted", { release: "r" });
       snapshot("static", 10 * SECOND, staticData());
@@ -2691,16 +2715,35 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
           fastData({ intents, work, batcher: { ...newBatcherHealth(target, "run-a", 0), state: "batching" } }),
         );
       }
-      for (let offsetMs = 10 * SECOND; offsetMs <= untilMs; offsetMs += 10 * SECOND) {
-        const data = mediumData({ money: 1e9 + offsetMs, noodles: { money: offsetMs, security: 1 } });
+      for (let offsetMs = 10 * SECOND; offsetMs < untilMs; offsetMs += 10 * SECOND) {
+        const cycle = cycleAt(offsetMs);
+        const inCycle = offsetMs - startOf(cycle);
+        const data = mediumData({
+          money: 1e9 + offsetMs,
+          noodles: { money: offsetMs, security: 1 },
+          factions: factionsOf(inCycle),
+        });
+        data.servers.push({
+          hostname: "CSEC",
+          maxRam: 8,
+          cpuCores: 1,
+          hasAdminRights: true,
+          backdoorInstalled: inCycle >= (cycle === 0 ? 3 * MINUTE : 2 * MINUTE + cycle * 10 * SECOND),
+          moneyAvailable: 0,
+          hackDifficulty: 1,
+        });
         snapshot("medium", offsetMs, data);
       }
       for (let offsetMs = 30 * SECOND; offsetMs <= untilMs; offsetMs += MINUTE) {
         const cycle = cycleAt(offsetMs);
-        const destroyed = offsetMs >= destroyMs;
-        const data = slowData([], {}, destroyed ? { 1: 1 } : {}, factionState({ joined: [] }));
-        data.resetInfo.lastNodeReset = destroyed ? T0 + destroyMs : RESET;
-        data.resetInfo.lastAugReset = cycle === 0 ? RESET : T0 + startOf(cycle);
+        const first = bitNodeStart(cycle);
+        const owned = Object.fromEntries(
+          AUGMENTATION_NAMES.slice(0, 5 + 3 * (cycle - first)).map((name) => [name, 1] as [string, number]),
+        );
+        const ownedSF: Record<string, number> = first === 0 ? {} : { 1: first / 5 };
+        const data = slowData(cloudNames, owned, ownedSF, factionState({ joined: [] }));
+        data.resetInfo.lastNodeReset = T0 + startOf(first);
+        data.resetInfo.lastAugReset = T0 + startOf(cycle);
         snapshot("slow", offsetMs, data, offsetMs);
       }
       for (let cycle = 0; cycle < cycles; cycle++) {
@@ -2748,7 +2791,7 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
     test.each([
       [6, 10],
       [6, 40],
-      [12, 10],
+      [14, 10],
     ])(
       "%i cycles, %i of each a cycle: each block within its bound, the report within its characters",
       (cycles, busy) => {
@@ -2757,9 +2800,35 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
         for (const [heading, most] of BLOCKS) {
           expect(blockOf(brief.text, heading).length, heading).toBeLessThanOrEqual(most(cycles));
         }
-        // About 1,100 characters a cycle (2b's block is most of it), and 9,400 besides: 15,893 for 6 cycles, at 10
-        // or at 40 of each, and 22,401 for 12. Not how busy each cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(10_000 + 1_200 * cycles);
+        // About 1,350 characters a cycle (2b's block is most of it), and 8,600 besides: 16,721 for 6 cycles at 10 of
+        // each, 16,756 at 40, and 27,606 for 14 over 3 BitNodes. Not how busy each cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_000 + 1_400 * cycles);
+        // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
+        // and each BitNode's lists.
+        const lines = brief.text.split("\n");
+        // The first cycle's 3 min, then 2 min 10 s on, 10 s more each cycle.
+        const lastMs = 2 * MINUTE + (cycles - 1) * 10 * SECOND;
+        const most = Math.max(3 * MINUTE, lastMs);
+        const mostIn = lastMs <= 3 * MINUTE ? "BN1.1 1" : cycles <= 10 ? `BN1.2 ${cycles - 5}` : `BN1.3 ${cycles - 10}`;
+        expect(lines).toContain(
+          `    CSEC: not backdoored at the window's start; backdoored in ${cycles} cycles, 2 min 10 s to ` +
+            `${formatDuration(most)} after the cycle's start (the most in ${mostIn}); no invitation from CyberSec seen`,
+        );
+        expect(lines).toContain(
+          "    joined: 11 factions, each first in: at the window's start: 2, BN1.1 1: 9 (--verbose lists each with when)",
+        );
+        expect(lines).toContain("    purchased servers: 25 (unchanged)");
+        expect(lines).toContain(
+          "    factions: 2 → 11 (+ The Black Hand, BitRunners, Tian Di Hui, Sector-12, Aevum, Netburners, and 3 more)",
+        );
+        expect(lines.filter((line) => line.startsWith("    installed augmentations: 5 → 17 (+ "))).toHaveLength(
+          cycles >= 10 ? 2 : 1,
+        );
+        const progress = brief.text.slice(brief.text.indexOf("2. Progress"), brief.text.indexOf("2b. "));
+        // The BitNodes line aside: one entry a BitNode.
+        for (const line of progress.split("\n").filter((each) => !each.startsWith("  BitNodes: "))) {
+          expect(line.length, line).toBeLessThanOrEqual(200);
+        }
         expect(blockOf(brief.text, "  work, as it changed")).toContain(
           `      ${at(CYCLE_MS + 4 * SECOND)}  not converged (ui): a dialog the Agent leaves for the owner is open`,
         );

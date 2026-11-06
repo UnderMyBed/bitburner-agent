@@ -435,6 +435,11 @@ export class BitNodeCycles {
     return `${this.bitNodes[cycle.bitNode]?.label ?? "?"} ${number}`;
   }
 
+  /** Where the cycle `atMs` falls in started, by the brain's clock, or null before the first (#245). */
+  cycleStartAt(atMs: number): number | null {
+    return this.#cycleAt(atMs)?.startMs ?? null;
+  }
+
   /** Where each cycle starts (an install or a destroy), by the brain's clock, in order (#245). */
   resetsMs(): number[] {
     return this.#cycles.map((cycle) => cycle.startMs);
