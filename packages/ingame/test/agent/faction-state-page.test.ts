@@ -612,6 +612,13 @@ describe("the worker: skipped where a page can't or mustn't be left (#197)", () 
     expect(clicks).toEqual([]);
   });
 
+  test("read a moment ago on the page's monotonic clock (#251): the Factions page isn't due, so not opened", async () => {
+    standInGame({ joined: [CYBERSEC], startOn: "Stats" });
+    const recent = memoryOf({}, { factionsReadAtMs: performance.now() - 1_000 });
+    expect(await runWorker(since(recent))).toMatchObject({ done: true, problem: null });
+    expect(clicks).not.toContain("Factions");
+  });
+
   test("otherwise read, the page put back", async () => {
     standInGame({ joined: [CYBERSEC], startOn: "Stats" });
     expect(await runWorker()).toMatchObject({ done: true, problem: null, opened: ["Factions"] });

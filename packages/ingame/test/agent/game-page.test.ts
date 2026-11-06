@@ -99,6 +99,8 @@ test("a dialog that stays is open, after the time a fade takes", async () => {
   const startedMs = performance.now();
   expect(await gamePage?.dialogStaysOpen()).toBe(true);
   expect(performance.now() - startedMs).toBeGreaterThanOrEqual(350);
+  // The fade's time, on the page's monotonic clock (#251), not the steps' 1.7 s.
+  expect(performance.now() - startedMs).toBeLessThan(1_000);
 });
 
 test("past the deadline, a step still looks once: what's there is clicked", async () => {
