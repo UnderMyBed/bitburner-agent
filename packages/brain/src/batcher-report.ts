@@ -3,10 +3,18 @@
 // short of RAM, except while sharing on the batches' hosts, the share's failure (#232). Its counts are each run's,
 // from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
 // already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
-// (#224).
-import type { BatcherHealth } from "@bitburner-agent/core";
+// (#224). Out of step is judged a stretch at a time (#241): one a clock step or page stall explains, which the batcher
+// recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts).
+import { type BatcherHealth, LANDING_LOST_AFTER_MS } from "@bitburner-agent/core";
 import { BATCHER_MOVE_IDLE_FAILS_AFTER_MS, BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
-import { formatIsoTime } from "./gap-report.ts";
+import {
+  BATCHER_INCIDENT_RECOVERY_MS,
+  batcherSpanOf,
+  type ClockIncident,
+  describeIncident,
+  INCIDENT_ATTRIBUTION_WEAKENS,
+} from "./clock-incidents.ts";
+import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import { sharingOf } from "./share.ts";
 import { type ReputationPoint, sharingLines } from "./share-report.ts";
 
@@ -47,8 +55,6 @@ const NEWER_COUNTS = [
 ] as const;
 const ALL_COUNTS = [...COUNTS, ...NEWER_COUNTS] as const;
 type Counts = Record<(typeof ALL_COUNTS)[number], number>;
-/** The counts that say the batches are out of step: each a run report failure (#206). */
-const OUT_OF_STEP = ["desyncs", "late", "lost"] as const;
 
 const HOUR_MS = 60 * 60_000;
 
@@ -326,17 +332,277 @@ function moveLines(moves: Move[], anyReporting: boolean, failures: string[]): st
   return lines;
 }
 
+/** The out-of-step counts (#206), as a health has them, or as they rose. */
+type OutOfStepCounts = Record<"desyncs" | "outOfOrder" | "outOfBounds" | "late" | "lost", number>;
+const OUT_OF_STEP_COUNTS = ["desyncs", "outOfOrder", "outOfBounds", "late", "lost"] as const;
+
+/** One look at a run's health: its run, state and target, and what of it was out of step since its look before. */
+interface RunLook {
+  runName: string;
+  atMs: number;
+  state: string;
+  target: string;
+  rose: OutOfStepCounts;
+}
+
+/** The clock steps and page stalls found (section 4), a weaken's time on a target then, and the warnings (#241). */
+export interface IncidentContext {
+  incidents: readonly ClockIncident[];
+  weakenMs: (target: string, atMs: number) => number | null;
+  warnings: string[];
+}
+
+/** The incident a stretch out of step is put down to (#241), with a weaken's time on its target then. */
+interface Attribution {
+  incident: ClockIncident;
+  weakenMs: number;
+}
+
+/**
+ * A stretch out of step (#241), one run's: from its first look with something risen to its first look batching with
+ * nothing risen (`recoveredMs`), and anything risen within `BATCHER_INCIDENT_RECOVERY_MS` after that (`againMs`, the
+ * first). After a desync's recovery (`recovering` seen), everything in flight has landed. With late or lost alone
+ * it never stops batching, so the parts in flight at its incident may land late, or be found lost, until a weaken and
+ * a part's loss after the incident's end (`landingUntilMs`): each such rise is the stretch's, and batching again waits
+ * for the last; one over `BATCHER_INCIDENT_RECOVERY_MS` after the incident, once it was batching again
+ * (`firstRecoveredMs`), is out of step again (`lateAgainMs`, #249's review). A move (`preparing` a new target) is
+ * neither. The incident's end is the batcher's: the game's clock's move, for a step (`batcherSpanOf`).
+ */
+interface OutOfStepStretch {
+  runName: string;
+  target: string;
+  firstMs: number;
+  counts: OutOfStepCounts;
+  attribution: Attribution | { why: string };
+  sawRecovering: boolean;
+  landingUntilMs: number;
+  recoveredMs: number | null;
+  firstRecoveredMs: number | null;
+  againMs: number | null;
+  lateAgainMs: number | null;
+}
+
+const countsText = (counts: OutOfStepCounts) =>
+  `${counts.desyncs} desync${counts.desyncs === 1 ? "" : "s"} (${counts.outOfOrder} out of order, ` +
+  `${counts.outOfBounds} out of bounds), ${counts.late} late, ${counts.lost} lost`;
+const addCounts = (counts: OutOfStepCounts, rose: OutOfStepCounts) => {
+  for (const count of OUT_OF_STEP_COUNTS) counts[count] += rose[count];
+};
+const kindName = ({ kind }: ClockIncident) => (kind === "clockStep" ? "clock step" : "page stall");
+
+/**
+ * The incident a stretch is put down to (#241), its first look out of step being at `firstMs`: the latest incident
+ * whose span, as the batcher felt it (`batcherSpanOf`), started by then and ended no more than
+ * `INCIDENT_ATTRIBUTION_WEAKENS` weaken times on `target` before it, and that no earlier stretch was put down to
+ * (`attributed`); or why there's none.
+ */
+function attributionOf(
+  firstMs: number,
+  target: string,
+  context: IncidentContext,
+  attributed: Set<ClockIncident>,
+): Attribution | { why: string } {
+  const incidentsBefore = context.incidents.filter((incident) => batcherSpanOf(incident).fromMs <= firstMs);
+  const lastIncident = incidentsBefore.at(-1);
+  if (lastIncident === undefined) return { why: "no clock step or page stall before it" };
+  const weakenMs = context.weakenMs(target, batcherSpanOf(lastIncident).fromMs);
+  if (weakenMs === null) {
+    return {
+      why:
+        `${describeIncident(lastIncident)} before it, but a weaken's time on ${target} is unknown (no static ` +
+        "snapshot with its figures, or no medium snapshot with the player's)",
+    };
+  }
+  const inReach = (incident: ClockIncident) =>
+    firstMs <= batcherSpanOf(incident).toMs + INCIDENT_ATTRIBUTION_WEAKENS * weakenMs;
+  const incident = incidentsBefore.findLast((candidate) => inReach(candidate) && !attributed.has(candidate));
+  if (incident !== undefined) {
+    attributed.add(incident);
+    return { incident, weakenMs };
+  }
+  const weaken = `a weaken there (${formatDuration(weakenMs)})`;
+  const alreadyAttributed = incidentsBefore.findLast(inReach);
+  if (alreadyAttributed !== undefined) {
+    return {
+      why:
+        `${describeIncident(alreadyAttributed)} within ${weaken} before it, but an earlier stretch was put down ` +
+        "to it",
+    };
+  }
+  return {
+    why: `no clock step or page stall within ${weaken} before it (the last, ${describeIncident(lastIncident)})`,
+  };
+}
+
+/** The stretches out of step (#241), from every run's looks in time order. */
+function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOfStepStretch[] {
+  const stretches: OutOfStepStretch[] = [];
+  const openStretchOfRun = new Map<string, OutOfStepStretch>();
+  const attributed = new Set<ClockIncident>();
+  for (const { runName, atMs, state, target, rose } of looks) {
+    const anyRose = OUT_OF_STEP_COUNTS.some((count) => rose[count] > 0);
+    const openStretch = openStretchOfRun.get(runName);
+    if (openStretch !== undefined && openStretch.recoveredMs === null) {
+      if (anyRose) addCounts(openStretch.counts, rose);
+      if (state === "recovering") openStretch.sawRecovering = true;
+      else if (state === "batching" && !anyRose) {
+        openStretch.recoveredMs = atMs;
+        openStretch.firstRecoveredMs ??= atMs;
+      }
+      continue;
+    }
+    if (!anyRose) continue;
+    if (openStretch?.recoveredMs != null) {
+      if (!openStretch.sawRecovering && atMs <= openStretch.landingUntilMs) {
+        addCounts(openStretch.counts, rose);
+        openStretch.recoveredMs = null;
+        const attribution = openStretch.attribution;
+        const sinceMs = "incident" in attribution ? atMs - batcherSpanOf(attribution.incident).toMs : 0;
+        if (sinceMs > BATCHER_INCIDENT_RECOVERY_MS) openStretch.lateAgainMs ??= atMs;
+        continue;
+      }
+      if (atMs - openStretch.recoveredMs <= BATCHER_INCIDENT_RECOVERY_MS) {
+        openStretch.againMs ??= atMs;
+        addCounts(openStretch.counts, rose);
+        continue;
+      }
+    }
+    const attribution = attributionOf(atMs, target, context, attributed);
+    const stretch: OutOfStepStretch = {
+      runName,
+      target,
+      firstMs: atMs,
+      counts: { ...rose },
+      attribution,
+      sawRecovering: state === "recovering",
+      landingUntilMs:
+        "incident" in attribution
+          ? batcherSpanOf(attribution.incident).toMs +
+            INCIDENT_ATTRIBUTION_WEAKENS * attribution.weakenMs +
+            LANDING_LOST_AFTER_MS
+          : atMs,
+      recoveredMs: null,
+      firstRecoveredMs: null,
+      againMs: null,
+      lateAgainMs: null,
+    };
+    openStretchOfRun.set(runName, stretch);
+    stretches.push(stretch);
+  }
+  return stretches;
+}
+
+/**
+ * Each stretch out of step put down to an incident, as a line (#241, owner decision 55), judged on its own run's looks
+ * (a run replaced or stopped ends there): a warning if the batcher is batching again within
+ * `BATCHER_INCIDENT_RECOVERY_MS` of the incident's end and in step that long after, or if its run's looks end
+ * before that can be seen ("recovery not yet confirmed"); otherwise a failure. Then the stretches put down to none, one
+ * failure with their totals (#206), each listed under it if more than one.
+ */
+function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, failures: string[]): string[] {
+  const lastLookOfRun = new Map(looks.map(({ runName, atMs }) => [runName, atMs]));
+  const recovery = formatDuration(BATCHER_INCIDENT_RECOVERY_MS);
+  const lines: string[] = [];
+  const unexplained: (OutOfStepStretch & { attribution: { why: string } })[] = [];
+  for (const stretch of stretchesOf(looks, context)) {
+    const { runName, target, firstMs, counts, attribution, recoveredMs, againMs, lateAgainMs, firstRecoveredMs } =
+      stretch;
+    const seenText = `${countsText(counts)} on ${target}, the first seen at ${formatIsoTime(firstMs)}`;
+    if (!("incident" in attribution)) {
+      unexplained.push({ ...stretch, attribution });
+      continue;
+    }
+    const { incident, weakenMs } = attribution;
+    const name = kindName(incident);
+    const weakenText = `within a weaken there, ${formatDuration(weakenMs)}`;
+    const afterText = `${seenText}, after ${describeIncident(incident)} (${weakenText})`;
+    const runEndMs = lastLookOfRun.get(runName) as number;
+    const incidentEndMs = batcherSpanOf(incident).toMs;
+    const sinceIncident = (atMs: number) => formatDuration(atMs - incidentEndMs);
+    let failed: string | null = null;
+    let unconfirmed: string | null = null;
+    if (recoveredMs === null) {
+      if (runEndMs - incidentEndMs >= BATCHER_INCIDENT_RECOVERY_MS) {
+        failed =
+          `not batching again within ${recovery} of the ${name} (its run's last look at ` +
+          `${formatIsoTime(runEndMs)})`;
+      } else {
+        unconfirmed =
+          `not batching again at its run's last look, at ${formatIsoTime(runEndMs)}, ` +
+          `${sinceIncident(runEndMs)} after the ${name} (${recovery} allowed)`;
+      }
+    } else if (lateAgainMs !== null && firstRecoveredMs !== null) {
+      failed =
+        `out of step again at ${formatIsoTime(lateAgainMs)}, ${sinceIncident(lateAgainMs)} after the ${name}, after ` +
+        `batching again at ${formatIsoTime(firstRecoveredMs)} (more than ${recovery} after it)`;
+    } else if (recoveredMs - incidentEndMs > BATCHER_INCIDENT_RECOVERY_MS) {
+      failed =
+        `batching again only at ${formatIsoTime(recoveredMs)}, ${sinceIncident(recoveredMs)} after the ${name} (more ` +
+        `than ${recovery})`;
+    } else if (againMs !== null) {
+      failed =
+        `out of step again at ${formatIsoTime(againMs)}, ${formatDuration(againMs - recoveredMs)} after ` +
+        `batching again at ${formatIsoTime(recoveredMs)} (within ${recovery})`;
+    } else if (runEndMs - recoveredMs < BATCHER_INCIDENT_RECOVERY_MS) {
+      unconfirmed =
+        `recovered in ${formatDuration(recoveredMs - firstMs)}: batching again at ${formatIsoTime(recoveredMs)}, ` +
+        `but its run's last look, at ${formatIsoTime(runEndMs)}, is ${formatDuration(runEndMs - recoveredMs)} ` +
+        `after (${recovery} needed)`;
+    }
+    let line: string;
+    if (failed !== null) {
+      line = `batcher out of step after a ${name}, not recovered: ${afterText}; ${failed}`;
+      failures.push(line);
+    } else if (unconfirmed !== null) {
+      line = `batcher out of step after a ${name}, recovery not yet confirmed: ${afterText}; ${unconfirmed}`;
+      context.warnings.push(line);
+    } else {
+      line =
+        `batcher out of step after a ${name}: ${afterText}; recovered in ` +
+        `${formatDuration((recoveredMs as number) - firstMs)}: batching again at ${formatIsoTime(recoveredMs)}, and ` +
+        `nothing out of step in the ${recovery} after`;
+      context.warnings.push(line);
+    }
+    lines.push(`  ${line}`);
+  }
+  const [first] = unexplained;
+  if (first !== undefined) {
+    const total = Object.fromEntries(OUT_OF_STEP_COUNTS.map((count) => [count, 0])) as OutOfStepCounts;
+    for (const { counts } of unexplained) addCounts(total, counts);
+    const targets = [...new Set(unexplained.map(({ target }) => target))].join(", ");
+    const line =
+      unexplained.length === 1
+        ? `batcher out of step: ${countsText(first.counts)} on ${first.target}, the first seen at ` +
+          `${formatIsoTime(first.firstMs)}; ${first.attribution.why}`
+        : `batcher out of step: ${countsText(total)} in ${unexplained.length} stretches on ${targets}, the ` +
+          `first seen at ${formatIsoTime(first.firstMs)}; the first: ${first.attribution.why}`;
+    lines.push(`  ${line}`);
+    failures.push(line);
+    if (unexplained.length > 1) {
+      for (const { counts, target, firstMs, attribution } of unexplained) {
+        lines.push(
+          `    ${countsText(counts)} on ${target}, the first seen at ${formatIsoTime(firstMs)}; ${attribution.why}`,
+        );
+      }
+    }
+  }
+  return lines;
+}
+
 /**
  * The section's lines: "6. The batcher", then each hour, the desyncs and the problems seen, and any stretch it was
  * sent but not running, which fails the run (`failures`); then its sharing (#224), with the brain's worked faction's
  * reputation (`readings`). Its moves (#236) are joined across a batcher's restart, but not across an install
- * (`resetsMs`, the game's `lastAugReset` times in the slow snapshots): a new cycle starts from nothing.
+ * (`resetsMs`, the game's `lastAugReset` times in the slow snapshots): a new cycle starts from nothing. Each
+ * stretch out of step a clock step or page stall explains (`incidentContext`, #241), the batcher batching again by
+ * itself, is a warning.
  */
 export function batcherSection(
   points: BatcherPoint[],
   failures: string[] = [],
   readings: readonly ReputationPoint[] = [],
   resetsMs: readonly number[] = [],
+  incidentContext: IncidentContext = { incidents: [], weakenMs: () => null, warnings: [] },
 ): string[] {
   const lines = ["6. The batcher (#205, #206)"];
   const notRunning = notRunningLines(points, failures);
@@ -354,7 +620,8 @@ export function batcherSection(
   const lastOfRun = new Map<string, Counts>();
   const lastHealthOfRun = new Map<string, BatcherHealth>();
   const problems = new Map<string, number>();
-  let firstOutOfStepMs: number | null = null;
+  // Each run's looks, in time order, for the stretches out of step (#241).
+  const looks: RunLook[] = [];
   // Short of RAM (#232): while sharing on the batches' hosts, at either end of the interval (the share's failure, as
   // share-report.ts counts it), or not (the batcher's own).
   let shortWhileSharing = 0;
@@ -377,9 +644,10 @@ export function batcherSection(
     const before = lastOfRun.get(health.runName) ?? (atMs === firstMs ? countsOf(health) : zero());
     const now = countsOf(health);
     for (const count of ALL_COUNTS) bucket.counts[count] += Math.max(0, now[count] - before[count]);
-    if (firstOutOfStepMs === null && OUT_OF_STEP.some((count) => health[count] > before[count])) {
-      firstOutOfStepMs = atMs;
-    }
+    const rose = Object.fromEntries(
+      OUT_OF_STEP_COUNTS.map((count) => [count, Math.max(0, now[count] - before[count])]),
+    ) as OutOfStepCounts;
+    looks.push({ runName: health.runName, atMs, state: health.state, target: health.target, rose });
     const short = Math.max(0, now.batchesShort - before.batchesShort);
     if (sharingOnHosts(lastHealthOfRun.get(health.runName)) || sharingOnHosts(health)) shortWhileSharing += short;
     else if (short > 0) {
@@ -428,15 +696,9 @@ export function batcherSection(
       : `  least slack: ${Math.round(Math.min(...slacks))} ms (an operation's time to spare when it was called; ` +
           "under 0 is late)",
   );
-  // Out of step, a failure (#206): the batches no longer land as planned, or someone else touched the target.
-  if (total.desyncs + total.late + total.lost > 0) {
-    const line =
-      `batcher out of step: ${total.desyncs} desync${total.desyncs === 1 ? "" : "s"} (${total.outOfOrder} out of order, ${total.outOfBounds} out of ` +
-      `bounds), ${total.late} late, ${total.lost} lost, the first seen at ` +
-      formatIsoTime(firstOutOfStepMs ?? firstMs);
-    lines.push(`  ${line}`);
-    failures.push(line);
-  }
+  // Out of step, a failure (#206): the batches no longer land as planned, or someone else touched the target. A
+  // stretch a clock step or page stall explains, which the batcher recovered from by itself, is a warning (#241).
+  if (total.desyncs + total.late + total.lost > 0) lines.push(...outOfStepLines(looks, incidentContext, failures));
   const describeBatchCount = (count: number) => `${count} batch${count === 1 ? "" : "es"}`;
   lines.push(
     total.batchesShort === 0
