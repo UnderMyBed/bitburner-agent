@@ -4,6 +4,7 @@
 // operation of its own wrote (a previous batcher's) and one never written (lost), loudly; a late hack's record, written
 // before its time, makes nothing out of order.
 import {
+  BATCH_RAM_WAIT_LOOK_MS,
   BATCH_RAM_WAIT_MS,
   BATCHER_CONFIG_PORT,
   BATCHER_HEALTH_PORT,
@@ -11,6 +12,7 @@ import {
   BATCHER_SCRIPT_NAME,
   type BatcherConfig,
   type BatcherHealth,
+  type BatchShort,
   batchHoldsMs,
   batchPeakRamGb,
   batchPlan,
@@ -22,6 +24,7 @@ import {
   type LandingRecord,
   leastSpacingMs,
   operationTimeMs,
+  type RamWait,
   SHARE_ROUND_MS,
   SHARE_SCRIPT_NAME,
   shareReserveGb,
@@ -860,6 +863,11 @@ test("no share for a minute after a batch comes up short of RAM (#226's review):
     fillers.push(...(await fillHosts(simulation, SHARING_HOSTS)));
     await simulation.advance(1_000);
   }
+  // Its record says what held the RAM (#246's review): the share's threads on its hosts among it, and the player's.
+  const [short] = (await healthOf(simulation)).shorts ?? [];
+  console.log(`#246's review: a short beside the share on its hosts: ${JSON.stringify(short)}`);
+  expect(short?.sharingGb).toBeGreaterThan(0);
+  expect(short?.othersGb).toBeGreaterThan(0);
   // The room back at once; a round started before the short ends within 10 s, and none starts after it for a minute.
   for (const pid of fillers) await simulation.kill(pid);
   await simulation.advance(10_500);
@@ -1481,6 +1489,14 @@ const BRIEF = "export async function main(ns) { await ns.asleep(Number(ns.args[0
  * A player's script that, every `everyMs`, takes each host's free RAM with `brief.js` threads ending `holdMs` on: RAM
  * that frees a moment after the batches counted on it, as a busy page's late timers leave an operation's (#246).
  */
+/** Writes to a port every `everyMs`, waking whatever waits on it: a busy batcher's landing records, coming that often. */
+const PING_PORT = `export async function main(ns) {
+  const [port, everyMs] = ns.args;
+  for (;;) {
+    ns.writePort(port, 0);
+    await ns.asleep(everyMs);
+  }
+}`;
 const HOLD_BRIEFLY = `export async function main(ns) {
   const [holdMs, everyMs, ...hosts] = ns.args;
   for (let round = 0; ; round++) {
@@ -1492,7 +1508,7 @@ const HOLD_BRIEFLY = `export async function main(ns) {
   }
 }`;
 
-test("an operation whose RAM frees a moment late waits for it (#246), within its lead; longer, it's short, and says why", {
+test("an operation whose RAM frees a moment late waits for it (#246), within its wait; longer, it's short, and why", {
   timeout: 300_000,
 }, async () => {
   const simulation = await gameWithScripts();
@@ -1501,7 +1517,7 @@ test("an operation whose RAM frees a moment late waits for it (#246), within its
   await simulation.diagnostics.setHomeRam(64);
   for (const host of SHARING_HOSTS) await simulation.writeFile(host, "brief.js", BRIEF);
   await simulation.writeFile("home", "hold-briefly.js", HOLD_BRIEFLY);
-  // n00dles batched on the six hosts' RAM, at hacking about 300: a batch every few seconds, its operations in under 30 s.
+  // n00dles batched on the six hosts' RAM, at hacking about 300: a batch every few seconds, its operations in 30 s.
   const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: MULTS };
   const plan = batchPlan(N00DLES, player, batchRamGb(SHARING_HOSTS.map(() => 16)));
   if (plan === null) throw new Error("no plan for n00dles on the six hosts");
@@ -1513,28 +1529,60 @@ test("an operation whose RAM frees a moment late waits for it (#246), within its
     await simulation.advance(5_000);
   }
   const before = await healthOf(simulation);
-  expect(before).toMatchObject({ batchesShort: 0, ramWaits: 0, shorts: [] });
+  expect(before).toMatchObject({ batchesShort: 0, ramWaits: 0, shorts: [], waits: [] });
   // For two minutes, every 100 ms, the hosts' free RAM held 40 ms: an operation due then finds no room until it frees.
   const holding = await simulation.run("home", "hold-briefly.js", { args: [40, 100, ...SHARING_HOSTS] });
   expect(holding.error).toBeUndefined();
-  await simulation.advance(2 * 60_000);
+  const waits = new Map<string, RamWait>();
+  for (let elapsed = 0; elapsed < 2 * 60_000; elapsed += 1_000) {
+    await simulation.advance(1_000);
+    for (const each of (await healthOf(simulation)).waits ?? []) waits.set(`${each.atMs} ${each.operation}`, each);
+  }
   await simulation.kill(holding.pid);
   await simulation.advance(1_000);
   const waited = await healthOf(simulation);
   console.log(
     `#246: ${waited.batchesStarted - before.batchesStarted} batches beside RAM held 40 ms in each 100 (a batch ` +
       `every ${config.spacingMs} ms); ${waited.ramWaits} operations waited for it, the longest ` +
-      `${waited.longestRamWaitMs} ms; ${waited.batchesShort} short`,
+      `${waited.longestRamWaitMs} ms; ${waited.batchesShort} short; a wait: ${JSON.stringify([...waits.values()][0])}`,
   );
-  // They waited, under the 100 ms it allows, and none was short or late: each landed in step.
+  // They waited, no longer than the RAM was held, and none was short or late: each landed in step.
   expect(waited.ramWaits).toBeGreaterThan(3);
   expect(waited.longestRamWaitMs).toBeGreaterThan(0);
   expect(waited.longestRamWaitMs).toBeLessThanOrEqual(45);
   expect(waited).toMatchObject({ batchesShort: 0, shorts: [], late: 0, lost: 0, desyncs: 0 });
   expect(waited.batchesStarted - before.batchesStarted).toBeGreaterThan(5);
-  // Held 300 ms in each 400, past the wait: a batch is short, a failure still, and its health says when, what, and
-  // that scripts not its own held the RAM.
-  const holdingLonger = await simulation.run("home", "hold-briefly.js", { args: [300, 400, ...OPERATION_HOSTS] });
+  // Each wait says why (#246's review): the player's script held the RAM, at least a 1.6 GB thread of it, and had it
+  // been free the operation would have fitted; no share threads. Every one seen, and each within the wait.
+  expect(waits.size).toBe(waited.ramWaits);
+  for (const each of waits.values()) {
+    expect(each.waitedMs).toBeGreaterThan(0);
+    expect(each.waitedMs).toBeLessThan(BATCH_RAM_WAIT_MS);
+    expect(each.othersGb).toBeGreaterThanOrEqual(1.6);
+    expect(each.sharingGb).toBe(0);
+    expect(each.freeGb + each.othersGb).toBeGreaterThanOrEqual(each.threads * 1.7);
+  }
+  // Again for a minute, the batcher woken every 3 ms besides (on its config port, unread with its config as its argument), as
+  // a busy one's landing records would: waits are tried again, and end, whatever wakes it (#246's review).
+  await simulation.writeFile("home", "ping-port.js", PING_PORT);
+  const pinging = await simulation.run("home", "ping-port.js", { args: [BATCHER_CONFIG_PORT, 3] });
+  const holdingAgain = await simulation.run("home", "hold-briefly.js", { args: [40, 100, ...SHARING_HOSTS] });
+  expect(pinging.error ?? holdingAgain.error).toBeUndefined();
+  await simulation.advance(60_000);
+  await simulation.kill(holdingAgain.pid);
+  await simulation.kill(pinging.pid);
+  await simulation.advance(1_000);
+  const pinged = await healthOf(simulation);
+  console.log(
+    `#246, woken every 3 ms: ${(pinged.ramWaits ?? 0) - (waited.ramWaits ?? 0)} more waits; ${pinged.batchesShort} short`,
+  );
+  expect(pinged.ramWaits).toBeGreaterThan(waited.ramWaits ?? 0);
+  expect(pinged).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0 });
+  expect(pinged.longestRamWaitMs).toBeLessThanOrEqual(45);
+  // Held 300 ms in each 400, past the wait: a batch is short, a failure still, given up within a look of the wait's
+  // end, never started past it (#246's review), and its health says when, what, and why.
+  const startedAt = await simulation.now();
+  const holdingLonger = await simulation.run("home", "hold-briefly.js", { args: [300, 400, ...SHARING_HOSTS] });
   expect(holdingLonger.error).toBeUndefined();
   for (let waitedMs = 0; (await healthOf(simulation)).batchesShort === 0; waitedMs += 1_000) {
     expect(waitedMs, "a batch short within 2 virtual minutes").toBeLessThan(2 * 60_000);
@@ -1545,16 +1593,81 @@ test("an operation whose RAM frees a moment late waits for it (#246), within its
   expect(short.shorts).toHaveLength(short.batchesShort);
   const [first] = short.shorts ?? [];
   console.log(`#246: held 300 ms in each 400, the first short: ${JSON.stringify(first)}`);
-  // Its own operations had all freed theirs on time, and it shared nothing: the player's script held the RAM.
-  expect(first).toMatchObject({ target: "n00dles", failedOn: null, pastLandingGb: 0, sharingGb: 0 });
-  expect(first?.waitedMs).toBeGreaterThanOrEqual(100);
-  expect(first?.othersGb).toBeGreaterThan(0);
-  // The free RAM held under its threads: whole threads on each host, and under one more there.
-  const { threads = 0, freeGb = 0, largestFreeGb = 0 } = first ?? {};
-  expect(threads).toBeGreaterThan(0);
-  expect(freeGb).toBeLessThan(threads * 1.8 + SHARING_HOSTS.length * 1.8);
-  expect(largestFreeGb).toBeLessThanOrEqual(freeGb);
-  expect(first?.atMs).toBeLessThanOrEqual(short.atMs);
+  expect(first).toMatchObject({ target: "n00dles", failedOn: null, sharingGb: 0 });
+  expect(first?.atMs).toBeGreaterThanOrEqual(startedAt);
+  expect(first?.waitedMs).toBeGreaterThanOrEqual(BATCH_RAM_WAIT_MS);
+  expect(first?.waitedMs).toBeLessThan(BATCH_RAM_WAIT_MS + 2 * BATCH_RAM_WAIT_LOOK_MS);
+  // The player's script held the RAM it needed.
+  const { threads = 0, freeGb = 0, othersGb = 0 } = first ?? {};
+  expect(othersGb).toBeGreaterThanOrEqual(1.6);
+  expect(freeGb + othersGb).toBeGreaterThanOrEqual(threads * 1.7);
   // A wait that ran out is a short, never a wait: those counted all started within it.
   expect(short.longestRamWaitMs).toBeLessThan(BATCH_RAM_WAIT_MS);
+  for (const each of short.waits ?? []) expect(each.waitedMs).toBeLessThan(BATCH_RAM_WAIT_MS);
+});
+
+test("RAM a landing frees late (#246's review): the wait or short says its own operations past their landing held it", {
+  timeout: 300_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2e16);
+  const figures = await figuresOf(simulation, ["joesguns"]);
+  const joesguns = figures.joesguns as BatcherConfig["figures"];
+  expect(joesguns.requiredHackingSkill).toBeGreaterThan(1);
+  const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: MULTS };
+  const ramGb = batchRamGb(SHARING_HOSTS.map(() => 16));
+  const configOn = (share: number) => {
+    const plan = batchPlan(N00DLES, player, ramGb * share);
+    if (plan === null) throw new Error(`no plan for n00dles on ${share} of the hosts`);
+    return { ...n00dlesConfig(), hosts: SHARING_HOSTS, hackShare: plan.hackShare, spacingMs: plan.spacingMs };
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
+  expect(error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(configOn(0.6))] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  // joesguns sent to prepare next on all the room the batches leave, at hacking about 1,000, its figures saying it
+  // needs hacking 1, not 10: its weaken's time, so reckoned, is about 40% short at its starting security, and the wave
+  // lands some 7 s after its time (under the 10 s that makes it lost), its RAM held meanwhile, as a landing a busy page
+  // runs late holds it a moment.
+  const lying = { ...joesguns, requiredHackingSkill: 1 };
+  await simulation.run("home", "set-port.js", {
+    args: [
+      BATCHER_CONFIG_PORT,
+      JSON.stringify({ ...configOn(0.6), next: { target: "joesguns", figures: lying, ramGb } }),
+    ],
+  });
+  for (let waited = 0; ((await healthOf(simulation)).next?.wavesStarted ?? 0) === 0; waited += 1_000) {
+    expect(waited, "a wave on joesguns within a minute").toBeLessThan(60_000);
+    await simulation.advance(1_000);
+  }
+  // The next dropped, its wave out, and the batches planned on all the RAM: those started once the wave was due to
+  // land find its RAM still held.
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(configOn(1))] });
+  const records = new Map<string, RamWait | BatchShort>();
+  for (let elapsed = 0; elapsed < 3 * 60_000; elapsed += 1_000) {
+    await simulation.advance(1_000);
+    const health = await healthOf(simulation);
+    for (const each of [...(health.waits ?? []), ...(health.shorts ?? [])]) {
+      records.set(`${each.atMs} ${each.operation}`, each);
+    }
+  }
+  const after = await healthOf(simulation);
+  const pastLanding = [...records.values()].filter((each) => each.pastLandingGb > 0);
+  const lateLanding = [...records.values()].filter((each) => (each.landingLagMs ?? 0) > 1_000);
+  console.log(
+    `#246's review, RAM freed late: ${after.late} late; ${after.ramWaits} waits, ${after.batchesShort} short; ` +
+      `${pastLanding.length} held by its own past their landing, ${lateLanding.length} beside a landing over 1 s ` +
+      "late; " +
+      `one: ${JSON.stringify(pastLanding[0])}`,
+  );
+  // The wave landed late, as reckoned: the stand-in for a late landing.
+  expect(after.late).toBeGreaterThan(0);
+  // What held the RAM was its own operations past their landing, and the landing recorded meanwhile ran late.
+  expect(pastLanding.length).toBeGreaterThan(0);
+  expect(lateLanding.length).toBeGreaterThan(0);
+  // Nothing else ran on its hosts: none of it read as scripts not its own, nor as its share threads.
+  for (const each of pastLanding) expect(each).toMatchObject({ othersGb: 0, sharingGb: 0 });
 });
