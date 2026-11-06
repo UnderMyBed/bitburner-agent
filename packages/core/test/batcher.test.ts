@@ -6,7 +6,12 @@ import {
   BATCH_LAUNCH_LEAD_MS,
   BATCH_OPERATIONS,
   BATCH_RAM_RELEASE_MS,
+  BATCH_RAM_WAIT_MS,
+  BATCH_SHORTS_KEPT,
+  BATCH_START_SLACK_MS,
+  BATCH_WAITS_KEPT,
   BATCH_WEAKEN_RAM_GB,
+  type BatchShort,
   type BatchThreads,
   batchBounds,
   batchFits,
@@ -24,11 +29,13 @@ import {
   hackSharePerThread,
   hackThreadsAtLaunch,
   hackThreadsForShare,
+  hackWaitsForItsBatch,
   isBatcherFile,
   isOutsideBounds,
   isTargetPrepared,
   LANDING_LOST_AFTER_MS,
   LandingWatch,
+  type LaunchOrder,
   landingOffsetMs,
   largestBatchThatFits,
   launchLeadMs,
@@ -36,6 +43,7 @@ import {
   MAX_BATCH_SHARE,
   MIN_BATCH_SPACING_MS,
   MOST_PREPARATION_WAVES,
+  mayStillStart,
   mostRamHeldGb,
   newBatcherHealth,
   operationRamGb,
@@ -47,9 +55,13 @@ import {
   preparationTimeMs,
   preparationWave,
   type RamHold,
+  type RamWait,
+  ramHeldOf,
   recordGrowsNotLooked,
   recordHackLanded,
   recordMoneyLook,
+  recordRamWait,
+  recordShort,
   threadsThatFit,
 } from "../src/batcher.ts";
 import { growthLogPerThread } from "../src/hack-loop.ts";
@@ -1034,5 +1046,106 @@ describe("preparationTimeMs, weaken alone (#216's review)", () => {
       0,
     );
     expect(preparationTimeMs(joesguns, player(100), now, 100)).toBeCloseTo(expected, 6);
+  });
+});
+
+describe("a batch short of RAM, and an operation that waited for it (#246)", () => {
+  const held = { freeGb: 3.2, largestFreeGb: 1.6, pastLandingGb: 7.2, othersGb: 0, sharingGb: 0, landingLagMs: 35 };
+  const short = (atMs: number): BatchShort => ({
+    atMs,
+    target: "n00dles",
+    operation: "grow",
+    threads: 4,
+    waitedMs: BATCH_RAM_WAIT_MS,
+    slackMs: null,
+    failedOn: null,
+    ...held,
+  });
+  const wait = (atMs: number, waitedMs: number): RamWait => ({
+    atMs,
+    target: "n00dles",
+    operation: "weaken1",
+    threads: 4,
+    waitedMs,
+    slackMs: 150,
+    ...held,
+  });
+
+  test("a waiting operation may start within half the fixed lead, a grow or weaken only with time to land", () => {
+    expect(BATCH_RAM_WAIT_MS).toBe(BATCH_LAUNCH_LEAD_MS / 2);
+    expect(BATCH_START_SLACK_MS).toBe(BATCH_LAUNCH_LEAD_MS - BATCH_RAM_WAIT_MS);
+    // A hack (no slack asked: its script skips itself when late): within the wait only.
+    expect(mayStillStart(0, null)).toBe(true);
+    expect(mayStillStart(BATCH_RAM_WAIT_MS - 0.5, null)).toBe(true);
+    expect(mayStillStart(BATCH_RAM_WAIT_MS, null)).toBe(false);
+    expect(mayStillStart(BATCH_RAM_WAIT_MS + 50, null)).toBe(false);
+    // A grow or weaken: within the wait, and with the start's lag to spare before it must be called.
+    expect(mayStillStart(10, BATCH_START_SLACK_MS)).toBe(true);
+    expect(mayStillStart(10, BATCH_START_SLACK_MS - 0.5)).toBe(false);
+    expect(mayStillStart(10, -5)).toBe(false);
+    expect(mayStillStart(BATCH_RAM_WAIT_MS, 10_000)).toBe(false);
+  });
+
+  test("a hack waits while another of its batch's orders waits for room, never another batch's or its own", () => {
+    const order = (batch: number, operation: LaunchOrder["operation"]): LaunchOrder => ({
+      batch,
+      operation,
+      landAt: 1_000,
+      launchAt: 500,
+    });
+    const hack = order(7, "hack");
+    expect(hackWaitsForItsBatch(hack, [order(7, "grow")])).toBe(true);
+    expect(hackWaitsForItsBatch(hack, [order(6, "grow"), order(8, "weaken1")])).toBe(false);
+    expect(hackWaitsForItsBatch(hack, [hack])).toBe(false);
+    expect(hackWaitsForItsBatch(hack, [])).toBe(false);
+  });
+
+  test("what held the RAM: past their landing, those drained in this wake up to what's beyond, others the rest", () => {
+    const host = { freeGb: 1, usedGb: 15, inFlightGb: 8, pastLandingGb: 3.6, sharingGb: 4, drainedGb: 0 };
+    // 15 used: 8 in flight (3.6 of it past its landing), 4 shared, 3 beyond them.
+    expect(ramHeldOf([host], null)).toEqual({
+      freeGb: 1,
+      largestFreeGb: 1,
+      pastLandingGb: 3.6,
+      othersGb: 3,
+      sharingGb: 4,
+      landingLagMs: null,
+    });
+    // 1.8 GB drained in this wake, its script not yet torn down (#246's review): past its landing, not someone else's.
+    expect(ramHeldOf([{ ...host, drainedGb: 1.8 }], 40)).toMatchObject({
+      pastLandingGb: 5.4,
+      othersGb: 1.2,
+      landingLagMs: 40,
+    });
+    // Drained and already freed: none of it held.
+    expect(ramHeldOf([{ ...host, usedGb: 12, drainedGb: 1.8 }], 0)).toMatchObject({ pastLandingGb: 3.6, othersGb: 0 });
+    // Summed over hosts, the most free on one; a host over-full reads no negative free RAM.
+    const three = ramHeldOf([host, { ...host, freeGb: 6, drainedGb: 9 }, { ...host, freeGb: -1 }], 0);
+    expect(three).toMatchObject({ freeGb: 7, largestFreeGb: 6, othersGb: 6, sharingGb: 12 });
+    expect(three.pastLandingGb).toBeCloseTo(3.6 * 3 + 3, 9);
+  });
+
+  test("each short counted, the last few kept, oldest first; an older health's count goes on", () => {
+    const health = newBatcherHealth("n00dles", "r", 0);
+    expect(health).toMatchObject({ batchesShort: 0, shorts: [], ramWaits: 0, longestRamWaitMs: null, waits: [] });
+    for (let each = 1; each <= BATCH_SHORTS_KEPT + 2; each++) recordShort(health, short(each));
+    expect(health.batchesShort).toBe(BATCH_SHORTS_KEPT + 2);
+    expect(health.shorts?.map((each) => each.atMs)).toEqual([3, 4, 5, 6, 7]);
+    const older = { ...newBatcherHealth("n00dles", "r", 0), batchesShort: 2, shorts: undefined };
+    recordShort(older, short(9));
+    expect(older).toMatchObject({ batchesShort: 3, shorts: [short(9)] });
+  });
+
+  test("each wait counted, the run's longest so far, the last few kept with what held the RAM", () => {
+    const health = newBatcherHealth("n00dles", "r", 0);
+    recordRamWait(health, wait(1, 30));
+    recordRamWait(health, wait(2, 12.5));
+    expect(health).toMatchObject({ ramWaits: 2, longestRamWaitMs: 30, waits: [wait(1, 30), wait(2, 12.5)] });
+    for (let each = 3; each <= BATCH_WAITS_KEPT + 3; each++) recordRamWait(health, wait(each, 5));
+    expect(health.waits?.map((each) => each.atMs)).toEqual([4, 5, 6, 7, 8]);
+    expect(health).toMatchObject({ ramWaits: BATCH_WAITS_KEPT + 3, longestRamWaitMs: 30 });
+    const older = { ...newBatcherHealth("n00dles", "r", 0), ramWaits: undefined, longestRamWaitMs: undefined };
+    recordRamWait(older, wait(1, 4));
+    expect(older).toMatchObject({ ramWaits: 1, longestRamWaitMs: 4, waits: [wait(1, 4)] });
   });
 });
