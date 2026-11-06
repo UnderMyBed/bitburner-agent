@@ -98,7 +98,11 @@ export class Curves {
     }
     this.#exp = exp;
     this.#money = money;
+    this.lastMinute = (exp.at(-1) as readonly [number, number])[0];
   }
+
+  /** The curve's last reading, in minutes: past it, each clock is extrapolated at its last slope (#263 flags it). */
+  readonly lastMinute: number;
 
   /** The hacking level `clockMin` minutes into the reference curve by the experience's clock, at `multipliers`. */
   hackingLevelAt(clockMin: number, multipliers: Pick<HackingMultipliers, "hacking" | "hacking_exp">): number {
