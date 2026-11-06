@@ -119,9 +119,10 @@ Code runs in three environments, and each file is typechecked in its own (archit
 | Files | Config | Environment |
 |---|---|---|
 | `packages/core/src` | `packages/core/tsconfig.json` | Neither: imported by in-game and Node code alike, so no DOM and no Node types |
+| `packages/model/src` | `packages/model/tsconfig.json` | Neither: the fast model is pure, like `core`, so the planner can run it anywhere (#260) |
 | `packages/ingame/src` | `packages/ingame/src/tsconfig.json` | The game's page: the DOM, no Node, and the NS API from the pinned game's definitions as `@nsdefs` |
 | `packages/ingame/test/agent` | `packages/ingame/test/agent/tsconfig.json` (extends `src`'s) | The same: unit tests of the Agent's modules, which import in-game sources (#136) |
-| Everything else: other packages, the tests, build scripts, `tools/`, the root's own files | the package's `tsconfig.json` (for `ingame`, its build script and tests); `packages/core/test/tsconfig.json` for `core`'s tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node (`packages/e2`: Node and the DOM) |
+| Everything else: other packages, the tests, build scripts, `tools/`, the root's own files | the package's `tsconfig.json` (for `ingame`, its build script and tests); `packages/core/test/tsconfig.json` and `packages/model/test/tsconfig.json` for their tests; `tools/tsconfig.json`; the root `tsconfig.json` | Node (`packages/e2`: Node and the DOM) |
 
 - Every config extends `tsconfig.base.json` (the shared strict options, environment-neutral) or `tsconfig.node.json` (the same, plus Node types).
 - **Types can arrive through imports.** `@types/jsdom` brings the DOM into any program that imports it: `packages/sim` (its host emulates the game's page with jsdom), `packages/brain` (its dashboard page test) and the root's `vitest.config.ts` (through `vitest/config`). Their configs' own options are still Node's.

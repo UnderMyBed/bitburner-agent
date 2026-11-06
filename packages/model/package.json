@@ -1,0 +1,11 @@
+{
+  "name": "@bitburner-agent/model",
+  "private": true,
+  "description": "The fast model: a pure, calibrated model of the game for planning, over core's formulas (#13). First slice: BN1's cycles of reputation, favour and augmentations (#260).",
+  "license": "MIT",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@bitburner-agent/core": "*"
+  }
+}

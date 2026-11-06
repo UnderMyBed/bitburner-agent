@@ -18,3 +18,12 @@ export function isUpgradableHomeRam(ram: unknown): ram is number {
     Math.log2(ram as number) % 1 === 0
   );
 }
+
+/**
+ * What doubling home's RAM from `ram` GB costs in BN1, as the game works it out
+ * (`PersonObjects/Player/PlayerObjectServerMethods.ts:30`), in the same order so the result is the same number. Other
+ * BitNodes multiply it (`HomeComputerRamCost`, `BitNode/BitNode.tsx`): a later slice adds them.
+ */
+export function homeRamUpgradePrice(ram: number): number {
+  return ram * 32_000 * 1.58 ** Math.log2(ram);
+}
