@@ -36,7 +36,8 @@
 //   batch's RAM may free late: a landing's call ends on a timer (NetscriptHelpers.tsx:419-432), its RAM freed as its
 //   script is torn down after (killWorkerScript.ts:124), and on a busy page that timer fires late while the batcher,
 //   woken by an earlier landing's record, starts orders fitted to that RAM. Past the wait, the batch is short. Its
-//   health keeps the last few waits and shorts, each with what held the RAM at its first look (core's `ramHeldOf`).
+//   health keeps the last few waits and shorts, each with what held the RAM (core's `ramHeldOf`): at a wait's first
+//   look, as a short gave up.
 // - **Checked, loudly:** every landing is recorded on the landing port, cleared when it starts; each id starts with
 //   this run's name, so a previous run's records are only counted (unexpected), never trusted. One before a landing
 //   already recorded on its target is out of order (#236: a move's batches land among another target's), one started
@@ -302,7 +303,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       if (data === "NULL PORT DATA") {
         // Each order waiting for room (#246's review): a landing late while it waits is RAM freed late.
         for (const held of waitingForRam.values()) {
-          if (landingLagMs !== null) held.landingLagMs = Math.max(held.landingLagMs ?? landingLagMs, landingLagMs);
+          if (held !== null && landingLagMs !== null) {
+            held.landingLagMs = Math.max(held.landingLagMs ?? landingLagMs, landingLagMs);
+          }
         }
         // Woken by each record as it's written, so these are all that have landed (#234). No new NS call: no more RAM.
         const { due, notLooked } = growLandings.takeDue();
@@ -333,9 +336,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       preparingNext.delete(record.id);
       const drainedPart = parts.get(record.id);
       const landedOn = drainedPart?.target ?? null;
-      if (drainedPart !== undefined) {
+      // A skipped one (a late hack) never ran its call: no landing's lag (#246's verification).
+      if (drainedPart !== undefined && !record.skipped) {
         drainedGbByHost.set(drainedPart.host, (drainedGbByHost.get(drainedPart.host) ?? 0) + drainedPart.gb);
-        landingLagMs = Math.max(landingLagMs ?? Number.NEGATIVE_INFINITY, record.landedAt - record.landAt);
+        // Never under 0: a landing recorded a fraction of a ms before its time is on time.
+        landingLagMs = Math.max(landingLagMs ?? 0, record.landedAt - record.landAt, 0);
       }
       parts.delete(record.id);
       if (!record.skipped) growLandings.landed(record.id, record.landAt, landedOn);
@@ -375,9 +380,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const pending: LaunchOrder[] = [];
   /**
    * The orders due that found no room and wait for it (#246), until they start or their wait is over, each with what
-   * held the RAM at its first look.
+   * held the RAM at its first look; or null, a hack held while another of its batch's orders waits (#246's
+   * verification), before it has looked at the RAM itself.
    */
-  const waitingForRam = new Map<LaunchOrder, RamHeld>();
+  const waitingForRam = new Map<LaunchOrder, RamHeld | null>();
   const batches = new Map<number, PlannedBatch>();
   let landing: { target: string; threads: BatchThreads; untilMs: number }[] = [];
   /** No share round before this (#226's review): a batch came up short, or batches planned beside a wave still land. */
@@ -594,6 +600,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     threads: number,
     failedOn: string | null,
     held: RamHeld,
+    slackMs: number | null,
   ) => {
     batch.short = true;
     const waitedMs = Math.max(0, Date.now() - order.launchAt);
@@ -603,6 +610,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       operation: order.operation,
       threads,
       waitedMs,
+      slackMs,
       failedOn,
       ...held,
     });
@@ -621,29 +629,35 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     // Out of the line on every way out but a wait, which puts it back.
     waitingForRam.delete(order);
     const batch = batches.get(order.batch);
-    if (batch === undefined) return true;
+    if (batch === undefined) {
+      // Its batch's hack went out before it (#253): counted, never dropped silently (#246's verification).
+      health.ordersDropped = (health.ordersDropped ?? 0) + 1;
+      logNow = true;
+      return true;
+    }
     let threads = batch.threads[order.operation];
     const isHack = order.operation === "hack";
     const waitedMs = () => Math.max(0, Date.now() - order.launchAt);
     if (isHack) {
+      // Never out, nor skipped, while another of its batch's orders waits for room (#246's review): it waits with it,
+      // or the batch is short. Out or skipped, it would take the batch off the books, and the waiting order with it.
+      if (hackWaitsForItsBatch(order, waitingForRam.keys())) {
+        if (mayStillStart(waitedMs(), null)) {
+          // Held for its batch, not for RAM (#246's verification): counted apart, once.
+          if (firstLook === undefined) health.hacksHeldForBatch = (health.hacksHeldForBatch ?? 0) + 1;
+          waitingForRam.set(order, firstLook ?? null);
+          return false;
+        }
+        batches.delete(order.batch);
+        health.hacksSkipped += 1;
+        markShort(order, batch, threads, null, ramHeldNow(), null);
+        return true;
+      }
       // After a desync no hack goes out; after a move (#206) the batches out still hack their own target. The hack is a
       // batch's last order out.
       if (batch.short || health.state === "recovering") {
         batches.delete(order.batch);
         health.hacksSkipped += 1;
-        return true;
-      }
-      // Never out while another of its batch's orders waits for room (#246's review): it waits with it, or the batch
-      // is short. Out, it would leave the batch's books and the waiting order with them, a hack without its grow.
-      if (hackWaitsForItsBatch(order, waitingForRam.keys())) {
-        const held = firstLook ?? ramHeldNow();
-        if (mayStillStart(waitedMs(), null)) {
-          waitingForRam.set(order, held);
-          return false;
-        }
-        batches.delete(order.batch);
-        health.hacksSkipped += 1;
-        markShort(order, batch, threads, null, held);
         return true;
       }
       const player = playerNow();
@@ -666,25 +680,28 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     // A retry only while it can still land on time (#246's review): asked before it starts, so a wait never starts one
     // that can't; a first look that finds no room always waits, and its first retry may give up.
-    const mayStart = firstLook === undefined || mayStillStart(waitedMs(), slackIfStartedNow(order, batch));
+    const slackMs = firstLook === undefined ? null : slackIfStartedNow(order, batch);
+    const mayStart = firstLook === undefined || mayStillStart(waitedMs(), slackMs);
     // A grow's parts (#234): its money is looked at once they've all landed.
     const growParts = order.operation === "grow" ? new Set<string>() : undefined;
     const { started, failedOn } = mayStart
       ? launch(order.operation, threads, order.landAt, `${order.batch}.${order.operation}`, batch.target, growParts)
       : { started: false, failedOn: null };
-    // None started for want of room: tried again soon.
+    // None started for want of room: tried again soon. One held for its batch looks at the RAM now.
     if (!started && mayStart && failedOn === null) {
       if (firstLook === undefined) retryWaitingAt = Math.max(retryWaitingAt, Date.now() + BATCH_RAM_WAIT_LOOK_MS);
       waitingForRam.set(order, firstLook ?? ramHeldNow());
       return false;
     }
-    if (started && firstLook !== undefined) {
+    // A wait for RAM, with what held it and the time it had to spare (#246's verification): not one held for its batch.
+    if (started && firstLook !== undefined && firstLook !== null) {
       recordRamWait(health, {
         atMs: Date.now(),
         target: batch.target,
         operation: order.operation,
         threads,
         waitedMs: waitedMs(),
+        slackMs,
         ...firstLook,
       });
     }
@@ -701,7 +718,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     // A hack that didn't all start is skipped too: what of it started still lands, and is counted as it does.
     if (!started && isHack) health.hacksSkipped += 1;
-    if (!started && !batch.short) markShort(order, batch, threads, failedOn, firstLook ?? ramHeldNow());
+    if (!started && !batch.short) markShort(order, batch, threads, failedOn, ramHeldNow(), slackMs);
     return true;
   };
 
@@ -712,8 +729,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * last try: those that start or give up leave the line. Whatever woke it, a landing's record or the time, so records
    * coming more often than that never keep them from their try, nor from giving up.
    */
-  const retryWaitingOrdersIfDue = () => {
-    if (waitingForRam.size === 0 || Date.now() < retryWaitingAt) return;
+  const retryWaitingOrdersIfDue = (whateverTheTime = false) => {
+    if (waitingForRam.size === 0 || (!whateverTheTime && Date.now() < retryWaitingAt)) return;
     retryWaitingAt = Date.now() + BATCH_RAM_WAIT_LOOK_MS;
     const inLine = [...waitingForRam.keys()].sort((a, b) => a.launchAt - b.launchAt || a.landAt - b.landAt);
     for (const order of inLine) launchOrder(order);
@@ -1078,8 +1095,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     // The batches planned go out in every state, a previous target's too after a move (#206).
     pending.sort((a, b) => a.launchAt - b.launchAt || a.landAt - b.landAt);
-    // Those waiting for room first (#246), once their next try is due; one that finds no room joins the line.
-    retryWaitingOrdersIfDue();
+    // Those waiting for room first (#246), on every wake of the whole loop, before those due can take their RAM (#246's
+    // verification); one that finds no room joins the line.
+    retryWaitingOrdersIfDue(true);
     while (pending.length > 0 && (pending[0] as LaunchOrder).launchAt <= Date.now()) {
       launchOrder(pending.shift() as LaunchOrder);
     }

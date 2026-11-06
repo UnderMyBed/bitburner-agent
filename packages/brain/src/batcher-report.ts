@@ -36,10 +36,13 @@ const COUNTS = [
 /**
  * Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM, and of them the share's (#232); its
  * looks at the target's money after each batch's grow, those below its maximum (#234), and the grows not looked at
- * (#235's review); and the operations that waited for RAM at their time (#246).
+ * (#235's review); the operations that waited for RAM at their time (#246), the hacks held for their batch's, and the
+ * orders that found their batch gone (#246's verification).
  */
 const NEWER_COUNTS = [
   "ramWaits",
+  "hacksHeldForBatch",
+  "ordersDropped",
   "batchesTrimmed",
   "batchesTrimmedBySharing",
   "moneyLooks",
@@ -355,6 +358,7 @@ function ramRecordsOf(health: BatcherHealth, kind: "shorts" | "waits"): (BatchSh
     return (
       RAM_RECORD_NUMBER_FIELDS.every((name) => isNumber(fields[name])) &&
       (fields.landingLagMs === null || isNumber(fields.landingLagMs)) &&
+      (fields.slackMs === undefined || fields.slackMs === null || isNumber(fields.slackMs)) &&
       typeof fields.operation === "string" &&
       typeof fields.target === "string" &&
       (kind === "waits" || fields.failedOn === null || typeof fields.failedOn === "string")
@@ -372,12 +376,15 @@ const formatGb = (value: number) => `${Number(value.toFixed(2))} GB`;
 function ramRecordLine(record: BatchShort | RamWait, started: boolean): string {
   const lag = record.landingLagMs === null ? "none landed then" : `landings ${Math.round(record.landingLagMs)} ms late`;
   const failedOn = "failedOn" in record && record.failedOn !== null ? `; exec failed on ${record.failedOn}` : "";
+  // A grow's or weaken's time to spare as it started, or gave up (#246's verification): under 100 ms, it gave up early.
+  const slack = typeof record.slackMs === "number" ? `, ${Math.round(record.slackMs)} ms to spare` : "";
   return (
     `    at ${formatIsoTime(record.atMs)}: ${record.operation} of ${record.threads} threads on ${record.target}, ` +
-    `${started ? "started " : ""}${Math.round(record.waitedMs)} ms past its time; at its first look ` +
+    `${started ? "started " : ""}${Math.round(record.waitedMs)} ms past its time${slack}; ` +
+    `${started ? "at its first look" : "as it gave up"} ` +
     `${formatGb(record.freeGb)} free (${formatGb(record.largestFreeGb)} at most on a host), held by its operations ` +
-    `past their landing ${formatGb(record.pastLandingGb)}, by scripts not its own ${formatGb(record.othersGb)}, by ` +
-    `its share threads ${formatGb(record.sharingGb)}; ${lag}${failedOn}`
+    `past their landing up to ${formatGb(record.pastLandingGb)}, by scripts not its own ` +
+    `${formatGb(record.othersGb)}, by its share threads ${formatGb(record.sharingGb)}; ${lag}${failedOn}`
   );
 }
 
@@ -543,6 +550,14 @@ export function batcherSection(
           `${Math.round(longestWaitMs)} ms`,
   );
   lines.push(...ramRecordLines(waits, total.ramWaits, true));
+  // Hacks held for their batch's orders waiting, apart from the waits for RAM; orders that found their batch gone, its
+  // hack out first (#253: a hack time under a few tens of ms), never silent (#246's verification). Shown, not a failure.
+  if (anyWaitReporting) {
+    lines.push(
+      `  hacks held for their batch's orders waiting for RAM (#246): ${total.hacksHeldForBatch || "none"}; orders that ` +
+        `found their batch gone: ${total.ordersDropped || "none"}`,
+    );
+  }
   // Trimmed (#232): the batcher fits each batch to the RAM as it will be held, so a plan its hosts can't place is cut,
   // never short. A batch trimmed is income lost, not a failure: a new plan, or one at a lower hacking level, can hold
   // more for a while than the plan's peak. Those the share's threads made smaller are shown apart (#232's review): the

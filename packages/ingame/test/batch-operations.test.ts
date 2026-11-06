@@ -6,6 +6,7 @@
 import {
   BATCH_RAM_WAIT_LOOK_MS,
   BATCH_RAM_WAIT_MS,
+  BATCH_START_SLACK_MS,
   BATCHER_CONFIG_PORT,
   BATCHER_HEALTH_PORT,
   BATCHER_LANDING_PORT,
@@ -1487,7 +1488,8 @@ test("a next target on all the RAM the batches leave (#237's re-review): prepare
 const BRIEF = "export async function main(ns) { await ns.asleep(Number(ns.args[0])); }";
 /**
  * A player's script that, every `everyMs`, takes each host's free RAM with `brief.js` threads ending `holdMs` on: RAM
- * that frees a moment after the batches counted on it, as a busy page's late timers leave an operation's (#246).
+ * that frees a moment after the batches counted on it, as a busy page's late timers leave an operation's (#246). Home
+ * keeps 1.65 GB, for the test's look at the health (1.6 GB), and no batch operation (1.7 GB at least).
  */
 /** Writes to a port every `everyMs`, waking whatever waits on it: a busy batcher's landing records, coming that often. */
 const PING_PORT = `export async function main(ns) {
@@ -1501,7 +1503,8 @@ const HOLD_BRIEFLY = `export async function main(ns) {
   const [holdMs, everyMs, ...hosts] = ns.args;
   for (let round = 0; ; round++) {
     for (const host of hosts) {
-      const threads = Math.floor((ns.getServerMaxRam(host) - ns.getServerUsedRam(host)) / 1.6 + 1e-9);
+      const keptGb = host === "home" ? 1.65 : 0;
+      const threads = Math.floor((ns.getServerMaxRam(host) - ns.getServerUsedRam(host) - keptGb) / 1.6 + 1e-9);
       if (threads > 0) ns.exec("brief.js", host, threads, holdMs, round);
     }
     await ns.asleep(everyMs);
@@ -1553,8 +1556,10 @@ test("an operation whose RAM frees a moment late waits for it (#246), within its
   expect(waited).toMatchObject({ batchesShort: 0, shorts: [], late: 0, lost: 0, desyncs: 0 });
   expect(waited.batchesStarted - before.batchesStarted).toBeGreaterThan(5);
   // Each wait says why (#246's review): the player's script held the RAM, at least a 1.6 GB thread of it, and had it
-  // been free the operation would have fitted; no share threads. Every one seen, and each within the wait.
-  expect(waits.size).toBe(waited.ramWaits);
+  // been free the operation would have fitted; no share threads. Those seen (the health keeps the last 5, looked at each
+  // second), each within the wait.
+  expect(waits.size).toBeGreaterThan(3);
+  expect(waits.size).toBeLessThanOrEqual(waited.ramWaits ?? 0);
   for (const each of waits.values()) {
     expect(each.waitedMs).toBeGreaterThan(0);
     expect(each.waitedMs).toBeLessThan(BATCH_RAM_WAIT_MS);
@@ -1670,4 +1675,181 @@ test("RAM a landing frees late (#246's review): the wait or short says its own o
   expect(lateLanding.length).toBeGreaterThan(0);
   // Nothing else ran on its hosts: none of it read as scripts not its own, nor as its share threads.
   for (const each of pastLanding) expect(each).toMatchObject({ othersGb: 0, sharingGb: 0 });
+});
+
+/**
+ * n00dles batched on the six hosts at the hacking level `hackingExp` gives, by a batcher given its config, a batch of one
+ * hack thread as often as the RAM holds: the config, its hacks landed.
+ */
+async function batchingOnSixHosts(simulation: Simulation, hackingExp: number): Promise<BatcherConfig> {
+  await simulation.diagnostics.gainHackingExp(hackingExp);
+  for (const host of SHARING_HOSTS) await simulation.writeFile(host, "brief.js", BRIEF);
+  await simulation.writeFile("home", "hold-briefly.js", HOLD_BRIEFLY);
+  const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: MULTS };
+  const threads = batchThreads(N00DLES, player, 1);
+  const spacingMs = leastSpacingMs(
+    threads,
+    batchHoldsMs(N00DLES, player, threads),
+    batchRamGb(SHARING_HOSTS.map(() => 16)),
+  );
+  if (spacingMs === null) throw new Error("no batch of one hack thread fits the six hosts");
+  const hackShare = hackSharePerThread(N00DLES, player);
+  const config = { ...n00dlesConfig(), hosts: SHARING_HOSTS, hackShare, spacingMs };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  return config;
+}
+
+/** Every wait and short the health kept over `forMs`, looked at each second. */
+async function waitsAndShortsOver(simulation: Simulation, forMs: number) {
+  const waits = new Map<string, RamWait>();
+  const shorts = new Map<string, BatchShort>();
+  for (let elapsed = 0; elapsed < forMs; elapsed += 1_000) {
+    await simulation.advance(1_000);
+    const health = await healthOf(simulation);
+    if (elapsed % 5_000 === 0) console.log();
+    for (const each of health.waits ?? []) waits.set(`${each.atMs} ${each.operation}`, each);
+    for (const each of health.shorts ?? []) shorts.set(`${each.atMs} ${each.operation}`, each);
+  }
+  return { waits: [...waits.values()], shorts: [...shorts.values()] };
+}
+
+test("waiting for RAM, a grow or weaken gives up once the security leaves it no time to land; and a give-up as a landing is recorded counts that landing's RAM as its own (#246's verification)", {
+  timeout: 300_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(6_000_000);
+  // joesguns (needs hacking 10) prepared by a player's script on a home of 32 TB: its security weighs on its times, 4%
+  // a point at its minimum of 5, so a little more than its batches leave makes a weaken seconds longer.
+  await simulation.diagnostics.setHomeRam(32_768);
+  await simulation.writeFile("home", "prepare-fully.js", PREPARE_FULLY);
+  const preparer = await simulation.run("home", "prepare-fully.js", { threads: 3_000, args: ["joesguns"] });
+  expect(preparer.error).toBeUndefined();
+  for (let waited = 0; (await simulation.ps("home")).some((each) => each.pid === preparer.pid); waited += 10_000) {
+    expect(waited, "joesguns prepared within 30 virtual minutes").toBeLessThan(30 * 60_000);
+    await simulation.advance(10_000);
+  }
+  const joesguns = (await figuresOf(simulation, ["joesguns"])).joesguns as BatcherConfig["figures"];
+  // The six hosts and home for its operations: batches of one hack thread every 80 ms, a landing every 20 ms, on a
+  // plan for half of home, the rest left for the player's hack.
+  const hosts = [...SHARING_HOSTS, "home"];
+  for (const host of hosts) await simulation.writeFile(host, "brief.js", BRIEF);
+  await simulation.writeFile("home", "hold-briefly.js", HOLD_BRIEFLY);
+  await simulation.writeFile("home", "hack-once.js", "export async function main(ns) { await ns.hack(ns.args[0]); }");
+  const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: MULTS };
+  const threads = batchThreads(joesguns, player, 1);
+  const holds = batchHoldsMs(joesguns, player, threads);
+  const spacingMs = leastSpacingMs(threads, holds, batchRamGb([...SHARING_HOSTS.map(() => 16), 16_384 - 8]));
+  expect(spacingMs).toBe(80);
+  const config = {
+    ...n00dlesConfig(),
+    target: "joesguns",
+    figures: joesguns,
+    hosts,
+    hackShare: hackSharePerThread(joesguns, player),
+    spacingMs: 80,
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  // RAM held 40 ms in each 100, so operations wait; and a player's hack of 500 threads, its security up by 1 (a
+  // weaken seconds longer), so the batcher stops hacking and lets its batches land, their grows and weakens still going
+  // out. A wait that finds no time left gives up at its next look: often as a landing's record wakes it, the landing's
+  // script not yet torn down (the game frees its RAM after the record is read, killWorkerScript.ts:124).
+  const raising = await simulation.run("home", "hack-once.js", { threads: 500, args: ["joesguns"] });
+  const holding = await simulation.run("home", "hold-briefly.js", { args: [40, 100, ...hosts] });
+  expect(holding.error ?? raising.error).toBeUndefined();
+  const { waits, shorts } = await waitsAndShortsOver(simulation, 60_000);
+  await simulation.kill(holding.pid);
+  const gaveUpEarly = shorts.filter(
+    (each) => each.operation !== "hack" && each.slackMs !== null && each.waitedMs < BATCH_RAM_WAIT_MS,
+  );
+  const drainedHeld = gaveUpEarly.filter((each) => each.pastLandingGb > 0);
+  console.log(
+    `#246's verification, security raised: ${waits.length} waits, ${shorts.length} shorts, ${gaveUpEarly.length} given ` +
+      `up early for want of time, ${drainedHeld.length} of them beside a landing's RAM not yet freed; one: ` +
+      JSON.stringify(drainedHeld[0] ?? gaveUpEarly[0]),
+  );
+  // Waiting, they gave up before their wait was over: started, they'd have landed late, out of step (row 1).
+  expect(gaveUpEarly.length).toBeGreaterThan(0);
+  for (const each of gaveUpEarly) expect(each.slackMs).toBeLessThan(BATCH_START_SLACK_MS);
+  // And none that waited started without the time to land on it.
+  for (const each of waits) {
+    if (each.slackMs !== null) expect(each.slackMs).toBeGreaterThanOrEqual(BATCH_START_SLACK_MS);
+  }
+  // Given up as a landing was recorded, its script not yet torn down: its RAM is its own past landing (row 2), and the
+  // landing on time.
+  expect(drainedHeld.length).toBeGreaterThan(0);
+  for (const each of drainedHeld) expect(each.landingLagMs).toBe(0);
+});
+
+/**
+ * n00dles prepared by a batcher at the hacking level `hackingExp` gives, then batched for 20 s by one told the player's
+ * hacks are 60 times as fast as they are, beside RAM held 60 ms in each 100: its health, and the waits it kept, looked
+ * at each second. Its operations, so reckoned, all start late: what's looked at is only its books.
+ */
+async function fastBatcherHealth(hackingExp: number): Promise<{ health: BatcherHealth; waits: RamWait[] }> {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.setHomeRam(64);
+  const honest = await batchingOnSixHosts(simulation, hackingExp);
+  const first = (await simulation.ps("home")).find((each) => each.filename.endsWith(BATCHER_SCRIPT_NAME));
+  if (first === undefined) throw new Error("no batcher on home");
+  await simulation.kill(first.pid);
+  await simulation.advance(60_000);
+  const fast = { ...MULTS, hacking_speed: 60 };
+  const player = { skills: { hacking: (await simulation.summary()).hackingLevel, intelligence: 0 }, mults: fast };
+  const threads = batchThreads(N00DLES, player, 1);
+  const ramGb = batchRamGb(SHARING_HOSTS.map(() => 16));
+  const spacingMs = leastSpacingMs(threads, batchHoldsMs(N00DLES, player, threads), ramGb);
+  if (spacingMs === null) throw new Error("no batch of one hack thread fits at 60 times the speed");
+  const config = {
+    ...honest,
+    player: { intelligence: 0, mults: fast },
+    hackShare: hackSharePerThread(N00DLES, player),
+    spacingMs,
+  };
+  const holding = await simulation.run("home", "hold-briefly.js", { args: [60, 100, ...SHARING_HOSTS] });
+  expect(holding.error).toBeUndefined();
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  const { waits } = await waitsAndShortsOver(simulation, 20_000);
+  const health = await healthOf(simulation);
+  await simulation.kill(holding.pid);
+  console.log(
+    `#246's verification, at ${hackingExp} exp: ${health.batchesStarted} batches, ${health.hacksHeldForBatch} hacks ` +
+      `held for their batch, ${health.ordersDropped} orders dropped, ${health.ramWaits} waits, ${health.batchesShort} short`,
+  );
+  return { health, waits };
+}
+
+test("a hack waits with its batch's orders waiting for RAM, never out without them (#246's verification)", {
+  timeout: 300_000,
+}, async () => {
+  // At hacking about 1,000, a weaken reckoned at 160 ms: a batch's hack starts some 50 ms after its grow, still the last
+  // out, as a late game's would (a hack time under ~64 ms), and a grow waiting for RAM is still there when it's due.
+  const { health, waits } = await fastBatcherHealth(2e16);
+  // Held while their batch's orders waited, then out or short with them; no order ever found its batch gone. Not waits
+  // for RAM: each wait counted is one that found no room itself.
+  expect(health.hacksHeldForBatch).toBeGreaterThan(0);
+  expect(health.ordersDropped).toBe(0);
+  for (const each of waits) {
+    expect(each.slackMs === null).toBe(each.operation === "hack");
+    expect(typeof each.freeGb).toBe("number");
+  }
+});
+
+test("an order that finds its batch gone, its hack out before it (#253), is counted, never silent (#246's verification)", {
+  timeout: 300_000,
+}, async () => {
+  // At hacking about 22,000, a weaken reckoned at 8 ms: the lead outweighs the times, and a batch's hack starts before
+  // its grow and weakens (#253, filed apart). Out, it takes the batch off the books, and those after it find it gone.
+  const { health } = await fastBatcherHealth(1e300);
+  expect(health.ordersDropped).toBeGreaterThan(0);
 });

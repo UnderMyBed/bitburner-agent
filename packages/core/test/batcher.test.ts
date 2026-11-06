@@ -1057,6 +1057,7 @@ describe("a batch short of RAM, and an operation that waited for it (#246)", () 
     operation: "grow",
     threads: 4,
     waitedMs: BATCH_RAM_WAIT_MS,
+    slackMs: null,
     failedOn: null,
     ...held,
   });
@@ -1066,6 +1067,7 @@ describe("a batch short of RAM, and an operation that waited for it (#246)", () 
     operation: "weaken1",
     threads: 4,
     waitedMs,
+    slackMs: 150,
     ...held,
   });
 

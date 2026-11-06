@@ -1161,6 +1161,13 @@ export interface BatcherHealth {
   longestRamWaitMs?: number | null;
   waits?: RamWait[];
   /**
+   * Hacks held back while another of their batch's orders waited for room (#246's verification): not waits for RAM,
+   * counted apart. And orders that found their batch gone, its hack out before them (a hack time under a few tens of
+   * ms, #253): never dropped silently. Absent from an older batcher.
+   */
+  hacksHeldForBatch?: number;
+  ordersDropped?: number;
+  /**
    * The last `BATCH_SHORTS_KEPT` batches short of RAM (#246), oldest first: when, what wasn't placed, and what held
    * the RAM, so the run report says each. Absent from an older batcher.
    */
@@ -1177,7 +1184,8 @@ export const BATCH_WAITS_KEPT = 5;
  * What held the hosts' RAM when an operation found no room (#246): their free RAM (in all, and the most on one host);
  * beside the batcher's operations in flight, the RAM of its own operations past their landing (not yet recorded, or
  * recorded in this wake with their scripts not yet torn down: a late landing's), of scripts not its own (with home a
- * host, the batcher's and the Agent's own scripts there too), and of its share threads there; and the latest of the
+ * host, the batcher's and the Agent's own scripts there too, so `pastLandingGb` is at most what it says: those drained
+ * are counted up to what's held beyond its own), and of its share threads there; and the latest of the
  * landings recorded in the wake of that look or while it waited, `landedAt` less `landAt`, ms (null with none): how
  * late the page ran.
  */
@@ -1226,7 +1234,8 @@ export function ramHeldOf(hosts: readonly HostRamHeld[], landingLagMs: number | 
 
 /**
  * An operation that waited for room (#246) and then started: when it started, what it was, how long past its time,
- * and what held the RAM at its first look.
+ * the time it had to spare as it started (`slackMs`, a grow's or weaken's: its landing less now and its time at the
+ * security then; null for a hack), and what held the RAM at its first look.
  */
 export interface RamWait extends RamHeld {
   atMs: number;
@@ -1234,11 +1243,15 @@ export interface RamWait extends RamHeld {
   operation: BatchOperation;
   threads: number;
   waitedMs: number;
+  slackMs: number | null;
 }
 
 /**
  * A batch short of RAM (#246): the operation that didn't start, when, how long it had waited past its time for room,
- * and what held the RAM at its first look. `failedOn` is the host whose `exec` failed, or null when none had room.
+ * the time a grow or weaken had to spare then (`slackMs`, null for a hack or one not asked: under
+ * `BATCH_START_SLACK_MS`, it gave up before its wait was over, as the target's security had risen), and what held the
+ * RAM as it gave up (#246's verification: given up in a landing's wake, that landing's RAM not yet freed is its own
+ * past landing). `failedOn` is the host whose `exec` failed, or null when none had room.
  */
 export interface BatchShort extends RamHeld {
   atMs: number;
@@ -1246,6 +1259,7 @@ export interface BatchShort extends RamHeld {
   operation: BatchOperation;
   threads: number;
   waitedMs: number;
+  slackMs: number | null;
   failedOn: string | null;
 }
 
@@ -1320,6 +1334,8 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     ramWaits: 0,
     longestRamWaitMs: null,
     waits: [],
+    hacksHeldForBatch: 0,
+    ordersDropped: 0,
     shorts: [],
     atMs,
   };
