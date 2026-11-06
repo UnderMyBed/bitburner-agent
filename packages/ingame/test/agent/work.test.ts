@@ -1,7 +1,8 @@
 // The Agent's work activity (#151): when it converges the work the brain wants, through which effector, and what it
-// reports. The workers are stand-ins; the simulator and E2 run the real ones.
+// reports. The workers are stand-ins; the simulator and E2 run the real ones. A property (#179) plays any history.
 import type { EffectorReport, Work, WorkEffectorReport } from "@bitburner-agent/core";
-import { afterEach, expect, test, vi } from "vitest";
+import fc from "fast-check";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createEffectorRunner } from "../../src/agent/effector-runner.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
 import { createWorkActivity } from "../../src/agent/work.ts";
@@ -11,7 +12,14 @@ const ROUND_MS = 2_000;
 const HACKING: Work = { kind: "faction", faction: "CyberSec", workType: "hacking", focus: true };
 const CONVERGED: EffectorReport = { done: true, problem: null };
 
-function activityWith(answer: () => WorkEffectorReport | "no report", singularity = { available: false }) {
+/**
+ * The activity, with stand-in workers answering what `answer` gives for each run: a report, `"no report"` for one that
+ * can't start, or `"busy"` for one whose last copy is still running.
+ */
+function activityWith(
+  answer: (workerFile: string, workerArguments: unknown[]) => WorkEffectorReport | "no report" | "busy",
+  singularity = { available: false },
+) {
   const lines: string[] = [];
   const ns = {
     print: (line: string) => lines.push(line),
@@ -20,9 +28,10 @@ function activityWith(answer: () => WorkEffectorReport | "no report", singularit
     getServerMaxRam: () => 32,
     getServerUsedRam: () => 3,
   } as unknown as NS;
-  const runWorker = vi.fn(async (): Promise<WorkerRun> => {
-    const report = answer();
+  const runWorker = vi.fn(async (workerFile: string, workerArguments: unknown[]): Promise<WorkerRun> => {
+    const report = answer(workerFile, workerArguments);
     if (report === "no report") return { outcome: "couldNotStart" };
+    if (report === "busy") return { outcome: "stillRunning" };
     return { outcome: "reported", report: { workerPid: 1, data: report } as never };
   });
   const effectorRunner = createEffectorRunner(ns, {
@@ -269,4 +278,138 @@ test("a promotion taken (#155): in the outcome, with the company and when, and l
   expect(work.outcome()?.promotion?.to).toBe("IT Analyst");
   work.desire({ ...IT, field: "Software" });
   expect(work.outcome()).toEqual({ converged: false, problem: null, backend: null });
+});
+
+describe("properties (#179): the work converges, and isn't restarted once it has", () => {
+  /**
+   * A stand-in game: the work it's doing (a worker file and the work's arguments, without the focus), its focus, and
+   * how often a work was started. A stand-in effector that converges does what each backend's does
+   * (`convergeFactionWork` and the others in the simulator, ../../src/page/work-page.ts on the page, the Singularity
+   * workers): already so, nothing touched; another work, started (focused, as the game starts one); then the focus.
+   * That each real effector touches nothing when the game is already so is theirs to show, example-tested per backend
+   * (packages/brain/test/effector-backends.test.ts for `sim` and `singularity`, the page's tests, E2): here, what the
+   * Agent asks of them.
+   */
+  interface StandInGame {
+    doing: string | null;
+    focus: boolean;
+    starts: number;
+  }
+  /** Each kind of work, two of faction work; the focus is the arbitrary's. */
+  const WORKS: Work[] = [
+    { kind: "faction", faction: "CyberSec", workType: "hacking", focus: false },
+    { kind: "faction", faction: "CyberSec", workType: "field", focus: false },
+    { kind: "company", company: "Carmichael Security", field: "IT", focus: false },
+    { kind: "crime", crime: "Shoplift", focus: false },
+    { kind: "class", location: "Powerhouse Gym", classType: "agi", focus: false },
+  ];
+  const anyWork = fc
+    .record({ index: fc.nat({ max: WORKS.length - 1 }), focus: fc.boolean() })
+    .map(({ index, focus }) => ({ ...(WORKS[index] as Work), focus }));
+  /** A run's work and focus: company work's worker takes the promotion check after the focus. */
+  const workOfRun = (workerFile: string, workerArguments: unknown[]) => {
+    const name = workerFile.split("/").at(-1) as string;
+    const args = workerArguments.slice(0, name === "company-work.js" ? -3 : -2);
+    const focus = workerArguments.at(name === "company-work.js" ? -3 : -2) === "true";
+    return { doing: JSON.stringify([name, ...args]), focus };
+  };
+  /** What the game does for `work`, written out here rather than taken from the effectors under test. */
+  const doingOf = (work: Work): string => {
+    if (work.kind === "faction") return JSON.stringify(["faction-work.js", work.faction, work.workType]);
+    if (work.kind === "company") return JSON.stringify(["company-work.js", work.company, work.field]);
+    if (work.kind === "crime") return JSON.stringify(["crime-work.js", work.crime]);
+    return JSON.stringify(["class-work.js", work.location, work.classType]);
+  };
+  /** What a stand-in worker does on one run: converges the game, or not, or is still running, or can't start. */
+  const ANSWERS = ["converges", "notConverged", "busy", "cantStart"] as const;
+  type Answer = (typeof ANSWERS)[number];
+  /** Looks in any 30 rounds, held: every 15 rounds (30 s) with a report; every round without one. */
+  const LOOKS_IN_30: Record<Answer, number> = { converges: 2, notConverged: 2, busy: 30, cantStart: 30 };
+  /**
+   * What happens in a round: the brain sends work (or none), a disconnect, the owner (or a page effector) moves the
+   * game's work, or a round runs with the worker's answer, with enough of the round left or not.
+   */
+  const anyStep = fc.oneof(
+    fc.record({ kind: fc.constant("desire" as const), work: fc.option(anyWork) }),
+    fc.record({ kind: fc.constant("forget" as const) }),
+    fc.record({ kind: fc.constant("owner" as const), work: fc.option(anyWork) }),
+    fc.record({ kind: fc.constant("round" as const), answer: fc.constantFrom(...ANSWERS), short: fc.boolean() }),
+  );
+
+  test("from anything, the work wanted, its answer held: settled within 16 rounds, kept, never restarted", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(anyStep, { maxLength: 30, size: "medium" }),
+        fc.option(anyWork, { freq: 5 }),
+        fc.constantFrom(...ANSWERS),
+        async (before, wanted, heldAnswer) => {
+          const standInGame: StandInGame = { doing: null, focus: false, starts: 0 };
+          let answer: Answer = "notConverged";
+          /** Each run the stand-in worker was asked for: the work and its focus. */
+          const asked: { doing: string; focus: boolean }[] = [];
+          const { work, round } = activityWith((workerFile, workerArguments) => {
+            const run = workOfRun(workerFile, workerArguments);
+            asked.push(run);
+            if (answer === "busy") return "busy";
+            if (answer === "cantStart") return "no report";
+            if (answer === "notConverged") return { done: false, problem: "not yet" };
+            if (standInGame.doing !== run.doing) {
+              standInGame.doing = run.doing;
+              standInGame.focus = true;
+              standInGame.starts += 1;
+            }
+            standInGame.focus = run.focus;
+            return CONVERGED;
+          });
+          for (const step of before) {
+            if (step.kind === "desire") work.desire(step.work === null ? null : structuredClone(step.work));
+            else if (step.kind === "forget") work.forget();
+            else if (step.kind === "owner") {
+              standInGame.doing = step.work === null ? null : doingOf(step.work);
+              standInGame.focus = step.work?.focus ?? false;
+            } else {
+              answer = step.answer;
+              await round(step.short ? 500 : ROUND_MS);
+            }
+          }
+          // From here the brain keeps sending the same work, or none (afresh, as off the wire), and each worker
+          // answers the same: within the 30 s between looks and one more round, the outcome is that answer's.
+          answer = heldAnswer;
+          const askedBefore = asked.length;
+          for (let each = 0; each < 16; each += 1) {
+            work.desire(wanted === null ? null : structuredClone(wanted));
+            await round();
+          }
+          // Every run asked for from here is for the work wanted, at its focus; none at all with none wanted.
+          const askedSince = asked.slice(askedBefore);
+          const wantedRun = wanted === null ? null : { doing: doingOf(wanted), focus: wanted.focus };
+          expect(askedSince.filter((run) => JSON.stringify(run) !== JSON.stringify(wantedRun))).toEqual([]);
+          if (wanted === null) {
+            // None wanted: the game's work left alone, nothing reported.
+            expect(askedSince).toEqual([]);
+            expect(work.outcome()).toBeNull();
+          } else if (heldAnswer === "converges") {
+            expect([standInGame.doing, standInGame.focus]).toEqual([doingOf(wanted), wanted.focus]);
+            expect(work.outcome()).toEqual({ converged: true, problem: null, backend: "ui" });
+          } else {
+            // Not converged, by the worker's word or for want of one: looked at, and said so.
+            expect(askedSince.length).toBeGreaterThanOrEqual(1);
+            expect(work.outcome()).toMatchObject({ converged: false, problem: expect.any(String), backend: "ui" });
+          }
+          // And kept: the outcome doesn't change, nothing is started again, and it's looked at as its answer says.
+          const settled = work.outcome();
+          const startsBefore = standInGame.starts;
+          const askedBeforeKept = asked.length;
+          for (let each = 0; each < 30; each += 1) {
+            work.desire(wanted === null ? null : structuredClone(wanted));
+            await round();
+          }
+          expect(work.outcome()).toEqual(settled);
+          expect(standInGame.starts).toBe(startsBefore);
+          expect(asked.length - askedBeforeKept).toBe(wanted === null ? 0 : LOOKS_IN_30[heldAnswer]);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
 });
