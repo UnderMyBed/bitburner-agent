@@ -130,7 +130,7 @@ export interface WorkResetInfo {
 /** What a faction work rate depends on beyond the person and the faction: the run's figures and the focus. */
 export interface WorkConditions {
   sourceFile15Level: number;
-  /** As the work goes (decision 37, ./work.ts's `workFocus`). */
+  /** As the work goes (decision 37, the brain's `workFocus`, packages/brain/src/work.ts). */
   focused: boolean;
   /** The Neuroreceptor Management Implant installed: unfocused at the full rate. */
   implant: boolean;
@@ -140,7 +140,7 @@ export interface WorkConditions {
   favorToDonateToFaction: number;
   /** Donations to come (#225): the Augmentations switch on. Absent, they are. */
   donations?: boolean;
-  /** The share threads' bonus while they run (#224, ./share.ts's `shareBonusOf`); 1 when absent. */
+  /** The share threads' bonus while they run (#224, the brain's `shareBonusOf`, brain/src/share.ts); 1 absent. */
   shareBonus?: number;
   /**
    * The work sent now (#226's review): its faction keeps its work type unless another earns `WORK_TYPE_SWITCH_GAIN`

@@ -15,9 +15,9 @@
  */
 import {
   type AugmentationPurchaseState,
-  affordableCounts,
   augmentationBitNodeMultipliers,
-  augmentationCost,
+  augmentationEndgame,
+  augmentationShops,
   augmentationsSoldBy,
   bestWorkRate,
   chooseAugmentationsToBuy,
@@ -31,7 +31,6 @@ import {
   daedalusSkillsReached,
   donationsUnlocked,
   donationTermsOf,
-  donationToReach,
   FACTION_NAMES,
   type FactionState,
   type FactionWorkChoice,
@@ -41,15 +40,12 @@ import {
   INSTALL_COUNTDOWN_MS,
   type InstallReason,
   installGains,
-  installRule,
-  isWorthInstalling,
+  installJudgement,
   type JoinedFaction,
-  missingPrerequisites,
   NEUROFLUX_GOVERNOR,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
   passiveFactionReputationPerSecond,
   QUICK_INSTALL_COUNTDOWN_MS,
-  redPillTarget,
   reputationToUnlockDonations,
   THE_RED_PILL,
   TIAN_DI_HUI,
@@ -60,7 +56,7 @@ import {
   type WorkingPerson,
 } from "@bitburner-agent/core";
 import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS } from "./calibration.ts";
-import { type Clocks, Curves, homeRamAfter } from "./curves.ts";
+import { type Clocks, Curves, homeRamAfter, measuredAt } from "./curves.ts";
 
 const MINUTE_MS = 60_000;
 
@@ -102,7 +98,7 @@ export interface CyclePolicy {
    * Whether to install now, given A6's reason (null: A6 wouldn't). Never asked about The Red Pill's install, and never
    * installs with nothing to install.
    */
-  install?: (view: PolicyView, brains: InstallReason | null) => boolean;
+  install?: (view: PolicyView, brainsReason: InstallReason | null) => boolean;
 }
 
 /** Today's brain: every rule as on main. */
@@ -155,6 +151,11 @@ export interface ModelRun {
 
 export interface ModelOptions {
   policy?: CyclePolicy;
+  /**
+   * Measured cycles (`RUN_3_CYCLES`' form) to run on in place of the calibrated curves, one a cycle in order; past the
+   * list, the curves. The validation runs run #3's own, so what it tests is the rules on them.
+   */
+  measured?: readonly { points: readonly (readonly [number, number, number])[] }[];
   /** The calibration, any part overridden (the sensitivity sweeps). */
   calibration?: Partial<Calibration>;
   /** The longest the run goes, in game time: 24 hours. */
@@ -226,8 +227,10 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     const onlineMs = now - cycleStartMs;
     const multipliers = multipliersOf(installed, sourceFile1Level);
     if (onlineMs > 0) clocks = curves.advanceClocks(clocks, stepMs, multipliers, homeRamGb);
-    const hacking = curves.hackingLevelAt(clocks.exp, multipliers);
-    const money = curves.moneyAt(clocks.money, multipliers);
+    const measured = options.measured?.[cycles.length];
+    const reading = measured === undefined ? null : measuredAt(measured.points, onlineMs / MINUTE_MS);
+    const hacking = reading?.hacking ?? curves.hackingLevelAt(clocks.exp, multipliers);
+    const money = reading?.money ?? curves.moneyAt(clocks.money, multipliers);
     const income = onlineMs > 0 ? (Math.max(0, money - lastMoney) / stepMs) * 1000 : null;
     lastMoney = money;
     options.onStep?.({ atMs: now, onlineMs, hacking, money, clocks });
@@ -286,7 +289,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       factionWorkRepGain: bitNode.FactionWorkRepGain,
       favorToDonateToFaction: bitNode.FavorToDonateToFaction,
       donations: true,
-      shareBonus: curves.calibration.shareBonus,
+      shareBonus: shareBonusOf(curves.calibration, cycles.length),
     };
     const resetInfo = { currentNode, ownedAugs: installed, ownedSF: { ...ownedSF } };
     const view: PolicyView = { atMs: now, onlineMs, hacking, money, installed, joined, multipliers };
@@ -347,6 +350,9 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       continue;
     }
     // The countdown (90 s, 30 s for a quick install; none for The Red Pill), called off if the rule stops saying so.
+    // At a minute's step the install comes at the first step past its end: 90 s is 2 minutes, a minute late at most.
+    // Kept from the first time the rule says install, as the brain's is; its extensions (`countdownExtensionMs`) aren't
+    // modelled.
     const countdownMs =
       reason === "The Red Pill" ? 0 : reason === "quick install" ? QUICK_INSTALL_COUNTDOWN_MS : INSTALL_COUNTDOWN_MS;
     countdownEndsMs ??= now + countdownMs;
@@ -517,9 +523,11 @@ export interface InstallDecision {
 }
 
 /**
- * A6's decision (packages/brain/src/augmentations.ts, its update before the commit), from core's functions on the
- * model's state: the endgame first (#215's The Red Pill, #225's "Daedalus donations", the holds for Daedalus), then the
- * count rule on the set the money covers. Null where no install can be: The Red Pill installed, or held for it.
+ * A6's decision before the commit, as the brain makes it (packages/brain/src/augmentations.ts), with core's own
+ * functions (#260): the shops (`augmentationShops`), A8's endgame ahead of the count rule (`augmentationEndgame`), the
+ * set the money covers less The Red Pill's donation (`chooseAugmentationsToBuy`), and the counts and the rule on it
+ * (`installJudgement`). The model buys at the commit, so nothing is queued or installable through a cycle, and it has
+ * no purchase reported but unshown. Null where no install can be: an endgame hold.
  */
 export function installDecision({
   installed,
@@ -540,89 +548,58 @@ export function installDecision({
   factionRep: number;
   onlineMs: number;
 }): InstallDecision | null {
-  if (Object.hasOwn(installed, THE_RED_PILL)) return null;
   const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
   const state = purchaseStateOf(installed, ownedSF, multipliers);
-  const working = joined.filter((faction) => FACTION_NAMES.includes(faction.name));
-  const shops = new Map(working.map((each) => [each.name, augmentationsSoldBy(each.name, currentNode, null)]));
-  const reputationOf = (faction: string) => working.find((each) => each.name === faction)?.reputation ?? 0;
-  const reachedAt = (name: string) => {
-    const needed = augmentationCost(name, state).reputation;
-    return [...shops].some(([faction, shop]) => shop.includes(name) && reputationOf(faction) >= needed);
-  };
   const owned = (name: string) => Object.hasOwn(installed, name);
-  const sold = [...new Set([...shops.values()].flat())].filter((name) => name !== NEUROFLUX_GOVERNOR);
-  const reached = sold.filter((name) => !owned(name) && reachedAt(name));
+  const shops = augmentationShops(joined, currentNode, state, owned);
   const count = daedalusCountOf({ currentNode, ownedSF, installed, joined, invitations: [] });
   const terms = donationTermsOf(
-    working,
-    shops,
-    sold.filter((name) => !owned(name) && !reachedAt(name)),
+    shops.joined,
+    shops.shops,
+    shops.sold.filter((name) => !owned(name) && shops.sellerOf(name) === null),
     factionRep,
     multipliers,
   );
-
-  // The endgame (the brain's `#endgame`).
-  const redPill = augmentationCost(THE_RED_PILL, state).reputation;
-  const redPillSellers = working.filter((faction) => shops.get(faction.name)?.includes(THE_RED_PILL));
-  const donor = redPillSellers.find((faction) => donationsUnlocked(faction.favor, multipliers));
-  let redPillDonation = 0;
-  let endgame: "redPill" | "daedalusDonations" | "hold" | "none" = "none";
-  if (redPillSellers.some((faction) => faction.reputation >= redPill)) endgame = "redPill";
-  else if (donor !== undefined) {
-    redPillDonation = donationToReach(redPill - donor.reputation, factionRep, multipliers.FactionWorkRepGain);
-    endgame = money >= redPillDonation ? "redPill" : "hold";
-  } else if (redPillSellers.length > 0) {
-    const daedalus = redPillSellers.find((faction) => faction.name === DAEDALUS);
-    const target = daedalus === undefined ? null : redPillTarget(redPill, daedalus, multipliers.FavorToDonateToFaction);
-    const unlocks =
-      daedalus !== undefined && target?.reason === "donations" && daedalus.reputation >= target.reputation;
-    endgame = unlocks ? "daedalusDonations" : "hold";
-  } else {
-    const required = daedalusRequirements(currentNode, ownedSF);
-    // Only the money missing: held, as an install now would reset it (#215).
-    if (count.installed >= required.augmentations && hacking >= required.hacking && money < required.money) {
-      endgame = "hold";
-    }
-  }
-  if (endgame === "hold") return null;
-  const budget = money - redPillDonation;
-  const set = chooseAugmentationsToBuy(reached, state, budget, hacking, terms, count.short);
+  const endgame = augmentationEndgame({
+    installed,
+    installable: [],
+    queue: [],
+    state,
+    shops,
+    money,
+    factionRep,
+    figures: { money, skills: { hacking, strength: 1, defense: 1, dexterity: 1, agility: 1 } },
+    currentNode,
+    ownedSF,
+    // The destroy is the model's at w0r1d_d43m0n's level.
+    destroyWanted: true,
+  });
+  if (endgame.kind === "hold") return null;
+  const budget = money - (endgame.kind === "redPill" ? (endgame.donation?.amount ?? 0) : 0);
+  const set = chooseAugmentationsToBuy(shops.reached, state, budget, hacking, terms, count.short);
   const names = set.purchases.map((purchase) => purchase.name);
-  if (endgame === "redPill") {
+  if (endgame.kind === "redPill") {
     return { reason: "The Red Pill", names: [...names, THE_RED_PILL], neuroFluxLevels: 0, set, terms };
   }
-  const neuroFluxReputation = Math.max(
-    0,
-    ...[...shops].filter(([, shop]) => shop.includes(NEUROFLUX_GOVERNOR)).map(([faction]) => reputationOf(faction)),
-  );
-  const counts = affordableCounts({
+  const { counts, rule } = installJudgement({
     state,
     installable: [],
     set,
     money: budget,
-    neuroFluxReputation,
-    donations: terms,
+    shops,
+    owned,
+    terms,
     short: count.short,
-  });
-  const afterSet = { installed, queued: names };
-  const left = sold.filter(
-    (name) =>
-      isWorthInstalling(name, count.short) &&
-      !owned(name) &&
-      !names.includes(name) &&
-      missingPrerequisites(name, afterSet).length === 0,
-  );
-  const rule = installRule({
     onlineMs,
     sinceResetMs: onlineMs,
-    installing: names.length,
-    neuroFluxLevels: counts.neuroFluxLevels,
-    nothingLeft: left.length === 0,
-    affordable: counts.affordable,
-    affordableWithNeuroFlux: counts.affordableWithNeuroFlux,
   });
   const neuroFluxLevels = counts.neuroFluxLevels;
-  if (endgame === "daedalusDonations") return { reason: "Daedalus donations", names, neuroFluxLevels, set, terms };
+  if (endgame.kind === "daedalusDonations") return { reason: "Daedalus donations", names, neuroFluxLevels, set, terms };
   return { reason: rule.install ? rule.reason : null, names, neuroFluxLevels, set, terms };
+}
+
+/** The share bonus in the cycle after `installs` installs: the calibration's for that cycle, past its list the last. */
+export function shareBonusOf(calibration: Calibration, installs: number): number {
+  const { shareBonusByCycle } = calibration;
+  return shareBonusByCycle[Math.min(installs, shareBonusByCycle.length - 1)] ?? 1;
 }

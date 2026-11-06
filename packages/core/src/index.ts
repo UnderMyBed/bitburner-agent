@@ -1,5 +1,13 @@
 export { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
 export {
+  type AugmentationShops,
+  augmentationEndgame,
+  augmentationShops,
+  type Endgame,
+  type EndgameHold,
+  installJudgement,
+} from "./augmentation-decision.ts";
+export {
   type AugmentationSet,
   affordableCounts,
   augmentationBuyOrder,

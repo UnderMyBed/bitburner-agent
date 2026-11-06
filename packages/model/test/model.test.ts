@@ -16,23 +16,23 @@ import {
   hackingLevelOf,
   homeRamAfter,
   installDecision,
-  type ModelCycle,
+  measuredAt,
   multipliersOf,
   programsPrice,
-  REFERENCE_MONEY_LEFT_OUT_MINUTES,
+  RUN_3_CYCLES,
   RUN_3_POLICY,
+  RUN_3_SHARE_BONUS,
   runModel,
-  SIMULATOR_CYCLES,
+  shareBonusOf,
   sourceFile1Bonus,
   startHomeRamGb,
   TODAYS_POLICY,
   WORLD_DAEMON_HACKING,
 } from "../src/index.ts";
-import { RUN_3_BN1_2, SIMULATOR_SEED_1 } from "./fixtures.ts";
+import { RUN_3_BN1_2 } from "./fixtures.ts";
 
 const MINUTE_MS = 60_000;
 const curves = new Curves(CALIBRATION);
-const reference = SIMULATOR_CYCLES[2]?.points ?? [];
 /** Run #3's model, and each step's hacking level and money by its time. */
 const steps = new Map<number, { hacking: number; money: number }>();
 const run3 = runModel(RUN_3_BN1_2.start, {
@@ -40,55 +40,44 @@ const run3 = runModel(RUN_3_BN1_2.start, {
   onStep: ({ atMs, hacking, money }) => steps.set(atMs, { hacking, money }),
 });
 
-/** What's installed after `cycles`: each set once, NeuroFlux Governor's levels summed. */
-function installedAfter(cycles: readonly ModelCycle[]): Record<string, number> {
-  const installed: Record<string, number> = {};
-  for (const cycle of cycles) {
-    for (const name of cycle.installed) installed[name] = 1;
-    if (cycle.neuroFluxLevels > 0) {
-      installed[NEUROFLUX_GOVERNOR] = (installed[NEUROFLUX_GOVERNOR] ?? 0) + cycle.neuroFluxLevels;
-    }
-  }
-  return installed;
-}
-
 describe("the calibration", () => {
-  test("the reference multipliers are what the model runs the simulator's third cycle at", () => {
-    const sim = runModel(SIMULATOR_SEED_1.start, { horizonMs: SIMULATOR_SEED_1.horizonMinutes * MINUTE_MS });
-    const third = multipliersOf(installedAfter(sim.cycles.slice(0, 2)), 0);
-    for (const key of ["hacking", "hacking_exp", "hacking_speed", "hacking_money"] as const) {
-      expect(CALIBRATION.reference[key]).toBeCloseTo(third[key], 3);
-    }
-  });
-
-  test("the share bonus gives run #3's BitRunners rate, for the favour, within 10%", () => {
-    // Each rate divided by (1 + favour/100) is the hacking level × faction_rep × the share bonus that set it.
-    for (const { cycle, perSecond, favor } of RUN_3_BN1_2.bitRunnersRate) {
-      const modelCycle = run3.cycles[cycle - 1];
-      const modelFavor = favorBefore(cycle - 1, "BitRunners");
-      const model = (modelCycle?.bestRatePerSecond.BitRunners ?? 0) / (1 + modelFavor / 100);
-      expect(Math.abs(model / (perSecond / (1 + favor / 100)) - 1)).toBeLessThan(0.1);
-    }
-  });
-
-  test("the reference curves give back the simulator's third cycle at its multipliers", () => {
-    for (const [minutes, level, money] of reference) {
-      expect(Math.abs(curves.hackingLevelAt(minutes, CALIBRATION.reference) - level)).toBeLessThanOrEqual(1);
-      if (!REFERENCE_MONEY_LEFT_OUT_MINUTES.includes(minutes) && minutes >= 3) {
-        expect(curves.moneyAt(minutes, CALIBRATION.reference) / money).toBeCloseTo(1, 9);
+  test("the reference cycles' multipliers are what the model runs those cycles of run #3 at", () => {
+    for (const { cycle, multipliers } of CALIBRATION.referenceCycles) {
+      const model = run3.cycles[cycle - 1]?.multipliers;
+      for (const key of ["hacking", "hacking_exp", "hacking_speed", "hacking_money"] as const) {
+        expect(multipliers[key], `cycle ${cycle}'s ${key}`).toBeCloseTo(model?.[key] ?? 0, 3);
       }
     }
   });
-});
 
-/** A faction's favour at the start of the 0-based cycle `index` in run #3's model: the install before's, or 0. */
-function favorBefore(index: number, faction: string): number {
-  for (let each = index - 1; each >= 0; each--) {
-    const favor = run3.cycles[each]?.favorAfter[faction];
-    if (favor !== undefined) return favor;
-  }
-  return 0;
-}
+  test("the share bonus is run #3's own a cycle, its last past the list", () => {
+    expect(shareBonusOf(CALIBRATION, 0)).toBe(RUN_3_SHARE_BONUS[0]);
+    expect(shareBonusOf(CALIBRATION, 3)).toBe(1.16);
+    expect(shareBonusOf(CALIBRATION, 40)).toBe(RUN_3_SHARE_BONUS[RUN_3_SHARE_BONUS.length - 1]);
+  });
+
+  test("the curve at a reference cycle's multipliers is near that cycle's level: the median of four", () => {
+    for (const { cycle, multipliers } of CALIBRATION.referenceCycles) {
+      for (const [minutes, level] of RUN_3_CYCLES[cycle - 1]?.points ?? []) {
+        if (minutes < 30 || minutes > 60) continue;
+        expect(
+          Math.abs(curves.hackingLevelAt(minutes, multipliers) / level - 1),
+          `cycle ${cycle}, ${minutes} min`,
+        ).toBeLessThan(0.15);
+      }
+    }
+  });
+
+  test("a partial override keeps the rest (the sensitivity sweeps)", () => {
+    const swept = runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      calibration: { moneyPaceExponent: CALIBRATION.moneyPaceExponent },
+    });
+    expect(swept).toEqual(run3);
+    const slower = runModel(RUN_3_BN1_2.start, { policy: RUN_3_POLICY, calibration: { firstCycleSpeed: 0.3 } });
+    expect(slower.cycles[0]?.endMs).toBeGreaterThan(run3.cycles[0]?.endMs ?? 0);
+  });
+});
 
 describe("the curves", () => {
   test("the game's skill formula: calculateSkill inverts hackingExpForLevel", () => {
@@ -97,39 +86,39 @@ describe("the curves", () => {
     }
   });
 
-  test("past the reference cycle's end, the experience and the money grow at its last rate", () => {
+  test("past the last reading, the money grows at its last rate", () => {
     const at = (minutes: number) => curves.moneyAt(minutes, { hacking_money: 1 });
-    expect(at(98) - at(88)).toBeCloseTo(at(88) - at(78), 0);
-    expect(at(88)).toBeGreaterThan(at(78));
+    expect(at(140) - at(130)).toBeCloseTo(at(130) - at(120), 0);
+    expect(at(130)).toBeGreaterThan(at(120));
   });
 
-  test("home's pace: the first cycle's at 8 GB, the reference's from 1 TB, log-linear between", () => {
-    expect(curves.homeSpeedOf(8)).toBe(CALIBRATION.firstCycleSpeed);
-    expect(curves.homeSpeedOf(1024)).toBe(1);
+  test("home's pace: the first cycle's at 8 GB, the reference's from `fullSpeedHomeRamGb`, log-linear between", () => {
+    const { firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
+    expect(curves.homeSpeedOf(8)).toBe(firstCycleSpeed);
+    expect(curves.homeSpeedOf(fullSpeedHomeRamGb)).toBe(1);
     expect(curves.homeSpeedOf(2 ** 30)).toBe(1);
-    expect(curves.homeSpeedOf(128)).toBeCloseTo(
-      CALIBRATION.firstCycleSpeed + ((1 - CALIBRATION.firstCycleSpeed) * 4) / 7,
-      12,
-    );
-  });
-
-  test("the reference money never falls: the minutes it fell at (a purchase) are left out", () => {
-    let before = 0;
-    for (let minutes = 3; minutes <= 78; minutes += 0.5) {
-      const money = curves.moneyAt(minutes, { hacking_money: 1 });
-      expect(money).toBeGreaterThanOrEqual(before);
-      before = money;
-    }
+    const halfway = 2 ** ((3 + Math.log2(fullSpeedHomeRamGb)) / 2);
+    expect(curves.homeSpeedOf(halfway)).toBeCloseTo(firstCycleSpeed + (1 - firstCycleSpeed) / 2, 12);
   });
 
   test("at the reference multipliers the clocks run at the reference's pace; higher multipliers run them faster", () => {
-    const one = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, CALIBRATION.reference, 1024);
+    const one = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, curves.reference, 2 ** 20);
     expect(one.exp).toBeCloseTo(30, 6);
     expect(one.money).toBeCloseTo(30, 6);
-    const faster = { ...CALIBRATION.reference, hacking: 3, hacking_speed: 2 };
-    const two = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 1024);
+    const faster = { ...curves.reference, hacking: 6, hacking_speed: 4 };
+    const two = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20);
     expect(two.exp).toBeGreaterThan(two.money);
     expect(two.money).toBeGreaterThan(30);
+  });
+
+  test("a measured cycle read back: the level linear, the money geometric, past the end at the last slope", () => {
+    const points = [
+      [10, 100, 1e6],
+      [20, 300, 1e8],
+    ] as const;
+    expect(measuredAt(points, 15)).toEqual({ hacking: 200, money: 1e7 });
+    expect(measuredAt(points, 0).hacking).toBe(1);
+    expect(measuredAt(points, 30).hacking).toBe(500);
   });
 
   test("home's RAM doubles while the money covers each upgrade on top of those before it", () => {
@@ -169,15 +158,38 @@ describe("the model", () => {
     }
   });
 
-  test("never installs nothing, and resets each cycle's reputation", () => {
+  test("never installs nothing, and starts each cycle's reputation from nothing", () => {
     for (const cycle of run3.cycles) {
       expect(cycle.installed.length + cycle.neuroFluxLevels).toBeGreaterThan(0);
       expect(cycle.endMs).toBeGreaterThan(cycle.startMs);
     }
-    // The 2nd cycle's reputation is its own: CyberSec's isn't the 1st cycle's plus more.
-    expect(run3.cycles[1]?.reputation.CyberSec).toBeLessThan(
-      (run3.cycles[0]?.reputation.CyberSec ?? 0) + (run3.cycles[1]?.reputation.CyberSec ?? 0),
+    // CyberSec is joined afresh in the 2nd cycle, and its reputation there is no more than one cycle's work at its
+    // best rate and a cycle's passive gain (at most a tenth of it, `processPassiveFactionRepGain`).
+    const second = run3.cycles[1];
+    const lengthS = ((second?.endMs ?? 0) - (second?.startMs ?? 0)) / 1000;
+    expect(
+      run3.events.some(
+        (event) => event.kind === "joined" && event.faction === "CyberSec" && event.atMs > (second?.startMs ?? 0),
+      ),
+    ).toBe(true);
+    expect(second?.reputation.CyberSec ?? 0).toBeLessThanOrEqual((second?.bestRatePerSecond.CyberSec ?? 0) * lengthS);
+  });
+
+  test("a favour grind naming a faction not joined leaves A5's choice", () => {
+    const named = runModel(RUN_3_BN1_2.start, {
+      policy: { ...RUN_3_POLICY, name: "a faction never joined", favourGrind: () => "Illuminati" },
+    });
+    expect(named.cycles).toEqual(run3.cycles);
+  });
+
+  test("passive reputation at the joined factions not worked for (`processPassiveFactionRepGain`)", () => {
+    // Tian Di Hui is joined in the 1st cycle and barely worked: its reputation is passive, a percent of its rate.
+    const first = run3.cycles[0];
+    const passive = Object.entries(first?.reputation ?? {}).filter(
+      ([faction]) => !(faction in (first?.workMinutes ?? {})),
     );
+    expect(passive.length).toBeGreaterThan(0);
+    for (const [, reputation] of passive) expect(reputation).toBeGreaterThan(0);
   });
 
   test("BN1.2 starts home at 32 GB, with SF1 (`Prestige.ts:254-260`); BN1.1 at 8", () => {
@@ -210,9 +222,13 @@ describe("the model", () => {
       for (const { atMs } of joins) {
         const now = steps.get(atMs);
         const before = steps.get(atMs - MINUTE_MS);
+        // The step before an install's next is the cycle before's: no comparison across an install.
+        const afterInstall = run3.cycles.some((cycle) => cycle.endMs === atMs - MINUTE_MS);
         expect(now?.hacking).toBeGreaterThanOrEqual(hacking);
         expect(now?.money).toBeGreaterThanOrEqual(programsPrice(ports));
-        expect((before?.hacking ?? 0) < hacking || (before?.money ?? 0) < programsPrice(ports)).toBe(true);
+        if (!afterInstall) {
+          expect((before?.hacking ?? 0) < hacking || (before?.money ?? 0) < programsPrice(ports)).toBe(true);
+        }
       }
     }
   });
@@ -272,13 +288,12 @@ describe("the model", () => {
     expect(decide(626e9)?.names).toContain("The Red Pill");
   });
 
-  test("today's policy holds the install that would leave Daedalus's count one short (#243)", () => {
+  test("today's policy is run #3's on this path: no install in it would leave Daedalus's count one short (#243)", () => {
+    // The model's 7th install takes the count from 25 to 34, past 29, so #243's hold never arises on run #3's path
+    // (run #3's own 7th took it to 29). The hold's wiring is checked by the probes, not by a run in reach.
     const today = runModel(RUN_3_BN1_2.start, { policy: TODAYS_POLICY });
-    const held = today.cycles.find((cycle) => cycle.heldMinutes > 0);
-    expect(held?.countAfter).toBeGreaterThanOrEqual(30);
-    expect(run3.cycles.every((cycle) => cycle.heldMinutes === 0)).toBe(true);
-    // Run #3's 29 isn't an install today's brain makes.
-    expect(today.cycles.some((cycle) => cycle.countAfter === 29)).toBe(false);
+    expect(today.cycles.every((cycle) => cycle.heldMinutes === 0)).toBe(true);
+    expect(today.cycles).toEqual(run3.cycles);
   });
 
   test("a policy's favour grind works the faction it names toward its donations", () => {

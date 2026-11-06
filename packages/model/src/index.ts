@@ -1,11 +1,21 @@
 export {
   CALIBRATION,
   type Calibration,
+  type CycleMultipliers,
   HACKER_FACTION_JOINS,
-  REFERENCE_MONEY_LEFT_OUT_MINUTES,
+  RUN_3_CYCLES,
+  RUN_3_SHARE_BONUS,
   SIMULATOR_CYCLES,
 } from "./calibration.ts";
-export { type Clocks, Curves, type HackingMultipliers, hackingLevelOf, homeRamAfter } from "./curves.ts";
+export {
+  type Clocks,
+  Curves,
+  type HackingMultipliers,
+  hackingLevelOf,
+  homeRamAfter,
+  measuredAt,
+  READ_MINUTES,
+} from "./curves.ts";
 export {
   type CyclePolicy,
   type InstallDecision,
@@ -22,6 +32,7 @@ export {
   programsPrice,
   RUN_3_POLICY,
   runModel,
+  shareBonusOf,
   sourceFile1Bonus,
   startHomeRamGb,
   TODAYS_POLICY,

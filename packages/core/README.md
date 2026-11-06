@@ -87,7 +87,7 @@ And (#228) `TIAN_DI_HUI`, `TIAN_DI_HUI_CITIES` (Chongqing, New Tokyo, Ishima), `
 
 ## The brain's choices, shared with the fast model
 
-Moved here from the brain in #260, unchanged, so the fast model ([packages/model](../model/README.md)) makes the brain's own choices on its state rather than a copy of them. The brain's rules call them on the snapshots' figures, and re-export the names for their modules and tests; what each does is in [the brain's README](../brain/README.md).
+Moved here from the brain in #260 so the fast model ([packages/model](../model/README.md)) makes the brain's own choices on its state rather than a copy of them: A5's, A6's reach and the city group's unchanged; A6's decision split from the brain's state (the countdown, the commit, the purchases reported) and its words. The brain's rules call them on the snapshots' figures, and re-export the names its modules and tests import; what each does is in [the brain's README](../brain/README.md).
 
 | File | What |
 |---|---|
@@ -95,6 +95,8 @@ Moved here from the brain in #260, unchanged, so the fast model ([packages/model
 | `src/augmentation-reach.ts` | A6's reach beyond a joined seller's reputation: the donations' terms (`donationTermsOf`, #225), and each augmentation still to come for Daedalus's count with its ETA (`countablesToCome`, #243). |
 | `src/city-groups.ts` | The city group to join this cycle (#228, owner decision 54): each group's worth and what its invitations cost (`cityGroupValues`), the choice (`chooseCityGroup`), and the visits (`visitsFor`). |
 | `src/home-ram.ts` | `homeRamUpgradePrice(ram)`: what doubling home's RAM costs in BN1, as the game works it out. |
+| `src/augmentation-decision.ts` | A6's decision before the commit: the joined factions' shops and what's reached (`augmentationShops`), A8's endgame ahead of the count rule (`augmentationEndgame`: The Red Pill, "Daedalus donations", or a hold and why, the words the brain's), and the counts and the count rule on a set (`installJudgement`). |
+| `src/faction-work.ts` | `passiveFactionReputationPerSecond(person, favor, sourceFile15Level, factionWorkRepGain, shareBonus?, factionPassiveRepGain?)`: a joined faction's reputation while not worked for (`processPassiveFactionRepGain`, `Faction/FactionHelpers.tsx:132-170`): the best work type's rate a cycle × (1% + favour/1000, at most 10%), never under 1/120 a cycle. The brain reads reputation from the game; the model adds it, as it breaks A5's ties toward the faction joined longer. |
 
 ## The hacking ceilings
 
