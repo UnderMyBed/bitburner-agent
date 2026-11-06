@@ -9,6 +9,7 @@ import { type BatcherHealth, LANDING_LOST_AFTER_MS } from "@bitburner-agent/core
 import { BATCHER_MOVE_IDLE_FAILS_AFTER_MS, BATCHER_NOT_RUNNING_AFTER, batcherNotRunning } from "./batcher.ts";
 import {
   BATCHER_INCIDENT_RECOVERY_MS,
+  batcherSpanOf,
   type ClockIncident,
   describeIncident,
   INCIDENT_ATTRIBUTION_WEAKENS,
@@ -363,7 +364,9 @@ interface Attribution {
  * first). After a desync's recovery (`recovering` seen), everything in flight has landed. With late or lost alone
  * it never stops batching, so the parts in flight at its incident may land late, or be found lost, until a weaken and
  * a part's loss after the incident's end (`landingUntilMs`): each such rise is the stretch's, and batching again waits
- * for the last. A move (`preparing` a new target) is neither.
+ * for the last; one over `BATCHER_INCIDENT_RECOVERY_MS` after the incident, once it was batching again
+ * (`firstRecoveredMs`), is out of step again (`lateAgainMs`, #249's review). A move (`preparing` a new target) is
+ * neither. The incident's end is the batcher's: the game's clock's move, for a step (`batcherSpanOf`).
  */
 interface OutOfStepStretch {
   runName: string;
@@ -374,7 +377,9 @@ interface OutOfStepStretch {
   sawRecovering: boolean;
   landingUntilMs: number;
   recoveredMs: number | null;
+  firstRecoveredMs: number | null;
   againMs: number | null;
+  lateAgainMs: number | null;
 }
 
 const countsText = (counts: OutOfStepCounts) =>
@@ -386,9 +391,10 @@ const addCounts = (counts: OutOfStepCounts, rose: OutOfStepCounts) => {
 const kindName = ({ kind }: ClockIncident) => (kind === "clockStep" ? "clock step" : "page stall");
 
 /**
- * The incident a stretch whose first look out of step is at `firstMs` is put down to (#241): the latest from whose
- * start to `INCIDENT_ATTRIBUTION_WEAKENS` weaken times on `target` after its end it lies, that no earlier stretch was
- * (`attributed`); or why none is.
+ * The incident a stretch is put down to (#241), its first look out of step being at `firstMs`: the latest incident
+ * whose span, as the batcher felt it (`batcherSpanOf`), started by then and ended no more than
+ * `INCIDENT_ATTRIBUTION_WEAKENS` weaken times on `target` before it, and that no earlier stretch was put down to
+ * (`attributed`); or why there's none.
  */
 function attributionOf(
   firstMs: number,
@@ -396,25 +402,26 @@ function attributionOf(
   context: IncidentContext,
   attributed: Set<ClockIncident>,
 ): Attribution | { why: string } {
-  const before = context.incidents.filter((incident) => incident.fromMs <= firstMs);
-  const last = before.at(-1);
-  if (last === undefined) return { why: "no clock step or page stall before it" };
-  const weakenMs = context.weakenMs(target, last.fromMs);
+  const incidentsBefore = context.incidents.filter((incident) => batcherSpanOf(incident).fromMs <= firstMs);
+  const lastIncident = incidentsBefore.at(-1);
+  if (lastIncident === undefined) return { why: "no clock step or page stall before it" };
+  const weakenMs = context.weakenMs(target, batcherSpanOf(lastIncident).fromMs);
   if (weakenMs === null) {
     return {
       why:
-        `${describeIncident(last)} before it, but a weaken's time on ${target} is unknown (no static snapshot with ` +
-        "its figures, or no medium snapshot with the player's)",
+        `${describeIncident(lastIncident)} before it, but a weaken's time on ${target} is unknown (no static ` +
+        "snapshot with its figures, or no medium snapshot with the player's)",
     };
   }
-  const inReach = (incident: ClockIncident) => firstMs <= incident.toMs + INCIDENT_ATTRIBUTION_WEAKENS * weakenMs;
-  const incident = before.findLast((each) => inReach(each) && !attributed.has(each));
+  const inReach = (incident: ClockIncident) =>
+    firstMs <= batcherSpanOf(incident).toMs + INCIDENT_ATTRIBUTION_WEAKENS * weakenMs;
+  const incident = incidentsBefore.findLast((candidate) => inReach(candidate) && !attributed.has(candidate));
   if (incident !== undefined) {
     attributed.add(incident);
     return { incident, weakenMs };
   }
   const weaken = `a weaken there (${formatDuration(weakenMs)})`;
-  const alreadyAttributed = before.findLast(inReach);
+  const alreadyAttributed = incidentsBefore.findLast(inReach);
   if (alreadyAttributed !== undefined) {
     return {
       why:
@@ -422,33 +429,41 @@ function attributionOf(
         "to it",
     };
   }
-  return { why: `no clock step or page stall within ${weaken} before it (the last, ${describeIncident(last)})` };
+  return {
+    why: `no clock step or page stall within ${weaken} before it (the last, ${describeIncident(lastIncident)})`,
+  };
 }
 
 /** The stretches out of step (#241), from every run's looks in time order. */
 function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOfStepStretch[] {
   const stretches: OutOfStepStretch[] = [];
-  const openOfRun = new Map<string, OutOfStepStretch>();
+  const openStretchOfRun = new Map<string, OutOfStepStretch>();
   const attributed = new Set<ClockIncident>();
   for (const { runName, atMs, state, target, rose } of looks) {
     const anyRose = OUT_OF_STEP_COUNTS.some((count) => rose[count] > 0);
-    const open = openOfRun.get(runName);
-    if (open !== undefined && open.recoveredMs === null) {
-      if (anyRose) addCounts(open.counts, rose);
-      if (state === "recovering") open.sawRecovering = true;
-      else if (state === "batching" && !anyRose) open.recoveredMs = atMs;
+    const openStretch = openStretchOfRun.get(runName);
+    if (openStretch !== undefined && openStretch.recoveredMs === null) {
+      if (anyRose) addCounts(openStretch.counts, rose);
+      if (state === "recovering") openStretch.sawRecovering = true;
+      else if (state === "batching" && !anyRose) {
+        openStretch.recoveredMs = atMs;
+        openStretch.firstRecoveredMs ??= atMs;
+      }
       continue;
     }
     if (!anyRose) continue;
-    if (open?.recoveredMs != null) {
-      if (!open.sawRecovering && atMs <= open.landingUntilMs) {
-        addCounts(open.counts, rose);
-        open.recoveredMs = null;
+    if (openStretch?.recoveredMs != null) {
+      if (!openStretch.sawRecovering && atMs <= openStretch.landingUntilMs) {
+        addCounts(openStretch.counts, rose);
+        openStretch.recoveredMs = null;
+        const attribution = openStretch.attribution;
+        const sinceMs = "incident" in attribution ? atMs - batcherSpanOf(attribution.incident).toMs : 0;
+        if (sinceMs > BATCHER_INCIDENT_RECOVERY_MS) openStretch.lateAgainMs ??= atMs;
         continue;
       }
-      if (atMs - open.recoveredMs <= BATCHER_INCIDENT_RECOVERY_MS) {
-        open.againMs ??= atMs;
-        addCounts(open.counts, rose);
+      if (atMs - openStretch.recoveredMs <= BATCHER_INCIDENT_RECOVERY_MS) {
+        openStretch.againMs ??= atMs;
+        addCounts(openStretch.counts, rose);
         continue;
       }
     }
@@ -462,12 +477,16 @@ function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOf
       sawRecovering: state === "recovering",
       landingUntilMs:
         "incident" in attribution
-          ? attribution.incident.toMs + INCIDENT_ATTRIBUTION_WEAKENS * attribution.weakenMs + LANDING_LOST_AFTER_MS
+          ? batcherSpanOf(attribution.incident).toMs +
+            INCIDENT_ATTRIBUTION_WEAKENS * attribution.weakenMs +
+            LANDING_LOST_AFTER_MS
           : atMs,
       recoveredMs: null,
+      firstRecoveredMs: null,
       againMs: null,
+      lateAgainMs: null,
     };
-    openOfRun.set(runName, stretch);
+    openStretchOfRun.set(runName, stretch);
     stretches.push(stretch);
   }
   return stretches;
@@ -486,7 +505,8 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
   const lines: string[] = [];
   const unexplained: (OutOfStepStretch & { attribution: { why: string } })[] = [];
   for (const stretch of stretchesOf(looks, context)) {
-    const { runName, target, firstMs, counts, attribution, recoveredMs, againMs } = stretch;
+    const { runName, target, firstMs, counts, attribution, recoveredMs, againMs, lateAgainMs, firstRecoveredMs } =
+      stretch;
     const seenText = `${countsText(counts)} on ${target}, the first seen at ${formatIsoTime(firstMs)}`;
     if (!("incident" in attribution)) {
       unexplained.push({ ...stretch, attribution });
@@ -497,11 +517,12 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
     const weakenText = `within a weaken there, ${formatDuration(weakenMs)}`;
     const afterText = `${seenText}, after ${describeIncident(incident)} (${weakenText})`;
     const runEndMs = lastLookOfRun.get(runName) as number;
-    const sinceIncident = (atMs: number) => formatDuration(atMs - incident.toMs);
+    const incidentEndMs = batcherSpanOf(incident).toMs;
+    const sinceIncident = (atMs: number) => formatDuration(atMs - incidentEndMs);
     let failed: string | null = null;
     let unconfirmed: string | null = null;
     if (recoveredMs === null) {
-      if (runEndMs - incident.toMs >= BATCHER_INCIDENT_RECOVERY_MS) {
+      if (runEndMs - incidentEndMs >= BATCHER_INCIDENT_RECOVERY_MS) {
         failed =
           `not batching again within ${recovery} of the ${name} (its run's last look at ` +
           `${formatIsoTime(runEndMs)})`;
@@ -510,7 +531,11 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
           `not batching again at its run's last look, at ${formatIsoTime(runEndMs)}, ` +
           `${sinceIncident(runEndMs)} after the ${name} (${recovery} allowed)`;
       }
-    } else if (recoveredMs - incident.toMs > BATCHER_INCIDENT_RECOVERY_MS) {
+    } else if (lateAgainMs !== null && firstRecoveredMs !== null) {
+      failed =
+        `out of step again at ${formatIsoTime(lateAgainMs)}, ${sinceIncident(lateAgainMs)} after the ${name}, after ` +
+        `batching again at ${formatIsoTime(firstRecoveredMs)} (more than ${recovery} after it)`;
+    } else if (recoveredMs - incidentEndMs > BATCHER_INCIDENT_RECOVERY_MS) {
       failed =
         `batching again only at ${formatIsoTime(recoveredMs)}, ${sinceIncident(recoveredMs)} after the ${name} (more ` +
         `than ${recovery})`;

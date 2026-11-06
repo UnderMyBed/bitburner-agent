@@ -31,28 +31,33 @@ const point = (offsetMs: number, gameOffsetMs = offsetMs, degradedTiers: string[
 });
 const none = { medium: [], fast: [], restartsMs: [] };
 
+/** Clock moves: from round k on, the clock `ms` on. */
+type ClockMoves = [round: number, ms: number][];
+
 /**
- * Run #3's rounds, every 2 s (round k at 1.8 + 2k s, true time) from round 330 to `lastRound`: the game's clock
- * `stepMs` on from round `gameStepAt` (354: between 11:47.8 and 11:49.8), the brain's from `brainStepAt` (364: between
- * 12:07.8 and 12:09.8), null for never; a medium snapshot every 5th round.
+ * Run #3's rounds, every 2 s (round k at 1.8 + 2k s, true time) from round 330 to `lastRound`: the game's clock and the
+ * brain's each moving as `gameMoves` and `brainMoves` say (by default `stepMs`, the game's from round 354, between
+ * 11:47.8 and 11:49.8, and the brain's from 364, between 12:07.8 and 12:09.8); a medium snapshot every 5th round. The
+ * fast snapshots in the store's order, by receipt.
  */
 function run3({
-  gameStepAt = 354 as number | null,
-  brainStepAt = 364 as number | null,
   stepMs = 2_678,
-  brainStepMs = null as number | null,
+  gameMoves = null as ClockMoves | null,
+  brainMoves = null as ClockMoves | null,
   lastRound = 400,
 } = {}) {
+  const moved = (moves: ClockMoves, round: number) =>
+    moves.reduce((sum, [from, ms]) => sum + (round >= from ? ms : 0), 0);
   const fast = [];
   const medium = [];
   for (let round = 330; round <= lastRound; round++) {
     const trueMs = 1_800 + 2_000 * round;
-    const game = trueMs + (gameStepAt !== null && round >= gameStepAt ? stepMs : 0);
-    const received = trueMs + (brainStepAt !== null && round >= brainStepAt ? (brainStepMs ?? stepMs) : 0);
+    const game = trueMs + moved(gameMoves ?? [[354, stepMs]], round);
+    const received = trueMs + moved(brainMoves ?? [[364, stepMs]], round);
     fast.push(point(received, game));
     if (round % 5 === 0) medium.push(point(received, game));
   }
-  return { fast, medium, restartsMs: [] };
+  return { fast: fast.sort((a, b) => a.atMs - b.atMs), medium, restartsMs: [] };
 }
 
 /** Fast snapshots every 2 s from 0 to `untilMs`, each of `stallsAt` followed by one 5 s later instead. */
@@ -65,27 +70,29 @@ function fastWithStalls(stallsAt: number[], untilMs: number) {
 }
 
 describe("clock steps", () => {
+  const RUN3_STEP = {
+    kind: "clockStep",
+    fromMs: T0 + 707_800,
+    toMs: T0 + 732_478,
+    sizeMs: 2_678,
+    gameClock: { fromMs: T0 + 707_800, toMs: T0 + 709_800 },
+    detail:
+      `the game's clock +2.7 s between snapshots at ${at(707_800)} and ${at(709_800)}, the brain's +2.7 s between ` +
+      `${at(727_800)} and ${at(732_478)}`,
+  };
+
   test("run #3: the game's clock and the brain's each 2.7 s on, 20 s apart, in both tiers: one clock step", () => {
-    expect(findClockIncidents(run3())).toEqual([
-      {
-        kind: "clockStep",
-        fromMs: T0 + 707_800,
-        toMs: T0 + 732_478,
-        sizeMs: 2_678,
-        detail:
-          `the game's clock +2.7 s between snapshots at ${at(707_800)} and ${at(709_800)}, the brain's +2.7 s ` +
-          `between ${at(727_800)} and ${at(732_478)}`,
-      },
-    ]);
+    expect(findClockIncidents(run3())).toEqual([RUN3_STEP]);
   });
 
   test("the brain's clock never seen to move (the window ends, say): the game's alone is a clock step", () => {
-    expect(findClockIncidents(run3({ brainStepAt: null }))).toEqual([
+    expect(findClockIncidents(run3({ brainMoves: [] }))).toEqual([
       {
         kind: "clockStep",
         fromMs: T0 + 707_800,
         toMs: T0 + 709_800,
         sizeMs: 2_678,
+        gameClock: { fromMs: T0 + 707_800, toMs: T0 + 709_800 },
         detail:
           `the game's clock +2.7 s between snapshots at ${at(707_800)} and ${at(709_800)}; the brain's not seen to ` +
           "move",
@@ -93,13 +100,64 @@ describe("clock steps", () => {
     ]);
   });
 
+  test("the two clocks taking it up in adjacent intervals, 1 s or 2.7 s: one step, each clock judged on its own", () => {
+    for (const stepMs of [1_000, 2_678]) {
+      const steps = findClockIncidents(run3({ gameMoves: [[354, stepMs]], brainMoves: [[355, stepMs]] }));
+      expect(steps).toEqual([
+        expect.objectContaining({
+          kind: "clockStep",
+          sizeMs: stepMs,
+          gameClock: { fromMs: T0 + 707_800, toMs: T0 + 709_800 },
+        }),
+      ]);
+      expect(steps[0]?.detail).toMatch(/^the game's clock \+\d\.\d s between .*, the brain's \+\d\.\d s between /);
+    }
+  });
+
+  test("both taking it up in the same interval: a page stall over 2 s, unseen under it (a round running long)", () => {
+    const both = (stepMs: number) => run3({ gameMoves: [[354, stepMs]], brainMoves: [[354, stepMs]] });
+    expect(findClockIncidents(both(2_678))).toEqual([
+      expect.objectContaining({ kind: "pageStall", fromMs: T0 + 707_800, toMs: T0 + 712_478, sizeMs: 2_678 }),
+    ]);
+    expect(findClockIncidents(both(1_500))).toEqual([]);
+  });
+
+  test("the brain's clock first, the game's after: one step, the batcher's moment the game's", () => {
+    const [step, ...rest] = findClockIncidents(run3({ gameMoves: [[364, 2_678]], brainMoves: [[354, 2_678]] }));
+    expect(rest).toEqual([]);
+    expect(step).toMatchObject({
+      kind: "clockStep",
+      fromMs: T0 + 707_800,
+      sizeMs: 2_678,
+      gameClock: { fromMs: T0 + 727_800 + 2_678, toMs: T0 + 729_800 + 2_678 },
+    });
+    expect(step?.detail).toMatch(/^the brain's clock \+2\.7 s between .*, the game's \+2\.7 s between /);
+  });
+
+  test("two game moves and one brain move: the step, and the game's other move alone", () => {
+    const steps = findClockIncidents(
+      run3({
+        gameMoves: [
+          [354, 2_678],
+          [380, 1_000],
+        ],
+        brainMoves: [[364, 2_678]],
+        lastRound: 400,
+      }),
+    );
+    expect(steps.map(({ sizeMs, detail }) => [sizeMs, detail.endsWith("the brain's not seen to move")])).toEqual([
+      [2_678, false],
+      [1_000, true],
+    ]);
+  });
+
   test("the two clocks' moves are one step only within 5 minutes of each other", () => {
     expect(CLOCK_STEP_PAIR_WITHIN_MS).toBe(5 * MINUTE);
     // The brain's move from round 504 (1,009.8 s), 300 s after the game's ended (709.8 s): one.
-    const within = findClockIncidents(run3({ brainStepAt: 505, lastRound: 520 }));
+    const within = findClockIncidents(run3({ brainMoves: [[505, 2_678]], lastRound: 520 }));
     expect(within.map(({ fromMs, toMs }) => [fromMs - T0, toMs - T0])).toEqual([[707_800, 1_011_800 + 2_678]]);
     // A round later, 302 s: two.
-    const later = findClockIncidents(run3({ brainStepAt: 506, lastRound: 520 }));
+    const later = findClockIncidents(run3({ brainMoves: [[506, 2_678]], lastRound: 520 }));
     expect(later.map(({ fromMs }) => fromMs - T0)).toEqual([707_800, 1_011_800]);
   });
 
@@ -110,8 +168,8 @@ describe("clock steps", () => {
   });
 
   test("moves of different sizes (beyond 250 ms apart) are two steps, not one", () => {
-    expect(findClockIncidents(run3({ brainStepMs: 2_678 + 250 }))).toHaveLength(1);
-    expect(findClockIncidents(run3({ brainStepMs: 2_678 + 251 }))).toHaveLength(2);
+    expect(findClockIncidents(run3({ brainMoves: [[364, 2_678 + 250]] }))).toHaveLength(1);
+    expect(findClockIncidents(run3({ brainMoves: [[364, 2_678 + 251]] }))).toHaveLength(2);
   });
 
   test("back as well as on: the clock stepped back 1 s", () => {
@@ -120,11 +178,36 @@ describe("clock steps", () => {
     expect(step?.detail).toMatch(/^the game's clock −1\.0 s between .*, the brain's −1\.0 s between/);
   });
 
-  test("the offset must hold before and after: a snapshot received late, or a burst from a busy brain, isn't", () => {
+  test("the brain's clock 3 s back: the fast snapshots reordered by receipt, the medium tier sees it", () => {
+    expect(findClockIncidents(run3({ gameMoves: [], brainMoves: [[364, -3_000]] }))).toEqual([
+      {
+        kind: "clockStep",
+        fromMs: T0 + 721_800,
+        toMs: T0 + 728_800,
+        sizeMs: -3_000,
+        detail: `the brain's clock −3.0 s between snapshots at ${at(721_800)} and ${at(728_800)}; the game's not seen to move`,
+      },
+    ]);
+  });
+
+  test("a medium snapshot the tier retried, the game's clock 1 s back in it: one game move, not the brain's", () => {
+    const medium = [point(0), point(10_000), point(22_000, 21_000), point(32_000, 31_000), point(42_000, 41_000)];
+    expect(findClockIncidents({ ...none, medium })).toEqual([
+      expect.objectContaining({
+        kind: "clockStep",
+        sizeMs: -1_000,
+        gameClock: { fromMs: T0 + 10_000, toMs: T0 + 22_000 },
+      }),
+    ]);
+  });
+
+  test("a clock must be long once and never short: a snapshot received late, or a burst from a busy brain, isn't", () => {
     expect(CLOCK_STEP_STEADY_MS).toBe(250);
-    // One received 1.5 s late, the next on time.
+    // One received 1.5 s late, the next on time; or 2 s late.
     const late = [point(0), point(2_000), point(5_500, 4_000), point(6_000), point(8_000), point(10_000)];
     expect(findClockIncidents({ ...none, fast: late })).toEqual([]);
+    const lateByARound = [point(0), point(2_000), point(6_000, 4_000), point(6_000), point(8_000), point(10_000)];
+    expect(findClockIncidents({ ...none, fast: lateByARound })).toEqual([]);
     // Three taken 2 s apart, received together after a 5 s wait.
     const burst = [
       point(0),
@@ -135,19 +218,22 @@ describe("clock steps", () => {
       point(10_000),
     ];
     expect(findClockIncidents({ ...none, fast: burst })).toEqual([]);
-    // The offset 300 ms off after: not held, not a step.
+    // The game's clock 300 ms short after: not held, not a step.
     const wobbly = [point(0), point(2_000), point(4_000, 6_000), point(6_000, 7_700), point(8_000, 9_700)];
     expect(findClockIncidents({ ...none, fast: wobbly })).toEqual([]);
     // 250 ms: held, a step.
     const held = [point(0), point(2_000), point(4_000, 6_000), point(6_000, 7_750), point(8_000, 9_750)];
     expect(findClockIncidents({ ...none, fast: held })).toHaveLength(1);
-    // Moving 300 ms the interval before: not held before.
-    const before = [point(0), point(2_000, 2_300), point(4_000, 6_300), point(6_000, 8_300)];
-    expect(findClockIncidents({ ...none, fast: before })).toEqual([]);
   });
 
-  test("the last interval, with nothing after to show the offset held, isn't judged", () => {
+  test("the last interval, with nothing after to show the clock held, isn't judged", () => {
     expect(findClockIncidents({ ...none, fast: [point(0), point(2_000), point(4_000, 7_000)] })).toEqual([]);
+  });
+
+  test("a fast snapshot whose worker failed (stamped at the round's start, sent at its end) is left out", () => {
+    const failed = (offsetMs: number) => point(offsetMs + 2_000, offsetMs, ["fast"]);
+    const fast = [point(0), point(2_000), failed(4_000), failed(6_000), point(8_000), point(10_000), point(12_000)];
+    expect(findClockIncidents({ ...none, fast })).toEqual([]);
   });
 
   test("over a restart, or with no game time (an older store's 0), nothing", () => {
@@ -230,6 +316,21 @@ describe("page stalls", () => {
     expect(findClockIncidents({ ...none, fast: fastWithStalls([2_000, 69_000], 80_000) })).toHaveLength(2);
   });
 
+  test("a medium stall near a fast one is the same incident, its times within the incident's", () => {
+    const medium = [point(20_000), point(33_000)];
+    expect(findClockIncidents({ medium, fast: fastWithStalls([2_000], 40_000), restartsMs: [] })).toEqual([
+      {
+        kind: "pageStall",
+        fromMs: T0 + 2_000,
+        toMs: T0 + 33_000,
+        sizeMs: 6_000,
+        detail:
+          "the fast snapshots 5.0 s apart on both clocks (2 s due); the medium snapshots 13.0 s apart on both clocks " +
+          "(10 s due)",
+      },
+    ]);
+  });
+
   test("a medium interval over two fast stalls adds nothing: ~6 s in all, not the medium's 6 s over again", () => {
     const fast = fastWithStalls([2_000, 9_000], 16_000);
     const medium = [point(0), point(16_000)];
@@ -260,9 +361,9 @@ describe("section 4's lines, and too many in an hour", () => {
   test("each incident, what it is and when; none says so; two in an hour aren't a failure", () => {
     const failures: string[] = [];
     expect(incidentLines([step, stall(40 * MINUTE)], failures)).toEqual([
-      "  clock steps and page stalls (#241: the gap between the game's clock and the brain's moving more than 0.5 s " +
-        "and holding; or the snapshots further apart on both clocks than due, the medium by more than 2.0 s, the " +
-        "fast by more than 4.0 s; 3 or more within an hour fail):",
+      "  clock steps and page stalls (#241: one clock's interval between snapshots off the other's by more than " +
+        "0.5 s, long that once; or the snapshots later than due on both clocks, the medium by more than 2.0 s, the " +
+        "fast more than 4.0 s apart; 3 or more within an hour fail):",
       `    clock step +2.7 s from ${at(707_800)} to ${at(732_478)}: the game's clock +2.7 s between snapshots at ` +
         `${at(707_800)} and ${at(709_800)}, the brain's +2.7 s between ${at(727_800)} and ${at(732_478)}`,
       `    page stalled ~3.0 s from ${at(40 * MINUTE)} to ${at(40 * MINUTE + 5_000)} (cause unknown): the fast ` +

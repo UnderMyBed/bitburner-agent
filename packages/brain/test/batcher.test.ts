@@ -1175,6 +1175,54 @@ describe("the run report's section, out of step after a clock step or page stall
     expect(warnings[0]).toMatch(/1 late, 1 lost on the-hub, .*; recovered in 8 min 2 s: batching again at /);
   });
 
+  test("a move (preparing a new target) is no recovery: batching again is on the new target, after it", () => {
+    const points = [
+      { atMs: at(700_000), health: health("batching") },
+      { atMs: at(734_478), health: health("batching", { late: 1 }) },
+      { atMs: at(736_478), health: health("preparing", { late: 1 }, "joesguns") },
+      { atMs: at(738_478), health: health("batching", { late: 1 }, "joesguns") },
+      { atMs: at(2_400_000), health: health("batching", { late: 1 }, "joesguns") },
+    ];
+    expect(section(points).warnings[0]).toMatch(/; recovered in 4 s: batching again at /);
+  });
+
+  test("put down to the game's clock moving, when the brain's moved later: recovery from the game's", () => {
+    const brainLater: ClockIncident = {
+      ...STEP,
+      toMs: at(972_478),
+      gameClock: { fromMs: at(707_800), toMs: at(709_800) },
+    };
+    const inTime = section(run({ recoveredMs: 709_800 + 10 * 60_000, lastMs: 2_400_000 }), [brainLater]);
+    expect(inTime.warnings).toHaveLength(1);
+    const late = section(run({ recoveredMs: 709_800 + 10 * 60_000 + 1, lastMs: 2_400_000 }), [brainLater]);
+    expect(late.failures[0]).toMatch(/; batching again only at \S+, 10 min after the clock step \(more than 10 min\)$/);
+    // From the game's move's start: a first desync before it isn't its.
+    expect(section(run(), [{ ...brainLater, gameClock: { fromMs: at(734_479), toMs: at(736_000) } }]).warnings).toEqual(
+      [],
+    );
+  });
+
+  test("late or lost alone, a part still landing over 10 minutes after the incident: out of step again, a failure", () => {
+    const longWeaken = 15 * 60_000;
+    const lateAgainMs = 732_478 + 12 * 60_000;
+    const points = [
+      { atMs: at(700_000), health: health("batching") },
+      { atMs: at(734_478), health: health("batching", { late: 1 }) },
+      { atMs: at(736_478), health: health("batching", { late: 1 }) },
+      { atMs: at(lateAgainMs), health: health("batching", { late: 2 }) },
+      { atMs: at(lateAgainMs + 2_000), health: health("batching", { late: 2 }) },
+      { atMs: at(2_400_000), health: health("batching", { late: 2 }) },
+    ];
+    const { failures, warnings } = section(points, [STEP], longWeaken);
+    expect(warnings).toEqual([]);
+    expect(failures).toEqual([
+      "batcher out of step after a clock step, not recovered: 0 desyncs (0 out of order, 0 out of bounds), 2 late, 0 " +
+        `lost on the-hub, ${FIRST}, after a clock step of +2.7 s from ${iso(707_800)} to ${iso(732_478)} (within a ` +
+        `weaken there, 15 min); out of step again at ${iso(lateAgainMs)}, 12 min after the clock step, after batching ` +
+        `again at ${iso(736_478)} (more than 10 min after it)`,
+    ]);
+  });
+
   test("a move (preparing a new target) is no recovery: a part lost after it is still the stretch's", () => {
     const points = [
       { atMs: at(700_000), health: health("batching") },
