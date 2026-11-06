@@ -514,6 +514,11 @@ describe("the run report's section", () => {
     ]);
     // Still a failure (#232).
     expect(failures).toContainEqual(expect.stringMatching(/^batches short of RAM: 9 batches short /));
+    // An order dropped, its batch gone (#253): a hack landed without its grow or weaken, a failure, with when it was
+    // first seen.
+    const dropped = "batch orders dropped: 1 found their batch gone (#253), the first seen at 2026-01-01T00:03:00.000Z";
+    expect(failures).toContain(dropped);
+    expect(lines).toContain(`  ${dropped}`);
     // An older batcher says nothing of waits.
     const older = batcherSection([{ atMs: at(0), health: { ...health("c", {}), ramWaits: undefined } }]);
     expect(older).toContain("  waited for RAM (#246): not reported (an older batcher)");

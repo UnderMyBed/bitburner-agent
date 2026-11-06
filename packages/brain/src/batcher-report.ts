@@ -433,6 +433,8 @@ export function batcherSection(
   let shortWhileSharing = 0;
   let shortOwn = 0;
   let firstShortOwnMs: number | null = null;
+  // Orders that found their batch gone (#253), and the first snapshot that showed one (#246's verification).
+  let firstDroppedMs: number | null = null;
   // Each short and wait for RAM the healths keep (#246), once, new since the run's health before (a run under way at
   // the window's first snapshot: those before it aren't the window's); whether any health counts the waits, and each
   // run's longest wait so far, from its latest health.
@@ -477,6 +479,7 @@ export function batcherSection(
       ...ramRecordsOf(health, "waits").filter(isNew(previous === undefined ? [] : ramRecordsOf(previous, "waits"))),
     );
     if (typeof health.ramWaits === "number") anyWaitReporting = true;
+    if (firstDroppedMs === null && now.ordersDropped > before.ordersDropped) firstDroppedMs = atMs;
     if (typeof health.longestRamWaitMs === "number" && now.ramWaits > before.ramWaits) {
       longestRamWaitMsOfRun.set(health.runName, health.longestRamWaitMs);
     }
@@ -551,12 +554,20 @@ export function batcherSection(
   );
   lines.push(...ramRecordLines(waits, total.ramWaits, true));
   // Hacks held for their batch's orders waiting, apart from the waits for RAM; orders that found their batch gone, its
-  // hack out first (#253: a hack time under a few tens of ms), never silent (#246's verification). Shown, not a failure.
+  // hack out first (#253: a hack time under a few tens of ms), never silent (#246's verification).
   if (anyWaitReporting) {
     lines.push(
       `  hacks held for their batch's orders waiting for RAM (#246): ${total.hacksHeldForBatch || "none"}; orders that ` +
         `found their batch gone: ${total.ordersDropped || "none"}`,
     );
+  }
+  // An order dropped, a failure: its batch's hack landed without it, a grow or weaken, the loss a short is.
+  if (total.ordersDropped > 0) {
+    const line =
+      `batch orders dropped: ${total.ordersDropped} found their batch gone (#253), the first seen at ` +
+      formatIsoTime(firstDroppedMs ?? firstMs);
+    lines.push(`  ${line}`);
+    failures.push(line);
   }
   // Trimmed (#232): the batcher fits each batch to the RAM as it will be held, so a plan its hosts can't place is cut,
   // never short. A batch trimmed is income lost, not a failure: a new plan, or one at a lower hacking level, can hold
