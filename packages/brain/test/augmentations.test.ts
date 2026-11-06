@@ -2106,7 +2106,7 @@ describe("held for Daedalus's count (#243)", () => {
     expect(RATE).toBeGreaterThan(0);
   });
 
-  test("run #3's 17:49: held, The Black Hand ~17 min off by work; no countdown, no install; its money held back", () => {
+  test("run #3's 17:49: held, The Black Hand ~17 min off by work; no countdown or install; its money held", () => {
     online();
     const ask = minuteOn({ reputation: reputationFor(17 * MINUTE) });
     expect(ask).toEqual({ intent: null, install: false, committed: false });
@@ -2210,7 +2210,7 @@ describe("held for Daedalus's count (#243)", () => {
   });
 
   test("not held: the rule not saying install, two short, Daedalus inviting, or the last more than 30 min off", () => {
-    // One short after the install, the last a minute off, but 4 affordable under the bar of 7 at 2 h: no hold, no install.
+    // One short after the install, the last a minute off, but 4 affordable under the bar of 7 at 2 h: no hold.
     online(2);
     minuteOn({ reputation: reputationFor(MINUTE) });
     expect(rule.view().progress).toMatchObject({ affordable: 4, bar: 7, reason: null, countHold: null, held: null });
@@ -2260,7 +2260,7 @@ describe("held for Daedalus's count (#243)", () => {
     expect(toCome).toEqual([{ augmentation: TBH, faction: TBH, way: "money", etaMs: 0, money: 550e6 }]);
   });
 
-  test("by the money (#228: whatever its value): Magnetism Amplifier's reputation reached, its money at the income", () => {
+  test("by the money (#228, whatever its value): Magnetism Amplifier reached, its money at the income", () => {
     // Magnetism Amplifier not installed (a filler in its place); The Black Hand at 15,000 reaches it.
     const ownedAugs = { ...OWNED, [FILLERS.find((name) => !Object.hasOwn(OWNED, name)) as string]: 1 };
     delete ownedAugs["Magnetism Amplifier"];
@@ -2287,7 +2287,7 @@ describe("held for Daedalus's count (#243)", () => {
       leftMs: expect.any(Number),
     });
     expect(rule.view().progress?.held).toMatch(
-      /^Daedalus's count reachable this cycle, Magnetism Amplifier in ~10 min \(at The Black Hand, its reputation reached, /,
+      /^Daedalus's count reachable this cycle, Magnetism Amplifier in ~10 min \(at The Black Hand, its reputation /,
     );
   });
 

@@ -587,12 +587,12 @@ export function installRule(inputs: InstallRuleInputs): InstallRule {
  */
 export const DAEDALUS_COUNT_HOLD_MS = 30 * 60_000;
 
-/** An augmentation that would add one to Daedalus's count, not owned, queued or in the set, and when it can be (#243). */
+/** One that would add to Daedalus's count, not owned, queued or in the set, and when it can be bought (#243). */
 export interface CountableToCome {
   augmentation: string;
   /** The joined faction it's bought from. */
   faction: string;
-  /** How: its reputation earned by work at `faction`, a donation there (#225), or, its reputation reached, the money. */
+  /** How: its reputation by work at `faction`, by a donation there (#225), or, its reputation reached, the money. */
   way: "work" | "donation" | "money";
   /** Until it can be bought: its reputation at the work's rate and its money at the income, the later; or Infinity. */
   etaMs: number;

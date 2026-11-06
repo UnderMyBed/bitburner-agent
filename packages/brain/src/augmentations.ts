@@ -754,7 +754,7 @@ export function readCountHold(store: TelemetryStore): { lastAugReset: number; si
   return { lastAugReset, sinceOnlineMs };
 }
 
-/** An augmentation to come for Daedalus's count (#243), with its money: what it adds to the set's, with any donation. */
+/** One to come for Daedalus's count (#243), with its money: what it adds to the set's, and any donation. */
 export type ToCome = CountableToCome & { money: number };
 
 /**
@@ -1682,6 +1682,7 @@ export class AugmentationRule {
       }
       if (countHeldBefore !== null) {
         const after = new Set([...Object.keys(ownedAugs), ...installing]).size;
+        const holdLength = formatEta(DAEDALUS_COUNT_HOLD_MS);
         const why = !short
           ? "Daedalus's count met"
           : countdownReason === null
@@ -1689,8 +1690,8 @@ export class AugmentationRule {
             : after >= count.required
               ? "the count reached at this install"
               : heldSinceOnlineMs !== null && onlineMs >= heldSinceOnlineMs + DAEDALUS_COUNT_HOLD_MS
-                ? `its ${formatEta(DAEDALUS_COUNT_HOLD_MS)} are up`
-                : `${countHeldBefore.augmentation} isn't within what's left of its ${formatEta(DAEDALUS_COUNT_HOLD_MS)}`;
+                ? `its ${holdLength} are up`
+                : `${countHeldBefore.augmentation} isn't within what's left of its ${holdLength}`;
         this.#log(`augmentations: the hold for Daedalus's count is over: ${why}`);
       }
       let redPillDonation: Donation | null = null;

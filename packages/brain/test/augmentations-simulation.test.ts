@@ -248,7 +248,7 @@ test.each(SEEDS)(
 
 // --- Held for Daedalus's count (#243): run #3's 17:49 in the engine, on to Daedalus's invitation --------------------
 
-/** `AUGMENTATION_DAEDALUS`: set (to anything), the suite runs on to Daedalus's invitation; unset (CI), to the install. */
+/** `AUGMENTATION_DAEDALUS`: set (to anything), on to Daedalus's invitation; unset (CI), to the install. */
 const TO_DAEDALUS = process.env.AUGMENTATION_DAEDALUS !== undefined;
 const BLACK_HAND = "The Black Hand";
 /**
@@ -386,7 +386,10 @@ test.each(SEEDS)(
     await until(() => installs.length > 0, HELD_WITHIN_MS);
     expect(brain.logLines).toContainEqual(
       expect.stringMatching(
-        /^augmentations: install held for Daedalus's count: Daedalus's count reachable this cycle, The Black Hand in ~1\d min \(by work at The Black Hand, /,
+        new RegExp(
+          "^augmentations: install held for Daedalus's count: Daedalus's count reachable this cycle, The Black Hand " +
+            "in ~1\\d min \\(by work at The Black Hand, ",
+        ),
       ),
     );
     expect(brain.logLines).toContain(
