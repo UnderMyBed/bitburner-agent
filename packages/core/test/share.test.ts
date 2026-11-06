@@ -22,6 +22,7 @@ import {
   shareReserveGb,
   shareRound,
   shareRoundThreads,
+  shareTopUpThreads,
 } from "../src/share.ts";
 
 const source = (file: string) =>
@@ -39,7 +40,7 @@ test("the constants are the pinned game's and legacy's: 10 s a call, 2.4 GB for 
   expect(SHARE_MOST_USE).toBe(0.8);
 });
 
-test("Singularity workers' RAM (#242's review): the largest is ram-budget.json's destroy, times the SF4 multiplier", () => {
+test("Singularity workers' RAM (#242's review): ram-budget.json's largest, times the SF4 multiplier", () => {
   const budget = JSON.parse(readFileSync(new URL("../../ingame/ram-budget.json", import.meta.url), "utf8")) as Record<
     string,
     number
@@ -158,7 +159,7 @@ test("home beside the batches' hosts (#224's review): its free RAM above what it
   });
 });
 
-test("run #3's 12:22 (#242): the batches on 97% of the cloud servers, home large and empty, home shares all it can", () => {
+test("run #3's 12:22 (#242): batches on 97% of the cloud servers, home empty: home shares all it can", () => {
   // The simulator's rebuild of it: 25 cloud servers of 64 TB, 1,594,284 GB used of them; home 64 TB, 8.45 GB used.
   // Counted over all the hosts, 0.8 x 1,703,936 - 1,594,292 is under 0: no room at all, and home sat idle.
   const cloud = Array.from({ length: 25 }, (_, index) => host(`pserv-${index}`, 65_536, 1_594_284 / 25));
@@ -198,6 +199,12 @@ test("a round starts half of what the share may hold, so two halves overlap (#24
   expect(shareRoundThreads(900, 100)).toBe(100);
   // Odd figures, whole threads.
   expect(shareRoundThreads(-3, 10.9)).toBe(5);
+  // A half's RAM back owes its rounds at most its fair share (#242's review): 20 back beside 10 held, 15.
+  expect(shareTopUpThreads(10, 20)).toBe(15);
+  expect(shareTopUpThreads(15, 15)).toBe(15);
+  expect(shareTopUpThreads(20, 10)).toBe(10);
+  expect(shareTopUpThreads(0, 7)).toBe(4);
+  expect(shareTopUpThreads(5, 0)).toBe(0);
   // A half ending (#242's review): none, though another host has room; its RAM comes back a moment later.
   expect(shareRoundThreads(500, 300, true)).toBe(0);
   expect(shareRoundThreads(500, 300, false)).toBe(300);

@@ -138,6 +138,7 @@ import {
   shareReleasedAt,
   shareRound,
   shareRoundThreads,
+  shareTopUpThreads,
 } from "@bitburner-agent/core";
 import { monotonicMs, monotonicMsOf, wallClockMsOf } from "../clock.ts";
 import type { NS } from "../ns.ts";
@@ -548,6 +549,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    */
   const startBatching = (notBeforeMs = 0) => {
     health.state = "batching";
+    // Its hosts may share now (#242's review): looked at at once, not at home's next look, up to 5 s on.
+    nextSharingLookAt = 0;
     logNow = true;
     setProblem(lastingProblem);
     batchesSinceStart = 0;
@@ -1013,8 +1016,14 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const toppingUp = topUp.threads > 0 && now < topUp.untilMs;
     if (started > 0) return toppingUp ? SHARE_LOOK_AGAIN_MS : SHARE_ROUND_MS;
     if (onHosts || halfEnding || toppingUp) return SHARE_LOOK_AGAIN_MS;
-    const heldOff = health.state === "batching" && sharingHeldOffUntil > now;
-    return heldOff ? Math.min(SHARE_ROUND_MS, sharingHeldOffUntil - now) : SHARE_ROUND_MS;
+    // Its hosts held (#242's review): looked at again as they may share, at the hold-off's end or the last wave's landing.
+    let inMs = SHARE_ROUND_MS;
+    if (health.state === "batching" && sharingHeldOffUntil > now) inMs = Math.min(inMs, sharingHeldOffUntil - now);
+    for (const { threads: waveThreads, untilMs } of landing) {
+      const { hack: hackCount } = waveThreads;
+      if (hackCount === 0 && untilMs >= now) inMs = Math.min(inMs, untilMs - now + 1);
+    }
+    return Math.max(SHARE_LOOK_AGAIN_MS, inMs);
   };
 
   /**
@@ -1037,7 +1046,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const released = releasedThreads > 0;
     if (released) {
       const owed = now < topUp.untilMs ? topUp.threads : 0;
-      topUp = { threads: owed + releasedThreads, untilMs: now + SHARE_TOP_UP_MS };
+      const stillHeld = sharingParts.reduce((sum, part) => sum + part.threads, 0);
+      // At most the half's fair share (core's `shareTopUpThreads`): the halves even out.
+      topUp = { threads: owed + shareTopUpThreads(stillHeld, releasedThreads), untilMs: now + SHARE_TOP_UP_MS };
     }
     const { sharing } = current();
     if (sharing === undefined) {

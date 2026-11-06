@@ -394,6 +394,7 @@ export {
   shareReserveGb,
   shareRound,
   shareRoundThreads,
+  shareTopUpThreads,
 } from "./share.ts";
 export {
   type FastSnapshotData,

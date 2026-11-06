@@ -125,7 +125,8 @@ describe("sharingConfigOf", () => {
       cores: {},
     });
     // Home keeps 4 times the Agent's 8 GB free of share threads (#226's review); with Singularity, the most its largest
-    // worker, the destroy's 33.9 GB at SF4.3, takes at the SF4 level owned beside that (#242's review): not all of home.
+    // worker, the destroy's 33.9 GB at SF4.3, takes at the SF4 level owned beside that (#242's review): not all of
+    // home.
     expect(SHARE_HOME_KEPT_GB).toBe(4 * HOME_KEPT_FOR_THE_AGENT_GB);
     const withHome = medium(50, { foodnstuff: true, CSEC: true }, [], 2 ** 20);
     expect(sharingConfigOf(config, withHome, 1)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 33.9, 9);
@@ -386,7 +387,7 @@ describe("the run report's lines", () => {
     expect(failures).toEqual([]);
   });
 
-  test("#242: the bonus while asked against the bonus possible, the time at x1.000, and home left idle, a failure", () => {
+  test("#242: the bonus while asked against the possible, the time at x1.000, home left idle", () => {
     // 6 minutes asked with home idle (run #3's 12:22: no threads, the room 0, home's RAM free), then 6 minutes sharing.
     const points = [];
     for (let second = 0; second <= 720; second += 2) {
@@ -413,8 +414,8 @@ describe("the run report's lines", () => {
       "  sharing spare RAM (#224):",
       "    shared for 6 min: threads at most 1,000, 1,000 on average; RAM at most 4,000 GB, 4,000 GB on average; " +
         "the bonus at most x1.400, x1.400 on average",
-      "    the bonus while asked (#242): x1.200 on average, of x1.410 possible under the share's rules; at x1.000 for " +
-        "6 min (50% of 12 min asked)",
+      "    the bonus while asked (#242): x1.200 on average, of x1.410 possible under the share's rules; " +
+        "at x1.000 for 6 min (50% of 12 min asked)",
       "    the brain's faction work while sharing: none to judge",
       "    while sharing on the batches' hosts: 0 late, 0 lost, 0 short; on home alone: 0 late, 0 lost, 0 short; " +
         "while not: 0 late, 0 lost, 0 short",
@@ -480,8 +481,8 @@ describe("the run report's lines", () => {
     ];
     expect(sharingLines(mixed, [], [])).toEqual(
       expect.arrayContaining([
-        "    the bonus while asked (#242): x1.000 on average, of x1.200 possible under the share's rules; at x1.000 for " +
-          "0 min (100% of 0 min asked)",
+        "    the bonus while asked (#242): x1.000 on average, of x1.200 possible under the share's rules; " +
+          "at x1.000 for 0 min (100% of 0 min asked)",
         "    home idle while asked (over half of what it may share free, for 5 minutes, #242): never",
       ]),
     );

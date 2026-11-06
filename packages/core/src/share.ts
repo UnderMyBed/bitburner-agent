@@ -148,6 +148,17 @@ export function shareRoundThreads(heldThreads: number, roomThreads: number, half
 }
 
 /**
+ * The threads a half's RAM coming back owes its rounds (#242's review): those that came back (`releasedThreads`), at
+ * most half of them and the threads still held (`heldThreads`), rounded up, so a half larger than its fair share isn't
+ * topped up past it, and the halves even out (15/15 of 30, not 20/10 again). The batcher looks again soon while a
+ * round since has started fewer.
+ */
+export function shareTopUpThreads(heldThreads: number, releasedThreads: number): number {
+  const released = Math.max(0, releasedThreads);
+  return Math.min(released, Math.ceil((Math.max(0, heldThreads) + released) / 2));
+}
+
+/**
  * The reserve the brain sends the batcher for sharing (#224), GB: the batches' peak on its plan (core's
  * `batchPeakRamGb`) with `SHARE_RESERVE_MARGIN`, plus the next target's RAM, if any (the batcher prepares it beside the
  * batches), rounded up to a whole GB.
