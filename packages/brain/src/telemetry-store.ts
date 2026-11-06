@@ -311,6 +311,22 @@ export class TelemetryStore {
     }
   }
 
+  /**
+   * Runs `write` in one write transaction: all of its writes or none (rolled back if it throws), and one commit, so
+   * one sync to disk, however many rows (the run report's tests build a run's thousands of snapshots in one).
+   */
+  writeTransaction<Result>(write: () => Result): Result {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = write();
+      this.#database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   /** The events in a window (both edges included), in the order stored: the run report. */
   eventsInWindow({
     environment,
