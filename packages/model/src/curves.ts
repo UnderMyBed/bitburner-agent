@@ -84,9 +84,9 @@ export class Curves {
 
   /** The pace of a cycle's economy for home's RAM (`Calibration.firstCycleSpeed`). */
   homeSpeedOf(homeRamGb: number): number {
-    const { firstCycleSpeed } = this.calibration;
-    // 8 GB (2^3) to 1 TB (2^10).
-    const share = Math.min(1, Math.max(0, (Math.log2(homeRamGb) - 3) / 7));
+    const { firstCycleSpeed, fullSpeedHomeRamGb } = this.calibration;
+    // 8 GB (2^3) to `fullSpeedHomeRamGb`, log-linear.
+    const share = Math.min(1, Math.max(0, (Math.log2(homeRamGb) - 3) / (Math.log2(fullSpeedHomeRamGb) - 3)));
     return firstCycleSpeed + (1 - firstCycleSpeed) * share;
   }
 

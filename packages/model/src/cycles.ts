@@ -47,6 +47,7 @@ import {
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
+  passiveFactionReputationPerSecond,
   QUICK_INSTALL_COUNTDOWN_MS,
   redPillTarget,
   reputationToUnlockDonations,
@@ -162,6 +163,8 @@ export interface ModelOptions {
   stepMs?: number;
   /** Each step's figures, for a trace. */
   onStep?: (step: { atMs: number; onlineMs: number; hacking: number; money: number; clocks: Clocks }) => void;
+  /** Each step's work (A5's choice, or a policy's grind) and the factions joined then, for a trace. */
+  onWork?: (step: { atMs: number; choice: FactionWorkChoice | null; joined: readonly JoinedFaction[] }) => void;
 }
 
 /** SF1's bonus on every hacking multiplier (`SourceFile/applySourceFile.ts:15-40`): 1.16, 1.24, 1.28. */
@@ -290,7 +293,28 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     const choice =
       grindWork(policy, view, person, conditions, bitNode.FavorToDonateToFaction) ??
       factionWorkChoice(person, state(), resetInfo, conditions, count(), held);
+    options.onWork?.({ atMs: now, choice, joined });
     if (choice !== null) work(choice);
+    // Every other joined faction gains passive reputation (`processPassiveFactionRepGain`): it breaks A5's ties
+    // between two factions selling the same augmentation toward the one joined longer, as in run #3.
+    joined = joined.map((each) =>
+      each.name === choice?.faction
+        ? each
+        : {
+            ...each,
+            reputation:
+              each.reputation +
+              (passiveFactionReputationPerSecond(
+                person,
+                each.favor,
+                conditions.sourceFile15Level,
+                conditions.factionWorkRepGain,
+                conditions.shareBonus,
+              ) *
+                stepMs) /
+                1000,
+          },
+    );
 
     // A6: the purchases and the install.
     const decision = installDecision({
@@ -369,7 +393,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
         shops,
         terms: decision.terms,
         person,
-        conditions,
+        // As the brain's: `workConditionsOf` without the share's bonus, the safe side (#243).
+        conditions: { ...conditions, shareBonus: 1 },
         work: { owners: null, brainWorks: true },
         money,
         income,

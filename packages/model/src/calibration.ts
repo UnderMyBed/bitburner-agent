@@ -97,6 +97,8 @@ export interface Calibration {
    * 122 (0.6 gives 63 and 128; 0.9, 48 and 113). The one constant fitted to the simulator; run #3's total moves 1%.
    */
   firstCycleSpeed: number;
+  /** Home's RAM from which a cycle runs at the reference cycle's pace (`firstCycleSpeed`'s other end). */
+  fullSpeedHomeRamGb: number;
   /**
    * How much the operations' speed drives the hacking experience: 1, from the game's formulas, not fitted. Each
    * hack, grow and weaken takes time ∝ 1 / ((hacking + 50) × hacking_speed) (`Hacking.ts:60-80`) and earns experience
@@ -126,6 +128,7 @@ export interface Calibration {
 export const CALIBRATION: Calibration = {
   reference: { hacking: 1.3201, hacking_exp: 1.383, hacking_speed: 1.295, hacking_money: 1.2572 },
   firstCycleSpeed: 0.75,
+  fullSpeedHomeRamGb: 1024,
   expPaceExponent: 1,
   moneyPaceExponent: 0.25,
   shareBonus: 1.45,

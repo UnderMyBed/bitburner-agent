@@ -315,6 +315,8 @@ export {
   hackingSkillValue,
   hackingValue,
   MAX_SKILL_LEVEL,
+  PASSIVE_REPUTATION_LEAST_PER_CYCLE,
+  passiveFactionReputationPerSecond,
   UNFOCUSED_WORK_BONUS,
   type WorkingPerson,
 } from "./faction-work.ts";
