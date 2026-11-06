@@ -406,6 +406,16 @@ describe("the brain's joins and faction work (#203)", () => {
     expect(textOf(document, "#work div")).toBe("The brain's: hacking work for CyberSec, focused: converged via ui");
   });
 
+  test("a city faction's join at the gate, and the one beside it that bans nothing (#269)", async () => {
+    const { document } = await openPage(() => ({
+      status: 200,
+      body: withRule({ joining: "Chongqing", joiningAlongside: "NiteSec" }),
+    }));
+    expect([...document.querySelectorAll("#faction-rule div")].map((each) => each.textContent)).toContain(
+      "Joining: Chongqing; NiteSec beside it, a join with enemies",
+    );
+  });
+
   test("not sent with your work, saying what it would be; none, saying why; off; waiting", async () => {
     const rule = async (factionWork: Partial<DashboardStatus["factionWork"]>) => {
       const { document } = await openPage(() => ({ status: 200, body: withRule(factionWork) }));

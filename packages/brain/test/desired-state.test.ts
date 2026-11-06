@@ -2888,3 +2888,210 @@ describe("Daedalus count stuck, judged on A6's commit's facts (#238)", () => {
     ]);
   });
 });
+
+describe("the brain's own irreversible intents go through the irreversible gate (#269)", () => {
+  const JOIN_SECTOR_12 = intent({ action: "joinFaction", args: { faction: "Sector-12" } });
+  const SAVED: SaveBackupEvent = { type: "saveBackup", atMs: 1, file: "saves/E0/x.json.gz", sizeBytes: 10 };
+  /** A player who can reach every city group (#228's): the city group A chosen (Sector-12, Aevum). */
+  const player = (factions: string[] = []) =>
+    mediumData(100, {}, { money: 1e9, city: "Sector-12", hasTorRouter: true, homeRam: 2 ** 20, factions });
+  /** A slow snapshot with `invited` in the faction state. */
+  const invitedTo = (invited: string[]) => {
+    const data = slowData();
+    data.factions = {
+      backend: "sim",
+      state: { joined: [], invitations: invited, queuedAugmentations: [] },
+      problem: null,
+    };
+    return data;
+  };
+  /** The hack loop off and every rule on; save backups each answered when the test says. */
+  function connected() {
+    store.setSetting("hackLoop.enabled", "false");
+    const pending: ((event: SaveBackupEvent) => void)[] = [];
+    const backupNow = vi.fn(() => new Promise<SaveBackupEvent>((resolve) => pending.push(resolve)));
+    const controller = new DesiredStateController({ channel, store, saveBackups: { backupNow } });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", invitedTo(["Sector-12"]));
+    const sentIds = () =>
+      desiredStates(connection)
+        .at(-1)
+        ?.intents.map((each) => each.id) ?? [];
+    const waitingFor = (id: string) => controller.intentsView().find((view) => view.id === id)?.waitingFor;
+    const settleBackup = async (event: SaveBackupEvent) => {
+      pending.shift()?.(event);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    return { controller, connection, backupNow, sentIds, waitingFor, settleBackup };
+  }
+
+  /** The Agent reports `id` done in its fast snapshot. */
+  const reportDone = (connection: MemoryConnection, id: string) =>
+    send(connection, "fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id, done: true, tries: 1, problem: null, backend: "sim" }],
+    });
+  /** The medium snapshots a new rule's gate needs: the first finds no gate (the rule's join comes with its update). */
+  const mediumsForAGate = (connection: MemoryConnection, factions: string[] = []) => {
+    for (let each = 0; each < 3; each += 1) send(connection, "medium", player(factions));
+  };
+
+  test("a city faction's join, Sector-12's (bans four): its guard on two medium snapshots, then a backup", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    send(connection, "medium", player());
+    expect(controller.factionsView().joining).toBe("Sector-12");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)",
+    );
+    // A third medium snapshot in all: the gate came with the first one's update, and counts from the next (safe side).
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe("waiting for a save backup");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBeNull();
+    // Out, its guard still judged: an enemy joined withdraws it.
+    send(connection, "medium", player(["Chongqing"]));
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe("held: Sector-12's enemy Chongqing is joined");
+  });
+
+  test("#269's reproduction: the owner's install queued, the join waits for it, one irreversible at a time", async () => {
+    const { controller, connection, sentIds, waitingFor, settleBackup } = connected();
+    controller.addManualIntent({ action: "installAugmentations", args: {} });
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    // Before #269: ["buyProgram(BruteSSH.exe)", "joinFaction(Sector-12)", "travel(Ishima)"], the join out at once.
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(controller.intentsView().find((view) => view.id === JOIN_SECTOR_12.id)?.source).toBe("join");
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for installAugmentations() first: one irreversible intent at a time",
+    );
+    // The install's backup lets the install out, alone.
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain("installAugmentations()");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+  });
+
+  test("out, then the owner queues an ally (Aevum, its group): withdrawn, never out with Aevum's", async () => {
+    const { controller, connection, sentIds, waitingFor, settleBackup } = connected();
+    mediumsForAGate(connection);
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Aevum" } });
+    // No longer first, so no longer judged: back to counting, withdrawn.
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for joinFaction(Aevum) first: one irreversible intent at a time",
+    );
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain("joinFaction(Aevum)");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    // Aevum done: Sector-12 is first again, and goes out only past a new guard count and backup.
+    reportDone(connection, "joinFaction(Aevum)");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far): " +
+        "another irreversible intent was queued ahead of it",
+    );
+    send(connection, "medium", player(["Aevum"]));
+    send(connection, "medium", player(["Aevum"]));
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+  });
+
+  test("pushed back while its backup is taken: that backup's success releases nothing", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    mediumsForAGate(connection);
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe("waiting for a save backup");
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Aevum" } });
+    await settleBackup(SAVED);
+    // Not first, so not out on it: the backup was for a gate that has started again.
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(sentIds()).not.toContain("joinFaction(Aevum)");
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for joinFaction(Aevum) first: one irreversible intent at a time",
+    );
+  });
+
+  test("pushed back after one medium snapshot held: first again, it counts two consecutive ones afresh", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    // The first finds no gate (the rule's join comes with its update); the second is held.
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (1 so far)",
+    );
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Aevum" } });
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain("joinFaction(Aevum)");
+    reportDone(connection, "joinFaction(Aevum)");
+    // One medium snapshot since: not the two consecutive ones R8 asks for, so no backup yet.
+    send(connection, "medium", player(["Aevum"]));
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (1 so far): " +
+        "another irreversible intent was queued ahead of it",
+    );
+    send(connection, "medium", player(["Aevum"]));
+    expect(backupNow).toHaveBeenCalledTimes(2);
+  });
+
+  test("out, then the owner queues an install and cancels it: out again only past a new backup", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    mediumsForAGate(connection);
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+    controller.addManualIntent({ action: "installAugmentations", args: {} });
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for installAugmentations() first: one irreversible intent at a time",
+    );
+    controller.cancelManualIntent("installAugmentations()");
+    // Not on its old release: its guard and a backup again.
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    expect(backupNow).toHaveBeenCalledTimes(2);
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+  });
+
+  test("a city join at the gate holds up no invitation that bans nothing: CyberSec's goes beside it", async () => {
+    const { controller, connection, sentIds, waitingFor, settleBackup } = connected();
+    send(connection, "slow", invitedTo(["Sector-12", "CyberSec", "NiteSec"]));
+    send(connection, "medium", player());
+    expect(sentIds()).toContain("joinFaction(CyberSec)");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(controller.factionsView()).toMatchObject({ joining: "Sector-12", joiningAlongside: "CyberSec" });
+    expect(waitingFor("joinFaction(CyberSec)")).toBeNull();
+    // Backups failing hold Sector-12, not the rest: CyberSec joined, NiteSec next.
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    await settleBackup({ type: "saveBackup", atMs: 1, failure: "no Remote File API connection" });
+    send(connection, "medium", player(["CyberSec"]));
+    expect(sentIds()).toContain("joinFaction(NiteSec)");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(controller.factionsView()).toMatchObject({ joining: "Sector-12", joiningAlongside: "NiteSec" });
+  });
+
+  test("reversible ones the rules make go at once, as before: CyberSec's join (no enemies), the purchase", () => {
+    const { connection, sentIds, controller } = connected();
+    send(connection, "slow", invitedTo(["CyberSec"]));
+    send(connection, "medium", player());
+    expect(sentIds()).toEqual(expect.arrayContaining(["joinFaction(CyberSec)", "buyProgram(BruteSSH.exe)"]));
+    // Nothing beside a join that's reversible itself.
+    expect(controller.factionsView()).toMatchObject({ joining: "CyberSec", joiningAlongside: null });
+  });
+});
