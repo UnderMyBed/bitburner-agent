@@ -12,9 +12,9 @@
 // - On to the second install (#238): NeuroFlux Governor's levels alone at 6 of 30, with nothing that counts within
 //   reach. The report says so as information, and doesn't fail "Daedalus count stuck" (#229's check did).
 // - Held for Daedalus's count (#243), a second test: run #3's 17:49 in the engine (25 installed, four reached, The
-//   Black Hand's augmentation 15 minutes off by work), held until it's reached, then one install at 30; with
-//   `AUGMENTATION_DAEDALUS` set, on to Daedalus's invitation (32.5 virtual minutes from the edit on seeds 1 to 5; on
-//   main 7c741cc, without the hold, 105.7 to 114.7).
+//   Black Hand's augmentation 12 minutes off by work, hacking past 2500), held until it's reached, then one install at
+//   30; with `AUGMENTATION_DAEDALUS=1`, on to Daedalus's invitation (37.5 virtual minutes from the edit on seeds 1 to 5;
+//   on main's code, without the hold, 61.2 to 104.7). `AUGMENTATION_DAEDALUS_LOG` names a file for its progress.
 // CI runs seed 1, to the install; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
 import { appendFileSync } from "node:fs";
 import { augmentationsSoldBy, DAEDALUS, type MediumSnapshotData, type SlowSnapshotData } from "@bitburner-agent/core";

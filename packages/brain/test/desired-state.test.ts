@@ -2417,6 +2417,10 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       expect(controller.factionsView().choice).toMatchObject({ faction: TBH, augmentation: TBH, held: true });
       // Not an install under way: the travel for group B's invitations goes on.
       expect(sentPurchases(connection)).toContainEqual(TRAVEL_CHONGQING);
+      // The brain's faction work switched off: nobody works for The Black Hand, so the hold is over.
+      controller.setFactionWorkEnabled(false);
+      send(connection, "medium", player(medium(1.5e9)));
+      expect(controller.augmentationsView().progress?.countHold).toBeNull();
     });
 
     test("an install chosen: no cloud server at all, saying why, and the augmentation bought instead", () => {
