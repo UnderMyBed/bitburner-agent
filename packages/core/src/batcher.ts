@@ -964,7 +964,9 @@ export function hackWaitsForItsBatch(hackOrder: LaunchOrder, waiting: Iterable<L
 /**
  * A batch's four operations, its hack landing at `landAt` and the rest δ apart after it, each started its hold
  * (`batchHoldsMs`) before it lands, earliest first: weaken1, weaken2, grow, hack, as their times go. With
- * `batchHoldsMs`'s holds the hack is always last (#253), however fast it is.
+ * `batchHoldsMs`'s holds the hack is always last (#253), however fast it is; under a hack time of about 20 ms the
+ * others' order changes, and under about 7 ms all three go out together, `BATCH_HACK_LAST_BY_MS` before the hack, in
+ * the order their floats give.
  */
 export function batchOrders(batch: number, landAt: number, holdsMs: Record<BatchOperation, number>): LaunchOrder[] {
   return BATCH_OPERATIONS.map((operation) => {
@@ -1196,8 +1198,8 @@ export interface BatcherHealth {
   waits?: RamWait[];
   /**
    * Hacks held back while another of their batch's orders waited for room (#246's verification): not waits for RAM,
-   * counted apart. And orders that found their batch gone, its hack out before them (a hack time under a few tens of
-   * ms, #253): never dropped silently. Absent from an older batcher.
+   * counted apart. And orders that found their batch gone, its hack out before them: never since #253 made the hack
+   * the last out, so a bug (the run report fails on it); never dropped silently. Absent from an older batcher.
    */
   hacksHeldForBatch?: number;
   ordersDropped?: number;

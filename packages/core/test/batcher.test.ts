@@ -1058,15 +1058,22 @@ describe("batchHoldsMs with other batches (#206)", () => {
 });
 
 describe("a batch's hack goes out last, however fast it is (#253)", () => {
-  /** The hold before #253: the operation's time at the minimum plus its lead at the batch's ceiling. */
-  const ownHoldMs = (operation: BatchOperation, target: HackingTarget, at: HackingPlayer, threads: BatchThreads) =>
+  /** The hold before #253: the operation's time at the minimum plus its lead at the ceiling of it and `others`. */
+  const ownHoldMs = (
+    operation: BatchOperation,
+    target: HackingTarget,
+    at: HackingPlayer,
+    threads: BatchThreads,
+    others: BatchThreads[] = [],
+  ) =>
     operationTimeMs(operation, target, at) +
-    launchLeadMs(operation, target, at, batchBounds(target, at, [threads]).securityCeiling);
+    launchLeadMs(operation, target, at, batchBounds(target, at, [threads, ...others]).securityCeiling);
 
   test("hack times from a minute to under a ms: every other order starts its gap before the hack, held no less", () => {
-    // zer0 at hacking 150: a hack of about 59 s; up to 10^6 times as fast, 0.06 ms. Under about 20 ms, a weaken2 started
-    // its own hold before its landing would go out after the hack; under about 18 ms, a grow (2.2 hack times < 2δ).
-    let hackFirstWithoutTheGap = 0;
+    // zer0 at hacking 150: a hack of about 59 s; up to 10^6 times as fast, 0.06 ms. Under about 20 ms, a weaken2
+    // started its own hold before its landing would go out after the hack; under about 18 ms, a grow (2.2 hack times <
+    // 2δ); under about 7 ms, a weaken1 (3 under δ).
+    let holdsExtendedCount = 0;
     for (let power = 0; power <= 24; power += 1) {
       const at = player(150, { hacking_speed: 10 ** (power / 4) });
       const threads = batchThreads(zer0, at, 10);
@@ -1084,11 +1091,30 @@ describe("a batch's hack goes out last, however fast it is (#253)", () => {
         const own = ownHoldMs(each.operation, zer0, at, threads);
         const needed = holds.hack + landingOffsetMs(each.operation) + BATCH_HACK_LAST_BY_MS;
         expect(holds[each.operation], `${label}: ${each.operation}`).toBeCloseTo(Math.max(own, needed), 9);
-        if (own < needed) hackFirstWithoutTheGap += 1;
+        if (own < needed) holdsExtendedCount += 1;
       }
     }
-    // The sweep reaches hack times where each of the three would have gone out after the hack, or with it.
-    expect(hackFirstWithoutTheGap).toBeGreaterThanOrEqual(3 * 5);
+    // The sweep reaches hack times where each of the three would have gone out after the hack, or with it: weaken2
+    // at the 11 fastest (a hack under 20.3 ms), grow at the 10 fastest (18.6 ms), weaken1 at the 9 fastest (7 ms).
+    expect(holdsExtendedCount).toBe(30);
+  });
+
+  test("beside a larger batch still landing, the holds at its ceiling: the hack still last, its gap kept", () => {
+    // A 2 ms hack: the larger batch's ceiling lengthens every lead, the hack's too, and the rest go out before it.
+    const at = player(150, { hacking_speed: operationTimeMs("hack", zer0, player(150)) / 2 });
+    const threads = batchThreads(zer0, at, 1);
+    const larger = batchThreads(zer0, at, 200);
+    const holds = batchHoldsMs(zer0, at, threads, [larger]);
+    expect(holds.hack).toBeGreaterThan(ownHoldMs("hack", zer0, at, threads));
+    expect(holds.hack).toBeCloseTo(ownHoldMs("hack", zer0, at, threads, [larger]), 9);
+    const orders = batchOrders(0, 1_000_000, holds);
+    const hackOrder = orders.at(-1) as LaunchOrder;
+    expect(hackOrder.operation).toBe("hack");
+    for (const each of orders.slice(0, -1)) {
+      expect(each.launchAt).toBeLessThanOrEqual(hackOrder.launchAt - BATCH_HACK_LAST_BY_MS + 1e-6);
+      const own = ownHoldMs(each.operation, zer0, at, threads, [larger]);
+      expect(own, each.operation).toBeLessThan(holds[each.operation]);
+    }
   });
 
   test("worked by hand: a 5 ms hack held 205 ms, its weakens and grow held to go out the gap before it", () => {

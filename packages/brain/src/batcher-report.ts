@@ -848,7 +848,7 @@ export function batcherSection(
   // An order dropped, a failure: its batch's hack landed without it, a grow or weaken, the loss a short is.
   if (total.ordersDropped > 0) {
     const line =
-      `batch orders dropped: ${total.ordersDropped} found their batch gone (#253), the first seen at ` +
+      `batch orders dropped: ${total.ordersDropped} found their batch gone (a bug since #253), the first seen at ` +
       formatIsoTime(firstDroppedMs ?? firstMs);
     lines.push(`  ${line}`);
     failures.push(line);

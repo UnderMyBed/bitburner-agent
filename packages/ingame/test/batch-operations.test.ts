@@ -64,7 +64,11 @@ const FREE_RAM = `export async function main(ns) {
 /** A player's own script, idle for an hour: 1.6 GB a thread. */
 const IDLE = "export async function main(ns) { await ns.asleep(3_600_000); }";
 
-async function gameWithScripts(): Promise<Simulation> {
+/**
+ * A new game with the batcher's scripts in its folder, and the helpers. `edit`, given, changes a script's bundled source
+ * before it's written: a test's fault injection (#261's review), never a hook in the batcher itself.
+ */
+async function gameWithScripts(edit?: (name: string, source: string) => string): Promise<Simulation> {
   const simulation = await start(NEW_GAME);
   const { source } = await build();
   for (const name of [
@@ -75,7 +79,7 @@ async function gameWithScripts(): Promise<Simulation> {
     SHARE_SCRIPT_NAME,
     "hack-loop-root.js",
   ]) {
-    await simulation.writeFile("home", FOLDER + name, source(name));
+    await simulation.writeFile("home", FOLDER + name, edit === undefined ? source(name) : edit(name, source(name)));
   }
   await simulation.writeFile("home", "read-port.js", READ_PORT);
   await simulation.writeFile("home", "write-port.js", WRITE_PORT);
@@ -2319,8 +2323,11 @@ test("waiting for RAM, a grow or weaken gives up once the security leaves it no 
  * hacks are 60 times as fast as they are, beside RAM held 60 ms in each 100: its health, and the waits it kept, looked
  * at each second. Its operations, so reckoned, all start late: what's looked at is only its books.
  */
-async function fastBatcherHealth(hackingExp: number): Promise<{ health: BatcherHealth; waits: RamWait[] }> {
-  const simulation = await gameWithScripts();
+async function fastBatcherHealth(
+  hackingExp: number,
+  edit?: (name: string, source: string) => string,
+): Promise<{ health: BatcherHealth; waits: RamWait[] }> {
+  const simulation = await gameWithScripts(edit);
   await simulation.diagnostics.setHomeRam(64);
   const honest = await batchingOnSixHosts(simulation, hackingExp);
   const first = (await simulation.ps("home")).find((each) => each.filename.endsWith(BATCHER_SCRIPT_NAME));
@@ -2377,7 +2384,25 @@ test("a batch's hack goes out last however fast it is (#253): no order finds its
   // the books, and those after it found it gone (9 at #250). Held to go out before it (core's `batchHoldsMs`), they
   // start, or wait for RAM with the hack held beside them, or the batch is short and its hack skipped.
   const { health } = await fastBatcherHealth(1e300);
-  expect(health.batchesStarted).toBeGreaterThan(0);
-  expect(health.hacksLanded + health.hacksSkipped).toBeGreaterThan(0);
+  expect(health.batchesStarted).toBeGreaterThanOrEqual(10);
+  expect(health.hacksLanded).toBeGreaterThan(0);
   expect(health.ordersDropped).toBe(0);
+});
+
+/** The bundled batcher.js with the holds before #253 (`BATCH_HACK_LAST_BY_MS` -Infinity: no hold extended). */
+const withHoldsBefore253 = (name: string, source: string) => {
+  if (name !== BATCHER_SCRIPT_NAME) return source;
+  const gap = /\bBATCH_HACK_LAST_BY_MS = 1;/g;
+  expect(source.match(gap)?.length, "the gap's declaration, once, in the bundled batcher.js").toBe(1);
+  return source.replace(gap, "BATCH_HACK_LAST_BY_MS = -Infinity;");
+};
+
+test("with the holds before #253, an order that finds its batch gone is counted, never silent (#246's verification)", {
+  timeout: 300_000,
+}, async () => {
+  // A test's fault (#261's review): the grow and weakens started only their own hold before their landing, after a hack
+  // of a weaken reckoned at 8 ms. Out first, the hack takes the batch off the books, and they find it gone (9 at #250).
+  const { health } = await fastBatcherHealth(1e300, withHoldsBefore253);
+  expect(health.batchesStarted).toBeGreaterThan(0);
+  expect(health.ordersDropped).toBeGreaterThan(0);
 });
