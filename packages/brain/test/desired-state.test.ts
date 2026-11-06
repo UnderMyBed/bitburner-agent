@@ -1437,6 +1437,100 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(backupNow).toHaveBeenCalledTimes(1);
     });
 
+    test("out, a travel queued ahead of it (#271): withdrawn at once, held, then a new backup", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      pastCountdown(connection, richMedium(0));
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // The owner's travel goes ahead of the brain's install: its guard, judged on this update, not the next snapshot.
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+      // The travel done: not out on its old release, but past its guard and a new backup.
+      reportedDone(connection, AEVUM.id);
+      expect(sentIds()).toEqual([]);
+      expect(waitingFor(INSTALL.id)).toBe("waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)");
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(2);
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+    });
+
+    /** Connected with the brain's install chosen: CyberSec's five bought, no money left, its countdown run out. */
+    const installChosen = () => {
+      const connected = connectedWithLoopOff();
+      send(connected.connection, "slow", slowWith(FIVE));
+      send(connected.connection, "medium", richMedium(0));
+      pastCountdown(connected.connection, richMedium(0));
+      return connected;
+    };
+
+    test("queued ahead of it mid-count, done before the next snapshot (#271): it counts two afresh", async () => {
+      const { controller, connection, waitingFor, backupNow } = installChosen();
+      send(connection, "medium", richMedium(0));
+      expect(waitingFor(INSTALL.id)).toBe("waiting for the guard to hold on 2 consecutive medium snapshots (1 so far)");
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      reportedDone(connection, AEVUM.id);
+      // Not one more: the snapshot it held on came before the travel, so R8's two are counted again.
+      expect(waitingFor(INSTALL.id)).toBe("waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)");
+      send(connection, "medium", richMedium(0));
+      expect(backupNow).not.toHaveBeenCalled();
+      send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+    });
+
+    test("held by the queue, a medium snapshot counts nothing: still held, no backup asked for", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = installChosen();
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      await settleBackup(SAVED);
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      for (let each = 0; each < 3; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+    });
+
+    test("a backup answered after the intent ahead is done (#271): releases nothing, counted afresh", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = installChosen();
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      reportedDone(connection, AEVUM.id);
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([]);
+      expect(waitingFor(INSTALL.id)).toBe("waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)");
+    });
+
+    test("out, the intent ahead cancelled rather than done (#271): out again only past a new backup", async () => {
+      const { controller, connection, sentIds, backupNow, settleBackup } = installChosen();
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      controller.cancelManualIntent(AEVUM.id);
+      expect(sentIds()).toEqual([]);
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(2);
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+    });
+
+    test("its backup taken as the owner queues ahead of it (#271): that backup releases nothing", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      pastCountdown(connection, richMedium(0));
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+    });
+
     test("the install reported done with no reset in the next slow snapshot: withdrawn, alerted (#213 re-review)", async () => {
       const { controller, connection, sentIds, settleBackup } = connectedWithLoopOff();
       const sent: { type: string }[] = [];
@@ -1709,6 +1803,49 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         expect(stored).toEqual([
           { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1 },
         ]);
+      });
+
+      /** The Agent reports the owner's travel to Aevum done. */
+      const travelDone = (connection: MemoryConnection) =>
+        send(connection, "fast", {
+          degradedTiers: [],
+          pageHeapUsedBytes: null,
+          game: null,
+          intents: [{ id: AEVUM.id, done: true, tries: 1, problem: null, backend: "sim" }],
+        });
+
+      test("its backup taken as the owner queues ahead of it (#271): that backup releases nothing", async () => {
+        const { controller, connection, sentIds, waitingFor, settleBackup, daemonMedium } = withTheRedPill();
+        for (let each = 0; each < 3; each += 1) daemonMedium();
+        controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([AEVUM.id]);
+        expect(waitingFor(BRAINS.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+        travelDone(connection);
+        expect(sentIds()).toEqual([]);
+        expect(waitingFor(BRAINS.id)).toBe(
+          "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)",
+        );
+      });
+
+      test("out, a travel queued ahead of it (#271): withdrawn at once, held, then a new backup", async () => {
+        const { controller, connection, sentIds, waitingFor, backupNow, settleBackup, daemonMedium } = withTheRedPill();
+        for (let each = 0; each < 3; each += 1) daemonMedium();
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([BRAINS.id]);
+        controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+        expect(sentIds()).toEqual([AEVUM.id]);
+        expect(waitingFor(BRAINS.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+        travelDone(connection);
+        expect(sentIds()).toEqual([]);
+        expect(waitingFor(BRAINS.id)).toBe(
+          "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)",
+        );
+        daemonMedium();
+        daemonMedium();
+        expect(backupNow).toHaveBeenCalledTimes(2);
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([BRAINS.id]);
       });
 
       test("a restarted brain keeps its destroy's note, asking again until the reset shows (#215 review)", () => {

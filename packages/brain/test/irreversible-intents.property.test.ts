@@ -4,7 +4,10 @@
 // Agent connected, answered saved at the moment it goes out, and not older than `RELEASED_SNAPSHOTS` medium snapshots
 // while it stays out; and alone. The rules are on, as in a live run, with the hack loop off so intents go without its
 // snapshots. The owner may queue an ally of the rule's join (Aevum, Sector-12's group) or an install and cancel it,
-// each of which puts an intent ahead of a rule's join already out (#269 review). The gate's example tests are
+// each of which puts an intent ahead of a rule's join already out (#269 review). In some runs the brain installs
+// (#210: CyberSec's five queued, no money left) or destroys the BitNode (#215: The Red Pill in, w0r1d_d43m0n rooted at
+// its level), so the owner's queuing goes ahead of the brain's own reset, out or not (#271). The gate's example tests
+// are
 // desired-state.test.ts's; the reset and done rules over the owner's queue, PR #268's property.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -22,6 +25,7 @@ import {
   intentId,
   isIrreversibleIntent,
   type SnapshotTier,
+  WORLD_DAEMON,
 } from "@bitburner-agent/core";
 import fc from "fast-check";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -50,7 +54,23 @@ const SAVED_BACKUP: SaveBackupEvent = { type: "saveBackup", atMs: 1, file: "save
 const FAILED_BACKUP: SaveBackupEvent = { type: "saveBackup", atMs: 1, failure: "the game sent its save as text" };
 /** The join intent of an id like "joinFaction(Sector-12)". */
 const joinOf = (id: string): Intent => intentOf({ action: "joinFaction", args: { faction: id.slice(12, -1) } });
-const NETWORK = { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] };
+const NETWORK = {
+  servers: [
+    staticServer("home", { moneyMax: 0 }),
+    staticServer("n00dles"),
+    staticServer(WORLD_DAEMON, { requiredHackingSkill: 3000, numOpenPortsRequired: 5 }),
+  ],
+};
+/** CyberSec's five, queued in a run where the brain installs (#210): all bought, no money left, so it installs. */
+const CYBERSEC_FIVE = [
+  "Cranial Signal Processors - Gen I",
+  "Cranial Signal Processors - Gen II",
+  "BitWire",
+  "Synaptic Enhancement Implant",
+  "Neurotrainer I",
+];
+/** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */
+const isReset = (id: string) => id === "installAugmentations()" || id.startsWith("destroyBitNode(");
 
 const anyFactionsJoined = fc.oneof(
   { arbitrary: fc.constant([] as string[]), weight: 3 },
@@ -60,35 +80,61 @@ const anyOwnerIntent = fc.nat({ max: OWNER_INTENTS.length - 1 });
 /**
  * What happens next: the owner queues or cancels, or queues an install and cancels it at once; a medium snapshot (some
  * factions joined); a slow one (some invitations); a save backup's answer; the three medium snapshots and saved
- * backups a gate needs (`release`, sometimes with the owner queuing meanwhile); the Agent's round, reporting each intent sent done or not; a reconnect.
+ * backups a gate needs (`release`, sometimes with the owner queuing meanwhile); the Agent's round, reporting each
+ * intent sent done or not; a reconnect.
  */
-const anyStep = fc.oneof(
-  { arbitrary: fc.record({ kind: fc.constant("queue" as const), index: anyOwnerIntent }), weight: 2 },
-  { arbitrary: fc.record({ kind: fc.constant("cancel" as const), index: anyOwnerIntent }), weight: 1 },
-  { arbitrary: fc.record({ kind: fc.constant("installThenCancel" as const) }), weight: 1 },
-  { arbitrary: fc.record({ kind: fc.constant("medium" as const), factions: anyFactionsJoined }), weight: 3 },
-  { arbitrary: fc.record({ kind: fc.constant("slow" as const), invited: fc.subarray(INVITABLE) }), weight: 2 },
-  { arbitrary: fc.record({ kind: fc.constant("backup" as const), saved: fc.boolean() }), weight: 2 },
-  {
-    arbitrary: fc.record({
-      kind: fc.constant("release" as const),
-      factions: anyFactionsJoined,
-      queuedMeanwhile: fc.option(anyOwnerIntent, { freq: 3 }),
-    }),
-    weight: 3,
-  },
-  {
-    arbitrary: fc.record({ kind: fc.constant("agentRound" as const), done: fc.array(fc.boolean(), { maxLength: 8 }) }),
-    weight: 2,
-  },
-  { arbitrary: fc.record({ kind: fc.constant("reconnect" as const) }), weight: 1 },
-);
+/**
+ * The steps, weighted for a run where the brain resets (`brainResets`) or not. Where it does, the owner's queue is
+ * emptied more often (cancels, the Agent's rounds), as the brain's install and destroy go out only behind it, and a
+ * travel alone is queued more often then, #271's path.
+ */
+const stepsFor = (brainResets: boolean) =>
+  fc.oneof(
+    {
+      arbitrary: fc.record({ kind: fc.constant("queue" as const), index: anyOwnerIntent }),
+      weight: brainResets ? 1 : 2,
+    },
+    {
+      arbitrary: fc.record({ kind: fc.constant("cancel" as const), index: anyOwnerIntent }),
+      weight: brainResets ? 3 : 1,
+    },
+    { arbitrary: fc.record({ kind: fc.constant("installThenCancel" as const) }), weight: 1 },
+    // A reversible intent of the owner's, alone: #271's path, ahead of the brain's own reset out (it has no gate).
+    { arbitrary: fc.record({ kind: fc.constant("queueTravel" as const) }), weight: brainResets ? 2 : 1 },
+    { arbitrary: fc.record({ kind: fc.constant("medium" as const), factions: anyFactionsJoined }), weight: 3 },
+    { arbitrary: fc.record({ kind: fc.constant("slow" as const), invited: fc.subarray(INVITABLE) }), weight: 2 },
+    { arbitrary: fc.record({ kind: fc.constant("backup" as const), saved: fc.boolean() }), weight: 2 },
+    {
+      arbitrary: fc.record({
+        kind: fc.constant("release" as const),
+        factions: anyFactionsJoined,
+        queuedMeanwhile: fc.option(anyOwnerIntent, { freq: 3 }),
+      }),
+      weight: 3,
+    },
+    {
+      arbitrary: fc.record({
+        kind: fc.constant("agentRound" as const),
+        done: fc.array(fc.boolean(), { maxLength: 8 }),
+      }),
+      weight: brainResets ? 4 : 2,
+    },
+    { arbitrary: fc.record({ kind: fc.constant("reconnect" as const) }), weight: 1 },
+  );
+const anyStep = stepsFor(false);
 type Step = typeof anyStep extends fc.Arbitrary<infer Each> ? Each : never;
 
 let directory: string;
 let storeCount = 0;
 /** Across the runs, so the property is seen to reach what it's for. */
-const reached = { runsWithARuleJoinOut: 0, ruleJoinsOutWhenTheOwnerWentAhead: 0 };
+const reached = {
+  runsWithARuleJoinOut: 0,
+  ruleJoinsOutWhenTheOwnerWentAhead: 0,
+  runsWithTheBrainsInstallOut: 0,
+  runsWithTheBrainsDestroyOut: 0,
+  reversibleAheadOfTheBrainsInstallOut: 0,
+  reversibleAheadOfTheBrainsDestroyOut: 0,
+};
 beforeAll(() => {
   directory = mkdtempSync(path.join(os.tmpdir(), "irreversible-intents-property-"));
 });
@@ -97,7 +143,7 @@ afterAll(() => {
 });
 
 /** A brain with every rule on, an Agent connected, the steps played: what each desired state sent breaks of R8. */
-async function play(steps: Step[]): Promise<string[]> {
+async function play(brainsReset: "none" | "install" | "destroy", steps: Step[]): Promise<string[]> {
   const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
   store.setSetting("hackLoop.enabled", "false");
   const channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
@@ -129,8 +175,18 @@ async function play(steps: Step[]): Promise<string[]> {
       .filter((view) => view.source !== "manual")
       .map((view) => view.id)
       .filter((id) => id.startsWith("joinFaction(") && isIrreversibleIntent(joinOf(id)));
-    return owners[0] ?? rules[0] ?? null;
+    return owners[0] ?? brainsResets()[0] ?? rules[0] ?? null;
   };
+  /** The brain's own resets in its view, in order (its destroy, then its install). */
+  const brainsResets = (): string[] =>
+    controller
+      .intentsView()
+      .filter((view) => view.source !== "manual" && isReset(view.id))
+      .map((view) => view.id);
+  /** The game's time, 10 s a medium snapshot on, so an install's countdown runs out (#222). */
+  let gameTimeMs = 1_000;
+  let theBrainsInstallWentOut = false;
+  let theBrainsDestroyWentOut = false;
   /** Medium snapshots seen this run, and when (by that count) each irreversible intent out went out. */
   let mediumsSeen = 0;
   const wentOutAt = new Map<string, number>();
@@ -153,7 +209,7 @@ async function play(steps: Step[]): Promise<string[]> {
         agentSessionId: `session-${connectionNumber}`,
         tier,
         sequenceNumber: ++sequenceNumber,
-        gameTimeMs: 1_000,
+        gameTimeMs,
         data,
       }),
     );
@@ -171,7 +227,10 @@ async function play(steps: Step[]): Promise<string[]> {
       );
       return enemy === undefined ? null : `its enemy ${enemy} is joined`;
     }
-    return ownerQueue[0] === irreversible.id ? null : `${ownerQueue[0]}, queued before it, isn't done`;
+    // A reset, the owner's or the brain's: what's ahead of it in the queue (the owner's first) done.
+    const ahead = [...ownerQueue, ...brainsResets()].find((id) => id !== irreversible.id);
+    const first = [...ownerQueue, ...brainsResets()][0];
+    return first === irreversible.id ? null : `${ahead}, queued before it, isn't done`;
   };
   /**
    * Checks what was sent since the last check. `savedFor`: the intent whose own backup, asked on this connection, this
@@ -197,7 +256,9 @@ async function play(steps: Step[]): Promise<string[]> {
         const outFor = mediumsSeen - (wentOutAt.get(each.id) ?? mediumsSeen);
         if (outFor >= RELEASED_SNAPSHOTS) violations.push(`${each.id} still out ${outFor} medium snapshots on`);
         // A rule's own join out, past its own gate: one the owner never queued (an owner's gate passes to a rule's id).
-        if (!everQueuedByOwner.has(each.id)) aRuleJoinWentOut = true;
+        if (!everQueuedByOwner.has(each.id) && each.action === "joinFaction") aRuleJoinWentOut = true;
+        if (!ownerQueue.includes(each.id) && each.action === "installAugmentations") theBrainsInstallWentOut = true;
+        if (!ownerQueue.includes(each.id) && each.action === "destroyBitNode") theBrainsDestroyWentOut = true;
       }
       irreversibleSentBefore = new Set(irreversible.map((each) => each.id));
     }
@@ -205,12 +266,22 @@ async function play(steps: Step[]): Promise<string[]> {
     // A backup is its intent's only while that stays the gates' first: pushed back, its gate counts again.
     const first = firstJudged();
     for (const pending of pendingBackups) if (pending.forId !== first) pending.current = false;
+    // A reset with anything queued ahead of it (a reversible intent too, which has no gate): its gate counts again.
+    if (first !== null && isReset(first) && [...ownerQueue, ...brainsResets()][0] !== first) {
+      for (const pending of pendingBackups) if (pending.forId === first) pending.current = false;
+    }
   };
   const invitedTo = (invited: string[]) => {
     const data = slowData();
+    if (brainsReset === "destroy") data.resetInfo = { ...data.resetInfo, ownedAugs: { "The Red Pill": 1 } };
+    const installs = brainsReset === "install";
     data.factions = {
       backend: "sim",
-      state: { joined: [], invitations: invited, queuedAugmentations: [] },
+      state: {
+        joined: installs ? [{ name: "CyberSec", reputation: 18_750, favor: 0 }] : [],
+        invitations: invited,
+        queuedAugmentations: installs ? CYBERSEC_FIVE : [],
+      },
       problem: null,
     };
     return data;
@@ -218,10 +289,26 @@ async function play(steps: Step[]): Promise<string[]> {
   const medium = (factions: string[]) => {
     latestMediumFactions = factions;
     mediumsSeen += 1;
-    send(
-      "medium",
-      mediumData(100, {}, { money: 1e9, city: "Sector-12", hasTorRouter: true, homeRam: 2 ** 20, factions }),
-    );
+    gameTimeMs += 10_000;
+    // The brain's install: CyberSec joined, no money left. Its destroy: w0r1d_d43m0n rooted, at its level.
+    const installs = brainsReset === "install";
+    const hacking = brainsReset === "destroy" ? 3000 : installs ? 300 : 100;
+    const joined = installs ? [...new Set([...factions, "CyberSec"])] : factions;
+    const player = {
+      money: installs ? 0 : 1e9,
+      city: "Sector-12",
+      hasTorRouter: true,
+      homeRam: 2 ** 20,
+      factions: joined,
+    };
+    const data = mediumData(hacking, { [WORLD_DAEMON]: true }, player);
+    data.player = {
+      ...data.player,
+      skills: { hacking, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+      exp: { hacking: 6_106_794 },
+      mults: { faction_rep: 1, hacking: 1 },
+    };
+    send("medium", data);
     checkDesiredStates();
   };
   const connect = () => {
@@ -260,9 +347,20 @@ async function play(steps: Step[]): Promise<string[]> {
     const { id, ...request } = OWNER_INTENTS[index] as Intent;
     if (!ownerQueue.includes(id)) ownerQueue.push(id);
     everQueuedByOwner.add(id);
+    // #271's path: a reversible intent of the owner's, which has no gate, ahead of the brain's own install or destroy.
+    if (!isIrreversibleIntent(OWNER_INTENTS[index] as Intent)) {
+      for (const out of irreversibleSentBefore) {
+        if (ownerQueue.includes(out) && out !== id) continue;
+        if (out === "installAugmentations()") reached.reversibleAheadOfTheBrainsInstallOut += 1;
+        if (out.startsWith("destroyBitNode(")) reached.reversibleAheadOfTheBrainsDestroyOut += 1;
+      }
+    }
+    // #270's: an irreversible one ahead of a rule's join out.
     if (isIrreversibleIntent(OWNER_INTENTS[index] as Intent)) {
       for (const out of irreversibleSentBefore) {
-        if (!everQueuedByOwner.has(out)) reached.ruleJoinsOutWhenTheOwnerWentAhead += 1;
+        if (!everQueuedByOwner.has(out) && out.startsWith("joinFaction(")) {
+          reached.ruleJoinsOutWhenTheOwnerWentAhead += 1;
+        }
       }
     }
     controller.addManualIntent(request as IntentRequest);
@@ -280,6 +378,7 @@ async function play(steps: Step[]): Promise<string[]> {
     for (const step of steps) {
       if (step.kind === "queue") queue(step.index);
       else if (step.kind === "cancel") cancel(step.index);
+      else if (step.kind === "queueTravel") queue(OWNER_INTENTS.findIndex((each) => each.action === "travel"));
       else if (step.kind === "installThenCancel") {
         queue(0);
         cancel(0);
@@ -296,7 +395,9 @@ async function play(steps: Step[]): Promise<string[]> {
       } else if (step.kind === "agentRound") {
         const sent = desiredStatesSent().at(-1)?.intents ?? [];
         const outcomes: IntentOutcome[] = sent.map((each, index) => {
-          const done = step.done[index] ?? false;
+          // The brain's own reset is never reported done here: done, it resets the game, which this property leaves to
+          // #179's (desired-state.property.test.ts); reported done without one, the brain calls its cycle off.
+          const done = (step.done[index] ?? false) && !(isReset(each.id) && !ownerQueue.includes(each.id));
           if (done && ownerQueue.includes(each.id)) ownerQueue.splice(ownerQueue.indexOf(each.id), 1);
           return { id: each.id, done, tries: 1, problem: done ? null : "not yet", backend: "sim" };
         });
@@ -308,24 +409,65 @@ async function play(steps: Step[]): Promise<string[]> {
       }
     }
     if (aRuleJoinWentOut) reached.runsWithARuleJoinOut += 1;
+    if (theBrainsInstallWentOut) reached.runsWithTheBrainsInstallOut += 1;
+    if (theBrainsDestroyWentOut) reached.runsWithTheBrainsDestroyOut += 1;
     return violations;
   } finally {
     store.close();
   }
 }
 
+/** A run: the brain's own reset in it, if any (#271), and the steps. */
+const anyRun = fc
+  .oneof(
+    { arbitrary: fc.constant("none" as const), weight: 2 },
+    // The brain's install the rarest to get out (its countdown, then the owner's queue empty), so the most often tried.
+    { arbitrary: fc.constant("install" as const), weight: 2 },
+    { arbitrary: fc.constant("destroy" as const), weight: 1 },
+  )
+  .chain((brainsReset) =>
+    fc.tuple(
+      fc.constant(brainsReset),
+      fc.array(stepsFor(brainsReset !== "none"), {
+        // Longer where the brain resets: its install's countdown and gate take a while before #271's path opens.
+        maxLength: brainsReset === "none" ? 40 : 80,
+        size: brainsReset === "none" ? "medium" : "large",
+      }),
+    ),
+  );
+
 test("every irreversible intent sent, the owner's or a rule's: past its guard, its own backup, and alone", async () => {
   await fc.assert(
-    fc.asyncProperty(fc.array(anyStep, { maxLength: 40, size: "medium" }), async (steps) => {
-      expect(await play(steps)).toEqual([]);
+    fc.asyncProperty(anyRun, async ([brainsReset, steps]) => {
+      expect(await play(brainsReset, steps)).toEqual([]);
     }),
     { numRuns: 100, endOnFailure: true },
   );
-  // Reached: a rule's own join out (a city faction's the owner never queued), and the owner putting an irreversible
-  // intent ahead of one out, #269 review's two cases. The seeds aren't fixed, so the floors sit where no seed misses
-  // them: over 40 measured blocks of 100 runs, the first ranged 17 to 35 (mean 24, sd 4: its floor is 5 sd below), the
-  // second 6 to 17 (mean 11, sd 3: none at all, its floor, is about e^-11 at that mean). At 0 the generator no longer
-  // gets there.
-  expect(reached.runsWithARuleJoinOut).toBeGreaterThanOrEqual(3);
-  expect(reached.ruleJoinsOutWhenTheOwnerWentAhead).toBeGreaterThanOrEqual(1);
+});
+
+test("the runs reach what it's for: rules' joins and the brain's resets out, the owner queuing ahead", async () => {
+  // A fixed seed, so these floors can't miss on a random one: over 10 measured blocks of 100 random runs, #271's path
+  // (a travel queued ahead of the brain's install out) came 0 to 6 times, its destroy's 0 to 4, and the brain's
+  // install was out in 4 to 9 runs. The property above draws fresh runs each time.
+  for (const key of Object.keys(reached)) (reached as Record<string, number>)[key] = 0;
+  await fc.assert(
+    fc.asyncProperty(anyRun, async ([brainsReset, steps]) => {
+      expect(await play(brainsReset, steps)).toEqual([]);
+    }),
+    { numRuns: 300, seed: 271, endOnFailure: true },
+  );
+  // On seed 271's 300 runs: a rule's own join out in 28 runs, the owner going ahead of one 16 times; the brain's
+  // install out in 12 runs and its destroy in 21; a travel queued ahead of the install out 7 times, of the destroy 11.
+  // Each floor about half that: below it, the generator no longer gets there, or a gate seldom lets it out.
+  const floors: Record<keyof typeof reached, number> = {
+    runsWithARuleJoinOut: 14,
+    ruleJoinsOutWhenTheOwnerWentAhead: 8,
+    runsWithTheBrainsInstallOut: 6,
+    runsWithTheBrainsDestroyOut: 10,
+    reversibleAheadOfTheBrainsInstallOut: 3,
+    reversibleAheadOfTheBrainsDestroyOut: 5,
+  };
+  for (const [key, floor] of Object.entries(floors)) {
+    expect([key, reached[key as keyof typeof reached] >= floor]).toEqual([key, true]);
+  }
 });
