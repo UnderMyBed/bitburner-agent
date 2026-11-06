@@ -75,12 +75,13 @@ test.each(SEEDS)(
     expect(player.factions).toContain("CyberSec");
     expect(player.currentServer).toBe("home");
 
-    // The run report: the backdoor, done through the simulator's effector, and PASS.
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // The run report: the backdoor, done through the simulator's effector (its intent's line, with --verbose: #245),
+    // and PASS.
+    const { text, failures } = runReport(
+      fresh.data.store,
+      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
+      { verbose: true },
+    );
     const lines = text.split("\n");
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}backdoor\(CSEC\): done after [12] tr(y|ies) \(sim\); done by /),

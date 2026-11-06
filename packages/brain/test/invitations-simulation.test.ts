@@ -145,12 +145,13 @@ test.each(SEEDS)(
       STAGE_MS,
     );
 
-    // The run report: the travel, the work for the count, the World Daemon's line; not out of reach.
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // The run report: the travel, the work for the count, the World Daemon's line; not out of reach. The travels'
+    // intents and the work's choices as lines, with --verbose (#245).
+    const { text, failures } = runReport(
+      fresh.data.store,
+      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
+      { verbose: true },
+    );
     expect(text).toMatch(/ {6}\S+ {2}travel to Ishima for Tian Di Hui's invitation \(23 of 30 installed\)/);
     expect(text).toMatch(
       / {6}\S+ {2}city factions: group B \(Chongqing, New Tokyo, Ishima\): 5 augmentations that count, against A 4, C 3/,

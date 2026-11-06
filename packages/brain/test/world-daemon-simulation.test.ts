@@ -147,12 +147,13 @@ test.each(SEEDS)(
     ).not.toContain("destroyBitNode(1)");
     expect(fresh.controller().worldDaemonView()).toMatchObject({ destroying: false, stall: null });
 
-    // The run report: The Red Pill's install and the destroy, and no failure.
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // The run report: The Red Pill's install and the destroy, and no failure. By default, the install chosen's reason
+    // in the cycle's line (#245); with --verbose, the decision's own line.
+    const reportWindow = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
+    expect(runReport(fresh.data.store, reportWindow).text.split("\n")).toContainEqual(
+      expect.stringMatching(/^ {4}BN1\.1 \d+: bought \d+ .*The Red Pill.*; 1 install chosen \(The Red Pill\); /),
+    );
+    const { text, failures } = runReport(fresh.data.store, reportWindow, { verbose: true });
     const lines = text.split("\n");
     expect(lines).toContainEqual(expect.stringMatching(/The Red Pill reached: it links w0r1d_d43m0n once installed$/));
     expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 1$/));

@@ -183,12 +183,17 @@ test.each(SEEDS)(
     expect(homeRam()).toBe(homeRamAfter);
 
     // The run report: the count rule's progress, the decision, the purchases and the install, the Agent back, and no
-    // failure.
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // failure. Each line with --verbose (#245); by default, the cycle's set in one line, in buy order.
+    const reportWindow = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
+    expect(runReport(fresh.data.store, reportWindow).text.split("\n")).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^ {4}BN1\\.1 1: bought \\d+ for \\$[\\d,]+: ${FIVE.join(", ")}, NeuroFlux Governor ×\\d+ ` +
+            "\\(levels? [\\d–]+\\); 1 install chosen \\(quick install\\); install sent \\(the brain's\\)$",
+        ),
+      ),
+    );
+    const { text, failures } = runReport(fresh.data.store, reportWindow, { verbose: true });
     const lines = text.split("\n");
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}\S+ {2}progress: 5 of 8 new augmentations affordable .*install countdown \(a quick /),
@@ -446,11 +451,12 @@ test.each(SEEDS)(
     expect(chosen[0]?.set.map((each) => each.augmentation).sort()).toEqual([BLACK_HAND, ...REACHED_FOUR].sort());
     await game.run(MINUTE);
     expect(installedCount()).toBe(30);
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // Each progress line, with --verbose (#245).
+    const { text, failures } = runReport(
+      fresh.data.store,
+      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
+      { verbose: true },
+    );
     expect(text.split("\n")).toContainEqual(
       expect.stringMatching(
         /^ {4}\S+ {2}progress: .*; held: Daedalus's count reachable this cycle, The Black Hand in ~/,
