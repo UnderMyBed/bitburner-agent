@@ -4,7 +4,6 @@ import type { EffectorReport, Work, WorkEffectorReport } from "@bitburner-agent/
 import fc from "fast-check";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createEffectorRunner } from "../../src/agent/effector-runner.ts";
-import { workEffectorFor } from "../../src/agent/effectors.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
 import { createWorkActivity } from "../../src/agent/work.ts";
 import type { NS } from "../../src/ns.ts";
@@ -288,7 +287,8 @@ describe("properties (#179): the work converges, and isn't restarted once it has
    * (`convergeFactionWork` and the others in the simulator, ../../src/page/work-page.ts on the page, the Singularity
    * workers): already so, nothing touched; another work, started (focused, as the game starts one); then the focus.
    * That each real effector touches nothing when the game is already so is theirs to show, example-tested per backend
-   * (the simulator's parity suites, the page's tests, E2): here, what the Agent asks of them.
+   * (packages/brain/test/effector-backends.test.ts for `sim` and `singularity`, the page's tests, E2): here, what the
+   * Agent asks of them.
    */
   interface StandInGame {
     doing: string | null;
@@ -313,13 +313,18 @@ describe("properties (#179): the work converges, and isn't restarted once it has
     const focus = workerArguments.at(name === "company-work.js" ? -3 : -2) === "true";
     return { doing: JSON.stringify([name, ...args]), focus };
   };
-  const doingOf = (work: Work) => {
-    const { workerName, workerArguments } = workEffectorFor(work).ui;
-    return workOfRun(workerName, [...workerArguments, 0]).doing;
+  /** What the game does for `work`, written out here rather than taken from the effectors under test. */
+  const doingOf = (work: Work): string => {
+    if (work.kind === "faction") return JSON.stringify(["faction-work.js", work.faction, work.workType]);
+    if (work.kind === "company") return JSON.stringify(["company-work.js", work.company, work.field]);
+    if (work.kind === "crime") return JSON.stringify(["crime-work.js", work.crime]);
+    return JSON.stringify(["class-work.js", work.location, work.classType]);
   };
-  /** What a stand-in worker does on one run. */
+  /** What a stand-in worker does on one run: converges the game, or not, or is still running, or can't start. */
   const ANSWERS = ["converges", "notConverged", "busy", "cantStart"] as const;
   type Answer = (typeof ANSWERS)[number];
+  /** Looks in any 30 rounds, held: every 15 rounds (30 s) with a report; every round without one. */
+  const LOOKS_IN_30: Record<Answer, number> = { converges: 2, notConverged: 2, busy: 30, cantStart: 30 };
   /**
    * What happens in a round: the brain sends work (or none), a disconnect, the owner (or a page effector) moves the
    * game's work, or a round runs with the worker's answer, with enough of the round left or not.
@@ -331,54 +336,71 @@ describe("properties (#179): the work converges, and isn't restarted once it has
     fc.record({ kind: fc.constant("round" as const), answer: fc.constantFrom(...ANSWERS), short: fc.boolean() }),
   );
 
-  test("from anything, the work wanted and kept ends done in the game, at its focus; then left alone but checked", async () => {
+  test("from anything, the work wanted, its answer held: settled within 16 rounds, kept, never restarted", async () => {
     await fc.assert(
-      fc.asyncProperty(fc.array(anyStep, { maxLength: 30, size: "medium" }), anyWork, async (before, wanted) => {
-        const game: StandInGame = { doing: null, focus: false, starts: 0 };
-        let answer: Answer = "notConverged";
-        const { work, round, calls } = activityWith((workerFile, workerArguments) => {
-          if (answer === "busy" || answer === "cantStart") return answer === "busy" ? "busy" : "no report";
-          if (answer === "notConverged") return { done: false, problem: "not yet" };
-          const asked = workOfRun(workerFile, workerArguments);
-          if (game.doing !== asked.doing) {
-            game.doing = asked.doing;
-            game.focus = true;
-            game.starts += 1;
+      fc.asyncProperty(
+        fc.array(anyStep, { maxLength: 30, size: "medium" }),
+        fc.option(anyWork, { freq: 5 }),
+        fc.constantFrom(...ANSWERS),
+        async (before, wanted, heldAnswer) => {
+          const game: StandInGame = { doing: null, focus: false, starts: 0 };
+          let answer: Answer = "notConverged";
+          const { work, round, calls } = activityWith((workerFile, workerArguments) => {
+            if (answer === "busy") return "busy";
+            if (answer === "cantStart") return "no report";
+            if (answer === "notConverged") return { done: false, problem: "not yet" };
+            const asked = workOfRun(workerFile, workerArguments);
+            if (game.doing !== asked.doing) {
+              game.doing = asked.doing;
+              game.focus = true;
+              game.starts += 1;
+            }
+            game.focus = asked.focus;
+            return CONVERGED;
+          });
+          for (const step of before) {
+            if (step.kind === "desire") work.desire(step.work === null ? null : structuredClone(step.work));
+            else if (step.kind === "forget") work.forget();
+            else if (step.kind === "owner") {
+              game.doing = step.work === null ? null : doingOf(step.work);
+              game.focus = step.work?.focus ?? false;
+            } else {
+              answer = step.answer;
+              await round(step.short ? 500 : ROUND_MS);
+            }
           }
-          game.focus = asked.focus;
-          return CONVERGED;
-        });
-        for (const step of before) {
-          if (step.kind === "desire") work.desire(step.work === null ? null : structuredClone(step.work));
-          else if (step.kind === "forget") work.forget();
-          else if (step.kind === "owner") {
-            game.doing = step.work === null ? null : doingOf(step.work);
-            game.focus = step.work?.focus ?? false;
+          // From here the brain keeps sending the same work, or none (afresh, as off the wire), and each worker
+          // answers the same: within the 30 s between looks and one more round, the outcome is that answer's.
+          answer = heldAnswer;
+          const gameBefore = { ...game };
+          for (let each = 0; each < 16; each += 1) {
+            work.desire(wanted === null ? null : structuredClone(wanted));
+            await round();
+          }
+          if (wanted === null) {
+            // None wanted: the game's work left alone, nothing reported.
+            expect(work.outcome()).toBeNull();
+          } else if (heldAnswer === "converges") {
+            expect([game.doing, game.focus]).toEqual([doingOf(wanted), wanted.focus]);
+            expect(work.outcome()).toEqual({ converged: true, problem: null, backend: "ui" });
           } else {
-            answer = step.answer;
-            await round(step.short ? 500 : ROUND_MS);
+            // Not converged, by the worker's word or for want of one: the game untouched, and said so.
+            expect(game).toEqual(gameBefore);
+            expect(work.outcome()).toMatchObject({ converged: false, problem: expect.any(String), backend: "ui" });
           }
-        }
-        // From here the brain keeps sending the same work (afresh, as off the wire) and each effector converges:
-        // within the 30 s between looks and one more round, the game does it, at its focus.
-        answer = "converges";
-        for (let each = 0; each < 16; each += 1) {
-          work.desire(structuredClone(wanted));
-          await round();
-        }
-        expect([game.doing, game.focus]).toEqual([doingOf(wanted), wanted.focus]);
-        expect(work.outcome()).toEqual({ converged: true, problem: null, backend: "ui" });
-        // Converged, it's never started again, and it's looked at every 30 s: twice in any 30 rounds.
-        const startsBefore = game.starts;
-        const callsBefore = calls().length;
-        for (let each = 0; each < 30; each += 1) {
-          work.desire(structuredClone(wanted));
-          await round();
-        }
-        expect(game.starts).toBe(startsBefore);
-        expect(calls().length - callsBefore).toBe(2);
-        expect(work.outcome()).toEqual({ converged: true, problem: null, backend: "ui" });
-      }),
+          // And kept: the outcome doesn't change, nothing is started again, and it's looked at as its answer says.
+          const settled = work.outcome();
+          const startsBefore = game.starts;
+          const callsBefore = calls().length;
+          for (let each = 0; each < 30; each += 1) {
+            work.desire(wanted === null ? null : structuredClone(wanted));
+            await round();
+          }
+          expect(work.outcome()).toEqual(settled);
+          expect(game.starts).toBe(startsBefore);
+          expect(calls().length - callsBefore).toBe(wanted === null ? 0 : LOOKS_IN_30[heldAnswer]);
+        },
+      ),
       { numRuns: 200 },
     );
   });

@@ -4,7 +4,6 @@ import { type EffectorReport, INTENT_ACTIONS, type Intent, type IntentRequest, i
 import fc from "fast-check";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createEffectorRunner } from "../../src/agent/effector-runner.ts";
-import { effectorFor } from "../../src/agent/effectors.ts";
 import { createIntentRunner } from "../../src/agent/intent-runner.ts";
 import type { WorkerRun, WorkerRunner } from "../../src/agent/run-worker.ts";
 import type { NS } from "../../src/ns.ts";
@@ -34,8 +33,8 @@ const DONE: EffectorReport = { done: true, problem: null };
 /**
  * A runner whose stand-in workers report what `answer` gives for each run, and its log. `singularity` says whether the
  * game has Singularity; a stand-in for a worker that "can't start" is `"no report"`, one that "didn't report" is
- * `"silent"`, and one whose last copy is still running (#162) is `"busy"`. Home has `home.maxRam` GB, `home.usedRam` of it in use (the Agent's 3 unless said); the Agent takes 3
- * and each worker 4.65.
+ * `"silent"`, and one whose last copy is still running (#162) is `"busy"`. Home has `home.maxRam` GB, `home.usedRam`
+ * of it in use (the Agent's 3 unless said); the Agent takes 3 and each worker 4.65.
  */
 function runnerWith(
   answer: (workerFile: string, workerArguments: unknown[]) => EffectorReport | "no report" | "silent" | "busy",
@@ -410,7 +409,7 @@ describe("backends (#145)", () => {
 });
 
 describe("properties (§9.3, #179): every action, its effector done, not done, busy, not started or silent", () => {
-  /** At least one intent of each action (two travels, two port programs, both resets), each its own worker run. */
+  /** An intent of each action (two travels, the TOR router and a port program, both resets), each its own run. */
   const POOL: Intent[] = [
     TOR,
     intent({ action: "buyProgram", args: { program: "FTPCrack.exe" } }),
@@ -425,6 +424,25 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     BACKDOOR_CSEC,
     INSTALL,
     DESTROY_INTO_2,
+  ];
+  /**
+   * Each pool intent's `ui` worker run, its worker and arguments without the deadline, written out here rather than
+   * taken from the effectors under test (the first test of this file checks them against the runner).
+   */
+  const RUN_OF: [workerName: string, ...workerArguments: unknown[]][] = [
+    ["buy-program.js", "TOR router", "Alpha Enterprises"],
+    ["buy-program.js", "FTPCrack.exe", ""],
+    ["upgrade-home-ram.js", 8, "Alpha Enterprises"],
+    ["travel.js", "Aevum"],
+    ["travel.js", "Volhaven"],
+    ["join-faction.js", "Sector-12"],
+    ["buy-augmentation.js", "Sector-12", "NeuroFlux Governor", 3],
+    ["donate-to-faction.js", "Sector-12", 1_000_000, 1],
+    ["buy-server.js", "pserv-0", 8],
+    ["upgrade-server.js", "pserv-0", 64],
+    ["backdoor.js", "CSEC"],
+    ["install-augmentations.js", "agent/boot.js"],
+    ["destroy-bitnode.js", 2, "agent/boot.js"],
   ];
   /** What a stand-in worker does on one run: reports done or not done, is still running, can't start, or is silent. */
   const ANSWERS = ["done", "notDone", "busy", "cantStart", "silent"] as const;
@@ -454,68 +472,83 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
   /** Which pool intent a worker run is for: its worker's file and arguments, without the deadline. */
   const runKey = (workerFile: string, workerArguments: unknown[]) =>
     JSON.stringify([workerFile.split("/").at(-1), ...workerArguments.slice(0, -1)]);
-  const poolIndexOfRun = new Map(
-    POOL.map((each, index) => {
-      const { workerName, workerArguments } = effectorFor(each).ui;
-      return [JSON.stringify([workerName, ...workerArguments]), index] as const;
-    }),
-  );
+  const poolIndexOfRun = new Map(RUN_OF.map((run, index) => [JSON.stringify(run), index] as const));
   const poolIndex = (workerFile: string, workerArguments: unknown[]) => {
     const index = poolIndexOfRun.get(runKey(workerFile, workerArguments));
     if (index === undefined) throw new Error(`a run for no intent: ${runKey(workerFile, workerArguments)}`);
     return index;
   };
 
-  /** The runner with workers answering as `answers` says now, each run noted; and the steps, played. */
+  /**
+   * The runner with workers answering as `answersNow` says, each run noted; the steps, played; and which intents the
+   * stand-in workers themselves reported done while the runner held them (the model, not the runner's word).
+   */
   function steppedRunner() {
-    const state = { answers: Array<Answer>(POOL.length).fill("notDone") };
+    let answersNow: Answer[] = Array(POOL.length).fill("notDone");
     const runs: string[] = [];
+    const reportedDone = new Set<string>();
     const runner = runnerWith((workerFile, workerArguments) => {
       const index = poolIndex(workerFile, workerArguments);
-      runs.push((POOL[index] as Intent).id);
-      return reportOf(state.answers[index] as Answer);
+      const { id } = POOL[index] as Intent;
+      runs.push(id);
+      if (answersNow[index] === "done") reportedDone.add(id);
+      return reportOf(answersNow[index] as Answer);
     }).runner;
     const fullRound = () => runner.runDue(performance.now() + 100 * ROUND_MS);
+    const desire = (intents: Intent[]) => {
+      runner.desire(structuredClone(intents));
+      // One that left is new if it comes back: done no longer.
+      const sent = new Set(intents.map((each) => each.id));
+      for (const id of [...reportedDone]) if (!sent.has(id)) reportedDone.delete(id);
+    };
     const play = async (step: Step, onRound: () => void = () => {}) => {
-      if (step.kind === "desire") runner.desire(structuredClone(step.intents));
-      else if (step.kind === "forget") runner.forget();
-      else {
-        state.answers = step.answers;
+      if (step.kind === "desire") desire(step.intents);
+      else if (step.kind === "forget") {
+        runner.forget();
+        reportedDone.clear();
+      } else {
+        answersNow = step.answers;
         await runner.runDue(performance.now() + (step.short ? 500 : 100 * ROUND_MS));
         onRound();
       }
     };
-    return { runner, state, runs, fullRound, play };
+    const answerWith = (answers: Answer[]) => {
+      answersNow = answers;
+    };
+    return { runner, runs, reportedDone, fullRound, desire, play, answerWith };
   }
 
-  test("the pool has every action an intent can name, so a new action needs a place here", () => {
+  test("the pool has every action an intent can name (a new one needs a place here), each its own run", async () => {
     expect(new Set(POOL.map((each) => each.action))).toEqual(new Set(INTENT_ACTIONS));
+    expect(poolIndexOfRun.size).toBe(POOL.length);
+    // The table is the runner's: each pool intent's worker and arguments, as the runner runs them.
+    const { runner, workerFiles, runWorker } = runnerWith(() => DONE);
+    runner.desire(POOL);
+    await runner.runDue(performance.now() + 100 * ROUND_MS);
+    expect(workerFiles()).toHaveLength(POOL.length);
+    expect(runWorker.mock.calls.map(([file, args]) => poolIndex(file, args as unknown[]))).toEqual(
+      POOL.map((_, index) => index),
+    );
   });
 
-  test("idempotent: an intent reported done is never run again while it stays sent, and only what's sent runs", async () => {
+  test("idempotent: one reported done never runs again while it stays sent, and only what's sent runs", async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(anyStep, { maxLength: 40, size: "medium" }), async (steps) => {
-        const { runner, runs, play } = steppedRunner();
-        const doneIds = new Set<string>();
+        const { runs, reportedDone, play } = steppedRunner();
         let sent = new Set<string>();
         const wrongRuns: string[] = [];
         let runsSeen = 0;
         for (const step of steps) {
-          if (step.kind === "desire") {
-            sent = new Set(step.intents.map((each) => each.id));
-            // One that left may come back later as new, and may run again then.
-            for (const id of [...doneIds]) if (!sent.has(id)) doneIds.delete(id);
-          } else if (step.kind === "forget") {
-            sent = new Set();
-            doneIds.clear();
-          }
+          // Done before this round, by the stand-in's own report.
+          const doneBefore = new Set(reportedDone);
+          if (step.kind === "desire") sent = new Set(step.intents.map((each) => each.id));
+          else if (step.kind === "forget") sent = new Set();
           await play(step, () => {
             for (const id of runs.slice(runsSeen)) {
-              if (doneIds.has(id)) wrongRuns.push(`${id}, done, ran again`);
+              if (doneBefore.has(id) && sent.has(id)) wrongRuns.push(`${id}, done, ran again`);
               if (!sent.has(id)) wrongRuns.push(`${id}, not sent, ran`);
             }
             runsSeen = runs.length;
-            for (const outcome of runner.outcomes()) if (outcome.done) doneIds.add(outcome.id);
           });
         }
         expect(wrongRuns).toEqual([]);
@@ -524,44 +557,44 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     );
   });
 
-  test("converges: with each effector stable from some round, every outcome settles on it, and stays", async () => {
-    // Stable: the game lets it be done, or keeps it not done, or its worker stays busy (a Singularity backdoor's, #162).
-    const anyStable = fc.array(fc.constantFrom("done", "notDone", "busy") as fc.Arbitrary<Answer>, {
-      minLength: POOL.length,
-      maxLength: POOL.length,
-    });
+  test("converges: each effector stable from some round, every outcome settles on its answer, and stays", async () => {
+    // Stable: any answer, held: the game lets it be done, or keeps it not done; its worker stays busy (a Singularity
+    // backdoor's, #162), can't start (home full), or never reports.
+    const anyStableAnswers = fc.array(fc.constantFrom(...ANSWERS), { minLength: POOL.length, maxLength: POOL.length });
+    /** Runs in any 30 rounds: none once done; every 15 rounds (30 s) not done or busy; every round with no report. */
+    const RUNS_IN_30: Record<Answer, number> = { done: 0, notDone: 2, busy: 2, cantStart: 30, silent: 30 };
     await fc.assert(
       fc.asyncProperty(
         fc.array(anyStep, { maxLength: 30, size: "medium" }),
         anyIntents,
-        anyStable,
-        async (before, finalIntents, stable) => {
-          const { runner, state, runs, fullRound, play } = steppedRunner();
+        anyStableAnswers,
+        async (before, finalIntents, stableAnswers) => {
+          const { runner, runs, reportedDone, fullRound, desire, play, answerWith } = steppedRunner();
           for (const step of before) await play(step);
           // From here the brain keeps sending the same intents, and each worker answers the same: within the retry
-          // period (15 rounds) and one more, each outcome is the effector's.
-          // One already done and still sent stays so: never run again.
-          state.answers = stable;
-          const alreadyDone = new Set(runner.outcomes().flatMap(({ id, done }) => (done ? [id] : [])));
-          const endsDone = (id: string) =>
-            alreadyDone.has(id) || stable[POOL.findIndex((each) => each.id === id)] === "done";
-          runner.desire(structuredClone(finalIntents));
+          // period (15 rounds) and one more, each outcome is the worker's. One the stand-in already reported done, and
+          // still sent, stays so: never run again. The model's word, not the runner's.
+          answerWith(stableAnswers);
+          const stableOf = (id: string) => stableAnswers[POOL.findIndex((each) => each.id === id)] as Answer;
+          desire(finalIntents);
+          const endsDone = (id: string) => reportedDone.has(id) || stableOf(id) === "done";
+          const alreadyDone = new Set(finalIntents.filter(({ id }) => reportedDone.has(id)).map(({ id }) => id));
           for (let each = 0; each < 16; each += 1) await fullRound();
           expect(runner.outcomes().map(({ id, done }) => [id, done])).toEqual(
             finalIntents.map(({ id }) => [id, endsDone(id)]),
           );
-          // And stays: no outcome changes but for the tries; one done never runs, one not done runs every 30 s, so
-          // twice in any 30 rounds, sent afresh each round or not.
+          // And stays: no outcome changes but for the tries, sent afresh each round or not.
           const settled = runner.outcomes().map(({ tries: _tries, ...rest }) => rest);
           const runsBefore = runs.length;
           for (let each = 0; each < 30; each += 1) {
-            if (each % 2 === 0) runner.desire(structuredClone(finalIntents));
+            if (each % 2 === 0) desire(finalIntents);
             await fullRound();
           }
           expect(runner.outcomes().map(({ tries: _tries, ...rest }) => rest)).toEqual(settled);
           const runsAfter = runs.slice(runsBefore);
           for (const { id } of finalIntents) {
-            expect([id, runsAfter.filter((run) => run === id).length]).toEqual([id, endsDone(id) ? 0 : 2]);
+            const expected = alreadyDone.has(id) ? 0 : RUNS_IN_30[stableOf(id)];
+            expect([id, runsAfter.filter((run) => run === id).length]).toEqual([id, expected]);
           }
         },
       ),
