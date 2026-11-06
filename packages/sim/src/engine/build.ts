@@ -1,7 +1,16 @@
 // Builds dist/engine.cjs: the game's source plus bundle/entry.ts, bundled for plain Node (ADR 0007).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { PINNED_GAME } from "@bitburner-agent/core";
 import * as esbuild from "esbuild";
@@ -26,8 +35,9 @@ export interface EngineInputs {
   tsconfigs: Record<string, string>;
   /**
    * The package.json files at and above our bundled sources and the game's root (#172): path (relative to
-   * src/engine/bundle, forward slashes) → the fields esbuild applies to the sources under them, as JSON. Those below
-   * the game's root (electron/package.json) are covered by its commit and working tree.
+   * src/engine/bundle, forward slashes) → the fields esbuild applies to the sources under them, as JSON. The game's
+   * root is walked for the repository's above it: the game's own, and those below it (electron/package.json), are
+   * covered by its commit and working tree too.
    */
   packageJsons: Record<string, string>;
 }
@@ -75,23 +85,26 @@ export function engineFingerprint(inputs: EngineInputs): string {
 /**
  * What esbuild takes from a package.json for the sources under it: the nearest one's `type` (a source's module
  * format), `sideEffects` (what tree shaking may drop) and `imports` (`#` specifiers), and, with platform "browser",
- * the nearest one with a `browser` map remaps their imports. The others (`main`, `exports`, ...) apply only to an
- * import of the package by name, which the bundle makes of neither.
+ * the nearest one with a `browser` map remaps their imports. The others (`name`, `main`, `exports`, ...) apply only to
+ * an import of the package by name, a source's import of its own package included (a self-reference), and the bundle
+ * makes none of either package, ours or the game's.
  */
 const APPLIED_PACKAGE_FIELDS = ["type", "sideEffects", "browser", "imports"] as const;
 
 /**
  * The package.json files esbuild reads for the sources in each of `dirs` (#172): every one at or above each, as the
  * nearest gives a source its `type`, `sideEffects` and `imports`, and the nearest with a `browser` map can be further
- * up. Path (relative to `base`, forward slashes) → the fields esbuild applies (APPLIED_PACKAGE_FIELDS), as JSON, so a
- * dependency's version, which can't change the bundle, doesn't rebuild it. Throws on one that isn't JSON, naming it.
+ * up. Walked from each one's real path, which esbuild resolves a linked directory to. Path (relative to `base`'s
+ * real path, forward slashes) → the fields esbuild applies (APPLIED_PACKAGE_FIELDS), as JSON, so a dependency's
+ * version, which can't change the bundle, doesn't rebuild it. Throws on one that isn't a JSON object, naming it.
  */
 export function collectPackageJsons(dirs: string[], base: string): Record<string, string> {
   const packageJsons: Record<string, string> = {};
+  const realBase = realpathSync.native(base);
   for (const dir of dirs) {
-    for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+    for (let current = realpathSync.native(dir); ; current = path.dirname(current)) {
       const file = path.join(current, "package.json");
-      const key = path.relative(base, file).replaceAll("\\", "/");
+      const key = path.relative(realBase, file).replaceAll("\\", "/");
       if (!(key in packageJsons) && existsSync(file)) packageJsons[key] = appliedFields(file);
       if (path.dirname(current) === current) break;
     }
@@ -102,21 +115,27 @@ export function collectPackageJsons(dirs: string[], base: string): Record<string
 function appliedFields(file: string): string {
   let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const value: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("not an object");
+    parsed = value as Record<string, unknown>;
   } catch (error) {
-    throw new Error(`${file} isn't JSON, so the engine's fingerprint can't cover it: ${(error as Error).message}`);
+    throw new Error(
+      `${file} isn't a JSON object, so the engine's fingerprint can't cover it: ${(error as Error).message}`,
+    );
   }
   return JSON.stringify(Object.fromEntries(APPLIED_PACKAGE_FIELDS.map((field) => [field, parsed[field]])));
 }
 
 /**
- * The tsconfig files esbuild applies to the sources in `dir`: the nearest tsconfig.json at or above it, as esbuild
- * finds it, then every file that one extends, in turn (each once, so a cycle ends). Path (relative to `dir`, forward
- * slashes) → content. Throws on an `extends` it can't follow (a package's config, a missing file), or a jsconfig.json
- * esbuild would take, rather than leave that config out of the fingerprint.
+ * The tsconfig files esbuild applies to the sources in `linkedDir`: the nearest tsconfig.json at or above its real
+ * path, as esbuild finds it, then every file that one extends, in turn (each once, so a cycle ends). Path (relative to
+ * that real path, forward slashes) → content. Throws on an `extends` it can't follow (a package's config, a missing
+ * file), or a jsconfig.json esbuild would take, rather than leave that config out of the fingerprint.
  */
-export function collectTsconfigs(dir: string): Record<string, string> {
-  let nearest = path.resolve(dir);
+export function collectTsconfigs(linkedDir: string): Record<string, string> {
+  // esbuild resolves a linked directory to its real path, and looks above that.
+  const dir = realpathSync.native(linkedDir);
+  let nearest = dir;
   while (!existsSync(path.join(nearest, "tsconfig.json"))) {
     // esbuild takes a jsconfig.json where a directory has no tsconfig.json: not followed here, so not allowed.
     if (existsSync(path.join(nearest, "jsconfig.json"))) {
@@ -181,7 +200,8 @@ export function collectEngineInputs(): EngineInputs {
     esbuildVersion: esbuild.version,
     // packages/sim/tsconfig.json's: esbuild ignores its `exclude`, which only keeps tsc off the bundle.
     tsconfigs: collectTsconfigs(enginePaths.bundleSourceDir),
-    // packages/sim/package.json for our sources, the game's own for its sources, and the repository's above both.
+    // packages/sim/package.json for our sources, and the repository's above both ours and the game's (the game's own
+    // comes along, though its commit covers it).
     packageJsons: collectPackageJsons([enginePaths.bundleSourceDir, enginePaths.gameRoot], enginePaths.bundleSourceDir),
   };
 }
