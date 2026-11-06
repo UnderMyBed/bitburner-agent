@@ -8,6 +8,7 @@
 // - Every wait ends by the caller's deadline: a worker that drives the page ends within its Agent's round, like any
 //   other. The steps end a little before it, so the way back to the Terminal always has its own time, however long a
 //   step waited for what never came. Waits are `ns.asleep`, which doesn't mark the script busy.
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 
 /** How often a wait for an element looks again, and how long a click is given to render. */
@@ -153,8 +154,8 @@ export const playerEvent = (fields: Record<string, unknown> = {}) => ({
 });
 
 /**
- * The game's page, for one worker's work until `deadlineMs` (the game's `Date.now()`), or null where there's no page.
- * Each step returns its problem, or null once it's done.
+ * The game's page, for one worker's work until `deadlineMs` (the page's monotonic clock, ../clock.ts), or null where
+ * there's no page. Each step returns its problem, or null once it's done.
  */
 export function openGamePage(ns: NS, deadlineMs: number) {
   const gamePage = pageDocument();
@@ -163,7 +164,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
   const findElement = (xpath: string): Element | null => findOnPage(gamePage, xpath);
   /** When the steps end; the way back to the Terminal has until `deadlineMs`. */
   const stepsEndMs = deadlineMs - RETURN_RESERVE_MS;
-  const timeLeftMs = (untilMs: number) => untilMs - Date.now();
+  const timeLeftMs = (untilMs: number) => untilMs - monotonicMs();
   /** Lets the page render after an action, without passing the deadline. */
   const letRender = () => ns.asleep(Math.max(0, Math.min(POLL_MS, timeLeftMs(deadlineMs))));
 
@@ -236,7 +237,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
      * with more queued shows the next in place.
      */
     async waitUntilGoneOrChanged(element: Element, currentText: () => string, textBefore: string): Promise<boolean> {
-      const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, deadlineMs);
+      const fadeEndsMs = Math.min(monotonicMs() + DIALOG_FADE_MS, deadlineMs);
       while (element.isConnected && currentText() === textBefore) {
         if (timeLeftMs(fadeEndsMs) <= 0) return false;
         await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));
@@ -265,7 +266,7 @@ export function openGamePage(ns: NS, deadlineMs: number) {
      * given that long to go.
      */
     async dialogStaysOpen(): Promise<boolean> {
-      const fadeEndsMs = Math.min(Date.now() + DIALOG_FADE_MS, stepsEndMs);
+      const fadeEndsMs = Math.min(monotonicMs() + DIALOG_FADE_MS, stepsEndMs);
       while (findElement(OPEN_DIALOG_XPATH) !== null) {
         if (timeLeftMs(fadeEndsMs) <= 0) return true;
         await ns.asleep(Math.min(POLL_MS, timeLeftMs(fadeEndsMs)));

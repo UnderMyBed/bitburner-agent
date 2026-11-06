@@ -119,9 +119,17 @@ async function readPort<Data>(simulation: Simulation, port: number): Promise<Dat
   return JSON.parse(await printed(simulation, pid)) as Data[];
 }
 
+/**
+ * The page's monotonic clock, `performance.now()` (#251): the batcher's and its operations' clock, which a wall-clock
+ * step (`stepWallClock`) leaves where it was.
+ */
+async function monotonicNow(simulation: Simulation): Promise<number> {
+  return (await simulation.diagnostics.clock()).enginePerformanceNow;
+}
+
 test("an operation lands at the moment named, started early, at any security, and records it", async () => {
   const simulation = await gameWithScripts();
-  const now = await simulation.now();
+  const now = await monotonicNow(simulation);
   // foodnstuff starts at security 10 (minimum 3): its weaken takes longer than at the minimum, and still lands on time.
   const landAt = now + 10 * 60_000;
   const { error } = await simulation.run("home", `${FOLDER}batch-weaken.js`, {
@@ -138,9 +146,37 @@ test("an operation lands at the moment named, started early, at any security, an
   expect((record as LandingRecord).result).toBeCloseTo(0.1, 9);
 });
 
+test("the moment named is on the page's monotonic clock (#251): the wall clock stepped either way, none lands off it", async () => {
+  const simulation = await gameWithScripts();
+  const landAt = (await monotonicNow(simulation)) + 10 * 60_000;
+  // Started after a step forward and after a step back, each a few seconds (run #3's was +2,678 ms), and stepped again
+  // while they're in flight: each lands at its moment, never late, as the game's timers never step.
+  await simulation.diagnostics.stepWallClock(3_000);
+  await simulation.run("home", `${FOLDER}batch-weaken.js`, {
+    args: ["foodnstuff", landAt, BATCHER_LANDING_PORT, "1.weaken1.0"],
+  });
+  await simulation.diagnostics.stepWallClock(-5_000);
+  await simulation.run("home", `${FOLDER}batch-weaken.js`, {
+    args: ["foodnstuff", landAt + 20, BATCHER_LANDING_PORT, "1.weaken2.0"],
+  });
+  await simulation.advance(60_000);
+  await simulation.diagnostics.stepWallClock(4_000);
+  await simulation.advance(10 * 60_000);
+  const records = await readPort<LandingRecord>(simulation, BATCHER_LANDING_PORT);
+  expect(records.map(({ id, late }) => ({ id, late }))).toEqual([
+    { id: "1.weaken1.0", late: false },
+    { id: "1.weaken2.0", late: false },
+  ]);
+  for (const [index, record] of records.entries()) {
+    expect(record.landAt).toBe(landAt + 20 * index);
+    expect(record.landedAt - record.landAt).toBeGreaterThanOrEqual(0);
+    expect(record.landedAt - record.landAt).toBeLessThanOrEqual(1);
+  }
+});
+
 test("started too late: a hack doesn't run and says so; a weaken runs, late, and says so", async () => {
   const simulation = await gameWithScripts();
-  const landAt = (await simulation.now()) + 1_000;
+  const landAt = (await monotonicNow(simulation)) + 1_000;
   for (const [script, id] of [
     ["batch-hack.js", "1.hack.0"],
     ["batch-weaken.js", "1.weaken1.0"],
@@ -184,10 +220,10 @@ function n00dlesConfig(): BatcherConfig {
 }
 
 /** A batcher on n00dles from two hosts, at hacking 50, batching for 2 minutes, several batches in flight: its pid. */
-async function batchingBatcher(simulation: Simulation): Promise<number> {
+async function batchingBatcher(simulation: Simulation, config = n00dlesConfig()): Promise<number> {
   await simulation.diagnostics.gainHackingExp(2_000);
   const { pid, error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, {
-    args: [JSON.stringify(n00dlesConfig())],
+    args: [JSON.stringify(config)],
   });
   expect(error).toBeUndefined();
   for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 5_000) {
@@ -288,6 +324,151 @@ test("the batcher counts a landing out of order and desyncs, and names a record 
   expect((await healthOf(simulation)).problem).toBeNull();
 });
 
+test.each([
+  ["forward", 3_000],
+  ["back", -3_000],
+])(
+  "the wall clock stepped %s 3 s with batches in flight (#251): none out of step, late, lost or short",
+  async (_, ms) => {
+    const simulation = await gameWithScripts();
+    // On home, made 4 TB: batches of one hack thread 400 ms apart, so the step spans several, as run #3's did.
+    await simulation.diagnostics.setHomeRam(4_096);
+    const atFifty = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
+    const threads = batchThreads(N00DLES, atFifty, 1);
+    const spacingMs = 400;
+    expect(leastSpacingMs(threads, batchHoldsMs(N00DLES, atFifty, threads), batchRamGb([2_048]))).toBeLessThan(
+      spacingMs,
+    );
+    const hackShare = hackSharePerThread(N00DLES, atFifty);
+    const config = { ...n00dlesConfig(), hosts: ["home"], hackShare, spacingMs };
+    await batchingBatcher(simulation, config);
+    // Its hacks landing, every 400 ms.
+    await healthOnceThat(simulation, (health) => health.hacksLanded > 0, 1_000, 5 * 60_000, "hacks landing");
+    const before = await healthOf(simulation);
+    expect((await inFlight(simulation, ["home"])).length).toBeGreaterThan(10);
+    // Run #3's: Windows Time stepped the PC's clock +2,678 ms, and the batcher, timed on it, counted 1,615 desyncs.
+    await simulation.diagnostics.stepWallClock(ms);
+    // A second on, the last hack is one since the step, stamped on the wall clock as it is now: its order is the
+    // monotonic clock's, so a step back doesn't hold the hack before it last.
+    await simulation.advance(1_000);
+    const justAfter = await healthOf(simulation);
+    expect(justAfter.lastHack?.atMs).toBeLessThanOrEqual(await simulation.now());
+    expect(justAfter.lastHack?.atMs).toBeGreaterThan((await simulation.now()) - 1_000);
+    await simulation.advance(2 * 60_000);
+    const after = await healthOf(simulation);
+    expect(outOfStep(after)).toEqual(outOfStep(before));
+    expect(after).toMatchObject({ state: "batching", problem: null, ramWaits: before.ramWaits });
+    expect(after.hacksLanded).toBeGreaterThan(before.hacksLanded);
+    // The stamps the brain reads are the wall clock's, the step and all: its health's time, and its last hack's, a
+    // moment ago (one lands every 400 ms).
+    const wallNow = await simulation.now();
+    expect(Math.abs(after.atMs - wallNow)).toBeLessThan(5_000);
+    expect(after.lastHack?.atMs).toBeLessThanOrEqual(wallNow);
+    expect(after.lastHack?.atMs).toBeGreaterThan(wallNow - 2_000);
+  },
+);
+
+test("batching, it sleeps on the monotonic clock until its next order (#251): a minute's timers, a few a second, no spin", async () => {
+  const simulation = await gameWithScripts();
+  await batchingBatcher(simulation);
+  const firedBefore = await simulation.diagnostics.timersFired();
+  await simulation.advance(60_000);
+  const fired = (await simulation.diagnostics.timersFired()) - firedBefore;
+  console.log(`#251: ${fired} timers fired in a virtual minute of batching n00dles (the game's loop's 300 among them)`);
+  // Its sleeps on the wall clock (`lookAt` less `Date.now()`) would all be 0: about 250 wakes a second.
+  expect(fired).toBeLessThan(5_000);
+});
+
+/** What a health says went out of step, or short. */
+const outOfStep = ({ desyncs, outOfOrder, outOfBounds, late, lost, batchesShort, hacksSkipped }: BatcherHealth) => ({
+  desyncs,
+  outOfOrder,
+  outOfBounds,
+  late,
+  lost,
+  batchesShort,
+  hacksSkipped,
+});
+
+test("the wall clock stepped on while preparing, and back while sharing beside a next target's wave (#251): none out of step", {
+  timeout: 120_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const plan = batchPlan(N00DLES, { skills: { hacking: 50, intelligence: 0 }, mults: MULTS }, batchRamGb([16, 16]));
+  if (plan === null) throw new Error("no plan for n00dles on 32 GB");
+  const sharing = { reserveGb: shareReserveGb(plan.peakRamGb, 0), homeKeptGb: 8, cores: {} };
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const next = { target: "foodnstuff", figures: foodnstuff, ramGb: 16 };
+  const config: BatcherConfig = { ...n00dlesConfig(), hosts: SHARING_HOSTS, sharing, next };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  // Preparing n00dles, a wave in flight: stepped on.
+  await simulation.advance(5_000);
+  expect(await healthOf(simulation)).toMatchObject({ state: "preparing", wavesStarted: 1 });
+  await simulation.diagnostics.stepWallClock(3_000);
+  await healthOnceThat(simulation, (health) => health.state === "batching", 5_000, 20 * 60_000, "batching");
+  // Batching, sharing, and foodnstuff's waves going out beside the batches: stepped back.
+  const sharingNow = await healthOnceThat(
+    simulation,
+    (health) => (health.sharing?.threads ?? 0) > 0 && (health.next?.wavesStarted ?? 0) > 0,
+    1_000,
+    5 * 60_000,
+    "sharing beside a next target's wave",
+  );
+  await simulation.diagnostics.stepWallClock(-3_000);
+  let sharedAfter = 0;
+  for (let elapsed = 0; elapsed < 2 * 60_000; elapsed += 5_000) {
+    await simulation.advance(5_000);
+    if (((await healthOf(simulation)).sharing?.threads ?? 0) > 0) sharedAfter += 1;
+  }
+  const after = await healthOf(simulation);
+  // Nothing out of step through the step on while preparing, nor through the step back.
+  expect(sharingNow).toMatchObject({ desyncs: 0, late: 0, lost: 0, batchesShort: 0, outOfBounds: 0 });
+  expect(outOfStep(after)).toEqual(outOfStep(sharingNow));
+  expect(after.state).toBe("batching");
+  expect(after.hacksLanded).toBeGreaterThan(sharingNow.hacksLanded);
+  // Its share rounds went on, and so did foodnstuff's waves, or it's ready.
+  expect(sharedAfter).toBeGreaterThan(5);
+  expect((after.next?.wavesStarted ?? 0) > (sharingNow.next?.wavesStarted ?? 0) || after.next?.ready).toBe(true);
+});
+
+test("a batcher before #251's wait, on the wall clock, is read as such: waited for, not for ever", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // An older batcher's health, its latest landing 30 s from now on the wall clock (a step since doesn't matter much).
+  const latestLandAt = (await simulation.now()) + 30_000;
+  await simulation.run("home", "set-port.js", { args: [BATCHER_HEALTH_PORT, JSON.stringify({ latestLandAt })] });
+  await simulation.advance(1);
+  await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(n00dlesConfig())] });
+  await simulation.advance(10_000);
+  const waiting = await healthOf(simulation);
+  expect(waiting.wavesStarted).toBe(0);
+  // Published on its own clock, so the next batcher waits for it too.
+  const untilMs = (waiting.latestLandAt ?? 0) - (await monotonicNow(simulation));
+  expect(untilMs).toBeGreaterThan(19_000);
+  expect(untilMs).toBeLessThanOrEqual(20_000);
+  await simulation.advance(21_000);
+  expect((await healthOf(simulation)).wavesStarted).toBeGreaterThan(0);
+});
+
+test("a record from a batcher before #251, its time the wall clock's, never stops the grows being looked at", async () => {
+  const simulation = await gameWithScripts();
+  await batchingBatcher(simulation);
+  const before = await healthOf(simulation);
+  // Another run's (not counted but as unexpected), landed now on the wall clock: far past every landing on this one.
+  const wallNow = await simulation.now();
+  await simulation.run("home", "write-port.js", {
+    args: [BATCHER_LANDING_PORT, recordJson("older.0.grow.0", wallNow, { result: 1 })],
+  });
+  await simulation.advance(2 * 60_000);
+  const after = await healthOf(simulation);
+  expect(after.unexpected).toBe(before.unexpected + 1);
+  // A grow every spacing (some 30 s here) is looked at; one landing just before the record may not be.
+  expect(after.moneyLooks ?? 0).toBeGreaterThanOrEqual((before.moneyLooks ?? 0) + 2);
+  expect(after.growsNotLooked ?? 0).toBeLessThanOrEqual((before.growsNotLooked ?? 0) + 1);
+});
+
 /** Advances in steps of `stepMs` until `done` holds, within `withinMs`: the health then. */
 async function healthOnceThat(
   simulation: Simulation,
@@ -364,7 +545,7 @@ test("an operation that dies is lost, counted 10 s after its time", async () => 
   const victim = (await inFlight(simulation))[0] as { pid: number; landAt: number };
   const before = await healthOf(simulation);
   expect(await simulation.kill(victim.pid)).toBe(true);
-  await simulation.advance(Math.ceil(victim.landAt - (await simulation.now()) + LANDING_LOST_AFTER_MS + 2_000));
+  await simulation.advance(Math.ceil(victim.landAt - (await monotonicNow(simulation)) + LANDING_LOST_AFTER_MS + 2_000));
   const after = await healthOf(simulation);
   expect(after.lost).toBe(before.lost + 1);
 });
@@ -1251,7 +1432,7 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   expect((await healthOf(simulation)).next).toEqual({ target: "harakiri-sushi", wavesStarted: 1, ready: false });
   const harakiriWave = (await inFlight(simulation, SHARING_HOSTS)).filter((each) => each.target === "harakiri-sushi");
   const waveLandsAt = Math.max(...harakiriWave.map((each) => each.landAt));
-  expect(waveLandsAt - (await simulation.now())).toBeGreaterThan(2 * 60_000);
+  expect(waveLandsAt - (await monotonicNow(simulation))).toBeGreaterThan(2 * 60_000);
 
   // Right after a batch on n00dles is planned (#237's review): a wait for RAM is said at once, not 10 s on.
   const startedBefore = (await healthOf(simulation)).batchesStarted;
@@ -1261,7 +1442,8 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   }
   // The move: to joesguns, prepared, the next dropped with its wave still out.
   const before = await healthOf(simulation);
-  const movedAt = await simulation.now();
+  // On the page's monotonic clock, as the landings in flight are (#251).
+  const movedAt = await monotonicNow(simulation);
   const toJoesguns: BatcherConfig = {
     ...batchingN00dles,
     target: "joesguns",
@@ -1278,6 +1460,7 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   let firstNewHackAt = Number.POSITIVE_INFINITY;
   let silentlyWaiting = 0;
   let saidItWaits = 0;
+  let timesNamed = 0;
   for (let elapsed = 0; elapsed < 5 * 60_000; elapsed += 2_000) {
     await simulation.advance(2_000);
     for (const { target, landAt } of await hacksInFlight(simulation)) {
@@ -1289,6 +1472,12 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
     if (health.state === "batching" && health.batchesStarted === before.batchesStarted) {
       if (health.problem?.startsWith("no batch on joesguns fits the RAM yet: it's held by its operations on ")) {
         saidItWaits += 1;
+        // The time it names is the wall clock's, as the brain reads it (#251): within minutes of now.
+        const landingAt = /landing at (\S+)$/.exec(health.problem)?.[1];
+        if (landingAt !== undefined) {
+          timesNamed += 1;
+          expect(Math.abs(Date.parse(landingAt) - (await simulation.now()))).toBeLessThan(10 * 60_000);
+        }
       } else silentlyWaiting += 1;
     }
   }
@@ -1301,6 +1490,7 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
       `${((firstNewHackAt - lastOldHackAt) / 1000).toFixed(0)} s; ${saidItWaits} looks waiting for RAM, said so`,
   );
   expect(silentlyWaiting).toBe(0);
+  expect(timesNamed).toBeGreaterThan(0);
   // joesguns' first hack lands a weaken after the move, and the seconds n00dles' batches take to free the RAM for one,
   // long before harakiri-sushi's wave: before #236, one spacing after the wave, 194 s in, idle 161 s. Those seconds are
   // about 30 (15 looks): the move comes right after a batch is planned (#237's review), so n00dles' batches hold the
@@ -1538,6 +1728,9 @@ test("an operation whose RAM frees a moment late waits for it (#246), within its
   expect(holding.error).toBeUndefined();
   const waits = new Map<string, RamWait>();
   for (let elapsed = 0; elapsed < 2 * 60_000; elapsed += 1_000) {
+    // The wall clock stepped 3 s on, then back, while orders wait (#251): no wait is longer for it.
+    if (elapsed === 30_000) await simulation.diagnostics.stepWallClock(3_000);
+    if (elapsed === 60_000) await simulation.diagnostics.stepWallClock(-3_000);
     await simulation.advance(1_000);
     for (const each of (await healthOf(simulation)).waits ?? []) waits.set(`${each.atMs} ${each.operation}`, each);
   }

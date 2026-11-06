@@ -1,6 +1,6 @@
 // agent/<deploymentId>/donate-to-faction.js: a home worker that donates to a faction through the game's page (#225), a
 // `ui` effector: there's no API for it before Singularity. Arguments: the faction, the amount, the reputation the
-// donation is for, and when to give up (the game's `Date.now()`).
+// donation is for, and when to give up (the page's monotonic clock).
 // - The page's steps are ../page/donate-page.ts's: the faction's own page, its reputation already there is done with
 //   nothing donated; else the amount typed, "donate" (never a disabled one), and the alert closed.
 // - Done once the faction's reputation, as the page shows it, is the reputation the donation is for.

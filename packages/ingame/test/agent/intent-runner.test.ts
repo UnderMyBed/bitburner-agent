@@ -62,7 +62,7 @@ function runnerWith(
   });
   const runner = createIntentRunner(ns, { effectorRunner });
   /** One round, with `leftMs` of it left when the runner's turn comes. */
-  const round = (leftMs = ROUND_MS) => runner.runDue(Date.now() + leftMs);
+  const round = (leftMs = ROUND_MS) => runner.runDue(performance.now() + leftMs);
   const workerFiles = () => runWorker.mock.calls.map(([workerFile]) => workerFile);
   return { runner, lines, runWorker, round, workerFiles };
 }
@@ -460,7 +460,7 @@ describe("properties (§9.3)", () => {
             doneIds.clear();
           } else {
             next = step;
-            await runner.runDue(Date.now() + 100 * ROUND_MS);
+            await runner.runDue(performance.now() + 100 * ROUND_MS);
             for (const outcome of runner.outcomes()) if (outcome.done) doneIds.add(outcome.id);
           }
         }
@@ -480,14 +480,14 @@ describe("properties (§9.3)", () => {
           else if (step.kind === "forget") runner.forget();
           else {
             next = step;
-            await runner.runDue(Date.now() + 100 * ROUND_MS);
+            await runner.runDue(performance.now() + 100 * ROUND_MS);
           }
         }
         // From here the brain keeps sending the same intents and the game lets each be done: within the retry period
         // (15 rounds) and one more, every one is.
         runner.desire(finalIntents);
         next = { done: true, reports: true };
-        for (let each = 0; each < 16; each += 1) await runner.runDue(Date.now() + 100 * ROUND_MS);
+        for (let each = 0; each < 16; each += 1) await runner.runDue(performance.now() + 100 * ROUND_MS);
         expect(runner.outcomes().map((outcome) => [outcome.id, outcome.done])).toEqual(
           finalIntents.map((each) => [each.id, true]),
         );

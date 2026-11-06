@@ -766,6 +766,22 @@ describe("the hacks landed and the moves (#236)", () => {
     expect(health.lastMove).toEqual({ from: "joesguns", to: "n00dles", idleMs: 100, atMs: 62_100 });
   });
 
+  test("timed on the monotonic clock (#251): the idle and the order the batcher's, not two wall-clock stamps'", () => {
+    const health = newBatcherHealth("n00dles", "run", 0);
+    recordHackLanded(health, "n00dles", 10_000, null);
+    // The wall clock stepped back 3 s: the next hack, 400 ms on, is stamped 2.6 s before the last, and is still last.
+    recordHackLanded(health, "n00dles", 7_400, 400);
+    expect(health.lastHack).toEqual({ target: "n00dles", atMs: 7_400 });
+    // Landing before the last one (another target's, after a move), it isn't.
+    recordHackLanded(health, "n00dles", 7_500, -50);
+    expect(health.lastHack).toEqual({ target: "n00dles", atMs: 7_400 });
+    // A move's idle is the monotonic clock's: 60 s, though the wall clock stepped 3 s on meanwhile.
+    health.target = "joesguns";
+    health.targetChangedSinceHack = true;
+    recordHackLanded(health, "joesguns", 70_400, 60_000);
+    expect(health.lastMove).toEqual({ from: "n00dles", to: "joesguns", idleMs: 60_000, atMs: 70_400 });
+  });
+
   test("a detour through a target never hacked (#237's review): back on the same target, still a move, with its idle", () => {
     const health = newBatcherHealth("phantasy", "run", 0);
     recordHackLanded(health, "phantasy", 1_000);
@@ -932,6 +948,8 @@ describe("parseBatcherConfig", () => {
       batchesStarted: 0,
       desyncs: 0,
       problem: null,
+      // Timed on the page's monotonic clock (#251).
+      clock: "monotonic",
       atMs: 5,
     });
   });

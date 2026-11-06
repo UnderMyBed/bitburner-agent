@@ -4,6 +4,7 @@
 // the deadline. One worker outlives its round: the Singularity backdoor's (#162), which reports at once and stays until
 // the backdoor ends; the effector runner allows for its RAM (free RAM, not just home's size).
 import { WORKER_REPORT_PORT, type WorkerReport } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 
 /** How often a wait checks whether its worker is still running. */
@@ -52,7 +53,7 @@ export function createWorkerRunner(ns: NS) {
     ): Promise<WorkerRun> {
       const previousWorkerPid = lastWorkerPids.get(workerFile);
       if (previousWorkerPid !== undefined && ns.isRunning(previousWorkerPid)) return { outcome: "stillRunning" };
-      if (Date.now() >= deadlineMs) return { outcome: "noTimeLeft" };
+      if (monotonicMs() >= deadlineMs) return { outcome: "noTimeLeft" };
       const workerPid = ns.run(workerFile, { temporary: true }, ...workerArguments);
       if (workerPid === 0) return { outcome: "couldNotStart" };
       lastWorkerPids.set(workerFile, workerPid);
@@ -66,7 +67,7 @@ export function createWorkerRunner(ns: NS) {
           const value: unknown = port.read();
           if (isReportFrom(value, workerPid)) report = value;
         }
-        const remainingMs = Math.min(deadlineMs - Date.now(), LONGEST_WAIT_MS);
+        const remainingMs = Math.min(deadlineMs - monotonicMs(), LONGEST_WAIT_MS);
         if (!workerRunning || remainingMs <= 0) {
           return report === null ? { outcome: "noReport" } : { outcome: "reported", report };
         }

@@ -4,7 +4,9 @@
 // from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
 // already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
 // (#224). Out of step is judged a stretch at a time (#241): one a clock step or page stall explains, which the batcher
-// recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts).
+// recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts). Since #251 the batcher times its
+// batches on the page's monotonic clock (its health's `clock`), which a clock step doesn't move: only a page stall
+// explains its stretches, and a clock step only an older batcher's.
 import {
   BATCH_RAM_WAIT_MS,
   type BatcherHealth,
@@ -422,6 +424,8 @@ interface RunLook {
   state: string;
   target: string;
   rose: OutOfStepCounts;
+  /** Whether its batcher times its batches on the page's monotonic clock (#251, its health's `clock`). */
+  monotonic: boolean;
 }
 
 /** The clock steps and page stalls found (section 4), a weaken's time on a target then, and the warnings (#241). */
@@ -445,7 +449,8 @@ interface Attribution {
  * a part's loss after the incident's end (`landingUntilMs`): each such rise is the stretch's, and batching again waits
  * for the last; one over `BATCHER_INCIDENT_RECOVERY_MS` after the incident, once it was batching again
  * (`firstRecoveredMs`), is out of step again (`lateAgainMs`, #249's review). A move (`preparing` a new target) is
- * neither. The incident's end is the batcher's: the game's clock's move, for a step (`batcherSpanOf`).
+ * neither. The incident's end is the batcher's: the game's clock's move, for a step (`batcherSpanOf`; a step explains
+ * only an older batcher's stretches, one on the wall clock, #251).
  */
 interface OutOfStepStretch {
   runName: string;
@@ -473,17 +478,27 @@ const kindName = ({ kind }: ClockIncident) => (kind === "clockStep" ? "clock ste
  * The incident a stretch is put down to (#241), its first look out of step being at `firstMs`: the latest incident
  * whose span, as the batcher felt it (`batcherSpanOf`), started by then and ended no more than
  * `INCIDENT_ATTRIBUTION_WEAKENS` weaken times on `target` before it, and that no earlier stretch was put down to
- * (`attributed`); or why there's none.
+ * (`attributed`); or why there's none. A batcher on the page's monotonic clock (#251, `monotonic`) can't be put out
+ * of step by a clock step, so only a page stall explains its stretches; an older batcher's, either.
  */
 function attributionOf(
   firstMs: number,
   target: string,
+  monotonic: boolean,
   context: IncidentContext,
   attributed: Set<ClockIncident>,
 ): Attribution | { why: string } {
-  const incidentsBefore = context.incidents.filter((incident) => batcherSpanOf(incident).fromMs <= firstMs);
+  const before = (incident: ClockIncident) => batcherSpanOf(incident).fromMs <= firstMs;
+  const explaining = monotonic ? context.incidents.filter(({ kind }) => kind === "pageStall") : context.incidents;
+  const incidentsBefore = explaining.filter(before);
   const lastIncident = incidentsBefore.at(-1);
-  if (lastIncident === undefined) return { why: "no clock step or page stall before it" };
+  const kinds = monotonic ? "page stall" : "clock step or page stall";
+  // Said, so a step that came before reads as no excuse, not as missed.
+  const stepNote =
+    monotonic && context.incidents.some((incident) => incident.kind === "clockStep" && before(incident))
+      ? " (a clock step can't put a batcher on the page's monotonic clock out of step, #251)"
+      : "";
+  if (lastIncident === undefined) return { why: `no ${kinds} before it${stepNote}` };
   const weakenMs = context.weakenMs(target, batcherSpanOf(lastIncident).fromMs);
   if (weakenMs === null) {
     return {
@@ -505,11 +520,11 @@ function attributionOf(
     return {
       why:
         `${describeIncident(alreadyAttributed)} within ${weaken} before it, but an earlier stretch was put down ` +
-        "to it",
+        `to it${stepNote}`,
     };
   }
   return {
-    why: `no clock step or page stall within ${weaken} before it (the last, ${describeIncident(lastIncident)})`,
+    why: `no ${kinds} within ${weaken} before it (the last, ${describeIncident(lastIncident)})${stepNote}`,
   };
 }
 
@@ -518,7 +533,7 @@ function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOf
   const stretches: OutOfStepStretch[] = [];
   const openStretchOfRun = new Map<string, OutOfStepStretch>();
   const attributed = new Set<ClockIncident>();
-  for (const { runName, atMs, state, target, rose } of looks) {
+  for (const { runName, atMs, state, target, rose, monotonic } of looks) {
     const anyRose = OUT_OF_STEP_COUNTS.some((count) => rose[count] > 0);
     const openStretch = openStretchOfRun.get(runName);
     if (openStretch !== undefined && openStretch.recoveredMs === null) {
@@ -546,7 +561,7 @@ function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOf
         continue;
       }
     }
-    const attribution = attributionOf(atMs, target, context, attributed);
+    const attribution = attributionOf(atMs, target, monotonic, context, attributed);
     const stretch: OutOfStepStretch = {
       runName,
       target,
@@ -735,7 +750,8 @@ export function batcherSection(
     const rose = Object.fromEntries(
       OUT_OF_STEP_COUNTS.map((count) => [count, Math.max(0, now[count] - before[count])]),
     ) as OutOfStepCounts;
-    looks.push({ runName: health.runName, atMs, state: health.state, target: health.target, rose });
+    const monotonic = health.clock === "monotonic";
+    looks.push({ runName: health.runName, atMs, state: health.state, target: health.target, rose, monotonic });
     const short = Math.max(0, now.batchesShort - before.batchesShort);
     if (sharingOnHosts(lastHealthOfRun.get(health.runName)) || sharingOnHosts(health)) shortWhileSharing += short;
     else if (short > 0) {

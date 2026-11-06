@@ -297,7 +297,7 @@ describe("the slow snapshot", () => {
       deadlines.push(deadlineMs);
       return reading;
     });
-    const before = Date.now();
+    const before = performance.now();
     await snapshotter.takeRound(send);
     expect(order).toEqual([
       "snapshot-fast.js",
@@ -308,7 +308,7 @@ describe("the slow snapshot", () => {
     ]);
     expect(sent.map((message) => message.tier)).toEqual(["fast", "medium", "static", "slow"]);
     expect(deadlines[0]).toBeGreaterThanOrEqual(before + 2_000);
-    expect(deadlines[0]).toBeLessThanOrEqual(Date.now() + 2_000);
+    expect(deadlines[0]).toBeLessThanOrEqual(performance.now() + 2_000);
     const slow = sent.find((message) => message.tier === "slow");
     expect(slow?.data).toEqual({ ...SLOW_WORKER_DATA, factions: reading });
     // The next round: no slow snapshot, so no read.
@@ -334,7 +334,8 @@ describe("the slow snapshot", () => {
   });
 
   test("under a second of the round left after the slow worker: no read, and the slow snapshot waits for the next round", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    // The round's time is the page's monotonic clock's (#251).
+    vi.useFakeTimers({ toFake: ["performance"] });
     try {
       const { snapshotter, order, sent, send } = snapshotterWith(async () => ({
         backend: "ui",
@@ -342,8 +343,11 @@ describe("the slow snapshot", () => {
         problem: null,
       }));
       // The workers take most of the round: 1.1 s by the time static has run.
-      const startedAtMs = Date.now();
-      const advance = (toMs: number) => vi.setSystemTime(startedAtMs + toMs);
+      let atMs = 0;
+      const advance = (toMs: number) => {
+        vi.advanceTimersByTime(toMs - atMs);
+        atMs = toMs;
+      };
       const runOrder = order as string[];
       const push = runOrder.push.bind(runOrder);
       runOrder.push = (...items: string[]) => {
@@ -366,7 +370,8 @@ describe("the slow snapshot", () => {
   });
 
   test("never waiting for ever: after 3 rounds with no time for the read, the slow snapshot goes, unread, saying why", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    // The round's time is the page's monotonic clock's (#251).
+    vi.useFakeTimers({ toFake: ["performance"] });
     try {
       const { snapshotter, order, sent, send } = snapshotterWith(async () => ({
         backend: "ui",
@@ -374,12 +379,10 @@ describe("the slow snapshot", () => {
         problem: null,
       }));
       // Every worker takes 1.1 s, so no round has a second left for the read.
-      let nowMs = Date.now();
       const runOrder = order as string[];
       const push = runOrder.push.bind(runOrder);
       runOrder.push = (...items: string[]) => {
-        nowMs += 1_100;
-        vi.setSystemTime(nowMs);
+        vi.advanceTimersByTime(1_100);
         return push(...items);
       };
       for (let round = 0; round < 3; round += 1) await snapshotter.takeRound(send);
@@ -410,7 +413,7 @@ describe("the slow snapshot", () => {
       throw new Error("not read");
     }, false);
     await snapshotter.takeRound(send);
-    await snapshotter.readSlowTierIfNone(Date.now() + 2_000);
+    await snapshotter.readSlowTierIfNone(performance.now() + 2_000);
     expect(order).not.toContain("readFactions");
   });
 });

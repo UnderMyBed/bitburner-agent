@@ -70,7 +70,7 @@ const sameNames = (one: string[], other: string[]) => [...one].sort().join("\n")
 export interface FactionPageMemory {
   state: FactionState;
   lastAugReset: number;
-  /** When the Factions page was last read (or found to have nothing), by the game's `Date.now()`. */
+  /** When the Factions page was last read (or found to have nothing), on the page's monotonic clock (#251). */
   factionsReadAtMs: number;
 }
 
@@ -93,6 +93,10 @@ export interface FactionGameFacts {
   lastAugReset: number;
   /** NeuroFlux Governor's installed level (`getResetInfo().ownedAugs`). */
   installedNeuroFluxLevel: number;
+  /**
+   * Now, on the page's monotonic clock (#251), as `factionsReadAtMs` is: the memory is the Agent's, which a reload, the
+   * only thing that starts that clock again, ends.
+   */
   nowMs: number;
 }
 

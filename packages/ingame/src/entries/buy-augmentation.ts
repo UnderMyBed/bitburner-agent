@@ -1,6 +1,6 @@
 // agent/<deploymentId>/buy-augmentation.js: a home worker that buys an augmentation from a faction through the game's
 // page (#149), a `ui` effector: there's no API for it before Singularity. Arguments: the faction, the augmentation,
-// the level (1, or NeuroFlux Governor's level to buy), and when to give up (the game's `Date.now()`).
+// the level (1, or NeuroFlux Governor's level to buy), and when to give up (the page's monotonic clock).
 // - The game first: an augmentation installed (or NeuroFlux installed at that level) is done, without the page.
 //   Queued ones aren't in any NS call without Singularity, so the page tells: the row's "Owned".
 // - The sidebar's Factions, "Augments" on the faction's row, then the augmentation's row

@@ -311,7 +311,7 @@ describe("the run report's section", () => {
     // Out of step: a failure, from the snapshot that first showed it.
     expect(failures).toEqual([
       "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen " +
-        "at 2026-01-01T01:10:00.000Z; no clock step or page stall before it",
+        "at 2026-01-01T01:10:00.000Z; no page stall before it",
     ]);
     expect(lines).toContain(`  ${failures[0]}`);
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
@@ -1071,7 +1071,7 @@ describe("the run report's section, out of step (#206)", () => {
     // When the first was seen, not the last.
     expect(failures).toEqual([
       "batcher out of step: 0 desyncs (0 out of order, 0 out of bounds), 1 late, 2 lost on n00dles, the first seen " +
-        "at 1970-01-01T00:01:00.000Z; no clock step or page stall before it",
+        "at 1970-01-01T00:01:00.000Z; no page stall before it",
     ]);
   });
 });
@@ -1093,8 +1093,10 @@ describe("the run report's section, out of step after a clock step or page stall
   };
   const STALL: ClockIncident = { ...STEP, kind: "pageStall", sizeMs: 3_000, detail: "…" };
   type State = "batching" | "recovering" | "preparing";
+  // Run #3's batcher was before #251, timed on the wall clock: its health says no clock.
   const health = (state: State, changes = {}, target = "the-hub", runName = "r1") => ({
     ...newBatcherHealth(target, runName, 0),
+    clock: undefined,
     state,
     batchesStarted: 900,
     ...changes,
@@ -1132,6 +1134,26 @@ describe("the run report's section, out of step after a clock step or page stall
     expect(failures).toEqual([]);
     expect(lines).toContain(`  ${warning}`);
     expect(lines).toContain("  desyncs: 1615 (1615 out of order, 0 out of bounds)");
+  });
+
+  test("a batcher on the monotonic clock (#251): a clock step can't put it out of step, so it fails, unexplained; a page stall still explains it", () => {
+    const monotonic = (points: Point[]) =>
+      points.map((point) => ({ ...point, health: { ...(point.health as object), clock: "monotonic" } }));
+    const stepped = section(monotonic(run()), [STEP]);
+    expect(stepped.warnings).toEqual([]);
+    expect(stepped.failures).toEqual([
+      `batcher out of step: ${COUNTS}, ${FIRST}; no page stall before it (a clock step can't put a batcher on the ` +
+        "page's monotonic clock out of step, #251)",
+    ]);
+    // A page stall within a weaken before it, the step beside it: the stall's.
+    const stall = { ...STALL, fromMs: at(600_000), toMs: at(605_000) };
+    expect(section(monotonic(run()), [stall, STEP]).warnings).toEqual([
+      `batcher out of step after a page stall: ${COUNTS}, ${FIRST}, after a page stall of ~3.0 s from ` +
+        `${iso(600_000)} to ${iso(605_000)} (within a weaken there, 7 min 57 s); ${RECOVERED}, and nothing out of ` +
+        "step in the 10 min after",
+    ]);
+    // An older batcher's health, with no clock, keeps the step's warning.
+    expect(section(run(), [STEP]).warnings).toHaveLength(1);
   });
 
   test("of two incidents within a weaken before the first desync, the latest", () => {
