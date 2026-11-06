@@ -8,6 +8,7 @@ export const QUIET_FACTIONS_VIEW: FactionsView = {
   enabled: true,
   waiting: true,
   joining: null,
+  joiningAlongside: null,
   passedOver: [],
   cityGroup: null,
   choice: null,

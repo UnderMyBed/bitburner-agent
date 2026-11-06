@@ -336,6 +336,8 @@ export class DesiredStateController {
   /** The joins and the brain's faction work (#203): the rule, the join it asks for now, the work it sends, or null. */
   readonly #factions: FactionRule;
   #join: Intent | null = null;
+  /** A join that bans nothing, sent beside `#join` while that one, a city faction's, waits at the gate (#269). */
+  #joinAlongside: Intent | null = null;
   /** The travel for invitations (#228), Tian Di Hui's and the city group's: the rule, and the travel it asks for. */
   readonly #invitations: InvitationRule;
   #travel: Intent | null = null;
@@ -686,19 +688,10 @@ export class DesiredStateController {
     const manual = readManualIntents(this.#store);
     const fromRule = (intent: Intent | null) =>
       this.#desired !== null && intent && !manual.some((each) => each.id === intent.id) ? [intent] : [];
-    const brainsGated = this.#gatedQueue().slice(manual.length);
-    const judged = this.#judgedQueue();
-    /** A rule's irreversible intent (#269) after a reset in the judged queue, its gate released before that came. */
-    const ruleAfterReset = (intent: Intent, source: string) =>
-      source !== "manual" &&
-      isIrreversibleIntent(intent) &&
-      afterReset(
-        judged,
-        judged.findIndex((each) => each.id === intent.id),
-      );
+    const brainsResets = this.#queueWithBrainsResets().slice(manual.length);
     return [
       ...manual.map((intent) => ({ intent, source: "manual" as const })),
-      ...brainsGated.map((intent) => ({
+      ...brainsResets.map((intent) => ({
         intent,
         source: intent.action === "destroyBitNode" ? ("worldDaemon" as const) : ("augmentation" as const),
       })),
@@ -706,6 +699,7 @@ export class DesiredStateController {
       ...fromRule(this.#augmentationIntent).map((intent) => ({ intent, source: "augmentation" as const })),
       ...fromRule(this.#backdoor).map((intent) => ({ intent, source: "backdoor" as const })),
       ...fromRule(this.#join).map((intent) => ({ intent, source: "join" as const })),
+      ...fromRule(this.#joinAlongside).map((intent) => ({ intent, source: "join" as const })),
       ...fromRule(this.#travel).map((intent) => ({ intent, source: "travel" as const })),
     ].map(({ intent, source }, index) => ({
       id: intent.id,
@@ -714,19 +708,18 @@ export class DesiredStateController {
       waitingFor:
         source === "manual" && afterReset(manual, index)
           ? waitingForReset(manual.find(resetsTheGame) as Intent)
-          : (this.#gates.waitingFor(intent.id) ??
-            this.#resetTimeAwaited(intent) ??
-            (ruleAfterReset(intent, source) ? waitingForReset(judged.find(resetsTheGame) as Intent) : null)),
+          : (this.#gates.waitingFor(intent.id) ?? this.#resetTimeAwaited(intent)),
     }));
   }
 
   /**
-   * The intents the gates judge, in order: the owner's queue; then the brain's destroy (#215) unless the owner queued a
-   * destroy (theirs wins, whatever BitNode it enters); then the brain's install (#210) unless the owner queued one. Each
-   * waits behind the whole queue (a reset's guard: nothing before it undone). The destroy goes before the install
-   * (#215 review): an install resets the hacking level w0r1d_d43m0n needs, and drops its root.
+   * The owner's queue, then the brain's resets: its destroy (#215) unless the owner queued a destroy (theirs wins,
+   * whatever BitNode it enters); then its install (#210) unless the owner queued one. Each waits behind the whole queue
+   * (a reset's guard: nothing before it undone). The destroy goes before the install (#215 review): an install resets
+   * the hacking level w0r1d_d43m0n needs, and drops its root. The gates judge it with the rules' irreversible intents
+   * after it (`#judgedQueue`).
    */
-  #gatedQueue(): Intent[] {
+  #queueWithBrainsResets(): Intent[] {
     const manual = readManualIntents(this.#store);
     const queue = [...manual];
     // The rule holds its ask until a slow snapshot shows the BitNode reset, so its reset note stays too.
@@ -744,22 +737,29 @@ export class DesiredStateController {
 
   /**
    * The rules' intents, in order, each only if the owner hasn't queued the same: the purchase, the augmentation purchase
-   * (#210), the backdoor (#195), the join (#203) and the travel for an invitation (#228).
+   * (#210), the backdoor (#195), the join (#203) and the one beside it (#269 review), and the travel for an invitation
+   * (#228).
    */
   #ruleIntents(): Intent[] {
     const manual = readManualIntents(this.#store);
-    return [this.#purchase, this.#augmentationIntent, this.#backdoor, this.#join, this.#travel].filter(
-      (intent): intent is Intent => intent !== null && !manual.some((each) => each.id === intent.id),
-    );
+    const rules = [
+      this.#purchase,
+      this.#augmentationIntent,
+      this.#backdoor,
+      this.#join,
+      this.#joinAlongside,
+      this.#travel,
+    ];
+    return rules.filter((intent): intent is Intent => intent !== null && !manual.some((each) => each.id === intent.id));
   }
 
   /**
-   * The intents the irreversible gate judges (R8, #147), in order: the gated queue (`#gatedQueue`), then the rules'
-   * irreversible ones (#269: the brain's join of a city faction, #228), so each waits for its guard and backup, one
-   * irreversible intent at a time, and after a reset queued before it.
+   * The intents the irreversible gate judges (R8, #147), in order: the owner's queue and the brain's resets
+   * (`#queueWithBrainsResets`), then the rules' irreversible ones (#269: the brain's join of a city faction, #228), so
+   * each waits for its guard and backup, one irreversible intent at a time, and after a reset queued before it.
    */
   #judgedQueue(): Intent[] {
-    return [...this.#gatedQueue(), ...this.#ruleIntents().filter(isIrreversibleIntent)];
+    return [...this.#queueWithBrainsResets(), ...this.#ruleIntents().filter(isIrreversibleIntent)];
   }
 
   /** The done intents in the connected Agent's latest fast snapshot. */
@@ -1341,26 +1341,29 @@ export class DesiredStateController {
       countHoldTarget: this.#augmentations.countHoldTarget(),
     });
     this.#join = factions.join;
+    this.#joinAlongside = factions.joinAlongside;
     this.#factionWork = factions.work;
-    // The manual queue first, then the brain's install (#210) behind it; then the purchase, the augmentation purchase
-    // (#210), the backdoor (#195) and the join (#203), each only if the owner hasn't queued the same. The purchases
-    // before the backdoor: a `buy` never waits for its terminal action.
+    // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The
+    // purchases before the backdoor: a `buy` never waits for its terminal action.
     const manual = readManualIntents(this.#store);
-    const gated = this.#gatedQueue();
-    const rules = this.#ruleIntents();
+    const queueWithBrainsResets = this.#queueWithBrainsResets();
+    const ruleIntents = this.#ruleIntents();
     // An irreversible intent goes once its gate lets it, and nothing queued after a reset's intent before it's done:
     // the rules' irreversible ones too (#269: the brain's join of a city faction, #228), judged after the queue's.
-    const judged = this.#judgedQueue();
-    this.#gates.sync(judged);
-    const goesOut = (each: Intent) =>
+    const judgedQueue = this.#judgedQueue();
+    this.#gates.sync(judgedQueue);
+    const goesOut = (intent: Intent) =>
       !afterReset(
-        judged,
-        judged.findIndex((judging) => judging.id === each.id),
+        judgedQueue,
+        judgedQueue.findIndex((judged) => judged.id === intent.id),
       ) &&
-      this.#gates.isReleased(each.id) &&
-      this.#resetTimeAwaited(each) === null;
-    // The rules' in their own order, reversible ones at once.
-    const intents = [...gated.filter(goesOut), ...rules.filter((each) => !isIrreversibleIntent(each) || goesOut(each))];
+      this.#gates.isReleased(intent.id) &&
+      this.#resetTimeAwaited(intent) === null;
+    // The rules' reversible ones at once.
+    const intents = [
+      ...queueWithBrainsResets.filter(goesOut),
+      ...ruleIntents.filter((intent) => !isIrreversibleIntent(intent) || goesOut(intent)),
+    ];
     // A queue stored under an old limit (99 before #195, 98 before #203) would make the state too long, and the Agent
     // would refuse it whole: the rules' intents wait for room, the last first.
     const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
@@ -1404,7 +1407,7 @@ export class DesiredStateController {
     this.#channel.setDesiredState(this.#desired);
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).
     // Only the first can be out: what's after it waits.
-    const reset = gated.find(resetsTheGame);
+    const reset = queueWithBrainsResets.find(resetsTheGame);
     if (reset === undefined || (this.#resetSent !== null && this.#resetSent.id !== reset.id)) {
       this.#noteResetSent(null);
     }

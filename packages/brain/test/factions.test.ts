@@ -116,6 +116,7 @@ describe("chooseJoin", () => {
   test("the first invitation from a faction without enemies, in the order invited; other city factions passed over", () => {
     expect(chooseJoin(["Sector-12", "CyberSec", "NiteSec"], [])).toEqual({
       next: "CyberSec",
+      alongside: null,
       passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
     });
   });
@@ -124,6 +125,8 @@ describe("chooseJoin", () => {
     const groupB = ["Chongqing", "New Tokyo", "Ishima"];
     expect(chooseJoin(["Sector-12", "Chongqing", "CyberSec"], [], groupB)).toEqual({
       next: "Chongqing",
+      // Chongqing waits at the irreversible gate (#269): CyberSec, which bans nothing, is joined beside it.
+      alongside: "CyberSec",
       passedOver: [{ faction: "Sector-12", bans: ["Chongqing", "New Tokyo", "Ishima", "Volhaven"] }],
     });
     for (const other of ["Sector-12", "Aevum", "Volhaven"]) expect(chooseJoin([other], [], groupB).next).toBeNull();
@@ -135,9 +138,13 @@ describe("chooseJoin", () => {
   });
 
   test("one joined is passed over, as is a name that isn't one of the game's factions; none left, none to join", () => {
-    expect(chooseJoin(["CyberSec", "Nope", "NiteSec"], ["CyberSec"])).toEqual({ next: "NiteSec", passedOver: [] });
-    expect(chooseJoin(["CyberSec"], ["CyberSec"])).toEqual({ next: null, passedOver: [] });
-    expect(chooseJoin([], [])).toEqual({ next: null, passedOver: [] });
+    expect(chooseJoin(["CyberSec", "Nope", "NiteSec"], ["CyberSec"])).toEqual({
+      next: "NiteSec",
+      alongside: null,
+      passedOver: [],
+    });
+    expect(chooseJoin(["CyberSec"], ["CyberSec"])).toEqual({ next: null, alongside: null, passedOver: [] });
+    expect(chooseJoin([], [])).toEqual({ next: null, alongside: null, passedOver: [] });
   });
 
   test("no city group chosen: every one of the six city factions is passed over; every other faction is joined", () => {
@@ -147,6 +154,16 @@ describe("chooseJoin", () => {
     for (const faction of ["Tian Di Hui", "Netburners", "ECorp", "The Syndicate", "Daedalus"]) {
       expect(chooseJoin([faction], []).next).toBe(faction);
     }
+  });
+
+  test("beside a city faction's join (#269): the first other invitation that bans nothing, never a city one", () => {
+    const groupA = ["Sector-12", "Aevum"];
+    expect(chooseJoin(["Sector-12", "Aevum", "Chongqing", "NiteSec", "CyberSec"], [], groupA)).toMatchObject({
+      next: "Sector-12",
+      alongside: "NiteSec",
+    });
+    expect(chooseJoin(["Sector-12", "Aevum"], [], groupA)).toMatchObject({ next: "Sector-12", alongside: null });
+    expect(chooseJoin(["Sector-12", "NiteSec"], ["NiteSec"], groupA)).toMatchObject({ alongside: null });
   });
 
   test("joinIntent: the joinFaction intent", () => {
