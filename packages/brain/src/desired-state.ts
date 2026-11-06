@@ -974,9 +974,13 @@ export class DesiredStateController {
     // RAM only with the money above it.
     const daedalusHold = this.#augmentations.daedalusHold();
     const countdownHold = this.#augmentations.countdownReserve();
+    // The countdown, or an install held for Daedalus's count (#243): the install's minutes off.
+    const countdownWords = this.#augmentations.countdownUnderWay()
+      ? "the augmentations' install countdown"
+      : "the augmentations' install, held for Daedalus's count";
     // In the countdown, programs are bought no more: they're lost at the install, minutes off.
     if (countdownHold > 0 && programsNext !== null) {
-      this.#waitingFor.programs = "the augmentations' install countdown (programs are lost at the install)";
+      this.#waitingFor.programs = `${countdownWords} (programs are lost at the install)`;
       programsNext = null;
     }
     // And The Red Pill's donation's money (#225 review), and an invitation's money (#228), from programs
@@ -985,7 +989,7 @@ export class DesiredStateController {
     const invitationHold = this.#invitations.hold();
     const holds: [number, string][] = [
       [daedalusHold, "Daedalus's invitation"],
-      [countdownHold, "the augmentations' install countdown"],
+      [countdownHold, countdownWords],
       [redPillHold, "The Red Pill's donation"],
       [invitationHold, "an invitation travelled for"],
     ];
@@ -1178,10 +1182,10 @@ export class DesiredStateController {
    * An install under way (#228 review): A6 committed to one, or counting down to it. Either way it puts the player back
    * in Sector-12 and drops every faction within minutes, so the travel for invitations stands down (but for a tech
    * vendor). The purchases stand down at the commit alone (`#augmentationsCommitted`): in the countdown, the money held
-   * keeps them in check.
+   * keeps them in check. Not an install held for Daedalus's count (#243 review): the travel is there for the count.
    */
   #installUnderWay(): boolean {
-    return this.#augmentationsCommitted || this.#augmentations.countdownReserve() > 0;
+    return this.#augmentationsCommitted || this.#augmentations.countdownUnderWay();
   }
 
   /** What the travel for invitations (#228) reads of the snapshots, or null where they don't say it all. */
@@ -1244,6 +1248,8 @@ export class DesiredStateController {
       // The destroy wanted once The Red Pill is installed (#215 review): ordinary installs held for it.
       destroyWanted:
         readWorldDaemonEnabled(this.#store) && nextBitNodeProblem(this.#slowData?.resetInfo?.ownedSF ?? {}) === null,
+      // Who works for a faction while an install is held for Daedalus's count (#243 review): A5 under the hold.
+      holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -1299,6 +1305,8 @@ export class DesiredStateController {
       // Owner decision 54 (#228): the city factions of the group the brain chose, and none of another's.
       cityFactions: this.#invitations.cityFactions(),
       cityGroup: this.#invitations.view().cityGroup,
+      // An install held for Daedalus's count by work (#243 review): its augmentation's seller, worked for first.
+      countHoldTarget: this.#augmentations.countHoldTarget(),
     });
     this.#join = factions.join;
     this.#factionWork = factions.work;

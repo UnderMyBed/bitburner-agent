@@ -198,6 +198,8 @@ export interface FactionWorkChoice {
   favor?: number;
   /** Short of Daedalus's count (#228): the work is for the count, installed of required. Absent otherwise. */
   count?: Pick<DaedalusCount, "installed" | "required">;
+  /** The work is for an install A6 holds for Daedalus's count (#243 review). Absent otherwise. */
+  held?: true;
 }
 
 /** The reputation worked toward at a faction for an augmentation (#225), and why. */
@@ -318,7 +320,10 @@ export function chooseFactionWork(
   slowData: SlowSnapshotData,
   shareBonus = 1,
   keep?: { faction: string; workType: FactionWorkType },
-  { donations = true }: { donations?: boolean } = {},
+  {
+    donations = true,
+    held = null,
+  }: { donations?: boolean; held?: { faction: string; augmentation: string } | null } = {},
 ): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
   const state: FactionState | null = factionReadingOf(slowData)?.state ?? null;
@@ -337,7 +342,9 @@ export function chooseFactionWork(
     const conditions = { ...workConditionsOf(resetInfo, slowData, shareBonus), donations, ...(keep ? { keep } : {}) };
     const count = countOf(state, resetInfo);
     const choice =
-      redPillWork(person, state, resetInfo, conditions) ?? bestCandidate(person, state, resetInfo, conditions, count);
+      redPillWork(person, state, resetInfo, conditions) ??
+      (held === null ? null : heldWork(person, state, resetInfo, conditions, held, count)) ??
+      bestCandidate(person, state, resetInfo, conditions, count);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
   } catch (error) {
@@ -556,6 +563,46 @@ export function redPillWork(
 }
 
 /**
+ * The work for an install A6 holds for Daedalus's count (#243 review): at the held augmentation's joined seller, its
+ * best work type, to its reputation (A6 counts the hold on that work), ahead of hacking value; null if it isn't joined,
+ * offers no work, or its reputation is reached (A6 buys it).
+ */
+function heldWork(
+  person: WorkingPerson,
+  state: FactionState,
+  { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
+  conditions: WorkConditions,
+  held: { faction: string; augmentation: string },
+  count: DaedalusCount,
+): FactionWorkChoice | null {
+  const faction = state.joined.find((each) => each.name === held.faction);
+  if (faction === undefined || !FACTION_NAMES.includes(faction.name)) return null;
+  const reputationNeeded = augmentationCost(held.augmentation, {
+    installed: ownedAugs,
+    queued: state.queuedAugmentations,
+    sourceFile11Level: ownedSF["11"] ?? 0,
+    bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
+  }).reputation;
+  if (faction.reputation >= reputationNeeded) return null;
+  const rate = bestWorkRate(person, faction, conditions);
+  if (rate === null) return null;
+  return {
+    faction: faction.name,
+    workType: rate.workType,
+    augmentation: held.augmentation,
+    reputation: faction.reputation,
+    reputationNeeded,
+    reputationPerSecond: rate.perSecond,
+    etaSeconds: (reputationNeeded - faction.reputation) / rate.perSecond,
+    target: "augmentation",
+    augmentationReputation: reputationNeeded,
+    favor: faction.favor,
+    count: { installed: count.installed, required: count.required },
+    held: true,
+  };
+}
+
+/**
  * `chooseFactionWork`'s choice from figures already checked; null for none. Short of Daedalus's count (#228), every
  * candidate adds one to it: those with a hacking value first, by value a second; with none, the soonest reached, for
  * the count.
@@ -664,6 +711,8 @@ export interface FactionInputs {
   cityFactions?: readonly string[];
   /** The city group chosen, in words (#228), or null. */
   cityGroup?: string | null;
+  /** The augmentation an install is held for by work (#243 review, A6's `countHoldTarget`), worked for first. */
+  countHoldTarget?: { faction: string; augmentation: string } | null;
 }
 
 const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
@@ -695,7 +744,8 @@ export function describeChoice(choice: FactionWorkChoice): string {
     `${choice.reputationPerSecond.toFixed(2)}/s: about ${describeEta(choice.etaSeconds)})` +
     (choice.count === undefined
       ? ""
-      : `, for Daedalus's count: ${choice.count.installed} of ${choice.count.required} augmentations installed`)
+      : `, for Daedalus's count: ${choice.count.installed} of ${choice.count.required} augmentations installed`) +
+    (choice.held === true ? ", the install held for it" : "")
   );
 }
 
@@ -824,6 +874,7 @@ export class FactionRule {
         ? { choice: null, waitingFor: "the Agent's medium and slow snapshots", transient: true }
         : chooseFactionWork(mediumData, slowData, shareBonus, this.#sent ?? undefined, {
             donations: inputs.augmentationsEnabled ?? true,
+            held: inputs.countHoldTarget ?? null,
           });
     const notSent = !enabled
       ? "the brain's faction work is switched off"
