@@ -265,7 +265,7 @@ const inputPath = (input: string) => input.replace(/^[A-Za-z][\w-]+:(?=.)/, "");
  * our sources it would try packages/sim/node_modules and the repository's node_modules first: a copy hoisted there by
  * one of our dependencies would be bundled beside the game's, and the fingerprint, which covers only the game's
  * lockfile, wouldn't see it. One that resolves anywhere else, or not at all, fails the build, naming it. `#` imports
- * (package.json `imports`) are left to esbuild; a `browser` map's remap of a bare name no longer applies to our sources.
+ * (package.json `imports`) are left to esbuild; a `browser` map's remap of a bare name no longer applies to ours.
  *
  * It fails closed: if it misses one of our imports (an importer path esbuild writes differently), the build still
  * fails once it ends, on any file it bundled from a node_modules outside the game's. That needs `metafile: true`.
@@ -278,7 +278,7 @@ export function gameDependencies(bundleDir: string, gameRoot: string): esbuild.P
       const ourSourcesRealPath = realpathSync.native(bundleDir);
       const gameSources = path.join(gameRoot, "src");
       const gameNodeModules = path.join(gameRoot, "node_modules");
-      // Read once: the game's node_modules is installed before a build (checkVendorInstall), and doesn't move during it.
+      // Read once: the game's node_modules is installed before a build (checkVendorInstall) and stays put during it.
       const gameNodeModulesRealPath = existsSync(gameNodeModules) ? realpathSync.native(gameNodeModules) : undefined;
       const inGameNodeModules = (file: string) =>
         gameNodeModulesRealPath !== undefined &&
