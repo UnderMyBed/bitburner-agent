@@ -161,6 +161,12 @@ export function beginTask(): void {
  * - `clearTimeout` and `clearInterval` clear either kind, as in a browser, including an interval that moved to 4 ms,
  *   by its handle or the handle's number.
  */
+/** How many timer callbacks the page has run, all told: a test's measure of a script that wakes too often (#251). */
+let timersFired = 0;
+export function timersFiredSoFar(): number {
+  return timersFired;
+}
+
 function callTimersAsABrowserDoes(): void {
   type TimerFunction = (...args: unknown[]) => unknown;
   const timers = globalThis as unknown as Record<
@@ -181,6 +187,7 @@ function callTimersAsABrowserDoes(): void {
   const callbackFor = (handler: unknown, args: unknown[]) => {
     const run = typeof handler === "function" ? handler : () => evaluateGlobally(String(handler));
     return () => {
+      timersFired += 1;
       try {
         run.apply(globalThis.window ?? globalThis, args);
       } catch (error) {

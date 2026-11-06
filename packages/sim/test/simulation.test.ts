@@ -34,7 +34,7 @@ describe("Simulation (host environment, no game booted)", () => {
     expect(clock.enginePerformanceNow).toBe(1234 + 5 * 3600_000);
   });
 
-  test("a wall-clock step (#251) moves Date either way, never performance.now(); a step before 0 is refused", async () => {
+  test("a wall-clock step (#251) moves Date either way, never performance.now(); one over 5 s, or before 0, is refused", async () => {
     const sim = await start(1);
     await sim.advance(1_000);
     expect(await sim.diagnostics.stepWallClock(3_000)).toBe(EPOCH + 4_000);
@@ -43,8 +43,13 @@ describe("Simulation (host environment, no game booted)", () => {
     await sim.advance(500);
     expect(await sim.diagnostics.clock()).toMatchObject({ engineDateNow: EPOCH - 500, enginePerformanceNow: 1_500 });
     expect(await sim.now()).toBe(EPOCH - 500);
-    await expect(sim.diagnostics.stepWallClock(-EPOCH)).rejects.toThrow(/wall-clock step/);
     await expect(sim.diagnostics.stepWallClock(0.5)).rejects.toThrow(/wall-clock step/);
+    // A time sync's few seconds at most (#251's review): over 10 s on would read as the game's loop stopped.
+    expect(await sim.diagnostics.stepWallClock(5_000)).toBe(EPOCH + 4_500);
+    await expect(sim.diagnostics.stepWallClock(5_001)).rejects.toThrow(/at most 5000 either way/);
+    await expect(sim.diagnostics.stepWallClock(-5_001)).rejects.toThrow(/at most 5000 either way/);
+    const nearZero = await start(1, 1_000);
+    await expect(nearZero.diagnostics.stepWallClock(-1_001)).rejects.toThrow(/at 0 or later/);
   });
 
   test("requests run one at a time, so a call made during an advance sees it finished", async () => {

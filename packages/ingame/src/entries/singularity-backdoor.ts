@@ -40,7 +40,7 @@ export async function main(ns: NS): Promise<void> {
   }
   const endsAtMs = monotonicMs() + ns.getHackTime(hostname) / 4;
   const endsInTheRound = endsAtMs <= deadlineMs;
-  if (!endsInTheRound) report(false, installingProblem(hostname, endsAtMs - monotonicMs()));
+  if (!endsInTheRound) report(false, installingProblem(hostname, endsAtMs));
   await ns.singularity.installBackdoor();
   ns.singularity.connect("home");
   if (endsInTheRound) {

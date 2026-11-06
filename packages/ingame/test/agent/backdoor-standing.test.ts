@@ -70,7 +70,9 @@ describe("backdoorStanding", () => {
   });
 });
 
-test("installingProblem: whole seconds left, at least 1", () => {
-  expect(installingProblem("CSEC", 25_100)).toBe("installing the backdoor on CSEC: about 26 s left");
-  expect(installingProblem("CSEC", 0)).toBe("installing the backdoor on CSEC: about 1 s left");
+test("installingProblem: whole seconds left to its end on the page's monotonic clock (#251), at least 1", () => {
+  expect(installingProblem("CSEC", performance.now() + 25_100)).toBe(
+    "installing the backdoor on CSEC: about 26 s left",
+  );
+  expect(installingProblem("CSEC", performance.now())).toBe("installing the backdoor on CSEC: about 1 s left");
 });

@@ -12,7 +12,6 @@
 //   it installed with the terminal still on the server types `home`. So the terminal ends home.
 // RAM: `getServer` 2.0 + `scan` 0.2 + `serverExists` 0.1 + `getHackingLevel` and `getHackTime` 0.05 each
 // (ram-budget.json); the page costs nothing.
-import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import type { GamePage } from "../page/game-page.ts";
 import { reportPageEffect } from "../page/page-effect.ts";
@@ -37,9 +36,9 @@ async function backdoorThroughTerminal(
   const { endsAtMs } = typed;
   const installed = () => ns.getServer(hostname).backdoorInstalled === true;
   // One that won't end within the round goes on alone: the round's time is the other intents'.
-  if (endsAtMs >= deadlineMs) return installingProblem(hostname, endsAtMs - monotonicMs());
+  if (endsAtMs >= deadlineMs) return installingProblem(hostname, endsAtMs);
   while (gamePage.terminalBusy() === true && !gamePage.stepsTimeUp()) await gamePage.waitARender();
-  if (gamePage.terminalBusy() === true) return installingProblem(hostname, endsAtMs - monotonicMs());
+  if (gamePage.terminalBusy() === true) return installingProblem(hostname, endsAtMs);
   if (!installed()) return `the terminal didn't install the backdoor on ${hostname}`;
   return gamePage.runTerminalCommand("home");
 }

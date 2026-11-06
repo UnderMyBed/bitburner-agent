@@ -1,7 +1,7 @@
 // The page's two clocks (#251): the monotonic one for every schedule and deadline, and a moment on it as the wall clock
 // reads it, for the stamps the brain reads. A step in the wall clock moves the first not at all.
 import { afterEach, expect, test, vi } from "vitest";
-import { monotonicMs, wallClockMsOf } from "../../src/clock.ts";
+import { monotonicMs, monotonicMsOf, wallClockMsOf } from "../../src/clock.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -24,4 +24,11 @@ test("wallClockMsOf: a moment ahead or behind on the monotonic clock, as far ahe
   const landing = monotonicMs() - 1_000;
   vi.setSystemTime(Date.now() + 2_678);
   expect(wallClockMsOf(landing)).toBe(Date.now() - 1_000);
+});
+
+test("monotonicMsOf: the other way, a wall-clock moment as far ahead or behind on the monotonic clock", () => {
+  vi.useFakeTimers();
+  expect(monotonicMsOf(Date.now() + 30_000)).toBe(monotonicMs() + 30_000);
+  expect(monotonicMsOf(Date.now() - 30_000)).toBe(monotonicMs() - 30_000);
+  expect(wallClockMsOf(monotonicMsOf(Date.now() + 5))).toBe(Date.now() + 5);
 });

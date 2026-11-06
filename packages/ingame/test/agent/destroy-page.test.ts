@@ -339,8 +339,8 @@ describe("the worker's steps (destroyOnPage)", () => {
     const { ran } = gameTerminal(state);
     const problem = await settled(destroyOnPage(ns, pageFor(ns), 2, BOOT));
     expect(problem).toMatch(/^backdooring w0r1d_d43m0n: about \d+ s left, then entering BitNode 2 from the BitVerse$/);
-    // The backdoor's end on the page's monotonic clock (#251): its hack time's quarter, 3 s, at most.
-    expect(Number(/about (\d+) s left/.exec(problem ?? "")?.[1])).toBeLessThanOrEqual(3);
+    // The backdoor's end on the page's monotonic clock (#251): its hack time's quarter, 3 s, all of it to come.
+    expect(Number(/about (\d+) s left/.exec(problem ?? "")?.[1])).toBe(3);
     expect(ran).toEqual(["connect The-Cave", `connect ${WD}`, "backdoor"]);
     // The backdoor's end: the BitVerse, which the timer, still armed, enters.
     document.body.replaceChildren();

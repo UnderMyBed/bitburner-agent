@@ -447,6 +447,8 @@ export interface HostMethods {
    * `performance.now()` and the timers stay. Returns the new virtual now. A harness edit, for test scenarios.
    */
   "diagnostics.stepWallClock"(params: { ms: number }): number;
+  /** How many timer callbacks the page has run since it booted: a script that wakes too often shows (#251's review). */
+  "diagnostics.timersFired"(params: Record<string, never>): number;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   /**
    * The highest RAM home has had in use, and the most scripts it has run at once, since the game booted (each its own
@@ -700,10 +702,20 @@ export function validateHomeRam(gb: number): void {
   }
 }
 
-/** A wall-clock step: a whole number of ms, either way, that leaves the clock at 0 or later. */
+/**
+ * The largest wall-clock step either way (#251's review): a time sync's is a few seconds (run #3's 2,678 ms). Over
+ * `runUntil`'s stalled-loop limit (10 s), a step on would read as the game's loop stopped, as `Engine._lastUpdate`
+ * lags `Date`; it would also count in `summary`'s `virtualMs`, and move the sockets' opening times.
+ */
+export const MAX_WALL_CLOCK_STEP_MS = 5_000;
+
+/** A wall-clock step: a whole number of ms, either way, at most `MAX_WALL_CLOCK_STEP_MS`, leaving the clock at 0 on. */
 export function validateWallClockStep(ms: number, nowMs: number): void {
-  if (!Number.isSafeInteger(ms) || nowMs + ms < 0) {
-    throw new RangeError(`a wall-clock step needs an integer number of ms that leaves it at 0 or later, got ${ms}`);
+  if (!Number.isSafeInteger(ms) || Math.abs(ms) > MAX_WALL_CLOCK_STEP_MS || nowMs + ms < 0) {
+    throw new RangeError(
+      `a wall-clock step needs an integer number of ms, at most ${MAX_WALL_CLOCK_STEP_MS} either way, that leaves ` +
+        `it at 0 or later, got ${ms}`,
+    );
   }
 }
 

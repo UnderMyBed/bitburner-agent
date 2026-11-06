@@ -218,6 +218,8 @@ export class Simulation {
      * leaving `performance.now()` and every timer where they were: the new virtual now. A harness edit, for tests.
      */
     stepWallClock: (ms: number) => this.rpc.call("diagnostics.stepWallClock", { ms }),
+    /** How many timer callbacks the page has run since it booted: a script that wakes too often shows (#251's review). */
+    timersFired: () => this.rpc.call("diagnostics.timersFired", {}),
     game: () => this.rpc.call("diagnostics.game", {}),
     /**
      * The highest RAM home has had in use (GB), and the most scripts it has run at once, since the game booted: each

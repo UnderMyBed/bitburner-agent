@@ -155,7 +155,7 @@ test("the moment named is on the page's monotonic clock (#251): the wall clock s
   await simulation.run("home", `${FOLDER}batch-weaken.js`, {
     args: ["foodnstuff", landAt, BATCHER_LANDING_PORT, "1.weaken1.0"],
   });
-  await simulation.diagnostics.stepWallClock(-6_000);
+  await simulation.diagnostics.stepWallClock(-5_000);
   await simulation.run("home", `${FOLDER}batch-weaken.js`, {
     args: ["foodnstuff", landAt + 20, BATCHER_LANDING_PORT, "1.weaken2.0"],
   });
@@ -342,29 +342,20 @@ test.each([
     const hackShare = hackSharePerThread(N00DLES, atFifty);
     const config = { ...n00dlesConfig(), hosts: ["home"], hackShare, spacingMs };
     await batchingBatcher(simulation, config);
+    // Its hacks landing, every 400 ms.
+    await healthOnceThat(simulation, (health) => health.hacksLanded > 0, 1_000, 5 * 60_000, "hacks landing");
     const before = await healthOf(simulation);
     expect((await inFlight(simulation, ["home"])).length).toBeGreaterThan(10);
     // Run #3's: Windows Time stepped the PC's clock +2,678 ms, and the batcher, timed on it, counted 1,615 desyncs.
     await simulation.diagnostics.stepWallClock(ms);
+    // A second on, the last hack is one since the step, stamped on the wall clock as it is now: its order is the
+    // monotonic clock's, so a step back doesn't hold the hack before it last.
+    await simulation.advance(1_000);
+    const justAfter = await healthOf(simulation);
+    expect(justAfter.lastHack?.atMs).toBeLessThanOrEqual(await simulation.now());
+    expect(justAfter.lastHack?.atMs).toBeGreaterThan((await simulation.now()) - 1_000);
     await simulation.advance(2 * 60_000);
     const after = await healthOf(simulation);
-    const outOfStep = ({
-      desyncs,
-      outOfOrder,
-      outOfBounds,
-      late,
-      lost,
-      batchesShort,
-      hacksSkipped,
-    }: BatcherHealth) => ({
-      desyncs,
-      outOfOrder,
-      outOfBounds,
-      late,
-      lost,
-      batchesShort,
-      hacksSkipped,
-    });
     expect(outOfStep(after)).toEqual(outOfStep(before));
     expect(after).toMatchObject({ state: "batching", problem: null, ramWaits: before.ramWaits });
     expect(after.hacksLanded).toBeGreaterThan(before.hacksLanded);
@@ -376,6 +367,71 @@ test.each([
     expect(after.lastHack?.atMs).toBeGreaterThan(wallNow - 2_000);
   },
 );
+
+test("batching, it sleeps on the monotonic clock until its next order (#251): a minute's timers, a few a second, no spin", async () => {
+  const simulation = await gameWithScripts();
+  await batchingBatcher(simulation);
+  const firedBefore = await simulation.diagnostics.timersFired();
+  await simulation.advance(60_000);
+  const fired = (await simulation.diagnostics.timersFired()) - firedBefore;
+  console.log(`#251: ${fired} timers fired in a virtual minute of batching n00dles (the game's loop's 300 among them)`);
+  // Its sleeps on the wall clock (`lookAt` less `Date.now()`) would all be 0: about 250 wakes a second.
+  expect(fired).toBeLessThan(5_000);
+});
+
+/** What a health says went out of step, or short. */
+const outOfStep = ({ desyncs, outOfOrder, outOfBounds, late, lost, batchesShort, hacksSkipped }: BatcherHealth) => ({
+  desyncs,
+  outOfOrder,
+  outOfBounds,
+  late,
+  lost,
+  batchesShort,
+  hacksSkipped,
+});
+
+test("the wall clock stepped on while preparing, and back while sharing beside a next target's wave (#251): none out of step", {
+  timeout: 120_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const plan = batchPlan(N00DLES, { skills: { hacking: 50, intelligence: 0 }, mults: MULTS }, batchRamGb([16, 16]));
+  if (plan === null) throw new Error("no plan for n00dles on 32 GB");
+  const sharing = { reserveGb: shareReserveGb(plan.peakRamGb, 0), homeKeptGb: 8, cores: {} };
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const next = { target: "foodnstuff", figures: foodnstuff, ramGb: 16 };
+  const config: BatcherConfig = { ...n00dlesConfig(), hosts: SHARING_HOSTS, sharing, next };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  // Preparing n00dles, a wave in flight: stepped on.
+  await simulation.advance(5_000);
+  expect(await healthOf(simulation)).toMatchObject({ state: "preparing", wavesStarted: 1 });
+  await simulation.diagnostics.stepWallClock(3_000);
+  await healthOnceThat(simulation, (health) => health.state === "batching", 5_000, 20 * 60_000, "batching");
+  // Batching, sharing, and foodnstuff's waves going out beside the batches: stepped back.
+  const sharingNow = await healthOnceThat(
+    simulation,
+    (health) => (health.sharing?.threads ?? 0) > 0 && (health.next?.wavesStarted ?? 0) > 0,
+    1_000,
+    5 * 60_000,
+    "sharing beside a next target's wave",
+  );
+  await simulation.diagnostics.stepWallClock(-3_000);
+  let sharedAfter = 0;
+  for (let elapsed = 0; elapsed < 2 * 60_000; elapsed += 5_000) {
+    await simulation.advance(5_000);
+    if (((await healthOf(simulation)).sharing?.threads ?? 0) > 0) sharedAfter += 1;
+  }
+  const after = await healthOf(simulation);
+  // Nothing out of step through the step on while preparing, nor through the step back.
+  expect(sharingNow).toMatchObject({ desyncs: 0, late: 0, lost: 0, batchesShort: 0, outOfBounds: 0 });
+  expect(outOfStep(after)).toEqual(outOfStep(sharingNow));
+  expect(after.state).toBe("batching");
+  expect(after.hacksLanded).toBeGreaterThan(sharingNow.hacksLanded);
+  // Its share rounds went on, and so did foodnstuff's waves, or it's ready.
+  expect(sharedAfter).toBeGreaterThan(5);
+  expect((after.next?.wavesStarted ?? 0) > (sharingNow.next?.wavesStarted ?? 0) || after.next?.ready).toBe(true);
+});
 
 test("a batcher before #251's wait, on the wall clock, is read as such: waited for, not for ever", async () => {
   const simulation = await gameWithScripts();
@@ -1672,6 +1728,9 @@ test("an operation whose RAM frees a moment late waits for it (#246), within its
   expect(holding.error).toBeUndefined();
   const waits = new Map<string, RamWait>();
   for (let elapsed = 0; elapsed < 2 * 60_000; elapsed += 1_000) {
+    // The wall clock stepped 3 s on, then back, while orders wait (#251): no wait is longer for it.
+    if (elapsed === 30_000) await simulation.diagnostics.stepWallClock(3_000);
+    if (elapsed === 60_000) await simulation.diagnostics.stepWallClock(-3_000);
     await simulation.advance(1_000);
     for (const each of (await healthOf(simulation)).waits ?? []) waits.set(`${each.atMs} ${each.operation}`, each);
   }

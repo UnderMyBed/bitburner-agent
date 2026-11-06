@@ -20,6 +20,7 @@ import {
   validateRunUntil,
   validateWallClockStep,
 } from "../protocol.ts";
+import { timersFiredSoFar } from "./clock.ts";
 import { events } from "./events.ts";
 import { installHost } from "./install.ts";
 import { heapLimit, heapUsed, startProfile, stopProfile } from "./measure.ts";
@@ -146,6 +147,7 @@ async function start(options: HostOptions): Promise<Host> {
       engineDateNow: engine.dateNow(),
       enginePerformanceNow: engine.performanceNow(),
     }),
+    "diagnostics.timersFired": () => timersFiredSoFar(),
     "diagnostics.stepWallClock": ({ ms }) => {
       validateWallClockStep(ms, clock.now());
       clock.stepWallClock(ms);

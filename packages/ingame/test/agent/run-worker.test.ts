@@ -51,10 +51,11 @@ test("the wall clock stepped an hour on (#251): the worker still starts, and its
   expect(started).toEqual([1]);
 });
 
-test("past its deadline on the monotonic clock, nothing starts, the wall clock stepped back or not", async () => {
+test("past its deadline on the monotonic clock, nothing starts, though the wall clock reads it still to come", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   const { ns, started } = homeWithWorker(50);
-  vi.setSystemTime(Date.now() - 3_600_000);
+  // The wall clock at 0, behind the page's monotonic one: by it, the deadline is still ahead.
+  vi.setSystemTime(0);
   expect(await createWorkerRunner(ns).runWorker("worker.js", [], performance.now() - 1)).toEqual({
     outcome: "noTimeLeft",
   });

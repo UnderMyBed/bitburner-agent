@@ -93,6 +93,10 @@ export interface FactionGameFacts {
   lastAugReset: number;
   /** NeuroFlux Governor's installed level (`getResetInfo().ownedAugs`). */
   installedNeuroFluxLevel: number;
+  /**
+   * Now, on the page's monotonic clock (#251), as `factionsReadAtMs` is: the memory is the Agent's, which a reload, the
+   * only thing that starts that clock again, ends.
+   */
   nowMs: number;
 }
 

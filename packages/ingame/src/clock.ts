@@ -21,3 +21,11 @@ export function monotonicMs(): number {
 export function wallClockMsOf(atMonotonicMs: number): number {
   return Date.now() + (atMonotonicMs - performance.now());
 }
+
+/**
+ * A moment on the wall clock as the monotonic clock reads it now: for a time a batcher before #251 published on the wall
+ * clock (its `latestLandAt`). A step between that moment and now moves it by the step.
+ */
+export function monotonicMsOf(atWallClockMs: number): number {
+  return performance.now() + (atWallClockMs - Date.now());
+}

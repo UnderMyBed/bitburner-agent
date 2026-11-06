@@ -677,7 +677,11 @@ export function preparationTimeMs(
 export interface LandingRecord {
   /** The batcher's name for the operation's part. */
   id: string;
-  /** When it was meant to land, and when it did (the page's monotonic clock, `performance.now()`, #251). */
+  /**
+   * When it was meant to land, and when it did (the page's monotonic clock, `performance.now()`, #251). A record from a
+   * batcher before #251 has them on the wall clock; only ever unexpected to one since, which counts it landed no later
+   * than now.
+   */
   landAt: number;
   landedAt: number;
   /** What the call returned: money hacked (0: the hack failed), growth, or security taken off. */
@@ -890,17 +894,26 @@ export function recordMoneyLook(health: BatcherHealth, target: string, money: nu
  * new target, and this clears), a move, idle from the last hack before it, on whatever target that was: the same one
  * after a detour through a target never hacked (#237's review). The target before still lands its batches for a
  * while, among the new one's: a hack of its then is no move, nor is the new target's next. A hack that took nothing
- * (its chance failed) counts too: the batcher is hacking that target.
+ * (its chance failed) counts too: the batcher is hacking that target. `atMs` is the wall clock's, a stamp the brain
+ * reads; `sinceLastHackMs`, given by a batcher on the page's monotonic clock (#251), is the time since the last hack's
+ * landing on that clock (null with none yet): the idle and which hack is last are then its, so a step in the wall clock
+ * between two hacks moves neither. Without it, both come from the stamps.
  */
-export function recordHackLanded(health: BatcherHealth, target: string, atMs: number): void {
+export function recordHackLanded(
+  health: BatcherHealth,
+  target: string,
+  atMs: number,
+  sinceLastHackMs?: number | null,
+): void {
   const last = health.lastHack ?? null;
   health.lastMove ??= null;
   const onTarget = target === health.target;
+  const sinceLastMs = last === null ? null : (sinceLastHackMs ?? atMs - last.atMs);
   if (last !== null && health.targetChangedSinceHack === true && onTarget) {
-    health.lastMove = { from: last.target, to: target, idleMs: Math.max(0, atMs - last.atMs), atMs };
+    health.lastMove = { from: last.target, to: target, idleMs: Math.max(0, sinceLastMs ?? 0), atMs };
   }
   if (onTarget) health.targetChangedSinceHack = false;
-  if (last === null || atMs >= last.atMs) health.lastHack = { target, atMs };
+  if (sinceLastMs === null || sinceLastMs >= 0) health.lastHack = { target, atMs };
 }
 
 /**
@@ -1173,6 +1186,12 @@ export interface BatcherHealth {
    * the RAM, so the run report says each. Absent from an older batcher.
    */
   shorts?: BatchShort[];
+  /**
+   * The clock it times its batches on (#251): `"monotonic"`, the page's `performance.now()`, which a step in the PC's
+   * clock doesn't move, so a clock step can't put it out of step (the run report then puts none of its desyncs down to
+   * one). Absent from an older batcher, timed on the wall clock.
+   */
+  clock?: "monotonic";
   /** The game's wall clock (`Date.now()`) when this was written, as are the stamps in it the brain reads (#251). */
   atMs: number;
 }
@@ -1338,6 +1357,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     hacksHeldForBatch: 0,
     ordersDropped: 0,
     shorts: [],
+    clock: "monotonic",
     atMs,
   };
 }

@@ -131,7 +131,7 @@ import {
   shareReleasedAt,
   shareRound,
 } from "@bitburner-agent/core";
-import { monotonicMs, wallClockMsOf } from "../clock.ts";
+import { monotonicMs, monotonicMsOf, wallClockMsOf } from "../clock.ts";
 import type { NS } from "../ns.ts";
 
 /** The longest the batcher sleeps, with nothing due: its log's health line comes at least this often. */
@@ -184,14 +184,15 @@ function configFromPort(ns: NS): ReturnType<typeof parseBatcherConfig> | null {
 /**
  * The latest landing a batcher before this one last published (#205), on the monotonic clock, or 0. One from a batcher
  * before #251 is the wall clock's, far nearer `Date.now()` than `performance.now()` (a page's age): read as such, it's
- * as far off as it was, a step since and all, not some 56 years.
+ * as far off as it was, a step since and all, not some 56 years. The other way, a batcher before #251 started after
+ * this one (a rollback) reads this one's monotonic time as long past: it loses that one wait (#205), no more.
  */
 function previousLatestLandAt(ns: NS): number {
   const previous = ns.peek(BATCHER_HEALTH_PORT) as { latestLandAt?: unknown } | null;
   const latest = typeof previous === "object" && previous !== null ? previous.latestLandAt : null;
   if (typeof latest !== "number" || !Number.isFinite(latest)) return 0;
   const onWallClock = Math.abs(latest - Date.now()) < Math.abs(latest - monotonicMs());
-  return onWallClock ? latest - Date.now() + monotonicMs() : latest;
+  return onWallClock ? monotonicMsOf(latest) : latest;
 }
 
 /** The health on its port, and in the log when `logIt`. */
@@ -245,6 +246,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const landings = new LandingWatch();
   /** Each batch's grow, until all its parts have landed and the target's money is looked at (#234). */
   const growLandings = new GrowLandingWatch();
+  /** The last hack's landing on the monotonic clock (#251), or null before one: a move's idle, and which hack is last. */
+  let lastHackLandAt: number | null = null;
   /**
    * Each operation's part started and not yet recorded (#232): its host, RAM and landing, which hold that RAM until
    * then. With the share threads, the RAM of the batcher's own on its hosts; the rest of what's used there isn't.
@@ -370,8 +373,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         health.leastSlackMs = Math.min(health.leastSlackMs ?? Number.POSITIVE_INFINITY, record.slackMs);
       }
       if (isHack && !record.skipped) {
-        // A stamp the brain reads (the run report's moves, #236): its landing on the wall clock (#251).
-        recordHackLanded(health, landedOn ?? "", wallClockMsOf(record.landAt));
+        // A stamp the brain reads (the run report's moves, #236): its landing on the wall clock; the idle and the order
+        // on the monotonic clock (#251).
+        const sinceLastHackMs = lastHackLandAt === null ? null : record.landAt - lastHackLandAt;
+        recordHackLanded(health, landedOn ?? "", wallClockMsOf(record.landAt), sinceLastHackMs);
+        lastHackLandAt = Math.max(lastHackLandAt ?? record.landAt, record.landAt);
         health.hacksLanded += 1;
         health.moneyHacked += record.result;
         if (record.result === 0) health.hacksFailed += 1;

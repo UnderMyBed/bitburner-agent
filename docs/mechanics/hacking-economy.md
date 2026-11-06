@@ -55,7 +55,7 @@ Ratios (1 core, `ServerWeakenRate=1`): 1 weaken thread offsets 25 hack threads o
 | `grow` | duration from current sec/skill; root check only (no skill req!) (`NetscriptFunctions.ts:266-286`) | growth from **end** sec, end money, **host cores at end**; XP always full per thread (`:286-309`) |
 | `weaken` | duration; root check only (`:342-362`) | fixed reduction using host cores; XP always full (`:362-385`) |
 
-- Duration is implemented with `window.setTimeout(duration_ms)` (`NetscriptHelpers.tsx:419-432`) → **wall-clock**, not game cycles.
+- Duration is implemented with `window.setTimeout(duration_ms)` (`NetscriptHelpers.tsx:419-432`) → **real-time (monotonic) `setTimeout`**, not game cycles: a step in the PC's clock doesn't move it (#251).
 - Killing the script before completion cancels the effect entirely (promise rejected with `ScriptDeath`).
 - XP raises skill **immediately** (`src/PersonObjects/Person.ts:50-64`), so in-flight hacks land with a higher skill than at launch → larger fraction than planned.
 - Hack XP: full on success, `1/4` on failure or when `drained == 0` (`NetscriptHelpers.tsx:564-587`). Grow/weaken XP is unconditional (even when no-op).
@@ -253,7 +253,7 @@ Installing: terminal `backdoor` (UI) or `singularity.installBackdoor` (SF4), mus
 | `updateGame(n)` order | playtime += n·200; Terminal.process; Player.processWork; stock prices; gang; Stanek; corp; bladeburner (store); sleeves; darknet; script online-time; **hacknet earnings**; counters | `engine.tsx:81-139` |
 | Counters (cycles) | faction invites 10, passive rep 5, messages 150, bladeburner 5, contracts 3000 (10 min, `tryGeneratingRandomContract(3)`), autosave `AutosaveInterval·5` | `engine.tsx:146-236` |
 
-What is wall-clock vs cycle-based:
+What is real-time (monotonic `setTimeout`) vs cycle-based:
 
 | Wall-clock `setTimeout` | Game cycles (200 ms) |
 |---|---|
@@ -483,7 +483,7 @@ Darknet `dnet.promoteStock` adds charges `threads·(500+cha)/500`; volatility mu
 
 ## 8. `ns.share()` — faction reputation (`src/NetworkShare/Share.ts`)
 
-- RAM 2.4 GB (script ≥4.0 GB/thread). Each call holds for `ShareBonusTime = 10 s` (wall-clock) (`NetscriptFunctions.ts:394-403`).
+- RAM 2.4 GB (script ≥4.0 GB/thread). Each call holds for `ShareBonusTime = 10 s` (real-time, a monotonic `setTimeout`) (`NetscriptFunctions.ts:394-403`).
 - `effThreads = threads · intBonus(2) · coreBonus(hostCores)`; global `shareThreads = 1 + Σ active effThreads`; **bonus = 1 + ln(shareThreads)/25** (`Share.ts:22-49`).
 - Applied as a multiplier on faction **work** rep only: fully on hacking contracts; on field/security work only the `(hack+int)` term (`PersonObjects/formulas/reputation.ts:16-52`). Not company rep, not passive rep.
 - UI alternative: Faction page "share" (home RAM, 4 GB/thread) (`Faction/ui/ShareOption.tsx`).

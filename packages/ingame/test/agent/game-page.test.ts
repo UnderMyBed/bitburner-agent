@@ -93,6 +93,19 @@ test("a dialog that's fading out after a close isn't one that stays open (#141)"
   expect(await gamePage?.dialogStaysOpen()).toBe(false);
 });
 
+test("a dialog closed that neither goes nor changes: given a fade's time (#251: the monotonic clock's), not the deadline's", async () => {
+  const stays = dialog();
+  stays.textContent = "You have been invited";
+  document.body.append(stays);
+  const gamePage = openGamePage(ns, performance.now() + 2_000);
+  const startedMs = performance.now();
+  expect(await gamePage?.waitUntilGoneOrChanged(stays, () => stays.textContent ?? "", "You have been invited")).toBe(
+    false,
+  );
+  expect(performance.now() - startedMs).toBeGreaterThanOrEqual(350);
+  expect(performance.now() - startedMs).toBeLessThan(1_000);
+});
+
 test("a dialog that stays is open, after the time a fade takes", async () => {
   document.body.append(dialog());
   const gamePage = openGamePage(ns, performance.now() + 2_000);
