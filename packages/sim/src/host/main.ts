@@ -18,6 +18,7 @@ import {
   validateHostOptions,
   validateRun,
   validateRunUntil,
+  validateWallClockStep,
 } from "../protocol.ts";
 import { events } from "./events.ts";
 import { installHost } from "./install.ts";
@@ -145,6 +146,11 @@ async function start(options: HostOptions): Promise<Host> {
       engineDateNow: engine.dateNow(),
       enginePerformanceNow: engine.performanceNow(),
     }),
+    "diagnostics.stepWallClock": ({ ms }) => {
+      validateWallClockStep(ms, clock.now());
+      clock.stepWallClock(ms);
+      return clock.now();
+    },
     "diagnostics.game": () => {
       booted();
       return {

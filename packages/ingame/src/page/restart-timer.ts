@@ -29,6 +29,7 @@
 //   which survives the reload and a relaunch; the next Agent takes it and sends it in a fast snapshot, and the brain
 //   stores it as a `restartFellBack` event, which fails the run report.
 import { RESTART_NOTE_STORAGE_KEY, type RestartNote } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import { findOnPage, pageDocument, playerEvent, reactPropsOf, sidebarItemXpath } from "./game-page.ts";
 
 /** The page's `localStorage`, or null (none, or refused). */
@@ -132,7 +133,7 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
   let outcome: RestartOutcome = "waiting";
   /** Why the fallback was taken, or why it stopped, or null. */
   let reason: string | null = null;
-  let stepEndsMs = Date.now() + (before[0]?.limitMs ?? SHARED_STEP_LIMITS_MS.terminal);
+  let stepEndsMs = monotonicMs() + (before[0]?.limitMs ?? SHARED_STEP_LIMITS_MS.terminal);
   let optionsOpened = false;
   /** The echoes of the line already in the terminal when Enter was sent: only a new one is this run's. */
   let echoesBefore = 0;
@@ -144,7 +145,7 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
   const isEcho = (line: string) => line.endsWith(`> ${command}`);
   const startStep = (next: typeof step, limitMs: number) => {
     step = next;
-    stepEndsMs = Date.now() + limitMs;
+    stepEndsMs = monotonicMs() + limitMs;
   };
   const fallBack = (why: string) => {
     reason = why;
@@ -164,7 +165,7 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
 
   /** One look at the page; whether to look again. */
   function look(): boolean {
-    const late = Date.now() >= stepEndsMs;
+    const late = monotonicMs() >= stepEndsMs;
     if (typeof step === "number") {
       const index = step;
       const caller = before[index] as StepBeforeTheTerminal;
@@ -229,7 +230,8 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
           const view = page.defaultView as { onbeforeunload: unknown } | null;
           if (view !== null) view.onbeforeunload = null;
           // Noted before the click, which saves and reloads the page (#212). A click that then doesn't reload is still
-          // noted as reloading; its reason (why the terminal wasn't used) is right either way.
+          // noted as reloading; its reason (why the terminal wasn't used) is right either way. A stamp the brain reads,
+          // after the reload: the wall clock (#251).
           leaveRestartNote(page, { outcome: "reloading", reason: reason ?? "not recorded", atMs: Date.now() });
           outcome = callHandler(forceKill, "onClick", playerEvent()) ? "reloading" : "gaveUp";
           return false;
@@ -247,7 +249,10 @@ export function armRestart(page: Document, bootScript: string, before: StepBefor
     }
   }
 
-  /** A fallback taken, or a restart given up after the reset: noted for the next Agent, so it's never silent (#212). */
+  /**
+   * A fallback taken, or a restart given up after the reset: noted for the next Agent, so it's never silent (#212). Its
+   * stamp is the wall clock's, for the brain (#251); the steps' limits are on the monotonic one.
+   */
   const noteIfFailed = () => {
     if (outcome === "gaveUp") leaveRestartNote(page, { outcome, reason: reason ?? "not recorded", atMs: Date.now() });
   };

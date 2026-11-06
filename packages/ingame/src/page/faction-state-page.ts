@@ -70,7 +70,7 @@ const sameNames = (one: string[], other: string[]) => [...one].sort().join("\n")
 export interface FactionPageMemory {
   state: FactionState;
   lastAugReset: number;
-  /** When the Factions page was last read (or found to have nothing), by the game's `Date.now()`. */
+  /** When the Factions page was last read (or found to have nothing), on the page's monotonic clock (#251). */
   factionsReadAtMs: number;
 }
 

@@ -71,7 +71,7 @@ const alertState = (count = 1) =>
 test("a game alert is closed with its own close button, and reported with its text", async () => {
   const { clicked } = modal("<p>Offline for 5 minutes. While you were offline: …</p>", { ownerState: alertState() });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(clicked).toEqual(["close"]);
   expect(watcher.takeReport()).toEqual({
     handled: [{ kind: "alert", text: "Offline for 5 minutes. While you were offline: …" }],
@@ -104,12 +104,12 @@ function alertQueue(texts: string[]) {
 test("a queue of alerts is closed in turn, in the one dialog that shows them, without waiting out a fade each", async () => {
   alertQueue(["first", "second", "third"]);
   const watcher = createDialogWatcher(ns);
-  const startedMs = Date.now();
-  await watcher.handle(Date.now() + ROUND_MS);
+  const startedMs = performance.now();
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport().handled.map((dialog) => dialog.text)).toEqual(["first", "second", "third"]);
   expect(document.querySelector(".MuiModal-root")).toBeNull();
   // Each swap is seen at once: three 400 ms fades would take over a second.
-  expect(Date.now() - startedMs).toBeLessThan(800);
+  expect(performance.now() - startedMs).toBeLessThan(800);
 });
 test("a faction invitation gets 'Decide later': joining is the brain's call", async () => {
   const { clicked } = modal("<h4>You received a faction invitation.</h4><p>Would you like to join Sector-12?</p>", {
@@ -117,7 +117,7 @@ test("a faction invitation gets 'Decide later': joining is the brain's call", as
     buttons: ["Join", "Decide later"],
   });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(clicked).toEqual(["Decide later"]);
   expect(watcher.takeReport().handled).toEqual([
     { kind: "factionInvitation", text: "You received a faction invitation.Would you like to join Sector-12?" },
@@ -130,11 +130,11 @@ test("a script's prompt, or any other dialog, is left open and reported as block
     buttons: ["Yes", "No"],
   });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(prompt.clicked).toEqual([]);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: "Buy the server?" });
   prompt.root.remove();
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: null });
 });
 
@@ -145,14 +145,14 @@ test("an ancestor with an empty list in its state doesn't make a prompt an alert
     buttons: ["Yes", "No"],
   });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(prompt.clicked).toEqual([]);
 });
 
 test("an alert fading out after its close isn't seen again: closed and reported once", async () => {
   const alert = modal("<p>You are now in Aevum!</p>", { ownerState: alertState(), fadeMs: 195 });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(alert.clicked).toEqual(["close"]);
   expect(watcher.takeReport().handled).toEqual([{ kind: "alert", text: "You are now in Aevum!" }]);
 });
@@ -160,21 +160,21 @@ test("an alert fading out after its close isn't seen again: closed and reported 
 test("a dialog's text is cut to 1,000 characters for the brain", async () => {
   modal(`<p>${"x".repeat(5_000)}</p>`, { ownerState: alertState() });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport().handled[0]?.text).toHaveLength(1_000);
 });
 
 test("at most 10 a round: the rest wait for the next", async () => {
   alertQueue(Array.from({ length: 15 }, (_, index) => `alert ${index}`));
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport().handled).toHaveLength(10);
 });
 
 test("with no fast snapshot for a while (safe mode, #160), the latest 100 are kept for the next", async () => {
   alertQueue(Array.from({ length: 105 }, (_, index) => `alert ${index}`));
   const watcher = createDialogWatcher(ns);
-  for (let round = 0; round < 11; round += 1) await watcher.handle(Date.now() + ROUND_MS);
+  for (let round = 0; round < 11; round += 1) await watcher.handle(performance.now() + ROUND_MS);
   const handled = watcher.takeReport().handled.map((dialog) => dialog.text);
   expect(handled).toHaveLength(100);
   expect([handled[0], handled.at(-1)]).toEqual(["alert 5", "alert 104"]);
@@ -191,7 +191,7 @@ test("a script's ns.alert (the one alert made from HTML) is the owner's: left op
     ],
   });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(scriptAlert.clicked).toEqual([]);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: "Your script says hello" });
 });
@@ -200,7 +200,7 @@ test("a dialog left alone first in the page doesn't stop the watcher from handli
   modal("<pre><p>Buy the server?</p></pre>", { ownerState: { txt: "Buy the server?", resolve: () => {} } });
   const alert = modal("<p>Offline for 5 minutes.</p>", { ownerState: alertState() });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(alert.clicked).toEqual(["close"]);
   expect(watcher.takeReport()).toEqual({
     handled: [{ kind: "alert", text: "Offline for 5 minutes." }],
@@ -211,12 +211,12 @@ test("a dialog left alone first in the page doesn't stop the watcher from handli
 test("an invitation with no 'Decide later', or a close button that can't be clicked, is left and reported", async () => {
   modal("<h4>You received a faction invitation.</h4>", { ownerState: ["Sector-12"], buttons: ["Join"] });
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: "You received a faction invitation." });
   document.body.replaceChildren();
   const alert = modal("<p>Saved.</p>", { ownerState: alertState() });
   Object.assign(alert.root.querySelector("button") as HTMLButtonElement, { __reactProps$test: {} });
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: "Saved." });
 });
 
@@ -227,12 +227,12 @@ test("a dialog fading out (inert) and an open dropdown (a Popover) are neither h
   dropdown.textContent = "Sector-12 Aevum";
   document.body.append(dropdown);
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(closing.clicked).toEqual([]);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: null });
 });
 test("with nothing open, it does nothing", async () => {
   const watcher = createDialogWatcher(ns);
-  await watcher.handle(Date.now() + ROUND_MS);
+  await watcher.handle(performance.now() + ROUND_MS);
   expect(watcher.takeReport()).toEqual({ handled: [], blocking: null });
 });

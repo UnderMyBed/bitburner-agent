@@ -327,7 +327,7 @@ describe("the worker's steps (destroyOnPage)", () => {
   }
 
   const pageFor = (ns: NS) => {
-    const gamePage = openGamePage(ns, Date.now() + 3_000);
+    const gamePage = openGamePage(ns, performance.now() + 3_000);
     if (gamePage === null) throw new Error("no page");
     return gamePage;
   };

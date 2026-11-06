@@ -1,7 +1,7 @@
 // agent/<deploymentId>/upgrade-home-ram.js: a home worker that doubles home's RAM once through the game's page (#138),
 // a `ui` effector like buy-program.js: there's no API for it before Singularity. Arguments: home's RAM (GB) when the
-// brain asked, the tech vendor in the player's city, and when to give up (the game's `Date.now()`), so it ends within
-// its Agent's round.
+// brain asked, the tech vendor in the player's city, and when to give up (the page's monotonic clock), so it ends
+// within its Agent's round.
 // - The game first: home with more RAM than that is done, without touching the page. So a repeat buys nothing more.
 // - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The City, the vendor, "Upgrade 'home' RAM" while it can be bought (`Locations/ui/RamButton.tsx`: disabled when the

@@ -1,6 +1,6 @@
 // agent/<deploymentId>/join-faction.js: a home worker that joins a faction through the game's page (#147), a `ui`
-// effector: there's no API for it before Singularity. Arguments: the faction, and when to give up (the game's
-// `Date.now()`), so it ends within its Agent's round.
+// effector: there's no API for it before Singularity. Arguments: the faction, and when to give up (the page's
+// monotonic clock), so it ends within its Agent's round.
 // - The game first: the player already a member is done, without touching the page.
 // - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The sidebar's Factions, then "Join!" on the faction's row under the invitations (`Faction/ui/FactionsRoot.tsx`:

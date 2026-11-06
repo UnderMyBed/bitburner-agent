@@ -213,6 +213,11 @@ export class Simulation {
   /** For tests and troubleshooting. */
   readonly diagnostics = {
     clock: () => this.rpc.call("diagnostics.clock", {}),
+    /**
+     * Steps the page's wall clock (`Date`) by `ms`, forward or back, as a time sync steps the PC's clock (#251),
+     * leaving `performance.now()` and every timer where they were: the new virtual now. A harness edit, for tests.
+     */
+    stepWallClock: (ms: number) => this.rpc.call("diagnostics.stepWallClock", { ms }),
     game: () => this.rpc.call("diagnostics.game", {}),
     /**
      * The highest RAM home has had in use (GB), and the most scripts it has run at once, since the game booted: each

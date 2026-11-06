@@ -15,6 +15,7 @@ import {
   type WorkEffectorReport,
   type WorkOutcome,
 } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { createChangeLog, createRoundSchedule } from "./activity.ts";
 import type { EffectorRunner } from "./effector-runner.ts";
@@ -58,7 +59,7 @@ export function createWorkActivity(ns: NS, { effectorRunner }: { effectorRunner:
       const convergenceDue = schedule.takeRound();
       const checkPromotion = desired.kind === "company" && promotionSchedule.takeRound();
       if (!convergenceDue && !checkPromotion) return;
-      if (deadlineMs - Date.now() < MIN_WORKER_TIME_MS) return;
+      if (deadlineMs - monotonicMs() < MIN_WORKER_TIME_MS) return;
       const tried = await effectorRunner.run(workEffectorFor(desired, { checkPromotion }), deadlineMs);
       outcome.backend = tried.backend;
       if (tried.report === null) {
@@ -78,6 +79,7 @@ export function createWorkActivity(ns: NS, { effectorRunner }: { effectorRunner:
       const { promoted } = tried.report as WorkEffectorReport;
       if (desired.kind === "company" && promoted) {
         const { from, to } = promoted;
+        // A stamp the brain reads: the wall clock (#251).
         outcome.promotion = { company: desired.company, from, to, gameTimeMs: Date.now() };
         ns.print(`agent: work: promoted at ${desired.company}, from ${from} to ${to}`);
       }

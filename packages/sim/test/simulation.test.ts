@@ -34,6 +34,19 @@ describe("Simulation (host environment, no game booted)", () => {
     expect(clock.enginePerformanceNow).toBe(1234 + 5 * 3600_000);
   });
 
+  test("a wall-clock step (#251) moves Date either way, never performance.now(); a step before 0 is refused", async () => {
+    const sim = await start(1);
+    await sim.advance(1_000);
+    expect(await sim.diagnostics.stepWallClock(3_000)).toBe(EPOCH + 4_000);
+    expect(await sim.diagnostics.clock()).toMatchObject({ engineDateNow: EPOCH + 4_000, enginePerformanceNow: 1_000 });
+    expect(await sim.diagnostics.stepWallClock(-5_000)).toBe(EPOCH - 1_000);
+    await sim.advance(500);
+    expect(await sim.diagnostics.clock()).toMatchObject({ engineDateNow: EPOCH - 500, enginePerformanceNow: 1_500 });
+    expect(await sim.now()).toBe(EPOCH - 500);
+    await expect(sim.diagnostics.stepWallClock(-EPOCH)).rejects.toThrow(/wall-clock step/);
+    await expect(sim.diagnostics.stepWallClock(0.5)).rejects.toThrow(/wall-clock step/);
+  });
+
   test("requests run one at a time, so a call made during an advance sees it finished", async () => {
     const sim = await start(1);
     const results = await Promise.all([sim.advance(3600_000), sim.now(), sim.advance(1000), sim.now()]);

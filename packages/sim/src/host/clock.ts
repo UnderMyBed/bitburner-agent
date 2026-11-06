@@ -90,6 +90,12 @@ export interface VirtualClock {
    * it throws is reported as uncaught, as for any task.
    */
   queueTask(task: () => void, delayMs: number): void;
+  /**
+   * Steps the wall clock (`Date`) by `ms`, forward or back, as a time sync steps the PC's clock (#251: Windows Time
+   * stepped it +2,678 ms in run #3). `performance.now()` and every timer stay where they were, as in a browser, whose
+   * timers and `performance.now()` run on a monotonic clock; `now()` moves with `Date`.
+   */
+  stepWallClock(ms: number): void;
 }
 
 /** A string timer handler is code, which a browser evaluates in the global scope: an indirect eval. */
@@ -275,6 +281,9 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
         if (to === endMs) return false;
       }
     },
+    // fake-timers' own (fake-timers-src.js:2526-2542): `performance.now()` is kept, and every timer moves with `Date`,
+    // so it's still due as many ms from now as before.
+    stepWallClock: (ms) => clock.setSystemTime(clock.now + ms),
     queueTask: (task, delayMs) => {
       clock.setTimeout(() => {
         beginTask();

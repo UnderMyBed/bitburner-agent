@@ -130,7 +130,7 @@ function gameWithFaction({
 }
 
 const page = () => {
-  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  const gamePage = openGamePage(ns, performance.now() + 1_000);
   if (gamePage === null) throw new Error("no page");
   return gamePage;
 };

@@ -59,6 +59,11 @@
 //   batch trimmed that the share's threads on its hosts made smaller is counted apart, the share's (#232's review).
 // - **Health:** core's `BatcherHealth`, on its health port whenever it changes, and in its log every minute and at each
 //   change of state or of its problem, or anything wrong.
+// - **On the page's monotonic clock (#251):** every schedule, wait, landing and duration is timed on
+//   `performance.now()` (../clock.ts), as are the landings it hands its operations and the latest it publishes for
+//   the next batcher: a step in the PC's clock (run #3's +2.7 s gave 1,615 desyncs) moves none of them. The stamps
+//   the brain reads are the wall clock's (`Date.now()`), each marked so: its health's time, each wait's and short's,
+//   the last hack's landing, and the times its problems name.
 // RAM (unchanged by sharing: `exec` and `scp` were already counted): `exec` 1.3 + `scp` 0.6 +
 // `getServerMoneyAvailable` and `getServerSecurityLevel` 0.1 each + `getServerMaxRam`, `getServerUsedRam` and
 // `getHackingLevel` 0.05 each; ports and `asleep` are free (ram-budget.json).
@@ -126,6 +131,7 @@ import {
   shareReleasedAt,
   shareRound,
 } from "@bitburner-agent/core";
+import { monotonicMs, wallClockMsOf } from "../clock.ts";
 import type { NS } from "../ns.ts";
 
 /** The longest the batcher sleeps, with nothing due: its log's health line comes at least this often. */
@@ -159,6 +165,7 @@ export async function main(ns: NS): Promise<void> {
     parsed = { ok: false, reason: "its argument isn't JSON" };
   }
   if (!parsed.ok) {
+    // A stamp the brain reads: the wall clock (#251).
     const health = newBatcherHealth("", "", Date.now());
     health.problem = `can't run: ${parsed.reason}`;
     publish(ns, health, true);
@@ -174,15 +181,22 @@ function configFromPort(ns: NS): ReturnType<typeof parseBatcherConfig> | null {
   return data === "NULL PORT DATA" ? null : parseBatcherConfig(data);
 }
 
-/** The latest landing a batcher before this one last published (#205), or 0. */
+/**
+ * The latest landing a batcher before this one last published (#205), on the monotonic clock, or 0. One from a batcher
+ * before #251 is the wall clock's, far nearer `Date.now()` than `performance.now()` (a page's age): read as such, it's
+ * as far off as it was, a step since and all, not some 56 years.
+ */
 function previousLatestLandAt(ns: NS): number {
   const previous = ns.peek(BATCHER_HEALTH_PORT) as { latestLandAt?: unknown } | null;
   const latest = typeof previous === "object" && previous !== null ? previous.latestLandAt : null;
-  return typeof latest === "number" && Number.isFinite(latest) ? latest : 0;
+  if (typeof latest !== "number" || !Number.isFinite(latest)) return 0;
+  const onWallClock = Math.abs(latest - Date.now()) < Math.abs(latest - monotonicMs());
+  return onWallClock ? latest - Date.now() + monotonicMs() : latest;
 }
 
 /** The health on its port, and in the log when `logIt`. */
 function publish(ns: NS, health: BatcherHealth, logIt: boolean): void {
+  // A stamp the brain reads: the wall clock (#251).
   health.atMs = Date.now();
   ns.clearPort(BATCHER_HEALTH_PORT);
   ns.writePort(BATCHER_HEALTH_PORT, { ...health });
@@ -209,6 +223,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   // This run's name: a previous batcher's operations, still landing, write ids that can't match its own.
   const runName = Math.floor(Math.random() * 2 ** 40).toString(36);
   const waitUntilMs = previousLatestLandAt(ns);
+  // A stamp the brain reads: the wall clock (#251).
   const health = newBatcherHealth("", runName, Date.now());
   ns.clearPort(BATCHER_LANDING_PORT);
   let logNow = true;
@@ -328,8 +343,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       if (!expected) {
         health.unexpected += 1;
         // Another run's record, or a part's lost and late (#235's review): it may have landed on any target, when
-        // it says.
-        if (!record.skipped) growLandings.landed(record.id, Math.max(record.landAt, record.landedAt), null);
+        // it says, and never after now (#251: a batcher's before #251 says it on the wall clock, far ahead of this).
+        const landedBy = Math.min(Math.max(record.landAt, record.landedAt), monotonicMs());
+        if (!record.skipped) growLandings.landed(record.id, landedBy, null);
         continue;
       }
       preparing.delete(record.id);
@@ -354,7 +370,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         health.leastSlackMs = Math.min(health.leastSlackMs ?? Number.POSITIVE_INFINITY, record.slackMs);
       }
       if (isHack && !record.skipped) {
-        recordHackLanded(health, landedOn ?? "", record.landAt);
+        // A stamp the brain reads (the run report's moves, #236): its landing on the wall clock (#251).
+        recordHackLanded(health, landedOn ?? "", wallClockMsOf(record.landAt));
         health.hacksLanded += 1;
         health.moneyHacked += record.result;
         if (record.result === 0) health.hacksFailed += 1;
@@ -395,17 +412,18 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const waveLanding = (target?: string) =>
     landing.some(
       ({ target: each, threads: { hack: hackCount }, untilMs }) =>
-        hackCount === 0 && untilMs >= Date.now() && (target === undefined || each === target),
+        hackCount === 0 && untilMs >= monotonicMs() && (target === undefined || each === target),
     );
   let wave = 0;
 
   /**
    * The most hack and grow threads of any batch planned or landing on `target`, which set the most security it may
-   * be left with: kept from the last look, so planning many batches at once looks once.
+   * be left with: kept from the last look, so planning many batches at once looks once (within the same whole ms: the
+   * monotonic clock reads fractions, #251).
    */
   let largest: { target: string; atMs: number; threads: BatchThreads } | null = null;
   const largestLanding = (target: string): BatchThreads => {
-    if (largest?.target === target && largest.atMs === Date.now()) return largest.threads;
+    if (largest?.target === target && largest.atMs === Math.floor(monotonicMs())) return largest.threads;
     let mostHack = 0;
     let mostGrow = 0;
     for (const each of [...batches.values(), ...landing]) {
@@ -416,7 +434,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       mostGrow = Math.max(mostGrow, growCount);
     }
     const threads: BatchThreads = { hack: mostHack, weaken1: 0, grow: mostGrow, weaken2: 0 };
-    largest = { target, atMs: Date.now(), threads };
+    largest = { target, atMs: Math.floor(monotonicMs()), threads };
     return threads;
   };
 
@@ -452,7 +470,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     for (let landAt = nextLandAt; ; landAt += current().spacingMs) {
       const { threads, orders } = planNextBatch(undefined, landAt);
       if ((orders[0] as LaunchOrder).launchAt >= untilMs) return upcoming;
-      upcoming.push(...batchRamHolds(threads, orders, Date.now()));
+      upcoming.push(...batchRamHolds(threads, orders, monotonicMs()));
     }
   };
 
@@ -461,7 +479,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * there (the batcher itself, anyone else's scripts), so every operation within it finds whole threads' room.
    */
   const capacityGb = () => {
-    const now = Date.now();
+    const now = monotonicMs();
     // Its share threads too, until their scripts end (#232's review): `getServerUsedRam` counts them till then.
     const batcherOwnGb = shareRamByHost(sharingParts, now);
     for (const { host, gb } of parts.values()) batcherOwnGb.set(host, (batcherOwnGb.get(host) ?? 0) + gb);
@@ -479,7 +497,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * and the orders of the batches planned, from their starts; the share threads' are `shareRamHeld`'s.
    */
   const heldRam = (): RamHold[] => {
-    const now = Date.now();
+    const now = monotonicMs();
     const held: RamHold[] = [];
     for (const { host, gb, landAt } of parts.values()) {
       if (!hosts.includes(host)) continue;
@@ -497,7 +515,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * The share threads' RAM on the hosts (#224), until their scripts end, a moment after their call (core's
    * `shareReleasedAt`, #232's review).
    */
-  const shareRamHeld = (): RamHold[] => shareRamHolds(sharingParts, hosts, Date.now());
+  const shareRamHeld = (): RamHold[] => shareRamHolds(sharingParts, hosts, monotonicMs());
 
   /**
    * Starts batching: the first batch's operations all start from now, after what's still in flight on its target lands
@@ -513,13 +531,14 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const player = playerNow();
     const threads = batchThreads(figures, player, hackThreadsForShare(hackShare, figures, player));
     const holds = batchHoldsMs(figures, player, threads);
-    const firstLandAt = Date.now() + Math.max(...Object.values(holds));
+    const firstLandAt = monotonicMs() + Math.max(...Object.values(holds));
     const ownLandingsAt = landings.latestLandAt(target) + spacingMs;
     nextLandAt = Math.max(firstLandAt, ownLandingsAt, notBeforeMs);
     // Its own operations in flight push the first batch back (a move back, a dropped next chosen): said (#237's
     // review).
     if (ownLandingsAt > Math.max(firstLandAt, notBeforeMs) && health.problem === lastingProblem) {
-      const lastAt = new Date(ownLandingsAt - spacingMs).toISOString();
+      // A time the brain reads: on the wall clock (#251).
+      const lastAt = new Date(Math.round(wallClockMsOf(ownLandingsAt - spacingMs))).toISOString();
       waitingProblem = `its first batch on ${target} waits for its operations in flight there, the last at ${lastAt}`;
       setProblem(waitingProblem);
     }
@@ -533,7 +552,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   const noBatchFitsYetProblem = () => {
     const holders = new Set<string>();
     let nextLandAtOfHeld = Number.POSITIVE_INFINITY;
-    const now = Date.now();
+    const now = monotonicMs();
     for (const { host, target, landAt } of parts.values()) {
       if (!hosts.includes(host)) continue;
       holders.add(target);
@@ -543,8 +562,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       ...(holders.size > 0 ? [`its operations on ${[...holders].sort().join(", ")}`] : []),
       ...(shareRamHeld().length > 0 ? ["its share threads"] : []),
     ];
+    // A time the brain reads: on the wall clock (#251).
     const until = Number.isFinite(nextLandAtOfHeld)
-      ? `, the next of them landing at ${new Date(nextLandAtOfHeld).toISOString()}`
+      ? `, the next of them landing at ${new Date(Math.round(wallClockMsOf(nextLandAtOfHeld))).toISOString()}`
       : "";
     return (
       `no batch on ${current().target} fits the RAM yet: it's held by ${held.join(" and ") || "scripts not its own"}` +
@@ -558,7 +578,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * too), its share threads; and how late this wake's landings were.
    */
   const ramHeldNow = (): RamHeld => {
-    const now = Date.now();
+    const now = monotonicMs();
     const sharingGbByHost = shareRamByHost(sharingParts, now);
     const byHost = hosts.map((host) => {
       let inFlightGb = 0;
@@ -590,7 +610,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     order.operation === "hack"
       ? null
       : order.landAt -
-        Date.now() -
+        monotonicMs() -
         operationTimeMs(order.operation, batch.figures, playerNow(), ns.getServerSecurityLevel(batch.target));
 
   /** A batch short of RAM (#246): counted, kept with what held the RAM, and no share for a while after. */
@@ -603,8 +623,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     slackMs: number | null,
   ) => {
     batch.short = true;
-    const waitedMs = Math.max(0, Date.now() - order.launchAt);
+    const waitedMs = Math.max(0, monotonicMs() - order.launchAt);
     recordShort(health, {
+      // A stamp the brain reads (the run report lists each short): the wall clock (#251).
       atMs: Date.now(),
       target: batch.target,
       operation: order.operation,
@@ -616,7 +637,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     });
     logNow = true;
     // No share for a while (#226's review): whatever took the RAM, the batches have it first.
-    sharingHeldOffUntil = Math.max(sharingHeldOffUntil, Date.now() + SHARE_AFTER_SHORT_MS);
+    sharingHeldOffUntil = Math.max(sharingHeldOffUntil, monotonicMs() + SHARE_AFTER_SHORT_MS);
   };
 
   /**
@@ -637,7 +658,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     let threads = batch.threads[order.operation];
     const isHack = order.operation === "hack";
-    const waitedMs = () => Math.max(0, Date.now() - order.launchAt);
+    const waitedMs = () => Math.max(0, monotonicMs() - order.launchAt);
     if (isHack) {
       // Never out, nor skipped, while another of its batch's orders waits for room (#246's review): it waits with it,
       // or the batch is short. Out or skipped, it would take the batch off the books, and the waiting order with it.
@@ -661,7 +682,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         return true;
       }
       const player = playerNow();
-      landing = landing.filter((each) => each.untilMs >= Date.now());
+      landing = landing.filter((each) => each.untilMs >= monotonicMs());
       const sameTarget = landing.filter((each) => each.target === batch.target).map((each) => each.threads);
       const bounds = batchBounds(batch.figures, player, [batch.threads, ...sameTarget]);
       const seen = {
@@ -689,13 +710,14 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       : { started: false, failedOn: null };
     // None started for want of room: tried again soon. One held for its batch looks at the RAM now.
     if (!started && mayStart && failedOn === null) {
-      if (firstLook === undefined) retryWaitingAt = Math.max(retryWaitingAt, Date.now() + BATCH_RAM_WAIT_LOOK_MS);
+      if (firstLook === undefined) retryWaitingAt = Math.max(retryWaitingAt, monotonicMs() + BATCH_RAM_WAIT_LOOK_MS);
       waitingForRam.set(order, firstLook ?? ramHeldNow());
       return false;
     }
     // A wait for RAM, with what held it and the time it had to spare (#246's verification): not one held for its batch.
     if (started && firstLook !== undefined && firstLook !== null) {
       recordRamWait(health, {
+        // A stamp the brain reads (the run report lists each wait): the wall clock (#251).
         atMs: Date.now(),
         target: batch.target,
         operation: order.operation,
@@ -730,8 +752,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * coming more often than that never keep them from their try, nor from giving up.
    */
   const retryWaitingOrdersIfDue = (whateverTheTime = false) => {
-    if (waitingForRam.size === 0 || (!whateverTheTime && Date.now() < retryWaitingAt)) return;
-    retryWaitingAt = Date.now() + BATCH_RAM_WAIT_LOOK_MS;
+    if (waitingForRam.size === 0 || (!whateverTheTime && monotonicMs() < retryWaitingAt)) return;
+    retryWaitingAt = monotonicMs() + BATCH_RAM_WAIT_LOOK_MS;
     const inLine = [...waitingForRam.keys()].sort((a, b) => a.launchAt - b.launchAt || a.landAt - b.landAt);
     for (const order of inLine) launchOrder(order);
   };
@@ -793,7 +815,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * at different times, and with batches planned a weaken ahead the sum left a next target none of its RAM.
    */
   const roomForWave = (landAt: number) => {
-    const now = Date.now();
+    const now = monotonicMs();
     const untilMs = landAt + 2 * BATCH_LANDING_GAP_MS + BATCH_RAM_RELEASE_MS;
     const besideGb = capacityGb() - mostRamHeldGb([...heldRam(), ...shareRamHeld()], now, untilMs);
     return Math.max(0, Math.min(besideGb, batchRamGb(freeRam().map((host) => host.freeGb))));
@@ -805,17 +827,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    */
   const prepare = () => {
     // Nor while share threads may still hold RAM (#224): a wave takes the RAM free, all of it once they've ended.
-    if (preparing.size > 0 || Date.now() < waitUntilMs || Date.now() < sharingHeldUntil()) return;
+    if (preparing.size > 0 || monotonicMs() < waitUntilMs || monotonicMs() < sharingHeldUntil()) return;
     const { target, figures } = current();
     // A move back to a target its batches are still landing on (#216's review): they land first, so no wave goes out
     // among them.
     if ([...batches.values()].some((each) => each.target === target)) return;
-    if (landing.some((each) => each.target === target && each.untilMs >= Date.now())) return;
+    if (landing.some((each) => each.target === target && each.untilMs >= monotonicMs())) return;
     const now = { money: ns.getServerMoneyAvailable(target), security: ns.getServerSecurityLevel(target) };
     health.seen = now;
     const player = playerNow();
     // Called at the security now, so their times are the longest they'll be: all land after their time from now.
-    const landAt = Date.now() + operationTimeMs("weaken1", figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
+    const landAt = monotonicMs() + operationTimeMs("weaken1", figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
     // The room, less the next target's: the batches out (a previous target's, after a move) keep what they need.
     const usableGb = isTargetPrepared(figures, now)
       ? 0
@@ -881,8 +903,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       nextWithoutRoomProblem = null;
       return;
     }
-    nextWithoutRoomSince ??= Date.now();
-    if (Date.now() - nextWithoutRoomSince >= NEXT_WITHOUT_ROOM_PROBLEM_AFTER_MS && health.problem === lastingProblem) {
+    nextWithoutRoomSince ??= monotonicMs();
+    if (
+      monotonicMs() - nextWithoutRoomSince >= NEXT_WITHOUT_ROOM_PROBLEM_AFTER_MS &&
+      health.problem === lastingProblem
+    ) {
       nextWithoutRoomProblem = `no RAM to prepare ${target} next beside the batches for a minute`;
       setProblem(nextWithoutRoomProblem);
     }
@@ -897,7 +922,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     if (next === undefined || next.target === current().target || preparingNext.size > 0) return;
     const now = { money: ns.getServerMoneyAvailable(next.target), security: ns.getServerSecurityLevel(next.target) };
     const player = playerNow();
-    const landAt = Date.now() + operationTimeMs("weaken1", next.figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
+    const landAt =
+      monotonicMs() + operationTimeMs("weaken1", next.figures, player, now.security) + BATCH_LAUNCH_LEAD_MS;
     // On at most its RAM, of the room beside what the batches hold until it lands (#236).
     const usableGb = isTargetPrepared(next.figures, now) ? 0 : Math.min(next.ramGb, roomForWave(landAt));
     const threads = preparationWave(next.figures, player, now, usableGb);
@@ -942,7 +968,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * Called once the batches' orders due and the waves are out, so they come first.
    */
   const shareSpareRam = () => {
-    const now = Date.now();
+    const now = monotonicMs();
     sharingParts = sharingParts.filter((part) => shareReleasedAt(part) > now);
     const { sharing } = current();
     if (sharing === undefined || health.state !== "batching" || now < sharingHeldOffUntil || waveLanding()) {
@@ -995,7 +1021,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
 
   /** The sharing in its health: null while it neither shares nor is asked to. */
   const sharingHealth = (): SharingHealth | null => {
-    const now = Date.now();
+    const now = monotonicMs();
     const running = sharingParts.filter((part) => part.endsAt > now);
     const wanted = config?.sharing !== undefined;
     if (!wanted && running.length === 0) return null;
@@ -1023,7 +1049,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       continue;
     }
     drainLandings();
-    const lost = landings.takeLostIds(Date.now());
+    const lost = landings.takeLostIds(monotonicMs());
     for (const id of lost) {
       preparing.delete(id);
       preparingNext.delete(id);
@@ -1034,17 +1060,17 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       health.lost += lost.length;
       logNow = true;
     }
-    let wakeAt = Date.now() + PREPARING_LOOK_EVERY_MS;
+    let wakeAt = monotonicMs() + PREPARING_LOOK_EVERY_MS;
     if (health.state === "preparing") {
       prepare();
-      if (Date.now() < waitUntilMs) wakeAt = Math.min(wakeAt, waitUntilMs);
+      if (monotonicMs() < waitUntilMs) wakeAt = Math.min(wakeAt, waitUntilMs);
     }
     if (health.state === "batching") {
       // Plan each batch whose first operation is due, then launch every order due, in time order.
       if (hackSharePerThread(current().figures, playerNow()) > 0) {
         for (
           let next = planNextBatch();
-          (next.orders[0] as LaunchOrder).launchAt <= Date.now();
+          (next.orders[0] as LaunchOrder).launchAt <= monotonicMs();
           next = planNextBatch()
         ) {
           // Fitted to the RAM as it will be held (#232): the batches planned before a new plan, or at a lower hacking
@@ -1058,14 +1084,14 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
             batch: fitted,
             trimmed,
             trimmedBySharing,
-          } = fitBatch(plannedHack, planNextBatch, held, shareHeld, capacityGb(), Date.now());
+          } = fitBatch(plannedHack, planNextBatch, held, shareHeld, capacityGb(), monotonicMs());
           if (trimmed) health.batchesTrimmed = (health.batchesTrimmed ?? 0) + 1;
           if (trimmedBySharing) health.batchesTrimmedBySharing = (health.batchesTrimmedBySharing ?? 0) + 1;
           if (fitted === null) {
             // None yet since it started batching (#236), or none for a minute since the last (#237's review): it says
             // what holds the RAM and the next of it to land, as it is when the wait is first said (each wait anew, so
             // the run report lists each once); not a gap among batches in step, or a new plan's.
-            const waiting = batchesSinceStart === 0 || Date.now() - lastBatchPlannedAt >= WAITING_PROBLEM_AFTER_MS;
+            const waiting = batchesSinceStart === 0 || monotonicMs() - lastBatchPlannedAt >= WAITING_PROBLEM_AFTER_MS;
             if (waiting && health.problem === lastingProblem) {
               waitingProblem = noBatchFitsYetProblem();
               setProblem(waitingProblem);
@@ -1076,7 +1102,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
           if (waitingProblem !== null && health.problem === waitingProblem) setProblem(lastingProblem);
           waitingProblem = null;
           batchesSinceStart += 1;
-          lastBatchPlannedAt = Date.now();
+          lastBatchPlannedAt = monotonicMs();
           batches.set(nextBatch, fitted.batch);
           pending.push(...fitted.orders);
           // Planned while a last preparation wave lands, its leads cover the wave's grow, longer than the plan's: no
@@ -1098,7 +1124,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     // Those waiting for room first (#246), on every wake of the whole loop, before those due can take their RAM (#246's
     // verification); one that finds no room joins the line.
     retryWaitingOrdersIfDue(true);
-    while (pending.length > 0 && (pending[0] as LaunchOrder).launchAt <= Date.now()) {
+    while (pending.length > 0 && (pending[0] as LaunchOrder).launchAt <= monotonicMs()) {
       launchOrder(pending.shift() as LaunchOrder);
     }
     if (pending.length > 0) wakeAt = Math.min(wakeAt, (pending[0] as LaunchOrder).launchAt);
@@ -1119,39 +1145,40 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     // Awake as share threads end (#224): its health's count falls then, and a wave waiting for them goes out.
     // And as their scripts end (#232's review): their RAM is the batcher's own until then.
     for (const part of sharingParts) {
-      wakeAt = Math.min(wakeAt, part.endsAt > Date.now() ? part.endsAt : shareReleasedAt(part));
+      wakeAt = Math.min(wakeAt, part.endsAt > monotonicMs() ? part.endsAt : shareReleasedAt(part));
     }
     // Awake when a part would be lost, so it's counted then, not at the next launch.
     wakeAt = Math.min(wakeAt, landings.nextLostAtMs());
     health.batchesPending = batches.size;
     const latestLandAt = landings.latestLandAt();
-    // Never before the one it waits for (#211): a batcher started while this one waits must wait for that one too.
+    // Never before the one it waits for (#211): a batcher started while this one waits must wait for that one too. On
+    // the monotonic clock (#251): only the next batcher, on the same page, reads it.
     const latest = Math.max(latestLandAt, waitUntilMs);
     health.latestLandAt = Number.isFinite(latest) && latest > 0 ? latest : null;
     health.inFlight = landings.inFlight();
     const published = JSON.stringify({ ...health, atMs: 0 });
-    const lineDue = Date.now() - lastLineAt >= HEALTH_LINE_EVERY_MS;
+    const lineDue = monotonicMs() - lastLineAt >= HEALTH_LINE_EVERY_MS;
     if (published !== lastPublished || logNow || lineDue) {
       publish(ns, health, logNow || lineDue);
-      if (logNow || lineDue) lastLineAt = Date.now();
+      if (logNow || lineDue) lastLineAt = monotonicMs();
       lastPublished = published;
       logNow = false;
     }
-    const fullWakeAt = Date.now() + Math.min(Math.max(0, wakeAt - Date.now()), HEALTH_LINE_EVERY_MS);
+    const fullWakeAt = monotonicMs() + Math.min(Math.max(0, wakeAt - monotonicMs()), HEALTH_LINE_EVERY_MS);
     // Woken by a landing, or a config written (the Agent writes it each round: a change is read within 2 s). Meanwhile,
     // with orders waiting for room (#246), at each try due those alone are tried again (#246's review: not the whole
     // loop, on a busy page), until one leaves the line.
     for (;;) {
       const lookAt = waitingForRam.size > 0 ? Math.min(fullWakeAt, retryWaitingAt) : fullWakeAt;
       const timedOut = await Promise.race([
-        ns.asleep(Math.max(0, lookAt - Date.now())).then(() => true),
+        ns.asleep(Math.max(0, lookAt - monotonicMs())).then(() => true),
         ns.nextPortWrite(BATCHER_LANDING_PORT).then(() => false),
         ns.nextPortWrite(BATCHER_CONFIG_PORT).then(() => false),
       ]);
       if (!timedOut) break;
       const inLineBefore = waitingForRam.size;
       retryWaitingOrdersIfDue();
-      if (Date.now() >= fullWakeAt || waitingForRam.size < inLineBefore || waitingForRam.size === 0) break;
+      if (monotonicMs() >= fullWakeAt || waitingForRam.size < inLineBefore || waitingForRam.size === 0) break;
     }
   }
 }

@@ -31,7 +31,7 @@ function activityWith(answer: () => WorkEffectorReport | "no report", singularit
     singularityAvailable: () => singularity.available,
   });
   const work = createWorkActivity(ns, { effectorRunner });
-  const round = (leftMs = ROUND_MS) => work.convergeIfDue(Date.now() + leftMs);
+  const round = (leftMs = ROUND_MS) => work.convergeIfDue(performance.now() + leftMs);
   const calls = () =>
     (runWorker.mock.calls as unknown as [string, unknown[]][]).map(([file, args]) => [file, args.slice(0, -1)]);
   return { work, lines, runWorker, round, calls };

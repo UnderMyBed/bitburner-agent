@@ -677,7 +677,7 @@ export function preparationTimeMs(
 export interface LandingRecord {
   /** The batcher's name for the operation's part. */
   id: string;
-  /** When it was meant to land, and when it did (the game's clock, `Date.now()`). */
+  /** When it was meant to land, and when it did (the page's monotonic clock, `performance.now()`, #251). */
   landAt: number;
   landedAt: number;
   /** What the call returned: money hacked (0: the hack failed), growth, or security taken off. */
@@ -1117,7 +1117,8 @@ export interface BatcherHealth {
   inFlight: number;
   /**
    * The latest landing it expects, or null: a batcher started after this one (#205) waits for it, so its first batches
-   * aren't short of the RAM this one's operations still hold.
+   * aren't short of the RAM this one's operations still hold. On the page's monotonic clock (#251): only that batcher
+   * reads it.
    */
   latestLandAt: number | null;
   /**
@@ -1172,7 +1173,7 @@ export interface BatcherHealth {
    * the RAM, so the run report says each. Absent from an older batcher.
    */
   shorts?: BatchShort[];
-  /** The game's clock when this was written. */
+  /** The game's wall clock (`Date.now()`) when this was written, as are the stamps in it the brain reads (#251). */
   atMs: number;
 }
 

@@ -44,6 +44,7 @@ import { createWorkerRunner } from "../agent/run-worker.ts";
 import { createSafeMode } from "../agent/safe-mode.ts";
 import { createSnapshotter, SNAPSHOT_ROUND_MS } from "../agent/snapshotter.ts";
 import { createWorkActivity } from "../agent/work.ts";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { takeRestartNote } from "../page/restart-timer.ts";
 
@@ -99,6 +100,7 @@ export async function main(ns: NS): Promise<void> {
   }
   const token = ns.read(deployedFilePath(ownDeploymentId, TOKEN_FILE_NAME)).trim();
   if (token === "") return reportCantStart("token.txt is missing or empty");
+  // A name, not a time: the wall clock's, unique across reloads, which start `performance.now()` again (#251).
   const agentSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const game = ns.ui.getGameInfo();
   // One runner for every home worker, so they run one at a time, and never two copies of one.
@@ -161,8 +163,10 @@ export async function main(ns: NS): Promise<void> {
    * focused or not (#151). Then it sleeps until the next round.
    */
   const takeRound = async (connection: WebSocket | null): Promise<void> => {
-    const roundStartedAtMs = Date.now();
-    const roundEndsAtMs = roundStartedAtMs + SNAPSHOT_ROUND_MS;
+    // The round's end, every worker's deadline, on the page's monotonic clock (#251, ../clock.ts): a step in the PC's
+    // clock neither cuts a round short nor stretches it.
+    const roundEndsAtMs = monotonicMs() + SNAPSHOT_ROUND_MS;
+    // Safe mode's times are the wall clock's: kept in a file across reloads, beside the game's `lastAugReset` (#251).
     if (connection !== null) {
       await snapshotter.takeRound((message) => connection.send(encodeControlMessage(message)));
       safeMode.connectedRound(Date.now(), snapshotter.lastAugReset());
@@ -188,8 +192,8 @@ export async function main(ns: NS): Promise<void> {
     if (!batcherStopping) await batcher.convergeIfDue(roundEndsAtMs);
     await intentRunner.runDue(roundEndsAtMs);
     await workActivity.convergeIfDue(roundEndsAtMs);
-    // Clamped, so a clock that steps back can't stretch the sleep.
-    const untilNextRoundMs = roundEndsAtMs - Date.now();
+    // Clamped all the same: a round never sleeps longer than a round.
+    const untilNextRoundMs = roundEndsAtMs - monotonicMs();
     await ns.sleep(Math.min(Math.max(0, untilNextRoundMs), SNAPSHOT_ROUND_MS));
   };
 
@@ -279,6 +283,7 @@ export async function main(ns: NS): Promise<void> {
           batcher.desire(event.message.batcher ?? null);
           intentRunner.desire(event.message.intents);
           workActivity.desire(event.message.work ?? null);
+          // The wall clock: safe mode's time is kept in a file across reloads (#251).
           safeMode.heard(event.message, Date.now(), snapshotter.lastAugReset());
         }
       } else {
@@ -296,6 +301,7 @@ export async function main(ns: NS): Promise<void> {
       ns.print("agent: replaced by a newer Agent; exiting");
       return;
     }
+    // The wall clock: safe mode's time is kept in a file across reloads (#251).
     safeMode.disconnected(Date.now());
     // Deployed again while disconnected (a new token or port means a new deployment): the new one takes over. Not
     // for an empty or invalid current.txt, which boot.js would refuse, leaving no Agent.

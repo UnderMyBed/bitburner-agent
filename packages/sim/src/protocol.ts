@@ -442,6 +442,11 @@ export interface HostMethods {
    */
   runUntil(params: RunUntilParams): RunUntilResult;
   "diagnostics.clock"(params: Record<string, never>): ClockDiagnostics;
+  /**
+   * Steps the page's wall clock (`Date`) by `ms`, forward or back, as a time sync steps the PC's clock (#251);
+   * `performance.now()` and the timers stay. Returns the new virtual now. A harness edit, for test scenarios.
+   */
+  "diagnostics.stepWallClock"(params: { ms: number }): number;
   "diagnostics.game"(params: Record<string, never>): GameDiagnostics;
   /**
    * The highest RAM home has had in use, and the most scripts it has run at once, since the game booted (each its own
@@ -692,6 +697,13 @@ export function validateRun({ threads, args }: { threads: number; args: ScriptAr
 export function validateHomeRam(gb: number): void {
   if (!Number.isInteger(gb) || gb < 8 || gb > 2 ** 30 || (gb & (gb - 1)) !== 0) {
     throw new RangeError(`home RAM must be a power of 2 GB from 8 to 2^30, got ${gb}`);
+  }
+}
+
+/** A wall-clock step: a whole number of ms, either way, that leaves the clock at 0 or later. */
+export function validateWallClockStep(ms: number, nowMs: number): void {
+  if (!Number.isSafeInteger(ms) || nowMs + ms < 0) {
+    throw new RangeError(`a wall-clock step needs an integer number of ms that leaves it at 0 or later, got ${ms}`);
   }
 }
 
