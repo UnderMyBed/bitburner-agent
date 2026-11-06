@@ -57,6 +57,16 @@ export function findGaps(receivedAtMs: number[], { sinceMs, untilMs, thresholdMs
 export const formatIsoTime = (epochMs: number | null) => (epochMs === null ? "none" : new Date(epochMs).toISOString());
 /** A duration in seconds, to a tenth: "10.0 s". */
 export const formatSeconds = (durationMs: number) => `${(durationMs / 1000).toFixed(1)} s`;
+/** "29 s", "10 min", "24 min 20 s", "1 h 14 min": to the second under an hour, to the minute over. */
+export function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.round(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours} h ${minutes} min`;
+  if (minutes > 0) return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`;
+  return `${seconds} s`;
+}
 const formatMegabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 /**

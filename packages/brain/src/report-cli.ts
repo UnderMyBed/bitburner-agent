@@ -1,8 +1,8 @@
 // npm run report -- [--data-dir <dir>] [--since <ISO time>] [--until <ISO time>] [--environment E0]
 // The run report (#185): what a run did and what went wrong, from the store (run-report.ts). Without --since, the
 // window starts at the newest brain start; without --until, it ends now.
-// Exits 0 on PASS, 1 on FAIL, 2 when it couldn't run: no store, no brain start to begin from, a window that ends before
-// it starts, or one with nothing recorded in it.
+// Exits 0 on PASS or WARN (warnings only, #241), 1 on FAIL, 2 when it couldn't run: no store, no brain start to begin
+// from, a window that ends before it starts, or one with nothing recorded in it.
 import process from "node:process";
 import { environmentFlag, existingStorePath, flagValue, parseIsoTime } from "./config.ts";
 import { newestBrainStartMs, runReport } from "./run-report.ts";
