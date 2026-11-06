@@ -344,25 +344,32 @@ export async function freshGame(
  */
 export async function typeCommand(page: Page, command: string): Promise<void> {
   // As a player types: once the Terminal is on the page.
-  await untilTerminalShown(page);
+  await advanceGameTimeUntilTerminalShown(page);
   await page.locator(TERMINAL_INPUT).focus();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
 }
 
-/** The terminal's output so far, once the Terminal is on the page. */
+/**
+ * The terminal's output so far, once the Terminal is on the page. Waiting for it can move up to 5 s of game time,
+ * which an outer `advanceUntil`'s `gameMs` doesn't count.
+ */
 export async function terminalText(page: Page): Promise<string> {
-  await untilTerminalShown(page);
+  await advanceGameTimeUntilTerminalShown(page);
   return page.locator("#terminal").innerText();
 }
 
+/** The start of the shown page's text, in a failure's message: the sidebar's and the overview's left out. */
+const SHOWN_PAGE_TEXT_CHARACTERS = 300;
+
 /**
- * Moves game time on until the Terminal is on the page, for at most 5 s of it. The Agent's faction state read (#197) can
- * have the page on Factions or Augmentations mid-round, after the round's fast snapshot was sent (a join since the last
- * read opens Factions, #256). Game time stands still between a test's steps, so a test that looked then would wait
- * for ever (#212). With the Terminal there, no time passes.
+ * Moves game time on until the Terminal is on the page, for at most 5 s of it. The Agent's faction state read (#197)
+ * can have the page on Factions or Augmentations mid-round, after the round's fast snapshot was sent (a join since the
+ * last read opens Factions, #256). Game time stands still between a test's steps, so a test that looked then would
+ * wait for ever (#212). With the Terminal there, no time passes. If it doesn't come back, the error starts the shown
+ * page's text, so a race that's new says where the page was.
  */
-async function untilTerminalShown(page: Page): Promise<void> {
+async function advanceGameTimeUntilTerminalShown(page: Page): Promise<void> {
   try {
     await advanceUntil(page, async () => (await page.locator(TERMINAL_INPUT).count()) === 1, {
       realTimeoutMs: 30_000,
@@ -370,7 +377,33 @@ async function untilTerminalShown(page: Page): Promise<void> {
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`The Terminal isn't on the page: ${reason}`, { cause: error });
+    const shown = await shownPageText(page).catch(unreadableText);
+    throw new Error(`The Terminal isn't on the page (${reason}). The page showed: ${shown}`, { cause: error });
+  }
+}
+
+/**
+ * The text of the page the game shows, without the sidebar (a MUI `Drawer`, `Sidebar/ui/SidebarRoot.tsx:321`) and the
+ * overview (a `react-draggable`, `ui/React/Overview.tsx:125`), whose text is the same on every page.
+ */
+async function shownPageText(page: Page): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  // As `waitForTerminal`'s read: a hung page says so in a second, rather than never.
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Timeout 1000ms exceeded")), 1_000);
+  });
+  const read = page.evaluate(() => {
+    const body = document.body.cloneNode(true) as HTMLElement;
+    for (const element of body.querySelectorAll(".MuiDrawer-root, .react-draggable")) element.remove();
+    return body.textContent ?? "";
+  });
+  // Lost to the timeout, its later failure (a closed page) is no one's to handle.
+  read.catch(() => {});
+  try {
+    const text = await Promise.race([read, timeout]);
+    return text.replace(/\s+/g, " ").trim().slice(0, SHOWN_PAGE_TEXT_CHARACTERS);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
