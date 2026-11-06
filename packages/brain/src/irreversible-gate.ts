@@ -1,8 +1,12 @@
 // The gate before an irreversible intent (R2, R8, #147): its guard on consecutive medium snapshots from the connected
-// Agent, then a save backup, then it goes out. The desired state's controller holds one gate per irreversible intent in
-// the owner's queue, and sends only the intents it lets through.
+// Agent, then a save backup, then it goes out. The desired state's controller holds one gate per irreversible intent it
+// judges (its `#judgedQueue`: the owner's queue, the brain's destroy and install, then the rules' irreversible
+// intents, #269), and sends only the intents it lets through.
 // - One irreversible intent at a time, in the queue's order: the next one's guard is judged only once the first is done
-//   or cancelled, so two that conflict (Sector-12 and Chongqing, enemies) never go out together.
+//   or cancelled, so two that conflict (Sector-12 and Chongqing, enemies) never go out together. A gate that is no
+//   longer first (an intent queued ahead of it since: the owner's, ahead of a rule's) goes back to counting, out or
+//   not: only the first is judged, so it's withdrawn, and goes out again only once first, past its guard and a new
+//   backup.
 // - The guard fails closed: a medium snapshot it can't read holds the intent, with the reason.
 // - Each backup is asked for by one request, and only that request's answer counts: a backup asked for before the
 //   count started again releases nothing.
@@ -64,9 +68,9 @@ const newGate = (): Gate => ({
 });
 
 /**
- * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2), `queue` being the owner's manual queue and
- * `staticData` the connected Agent's static snapshot. A snapshot without what a guard reads fails it: the Agent's word,
- * so never assumed.
+ * Why `intent`'s guard doesn't hold on `medium`, or null if it does (R2), `queue` being the queue the gates judge
+ * (the owner's first) and `staticData` the connected Agent's static snapshot. A snapshot without what a guard reads
+ * fails it: the Agent's word, so never assumed.
  * - Joining a faction: none of its enemies is joined (the game refuses a banned faction then:
  *   `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`).
  * - An intent that resets the game, installing augmentations (#164) or destroying the BitNode (#175): nothing queued
@@ -131,11 +135,22 @@ export class IrreversibleIntentGates {
     this.#onChange = onChange;
   }
 
-  /** The queue now: a gate for each irreversible intent in it, in its order; those that left are dropped. */
+  /**
+   * The queue now: a gate for each irreversible intent in it, in its order; those that left are dropped. One no longer
+   * first goes back to counting (#269 review): only the first is judged, so one left out or counting there would go on
+   * unwatched, and go out beside the first, or on a stale release.
+   */
   sync(queue: Intent[]): void {
     const kept = new Map<string, Gate>();
     for (const intent of queue.filter(isIrreversibleIntent))
       kept.set(intent.id, this.#gates.get(intent.id) ?? newGate());
+    let first = true;
+    for (const gate of kept.values()) {
+      if (!first && (gate.stage !== "counting" || gate.heldSnapshots > 0)) {
+        this.#restart(gate, "another irreversible intent was queued ahead of it");
+      }
+      first = false;
+    }
     this.#gates = kept;
   }
 

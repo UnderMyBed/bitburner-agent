@@ -141,6 +141,11 @@ export interface PassedOver {
 export interface JoinPlan {
   /** The faction to join now, or null. */
   next: string | null;
+  /**
+   * While `next` is a city faction (irreversible: it waits at the irreversible gate, #269), the first other invitation
+   * from a faction without enemies, joined beside it so the gate's wait holds up nothing that bans nothing; else null.
+   */
+  alongside: string | null;
   /** The city factions' invitations not of the brain's city group, in the order invited. */
   passedOver: PassedOver[];
 }
@@ -156,9 +161,15 @@ export function chooseJoin(
   cityFactions: readonly string[] = [],
 ): JoinPlan {
   const open = invitations.filter((faction) => FACTION_NAMES.includes(faction) && !joined.includes(faction));
-  const joins = (faction: string) => FACTION_ENEMIES[faction] === undefined || cityFactions.includes(faction);
+  const bansNothing = (faction: string) => FACTION_ENEMIES[faction] === undefined;
+  const joins = (faction: string) => bansNothing(faction) || cityFactions.includes(faction);
+  const next = open.find(joins) ?? null;
   return {
-    next: open.find(joins) ?? null,
+    next,
+    alongside:
+      next === null || bansNothing(next)
+        ? null
+        : (open.find((faction) => faction !== next && bansNothing(faction)) ?? null),
     passedOver: open
       .filter((faction) => !joins(faction))
       .map((faction) => ({ faction, bans: [...(FACTION_ENEMIES[faction] ?? [])] })),
@@ -293,6 +304,8 @@ export interface FactionsView {
   waiting: boolean;
   /** The faction being joined, or null. */
   joining: string | null;
+  /** A faction without enemies joined beside `joining` while that one, a city faction's, waits at the gate (#269). */
+  joiningAlongside: string | null;
   /** The city factions' invitations not joined, not of the city group the brain chose (#228). */
   passedOver: PassedOver[];
   /** The city group the brain chose this cycle, in words (#228, ./invitations.ts), or null before it's known. */
@@ -383,7 +396,8 @@ export function describeChoice(choice: FactionWorkChoice): string {
 /**
  * Joins and faction work as the desired state's controller runs them, on every update (so it logs only on a change):
  * the join to send and the work to send, the view, the stall, and the events for the store.
- * - The join is asked for until a snapshot shows the faction joined; the next waits for it.
+ * - The join is asked for until a snapshot shows the faction joined; the next waits for it, but for one that bans
+ *   nothing, joined beside a city faction's while that one waits at the irreversible gate (#269 review).
  * - The work is sent while it's the rule's (no owner's work, the switch on). Its choice is stored as an event when its
  *   faction, work type or target changes, and its end as another when a definite reason stops it: the owner's work,
  *   the switch, nothing left worth it. Snapshots missing (a reconnect, the faction state unread) change nothing stored:
@@ -418,6 +432,7 @@ export class FactionRule {
     enabled: true,
     waiting: true,
     joining: null,
+    joiningAlongside: null,
     passedOver: [],
     cityGroup: null,
     choice: null,
@@ -449,18 +464,25 @@ export class FactionRule {
     return { faction: watch.faction, sinceMs: watch.stalledSinceMs ?? lastReadingAtMs, lastReadingAtMs };
   }
 
-  update(inputs: FactionInputs): { join: Intent | null; work: { faction: string; workType: FactionWorkType } | null } {
-    const join = this.#join(inputs);
+  update(inputs: FactionInputs): {
+    join: Intent | null;
+    joinAlongside: Intent | null;
+    work: { faction: string; workType: FactionWorkType } | null;
+  } {
+    const { join, joinAlongside } = this.#join(inputs);
     const work = this.#work(inputs);
-    return { join, work };
+    return { join, joinAlongside, work };
   }
 
-  #join({ mediumData, slowData, cityFactions = [], cityGroup = null }: FactionInputs): Intent | null {
+  #join({ mediumData, slowData, cityFactions = [], cityGroup = null }: FactionInputs): {
+    join: Intent | null;
+    joinAlongside: Intent | null;
+  } {
     const state = slowData === null ? null : (factionReadingOf(slowData)?.state ?? null);
     const joined = (mediumData?.player as { factions?: unknown } | undefined)?.factions;
     if (state === null || !Array.isArray(joined)) {
-      this.#view = { ...this.#view, joining: null, passedOver: [], cityGroup };
-      return null;
+      this.#view = { ...this.#view, joining: null, joiningAlongside: null, passedOver: [], cityGroup };
+      return { join: null, joinAlongside: null };
     }
     const resetAt = (slowData?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
     if (typeof resetAt === "number" && resetAt !== this.#passedOverResetAt) {
@@ -494,8 +516,22 @@ export class FactionRule {
       this.#joining = next;
       this.#log(`factions: joining ${next} (its invitation)`);
     }
-    this.#view = { ...this.#view, joining: next, passedOver: plan.passedOver, cityGroup };
-    return next === null ? null : joinIntent(next);
+    if (plan.alongside !== null && plan.alongside !== this.#view.joiningAlongside) {
+      this.#log(
+        `factions: joining ${plan.alongside} (its invitation) beside ${next}, which waits at the irreversible gate`,
+      );
+    }
+    this.#view = {
+      ...this.#view,
+      joining: next,
+      joiningAlongside: plan.alongside,
+      passedOver: plan.passedOver,
+      cityGroup,
+    };
+    return {
+      join: next === null ? null : joinIntent(next),
+      joinAlongside: plan.alongside === null ? null : joinIntent(plan.alongside),
+    };
   }
 
   #work(inputs: FactionInputs): { faction: string; workType: FactionWorkType } | null {
