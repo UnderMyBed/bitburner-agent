@@ -18,7 +18,6 @@ import {
   augmentationBitNodeMultipliers,
   augmentationEndgame,
   augmentationShops,
-  augmentationsSoldBy,
   bestWorkRate,
   chooseAugmentationsToBuy,
   chooseCityGroup,
@@ -31,7 +30,6 @@ import {
   daedalusSkillsReached,
   donationsUnlocked,
   donationTermsOf,
-  FACTION_NAMES,
   type FactionState,
   type FactionWorkChoice,
   factionWorkChoice,
@@ -602,7 +600,9 @@ export function countHoldOf({
   joined: readonly JoinedFaction[];
   currentNode: number;
   ownedSF: Readonly<Record<string, number>>;
-  decision: Pick<InstallDecision, "names" | "neuroFluxLevels" | "set" | "terms">;
+  decision: Pick<InstallDecision, "names" | "neuroFluxLevels" | "set"> & {
+    terms: InstallDecision["terms"] | undefined;
+  };
   money: number;
   income: number | null;
   person: WorkingPerson;
