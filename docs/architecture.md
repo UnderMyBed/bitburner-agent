@@ -642,7 +642,7 @@ The game source is a git submodule (`vendor/bitburner-src`) pinned to upstream `
 
 Steam itself is not pinned: game updates are taken as Steam ships them.
 
-Upgrading the pinned version is a normal PR: regenerate types, run the full suite, then a live run whose run report passes, or warns with each warning explained on the review issue (owner decision 55).
+Upgrading the pinned version is a normal PR: regenerate types, run the full suite, then a live run whose run report passes, or warns with each warning explained on the bump's issue (the stable watcher's "Upstream stable moved", owner decision 55).
 
 ---
 
