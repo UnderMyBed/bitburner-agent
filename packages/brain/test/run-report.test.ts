@@ -354,13 +354,13 @@ describe("the sections", () => {
     });
     const { text } = report();
     for (const line of [
-      "  money: unknown (unchanged)",
-      "  hacking: unknown (unchanged)",
-      "  home RAM: unknown (unchanged)",
-      "  home RAM used: 4.5 GB → unknown",
+      "\n    money: unknown (unchanged)",
+      "\n    hacking: unknown (unchanged)",
+      "\n    home RAM: unknown (unchanged)",
+      "\n    home RAM used: 4.5 GB → unknown",
       // No static snapshot: which servers are the game's isn't known (#194).
-      "  the hack loop's hosts' RAM: unknown (no static snapshot) (unchanged)",
-      "  city: unknown (unchanged)",
+      "\n    the hack loop's hosts' RAM: unknown (no static snapshot) (unchanged)",
+      "\n    city: unknown (unchanged)",
     ]) {
       expect(text).toContain(line);
     }
@@ -407,8 +407,8 @@ describe("the sections", () => {
     snapshot("fast", 10 * SECOND, fastData({ work: undefined }));
     const { text } = report();
     for (const line of [
-      "  no medium snapshot (the player and the servers) in the window",
-      "  no slow snapshot (the BitNode, augmentations, Source-Files, purchased servers) in the window",
+      "  BitNode not recorded, first snapshot → last:\n    no medium snapshot (the player and the servers) in the window",
+      "\n    no slow snapshot (the BitNode, augmentations, Source-Files, purchased servers) in the window",
       "    none moved",
       "  intents:\n    none",
       "  work, as it changed:\n    not reported",
@@ -472,7 +472,7 @@ describe("cloud servers (#194)", () => {
         `    ${at(12 * MINUTE)}  pserv-1 upgraded, 8 GB → 64 GB, $3,080,000\n` +
         "    in all: 1 bought, 1 upgraded, $3,520,000",
     );
-    expect(text).toContain("  the hack loop's hosts' RAM: 12 GB on 2 servers → 76 GB on 3 servers");
+    expect(text).toContain("\n    the hack loop's hosts' RAM: 12 GB on 2 servers → 76 GB on 3 servers\n");
   });
 
   test("outside BN1, the price is unknown", () => {
@@ -1008,7 +1008,7 @@ describe("each failure is a FAIL, with its line", () => {
     const { text } = report();
     expect(text).toContain("    faction reputation and favour, first reading → last:\n      never read");
     expect(text).toContain("    faction invitations, as first seen:\n      never read");
-    expect(text).toContain("  augmentations queued: unknown (unchanged)");
+    expect(text).toContain("\n    augmentations queued: unknown (unchanged)\n");
   });
 
   test("an interval of exactly 6 s isn't a gap", () => {
