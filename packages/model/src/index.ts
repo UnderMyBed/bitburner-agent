@@ -3,6 +3,7 @@ export {
   type Calibration,
   type CycleMultipliers,
   HACKER_FACTION_JOINS,
+  ROOTED_WORLD_RAM_GB_BY_PORTS,
   RUN_3_CYCLES,
   RUN_3_SHARE_BONUS,
 } from "./calibration.ts";
@@ -51,7 +52,6 @@ export {
 export {
   CLOUD_SERVER_INCOME_WINDOW_MS,
   CLOUD_SERVER_LIMIT,
-  CLOUD_SERVER_MAX_RAM,
   CLOUD_SERVER_PAYBACK_LIMIT_MS,
   CLOUD_SERVER_PRICE_PER_GB,
   CLOUD_SERVER_RESERVE_HORIZON_MS,
@@ -60,7 +60,9 @@ export {
   type Holds,
   MIN_CLOUD_SERVER_RAM,
   NO_HOLDS,
+  nextPurchase,
   PROGRAM_PRICES,
+  type Purchase,
   type Purse,
   portsOpen,
   spendThroughCycle,

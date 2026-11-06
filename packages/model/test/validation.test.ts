@@ -4,9 +4,10 @@
 //   they check (the rate is the level times the share; the count and the favour turn on the money and the cycle's
 //   length; the measured curves restart at run #3's truth each cycle), so they check the rules' mechanism;
 // - fitted, so consistency only: the curve against run #3's own level, the share against run #3's own.
-// #263's gate is not met (the model README's "Not yet fit for #247"): BitRunners' donations unlock at the 7th install,
-// not the 6th; phases 3 to 5 of #244's table are out by far more than 15%; the simulator's first install is 19% early.
-// Those are tested as known misses, so a change to any is seen. Each tolerance is in the test's name.
+// #263's gate is not met (slice 2, part 1; the model README's "#263's gate: not met"): BitRunners' donations unlock at
+// the 7th install, not the 6th; phases 3 to 5 of #244's table are out by far more than 15%; the simulator's first
+// install is 19% early. Those are tested as known misses, so a change to any is seen; BN1.3's data, held out, is the
+// next validation (#263). Each tolerance is in the test's name.
 import { describe, expect, test } from "vitest";
 import { type ModelRun, RUN_3_CYCLES, RUN_3_POLICY, RUN_3_SHARE_BONUS, runModel, TODAYS_POLICY } from "../src/index.ts";
 import { RUN_3_BN1_2, RUN_3_CASH, RUN_3_PER_CYCLE, SIMULATOR_SEED_1 } from "./fixtures.ts";
@@ -136,30 +137,62 @@ describe("downstream: the rules on run #3's own measured curves, cycles 1 to 6",
     }
   });
 
-  test("the money in hand once the cloud servers are bought, cycles 5 and 6, 30 to 60 min [10%]", () => {
-    // The purchases through the cycle, by the brain's rules, against run #3's cash in hand (#263's comment). Before 30
-    // min the model's is lower: it buys every server the money covers each minute, the brain one at a time.
-    const cash = new Map<string, number>();
+  /** The money A6 sees at each minute of run #3's measured cycles, cycles 1 to 6, as `money` has it. */
+  const moneyAt = (money: "cash" | "gross") => {
+    const seen = new Map<string, number>();
     let cycle = 0;
     let last = -1;
     runModel(RUN_3_BN1_2.start, {
       policy: RUN_3_POLICY,
       measured: RUN_3_CYCLES,
+      money,
       horizonMs: measured.cycles[5]?.endMs,
-      onStep: ({ onlineMs, money }) => {
+      onStep: ({ onlineMs, money: seenMoney }) => {
         if (onlineMs < last) cycle += 1;
         last = onlineMs;
-        cash.set(`${cycle}:${onlineMs / MINUTE_MS}`, money);
+        seen.set(`${cycle}:${onlineMs / MINUTE_MS}`, seenMoney);
       },
     });
+    return (index: number, minutes: number) => seen.get(`${index}:${minutes}`) ?? Number.NaN;
+  };
+  const cashAt = moneyAt("cash");
+  const grossAt = moneyAt("gross");
+  /** Run #3's cash in hand at `minutes` into its cycle `index + 1` (#263's comment). */
+  const actualCash = (index: number, minutes: number) =>
+    RUN_3_CASH[index]?.find(([at]) => at === minutes)?.[1] ?? Number.NaN;
+
+  test("the money in hand once the cloud servers are bought, cycles 5 and 6, 30 to 60 min [10%]", () => {
+    // The purchases through the cycle, by the brain's rules, against run #3's cash in hand. Here the gross is within
+    // 7% of the cash too ($1.44t of cloud servers against hundreds of trillions): this check alone can't tell them
+    // apart.
     for (const index of [4, 5]) {
-      for (const [minutes, actual] of RUN_3_CASH[index] ?? []) {
-        if (minutes < 30 || minutes > 60) continue;
-        expect(off(cash.get(`${index}:${minutes}`) ?? 0, actual), `cycle ${index + 1}, ${minutes} min`).toBeLessThan(
-          0.1,
-        );
+      for (const minutes of [30, 45, 60]) {
+        expect(
+          off(cashAt(index, minutes), actualCash(index, minutes)),
+          `cycle ${index + 1}, ${minutes} min`,
+        ).toBeLessThan(0.1);
       }
     }
+  });
+
+  test("where the spending is most of the income, cycles 1 to 3 at 30 min: the gross out by ×2.6 to ×10", () => {
+    // Run #3 at 30 min: $196m in hand of $1.95b earned (cycle 1), $45.7b of $244b (2), $888b of $2.33t (3).
+    for (const [index, low] of [
+      [0, 9],
+      [1, 5],
+      [2, 2.5],
+    ] as const) {
+      expect(grossAt(index, 30) / actualCash(index, 30), `cycle ${index + 1}`).toBeGreaterThan(low);
+    }
+  });
+
+  test("known miss: cycles 1 and 2 at 30 min, the model's cash under 2% of run #3's; the 3rd's within 10%", () => {
+    // The model buys each server the money covers within the step; the brain buys one an intent, a medium snapshot
+    // (10 s) apart, so its money waits between them (BN1.3's purchase times will say how long).
+    for (const index of [0, 1]) {
+      expect(cashAt(index, 30) / actualCash(index, 30), `cycle ${index + 1}`).toBeLessThan(0.02);
+    }
+    expect(off(cashAt(2, 30), actualCash(2, 30)), "cycle 3").toBeLessThan(0.1);
   });
 });
 

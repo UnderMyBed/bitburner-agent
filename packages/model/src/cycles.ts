@@ -1,7 +1,7 @@
 /**
- * The cycle model (#260, the fast model's first slice, #13): BN1 stepped a minute at a time from the BitNode's start to
- * its destroy, install to install, with the brain's own choices made by core's own functions on the model's state, so
- * it can't drift from the brain:
+ * The cycle model (the fast model, #13: slice 1, #260; slice 2, part 1, #263): BN1 stepped a minute at a time from the
+ * BitNode's start to its destroy, install to install, with the brain's own choices made by core's own functions on the
+ * model's state, so it can't drift from the brain:
  * - A5's work (core's `factionWorkChoice`: the most hacking value per second of work, The Red Pill first, toward
  *   donations' favour, the count; `factionReputationPerSecond` at the modelled level, `faction_rep` and favour);
  * - the joins: the hacker factions by their servers (`HACKER_FACTION_JOINS`), Tian Di Hui, the city group (core's
@@ -11,9 +11,10 @@
  *   `countablesToCome`), as packages/brain/src/augmentations.ts runs them;
  * - at each install, the favour (`favorAfterInstall`), the multipliers (`installGains`, SF1's bonus) and home's RAM.
  * What core can't say, the hacking level and the gross income over a cycle, is calibrated (./calibration.ts,
- * ./curves.ts). #263: the money in hand is the gross less the brain's purchases through the cycle (./money.ts); the share
- * bonus is the game's for the cycle's RAM; A6's countdown, holds and lookahead are the brain's, checked against it
- * (packages/brain/test/augmentations.test.ts); cycles past the curves' range are flagged and bounded.
+ * ./curves.ts). #263: the money in hand is the gross less the brain's purchases through the cycle (./money.ts); the
+ * share bonus is the game's formula on a fitted share of the cycle's RAM; A6's countdown, holds and lookahead follow
+ * the brain's, tested against it on the same inputs (packages/brain/test/augmentations.test.ts and
+ * desired-state.test.ts); cycles past the curves' range are flagged and bounded.
  * Not wired into the brain's choices (owner decision 46: phase B replaces a choice only where it measurably beats it).
  */
 import {
@@ -35,6 +36,7 @@ import {
   daedalusSkillsReached,
   donationsUnlocked,
   donationTermsOf,
+  type EndgameHold,
   type FactionState,
   type FactionWorkChoice,
   factionWorkChoice,
@@ -60,7 +62,7 @@ import {
   type WorkConditions,
   type WorkingPerson,
 } from "@bitburner-agent/core";
-import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS } from "./calibration.ts";
+import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS, ROOTED_WORLD_RAM_GB_BY_PORTS } from "./calibration.ts";
 import { type Clocks, Curves, homeRamAfter, measuredAt } from "./curves.ts";
 import {
   cloudRamOf,
@@ -208,7 +210,8 @@ export interface ModelOptions {
   money?: "cash" | "gross";
   /**
    * The share bonus: "state", from the RAM the cycle's purse holds (`shareBonusOfState`, #263), or "index", run
-   * #3's own by install index (`RUN_3_SHARE_BONUS`), as slice 1 had it, kept for the paired comparison's structural variant.
+   * #3's own by install index (`RUN_3_SHARE_BONUS`), as slice 1 had it, kept for the paired comparison's structural
+   * variant.
    */
   share?: "state" | "index";
   /** Each step's figures, for a trace: `money` in hand, of `gross`, and the share bonus while working. */
@@ -281,8 +284,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   let heldSinceOnlineMs: number | null = null;
   let held: { faction: string; augmentation: string } | null = null;
   let holds: Holds = NO_HOLDS;
-  // The game's count of income since the install, sampled: nothing at the install.
-  let window: { onlineMs: number; gross: number }[] = [{ onlineMs: 0, gross: 0 }];
+  // The game's count of income since the install, sampled each step: nothing at the install.
+  let incomeSamples: { onlineMs: number; gross: number }[] = [{ onlineMs: 0, gross: 0 }];
   let stats = freshStats();
 
   for (let now = 0; now <= horizonMs; now += stepMs) {
@@ -295,18 +298,27 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     const gross = reading?.money ?? curves.moneyAt(clocks.money, multipliers);
     // Past the curve's last reading, or the measured cycle's end: extrapolated (#263).
     const lastMinute = measured === undefined ? curves.lastMinute : (measured.points.at(-1)?.[0] ?? 0);
-    const past = measured === undefined ? Math.max(clocks.exp, clocks.money) : onlineMs / MINUTE_MS;
-    if (past > lastMinute) stats.extrapolatedMinutes = Math.max(stats.extrapolatedMinutes, past - lastMinute);
-    // The income over the brain's window (`AUGMENTATION_INCOME_WINDOW_MS`, the cloud servers' too), null till full.
-    window = [...window.filter((each) => onlineMs - each.onlineMs <= INCOME_WINDOW_MS), { onlineMs, gross }];
-    const first = window[0] as { onlineMs: number; gross: number };
+    const minutesIntoCurve = measured === undefined ? Math.max(clocks.exp, clocks.money) : onlineMs / MINUTE_MS;
+    if (minutesIntoCurve > lastMinute) {
+      stats.extrapolatedMinutes = Math.max(stats.extrapolatedMinutes, minutesIntoCurve - lastMinute);
+    }
+    // The income over the brain's window (`AUGMENTATION_INCOME_WINDOW_MS`, the cloud servers' too): from the newest
+    // sample at or before the window's start, as the brain keeps them (`HackLoopIncome.add`); null till it spans it.
+    incomeSamples.push({ onlineMs, gross });
+    while ((incomeSamples[1]?.onlineMs ?? Number.POSITIVE_INFINITY) <= onlineMs - INCOME_WINDOW_MS) {
+      incomeSamples.shift();
+    }
+    const oldest = incomeSamples[0] as { onlineMs: number; gross: number };
     const income =
-      onlineMs - first.onlineMs >= INCOME_WINDOW_MS
-        ? (Math.max(0, gross - first.gross) / (onlineMs - first.onlineMs)) * 1000
+      onlineMs - oldest.onlineMs >= INCOME_WINDOW_MS
+        ? (Math.max(0, gross - oldest.gross) / (onlineMs - oldest.onlineMs)) * 1000
         : null;
-    // What the brain spends through the cycle: the money in hand is what's left (#263); or the gross (#260's).
-    purse = spendThroughCycle(purse, gross, income, onlineMs, holds);
-    const money = byCash ? gross - purse.spent : gross;
+    // What the brain spends through the cycle, the hack loop's hosts the world servers its ports root and the cloud
+    // servers. The money in hand is what's left (#263); with `money: "gross"`, A6 and the joins see the gross instead.
+    const ports = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
+    purse = spendThroughCycle(purse, gross, income, onlineMs, holds, ROOTED_WORLD_RAM_GB_BY_PORTS[ports] as number);
+    const cash = gross - purse.spent;
+    const money = byCash ? cash : gross;
     const shareBonus = byState
       ? shareBonusOfState(purse, curves.calibration)
       : shareBonusOf(curves.calibration, cycles.length);
@@ -442,13 +454,13 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
         reason = null;
       }
     }
-    const step = installClock(countdown, reason, decision, now);
-    countdown = step.countdown;
+    const clockStep = installClock(countdown, reason, decision, now);
+    countdown = clockStep.countdown;
     // What the next step's purchases leave alone (packages/brain/src/desired-state.ts `#chooseProgramOrHomeRam`,
     // `#reserveForOtherPurchase`): an endgame hold's (Daedalus's $100b, The Red Pill's donation), the countdown's or
     // #243's hold's money from everything, and the lookahead's from cloud servers.
     holds = holdsOf(decision, countdown !== null, countHeld);
-    if (step.install && reason !== null) install(now, reason, decision, hacking, money, gross, multipliers);
+    if (clockStep.install && reason !== null) install(now, reason, decision, hacking, money, cash, gross, multipliers);
   }
   // The cycles out of the curves' range, the one under way at the horizon or the destroy too.
   const outOfRange = [...cycles.map((each) => each.extrapolatedMinutes), stats.extrapolatedMinutes].flatMap(
@@ -474,6 +486,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     decision: InstallDecision,
     hacking: number,
     money: number,
+    cash: number,
     gross: number,
     multipliers: Multipliers,
   ): void {
@@ -494,8 +507,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     }
     const countAfter = Object.keys(installed).length;
     // The commit: the donations and the set, then home's RAM with the money above the levels' (an install keeps it),
-    // then the levels (packages/brain/src/augmentations.ts, `#commit`).
-    const homeRamGb = homeRamAtCommit(purse.homeRamGb, money, decision.money);
+    // then the levels. From the cash in hand, whichever money A6 saw: the purse has spent through the cycle either way.
+    const homeRamGb = homeRamAtCommit(purse.homeRamGb, cash, decision.money);
     const { shareBonusSum, ...cycleStats } = stats;
     const minutesWorked = Object.values(stats.workMinutes).reduce((sum, each) => sum + each, 0);
     cycles.push({
@@ -527,15 +540,15 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     holds = NO_HOLDS;
     // Programs and cloud servers are lost at an install; home's RAM is kept (`Prestige.ts`).
     purse = freshPurse(homeRamGb);
-    window = [{ onlineMs: 0, gross: 0 }];
+    incomeSamples = [{ onlineMs: 0, gross: 0 }];
     stats = freshStats();
   }
 }
 
 /**
- * Home's RAM after the commit (packages/brain/src/augmentations.ts `#commit`): the donations and the set first, then
- * home's RAM with only the money above what NeuroFlux Governor's levels hold (`neuroFluxHeld`), then the levels; an
- * install keeps it. `commitMoney` is what the counted purchases cost.
+ * Home's RAM after the commit (packages/brain/src/augmentations.ts `#decide`, committed, `:1809-1823`): the donations
+ * and the set first, then home's RAM with only the money above what NeuroFlux Governor's levels hold (`neuroFluxHeld`),
+ * then the levels; an install keeps it. `commitMoney` is what the counted purchases cost, the donations included.
  */
 export function homeRamAtCommit(homeRamGb: number, money: number, commitMoney: number): number {
   return homeRamAfter(homeRamGb, money - commitMoney);
@@ -597,25 +610,35 @@ export function installClock(
 
 /**
  * What the brain's purchases leave alone after A6's decision (packages/brain/src/desired-state.ts
- * `#chooseProgramOrHomeRam`, `#reserveForOtherPurchase`; augmentations.ts `reserve`, `countdownReserve`): an endgame
- * hold's money (Daedalus's $100b, The Red Pill's donation) from everything; in the countdown, the counted purchases'
- * money from everything, and no program; held for Daedalus's count (#243), the counted purchases' money or the set's
- * and the last's, if more; else the lookahead's reserve from cloud servers alone.
+ * `#chooseProgramOrHomeRam`, `:973-1017`, and `#reserveForOtherPurchase`; augmentations.ts `reserve`,
+ * `countdownReserve`, `daedalusHold`, `redPillHold`): an endgame hold's money from home's RAM and cloud servers, and
+ * from programs too for The Red Pill's donation only (Daedalus's $100b doesn't hold programs); in the countdown, the
+ * counted purchases' money from home's RAM and cloud servers, and no program; held for Daedalus's count (#243), the
+ * counted purchases' money or the set's and the last's, if more, and no program; else the lookahead's reserve from
+ * cloud servers alone.
  */
 export function holdsOf(
-  decision: Pick<InstallDecision, "endgameHold" | "money" | "set" | "lookahead">,
+  decision: Pick<InstallDecision, "endgameHold" | "endgameHoldFor" | "money" | "set" | "lookahead">,
   countdownUnderWay: boolean,
   countHeld: { next: { money: number } } | null,
 ): Holds {
   if (decision.endgameHold !== null) {
-    return { home: decision.endgameHold, cloud: decision.endgameHold, countdown: false };
+    const fromPrograms = decision.endgameHoldFor === "redPill" ? decision.endgameHold : 0;
+    return {
+      fromHomeRam: decision.endgameHold,
+      fromPrograms,
+      fromCloudServers: decision.endgameHold,
+      countdownUnderWay: false,
+    };
   }
   if (countHeld !== null) {
     const held = Math.max(decision.money, decision.set.money + decision.set.donationMoney + countHeld.next.money);
-    return { home: held, cloud: held, countdown: true };
+    return { fromHomeRam: held, fromPrograms: 0, fromCloudServers: held, countdownUnderWay: true };
   }
-  if (countdownUnderWay) return { home: decision.money, cloud: decision.money, countdown: true };
-  return { home: 0, cloud: decision.lookahead, countdown: false };
+  if (countdownUnderWay) {
+    return { fromHomeRam: decision.money, fromPrograms: 0, fromCloudServers: decision.money, countdownUnderWay: true };
+  }
+  return { fromHomeRam: 0, fromPrograms: 0, fromCloudServers: decision.lookahead, countdownUnderWay: false };
 }
 
 /**
@@ -683,6 +706,8 @@ export interface InstallDecision {
   barWithNeuroFlux: number;
   /** An endgame hold's money (A8: Daedalus's $100b, The Red Pill's donation), or null for none: then no install. */
   endgameHold: number | null;
+  /** What the endgame holds for (core's `augmentationEndgame`'s `why`), or null for no hold. */
+  endgameHoldFor: EndgameHold["why"] | null;
   /**
    * The lookahead's reserve (#213, #222), held from cloud servers before the rule says install: the counted purchases'
    * money for an install the rule would choose with `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0.
@@ -756,13 +781,14 @@ export function installDecision({
   const budget = money - (endgame.kind === "redPill" ? (endgame.donation?.amount ?? 0) : 0);
   const set = chooseAugmentationsToBuy(shops.reached, state, budget, hacking, terms, count.short);
   const names = set.purchases.map((purchase) => purchase.name);
-  const nothing = { neuroFluxLevels: 0, affordableWithNeuroFlux: 0, barWithNeuroFlux: 0, lookahead: 0 };
+  const noCounts = { neuroFluxLevels: 0, affordableWithNeuroFlux: 0, barWithNeuroFlux: 0, lookahead: 0 };
   if (endgame.kind === "hold") {
-    return { reason: null, names: [], set, terms, money: 0, endgameHold: endgame.reserve, ...nothing };
+    const held = { endgameHold: endgame.reserve, endgameHoldFor: endgame.why };
+    return { reason: null, names: [], set, terms, money: 0, ...held, ...noCounts };
   }
   if (endgame.kind === "redPill") {
-    const redPill = { names: [...names, THE_RED_PILL], set, terms, endgameHold: null };
-    return { reason: "The Red Pill", ...redPill, ...nothing, money: set.money + set.donationMoney };
+    const redPill = { names: [...names, THE_RED_PILL], set, terms, endgameHold: null, endgameHoldFor: null };
+    return { reason: "The Red Pill", ...redPill, ...noCounts, money: set.money + set.donationMoney };
   }
   const judge = (spare: number, covered: typeof set, laterMs = 0) =>
     installJudgement({
@@ -797,6 +823,7 @@ export function installDecision({
     affordableWithNeuroFlux: rule.affordableWithNeuroFlux,
     barWithNeuroFlux: rule.barWithNeuroFlux,
     endgameHold: null,
+    endgameHoldFor: null,
     lookahead,
   };
 }

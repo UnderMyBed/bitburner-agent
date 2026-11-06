@@ -1,20 +1,26 @@
 /**
  * The cycle's money in hand (#263): the game's hacking income since the install (the curves' gross) less what the brain
  * spends through the cycle, by the brain's own rules (packages/brain/src/desired-state.ts `#choosePurchase`,
- * packages/brain/src/cloud-servers.ts `chooseCloudServerPurchase`, packages/brain/src/home-ram.ts):
- * - a program (the TOR router and the port openers) or home's RAM, the cheaper first, each once the money less what
- *   the augmentations hold covers it; no program in the install's countdown (they're lost at it);
- * - else a cloud server: none before the income window (10 min online), then the largest power of two of RAM the money
- *   covers, less the cheaper of the next program and home's RAM if the income brings it within a minute and less what
- *   the augmentations hold from cloud servers, that pays for itself within 15 min at the income a GB; a new server from
- *   8 GB while fewer than 25, else the smallest one upgraded.
- * Run #3's BN1.2 (#263's comment) bears it out: the cloud servers' 25 × 1 PB ($1.44t) by 30 min each cycle from the
- * 3rd, and home's upgrades at core's price ($416.68t in the 4th cycle: 512 TB → 1 PB → 2 PB; $997.84t, 2 PB → 4 PB, in
- * the 8th). The augmentations themselves are bought at the commit (`cycles.ts`).
+ * `#chooseProgramOrHomeRam` and `#reserveForOtherPurchase`; packages/brain/src/cloud-servers.ts
+ * `chooseCloudServerPurchase`; packages/brain/src/home-ram.ts), one purchase at a time (`nextPurchase`):
+ * - a program (the TOR router and the port openers) or home's RAM, the cheaper of those the money covers: a program
+ *   not in the install's countdown (they're lost at it) nor into The Red Pill's donation's money; home's RAM not into
+ *   any money A6 holds;
+ * - else a cloud server: none before the income window (10 min), then the largest power of two of RAM the money covers,
+ *   less the cheaper of the next program and home's RAM if the income brings it within a minute and less what A6 holds
+ *   from cloud servers, that pays for itself within 15 min at the income a GB of the hack loop's hosts (the rooted
+ *   world servers and the cloud servers); a new server from 8 GB while fewer than 25, else the smallest one upgraded.
+ * Tested against the brain's own choice on the same purse and income (packages/brain/test/desired-state.test.ts,
+ * "brain against the fast model"). Run #3's BN1.2 (#263's comment) bears the rules out: the cloud servers' 25 × 1 PB
+ * ($1.44t) by 30 min each cycle from the 3rd; home's upgrades at core's price (in the 4th cycle, $416.68t on servers
+ * all told: the $1.44t of cloud servers, 512 TB → 1 PB → 2 PB of home's). The augmentations are bought at the commit.
  */
-import { HOME_RAM_LIMIT, homeRamUpgradePrice } from "@bitburner-agent/core";
+import { CLOUD_SERVER_MAX_RAM, HOME_RAM_LIMIT, homeRamUpgradePrice } from "@bitburner-agent/core";
 
-/** The TOR router (`Constants.ts:44`), then the port openers, cheapest first (`DarkWeb/DarkWebItems.ts:6-10`). */
+/**
+ * The TOR router (`Constants.ts:44`), then the port openers, cheapest first (`DarkWeb/DarkWebItems.ts:6-10`): the
+ * brain's `PURCHASE_PRICES` in that order.
+ */
 export const PROGRAM_PRICES: readonly number[] = [200e3, 500e3, 1.5e6, 5e6, 30e6, 250e6];
 /** BN1's price of a GB of a cloud server (`Server/data/Constants.ts:4`); the brain's `CLOUD_SERVER_PRICE_PER_GB`. */
 export const CLOUD_SERVER_PRICE_PER_GB = 55_000;
@@ -22,9 +28,7 @@ export const CLOUD_SERVER_PRICE_PER_GB = 55_000;
 export const CLOUD_SERVER_LIMIT = 25;
 /** The least RAM the brain buys a server with; the brain's `MIN_CLOUD_SERVER_RAM`. */
 export const MIN_CLOUD_SERVER_RAM = 8;
-/** The most a cloud server can have (core's `CLOUD_SERVER_MAX_RAM`, `Server/data/Constants.ts:13`). */
-export const CLOUD_SERVER_MAX_RAM = 2 ** 20;
-/** No cloud server before the income is measured over this, online; the brain's `CLOUD_SERVER_INCOME_WINDOW_MS`. */
+/** No cloud server before the income is measured over this; the brain's `CLOUD_SERVER_INCOME_WINDOW_MS`. */
 export const CLOUD_SERVER_INCOME_WINDOW_MS = 10 * 60_000;
 /** A server pays for itself within this at the income a GB; the brain's `CLOUD_SERVER_PAYBACK_LIMIT_MS`. */
 export const CLOUD_SERVER_PAYBACK_LIMIT_MS = 15 * 60_000;
@@ -40,12 +44,12 @@ export interface Purse {
   /** Of `PROGRAM_PRICES`, how many bought: the TOR router first, so the ports open are one fewer. */
   programs: number;
   /** Each cloud server's RAM, GB. */
-  cloud: number[];
+  cloudServersRamGb: number[];
   homeRamGb: number;
 }
 
 export function freshPurse(homeRamGb: number): Purse {
-  return { spent: 0, programs: 0, cloud: [], homeRamGb };
+  return { spent: 0, programs: 0, cloudServersRamGb: [], homeRamGb };
 }
 
 /** The ports the programs bought open: one a port opener (the TOR router opens none). */
@@ -54,80 +58,117 @@ export function portsOpen(purse: Purse): number {
 }
 
 export function cloudRamOf(purse: Purse): number {
-  return purse.cloud.reduce((sum, each) => sum + each, 0);
+  return purse.cloudServersRamGb.reduce((sum, each) => sum + each, 0);
 }
 
-/** What the brain holds back from a purchase this step. */
+/** What A6 holds back from each purchase (packages/brain/src/desired-state.ts `#chooseProgramOrHomeRam`). */
 export interface Holds {
-  /** From programs and home's RAM: the install's countdown (or #243's hold), Daedalus's $100b, The Red Pill's. */
-  home: number;
-  /** From cloud servers: that, or the lookahead's reserve, where more. */
-  cloud: number;
-  /** The install's countdown or #243's hold under way: no program is bought. */
-  countdown: boolean;
+  /** From home's RAM: the countdown's or #243's hold's money, Daedalus's $100b, The Red Pill's donation, the most. */
+  fromHomeRam: number;
+  /** From programs: The Red Pill's donation only (the brain's invitations' hold isn't modelled). */
+  fromPrograms: number;
+  /** From cloud servers (`#reserveForOtherPurchase`): A6's reserve, the lookahead's included. */
+  fromCloudServers: number;
+  /** The install's countdown or #243's hold under way: no program is bought (they're lost at the install). */
+  countdownUnderWay: boolean;
 }
 
-export const NO_HOLDS: Holds = { home: 0, cloud: 0, countdown: false };
+export const NO_HOLDS: Holds = { fromHomeRam: 0, fromPrograms: 0, fromCloudServers: 0, countdownUnderWay: false };
+
+/** One purchase: a program (the next of `PROGRAM_PRICES`), home's next upgrade, or a cloud server. */
+export type Purchase =
+  | { kind: "program"; price: number }
+  | { kind: "homeRam"; fromRamGb: number; price: number }
+  | { kind: "cloudServer"; serverIndex: number | null; ramGb: number; price: number };
 
 /**
- * The purse after the step's purchases, with the cycle's `gross` income so far (the money in hand is `gross` less
- * `spent`), its rate a second (`income`, null before there's one) and the time online.
+ * The brain's next purchase with `cash` in hand, the hack loop's `income` a second (null before it's measured over the
+ * window), the time online, A6's holds and the rooted world servers' RAM (the hack loop's other hosts); null for none.
+ */
+export function nextPurchase(
+  purse: Purse,
+  cash: number,
+  income: number | null,
+  onlineMs: number,
+  holds: Holds,
+  worldRamGb: number,
+): Purchase | null {
+  const programPrice = PROGRAM_PRICES[purse.programs];
+  const homeRamPrice = purse.homeRamGb < HOME_RAM_LIMIT ? homeRamUpgradePrice(purse.homeRamGb) : undefined;
+  const programAllowed =
+    programPrice !== undefined &&
+    cash >= programPrice &&
+    !holds.countdownUnderWay &&
+    !(holds.fromPrograms > 0 && cash - programPrice < holds.fromPrograms);
+  const homeRamAllowed =
+    homeRamPrice !== undefined &&
+    cash >= homeRamPrice &&
+    !(holds.fromHomeRam > 0 && cash - homeRamPrice < holds.fromHomeRam);
+  if (programAllowed && (!homeRamAllowed || (programPrice as number) <= (homeRamPrice as number))) {
+    return { kind: "program", price: programPrice as number };
+  }
+  if (homeRamAllowed) return { kind: "homeRam", fromRamGb: purse.homeRamGb, price: homeRamPrice as number };
+  return cloudPurchase(purse, cash, income, onlineMs, holds, worldRamGb, [programPrice, homeRamPrice]);
+}
+
+/**
+ * The purse after the step's purchases, one after another (`nextPurchase`), with the cycle's `gross` income so far (the
+ * money in hand is `gross` less `spent`), the income, the time online, A6's holds and the world servers' RAM.
  */
 export function spendThroughCycle(
   purse: Purse,
   gross: number,
   income: number | null,
   onlineMs: number,
-  holds: Holds = NO_HOLDS,
+  holds: Holds,
+  worldRamGb: number,
 ): Purse {
-  const next: Purse = { ...purse, cloud: [...purse.cloud] };
+  const after: Purse = { ...purse, cloudServersRamGb: [...purse.cloudServersRamGb] };
   for (let bought = 0; bought < MOST_PURCHASES_A_STEP; bought++) {
-    const cash = gross - next.spent;
-    const program = holds.countdown ? undefined : PROGRAM_PRICES[next.programs];
-    const home = next.homeRamGb < HOME_RAM_LIMIT ? homeRamUpgradePrice(next.homeRamGb) : undefined;
-    const affordable = [program, home].filter((price) => price !== undefined && cash - price >= holds.home);
-    const cheaper = Math.min(...(affordable as number[]));
-    if (affordable.length > 0) {
-      next.spent += cheaper;
-      if (cheaper === program) next.programs += 1;
-      else next.homeRamGb *= 2;
-      continue;
-    }
-    const purchase = cloudPurchase(next, cash, income, onlineMs, holds, [program, home]);
+    const purchase = nextPurchase(after, gross - after.spent, income, onlineMs, holds, worldRamGb);
     if (purchase === null) break;
-    next.spent += purchase.price;
-    if (purchase.index === null) next.cloud.push(purchase.ram);
-    else next.cloud[purchase.index] = purchase.ram;
+    after.spent += purchase.price;
+    if (purchase.kind === "program") after.programs += 1;
+    else if (purchase.kind === "homeRam") after.homeRamGb *= 2;
+    else if (purchase.serverIndex === null) after.cloudServersRamGb.push(purchase.ramGb);
+    else after.cloudServersRamGb[purchase.serverIndex] = purchase.ramGb;
   }
-  return next;
+  return after;
 }
 
-/** The brain's next cloud purchase (`chooseCloudServerPurchase`), or null. */
+/** The brain's next cloud purchase (`chooseCloudServerPurchase` with `#reserveForOtherPurchase`), or null. */
 function cloudPurchase(
   purse: Purse,
   cash: number,
   income: number | null,
   onlineMs: number,
   holds: Holds,
-  waiting: readonly (number | undefined)[],
-): { index: number | null; ram: number; price: number } | null {
+  worldRamGb: number,
+  waitingPrices: readonly (number | undefined)[],
+): Purchase | null {
   if (onlineMs < CLOUD_SERVER_INCOME_WINDOW_MS || income === null || !(income > 0)) return null;
-  const atTheLimit = purse.cloud.length >= CLOUD_SERVER_LIMIT;
-  const index = atTheLimit ? purse.cloud.indexOf(Math.min(...purse.cloud)) : null;
-  const fromRam = index === null ? 0 : (purse.cloud[index] as number);
-  if (fromRam >= CLOUD_SERVER_MAX_RAM) return null;
-  // The cheaper of the next program and home's RAM, held if the income brings it within the horizon.
-  const cheaper = Math.min(...waiting.filter((price): price is number => price !== undefined));
-  const other = cheaper - cash <= (income * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : 0;
-  const spendable = cash - Math.max(holds.cloud, other);
-  // The hack loop's income a GB a second, over the cloud servers (the world's servers left out: the safe side).
-  const cloudRam = cloudRamOf(purse);
-  const perGbSecond = cloudRam > 0 ? income / cloudRam : Number.POSITIVE_INFINITY;
-  let best: { index: number | null; ram: number; price: number } | null = null;
-  for (let ram = index === null ? MIN_CLOUD_SERVER_RAM : fromRam * 2; ram <= CLOUD_SERVER_MAX_RAM; ram *= 2) {
-    const price = (ram - fromRam) * CLOUD_SERVER_PRICE_PER_GB;
-    const paybackMs = (price / ((ram - fromRam) * perGbSecond)) * 1000;
-    if (price <= spendable && paybackMs <= CLOUD_SERVER_PAYBACK_LIMIT_MS) best = { index, ram, price };
+  const servers = purse.cloudServersRamGb;
+  const atTheLimit = servers.length >= CLOUD_SERVER_LIMIT;
+  const serverIndex = atTheLimit ? servers.indexOf(Math.min(...servers)) : null;
+  const fromRamGb = serverIndex === null ? 0 : (servers[serverIndex] as number);
+  if (fromRamGb >= CLOUD_SERVER_MAX_RAM) return null;
+  // The cheaper of the next program and home's RAM (the program's even in the countdown, as the brain's plan has it),
+  // held if the income brings it within the horizon.
+  const cheaperWaiting = Math.min(...waitingPrices.filter((price): price is number => price !== undefined));
+  const heldForNext = cheaperWaiting - cash <= (income * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaperWaiting : 0;
+  const spendable = cash - Math.max(holds.fromCloudServers, heldForNext);
+  // The hack loop's income a GB a second over its hosts: the rooted world servers and the cloud servers.
+  const perGbSecond = income / (worldRamGb + cloudRamOf(purse));
+  let best: Purchase | null = null;
+  for (
+    let ramGb = serverIndex === null ? MIN_CLOUD_SERVER_RAM : fromRamGb * 2;
+    ramGb <= CLOUD_SERVER_MAX_RAM;
+    ramGb *= 2
+  ) {
+    const price = (ramGb - fromRamGb) * CLOUD_SERVER_PRICE_PER_GB;
+    const paybackMs = (price / ((ramGb - fromRamGb) * perGbSecond)) * 1000;
+    if (price <= spendable && paybackMs <= CLOUD_SERVER_PAYBACK_LIMIT_MS)
+      best = { kind: "cloudServer", serverIndex, ramGb, price };
   }
   return best;
 }

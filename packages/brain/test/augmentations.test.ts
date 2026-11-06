@@ -14,7 +14,9 @@ import {
   factionReputationPerSecond,
   isWorthInstalling,
   type MediumSnapshotData,
+  PORT_OPENER_PROGRAMS,
   type SlowSnapshotData,
+  TOR_ROUTER,
   type WorkingPerson,
 } from "@bitburner-agent/core";
 import * as model from "@bitburner-agent/model";
@@ -45,6 +47,7 @@ import {
 } from "../src/augmentations.ts";
 import * as cloud from "../src/cloud-servers.ts";
 import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions.ts";
+import { PURCHASE_PRICES } from "../src/programs.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
@@ -2656,7 +2659,7 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
       const countdown = rule.view().progress?.countdown;
       expect(clock?.endsAtMs, `${atMs} ms`).toBe(countdown?.endsAtGameMs);
       expect(clock?.extensions, `${atMs} ms`).toBe(countdown?.extensions);
-      expect(holdsOf(decision, clock !== null, null).home, `${atMs} ms`).toBeCloseTo(rule.countdownReserve(), 0);
+      expect(holdsOf(decision, clock !== null, null).fromHomeRam, `${atMs} ms`).toBeCloseTo(rule.countdownReserve(), 0);
     }
     expect(readAugmentationCycle(store)).not.toBeNull();
   });
@@ -2674,7 +2677,7 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
       const decision = modelDecision(EIGHT_COST + SLACK + extra, atMs);
       clock = installClock(clock, decision.reason, decision, gameTimeMs).countdown;
       expect(clock?.endsAtMs ?? null, `${atMs} ms`).toBe(rule.view().progress?.countdown?.endsAtGameMs ?? null);
-      expect(holdsOf(decision, clock !== null, null).home, `${atMs} ms`).toBeCloseTo(rule.countdownReserve(), 0);
+      expect(holdsOf(decision, clock !== null, null).fromHomeRam, `${atMs} ms`).toBeCloseTo(rule.countdownReserve(), 0);
     }
   });
 
@@ -2689,8 +2692,8 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
       const decision = modelDecision(EIGHT_COST - short, rule.view().progress?.onlineMs ?? 0, perSecond);
       expect(decision.reason).toBeNull();
       const holds = holdsOf(decision, false, null);
-      expect(holds.cloud, `$${short} short at $${perSecond}/s`).toBeCloseTo(rule.reserve(), 0);
-      expect(holds.home).toBe(rule.countdownReserve());
+      expect(holds.fromCloudServers, `$${short} short at $${perSecond}/s`).toBeCloseTo(rule.reserve(), 0);
+      expect(holds.fromHomeRam).toBe(rule.countdownReserve());
     }
   });
 
@@ -2703,5 +2706,7 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
     expect(model.CLOUD_SERVER_PRICE_PER_GB).toBe(cloud.CLOUD_SERVER_PRICE_PER_GB);
     expect(model.CLOUD_SERVER_RESERVE_HORIZON_MS).toBe(cloud.CLOUD_SERVER_RESERVE_HORIZON_MS);
     expect(model.MIN_CLOUD_SERVER_RAM).toBe(cloud.MIN_CLOUD_SERVER_RAM);
+    // The programs in the order the brain buys them (TOR first, then core's port openers), at the brain's prices.
+    expect(model.PROGRAM_PRICES).toEqual([TOR_ROUTER, ...PORT_OPENER_PROGRAMS].map((item) => PURCHASE_PRICES[item]));
   });
 });

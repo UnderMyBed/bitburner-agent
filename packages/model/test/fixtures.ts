@@ -63,8 +63,10 @@ export const RUN_3_PER_CYCLE = [
 /**
  * Run #3's cash in hand (the medium snapshots' `player.money`) a cycle, cycles 1 to 6, [minutes after the install,
  * money], at the readings the cycle lasted to (its end left out: that's after the commit's purchases). The
- * coordinator's read-only extract on #263: https://github.com/UnderMyBed/bitburner-agent/issues/263 (its first comment). The slow
- * snapshots' sources lag the medium's by up to a few minutes, so in a cycle's steep minutes the two don't compare.
+ * coordinator's read-only extract on #263:
+ * https://github.com/UnderMyBed/bitburner-agent/issues/263#issuecomment-6681259933.
+ * The slow snapshots' sources lag the medium's by up to a few minutes, so in a cycle's steep minutes the two don't
+ * compare.
  */
 export const RUN_3_CASH: readonly (readonly (readonly [number, number])[])[] = [
   [5, 10, 15, 20, 30].map((minutes, index) => [minutes, [1262, 1.43e6, 2.64e6, 16.55e6, 195.61e6][index] as number]),
@@ -93,9 +95,6 @@ export const RUN_3_CASH: readonly (readonly (readonly [number, number])[])[] = [
     ] as number,
   ]),
 ];
-
-/** BitRunners' favour after the 4th install in run #3 (#247: "favour 4.8" at 13:13; the table's 4.76). */
-export const RUN_3_BITRUNNERS_FAVOR_AFTER_4 = 4.76;
 
 /**
  * Run #3's BN1.2 phases (#244's table), each ending at an install: 11 h 17 min from 08:46 to the destroy at 20:03.

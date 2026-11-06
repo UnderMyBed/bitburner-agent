@@ -108,18 +108,21 @@ describe("the calibration", () => {
       return (level + money / 3) / readings;
     };
     const fitted = error({});
-    // 0.200 at the fit (12% on the level, ×1.8 on the money), refitted by #263 once home's RAM came from the cash.
-    expect(fitted).toBeLessThan(0.21);
+    // 0.2003 at the fit (12% on the level, ×1.8 on the money; #263 refitted it once home's RAM came from the cash), a
+    // local best by coordinate descent at these steps; the bound keeps the fit within a thousandth of it.
+    expect(fitted).toBeLessThan(0.201);
     const { expPaceExponent, moneyPaceExponent, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
+    // The refit's own steps: ±0.0625 on the exponents (0.5625, #260's, among them), ±0.05 on the first cycle's
+    // speed, ×2 and ÷2 on home's RAM (256 GB, #260's, among them).
     for (const neighbour of [
-      { expPaceExponent: expPaceExponent - 0.125 },
-      { expPaceExponent: expPaceExponent + 0.125 },
-      { moneyPaceExponent: moneyPaceExponent - 0.125 },
-      { moneyPaceExponent: moneyPaceExponent + 0.125 },
-      { firstCycleSpeed: firstCycleSpeed - 0.1 },
-      { firstCycleSpeed: firstCycleSpeed + 0.1 },
-      { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 4 },
-      { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 4 },
+      { expPaceExponent: expPaceExponent - 0.0625 },
+      { expPaceExponent: expPaceExponent + 0.0625 },
+      { moneyPaceExponent: moneyPaceExponent - 0.0625 },
+      { moneyPaceExponent: moneyPaceExponent + 0.0625 },
+      { firstCycleSpeed: firstCycleSpeed - 0.05 },
+      { firstCycleSpeed: firstCycleSpeed + 0.05 },
+      { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 2 },
+      { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 2 },
     ]) {
       expect(fitted, JSON.stringify(neighbour)).toBeLessThanOrEqual(error(neighbour));
     }
@@ -348,7 +351,8 @@ describe("the model", () => {
         factionRep: 4,
         onlineMs: 5 * MINUTE_MS,
       });
-    // 2.5m reputation at $1m a reputation over faction_rep 4: $625b, and a hair. Held: nothing installs, its money held.
+    // 2.5m reputation at $1m a reputation over faction_rep 4: $625b, and a hair. Held: nothing installs, its money
+    // held.
     expect(decide(624e9)).toMatchObject({ reason: null, names: [], neuroFluxLevels: 0 });
     expect(decide(624e9).endgameHold).toBeGreaterThan(0);
     expect(decide(626e9).endgameHold).toBeNull();

@@ -176,10 +176,11 @@ export interface Calibration {
    */
   referenceCycles: readonly { cycle: number; multipliers: CycleMultipliers }[];
   /**
-   * How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. Fitted, with
-   * `fullSpeedHomeRamGb` and the paces, on run #3's cycles 1 to 6 (the model's 7th on is another cycle than run #3's),
-   * refitted by #263 once home's RAM came from the cash: the mean error at each reading, 12% on the level and ×1.8 on
-   * the gross income (which spans 12 orders of magnitude). BN1.2's home starts at 32 GB, so 8 GB is out of its range.
+   * How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. Fitted,
+   * with `fullSpeedHomeRamGb` and the paces, on run #3's cycles 1 to 6 (the model's 7th on is another cycle than run
+   * #3's), refitted by #263 once home's RAM came from the cash: the mean error at each reading, 12% on the level and
+   * ×1.8 on the gross income (which spans 12 orders of magnitude). BN1.2's home starts at 32 GB, so 8 GB is out of its
+   * range.
    */
   firstCycleSpeed: number;
   /** Home's RAM from which a cycle runs at the reference cycles' pace (`firstCycleSpeed`'s other end). */
@@ -196,9 +197,11 @@ export interface Calibration {
   /** The share bonus while working, by cycle (`RUN_3_SHARE_BONUS`); past the list, its last: `share: "index"` only. */
   shareBonusByCycle: readonly number[];
   /**
-   * The share of home's and the cloud servers' RAM in share threads while working (`shareBonusOfState`, #263): what the
-   * batches leave, at most 80% of their hosts' use (core's `shareRound`). Fitted on run #3's share a cycle, cycles 1 to
-   * 6: 6% mean error (3% without the 4th, whose 1.16 its brain's share before #242 made, not its RAM).
+   * The share of home's and the cloud servers' RAM in share threads while working (`shareBonusOfState`, #263): the
+   * game's formula on this constant. The real share is what the batches leave (at most 80% of their hosts' use, core's
+   * `shareRound`), which rises late in a cycle as the batches need less, so a constant reads low in cycles 5 and 6 (an
+   * average of 1.43 against run #3's 1.49 and 1.55). Fitted on run #3's share a cycle, cycles 1 to 6: 6% mean error
+   * (3% without the 4th, whose 1.16 its brain's share before #242 made, not its RAM).
    */
   shareRamShare: number;
 }
@@ -219,11 +222,20 @@ export const CALIBRATION: Calibration = {
 };
 
 /**
+ * The world servers' RAM the hack loop roots with `ports` port openers, GB, by the ports (0 to 5): every server of the
+ * game's that needs no more (`Server/data/servers.ts`, `numOpenPortsRequired`; NUKE checks the ports alone,
+ * `NetscriptFunctions.ts:541-544`, and the hack loop roots by them, packages/ingame/src/entries/hack-loop-root.ts), its
+ * RAM 2^`maxRamExponent`, the mean of a range drawn per save. The hack loop's hosts with the cloud servers (the brain's
+ * `hackLoopHosts`): the cloud payback's income a GB is over them all (#263 review). The game's; a test recomputes them.
+ */
+export const ROOTED_WORLD_RAM_GB_BY_PORTS: readonly number[] = [100, 236, 454, 907.0667, 1406.1333, 3168.8];
+
+/**
  * When each hacker faction is joined (#195's backdoors): once the hacking level reaches its server's
- * `requiredHackingSkill` and the money has bought the TOR router and the port openers it needs. Each server's level is
- * drawn per save in a range (`Server/data/servers.ts:1430-1517`); the model takes the top of each (CSEC 51-60,
- * avmnite-02h 202-220, I.I.I.I 340-365, run4theh111z 505-550), the safe side. Run #3 joined BitRunners at hacking
- * about 588 (#247), the simulator at 540.
+ * `requiredHackingSkill` and the TOR router and the port openers it needs are bought. Each server's level is drawn per
+ * save in a range (`Server/data/servers.ts:1430-1517`); the model takes the top of each (CSEC 51-60, avmnite-02h
+ * 202-220, I.I.I.I 340-365, run4theh111z 505-550), the safe side. Run #3 joined BitRunners at hacking about 588 (#247),
+ * the simulator at 540.
  */
 export const HACKER_FACTION_JOINS: readonly { faction: string; hacking: number; ports: number }[] = [
   { faction: "CyberSec", hacking: 60, ports: 1 },
