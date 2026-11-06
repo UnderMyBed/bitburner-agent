@@ -2888,3 +2888,97 @@ describe("Daedalus count stuck, judged on A6's commit's facts (#238)", () => {
     ]);
   });
 });
+
+describe("the brain's own irreversible intents go through the irreversible gate (#269)", () => {
+  const JOIN_SECTOR_12 = intent({ action: "joinFaction", args: { faction: "Sector-12" } });
+  const SAVED: SaveBackupEvent = { type: "saveBackup", atMs: 1, file: "saves/E0/x.json.gz", sizeBytes: 10 };
+  /** A player who can reach every city group (#228's): the city group A chosen (Sector-12, Aevum). */
+  const player = (factions: string[] = []) =>
+    mediumData(100, {}, { money: 1e9, city: "Sector-12", hasTorRouter: true, homeRam: 2 ** 20, factions });
+  /** A slow snapshot with `invited` in the faction state. */
+  const invitedTo = (invited: string[]) => {
+    const data = slowData();
+    data.factions = {
+      backend: "sim",
+      state: { joined: [], invitations: invited, queuedAugmentations: [] },
+      problem: null,
+    };
+    return data;
+  };
+  /** The hack loop off and every rule on; save backups each answered when the test says. */
+  function connected() {
+    store.setSetting("hackLoop.enabled", "false");
+    const pending: ((event: SaveBackupEvent) => void)[] = [];
+    const backupNow = vi.fn(() => new Promise<SaveBackupEvent>((resolve) => pending.push(resolve)));
+    const controller = new DesiredStateController({ channel, store, saveBackups: { backupNow } });
+    const connection = connectAgent();
+    send(connection, "static", network);
+    send(connection, "slow", invitedTo(["Sector-12"]));
+    const sentIds = () =>
+      desiredStates(connection)
+        .at(-1)
+        ?.intents.map((each) => each.id) ?? [];
+    const waitingFor = (id: string) => controller.intentsView().find((view) => view.id === id)?.waitingFor;
+    const settleBackup = async (event: SaveBackupEvent) => {
+      pending.shift()?.(event);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    return { controller, connection, backupNow, sentIds, waitingFor, settleBackup };
+  }
+
+  test("a city faction's join, Sector-12's (it bans four): its guard on two medium snapshots, then a backup", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    send(connection, "medium", player());
+    expect(controller.factionsView().joining).toBe("Sector-12");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)",
+    );
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe("waiting for a save backup");
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBeNull();
+    // Out, its guard still judged: an enemy joined withdraws it.
+    send(connection, "medium", player(["Chongqing"]));
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe("held: Sector-12's enemy Chongqing is joined");
+  });
+
+  test("#269's reproduction: with the owner's install queued, the join waits for it, one irreversible intent at a time", () => {
+    const { controller, connection, backupNow, sentIds, waitingFor } = connected();
+    controller.addManualIntent({ action: "installAugmentations", args: {} });
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    // Before #269: ["buyProgram(BruteSSH.exe)", "joinFaction(Sector-12)", "travel(Ishima)"], the join out at once.
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(controller.intentsView().find((view) => view.id === JOIN_SECTOR_12.id)?.source).toBe("join");
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for installAugmentations() first: one irreversible intent at a time",
+    );
+    // The only backup asked for is the install's.
+    expect(backupNow).toHaveBeenCalledTimes(1);
+  });
+
+  test("out, then the owner queues an install: the join waits for its reset, and says so", async () => {
+    const { controller, connection, sentIds, waitingFor, settleBackup } = connected();
+    for (let each = 0; each < 3; each += 1) send(connection, "medium", player());
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain(JOIN_SECTOR_12.id);
+    controller.addManualIntent({ action: "installAugmentations", args: {} });
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for installAugmentations() first: queued after an install, it's for the game after the reset",
+    );
+  });
+
+  test("reversible ones the rules make go at once, as before: CyberSec's join (no enemies), the purchase", () => {
+    const { connection, sentIds } = connected();
+    send(connection, "slow", invitedTo(["CyberSec"]));
+    send(connection, "medium", player());
+    expect(sentIds()).toEqual(expect.arrayContaining(["joinFaction(CyberSec)", "buyProgram(BruteSSH.exe)"]));
+  });
+});

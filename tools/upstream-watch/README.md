@@ -22,7 +22,7 @@ The stable watcher's report leads with **bump steps**, when `stable` is ahead of
 2. `PINNED_GAME`;
 3. `setup:engine`, regenerating core's game data (`generate-game-data.ts`, #193), and `npm run check`;
 4. the parity re-audit;
-5. the heavy suites;
+5. the heavy suites, including their live run read back with `npm run report`, which must PASS, or WARN with each warning explained on the issue (owner decisions 45 and 55);
 6. the mechanics docs;
 7. a search for the old version and commit, skipping the generated game data;
 8. the bump PR.
