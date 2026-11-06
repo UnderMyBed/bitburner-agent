@@ -48,15 +48,20 @@
 //   maximum is counted (`moneyLooksBelowFull`), a grow short of the hack before it, so the batches would drift toward
 //   the bounds' floor. A grow it can't look at so is counted (`growsNotLooked`, #235's review), and so are those that
 //   land while it recovers from a desync, whose money isn't the grow's doing.
-// - **Sharing (#224):** while its config asks (the brain's switch on, faction work going on) and it's batching, once the
-//   batches' orders due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on its hosts' free
-//   RAM less the config's reserve for the batches and the next target, and on home's above what it keeps for the Agent,
-//   to at most 80% of their RAM in use (core's `shareRound`), and never the RAM the batches planned will hold over its
-//   10 s (#232): a round at most every 5 s, looking again soon after one finds no room. None while a last preparation
-//   wave still lands, nor until the batches planned meanwhile, whose leads it lengthens, have landed (#226's review);
-//   none for a minute after a batch came up short (legacy daemon.js shares only with every batch scheduled). No wave
-//   starts while share threads still hold RAM (10 s at most), so a move or a desync's preparation has all of it. A
-//   batch trimmed that the share's threads on its hosts made smaller is counted apart, the share's (#232's review).
+// - **Sharing (#224):** while its config asks (the brain's switch on, faction work going on), once the batches' orders
+//   due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on home's RAM above what it keeps
+//   for the Agent, and, while it's batching, on its hosts' free RAM less the config's reserve for the batches and the
+//   next target, to at most 80% of their RAM in use (core's `shareRound`; #242: home, beside them, isn't counted), and
+//   never the RAM the batches planned will hold over its 10 s (#232). A round at most every 5 s, of half of all the
+//   share may hold (core's `shareRoundThreads`, #242): two halves overlap, so as one ends the other still shares, never
+//   ×1.0 while the RAM comes back; none on what's left beside a half ending. Looking again 100 ms after a look that
+//   started none while batching; preparing, at each wake, a second apart at most. None on its hosts while a last preparation wave still lands, nor until the batches planned meanwhile, whose
+//   leads it lengthens, have landed (#226's review); none for a minute after a batch came up short (legacy daemon.js
+//   shares only with every batch scheduled); home shares through all of these and while it prepares (#242: its share
+//   can't take the batches' RAM, #230). No wave starts while share threads on its hosts still hold RAM (10 s at most),
+//   so a move or a desync's preparation has all of it. A batch trimmed that the share's threads on its hosts made
+//   smaller is counted apart, the share's (#232's review). Its health has the bonus its last look found possible and
+//   home's RAM free then (#242).
 // - **Health:** core's `BatcherHealth`, on its health port whenever it changes, and in its log every minute and at each
 //   change of state or of its problem, or anything wrong.
 // - **On the page's monotonic clock (#251):** every schedule, wait, landing and duration is timed on
@@ -130,6 +135,7 @@ import {
   shareRamHolds,
   shareReleasedAt,
   shareRound,
+  shareRoundThreads,
 } from "@bitburner-agent/core";
 import { monotonicMs, monotonicMsOf, wallClockMsOf } from "../clock.ts";
 import type { NS } from "../ns.ts";
@@ -958,51 +964,89 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     nextHealth.wavesStarted += 1;
   };
 
-  // Sharing (#224): each part of a round started, the next look, the rounds started, and the room the last look found.
+  // Sharing (#224): each part of a round started, the next look, the rounds started, and the room the last look found;
+  // the bonus possible then, and home's RAM and its RAM free beyond what it keeps (#242).
   let sharingParts: { host: string; threads: number; cores: number; endsAt: number }[] = [];
   let nextSharingLookAt = 0;
   let sharingRounds = 0;
   let sharingRoomGb = 0;
+  let sharingPossibleBonus = 1;
+  let homeRamLooked: { gb: number; freeGb: number } | null = null;
   /** The problem its last round gave (a part that wouldn't start), until a round without one; or null. */
   let sharingProblem: string | null = null;
-  /** When the share threads started last may have ended and freed their RAM, or 0 with none. */
-  const sharingHeldUntil = () => sharingParts.reduce((latest, part) => Math.max(latest, shareReleasedAt(part)), 0);
+  /**
+   * When the share threads on its hosts started last may have ended and freed their RAM, or 0 with none (#242: home's,
+   * beside them, never hold a wave's RAM).
+   */
+  const sharingHeldUntil = () =>
+    sharingParts.reduce(
+      (latest, part) => (hosts.includes(part.host) ? Math.max(latest, shareReleasedAt(part)) : latest),
+      0,
+    );
 
   /**
-   * A round of share (#224): only while batching, with its config's `sharing`, at most every `SHARE_ROUND_MS`, on the
-   * hosts' free RAM less the config's reserve and home's kept RAM, to at most 80% of their RAM (core's `shareRound`).
-   * Called once the batches' orders due and the waves are out, so they come first.
+   * A round of share (#224), with its config's `sharing`, at most every `SHARE_ROUND_MS`, of half of all the share may
+   * hold (core's `shareRoundThreads`, #242), so a half ends while the other still holds. On its hosts only while batching, outside the hold-offs (a wave landing, a short), and never the
+   * RAM the batches will hold (#232); on home, beside them, whenever asked (#242): its share can't take theirs (#230),
+   * and a move or a hold-off left run #3's home idle. On the hosts' free RAM less the config's reserve and home's kept
+   * RAM, the batches' hosts to at most 80% of their RAM (core's `shareRound`). Called once the batches' orders due and
+   * the waves are out, so they come first.
    */
   const shareSpareRam = () => {
     const now = monotonicMs();
     sharingParts = sharingParts.filter((part) => shareReleasedAt(part) > now);
     const { sharing } = current();
-    if (sharing === undefined || health.state !== "batching" || now < sharingHeldOffUntil || waveLanding()) {
+    if (sharing === undefined) {
       sharingRoomGb = 0;
+      sharingPossibleBonus = 1;
+      homeRamLooked = null;
       return;
     }
+    const onHosts = health.state === "batching" && now >= sharingHeldOffUntil && !waveLanding();
     if (now < nextSharingLookAt) return;
     // Its hosts, and home beside them (#226's review): after an install, home is most of the RAM.
     const sharingHosts = hosts.includes("home") ? hosts : [...hosts, "home"];
-    const use = sharingHosts.map((host) => ({
-      host,
-      maxGb: ns.getServerMaxRam(host),
-      usedGb: ns.getServerUsedRam(host),
-      batches: hosts.includes(host),
-    }));
-    // Never the RAM the batches will hold over its threads' time and release (#232): those planned, and those due
-    // meanwhile at the plan's size (#232's review), else trimmed for its threads. A round takes at most the room beside
-    // the most held then, whatever the brain's reserve leaves.
-    const roundEndsAt = now + SHARE_HELD_MS + BATCH_RAM_RELEASE_MS;
-    const heldThen = mostRamHeldGb([...heldRam(), ...shareRamHeld(), ...upcomingRam(roundEndsAt)], now, roundEndsAt);
-    const roomBesideGb = Math.max(0, capacityGb() - heldThen);
-    const hostsFreeGb = use.reduce(
-      (total, each) => total + (each.batches ? Math.max(0, each.maxGb - each.usedGb) : 0),
-      0,
+    const use = sharingHosts
+      .filter((host) => onHosts || !hosts.includes(host))
+      .map((host) => ({
+        host,
+        maxGb: ns.getServerMaxRam(host),
+        usedGb: ns.getServerUsedRam(host),
+        batches: hosts.includes(host),
+      }));
+    let reserveGb = sharing.reserveGb;
+    if (onHosts) {
+      // Never the RAM the batches will hold over its threads' time and release (#232): those planned, and those due
+      // meanwhile at the plan's size (#232's review), else trimmed for its threads. A round takes at most the room
+      // beside the most held then, whatever the brain's reserve leaves.
+      const roundEndsAt = now + SHARE_HELD_MS + BATCH_RAM_RELEASE_MS;
+      const heldThen = mostRamHeldGb([...heldRam(), ...shareRamHeld(), ...upcomingRam(roundEndsAt)], now, roundEndsAt);
+      const roomBesideGb = Math.max(0, capacityGb() - heldThen);
+      const hostsFreeGb = use.reduce(
+        (total, each) => total + (each.batches ? Math.max(0, each.maxGb - each.usedGb) : 0),
+        0,
+      );
+      reserveGb = Math.max(sharing.reserveGb, hostsFreeGb - roomBesideGb);
+    }
+    // All the room, for the bonus possible; a round takes half of what the share may hold there (#242).
+    const whole = shareRound(use, reserveGb, sharing.homeKeptGb);
+    const usedHosts = use.map((each) => each.host);
+    const heldThreads = sharingParts.reduce((sum, part) => sum + (usedHosts.includes(part.host) ? part.threads : 0), 0);
+    const roomThreads = whole.placed.reduce((sum, part) => sum + part.threads, 0);
+    // A half ending now: none until its RAM is back, a look or two later, not a round on what's left beside it.
+    const halfEnding = sharingParts.some(
+      (part) => usedHosts.includes(part.host) && part.endsAt <= now + SHARE_LOOK_AGAIN_MS,
     );
-    const round = shareRound(use, Math.max(sharing.reserveGb, hostsFreeGb - roomBesideGb), sharing.homeKeptGb);
-    sharingRoomGb = round.roomGb;
+    const mostThreads = halfEnding ? 0 : shareRoundThreads(heldThreads, roomThreads);
+    const round = shareRound(use, reserveGb, sharing.homeKeptGb, mostThreads);
+    sharingRoomGb = whole.roomGb;
+    const coresOf = (host: string) => sharing.cores[host] ?? 1;
+    sharingPossibleBonus = shareBonus(
+      [...sharingParts, ...whole.placed.map((part) => ({ threads: part.threads, cores: coresOf(part.host) }))],
+      current().player.intelligence,
+    );
     let started = 0;
+    let startedOnHome = 0;
     let failed: string | null = null;
     for (const [part, { host, threads }] of round.placed.entries()) {
       const options = { threads, temporary: true };
@@ -1011,6 +1055,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       } else if (ns.exec(folder + SHARE_SCRIPT_NAME, host, options, `${runName}.s${sharingRounds}.${part}`)) {
         sharingParts.push({ host, threads, cores: sharing.cores[host] ?? 1, endsAt: now + SHARE_HELD_MS });
         started += threads;
+        if (host === "home") startedOnHome += threads;
       } else {
         failed ??= `a share of ${threads} threads on ${host} wouldn't start`;
       }
@@ -1022,6 +1067,16 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     if (round.placed.length > 0) sharingProblem = failed;
     if (started > 0) sharingRounds += 1;
+    // Home's RAM free beyond what it keeps, once this round has its threads (#242).
+    const homeUse = use.find((each) => each.host === "home");
+    homeRamLooked =
+      homeUse === undefined
+        ? null
+        : {
+            gb: homeUse.maxGb,
+            freeGb: Math.max(0, homeUse.maxGb - homeUse.usedGb - sharing.homeKeptGb - startedOnHome * SHARE_RAM_GB),
+          };
+    // With none started, again soon: the batches' RAM frees as they land, a half's a moment after its end on a busy page.
     nextSharingLookAt = now + (started > 0 ? SHARE_ROUND_MS : SHARE_LOOK_AGAIN_MS);
   };
 
@@ -1041,6 +1096,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       hostsRamGb: threadsOnHosts * SHARE_RAM_GB,
       bonus: shareBonus(running, current().player.intelligence),
       roomGb: sharingRoomGb,
+      // While asked (#242): the bonus its last look found possible, and home's RAM then.
+      ...(wanted ? { possibleBonus: sharingPossibleBonus } : {}),
+      ...(wanted && homeRamLooked !== null ? { homeGb: homeRamLooked.gb, homeFreeGb: homeRamLooked.freeGb } : {}),
     };
   };
 
@@ -1145,9 +1203,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     if (health.state !== "recovering") prepareNext();
     shareSpareRam();
     health.sharing = sharingHealth();
-    if (health.sharing?.wanted && health.state === "batching") {
-      wakeAt = Math.min(wakeAt, Math.max(nextSharingLookAt, sharingHeldOffUntil));
-    }
+    // Awake for its next look while asked and batching. Preparing, it looks at each wake, a second apart at most, and as
+    // a half's RAM comes back (#242): home's share, beside the waves, needs no sooner. A hold-off on its hosts ends at a
+    // look within a round's 5 s.
+    if (health.sharing?.wanted && health.state === "batching") wakeAt = Math.min(wakeAt, nextSharingLookAt);
     // Awake as share threads end (#224): its health's count falls then, and a wave waiting for them goes out.
     // And as their scripts end (#232's review): their RAM is the batcher's own until then.
     for (const part of sharingParts) {

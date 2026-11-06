@@ -1162,8 +1162,8 @@ export interface BatcherHealth {
   /**
    * Sharing (#224): whether its config asks for it, the share threads running (started under `SHARE_TIME_MS` ago),
    * their RAM, and of it the RAM on its hosts (#230), the bonus they give (core's `shareBonus`), and the room its
-   * last look found (the RAM a round could take); null while it neither shares nor is asked to. Absent from an older
-   * batcher.
+   * last look found (the RAM a round could take); the bonus possible and home's RAM free (#242); null while it neither
+   * shares nor is asked to. Absent from an older batcher.
    */
   sharing?: SharingHealth | null;
   /**
@@ -1312,6 +1312,18 @@ export interface SharingHealth {
   hostsRamGb: number;
   bonus: number;
   roomGb: number;
+  /**
+   * The bonus were the share to hold all its rules allow at its last look (#242): its threads whose RAM isn't yet
+   * released, and the room it found, placed as a round would place it. `bonus` against it is what the share made of
+   * the RAM free. Absent from a batcher before #242.
+   */
+  possibleBonus?: number;
+  /**
+   * Home's RAM, and of it the RAM free beyond what home keeps for the Agent (the config's `homeKeptGb`), at its last
+   * look, GB (#242): home sitting idle while asked shows here, whatever the room. Absent from a batcher before #242.
+   */
+  homeGb?: number;
+  homeFreeGb?: number;
 }
 
 /** A new batcher's health. */

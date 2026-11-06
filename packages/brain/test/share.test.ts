@@ -372,6 +372,74 @@ describe("the run report's lines", () => {
     expect(failures).toEqual([]);
   });
 
+  test("#242: the bonus while asked against the bonus possible, the time at x1.000, and home left idle, a failure", () => {
+    // 6 minutes asked with home idle (run #3's 12:22: no threads, the room 0, home's RAM free), then 6 minutes sharing.
+    const points = [];
+    for (let second = 0; second <= 720; second += 2) {
+      const sharing =
+        second <= 360
+          ? { wanted: true, possibleBonus: 1.4, homeGb: 1_000, homeFreeGb: 900 }
+          : { wanted: true, ...sharingAt(1_000, 1.4), possibleBonus: 1.42, homeGb: 1_000, homeFreeGb: 0 };
+      points.push({ atMs: at(second), health: health(sharing, { atMs: at(second) }) });
+    }
+    const failures: string[] = [];
+    const lines = sharingLines(points, [], failures);
+    const line =
+      "share left home idle from 2026-01-01T00:00:00.000Z to 2026-01-01T00:06:00.000Z (6 min): asked, and over half " +
+      "of home's 1,000 GB free beyond what it keeps";
+    expect(failures).toEqual([line]);
+    expect(lines).toEqual([
+      "  sharing spare RAM (#224):",
+      "    shared for 6 min: threads at most 1,000, 1,000 on average; RAM at most 4,000 GB, 4,000 GB on average; " +
+        "the bonus at most x1.400, x1.400 on average",
+      "    the bonus while asked (#242): x1.200 on average, of x1.410 possible on the RAM free; at x1.000 for 6 min " +
+        "(50% of 12 min asked)",
+      "    the brain's faction work while sharing: none to judge",
+      "    while sharing on the batches' hosts: 0 late, 0 lost, 0 short; on home alone: 0 late, 0 lost, 0 short; " +
+        "while not: 0 late, 0 lost, 0 short",
+      "    idle (asked, the room free, no threads, for 10 minutes): never",
+      `    ${line}`,
+    ]);
+    // Under 5 minutes, or broken by a gap in the fast snapshots: no failure, and a line saying so.
+    const short: string[] = [];
+    const brief = points.filter(({ atMs }) => atMs < at(60) || atMs > at(120));
+    expect(sharingLines(brief, [], short)).toContain(
+      "    home idle while asked (over half its RAM free, for 5 minutes, #242): never",
+    );
+    expect(short).toEqual([]);
+    // Exactly half free isn't over half; not asked isn't idle.
+    const half: string[] = [];
+    const halfPoints = points.map(({ atMs, health: each }) => ({
+      atMs,
+      health: { ...each, sharing: { ...(each.sharing as SharingHealth), homeFreeGb: 500 } },
+    }));
+    sharingLines(halfPoints, [], half);
+    const unasked = points.map(({ atMs, health: each }) => ({
+      atMs,
+      health: { ...each, sharing: { ...(each.sharing as SharingHealth), wanted: false } },
+    }));
+    sharingLines(unasked, [], half);
+    expect(half).toEqual([]);
+  });
+
+  test("#242: a batcher before it says no bonus possible nor home's RAM: neither line; odd figures aren't kept", () => {
+    const lines = sharingLines(
+      [0, 2, 4].map((second) => ({ atMs: at(second), health: health({}) })),
+      [],
+      [],
+    );
+    expect(lines.some((each) => /#242/.test(each))).toBe(false);
+    expect(sharingOf(health({ possibleBonus: Number.NaN, homeGb: 64, homeFreeGb: -1 }))).not.toHaveProperty(
+      "possibleBonus",
+    );
+    expect(sharingOf(health({ homeGb: 64, homeFreeGb: -1 }))).not.toHaveProperty("homeGb");
+    expect(sharingOf(health({ possibleBonus: 1.2, homeGb: 64, homeFreeGb: 12 }))).toMatchObject({
+      possibleBonus: 1.2,
+      homeGb: 64,
+      homeFreeGb: 12,
+    });
+  });
+
   test("share starved batches (#226's review): batches short of RAM while sharing, on their own terms, a failure", () => {
     const failures: string[] = [];
     const lines = sharingLines(

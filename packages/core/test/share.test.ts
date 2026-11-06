@@ -20,6 +20,7 @@ import {
   shareReleasedAt,
   shareReserveGb,
   shareRound,
+  shareRoundThreads,
 } from "../src/share.ts";
 
 const source = (file: string) =>
@@ -123,10 +124,63 @@ test("home beside the batches' hosts (#224's review): its free RAM above what it
   expect(shareRound([{ ...home, usedGb: 1_014 }, host("pserv-0", 4_096, 0)], 3_994, 8).placed).toEqual([
     { host: "pserv-0", threads: 25 },
   ]);
-  // Home first, though a batches' host has less free.
-  expect(shareRound([host("pserv-0", 64, 0), home], 0, 8).placed).toEqual([{ host: "home", threads: 216 }]);
-  // The 80% cap counts home's RAM and use too: 0.8 x 2,048 - 1,724 is under 0, though home has 316 GB free.
-  expect(shareRound([{ ...home, usedGb: 700 }, host("pserv-0", 1_024, 1_024)], 0, 8).placed).toEqual([]);
+  // Home first, though a batches' host has less free; then the batches' host to 80% of its own RAM, 51.2 GB.
+  expect(shareRound([host("pserv-0", 64, 0), home], 0, 8)).toEqual({
+    placed: [
+      { host: "home", threads: 253 },
+      { host: "pserv-0", threads: 12 },
+    ],
+    roomGb: 1_012 + 51.2,
+  });
+  // The 80% cap counts the batches' hosts alone (#242): theirs full, home's 316 GB above its 8 kept still shares.
+  expect(shareRound([{ ...home, usedGb: 700 }, host("pserv-0", 1_024, 1_024)], 0, 8)).toEqual({
+    placed: [{ host: "home", threads: 79 }],
+    roomGb: 316,
+  });
+});
+
+test("run #3's 12:22 (#242): the batches on 97% of the cloud servers, home large and empty, home shares all it can", () => {
+  // The simulator's rebuild of it: 25 cloud servers of 64 TB, 1,594,284 GB used of them; home 64 TB, 8.45 GB used.
+  // Counted over all the hosts, 0.8 x 1,703,936 - 1,594,292 is under 0: no room at all, and home sat idle.
+  const cloud = Array.from({ length: 25 }, (_, index) => host(`pserv-${index}`, 65_536, 1_594_284 / 25));
+  const home = { ...host("home", 65_536, 8.45), batches: false };
+  const round = shareRound([...cloud, home], 50_000, 32);
+  expect(round.roomGb).toBeCloseTo(65_536 - 8.45 - 32, 9);
+  expect(round.placed).toEqual([{ host: "home", threads: 16_373 }]);
+});
+
+test("a round takes at most `mostThreads` (#242): home first, then the batches' hosts with the least free", () => {
+  const home = { ...host("home", 108, 0), batches: false };
+  const hosts = [host("big", 1_024, 0), host("small", 64, 0), home];
+  // Room: home's 100 (8 kept) and 80% of the hosts' 1,088, 870.4: the room is all of it, the threads only 30.
+  const round = shareRound(hosts, 0, 8, 30);
+  expect(round.placed).toEqual([
+    { host: "home", threads: 25 },
+    { host: "small", threads: 5 },
+  ]);
+  expect(round.roomGb).toBeCloseTo(970.4, 9);
+  expect(shareRound(hosts, 0, 8, 0).placed).toEqual([]);
+  // More than the room: the room's.
+  expect(shareRound(hosts, 0, 8, 1_000).placed.reduce((sum, part) => sum + part.threads, 0)).toBe(25 + 16 + 201);
+});
+
+test("a round starts half of what the share may hold, so two halves overlap (#242), never more than the room", () => {
+  // Nothing held: half the room, rounded up.
+  expect(shareRoundThreads(0, 1_000)).toBe(500);
+  expect(shareRoundThreads(0, 7)).toBe(4);
+  expect(shareRoundThreads(0, 1)).toBe(1);
+  // Half held, the other half's RAM back: that half.
+  expect(shareRoundThreads(500, 500)).toBe(500);
+  // The old half not yet released: no room, nothing.
+  expect(shareRoundThreads(1_000, 0)).toBe(0);
+  // Half held, and more room since: half the whole.
+  expect(shareRoundThreads(500, 1_500)).toBe(1_000);
+  // Less room than half: the room.
+  expect(shareRoundThreads(900, 100)).toBe(100);
+  // Odd figures, whole threads.
+  expect(shareRoundThreads(-3, 10.9)).toBe(5);
+  // Two halves a round apart, each running a call's time: a round's every `SHARE_ROUND_MS`, half a call's 10 s.
+  expect(2 * SHARE_ROUND_MS).toBe(SHARE_TIME_MS);
 });
 
 test("a round places nothing where the room holds no thread: the reserve takes it all", () => {

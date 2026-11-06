@@ -390,6 +390,7 @@ export {
   shareReleasedAt,
   shareReserveGb,
   shareRound,
+  shareRoundThreads,
 } from "./share.ts";
 export {
   type FastSnapshotData,

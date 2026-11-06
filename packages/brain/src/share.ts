@@ -93,15 +93,24 @@ export function singularityInEffect(slowData: SlowSnapshotData | null): boolean 
 
 /**
  * The batcher health's sharing, or null if it says none or isn't one (the Agent's word: checked as it's read). A
- * batcher before #230 doesn't say how much is on its hosts: all of its RAM counts, as it could take a batch's.
+ * batcher before #230 doesn't say how much is on its hosts: all of its RAM counts, as it could take a batch's. The
+ * bonus possible and home's RAM (#242) are kept only as numbers of 0 or more: absent from a batcher before #242.
  */
 export function sharingOf(health: unknown): SharingHealth | null {
   const sharing = (health as { sharing?: unknown } | null)?.sharing as Record<string, unknown> | null | undefined;
   if (typeof sharing !== "object" || sharing === null || typeof sharing.wanted !== "boolean") return null;
   const hostsRamGb = sharing.hostsRamGb === undefined ? sharing.ramGb : sharing.hostsRamGb;
+  const isAmount = (value: unknown): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0;
   const numbers = [sharing.threads, sharing.ramGb, hostsRamGb, sharing.bonus, sharing.roomGb];
-  if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)) return null;
-  return { ...(sharing as unknown as SharingHealth), hostsRamGb: hostsRamGb as number };
+  if (!numbers.every(isAmount)) return null;
+  const { possibleBonus, homeGb, homeFreeGb, ...rest } = sharing;
+  return {
+    ...(rest as unknown as SharingHealth),
+    hostsRamGb: hostsRamGb as number,
+    ...(isAmount(possibleBonus) ? { possibleBonus } : {}),
+    ...(isAmount(homeGb) && isAmount(homeFreeGb) ? { homeGb, homeFreeGb } : {}),
+  };
 }
 
 /**
