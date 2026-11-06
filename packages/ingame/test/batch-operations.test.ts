@@ -26,6 +26,7 @@ import {
   leastSpacingMs,
   operationTimeMs,
   type RamWait,
+  SHARE_RAM_GB,
   SHARE_ROUND_MS,
   SHARE_SCRIPT_NAME,
   shareReserveGb,
@@ -851,7 +852,7 @@ async function sharesRunning(simulation: Simulation): Promise<{ threads: number;
   return { threads, rounds: [...rounds] };
 }
 
-test("sharing (#224): only while batching and asked, on the room the reserve leaves, every 5 s; off, its RAM comes back", async () => {
+test("sharing (#224): on its hosts only while batching and asked, every 5 s; off, its RAM back", async () => {
   const simulation = await gameWithScripts();
   await simulation.writeFile("home", "share-power.js", SHARE_POWER);
   await simulation.diagnostics.gainHackingExp(2_000);
@@ -871,13 +872,19 @@ test("sharing (#224): only while batching and asked, on the room the reserve lea
   await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
   // Preparing: asked, but no share, the waves have the RAM.
   let preparingLooks = 0;
-  for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 1_000) {
+  for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 100) {
     expect(waited, "batching within 20 virtual minutes").toBeLessThan(20 * 60_000);
     expect((await sharesRunning(simulation)).threads).toBe(0);
     preparingLooks += 1;
-    await simulation.advance(1_000);
+    await simulation.advance(100);
   }
-  expect(preparingLooks, "preparing for a while, with room beside the wave").toBeGreaterThan(20);
+  expect(preparingLooks, "preparing for a while, with room beside the wave").toBeGreaterThan(200);
+  // Batching, seen within 100 ms: its hosts share at once (#242's review), a look as they may, not home's next, up to
+  // 5 s on.
+  for (let waited = 0; (await sharesRunning(simulation)).threads === 0; waited += 50) {
+    expect(waited, "sharing on its hosts within 300 ms of batching").toBeLessThan(300);
+    await simulation.advance(50);
+  }
   // Batching: a round at most every 5 s, each on the room the reserve leaves of the 96 GB, to at most 80% of it.
   const firstSeen = new Map<string, number>();
   let samplesSharing = 0;
@@ -915,10 +922,15 @@ test("sharing (#224): only while batching and asked, on the room the reserve lea
   expect(samplesSharing).toBeGreaterThan(SAMPLES * 0.85);
   const starts = [...firstSeen.values()].sort((a, b) => a - b);
   expect(starts.length).toBeGreaterThanOrEqual(SAMPLES / 15);
+  // Seen a second at a time (#242's review): one round every 5 s, each at least 4 s from the last, and about 18 in the
+  // 90 s. On the simulator's page a half's RAM comes back on time, so no top-up adds a round. Halves in step, as without
+  // the 5 s between looks or with a top-up that never ends, start in pairs (18 in 9 pairs); a top-up past a half's fair
+  // share, one never spent, or a round beside a half ending adds rounds (19 or 21, a second from another).
   for (const [index, startedAt] of starts.entries()) {
-    // Seen a second at a time: at most one round every 5 s.
-    if (index > 0) expect(startedAt - (starts[index - 1] as number)).toBeGreaterThanOrEqual(SHARE_ROUND_MS - 1_000);
+    const previous = starts[index - 1];
+    if (previous !== undefined) expect(startedAt - previous).toBeGreaterThanOrEqual(SHARE_ROUND_MS - 1_000);
   }
+  expect(starts.length).toBeLessThanOrEqual((SAMPLES / SHARE_ROUND_MS) * 1_000 + 2);
   // A reserve that leaves no room: the rounds stop, and the threads end, their RAM back.
   await simulation.run("home", "set-port.js", {
     args: [BATCHER_CONFIG_PORT, JSON.stringify({ ...config, sharing: { ...sharing, reserveGb: 96 } })],
@@ -932,6 +944,16 @@ test("sharing (#224): only while batching and asked, on the room the reserve lea
   await simulation.advance(1_000);
   expect((await sharesRunning(simulation)).threads).toBeGreaterThan(0);
   const { sharing: _sharing, ...unshared } = config;
+  // Off and on again within a round's 5 s (#242's review): looked at again at once, its health whole, the bonus
+  // possible never under the one running.
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(unshared)] });
+  await simulation.advance(300);
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  await simulation.advance(200);
+  const toggled = (await healthOf(simulation)).sharing;
+  expect(toggled).toMatchObject({ wanted: true, homeGb: 8, homeKeptGb: 8 });
+  expect(toggled?.threads).toBeGreaterThan(0);
+  expect(toggled?.possibleBonus).toBeGreaterThanOrEqual(toggled?.bonus ?? Number.POSITIVE_INFINITY);
   await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(unshared)] });
   await simulation.advance(12_000);
   expect((await sharesRunning(simulation)).threads).toBe(0);
@@ -964,6 +986,291 @@ test("sharing (#224): only while batching and asked, on the room the reserve lea
   expect((await healthOf(simulation)).wavesStarted).toBeGreaterThan(beforeMove.wavesStarted);
 });
 
+/** The share threads running on home. */
+async function sharesOnHome(simulation: Simulation): Promise<number> {
+  return (await simulation.ps("home"))
+    .filter((process) => process.filename.endsWith(`/${SHARE_SCRIPT_NAME}`))
+    .reduce((sum, process) => sum + process.threads, 0);
+}
+
+/** Polls the game's share bonus every 10 ms for its argument's ms: how many polls found it ×1.0, of how many. */
+const SHARE_POWER_POLL = `export async function main(ns) {
+  let atOne = 0, polls = 0, least = Infinity;
+  for (const until = performance.now() + ns.args[0]; performance.now() < until; await ns.asleep(10)) {
+    const power = ns.getSharePower();
+    polls += 1;
+    least = Math.min(least, power);
+    if (power <= 1) atOne += 1;
+  }
+  ns.print(JSON.stringify({ atOne, polls, least }));
+}`;
+
+test("sharing in two halves (#242): as one ends the other holds, never x1.0 between rounds", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.setHomeRam(64);
+  await simulation.writeFile("home", "share-power-poll.js", SHARE_POWER_POLL);
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const plan = batchPlan(N00DLES, { skills: { hacking: 50, intelligence: 0 }, mults: MULTS }, batchRamGb([16, 16]));
+  if (plan === null) throw new Error("no plan for n00dles on 32 GB");
+  const sharing = { reserveGb: shareReserveGb(plan.peakRamGb, 0), homeKeptGb: 8, cores: {} };
+  const config = { ...n00dlesConfig(), hosts: SHARING_HOSTS, sharing };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  for (let waited = 0; (await sharesRunning(simulation)).threads === 0; waited += 1_000) {
+    expect(waited, "sharing on its hosts within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(1_000);
+  }
+  // Past the first round's half alone, into the halves' rhythm.
+  await simulation.advance(10_000);
+  // The game's bonus, every 10 ms for 40 s, four rounds' ends: before #242, all the threads ended at once, and nothing
+  // shared until the next round took their RAM, a landing's 20 ms here, as long as the page's lag on a busy one.
+  const { pid } = await simulation.run("home", "share-power-poll.js", { args: [40_000] });
+  let samplesWithTwoRounds = 0;
+  /** Every round seen over the 40 s. */
+  const roundsSeen = new Set<string>();
+  let mostInOneRound = 0;
+  let mostThreads = 0;
+  let healthChecked = 0;
+  for (let second = 0; second < 40; second++) {
+    await simulation.advance(1_000);
+    const roundThreads = new Map<string, number>();
+    for (const host of [...SHARING_HOSTS, "home"]) {
+      for (const process of await simulation.ps(host)) {
+        if (!process.filename.endsWith(`/${SHARE_SCRIPT_NAME}`)) continue;
+        const round = String(process.args[0]).split(".").slice(0, 2).join(".");
+        roundThreads.set(round, (roundThreads.get(round) ?? 0) + process.threads);
+        roundsSeen.add(round);
+      }
+    }
+    if (roundThreads.size >= 2) samplesWithTwoRounds += 1;
+    mostInOneRound = Math.max(mostInOneRound, ...roundThreads.values());
+    const total = [...roundThreads.values()].reduce((sum, threads) => sum + threads, 0);
+    mostThreads = Math.max(mostThreads, total);
+    // The bonus possible on the RAM free (#242): the share's threads and the room, never under what runs; with both
+    // halves out, within a few threads' worth of it.
+    const { sharing: reported } = await healthOf(simulation);
+    expect(reported?.possibleBonus).toBeGreaterThanOrEqual(reported?.bonus ?? Number.POSITIVE_INFINITY);
+    if (roundThreads.size >= 2 && reported?.threads === total) {
+      expect((reported.possibleBonus ?? 0) - reported.bonus).toBeLessThan(0.01);
+      healthChecked += 1;
+    }
+    // Home's RAM, and free beyond the 8 kept, as the game has it.
+    expect(reported).toMatchObject({ homeGb: 64, homeKeptGb: 8 });
+    expect(reported?.homeFreeGb).toBeGreaterThanOrEqual(0);
+    expect(reported?.homeFreeGb).toBeLessThan(SHARE_RAM_GB);
+  }
+  const polled = JSON.parse(await printed(simulation, pid)) as { atOne: number; polls: number; least: number };
+  console.log(`#242: the share's bonus polled every 10 ms for 40 s: ${JSON.stringify(polled)}`);
+  expect(polled.polls).toBeGreaterThan(3_000);
+  expect(polled.atOne).toBe(0);
+  expect(samplesWithTwoRounds).toBeGreaterThanOrEqual(35);
+  console.log(`#242: rounds seen over 40 s: ${roundsSeen.size}`);
+  // Every 20 ms for 21 s, past four halves' ends (#242's review): a round starts only once the half it replaces has
+  // ended on every host, never beside a half ending (over 9.5 s old) on one while another host has room.
+  const firstSeenAt = new Map<string, number>();
+  let newBesideEnding = 0;
+  let newRounds = 0;
+  for (let elapsed = 0; elapsed < 21_000; elapsed += 20) {
+    await simulation.advance(20);
+    const rounds = new Set<string>();
+    for (const host of [...SHARING_HOSTS, "home"]) {
+      for (const process of await simulation.ps(host)) {
+        if (process.filename.endsWith(`/${SHARE_SCRIPT_NAME}`)) {
+          rounds.add(String(process.args[0]).split(".").slice(0, 2).join("."));
+        }
+      }
+    }
+    const fresh = [...rounds].filter((round) => !firstSeenAt.has(round));
+    const ending = [...rounds].some((round) => elapsed - (firstSeenAt.get(round) ?? elapsed) > 9_500);
+    if (elapsed > 0 && fresh.length > 0) {
+      newRounds += 1;
+      if (ending) newBesideEnding += 1;
+    }
+    for (const round of fresh) firstSeenAt.set(round, elapsed);
+  }
+  expect(newRounds).toBeGreaterThanOrEqual(3);
+  expect(newBesideEnding).toBe(0);
+  // Each round about half of the most shared at once.
+  expect(mostInOneRound).toBeLessThanOrEqual(Math.ceil(mostThreads / 2) + 1);
+  expect(healthChecked).toBeGreaterThan(0);
+  expect(await healthOf(simulation)).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0 });
+});
+
+test("home shares while the batcher prepares (#242); the waves wait only for its hosts' share", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.setHomeRam(64);
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // n00dles from a fresh start's 4% on two 16 GB hosts: several waves, a few minutes preparing.
+  const config = { ...n00dlesConfig(), sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} } };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  let preparingLooks = 0;
+  let sharingWhilePreparing = 0;
+  const onHome: number[] = [];
+  /** Each round's threads on home, by its name. */
+  const homeRounds = new Map<string, number>();
+  let firstHalfChecked = false;
+  for (let waited = 0; (await healthOf(simulation)).state === "preparing"; waited += 1_000) {
+    expect(waited, "batching within 20 virtual minutes: the waves never held by home's share").toBeLessThan(
+      20 * 60_000,
+    );
+    await simulation.advance(1_000);
+    const health = await healthOf(simulation);
+    if (health.state !== "preparing") break;
+    preparingLooks += 1;
+    // None on its hosts while it prepares: the waves have their RAM.
+    expect(health.sharing?.hostsRamGb).toBe(0);
+    expect((await inFlight(simulation)).filter(({ id }) => !/\.p\d+\./.test(id))).toEqual([]);
+    const threadsOnHome = await sharesOnHome(simulation);
+    onHome.push(threadsOnHome);
+    for (const process of await simulation.ps("home")) {
+      if (!process.filename.endsWith(`/${SHARE_SCRIPT_NAME}`)) continue;
+      const round = String(process.args[0]).split(".").slice(0, 2).join(".");
+      homeRounds.set(round, Math.max(homeRounds.get(round) ?? 0, process.threads));
+    }
+    if (threadsOnHome > 0 && (health.sharing?.threads ?? 0) > 0) sharingWhilePreparing += 1;
+    // Its first round, half of home's room (#242): the bonus possible is the whole room's, a half's worth more.
+    if (!firstHalfChecked && threadsOnHome > 0) {
+      expect((health.sharing?.possibleBonus ?? 0) - (health.sharing?.bonus ?? 0)).toBeGreaterThan(0.02);
+      firstHalfChecked = true;
+    }
+  }
+  expect(preparingLooks, "preparing for a while").toBeGreaterThan(30);
+  // Home shared all along but its first seconds and the turns of its halves, seen a second at a time.
+  expect(sharingWhilePreparing).toBeGreaterThan(preparingLooks - 5);
+  // Both halves out nearly all the time: a half's RAM taken again within moments of its end, not a round's 5 s later.
+  const most = Math.max(...onHome);
+  expect(onHome.filter((threads) => threads >= most - 1).length).toBeGreaterThan(0.8 * onHome.length);
+  // Each round a half of it, so the other half holds as one ends.
+  expect(homeRounds.size).toBeGreaterThan(preparingLooks / 6);
+  expect(Math.max(...homeRounds.values())).toBeLessThanOrEqual(Math.ceil(most / 2));
+  expect(await healthOf(simulation)).toMatchObject({ state: "batching", desyncs: 0, late: 0, lost: 0 });
+});
+
+/**
+ * A busy page's late release on home: looking every 10 ms, as a share half's RAM comes back (8 GB or more free above
+ * the 8 GB home keeps and the test's looks), takes half of it for `holdMs`, so the batcher's look finds only the rest;
+ * once a release, until the share has the rest.
+ */
+const HOLD_HALF_ON_RELEASE = `export async function main(ns) {
+  const [holdMs] = ns.args;
+  for (let round = 0; ; round++) {
+    const freeGb = ns.getServerMaxRam("home") - ns.getServerUsedRam("home") - 9.65;
+    if (freeGb >= 8) {
+      ns.exec("brief.js", "home", Math.floor(freeGb / 2 / 1.6 + 1e-9), holdMs, round);
+      await ns.asleep(holdMs + 50);
+      // Once a release: until the share has taken the rest.
+      while (ns.getServerMaxRam("home") - ns.getServerUsedRam("home") - 9.65 >= 4) await ns.asleep(10);
+    }
+    await ns.asleep(10);
+  }
+}`;
+
+/** Each share round on home now, by its name (`<run>.s<round>`), and its threads. */
+async function homeRoundsNow(simulation: Simulation): Promise<Map<string, number>> {
+  const rounds = new Map<string, number>();
+  for (const process of await simulation.ps("home")) {
+    if (!process.filename.endsWith(`/${SHARE_SCRIPT_NAME}`)) continue;
+    const round = String(process.args[0]).split(".").slice(0, 2).join(".");
+    rounds.set(round, (rounds.get(round) ?? 0) + process.threads);
+  }
+  return rounds;
+}
+
+test("a half's RAM taken again as it comes back (#242's review), and topped up after a late release", {
+  timeout: 300_000,
+}, async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.setHomeRam(64);
+  await simulation.diagnostics.gainHackingExp(2_000);
+  // n00dles from a fresh start's 4% on one 16 GB host: preparing for minutes, home alone sharing beside the waves.
+  const config = {
+    ...n00dlesConfig(),
+    hosts: ["foodnstuff"],
+    sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} },
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  await simulation.advance(12_000);
+  // Every 20 ms for 21 s, past two halves' ends: each round that ends is followed by another within 60 ms, its RAM's
+  // release (20 ms) and a wake, not at the next second's look.
+  let seen = await homeRoundsNow(simulation);
+  const endedAt = new Map<string, number>();
+  const startedAt = new Map<string, number>();
+  for (let elapsed = 20; elapsed <= 21_000; elapsed += 20) {
+    await simulation.advance(20);
+    const now = await homeRoundsNow(simulation);
+    for (const round of seen.keys()) if (!now.has(round)) endedAt.set(round, elapsed);
+    for (const round of now.keys()) if (!seen.has(round)) startedAt.set(round, elapsed);
+    seen = now;
+  }
+  expect((await healthOf(simulation)).state).toBe("preparing");
+  expect(endedAt.size).toBeGreaterThanOrEqual(3);
+  for (const [round, endMs] of endedAt) {
+    const next = [...startedAt.values()].filter((startMs) => startMs >= endMs).sort((a, b) => a - b)[0];
+    expect(next, `a round after ${round} ended at ${endMs} ms`).toBeDefined();
+    expect((next as number) - endMs, `the round after ${round}`).toBeLessThanOrEqual(60);
+  }
+  const full = [...(await homeRoundsNow(simulation)).values()].reduce((sum, threads) => sum + threads, 0);
+  // Then a busy page's late release: half of each half's RAM is taken for 300 ms as it comes back, so the round that
+  // replaces it starts short. It looks again 100 ms on, and on, and takes the rest once it's free: both halves out
+  // nearly all the time (the holder's own script takes a thread's RAM), not one short for a round's 5 s.
+  await simulation.writeFile("home", "brief.js", BRIEF);
+  await simulation.writeFile("home", "hold-half-on-release.js", HOLD_HALF_ON_RELEASE);
+  const holding = await simulation.run("home", "hold-half-on-release.js", { args: [300] });
+  expect(holding.error).toBeUndefined();
+  let samples = 0;
+  let nearlyFull = 0;
+  for (let second = 0; second < 60; second++) {
+    await simulation.advance(1_000);
+    const total = [...(await homeRoundsNow(simulation)).values()].reduce((sum, threads) => sum + threads, 0);
+    samples += 1;
+    if (total >= full - 2) nearlyFull += 1;
+  }
+  await simulation.kill(holding.pid);
+  console.log(`#242's review: home's halves nearly full in ${nearlyFull} of ${samples} seconds beside late releases`);
+  expect(nearlyFull).toBeGreaterThan(0.8 * samples);
+});
+
+test("while asked, its health goes out at least every 10 s, though nothing in it changes (#242's review)", {
+  timeout: 300_000,
+}, async () => {
+  // Preparing foodnstuff from its security of 10 at hacking 50: a weaken of minutes, nothing else changing, and home
+  // (8 GB) with nothing to share. Before, the health went out only each minute, and the brain, which reads one
+  // unchanged for 20 s as a stopped batcher's, counted no sharing at all.
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const config = {
+    ...n00dlesConfig(),
+    target: "foodnstuff",
+    figures: foodnstuff,
+    sharing: { reserveGb: 0, homeKeptGb: 8, cores: {} },
+  };
+  const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] });
+  expect(error).toBeUndefined();
+  await simulation.advance(5_000);
+  const stamps: number[] = [];
+  /** Each stamp's health with its stamp zeroed: one the same as the stamp before was sent again, not changed. */
+  const contents: string[] = [];
+  for (let second = 0; second < 60; second += 2) {
+    const health = await healthOf(simulation);
+    expect(health.state).toBe("preparing");
+    expect(health.sharing?.wanted).toBe(true);
+    if (stamps.at(-1) !== health.atMs) {
+      stamps.push(health.atMs);
+      contents.push(JSON.stringify({ ...health, atMs: 0 }));
+    }
+    await simulation.advance(2_000);
+  }
+  const sentAgain = contents.filter((content, index) => index > 0 && content === contents[index - 1]).length;
+  expect(sentAgain, "healths sent again unchanged").toBeGreaterThanOrEqual(2);
+  const gaps = stamps.slice(1).map((stamp, index) => stamp - (stamps[index] as number));
+  console.log(`#242's review: health stamps ${gaps.length + 1}, the longest between ${Math.max(...gaps)} ms`);
+  expect(gaps.length).toBeGreaterThanOrEqual(5);
+  expect(Math.max(...gaps)).toBeLessThanOrEqual(12_000);
+});
+
 test("sharing (#224) uses home's RAM above what it keeps for the Agent, beside its hosts (#226's review)", async () => {
   const simulation = await gameWithScripts();
   await simulation.diagnostics.setHomeRam(64);
@@ -987,8 +1294,10 @@ test("sharing (#224) uses home's RAM above what it keeps for the Agent, beside i
   expect((await healthOf(simulation)).sharing).toMatchObject({ threads, hostsRamGb: 0 });
 });
 
-test("no share while a last wave lands, nor until the batches planned beside it have (#226's review)", async () => {
+test("no share on its hosts while a last wave lands (#226's review); home's goes on (#242)", async () => {
   const simulation = await gameWithScripts();
+  // A large home beside them (#242's review): it shares through it all, the wave's RAM not its own.
+  await simulation.diagnostics.setHomeRam(64);
   await simulation.diagnostics.gainHackingExp(2_000);
   // n00dles from a fresh start's 4%, at its minimum: one large grow wave, and the batches start beside it at once, the
   // first planned while it lands (a plan on 20 GB, 50 s apart, where the wave leaves 24).
@@ -1007,10 +1316,14 @@ test("no share while a last wave lands, nor until the batches planned beside it 
   await simulation.advance(1_000);
   expect(await healthOf(simulation)).toMatchObject({ state: "batching", wavesStarted: 1 });
   let sharedAt: number | null = null;
+  let looksBefore = 0;
+  let homeSharedBefore = 0;
   for (let waited = 0; sharedAt === null; waited += 1_000) {
     expect(waited, "sharing within 10 virtual minutes").toBeLessThan(10 * 60_000);
     const health = await healthOf(simulation);
     expect(health).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0 });
+    looksBefore += 1;
+    if ((await sharesOnHome(simulation)) > 0) homeSharedBefore += 1;
     if ((await sharesRunning(simulation)).threads > 0) {
       // Not before the batches planned beside the wave have landed: their hacks first.
       expect(health.hacksLanded).toBeGreaterThan(0);
@@ -1018,11 +1331,14 @@ test("no share while a last wave lands, nor until the batches planned beside it 
     }
     await simulation.advance(1_000);
   }
+  // Home shared while the wave and the batches beside it landed, all but its first look.
+  expect(looksBefore).toBeGreaterThan(5);
+  expect(homeSharedBefore).toBeGreaterThanOrEqual(looksBefore - 1);
   await simulation.advance(2 * 60_000);
   expect(await healthOf(simulation)).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0 });
 });
 
-test("no share for a minute after a batch comes up short of RAM (#226's review): the batches come first", async () => {
+test("no share on its hosts for a minute after a batch comes up short of RAM (#226's review)", async () => {
   const simulation = await gameWithScripts();
   await simulation.diagnostics.gainHackingExp(2_000);
   // No reserve, and six hosts for a plan on two: a share takes any room. Once batching, a player's own script takes
@@ -1067,15 +1383,15 @@ test("no share for a minute after a batch comes up short of RAM (#226's review):
 test("a batch short beside a share on home alone isn't the share's (#230): the same batches come up short without it", async () => {
   // #229's augmentations suite: after an install, home (64 GB) shares beside the hosts, whose reserve leaves them none;
   // batches came up short of their own (#232), and the share was blamed. Here, a player's own script takes the hosts'
-  // free RAM at the same moment in both, and (#231's review) gives it back after the first short, so the rounds start
-  // again once the hold-off after a short is over.
+  // free RAM at the same moment in both, and (#231's review) gives it back after the first short. Home shares through
+  // the hold-off after a short (#242): the hold-off keeps the share off the batches' hosts, and home isn't one.
   const unshared = n00dlesConfig();
   const shared = { ...unshared, sharing: { reserveGb: 1_000, homeKeptGb: 8, cores: {} } };
   /**
    * The batcher's first short, from its start, the hosts' free RAM taken from 3 minutes into batching, once a batch
    * is planned whose hack isn't out, and again each second as landings free it, then given back at the first short;
-   * then its counts 4 minutes after it, past the minute's hold-off after a short (`SHARE_AFTER_SHORT_MS`), and whether
-   * home shared again by then.
+   * then its counts 4 minutes after it, past the minute's hold-off after a short (`SHARE_AFTER_SHORT_MS`), whether
+   * home shared again by then, and of the looks within the hold-off, from 15 s to 55 s after it, those home shared at.
    */
   const firstShortOf = async (config: BatcherConfig) => {
     const simulation = await gameWithScripts();
@@ -1089,6 +1405,7 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
     let fillers: number[] | null = null;
     let first: { afterMs: number; health: BatcherHealth } | null = null;
     let sharedAgain = false;
+    const holdOff = { looks: 0, shared: 0 };
     for (let waited = 0; ; waited += 1_000) {
       expect(waited, "a batch short within 20 virtual minutes").toBeLessThan(20 * 60_000);
       const health = await healthOf(simulation);
@@ -1105,7 +1422,11 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
         for (const pid of fillers ?? []) await simulation.kill(pid);
       }
       if (first !== null && waited > first.afterMs + 70_000 && (health.sharing?.threads ?? 0) > 0) sharedAgain = true;
-      if (first !== null && waited >= first.afterMs + 240_000) return { first, after: health, sharedAgain };
+      if (first !== null && waited > first.afterMs + 15_000 && waited < first.afterMs + 55_000) {
+        holdOff.looks += 1;
+        if ((health.sharing?.threads ?? 0) > 0) holdOff.shared += 1;
+      }
+      if (first !== null && waited >= first.afterMs + 240_000) return { first, after: health, sharedAgain, holdOff };
       await simulation.advance(1_000);
     }
   };
@@ -1114,6 +1435,9 @@ test("a batch short beside a share on home alone isn't the share's (#230): the s
   expect(withShare.first.health.sharing).toMatchObject({ wanted: true, hostsRamGb: 0 });
   expect(withShare.first.health.sharing?.threads).toBeGreaterThan(0);
   expect(withShare.sharedAgain, "home shared again after the hold-off").toBe(true);
+  // And through it (#242): before, home stopped for the minute too.
+  expect(withShare.holdOff.looks).toBeGreaterThan(35);
+  expect(withShare.holdOff.shared).toBe(withShare.holdOff.looks);
   const without = await firstShortOf(unshared);
   expect(without.first.health.sharing).toBeNull();
   expect(without.first.afterMs).toBe(withShare.first.afterMs);
@@ -1248,11 +1572,13 @@ test("a share round never takes the RAM the batches planned will hold (#232), wh
   // It shared on its hosts all the same, beside the batches.
   expect(mostShared).toBeGreaterThan(0);
 });
-test("a larger plan beside a round's threads (#232's review): trimmed for them, counted as the share's", async () => {
-  // A round leaves the batches planned and due their RAM, at the plan's size. A larger plan sent just after it finds
-  // the round's threads on its hosts: its batches are trimmed for them until they end, and counted apart, the share's
-  // (`share starved batches` in the run report), never short. At hacking 1,000, n00dles' weaken takes under a round's
-  // 10 s, so a round's threads are beside whole batches.
+test("larger batches beside a round's threads (#232's review): trimmed for them, the share's", async () => {
+  // A round leaves the batches planned and due their RAM, at the plan's size. Small batches a second apart, then, just
+  // after a round, batches of a quarter of n00dles' money at the same spacing: the next is planned within a second,
+  // and at hacking 1,000 n00dles' weaken (9.3 s) has all its operations out together before the newer half's 10 s
+  // end (#242: a round is half of what the share may hold). So each batch planned while it holds is trimmed for the
+  // share's threads on its hosts, and counted apart, the share's (`share starved batches` in the run report), never
+  // short. Home, 8 GB, keeps all of it: the share is its hosts'.
   const simulation = await gameWithScripts();
   await simulation.diagnostics.gainHackingExp(1e17);
   const hacking = (await simulation.summary()).hackingLevel;
@@ -1272,7 +1598,10 @@ test("a larger plan beside a round's threads (#232's review): trimmed for them, 
   };
   const setConfig = (config: BatcherConfig) =>
     simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
-  await setConfig(configOf(ramGb / 4));
+  // Small batches a second apart: the next after a new config is planned within a second.
+  const small = { ...configOf(ramGb / 4), spacingMs: 1_000 };
+  small.hackShare = configOf(ramGb / 4).hackShare / 8;
+  await setConfig(small);
   const { error } = await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME);
   expect(error).toBeUndefined();
   for (let waited = 0; (await healthOf(simulation)).hacksLanded < 3; waited += 1_000) {
@@ -1287,8 +1616,10 @@ test("a larger plan beside a round's threads (#232's review): trimmed for them, 
     if (rounds.some((round) => !firstRounds.includes(round))) break;
     await simulation.advance(100);
   }
+  // Two halves out at least, all the room the batches leave.
+  expect((await sharesRunning(simulation)).rounds.length).toBeGreaterThanOrEqual(2);
   expect((await healthOf(simulation)).batchesTrimmedBySharing).toBe(0);
-  await setConfig(configOf(ramGb));
+  await setConfig({ ...small, hackShare: 0.25 });
   await simulation.advance(30_000);
   const health = await healthOf(simulation);
   expect(health).toMatchObject({ batchesShort: 0, desyncs: 0, late: 0, lost: 0 });

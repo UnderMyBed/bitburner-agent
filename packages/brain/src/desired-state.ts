@@ -89,7 +89,7 @@ import {
   shareBonusOf,
   sharingConfigOf,
   sharingOf,
-  singularityInEffect,
+  singularityRamMultiplierOf,
   writeShareEnabled,
 } from "./share.ts";
 import { writeSwitch } from "./switches.ts";
@@ -1165,7 +1165,7 @@ export class DesiredStateController {
     }
     // Sharing its spare RAM (#224), while the player works for a faction, the brain's work or the owner's.
     const sharingConfig = factionWorking
-      ? sharingConfigOf(planned.batcher.config, this.#mediumData, singularityInEffect(this.#slowData))
+      ? sharingConfigOf(planned.batcher.config, this.#mediumData, singularityRamMultiplierOf(this.#slowData))
       : null;
     const sharing = readShareEnabled(this.#store) ? sharingConfig : null;
     this.#shareWhy = !factionWorking

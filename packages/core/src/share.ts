@@ -16,9 +16,15 @@ export const SHARE_SCRIPT_NAME = "batch-share.js";
 export const SHARE_RAM_GB = 4;
 /** How long a call holds its threads, ms (`ShareBonusTime`, `NetworkShare/Share.ts:8`). */
 export const SHARE_TIME_MS = 10_000;
-/** The batcher starts a round of share at most this often, ms: legacy daemon.js's `share-cooldown`. */
+/**
+ * The batcher starts a round of share at most this often, ms: legacy daemon.js's `share-cooldown`, and half a call's
+ * `SHARE_TIME_MS`, so a round's half of the share starts as the half before the last ends (#242: `shareRoundThreads`).
+ */
 export const SHARE_ROUND_MS = 5_000;
-/** The most of its hosts' RAM in use, share included, a round may take it to: legacy's `share-max-utilization`. */
+/**
+ * The most of the batches' hosts' RAM in use, share included, a round may take it to: legacy's `share-max-utilization`.
+ * Home, beside them, isn't counted (#242).
+ */
 export const SHARE_MOST_USE = 0.8;
 /**
  * The margin on the batches' peak in the reserve the brain sends (`shareReserveGb`): the batcher replans each batch at
@@ -71,34 +77,44 @@ export interface HostRamUse {
 
 /**
  * Where a round of share threads goes (#224), and the room it had: the free RAM of the batches' hosts less `reserveGb`
- * (theirs and the next target's, `shareReserveGb`), and that of any other host (home, beside them), less `homeKeptGb`
- * on home (the Agent's and its workers'); no more than takes all the hosts' use to `SHARE_MOST_USE` of their RAM. The
- * other hosts first, then the batches' hosts with the least free first, so the large keep room for whole batch
- * operations (`placeThreads`), never more on them than their room; whole threads (`threadsThatFit`). None when the
- * room holds no thread.
+ * (theirs and the next target's, `shareReserveGb`), no more than takes their use to `SHARE_MOST_USE` of their RAM; and
+ * that of any other host (home, beside them), less `homeKeptGb` on home (the Agent's and its workers'). The cap counts
+ * the batches' hosts alone (#242): it leaves the batches room on their own hosts, and home's share can't take theirs
+ * (#230). Counted over all the hosts, it let run #3's batches on over about 82% of 26.2 PB of cloud servers leave
+ * 0.5–1 PB of home idle for 51 minutes. At most `mostThreads` threads (a round takes half of what the share may hold,
+ * #242). The other hosts first, then the batches' hosts with the least free first, so the large keep room for whole
+ * batch operations (`placeThreads`), never more on them than their room; whole threads (`threadsThatFit`). None when
+ * the room holds no thread.
  */
 export function shareRound(
   hosts: readonly HostRamUse[],
   reserveGb: number,
   homeKeptGb: number,
+  mostThreads = Number.POSITIVE_INFINITY,
 ): { placed: { host: string; threads: number }[]; roomGb: number } {
   const freeOf = (each: HostRamUse) =>
     Math.max(0, each.maxGb - each.usedGb - (each.host === "home" ? Math.max(0, homeKeptGb) : 0));
   const forBatches = (each: HostRamUse) => each.batches !== false;
-  let totalGb = 0;
-  let usedGb = 0;
+  let batchesTotalGb = 0;
+  let batchesUsedGb = 0;
   let batchesFreeGb = 0;
   let otherFreeGb = 0;
   for (const each of hosts) {
-    totalGb += each.maxGb;
-    usedGb += each.usedGb;
-    if (forBatches(each)) batchesFreeGb += freeOf(each);
-    else otherFreeGb += freeOf(each);
+    if (forBatches(each)) {
+      batchesTotalGb += each.maxGb;
+      batchesUsedGb += each.usedGb;
+      batchesFreeGb += freeOf(each);
+    } else {
+      otherFreeGb += freeOf(each);
+    }
   }
-  const batchesRoomGb = Math.max(0, batchesFreeGb - Math.max(0, reserveGb));
-  const roomGb = Math.max(0, Math.min(batchesRoomGb + otherFreeGb, SHARE_MOST_USE * totalGb - usedGb));
+  const batchesRoomGb = Math.max(
+    0,
+    Math.min(batchesFreeGb - Math.max(0, reserveGb), SHARE_MOST_USE * batchesTotalGb - batchesUsedGb),
+  );
+  const roomGb = batchesRoomGb + otherFreeGb;
   const placed: { host: string; threads: number }[] = [];
-  let left = Math.floor(roomGb / SHARE_RAM_GB + 1e-9);
+  let left = Math.min(Math.max(0, Math.floor(mostThreads)), Math.floor(roomGb / SHARE_RAM_GB + 1e-9));
   let leftOnBatches = Math.floor(batchesRoomGb / SHARE_RAM_GB + 1e-9);
   const order = [...hosts].sort(
     (a, b) => Number(forBatches(a)) - Number(forBatches(b)) || freeOf(a) - freeOf(b) || (a.host < b.host ? -1 : 1),
@@ -113,6 +129,33 @@ export function shareRound(
     if (forBatches(each)) leftOnBatches -= threads;
   }
   return { placed, roomGb };
+}
+
+/**
+ * How many threads a round of share may start (#242): half of all the share may hold (`heldThreads`, its threads whose
+ * RAM isn't yet released, and `roomThreads`, the room's), rounded up, and no more than the room. Rounds start
+ * `SHARE_ROUND_MS` apart, half a call's time, so the threads run in two halves: as one ends, the other still holds, and
+ * the bonus never falls to ×1.0 while the RAM it held comes back (run #3: ×1.0 in up to 39% of an hour's fast
+ * snapshots), only to half its threads' (ln 2/25, 0.028, less). A round on all the room, as before, left nothing
+ * sharing from its threads' end until the next round could take their RAM. None while a half is ending
+ * (`halfEnding`), whatever room another host has: its RAM comes back a moment later, and a round on what's left beside
+ * it would leave the halves uneven.
+ */
+export function shareRoundThreads(heldThreads: number, roomThreads: number, halfEnding = false): number {
+  if (halfEnding) return 0;
+  const room = Math.max(0, Math.floor(roomThreads));
+  return Math.min(room, Math.ceil((Math.max(0, heldThreads) + room) / 2));
+}
+
+/**
+ * The threads a half's RAM coming back owes its rounds (#242's review): those that came back (`releasedThreads`), at
+ * most half of them and the threads still held (`heldThreads`), rounded up, so a half larger than its fair share isn't
+ * topped up past it, and the halves even out (15/15 of 30, not 20/10 again). The batcher looks again soon while a
+ * round since has started fewer.
+ */
+export function shareTopUpThreads(heldThreads: number, releasedThreads: number): number {
+  const released = Math.max(0, releasedThreads);
+  return Math.min(released, Math.ceil((Math.max(0, heldThreads) + released) / 2));
 }
 
 /**

@@ -1,18 +1,27 @@
 // The run report's lines on sharing spare RAM (#224), in its batcher section: from the batcher's health in the fast
 // snapshots, the time it shared, its threads, RAM and bonus, and from the slow snapshots, the brain's faction work's
-// reputation while it shared against while it didn't. Two failures of their own:
+// reputation while it shared against while it didn't. Three failures of their own:
 // - **share starved batches:** batches short of RAM while it shared on the batches' hosts (#226's review: on their
 //   own terms), or trimmed for its threads there (#232's review): the share took RAM a batch needed. A share on home
 //   alone, beside the hosts, can't (#230): batches short then are shown apart, the batcher's own (its `batches short
 //   of RAM` failure, #232). Late and lost, while sharing or not, are the batcher's out-of-step failure.
 // - **share idle:** asked to share while batching, with the room for a thread free, and no share threads for 10
 //   minutes: its rounds don't start.
+// - **share left home idle (#242):** asked, and over half of what home may share (its RAM beyond what it keeps for the
+//   Agent) free, for 5 minutes, as the batcher's health has it: run #3's home sat idle for 51 minutes while the room
+//   said 0.
+// And from a batcher since #242, the bonus while asked, on average, against the bonus possible under the share's rules
+// (its `possibleBonus`), and the time at x1.000 while asked; from an older one, both said not judged.
 import { SHARE_RAM_GB, type SharingHealth } from "@bitburner-agent/core";
 import { formatIsoTime } from "./gap-report.ts";
 import { SHARE_HEALTH_STALE_MS, sharingOf } from "./share.ts";
 
 /** Asked, batching, with the room free and no threads this long: `share idle`, a failure. */
 export const SHARE_IDLE_AFTER_MS = 10 * 60_000;
+/** Asked, with over this fraction of what home may share (its RAM beyond what it keeps) free (#242)... */
+export const HOME_IDLE_FREE_FRACTION = 0.5;
+/** ...this long: `share left home idle`, a failure. */
+export const HOME_IDLE_AFTER_MS = 5 * 60_000;
 /** Fast snapshots (every 2 s) further apart than this are a gap: the time between isn't counted as shared or not. */
 const FAST_GAP_MS = 10_000;
 /** Slow snapshots (every 60 s) further apart than this are a gap: the reputation between isn't judged. */
@@ -117,9 +126,94 @@ export function sharingLines(
         `x${peak.bonus.toFixed(3)}, x${(bonusMs / sharedMs).toFixed(3)} on average`,
     );
   }
+  lines.push(...askedLines(points));
   lines.push(`    ${reputationLine(points, readings)}`);
   lines.push(...starvedLines(points, failures));
   lines.push(...idleLines(points, failures));
+  lines.push(...homeIdleLines(points, failures));
+  return lines;
+}
+
+/** Whether any fast snapshot asked the batcher to share. */
+const askedAtAll = (points: Point[]) => points.some((point) => point.sharing?.wanted === true);
+
+/**
+ * While asked (#242), from a batcher that says its bonus possible: the bonus on average, time-weighted between fast
+ * snapshots, against the bonus possible under the share's rules, and the time at x1.000 (no threads running). From an
+ * older batcher alone, not judged; never asked, nothing.
+ */
+function askedLines(points: Point[]): string[] {
+  let askedMs = 0;
+  let bonusMs = 0;
+  let possibleMs = 0;
+  let atOneMs = 0;
+  for (const [index, point] of points.entries()) {
+    const previous = points[index - 1];
+    const sharing = point.sharing;
+    if (previous === undefined || point.atMs - previous.atMs > FAST_GAP_MS || sharing?.wanted !== true) continue;
+    if (sharing.possibleBonus === undefined) continue;
+    const stepMs = point.atMs - previous.atMs;
+    askedMs += stepMs;
+    bonusMs += sharing.bonus * stepMs;
+    possibleMs += sharing.possibleBonus * stepMs;
+    if (sharing.threads === 0) atOneMs += stepMs;
+  }
+  if (askedMs === 0) {
+    if (!askedAtAll(points) || points.some((point) => point.sharing?.possibleBonus !== undefined)) return [];
+    return ["    the bonus while asked (#242): not judged: a batcher before #242 doesn't say the bonus possible"];
+  }
+  const percent = Math.round((atOneMs / askedMs) * 100);
+  return [
+    `    the bonus while asked (#242): x${(bonusMs / askedMs).toFixed(3)} on average, of ` +
+      `x${(possibleMs / askedMs).toFixed(3)} possible under the share's rules; at x1.000 for ${duration(atOneMs)} ` +
+      `(${percent}% of ${duration(askedMs)} asked)`,
+  ];
+}
+
+/**
+ * Stretches asked with over `HOME_IDLE_FREE_FRACTION` of what home may share (its RAM beyond what it keeps, a thread
+ * or more) free (#242), as the batcher's health has it, of `HOME_IDLE_AFTER_MS` or more: `share left home idle`, a
+ * failure each. Whatever the batcher's room says: run #3's room was 0 while home sat idle. From an older batcher alone,
+ * which doesn't say home's RAM, not judged.
+ */
+function homeIdleLines(points: Point[], failures: string[]): string[] {
+  if (!points.some((point) => point.sharing?.homeGb !== undefined)) {
+    return askedAtAll(points)
+      ? ["    home idle while asked (#242): not judged: a batcher before #242 doesn't say home's RAM"]
+      : [];
+  }
+  const lines: string[] = [];
+  let from: number | null = null;
+  let to = 0;
+  let mayShareGb = 0;
+  const close = () => {
+    if (from !== null && to - from >= HOME_IDLE_AFTER_MS) {
+      const line =
+        `share left home idle from ${formatIsoTime(from)} to ${formatIsoTime(to)} (${duration(to - from)}): asked, ` +
+        `and over half of the ${gigabytes(mayShareGb)} home may share free`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
+    from = null;
+  };
+  for (const [index, point] of points.entries()) {
+    const previous = points[index - 1];
+    const sharing = point.sharing;
+    const homeMayShareGb = Math.max(0, (sharing?.homeGb ?? 0) - (sharing?.homeKeptGb ?? 0));
+    const idle =
+      sharing?.wanted === true &&
+      homeMayShareGb >= SHARE_RAM_GB &&
+      (sharing.homeFreeGb ?? 0) > HOME_IDLE_FREE_FRACTION * homeMayShareGb;
+    if (!idle || (previous !== undefined && point.atMs - previous.atMs > FAST_GAP_MS)) close();
+    if (!idle) continue;
+    from ??= point.atMs;
+    to = point.atMs;
+    mayShareGb = homeMayShareGb;
+  }
+  close();
+  if (lines.length === 0) {
+    lines.push("    home idle while asked (over half of what it may share free, for 5 minutes, #242): never");
+  }
   return lines;
 }
 
