@@ -2369,11 +2369,15 @@ test("a hack waits with its batch's orders waiting for RAM, never out without th
   }
 });
 
-test("an order that finds its batch gone, its hack out before it (#253), is counted, never silent (#246's verification)", {
+test("a batch's hack goes out last however fast it is (#253): no order finds its batch gone", {
   timeout: 300_000,
 }, async () => {
-  // At hacking about 22,000, a weaken reckoned at 8 ms: the lead outweighs the times, and a batch's hack starts before
-  // its grow and weakens (#253, filed apart). Out, it takes the batch off the books, and those after it find it gone.
+  // At hacking about 22,000, a weaken reckoned at 8 ms: the lead outweighs the times, and a batch's grow and weakens,
+  // each started only its own hold before its landing, would go out after its hack. Out, the hack takes the batch off
+  // the books, and those after it found it gone (9 at #250). Held to go out before it (core's `batchHoldsMs`), they
+  // start, or wait for RAM with the hack held beside them, or the batch is short and its hack skipped.
   const { health } = await fastBatcherHealth(1e300);
-  expect(health.ordersDropped).toBeGreaterThan(0);
+  expect(health.batchesStarted).toBeGreaterThan(0);
+  expect(health.hacksLanded + health.hacksSkipped).toBeGreaterThan(0);
+  expect(health.ordersDropped).toBe(0);
 });

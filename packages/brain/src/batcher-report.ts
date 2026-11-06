@@ -838,7 +838,7 @@ export function batcherSection(
   );
   lines.push(...ramRecordLines(waits, total.ramWaits, true));
   // Hacks held for their batch's orders waiting, apart from the waits for RAM; orders that found their batch gone, its
-  // hack out first (#253: a hack time under a few tens of ms), never silent (#246's verification).
+  // hack out first (a bug since #253 made the hack the last out), never silent (#246's verification).
   if (anyWaitReporting) {
     lines.push(
       `  hacks held for their batch's orders waiting for RAM (#246): ${total.hacksHeldForBatch || "none"}; orders that ` +

@@ -64,6 +64,13 @@ export const BATCH_RAM_RELEASE_MS = BATCH_LANDING_GAP_MS;
  */
 export const BATCH_LAUNCH_LEAD_MS = 200;
 /**
+ * How long before its hack, at least, each of a batch's other orders is started (#253): the hack is its batch's last
+ * order out (`batchHoldsMs`). Out, it takes the batch off the books, so an order after it would find it gone, and the
+ * hack land without that grow or weaken; and only last can it see the rest out, or skip itself with a short batch.
+ * Not 0: started at the same moment, the hack would sort first (by its landing, the earliest).
+ */
+export const BATCH_HACK_LAST_BY_MS = 1;
+/**
  * How long past its time an operation that finds no room waits for it (#246), tried again every
  * `BATCH_RAM_WAIT_LOOK_MS`: half the fixed lead (`BATCH_LAUNCH_LEAD_MS`), the other half kept for the start's lag. The
  * RAM its batch was fitted to may free late: an operation's call ends on a timer (NetscriptHelpers.tsx:419-432) and its
@@ -325,6 +332,11 @@ export function launchLeadMs(
  * covers the security the largest of its batch and `others` (the batches still landing on the target) may leave: a
  * small batch's operation started just after a larger one's grow landed takes longer (#206: a plan grown with the
  * RAM made one 12 ms late).
+ *
+ * The hack is always the last out (#253), `BATCH_HACK_LAST_BY_MS` after the rest: a grow or weaken held only so long
+ * would go out after it once a hack takes under about 20 ms (weaken2: 3 hack times under 3δ; grow: 2.2 under 2δ;
+ * weaken1: 3 under δ), late in a BitNode. Held longer instead, it waits the rest out itself (`additionalMsec`), so this
+ * costs only RAM, at most 3δ and the gap of a weaken2's, which every plan and fit counts from these holds.
  */
 export function batchHoldsMs(
   target: HackingTarget,
@@ -337,6 +349,13 @@ export function batchHoldsMs(
   for (const operation of BATCH_OPERATIONS) {
     holds[operation] =
       operationTimeMs(operation, target, player) + launchLeadMs(operation, target, player, securityCeiling);
+  }
+  // Destructured: the batcher runs this, and the game would charge hack's RAM for `.hack` (RamCalculations.ts:436).
+  const { hack: hackHoldMs } = holds;
+  for (const operation of BATCH_OPERATIONS) {
+    if (operation === "hack") continue;
+    const outBeforeTheHackMs = hackHoldMs + landingOffsetMs(operation) + BATCH_HACK_LAST_BY_MS;
+    holds[operation] = Math.max(holds[operation], outBeforeTheHackMs);
   }
   return holds;
 }
@@ -944,7 +963,8 @@ export function hackWaitsForItsBatch(hackOrder: LaunchOrder, waiting: Iterable<L
 
 /**
  * A batch's four operations, its hack landing at `landAt` and the rest δ apart after it, each started its hold
- * (`batchHoldsMs`) before it lands, earliest first: weaken1, weaken2, grow, hack, as their times go.
+ * (`batchHoldsMs`) before it lands, earliest first: weaken1, weaken2, grow, hack, as their times go. With
+ * `batchHoldsMs`'s holds the hack is always last (#253), however fast it is.
  */
 export function batchOrders(batch: number, landAt: number, holdsMs: Record<BatchOperation, number>): LaunchOrder[] {
   return BATCH_OPERATIONS.map((operation) => {

@@ -24,7 +24,8 @@
 //   and lands itself (../workers/batch-operation.ts). A batch's threads are planned when its first weaken goes out,
 //   and its hack threads replanned when its hack does (`hackThreadsAtLaunch`), at the hacking level then; the hack goes
 //   out only if the rest did and the target is within the bounds of every batch still landing (`batchBounds`). Each
-//   operation's lead covers the security the largest batch still landing may leave (#206).
+//   operation's lead covers the security the largest batch still landing may leave (#206), and the hack is always the
+//   last out (#253: under a hack time of about 20 ms its grow and weakens are held longer, to go out before it).
 // - **Fitted to the RAM (#232):** a batch is planned only as large as the hosts' RAM holds beside all else it will
 //   hold at once (core's `largestBatchThatFits`: the parts in flight, the orders of the batches planned, the share
 //   threads), counted a thread short on each host (`batchRamGb`): fewer hack threads, or none that time, never short of
@@ -678,7 +679,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     waitingForRam.delete(order);
     const batch = batches.get(order.batch);
     if (batch === undefined) {
-      // Its batch's hack went out before it (#253): counted, never dropped silently (#246's verification).
+      // Its batch's hack went out before it: never since #253 (core's `batchHoldsMs` holds each of a batch's other
+      // orders to go out before its hack, however fast), so a bug. Counted, never dropped silently (#246's
+      // verification), and the run report fails on it.
       health.ordersDropped = (health.ordersDropped ?? 0) + 1;
       logNow = true;
       return true;
@@ -702,7 +705,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         return true;
       }
       // After a desync no hack goes out; after a move (#206) the batches out still hack their own target. The hack is a
-      // batch's last order out.
+      // batch's last order out, however fast (#253: core's `batchHoldsMs`).
       if (batch.short || health.state === "recovering") {
         batches.delete(order.batch);
         health.hacksSkipped += 1;
