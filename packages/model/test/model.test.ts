@@ -19,6 +19,7 @@ import {
   measuredAt,
   multipliersOf,
   programsPrice,
+  READ_MINUTES,
   RUN_3_CYCLES,
   RUN_3_POLICY,
   RUN_3_SHARE_BONUS,
@@ -65,6 +66,54 @@ describe("the calibration", () => {
           `cycle ${cycle}, ${minutes} min`,
         ).toBeLessThan(0.15);
       }
+    }
+  });
+
+  test("the curve's constants are the fit's: each a local best of the error on run #3's own level and money", () => {
+    // The error the fit minimised: over every reading of run #3's ten cycles, the mean |ln| of the level's ratio and a
+    // third of the mean |log10| of the money's (floored at $1m), the model at the same minute of the same cycle.
+    const error = (calibration: Partial<typeof CALIBRATION>) => {
+      const seen = new Map<string, { hacking: number; money: number }>();
+      let cycle = 0;
+      let last = Number.POSITIVE_INFINITY;
+      runModel(RUN_3_BN1_2.start, {
+        policy: RUN_3_POLICY,
+        calibration,
+        onStep: ({ onlineMs, hacking, money }) => {
+          if (onlineMs < last) cycle += 1;
+          last = onlineMs;
+          seen.set(`${cycle}:${onlineMs / MINUTE_MS}`, { hacking, money });
+        },
+      });
+      let level = 0;
+      let money = 0;
+      let readings = 0;
+      for (const [index, { points }] of RUN_3_CYCLES.entries()) {
+        for (const [minutes, actualLevel, income] of points) {
+          const step = seen.get(`${index + 1}:${minutes}`);
+          if (step === undefined || !READ_MINUTES.includes(minutes)) continue;
+          level += Math.abs(Math.log(step.hacking / actualLevel));
+          money += Math.abs(Math.log10(Math.max(1e6, step.money) / Math.max(1e6, income)));
+          readings += 1;
+        }
+      }
+      return (level + money / 3) / readings;
+    };
+    const fitted = error({});
+    // 0.29 at the fit (13% on the level, ×3 on the money); without the money's pace, 0.38.
+    expect(fitted).toBeLessThan(0.3);
+    const { expPaceExponent, moneyPaceExponent, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
+    for (const neighbour of [
+      { expPaceExponent: expPaceExponent - 0.125 },
+      { expPaceExponent: expPaceExponent + 0.125 },
+      { moneyPaceExponent: moneyPaceExponent - 0.125 },
+      { moneyPaceExponent: moneyPaceExponent + 0.125 },
+      { firstCycleSpeed: firstCycleSpeed - 0.1 },
+      { firstCycleSpeed: firstCycleSpeed + 0.1 },
+      { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 4 },
+      { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 4 },
+    ]) {
+      expect(fitted, JSON.stringify(neighbour)).toBeLessThanOrEqual(error(neighbour));
     }
   });
 
