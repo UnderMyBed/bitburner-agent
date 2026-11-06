@@ -516,9 +516,19 @@ export class FactionRule {
       this.#joining = next;
       this.#log(`factions: joining ${next} (its invitation)`);
     }
-    if (plan.alongside !== null && plan.alongside !== this.#view.joiningAlongside) {
+    // The join beside, logged as the first is: when it starts, and when it's joined or no longer asked for.
+    const besideBefore = this.#view.joiningAlongside;
+    if (besideBefore !== null && besideBefore !== plan.alongside) {
       this.#log(
-        `factions: joining ${plan.alongside} (its invitation) beside ${next}, which waits at the irreversible gate`,
+        joinedNames.includes(besideBefore)
+          ? `factions: ${besideBefore} joined`
+          : `factions: no longer joining ${besideBefore} beside ${this.#view.joining ?? "a join with enemies"}`,
+      );
+    }
+    if (plan.alongside !== null && plan.alongside !== besideBefore) {
+      this.#log(
+        `factions: joining ${plan.alongside} (its invitation) beside ${next}'s join, which has enemies, so goes ` +
+          "through the irreversible gate",
       );
     }
     this.#view = {

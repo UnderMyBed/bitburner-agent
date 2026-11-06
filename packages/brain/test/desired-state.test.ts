@@ -2939,7 +2939,7 @@ describe("the brain's own irreversible intents go through the irreversible gate 
     for (let each = 0; each < 3; each += 1) send(connection, "medium", player(factions));
   };
 
-  test("a city faction's join, Sector-12's (it bans four): its guard on two medium snapshots, then a backup", async () => {
+  test("a city faction's join, Sector-12's (bans four): its guard on two medium snapshots, then a backup", async () => {
     const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
     send(connection, "medium", player());
     expect(controller.factionsView().joining).toBe("Sector-12");
@@ -2962,7 +2962,7 @@ describe("the brain's own irreversible intents go through the irreversible gate 
     expect(waitingFor(JOIN_SECTOR_12.id)).toBe("held: Sector-12's enemy Chongqing is joined");
   });
 
-  test("#269's reproduction: the owner's install queued, the join waits for it, one irreversible intent at a time", async () => {
+  test("#269's reproduction: the owner's install queued, the join waits for it, one irreversible at a time", async () => {
     const { controller, connection, sentIds, waitingFor, settleBackup } = connected();
     controller.addManualIntent({ action: "installAugmentations", args: {} });
     send(connection, "medium", player());
@@ -3008,7 +3008,47 @@ describe("the brain's own irreversible intents go through the irreversible gate 
     expect(sentIds()).toContain(JOIN_SECTOR_12.id);
   });
 
-  test("out, then the owner queues an install and cancels it: the join goes again only past a new backup", async () => {
+  test("pushed back while its backup is taken: that backup's success releases nothing", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    mediumsForAGate(connection);
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe("waiting for a save backup");
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Aevum" } });
+    await settleBackup(SAVED);
+    // Not first, so not out on it: the backup was for a gate that has started again.
+    expect(sentIds()).not.toContain(JOIN_SECTOR_12.id);
+    expect(sentIds()).not.toContain("joinFaction(Aevum)");
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for joinFaction(Aevum) first: one irreversible intent at a time",
+    );
+  });
+
+  test("pushed back after one medium snapshot held: first again, it counts two consecutive ones afresh", async () => {
+    const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
+    // The first finds no gate (the rule's join comes with its update); the second is held.
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (1 so far)",
+    );
+    controller.addManualIntent({ action: "joinFaction", args: { faction: "Aevum" } });
+    send(connection, "medium", player());
+    send(connection, "medium", player());
+    await settleBackup(SAVED);
+    expect(sentIds()).toContain("joinFaction(Aevum)");
+    reportDone(connection, "joinFaction(Aevum)");
+    // One medium snapshot since: not the two consecutive ones R8 asks for, so no backup yet.
+    send(connection, "medium", player(["Aevum"]));
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(waitingFor(JOIN_SECTOR_12.id)).toBe(
+      "waiting for the guard to hold on 2 consecutive medium snapshots (1 so far): " +
+        "another irreversible intent was queued ahead of it",
+    );
+    send(connection, "medium", player(["Aevum"]));
+    expect(backupNow).toHaveBeenCalledTimes(2);
+  });
+
+  test("out, then the owner queues an install and cancels it: out again only past a new backup", async () => {
     const { controller, connection, backupNow, sentIds, waitingFor, settleBackup } = connected();
     mediumsForAGate(connection);
     await settleBackup(SAVED);

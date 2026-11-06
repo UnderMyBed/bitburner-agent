@@ -412,7 +412,7 @@ describe("the brain's joins and faction work (#203)", () => {
       body: withRule({ joining: "Chongqing", joiningAlongside: "NiteSec" }),
     }));
     expect([...document.querySelectorAll("#faction-rule div")].map((each) => each.textContent)).toContain(
-      "Joining: Chongqing; NiteSec beside it, as it bans nothing (Chongqing waits at the irreversible gate)",
+      "Joining: Chongqing; NiteSec beside it, a join with enemies",
     );
   });
 

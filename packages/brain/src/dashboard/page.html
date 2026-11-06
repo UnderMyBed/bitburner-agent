@@ -606,7 +606,7 @@ function render(status) {
         : `waiting for ${view.waitingFor ?? "nothing"}`;
   document.querySelector("#faction-rule").replaceChildren(
     element("div", `The brain's faction work: ${rule.enabled ? workLine : "off"}`, rule.enabled && rule.sent ? "ok" : "muted"),
-    element("div", `Joining: ${rule.joining ?? "none"}${rule.joiningAlongside ? `; ${rule.joiningAlongside} beside it, as it bans nothing (${rule.joining} waits at the irreversible gate)` : ""}`),
+    element("div", `Joining: ${rule.joining ?? "none"}${rule.joiningAlongside ? `; ${rule.joiningAlongside} beside it, a join with enemies` : ""}`),
     element("div", `City factions: ${rule.cityGroup ?? "not chosen yet"}`),
     ...(rule.invitations
       ? [element("div", `Invitations: ${invitationText(rule.invitations)}`, rule.invitations.travel || rule.invitations.hold ? "ok" : "muted")]

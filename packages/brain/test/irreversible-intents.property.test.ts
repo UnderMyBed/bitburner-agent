@@ -60,7 +60,7 @@ const anyOwnerIntent = fc.nat({ max: OWNER_INTENTS.length - 1 });
 /**
  * What happens next: the owner queues or cancels, or queues an install and cancels it at once; a medium snapshot (some
  * factions joined); a slow one (some invitations); a save backup's answer; the three medium snapshots and saved
- * backups a gate needs (`release`); the Agent's round, reporting each intent sent done or not; a reconnect.
+ * backups a gate needs (`release`, sometimes with the owner queuing meanwhile); the Agent's round, reporting each intent sent done or not; a reconnect.
  */
 const anyStep = fc.oneof(
   { arbitrary: fc.record({ kind: fc.constant("queue" as const), index: anyOwnerIntent }), weight: 2 },
@@ -69,7 +69,14 @@ const anyStep = fc.oneof(
   { arbitrary: fc.record({ kind: fc.constant("medium" as const), factions: anyFactionsJoined }), weight: 3 },
   { arbitrary: fc.record({ kind: fc.constant("slow" as const), invited: fc.subarray(INVITABLE) }), weight: 2 },
   { arbitrary: fc.record({ kind: fc.constant("backup" as const), saved: fc.boolean() }), weight: 2 },
-  { arbitrary: fc.record({ kind: fc.constant("release" as const), factions: anyFactionsJoined }), weight: 3 },
+  {
+    arbitrary: fc.record({
+      kind: fc.constant("release" as const),
+      factions: anyFactionsJoined,
+      queuedMeanwhile: fc.option(anyOwnerIntent, { freq: 3 }),
+    }),
+    weight: 3,
+  },
   {
     arbitrary: fc.record({ kind: fc.constant("agentRound" as const), done: fc.array(fc.boolean(), { maxLength: 8 }) }),
     weight: 2,
@@ -99,10 +106,16 @@ async function play(steps: Step[]): Promise<string[]> {
    * Each backup asked for: the connection it was asked on, and the intent it was for (the first irreversible one the
    * gates judge then: the owner's in the order queued, then the rules').
    */
-  const pendingBackups: { answer: (event: SaveBackupEvent) => void; askedOn: number; forId: string | null }[] = [];
+  const pendingBackups: {
+    answer: (event: SaveBackupEvent) => void;
+    askedOn: number;
+    forId: string | null;
+    /** Still its intent's: false once another went ahead of it (its gate started again), or it left the head. */
+    current: boolean;
+  }[] = [];
   const backupNow = () =>
     new Promise<SaveBackupEvent>((answer) => {
-      pendingBackups.push({ answer, askedOn: connectionNumber, forId: firstJudged() });
+      pendingBackups.push({ answer, askedOn: connectionNumber, forId: firstJudged(), current: true });
     });
   const controller = new DesiredStateController({ channel, store, saveBackups: { backupNow } });
   /** The owner's queue as the owner made it, by id. */
@@ -179,7 +192,8 @@ async function play(steps: Step[]): Promise<string[]> {
           if (savedFor !== each.id) violations.push(`${each.id} went out with no backup of its own answered saved`);
           wentOutAt.set(each.id, mediumsSeen);
         }
-        // Out, its backup never older than the gate allows: withdrawn after `RELEASED_SNAPSHOTS` medium snapshots.
+        // Out, its backup never older than the gate allows: withdrawn after `RELEASED_SNAPSHOTS` medium snapshots. The
+        // steps rarely get that far: desired-state.test.ts's "out for 60 medium snapshots and not done" pins it.
         const outFor = mediumsSeen - (wentOutAt.get(each.id) ?? mediumsSeen);
         if (outFor >= RELEASED_SNAPSHOTS) violations.push(`${each.id} still out ${outFor} medium snapshots on`);
         // A rule's own join out, past its own gate: one the owner never queued (an owner's gate passes to a rule's id).
@@ -188,6 +202,9 @@ async function play(steps: Step[]): Promise<string[]> {
       irreversibleSentBefore = new Set(irreversible.map((each) => each.id));
     }
     statesChecked = states.length;
+    // A backup is its intent's only while that stays the gates' first: pushed back, its gate counts again.
+    const first = firstJudged();
+    for (const pending of pendingBackups) if (pending.forId !== first) pending.current = false;
   };
   const invitedTo = (invited: string[]) => {
     const data = slowData();
@@ -230,10 +247,10 @@ async function play(steps: Step[]): Promise<string[]> {
   };
   /** Answers the oldest backup asked for (`all`: every one), then lets the controller see it. */
   const answerBackups = async (saved: boolean, { all = false } = {}) => {
-    for (const { answer, askedOn, forId } of pendingBackups.splice(0, all ? pendingBackups.length : 1)) {
+    for (const { answer, askedOn, forId, current } of pendingBackups.splice(0, all ? pendingBackups.length : 1)) {
       answer(saved ? SAVED_BACKUP : FAILED_BACKUP);
       await new Promise((resolve) => setImmediate(resolve));
-      checkDesiredStates(saved && askedOn === connectionNumber ? forId : null);
+      checkDesiredStates(saved && current && askedOn === connectionNumber ? forId : null);
     }
     checkDesiredStates();
   };
@@ -273,6 +290,8 @@ async function play(steps: Step[]): Promise<string[]> {
       } else if (step.kind === "backup") await answerBackups(step.saved);
       else if (step.kind === "release") {
         for (let each = 0; each < 3; each += 1) medium(step.factions);
+        // Sometimes the owner queues one while the backup is taken: an irreversible one pushes that gate back.
+        if (step.queuedMeanwhile !== null) queue(step.queuedMeanwhile);
         await answerBackups(true, { all: true });
       } else if (step.kind === "agentRound") {
         const sent = desiredStatesSent().at(-1)?.intents ?? [];
@@ -295,7 +314,7 @@ async function play(steps: Step[]): Promise<string[]> {
   }
 }
 
-test("every irreversible intent sent, the owner's or a rule's: past its guard and a saved backup, and alone", async () => {
+test("every irreversible intent sent, the owner's or a rule's: past its guard, its own backup, and alone", async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(anyStep, { maxLength: 40, size: "medium" }), async (steps) => {
       expect(await play(steps)).toEqual([]);
