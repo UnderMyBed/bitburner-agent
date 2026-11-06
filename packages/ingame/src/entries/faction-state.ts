@@ -1,8 +1,8 @@
 // agent/<deploymentId>/faction-state.js: a home worker that reads the faction state from the game's page (#197), the
 // `ui` backend's reader: each joined faction's reputation and favour, the invitations and the queued augmentations,
 // which no NS call has before Singularity. The Agent runs it with each slow snapshot. Arguments: the read's context as
-// JSON (`FactionReadContext`: the last reading, and what the Agent saw happen since), and when to give up (the game's
-// `Date.now()`).
+// JSON (`FactionReadContext`: the last reading, and what the Agent saw happen since), and when to give up (the page's
+// monotonic clock).
 // - First, without moving the page: the worked faction's reputation from its prop, and the sidebar's counts. The pages
 //   are opened only for what may have changed (../page/faction-state-page.ts, `pagesToOpen`); otherwise the last
 //   reading stands, with that reputation, and the page isn't touched.
@@ -13,6 +13,7 @@
 //   own page), not left on the Terminal.
 // RAM: `getPlayer` 0.5 + `getResetInfo` 1.0 (ram-budget.json); the page costs nothing.
 import { type FactionState, NEUROFLUX_GOVERNOR } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import {
   type FactionGameFacts,
@@ -47,7 +48,7 @@ export async function main(ns: NS): Promise<void> {
     joined: ns.getPlayer().factions,
     lastAugReset: resetInfo.lastAugReset,
     installedNeuroFluxLevel: resetInfo.ownedAugs.get(NEUROFLUX_GOVERNOR) ?? 0,
-    nowMs: Date.now(),
+    nowMs: monotonicMs(),
   };
   const read: { state: FactionState | null; opened: string[]; memory: FactionPageMemory | null } = {
     state: null,

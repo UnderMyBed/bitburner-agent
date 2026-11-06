@@ -30,6 +30,7 @@ import {
   type WorkerReport,
   type WorkOutcome,
 } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { type WorkerRunner, whyNoReport } from "./run-worker.ts";
 
@@ -182,8 +183,11 @@ export function createSnapshotter(
 
     /** One round, over within 2 s: the fast tier first (the heartbeat), then each other tier that is due. */
     async takeRound(send: (message: SnapshotMessage) => void): Promise<void> {
+      // The stamp of a fast snapshot whose worker failed: the wall clock, as the brain reads it, beside the workers'
+      // (`gameTimeMs`), and the clock its clock-step check reads (#241). The round's end is on the monotonic clock
+      // (#251).
       const roundStartedAtMs = Date.now();
-      const roundEndsAtMs = roundStartedAtMs + SNAPSHOT_ROUND_MS;
+      const roundEndsAtMs = monotonicMs() + SNAPSHOT_ROUND_MS;
       const fastReport = await runTierWorker("fast", roundEndsAtMs);
       // Taken now, as it's sent (#212).
       const restart = takeRestartNote();
@@ -233,7 +237,7 @@ export function createSnapshotter(
       // worker's report waits, and the tier stays due, for the next round, which has only the fast tier before it.
       // Never waiting for ever: after `MOST_ROUNDS_WAITING_TO_READ` rounds with no time, it goes unread, saying so.
       if (slowReport !== null) {
-        const timeToRead = roundEndsAtMs - Date.now() >= MIN_FACTION_READ_MS;
+        const timeToRead = roundEndsAtMs - monotonicMs() >= MIN_FACTION_READ_MS;
         if (!timeToRead) roundsWaitingToRead += 1;
         if (timeToRead || roundsWaitingToRead >= MOST_ROUNDS_WAITING_TO_READ) {
           const report: WorkerReport = slowReport;

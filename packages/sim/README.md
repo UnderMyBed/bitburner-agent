@@ -93,7 +93,8 @@ await sim.close();
 - **Nothing happens until `advance(ms)` (or `runUntil`).** It fires every timer due in the next `ms` virtual milliseconds, in order: the engine's own loop, script timers, everything.
 - **`close()`** ends the process; pending calls reject. It's safe to call twice.
 - **`diagnostics`** exist for tests and troubleshooting:
-  - `clock()`: the engine's view of time
+  - `clock()`: the engine's view of time: `Date.now()` and `performance.now()`
+  - `stepWallClock(ms)`: steps the page's wall clock (`Date`) by `ms`, forward or back, as a time sync steps the PC's clock, leaving `performance.now()` and every timer where they were, as a browser's run on a monotonic clock (fake-timers' `setSystemTime`). A harness edit, for tests (#251: the batcher's operation tests step it with batches in flight).
   - `game()`: tutorial state, autosave setting, the current page and `Player.focus`, the current BitNode's multipliers, exploits earned (always none), whether the game thinks it's under a test runner (always false), coding contracts, host boot time, default and pinned locale
   - `homePeak()`: the highest RAM home has had in use (GB), and the most scripts it has run at once, since the game booted. Each is its own high, so the two may come from different moments. They're taken as each changes, so a script that starts and exits within one timer still counts, though no check after a timer (`runUntil`) can see it. The RAM covers everything that changes it: script starts and kills, `ns.ramOverride`, and sharing. The harness only observes the game's `updateRamUsed` and its map of running scripts to take them, so the game behaves the same ([parity §8](../../docs/sim/parity.md#8-the-simulators-own-parity-layer)).
   - `random(n)`: samples of the seeded streams

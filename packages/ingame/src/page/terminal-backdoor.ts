@@ -2,6 +2,7 @@
 // `home` unless the terminal is there, `connect` along the way from home (each hop checked), then `backdoor`. Its
 // action takes hacking time / 4 (`Terminal/Terminal.ts:233-243`) and disables the input until it ends.
 // RAM: `getServer` 2.0 + `getHackTime` 0.05, with the caller's.
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import type { GamePage } from "./game-page.ts";
 
@@ -10,8 +11,8 @@ const STARTED_WITHIN_RENDERS = 5;
 
 /**
  * Types the backdoor on `hostname` along `route` (its hops from home): its problem, and whether `backdoor` was entered
- * by then (its action may have started unseen, #177's review); or when its action ends (the game's `Date.now()`), once
- * it has started. One already ended by the time it's looked at (a short one) counts too.
+ * by then (its action may have started unseen, #177's review); or when its action ends (the page's monotonic clock),
+ * once it has started. One already ended by the time it's looked at (a short one) counts too.
  */
 export async function typeBackdoor(
   ns: NS,
@@ -30,7 +31,7 @@ export async function typeBackdoor(
       return { problem: `couldn't connect to ${hop} on the way to ${hostname}`, backdoorEntered: false };
     }
   }
-  const endsAtMs = Date.now() + ns.getHackTime(hostname) / 4;
+  const endsAtMs = monotonicMs() + ns.getHackTime(hostname) / 4;
   // Its problems all come before Enter (`game-page.ts`, `runTerminalCommand`).
   const typed = await gamePage.runTerminalCommand("backdoor");
   if (typed !== null) return { problem: typed, backdoorEntered: false };

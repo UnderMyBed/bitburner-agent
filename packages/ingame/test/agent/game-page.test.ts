@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The game's page, driven as `buy-program.js` drives it (#136), on a stand-in page: the sidebar's items as the game
 // renders them, with React's props on them. E2 drives the real page (packages/e2/test/effectors.e2.test.ts).
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import { openGamePage, reactPropsAbove, reactText, xpathString } from "../../src/page/game-page.ts";
 
@@ -28,7 +28,7 @@ afterEach(() => {
 
 test("a step that waits in vain leaves the way back to the Terminal its own time", async () => {
   sidebarWith("Terminal", "City");
-  const deadlineMs = Date.now() + 1_000;
+  const deadlineMs = performance.now() + 1_000;
   const gamePage = openGamePage(ns, deadlineMs);
   if (!gamePage) throw new Error("no page");
   expect(await gamePage.openSidebarPage("City")).toBeNull();
@@ -37,12 +37,12 @@ test("a step that waits in vain leaves the way back to the Terminal its own time
   );
   expect(await gamePage.returnToTerminal()).toBeNull();
   expect(clicks).toEqual(["City", "Terminal"]);
-  expect(Date.now()).toBeLessThanOrEqual(deadlineMs + 100);
+  expect(performance.now()).toBeLessThanOrEqual(deadlineMs + 100);
 });
 
 test("after a step waited in vain, the Terminal is still waited for in the time kept for it", async () => {
   sidebarWith("City");
-  const deadlineMs = Date.now() + 1_000;
+  const deadlineMs = performance.now() + 1_000;
   // The sidebar's Terminal comes back only after the steps' time is up (300 ms before the deadline).
   setTimeout(() => sidebarWith("City", "Terminal"), 850);
   const gamePage = openGamePage(ns, deadlineMs);
@@ -53,15 +53,31 @@ test("after a step waited in vain, the Terminal is still waited for in the time 
   expect(clicks).toEqual(["Terminal"]);
 });
 
+test("a worker's time is on the page's monotonic clock (#251): the wall clock stepped an hour either way moves it not", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const gamePage = openGamePage(ns, performance.now() + 1_000);
+    if (!gamePage) throw new Error("no page");
+    vi.setSystemTime(Date.now() + 3_600_000);
+    expect([gamePage.timeUp(), gamePage.stepsTimeUp()]).toEqual([false, false]);
+    vi.setSystemTime(Date.now() - 7_200_000);
+    expect([gamePage.timeUp(), gamePage.stepsTimeUp()]).toEqual([false, false]);
+  } finally {
+    vi.useRealTimers();
+  }
+  const pastDeadline = openGamePage(ns, performance.now() - 1);
+  expect(pastDeadline?.timeUp()).toBe(true);
+});
+
 test("a missing sidebar item is named as missing, with the likely reason", async () => {
   sidebarWith("Terminal");
-  const gamePage = openGamePage(ns, Date.now() + 500);
+  const gamePage = openGamePage(ns, performance.now() + 500);
   expect(await gamePage?.openSidebarPage("City")).toBe('no "City" in the sidebar (is its section collapsed?)');
 });
 
 test("a city location: the City, then the location; one that isn't there is named (#138)", async () => {
   sidebarWith("Terminal", "City");
-  const gamePage = openGamePage(ns, Date.now() + 700);
+  const gamePage = openGamePage(ns, performance.now() + 700);
   expect(await gamePage?.openCityLocation("Alpha Enterprises")).toBe("no Alpha Enterprises in the city");
   expect(clicks).toEqual(["City"]);
 });
@@ -73,28 +89,43 @@ test("a dialog that's fading out after a close isn't one that stays open (#141)"
   const fading = dialog();
   document.body.append(fading);
   setTimeout(() => fading.remove(), 200);
-  const gamePage = openGamePage(ns, Date.now() + 2_000);
+  const gamePage = openGamePage(ns, performance.now() + 2_000);
   expect(await gamePage?.dialogStaysOpen()).toBe(false);
+});
+
+test("a dialog closed that neither goes nor changes: given a fade's time (#251: the monotonic clock's), not the deadline's", async () => {
+  const stays = dialog();
+  stays.textContent = "You have been invited";
+  document.body.append(stays);
+  const gamePage = openGamePage(ns, performance.now() + 2_000);
+  const startedMs = performance.now();
+  expect(await gamePage?.waitUntilGoneOrChanged(stays, () => stays.textContent ?? "", "You have been invited")).toBe(
+    false,
+  );
+  expect(performance.now() - startedMs).toBeGreaterThanOrEqual(350);
+  expect(performance.now() - startedMs).toBeLessThan(1_000);
 });
 
 test("a dialog that stays is open, after the time a fade takes", async () => {
   document.body.append(dialog());
-  const gamePage = openGamePage(ns, Date.now() + 2_000);
-  const startedMs = Date.now();
+  const gamePage = openGamePage(ns, performance.now() + 2_000);
+  const startedMs = performance.now();
   expect(await gamePage?.dialogStaysOpen()).toBe(true);
-  expect(Date.now() - startedMs).toBeGreaterThanOrEqual(350);
+  expect(performance.now() - startedMs).toBeGreaterThanOrEqual(350);
+  // The fade's time, on the page's monotonic clock (#251), not the steps' 1.7 s.
+  expect(performance.now() - startedMs).toBeLessThan(1_000);
 });
 
 test("past the deadline, a step still looks once: what's there is clicked", async () => {
   sidebarWith("Terminal");
-  const gamePage = openGamePage(ns, Date.now() - 1);
+  const gamePage = openGamePage(ns, performance.now() - 1);
   expect(await gamePage?.returnToTerminal()).toBeNull();
   expect(clicks).toEqual(["Terminal"]);
 });
 
 test("a step the game may skip (#141): clicked if it's there now, and no problem if it isn't", async () => {
   sidebarWith("Terminal", "City");
-  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  const gamePage = openGamePage(ns, performance.now() + 1_000);
   if (!gamePage) throw new Error("no page");
   expect(await gamePage.clickIfThere("//div[@role='button' and .//p[normalize-space()='Travel']]", "Travel")).toEqual({
     clicked: false,
@@ -109,7 +140,7 @@ test("a step the game may skip (#141): clicked if it's there now, and no problem
 });
 
 test("the steps' time is up 300 ms before the deadline, kept for the way back", () => {
-  const gamePage = openGamePage(ns, Date.now() + 200);
+  const gamePage = openGamePage(ns, performance.now() + 200);
   expect(gamePage?.stepsTimeUp()).toBe(true);
 });
 
@@ -127,7 +158,7 @@ test.each([
 test("findWhenThere waits for an element without clicking it, and gives null by the steps' end", async () => {
   sidebarWith("Terminal");
   setTimeout(() => document.body.append(Object.assign(document.createElement("button"), { textContent: "Buy" })), 100);
-  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  const gamePage = openGamePage(ns, performance.now() + 1_000);
   expect((await gamePage?.findWhenThere("//button[normalize-space()='Buy']"))?.textContent).toBe("Buy");
   expect(await gamePage?.findWhenThere("//button[normalize-space()='Owned']")).toBeNull();
   expect(clicks).toEqual([]);
@@ -169,7 +200,7 @@ function terminalInput({ disabled }: { disabled: boolean }) {
 
 test("the terminal (#162): a command typed and run; while it's busy (input disabled), nothing typed, 'terminal busy'", async () => {
   const idle = terminalInput({ disabled: false });
-  const gamePage = openGamePage(ns, Date.now() + 1_000);
+  const gamePage = openGamePage(ns, performance.now() + 1_000);
   expect(gamePage?.terminalBusy()).toBe(false);
   expect(await gamePage?.runTerminalCommand("buy BruteSSH.exe")).toBeNull();
   expect(idle.ran).toEqual(["buy BruteSSH.exe"]);

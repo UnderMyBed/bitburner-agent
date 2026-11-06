@@ -1,7 +1,7 @@
 // agent/<deploymentId>/buy-program.js: a home worker that buys one hacking program through the game's page (#136), the
 // first `ui` effector: there's no API for it before Singularity. Arguments: the item ("TOR router" or a program's file
-// name), the tech vendor in the player's city for the TOR router (else ""), and when to give up (the game's
-// `Date.now()`), so it ends within its Agent's round.
+// name), the tech vendor in the player's city for the TOR router (else ""), and when to give up (the page's
+// monotonic clock), so it ends within its Agent's round.
 // - The game first: an item already owned is done, without touching the page.
 // - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The TOR router: the City, the vendor, "Purchase TOR router" while it can be bought (`Locations/ui/TorButton.tsx`),

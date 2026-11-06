@@ -1,6 +1,6 @@
 // agent/<deploymentId>/destroy-bitnode.js: a home worker that destroys the BitNode through the game's page (#177), the
 // `ui` backend's destroy, and arms the restart after it (architecture §5.7). Arguments: the BitNode to enter, the
-// script to start after it (`agent/boot.js`), and when to give up (the game's `Date.now()`).
+// script to start after it (`agent/boot.js`), and when to give up (the page's monotonic clock).
 // - w0r1d_d43m0n's preconditions first, in core's words (`worldDaemonProblem`), before the page is touched.
 // - Then the steps in ../page/destroy-page.ts (`destroyOnPage`): at the BitVerse already (a load there), only the
 //   timer, armed at the portal; otherwise the Terminal page, the timer armed, then `home`, a `connect` per hop and

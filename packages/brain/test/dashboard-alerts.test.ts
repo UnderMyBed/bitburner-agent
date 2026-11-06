@@ -334,8 +334,8 @@ test("batcherOutOfStep (#206): its desyncs, late or lost rose lately, with the t
       sinceMs: 7_000,
       detail:
         "the batcher is out of step on n00dles: 1 desync, 2 late, 0 lost lately; it stops hacking, prepares the " +
-        "target again and goes on, and the run report fails the run, unless a clock step or page stall explains it " +
-        "and the batcher recovered by itself (a warning, #241)",
+        "target again and goes on, and the run report fails the run, unless a page stall (or, for a batcher before " +
+        "#251, a clock step) explains it and the batcher recovered by itself (a warning, #241)",
     },
   ]);
   const notRunning = { sinceMs: 5_000, inARow: 3, problem: "no room on joesguns" };

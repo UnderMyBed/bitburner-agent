@@ -12,6 +12,7 @@
 // - Each try picks its backend (#145) and runs the effector through ./effector-runner.ts. A Singularity worker that
 //   can't start for now (home full) or doesn't report is tried again, as any worker is.
 import type { Intent, IntentOutcome } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { createChangeLog, createRoundSchedule } from "./activity.ts";
 import type { EffectorRunner } from "./effector-runner.ts";
@@ -110,7 +111,7 @@ export function createIntentRunner(ns: NS, { effectorRunner }: { effectorRunner:
         if (entry.outcome.done) continue;
         // A round that isn't due counts down, short or not. A due one that's short leaves it due next round.
         if (!entry.schedule.takeRound()) continue;
-        if (deadlineMs - Date.now() < MIN_WORKER_TIME_MS) continue;
+        if (deadlineMs - monotonicMs() < MIN_WORKER_TIME_MS) continue;
         await run(entry, deadlineMs);
       }
     },

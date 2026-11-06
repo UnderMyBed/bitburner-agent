@@ -1,6 +1,6 @@
 // agent/<deploymentId>/travel.js: a home worker that travels to a city through the game's page (#141), a `ui` effector:
-// there's no API for it before Singularity. Arguments: the city, and when to give up (the game's `Date.now()`), so it
-// ends within its Agent's round.
+// there's no API for it before Singularity. Arguments: the city, and when to give up (the page's monotonic clock), so
+// it ends within its Agent's round.
 // - The game first: the player already in the city is done, without touching the page.
 // - Never over an open dialog the dialog watcher leaves (a script's, the owner's): that's theirs to answer (#143).
 // - The sidebar's Travel, then the city (`Locations/ui/TravelAgencyRoot.tsx`): on the ASCII map, the city's first letter

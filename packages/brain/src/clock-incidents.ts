@@ -1,9 +1,11 @@
 // Clock steps and page stalls (#241): what, outside the batcher, makes its landings look out of order. Run #3
 // (2026-11-05) had a clock step: Windows stepped the PC's clock +2,678 ms at 17:11:33.5Z (its event log), the game's
 // process took it up at about 17:11:46 and the brain's at about 17:12:08 (each resyncs its wall clock now and then);
-// the batcher, judging landings by `Date.now()`, saw every part in flight 2.7 s late, and 1,615 desyncs on the-hub
-// followed, which it recovered from by itself in 95 s (its own fix is #251). A page stall, the page not running its
-// scripts for seconds (its cause unknown: the PC, the game, or a script of ours), would do the same. The run report
+// the batcher, then judging landings by `Date.now()`, saw every part in flight 2.7 s late, and 1,615 desyncs on the-hub
+// followed, which it recovered from by itself in 95 s. Since #251 the batcher times them on the page's monotonic clock,
+// which a step doesn't move: a step explains only an older batcher's desyncs (its health has no `clock`). A page
+// stall, the page not running its scripts for seconds (its cause unknown: the PC, the game, or a script of ours),
+// still would. The run report
 // finds both in the store's snapshots (section 4), fails 3 or more in an hour, and section 6 puts a batcher's desyncs
 // down to one within a weaken's time before them (./batcher-report.ts): a warning, not a failure, once the batcher is
 // batching again (owner decision 55).
@@ -21,8 +23,9 @@ import { formatIsoTime, formatSeconds } from "./gap-report.ts";
 /**
  * A clock step: between two snapshots of a tier, one clock's interval longer (or shorter) than the other's by more than
  * this. Each snapshot is received within tens of ms of being taken (the round's worker, then the socket), so the two
- * agree to well within it; a step this size is over twice the slack a batcher's operations had in run #3 (178 ms), so
- * smaller ones that still desync it are left to the batcher's own fix (#251). Run #3's was 2,678 ms.
+ * agree to well within it; a step this size is over twice the slack a batcher's operations had in run #3 (178 ms); a
+ * smaller one could desync an older batcher too, and none can one since #251, on the monotonic clock. Run #3's was
+ * 2,678 ms.
  */
 export const CLOCK_STEP_MIN_MS = 500;
 /**
@@ -55,8 +58,8 @@ export const PAGE_STALL_FAST_INTERVAL_MS = 2 * SNAPSHOT_TIER_PERIOD_MS.fast;
 export const PAGE_STALL_SAME_INCIDENT_WITHIN_MS = 60_000;
 /**
  * A batcher's stretch out of step is an incident's if its first look out of step is seen from the incident's start to
- * this many of its target's weaken times after its end (the game's clock's move, for a step: the batcher reads only
- * it): every part in flight then lands within one weaken (an operation's longest time, 4 hacks,
+ * this many of its target's weaken times after its end (the game's clock's move, for a step: an older batcher read
+ * only it; one since #251 reads neither, so a step explains none of its stretches): every part in flight then lands within one weaken (an operation's longest time, 4 hacks,
  * Hacking.ts:89-93). An incident explains the first such stretch only.
  */
 export const INCIDENT_ATTRIBUTION_WEAKENS = 1;
@@ -85,7 +88,7 @@ export interface FastSnapshotTime extends SnapshotTime {
 /**
  * A clock step (`sizeMs` the clock's move, + on) or a page stall (`sizeMs` the time lost), between snapshots received
  * at `fromMs` and `toMs`, and what showed it; for a step, when the game's clock moved, if it was seen to (`gameClock`):
- * the batcher's moment (#251).
+ * the moment an older batcher, on the wall clock, felt it (one since #251 doesn't).
  */
 export interface ClockIncident {
   kind: "clockStep" | "pageStall";

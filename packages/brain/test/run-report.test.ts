@@ -2875,7 +2875,13 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
    * snapshots after each saying so, and sends it the round after.
    */
   const END_MS = 30 * MINUTE;
-  function incidentRun({ noStep = false, stallsAfter = [] as number[], mediumRetriedAt = null as number | null } = {}) {
+  /** Run #3's batcher was before #251, on the wall clock (no `clock`); `monotonic`, one since. */
+  function incidentRun({
+    noStep = false,
+    stallsAfter = [] as number[],
+    mediumRetriedAt = null as number | null,
+    monotonic = false,
+  } = {}) {
     const rounds: { round: number; receivedMs: number; gameMs: number }[] = [];
     let trueMs = 1_800;
     for (let round = 0; trueMs <= END_MS; round++) {
@@ -2896,7 +2902,8 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
               : round < 412
                 ? (["preparing", OUT] as const)
                 : (["batching", OUT] as const);
-      return { ...newBatcherHealth("the-hub", "r1", 0), state, batchesStarted: round, ...counts };
+      const clock = monotonic ? ("monotonic" as const) : undefined;
+      return { ...newBatcherHealth("the-hub", "r1", 0), clock, state, batchesStarted: round, ...counts };
     };
     event(0, "brainStarted", { release: "r" });
     event(SECOND, "agentConnected", { agentSessionId: "session-1", deploymentId: "dep", game: { version: "3.0.1" } });
@@ -2952,6 +2959,18 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
         `first seen at ${at(731_800)}; no clock step or page stall before it`,
     ]);
     expect(text).toMatch(/3 or more within an hour fail\):\n {4}none\n/);
+  });
+
+  test("a batcher on the monotonic clock (#251), the same desyncs after the same step: FAIL, the step no excuse", () => {
+    incidentRun({ monotonic: true });
+    const { text, failures, warnings } = runReport(store, incidentWindow);
+    expect(text).toContain(`within an hour fail):\n${STEP_LINE}\n  income stalls`);
+    expect(warnings).toEqual([]);
+    expect(failures).toEqual([
+      "batcher out of step: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub, the " +
+        `first seen at ${at(734_478)}; no page stall before it (a clock step can't put a batcher on the page's ` +
+        "monotonic clock out of step, #251)",
+    ]);
   });
 
   test("a move of the clocks' gap over a restart isn't a step: FAIL then", () => {
