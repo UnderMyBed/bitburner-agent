@@ -2351,8 +2351,9 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       expect(sentPurchases(connection)?.map((each) => each.action)).toEqual(["upgradeHomeRam"]);
     });
 
-    test("an install held for Daedalus's count (#243 review): A5 works for its seller, invitation travel goes on", () => {
-      // 25 installed (none of group B's but those The Black Hand sells too), CyberSec's other three reached and Neural Wit Amplifier queued: 29 of 30. The
+    test("an install held for Daedalus's count (#243 review): A5 works for its seller; travel goes on", () => {
+      // 25 installed (none of group B's but those The Black Hand sells too), CyberSec's other three reached and Neural
+      // Wit Amplifier queued: 29 of 30. The
       // Black Hand's own augmentation 5 minutes off at A5's rate, hacking 2,500 (Daedalus's), 8 h online.
       const TBH = "The Black Hand";
       const shopOf = (faction: string) => augmentationsSoldBy(faction, 1, null);

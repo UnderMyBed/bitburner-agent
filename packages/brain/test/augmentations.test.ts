@@ -2246,7 +2246,7 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.countFacts()).not.toBeNull();
   });
 
-  test("each other end, logged: the count met, the rule no longer saying install, two short, the switch, no snapshots", () => {
+  test("each other end, logged: the count met, the rule not saying install, two short, the switch, snapshots", () => {
     const held = () => {
       online();
       minuteOn({ reputation: reputationFor(5 * MINUTE) });
@@ -2385,7 +2385,7 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.countHoldTarget()).toBeNull();
   });
 
-  test("a restart with the money not yet covered: held on (the income unknown) until it's measured or the window ends", () => {
+  test("a restart with the money not yet covered: held on until the income is measured or the window ends", () => {
     const ownedAugs = withoutMagnetism();
     const withMagnetism = 250e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
     const money = withMagnetism - 60e6;

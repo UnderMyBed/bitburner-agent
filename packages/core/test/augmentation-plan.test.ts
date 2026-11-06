@@ -763,7 +763,7 @@ describe("the hold for Daedalus's count (#243)", () => {
     expect(hold()).toEqual({ next: BLACK_HAND, sinceOnlineMs: 2 * HOUR, untilOnlineMs: 2 * HOUR + 20 * MINUTE });
   });
 
-  test("only once this cycle has reached Daedalus's hacking or combat requirement: else the count isn't what's missing", () => {
+  test("only once this cycle has reached Daedalus's hacking or combat requirement", () => {
     expect(hold({ skillsReached: false })).toBeNull();
     const figures = (hacking: number, combat: number) => ({
       hacking,
