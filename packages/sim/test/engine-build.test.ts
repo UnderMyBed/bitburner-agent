@@ -5,6 +5,7 @@ import path from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { PINNED_GAME } from "@bitburner-agent/core";
+import * as esbuild from "esbuild";
 import { describe, expect, test } from "vitest";
 import {
   buildEngine,
@@ -13,7 +14,9 @@ import {
   collectPackageJsons,
   collectTsconfigs,
   type EngineInputs,
+  engineBuildOptions,
   engineFingerprint,
+  gameDependencies,
   holdModules,
 } from "../src/engine/build.ts";
 import { enginePaths } from "../src/engine/paths.ts";
@@ -255,6 +258,75 @@ describe("collectTsconfigs", () => {
   test("fails on a jsconfig.json esbuild would take before a tsconfig.json further up", () => {
     const root = tree({ "pkg/jsconfig.json": "{}", "tsconfig.json": "{}", "pkg/src/a.ts": "" }, "tsconfigs-");
     expect(() => collectTsconfigs(path.join(root, "pkg/src"))).toThrow(/jsconfig\.json.*fingerprint/);
+  });
+});
+
+describe("gameDependencies (#267)", () => {
+  /** A package `name` whose main module exports `copy`. */
+  const lib = (dir: string, name: string, copy: string) => ({
+    [`${dir}/${name}/package.json`]: JSON.stringify({ name, main: "index.js" }),
+    [`${dir}/${name}/index.js`]: `module.exports = ${JSON.stringify(copy)};`,
+    [`${dir}/${name}/server.js`]: `module.exports = ${JSON.stringify(`${copy}, server`)};`,
+  });
+
+  /** Bundles pkg/src/bundle/entry.js (importing `imports`) as the engine does, with or without the plugin. */
+  async function bundle(files: Record<string, string>, imports: string[], pinned = true): Promise<string> {
+    const lines = imports.map((name, i) => `import v${i} from ${JSON.stringify(name)}; console.log(v${i});`);
+    const root = tree({ ...files, "pkg/src/bundle/entry.js": lines.join("\n"), "game/src/a.js": "" }, "hoist-");
+    const bundleDir = path.join(root, "pkg/src/bundle");
+    const result = await esbuild.build({
+      entryPoints: [path.join(bundleDir, "entry.js")],
+      bundle: true,
+      format: "cjs",
+      platform: "browser",
+      write: false,
+      logLevel: "silent",
+      plugins: pinned ? [gameDependencies(bundleDir, path.join(root, "game"))] : [],
+    });
+    return result.outputFiles[0]?.text ?? "";
+  }
+
+  test("a package hoisted to the root's node_modules is still bundled from the game's", async () => {
+    const files = { ...lib("node_modules", "lib", "root copy"), ...lib("game/node_modules", "lib", "game copy") };
+    // The hazard: esbuild walks up from our sources, so the root's copy comes first.
+    expect(await bundle(files, ["lib"], false)).toContain('"root copy"');
+    const text = await bundle(files, ["lib", "lib/server.js"]);
+    expect(text).toContain('"game copy"');
+    expect(text).toContain('"game copy, server"');
+    expect(text).not.toContain("root copy");
+  });
+
+  test("so is one in the bundle's own package's node_modules", async () => {
+    const files = { ...lib("pkg/node_modules", "lib", "our copy"), ...lib("game/node_modules", "lib", "game copy") };
+    const text = await bundle(files, ["lib"]);
+    expect(text).toContain('"game copy"');
+    expect(text).not.toContain("our copy");
+  });
+
+  test("fails the build on a package the game doesn't have, naming it, rather than bundle another copy", async () => {
+    // The game has its node_modules, without lib.
+    const files = { ...lib("node_modules", "lib", "root copy"), ...lib("game/node_modules", "other", "game copy") };
+    await expect(bundle(files, ["lib"])).rejects.toThrow(
+      /lib \(imported by .*entry\.js\) resolves to .*node_modules.lib.index\.js, not in the game's node_modules/,
+    );
+    await expect(bundle({}, ["nowhere"])).rejects.toThrow(/nowhere .* isn't installed, not in the game's node_modules/);
+  });
+
+  test("leaves the game's own imports and our relative ones alone", async () => {
+    const files = {
+      ...lib("game/node_modules", "lib", "game copy"),
+      "pkg/src/bundle/local.js": 'module.exports = "local";',
+      "game/src/game.js": 'module.exports = require("lib") + ", from the game";',
+    };
+    const text = await bundle(files, ["./local.js", "../../../game/src/game.js"]);
+    expect(text).toContain('"local"');
+    expect(text).toContain('"game copy"');
+  });
+
+  test("the engine's build pins our imports through it, and no longer searches the game's node_modules last", () => {
+    const options = engineBuildOptions();
+    expect(options.plugins?.map((plugin) => plugin.name)).toContain("game-dependencies");
+    expect(options.nodePaths).toBeUndefined();
   });
 });
 

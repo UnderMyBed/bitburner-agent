@@ -246,6 +246,63 @@ function gameModules(): esbuild.Plugin {
   };
 }
 
+/**
+ * Our bundled sources' bare imports (`react`, `react-dom/server`, `lodash`: page.ts) resolved as the game's own sources
+ * resolve them, to the game's node_modules only (#267). esbuild walks up from the importer, so from our sources it
+ * would try packages/sim/node_modules and the repository's node_modules first: a copy hoisted there by one of our
+ * dependencies would be bundled beside the game's, and the fingerprint, which covers only the game's lockfile, wouldn't
+ * see it. One that resolves anywhere else, the game not having it, fails the build, naming it.
+ */
+export function gameDependencies(bundleDir: string, gameRoot: string): esbuild.Plugin {
+  return {
+    name: "game-dependencies",
+    setup(build) {
+      // Real paths: esbuild gives the importer's and the result's (a junctioned node_modules resolves to its target).
+      const ourSources = realpathSync.native(bundleDir) + path.sep;
+      const gameSources = path.join(gameRoot, "src");
+      const gameModules = path.join(gameRoot, "node_modules");
+      build.onResolve({ filter: /^[^./]/ }, async (args) => {
+        if (!args.importer.startsWith(ourSources) || path.isAbsolute(args.path)) return undefined;
+        const result = await build.resolve(args.path, { kind: args.kind, resolveDir: gameSources });
+        const theirs = existsSync(gameModules) ? realpathSync.native(gameModules) + path.sep : undefined;
+        if (result.errors.length > 0 || theirs === undefined || !result.path.startsWith(theirs)) {
+          const found = result.errors.length > 0 ? "isn't installed" : `resolves to ${result.path}`;
+          return {
+            errors: [{ text: `${args.path} (imported by ${args.importer}) ${found}, not in the game's node_modules` }],
+          };
+        }
+        return { path: result.path, namespace: result.namespace, sideEffects: result.sideEffects };
+      });
+    },
+  };
+}
+
+/** The esbuild options of the engine's build. */
+export function engineBuildOptions(): esbuild.BuildOptions {
+  return {
+    entryPoints: [path.join(enginePaths.bundleSourceDir, "entry.ts")],
+    outfile: enginePaths.bundle,
+    bundle: true,
+    format: "cjs",
+    // The game is built for the web (webpack `target: "web"`), so dependencies resolve their browser variants.
+    platform: "browser",
+    target: "es2024",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      // webpack.config.js injects `git rev-parse --short HEAD` of the game's repo. A short hash's length depends on
+      // the clone (CI's shallow one gives 7 characters), so it's fixed at PINNED_GAME's: every clone builds the same
+      // engine.
+      __COMMIT_HASH__: JSON.stringify(gameGit("rev-parse", `--short=${PINNED_GAME.commit.length}`, "HEAD")),
+    },
+    loader: Object.fromEntries(assetExtensions.split(" ").map((ext) => [`.${ext}`, "empty" as const])),
+    jsx: "transform",
+    // gameModules first: its aliases (`crypto`, `monaco-editor`, ...) take those names before gameDependencies.
+    plugins: [gameModules(), gameDependencies(enginePaths.bundleSourceDir, enginePaths.gameRoot)],
+    sourcemap: "linked",
+    logLevel: "error",
+  };
+}
+
 /** The game's script module cache (NetscriptJSEvaluator.ts:41-47, :223-224). */
 const moduleCacheFile = path.join(enginePaths.gameRoot, "src", "NetscriptJSEvaluator.ts");
 
@@ -285,29 +342,7 @@ export async function buildEngine({ force = false } = {}): Promise<BuildResult> 
     if (meta.fingerprint === fingerprint) return { skipped: true, fingerprint };
   }
 
-  const result = await esbuild.build({
-    entryPoints: [path.join(enginePaths.bundleSourceDir, "entry.ts")],
-    outfile: enginePaths.bundle,
-    bundle: true,
-    format: "cjs",
-    // The game is built for the web (webpack `target: "web"`), so dependencies resolve their browser variants.
-    platform: "browser",
-    target: "es2024",
-    nodePaths: [path.join(enginePaths.gameRoot, "node_modules")],
-    define: {
-      "process.env.NODE_ENV": '"production"',
-      // webpack.config.js injects `git rev-parse --short HEAD` of the game's repo. A short hash's length depends on the
-      // clone (CI's shallow one gives 7 characters), so it's fixed at PINNED_GAME's: every clone builds the same engine.
-      __COMMIT_HASH__: JSON.stringify(gameGit("rev-parse", `--short=${PINNED_GAME.commit.length}`, "HEAD")),
-    },
-    loader: Object.fromEntries(assetExtensions.split(" ").map((ext) => [`.${ext}`, "empty" as const])),
-    jsx: "transform",
-    plugins: [gameModules()],
-    sourcemap: "linked",
-    metafile: true,
-    write: false,
-    logLevel: "error",
-  });
+  const result = await esbuild.build({ ...engineBuildOptions(), metafile: true, write: false });
 
   // Write each output to a temporary file and rename it, so a concurrent load never sees a half-written bundle.
   mkdirSync(path.dirname(enginePaths.bundle), { recursive: true });
