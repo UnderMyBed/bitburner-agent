@@ -17,7 +17,7 @@ import {
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { STORE_FILE_NAME } from "../src/config.ts";
-import { heldBackOf } from "../src/cycle-report.ts";
+import { BitNodeCycles, heldBackOf } from "../src/cycle-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -836,5 +836,138 @@ describe("heldBackOf: what more of would have raised the count (#244)", () => {
     expect(
       heldBackOf(slow([{ name: "CyberSec", reputation: 0, favor: 0 }], { "Not An Augmentation": 1 }), money),
     ).toBeNull();
+  });
+});
+
+describe("section 5's hours and section 3's cycles, from the cycles (#245)", () => {
+  const HOUR = 60 * MINUTE;
+  /** BN1.1, from an hour before the window, then BN1.2 from `destroyAtMs` (its own first cycle), on one clock. */
+  const bitNode = (offsetMs: number, destroyAtMs: number) =>
+    offsetMs < destroyAtMs
+      ? { lastAugReset: T0 - HOUR, lastNodeReset: T0 - HOUR, ownedSF: {} as Record<string, number> }
+      : { lastAugReset: T0 + destroyAtMs, lastNodeReset: T0 + destroyAtMs, ownedSF: { 1: 1 } };
+  /**
+   * The cycles, fed as the run report feeds them: a slow snapshot a minute at `slowsMs`, with `joined(offsetMs)` (null:
+   * no faction state), then a medium snapshot with each, the money `money(offsetMs)` (null: none).
+   */
+  function cyclesOf({
+    slowsMs,
+    destroyAtMs = Number.POSITIVE_INFINITY,
+    joined,
+    money,
+    events = [],
+  }: {
+    slowsMs: number[];
+    destroyAtMs?: number;
+    joined: (offsetMs: number) => JoinedFaction[] | null;
+    money: (offsetMs: number) => number | null;
+    events?: { atMs: number; kind: string; detail: unknown }[];
+  }): BitNodeCycles {
+    const cycles = new BitNodeCycles(events, { sinceMs: T0 });
+    for (const offsetMs of slowsMs) {
+      const factions = joined(offsetMs);
+      const data = slowData({
+        ...bitNode(offsetMs, destroyAtMs),
+        ...(factions === null ? {} : { factions: reading(factions) }),
+      });
+      cycles.addSlow(T0 + offsetMs, T0 + offsetMs, data);
+    }
+    for (const offsetMs of slowsMs) {
+      const each = money(offsetMs);
+      if (each !== null) cycles.addMedium(T0 + offsetMs, mediumData(each, 1, []));
+    }
+    return cycles;
+  }
+  const minutes = (from: number, to: number) =>
+    Array.from({ length: to - from }, (_, index) => (from + index) * MINUTE);
+  const CYBERSEC_SHORT = [{ name: "CyberSec", reputation: 1_500, favor: 0 }];
+
+  test("an hour across a destroy: each judgement's own money, never the BitNode before's", () => {
+    // BN1.1 to 20 min, nothing left at no faction, $2.5e19; BN1.2 from 20 min, CyberSec's reputation short, $2e10.
+    const cycles = cyclesOf({
+      slowsMs: minutes(0, 60),
+      destroyAtMs: 20 * MINUTE,
+      joined: (offsetMs) => (offsetMs < 20 * MINUTE ? [] : CYBERSEC_SHORT),
+      money: (offsetMs) => (offsetMs < 20 * MINUTE ? 2.5e19 : 2e10),
+    });
+    expect(cycles.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by reputation, not income (67% of 58 min online judged in the hour; factions 33%); most money " +
+        "unspent $20,000,000,000",
+    );
+  });
+
+  test("factions: no claim either way, as joining one can cost money", () => {
+    const cycles = cyclesOf({ slowsMs: minutes(0, 60), joined: () => [], money: () => 1e12 });
+    expect(cycles.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by factions (100% of 59 min online judged in the hour); most money unspent $1,000,000,000,000",
+    );
+  });
+
+  test("reputation and money: income too", () => {
+    const joined = [
+      { name: "CyberSec", reputation: 2_500, favor: 0 },
+      { name: "Sector-12", reputation: 0, favor: 0 },
+    ];
+    const cycles = cyclesOf({ slowsMs: minutes(0, 60), joined: () => joined, money: () => 9e6 });
+    expect(cycles.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by reputation and money: income (100% of 59 min online judged in the hour)",
+    );
+  });
+
+  test("answers tied for the most are named together", () => {
+    // 29 min of each: BN1.1's factions to 30 min, BN1.2's reputation after.
+    const cycles = cyclesOf({
+      slowsMs: minutes(0, 60),
+      destroyAtMs: 30 * MINUTE,
+      joined: (offsetMs) => (offsetMs < 30 * MINUTE ? [] : CYBERSEC_SHORT),
+      money: (offsetMs) => (offsetMs < 30 * MINUTE ? 1e9 : 2e10),
+    });
+    expect(cycles.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by reputation and factions equally (50% each of 58 min online judged in the hour); most money " +
+        "unspent $20,000,000,000",
+    );
+  });
+
+  test("the brain's own state with no money recorded: not income, the money not recorded", () => {
+    const events = [{ atMs: T0, kind: "augmentationProgress", detail: { lastAugReset: T0 - HOUR, held: "Daedalus" } }];
+    const cycles = cyclesOf({ slowsMs: minutes(0, 60), joined: () => [], money: () => null, events });
+    expect(cycles.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by The Red Pill's way, not income (100% of 59 min online judged in the hour); most money unspent " +
+        "not recorded",
+    );
+  });
+
+  test("not judged: no slow snapshot in the hour, one alone, or none with faction state", () => {
+    const cycles = cyclesOf({ slowsMs: minutes(0, 60), joined: () => [], money: () => 1e9 });
+    expect(cycles.heldBackBetween(T0 + 2 * HOUR, T0 + 3 * HOUR)).toBe(
+      "held back by: not judged in the hour (no slow snapshot judged: its install already chosen, or none)",
+    );
+    const alone = cyclesOf({ slowsMs: [0], joined: () => [], money: () => 1e9 });
+    expect(alone.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by: not judged in the hour (no time online between its slow snapshots)",
+    );
+    const older = cyclesOf({ slowsMs: minutes(0, 60), joined: () => null, money: () => 1e9 });
+    expect(older.heldBackBetween(T0, T0 + HOUR)).toBe(
+      "held back by: not judged in the hour (no faction state or money)",
+    );
+  });
+
+  test("cycleLabelAt: 2b's name for the cycle a time falls in; before the first, or none seen", () => {
+    expect(new BitNodeCycles([], { sinceMs: T0 }).cycleLabelAt(T0)).toBe("the window");
+    // BN1.1 from 10 min, an install at 20 min, a destroy at 30 min.
+    const cycles = new BitNodeCycles([], { sinceMs: T0 });
+    for (const offsetMs of minutes(10, 40)) {
+      const reset = offsetMs < 30 * MINUTE ? T0 + 10 * MINUTE : T0 + 30 * MINUTE;
+      const lastAugReset =
+        offsetMs < 20 * MINUTE ? T0 + 10 * MINUTE : offsetMs < 30 * MINUTE ? T0 + 20 * MINUTE : reset;
+      const ownedSF: Record<string, number> = offsetMs < 30 * MINUTE ? {} : { 1: 1 };
+      cycles.addSlow(T0 + offsetMs, T0 + offsetMs, slowData({ lastAugReset, lastNodeReset: reset, ownedSF }));
+    }
+    expect(cycles.cycleLabelAt(T0)).toBe("before BN1.1 1");
+    expect(cycles.cycleLabelAt(T0 + 10 * MINUTE)).toBe("BN1.1 1");
+    expect(cycles.cycleLabelAt(T0 + 20 * MINUTE - 1)).toBe("BN1.1 1");
+    expect(cycles.cycleLabelAt(T0 + 20 * MINUTE)).toBe("BN1.1 2");
+    expect(cycles.cycleLabelAt(T0 + 30 * MINUTE)).toBe("BN1.2 1");
+    expect(cycles.resetsMs()).toEqual([T0 + 10 * MINUTE, T0 + 20 * MINUTE, T0 + 30 * MINUTE]);
   });
 });

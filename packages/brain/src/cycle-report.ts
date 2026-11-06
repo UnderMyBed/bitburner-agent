@@ -946,55 +946,65 @@ export class BitNodeCycles {
 
   /**
    * What held the cycles back from `fromMs` to `toMs`, for section 5's hours (#245): 2b's judgements made in it, by
-   * time online, the most first. Where that isn't money, income wasn't what the cycle waited on, and the most money
-   * unspent in it (while judged: once an install is chosen, the set's buying spends it) says so: "held back by
-   * reputation, not income (92% of 55 min online judged in the hour; count 8%); most money unspent $766,000,000". Or
-   * "held back by money: income (…)", or "reputation and money: income too", or not judged.
+   * time online, the most first (answers tied for the most named together). Where those are reputation, the count or
+   * the brain's own state, income wasn't what the cycle waited on, and the most money the judgements giving them saw
+   * says so: "held back by reputation, not income (92% of 55 min online judged in the hour; count 8%); most money
+   * unspent $766,000,000,000,000" (each judgement's own figure, so never another BitNode's). Where money is among them,
+   * "held back by money: income (…)"; "factions" says neither, as joining one can cost a travel. Or not judged.
    */
   heldBackBetween(fromMs: number, toMs: number): string {
-    const totals = new Map<CycleAnswer, number>();
-    let judged = 0;
-    let made = 0;
-    let answered = 0;
-    let unspent: number | null = null;
-    const inside = (atMs: number) => atMs >= fromMs && atMs < toMs;
+    const onlineByAnswer = new Map<CycleAnswer, number>();
+    const moneyByAnswer = new Map<CycleAnswer, number>();
+    let onlineJudgedMs = 0;
+    let judgementsInHour = 0;
+    let judgementsAnswered = 0;
     for (const cycle of this.#cycles) {
       const progress = this.#progressOf(cycle);
-      for (const judgement of cycle.judgements.filter((each) => inside(each.atMs))) {
-        made += 1;
+      for (const judgement of cycle.judgements.filter(({ atMs }) => atMs >= fromMs && atMs < toMs)) {
+        judgementsInHour += 1;
         const answer = this.#answerAt(cycle, judgement, progress);
         if (answer === null) continue;
-        answered += 1;
-        judged += judgement.onlineMs;
-        totals.set(answer, (totals.get(answer) ?? 0) + judgement.onlineMs);
-      }
-      for (const { atMs, money } of cycle.medium) {
-        if (money === null || !inside(atMs) || atMs > cycle.chosenAtMs) continue;
-        unspent = Math.max(unspent ?? money, money);
+        judgementsAnswered += 1;
+        onlineJudgedMs += judgement.onlineMs;
+        onlineByAnswer.set(answer, (onlineByAnswer.get(answer) ?? 0) + judgement.onlineMs);
+        const money = this.#figuresAt(cycle, judgement)?.money;
+        if (isFiniteNumber(money)) moneyByAnswer.set(answer, Math.max(moneyByAnswer.get(answer) ?? money, money));
       }
     }
-    if (judged === 0) {
+    if (onlineJudgedMs === 0) {
       const why =
-        made === 0
+        judgementsInHour === 0
           ? "no slow snapshot judged: its install already chosen, or none"
-          : answered === 0
+          : judgementsAnswered === 0
             ? "no faction state or money"
             : "no time online between its slow snapshots";
       return `held back by: not judged in the hour (${why})`;
     }
-    const ranked = ANSWER_ORDER.filter((answer) => (totals.get(answer) ?? 0) > 0).sort(
-      (a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0),
-    );
-    const percent = (answer: CycleAnswer) => `${Math.round((100 * (totals.get(answer) ?? 0)) / judged)}%`;
-    const [top, ...others] = ranked as [CycleAnswer, ...CycleAnswer[]];
+    const onlineOf = (answer: CycleAnswer) => onlineByAnswer.get(answer) ?? 0;
+    const ranked = ANSWER_ORDER.filter((answer) => onlineOf(answer) > 0).sort((a, b) => onlineOf(b) - onlineOf(a));
+    const percent = (answer: CycleAnswer) => `${Math.round((100 * onlineOf(answer)) / onlineJudgedMs)}%`;
+    const tiedForMost = ranked.filter((answer) => onlineOf(answer) === onlineOf(ranked[0] as CycleAnswer));
+    const others = ranked.slice(tiedForMost.length);
+    const each = tiedForMost.length > 1 ? " each" : "";
     const shares =
-      `${percent(top)} of ${formatDuration(judged)} online judged in the hour` +
-      others.map((answer) => `; ${answer} ${percent(answer)}`).join("");
-    if (top === "money") return `held back by money: income (${shares})`;
-    if (top === "reputation and money") return `held back by reputation and money: income too (${shares})`;
+      `${percent(tiedForMost[0] as CycleAnswer)}${each} of ${formatDuration(onlineJudgedMs)} ` +
+      `online judged in the hour${others.map((answer) => `; ${answer} ${percent(answer)}`).join("")}`;
+    const heldBy = `held back by ${tiedForMost.join(" and ")}${tiedForMost.length > 1 ? " equally" : ""}`;
+    if (tiedForMost.some((answer) => answer === "money" || answer === "reputation and money")) {
+      return `${heldBy}: income (${shares})`;
+    }
+    const moneySeen = tiedForMost.map((answer) => moneyByAnswer.get(answer)).filter(isFiniteNumber);
+    const unspent = moneySeen.length === 0 ? "not recorded" : formatMoney(Math.max(...moneySeen));
+    const unspentPart = `most money unspent ${unspent}`;
+    if (tiedForMost.includes("factions")) return `${heldBy} (${shares}); ${unspentPart}`;
+    return `${heldBy}, not income (${shares}); ${unspentPart}`;
+  }
+
+  /** The medium snapshot's figures a judgement is made with: the latest by it with money, else the cycle's first. */
+  #figuresAt(cycle: Cycle, judgement: Judgement): MediumPoint | undefined {
     return (
-      `held back by ${top}, not income (${shares}); most money unspent ` +
-      (unspent === null ? "not recorded" : formatMoney(unspent))
+      cycle.medium.findLast((point) => point.atMs <= judgement.atMs && point.money !== null) ??
+      cycle.medium.find((point) => point.money !== null)
     );
   }
 
@@ -1005,9 +1015,7 @@ export class BitNodeCycles {
     if (isFiniteNumber(fieldsOf(inForce.countdown).endsInMs) || Object.keys(fieldsOf(inForce.countHold)).length > 0) {
       return "count reached";
     }
-    const figures =
-      cycle.medium.findLast((point) => point.atMs <= judgement.atMs && point.money !== null) ??
-      cycle.medium.find((point) => point.money !== null);
+    const figures = this.#figuresAt(cycle, judgement);
     if (figures === undefined) return null;
     return heldBackOf(judgement.data, { money: figures.money as number, factionRep: figures.factionRep ?? 1 });
   }

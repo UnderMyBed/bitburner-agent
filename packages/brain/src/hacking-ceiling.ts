@@ -425,8 +425,9 @@ export class HackingFold {
 
   /**
    * Section 5's lines; a line in `failures` for hacking that earned more than all the rooted RAM could. `heldBack`, a
-   * line under each hour's (#245): what held the cycle back then, so a low share of the ceiling while money wasn't
-   * what it waited on (reputation, say, with money unspent) doesn't read as a failure.
+   * line under each hour's, or the window's with an hour or less (#245): what held the cycle back then, so a low
+   * share of the ceiling while money wasn't what it waited on (reputation, say, with money unspent) doesn't read as a
+   * failure.
    */
   section(failures: string[], heldBack?: (fromMs: number, toMs: number) => string): string[] {
     const lines = [
@@ -457,6 +458,8 @@ export class HackingFold {
     lines.push(`  over the window: ${describeAgainst(whole)}`);
     const unjudgedMs = (this.#money.at(-1)?.atMs ?? 0) - (this.#money[0]?.atMs ?? 0) - whole.judgedMs;
     if (unjudgedMs > 0) lines.push(`    not judged: ${hoursOf(unjudgedMs)} with the ceilings unknown`);
+    // Under an hour, or one, the window is the hour (#245 review): its line under the window's.
+    if (stretches.length <= 1 && heldBack !== undefined) lines.push(`    ${heldBack(whole.fromMs, whole.toMs)}`);
     if (stretches.length > 1) {
       lines.push("  each hour:");
       for (const stretch of stretches) {

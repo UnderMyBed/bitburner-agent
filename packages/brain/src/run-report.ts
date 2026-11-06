@@ -45,13 +45,16 @@ import {
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
 import {
+  countsOf,
   DEFAULT_GAP_THRESHOLD_MS,
+  describeCounts,
   describePageHeap,
   findGaps,
   formatDuration,
   formatIsoTime,
   formatSeconds,
   type Gap,
+  plural,
 } from "./gap-report.ts";
 import { hackLoopHosts, readHackLoopEnabled } from "./hack-loop.ts";
 import { HackingFold } from "./hacking-ceiling.ts";
@@ -242,32 +245,55 @@ export interface MovedServers {
 }
 
 /**
+ * Where the window's installs and destroys are (#245): each cycle's start by the brain's clock, as 2b estimates it, and
+ * each `lastAugReset` the slow snapshots show, on the game's own clock. A snapshot's game time is the game's clock too,
+ * so the second needs no estimate: a clock offset can't move it past the snapshot it falls before.
+ */
+export interface Resets {
+  brainMs: readonly number[];
+  gameMs: readonly number[];
+}
+
+/** A snapshot's two times: its receipt (the brain's clock) and the game's time it was taken. */
+interface SnapshotMoment {
+  atMs: number;
+  gameTimeMs?: number;
+}
+
+/** Whether a reset is between two snapshots, by either clock: after `before`, at or before `after`. */
+function resetBetween(resets: Resets, before: SnapshotMoment, after: SnapshotMoment): boolean {
+  if (resets.brainMs.some((resetMs) => resetMs > before.atMs && resetMs <= after.atMs)) return true;
+  const [fromMs, toMs] = [before.gameTimeMs, after.gameTimeMs];
+  if (!isNumber(fromMs) || !isNumber(toMs)) return false;
+  return resets.gameMs.some((resetMs) => resetMs > fromMs && resetMs <= toMs);
+}
+
+/**
  * The hack loop's target over time, inferred, one medium snapshot at a time: a server's money and security change only
  * when a script hacks, grows or weakens it, so the game's servers whose money or security moved between consecutive
  * medium snapshots are the ones being worked. An inference, not a record: the owner's own scripts move servers too.
  * Stretches where nothing moved don't end one. `ignored` are the player's own servers (home, purchased). Two snapshots
- * with a reset between them (`resetsMs`: an install or a destroy, which puts every server's money and security back)
- * aren't compared (#245): that move is the reset's, every server at once, not the hack loop's.
+ * with a reset between them (`resetBetween`: an install or a destroy, which puts every server's money and security
+ * back) aren't compared (#245): that move is the reset's, every server at once, not the hack loop's.
  */
 class HackTargetInference {
   readonly stretches: MovedServers[] = [];
   #before: Map<string, string> | null = null;
-  #beforeMs = Number.NEGATIVE_INFINITY;
+  #beforeMoment: SnapshotMoment = { atMs: Number.NEGATIVE_INFINITY };
   readonly #ignored: ReadonlySet<string>;
-  readonly #resetsMs: readonly number[];
+  readonly #resets: Resets;
 
-  constructor(ignored: ReadonlySet<string>, resetsMs: readonly number[] = []) {
+  constructor(ignored: ReadonlySet<string>, resets: Resets = { brainMs: [], gameMs: [] }) {
     this.#ignored = ignored;
-    this.#resetsMs = resetsMs;
+    this.#resets = resets;
   }
 
-  add(atMs: number, data: MediumSnapshotData): void {
-    const [before, beforeMs] = [this.#before, this.#beforeMs];
+  add(moment: SnapshotMoment, data: MediumSnapshotData): void {
+    const [before, beforeMoment] = [this.#before, this.#beforeMoment];
     const after = serverStates(data);
     this.#before = after;
-    this.#beforeMs = atMs;
-    if (before === null) return;
-    if (this.#resetsMs.some((resetMs) => resetMs > beforeMs && resetMs <= atMs)) return;
+    this.#beforeMoment = moment;
+    if (before === null || resetBetween(this.#resets, beforeMoment, moment)) return;
     const moved = [...after]
       .filter(
         ([hostname, state]) => !this.#ignored.has(hostname) && before.has(hostname) && before.get(hostname) !== state,
@@ -276,20 +302,49 @@ class HackTargetInference {
       .sort();
     if (moved.length === 0) return;
     const current = this.stretches.at(-1);
-    if (current && current.servers.join() === moved.join()) current.toMs = atMs;
-    else this.stretches.push({ servers: moved, fromMs: atMs, toMs: atMs });
+    if (current && current.servers.join() === moved.join()) current.toMs = moment.atMs;
+    else this.stretches.push({ servers: moved, fromMs: moment.atMs, toMs: moment.atMs });
   }
 }
 
 /** `HackTargetInference` over a list of medium snapshots. */
 export function inferHackTargets(
-  medium: { atMs: number; data: MediumSnapshotData }[],
+  medium: (SnapshotMoment & { data: MediumSnapshotData })[],
   ignored: ReadonlySet<string>,
-  resetsMs: readonly number[] = [],
+  resets?: Resets,
 ): MovedServers[] {
-  const inference = new HackTargetInference(ignored, resetsMs);
-  for (const { atMs, data } of medium) inference.add(atMs, data);
+  const inference = new HackTargetInference(ignored, resets);
+  for (const { data, ...moment } of medium) inference.add(moment, data);
   return inference.stretches;
+}
+
+/**
+ * The batcher's target as its health in the fast snapshots says it, a stretch at a time (#245): one target from its
+ * first look to its last, ended by another target, a reset (`resetBetween`), or no look naming it for more than the
+ * heartbeat's gap threshold (the batcher stopped, or the Agent gone): the same target after one is another stretch.
+ */
+class BatcherTargets {
+  readonly stretches: BatcherTarget[] = [];
+  #last: SnapshotMoment | null = null;
+  readonly #resets: Resets;
+
+  constructor(resets: Resets) {
+    this.#resets = resets;
+  }
+
+  add(moment: SnapshotMoment, batcher: unknown): void {
+    const target = isObject(batcher) ? fieldsOf(batcher).target : undefined;
+    if (typeof target !== "string") return;
+    const [current, last] = [this.stretches.at(-1), this.#last];
+    this.#last = moment;
+    const goesOn =
+      current?.target === target &&
+      last !== null &&
+      moment.atMs - last.atMs <= DEFAULT_GAP_THRESHOLD_MS &&
+      !resetBetween(this.#resets, last, moment);
+    if (goesOn) current.toMs = moment.atMs;
+    else this.stretches.push({ target, fromMs: moment.atMs, toMs: moment.atMs });
+  }
 }
 
 /** Each server's money and security, as one string to compare. */
@@ -612,8 +667,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let mediumFirst: MediumSnapshotData | undefined;
     let mediumLast: MediumSnapshotData | undefined;
     const money: MoneyPoint[] = [];
-    // The slow snapshots are read: the cycles say where each reset is (#245).
-    const inference = new HackTargetInference(playersServers, cycles.resetsMs());
+    // The slow snapshots are read: where each reset is (#245), by 2b's estimate and on the game's clock (each
+    // `lastAugReset`: an install's, and a destroy's too, `PlayerObjectGeneralMethods.ts:126`).
+    const resets: Resets = { brainMs: cycles.resetsMs(), gameMs: [...resetsMs] };
+    const inference = new HackTargetInference(playersServers, resets);
     const cloudServerChanges = new CloudServerChanges(cloudServers);
     const worldDaemon = new WorldDaemonFold();
     const mediumTimes: SnapshotTime[] = [];
@@ -630,7 +687,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       segment.mediumLast = data;
       const playerMoney = playerOf(data).money;
       if (typeof playerMoney === "number") money.push({ atMs, money: playerMoney });
-      inference.add(atMs, data);
+      inference.add({ atMs, gameTimeMs }, data);
       cloudServerChanges.add(atMs, data);
       hacking.addMedium(atMs, data);
       backdoors.addMedium(atMs, data);
@@ -638,15 +695,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       augmentations.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
-    const batcherTargets: BatcherTarget[] = [];
+    const batcherTargets = new BatcherTargets(resets);
     for (const { atMs, gameTimeMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
-      const target = isObject(data.batcher) ? fieldsOf(data.batcher).target : undefined;
-      if (typeof target === "string") {
-        const last = batcherTargets.at(-1);
-        if (last?.target === target) last.toMs = atMs;
-        else batcherTargets.push({ target, fromMs: atMs, toMs: atMs });
-      }
+      batcherTargets.add({ atMs, gameTimeMs }, data.batcher);
       cycles.addFast(atMs, gameTimeMs, data.batcher);
       const segment = segmentAt(cycles.bitNodeIndexAt(atMs));
       if (!segment.fastSeen) segment.homeRamUsedFirst = data.game?.homeRamUsed;
@@ -684,7 +736,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       weakenTimes,
       money,
       targets: inference.stretches,
-      batcherTargets,
+      batcherTargets: batcherTargets.stretches,
       backdoors,
       slowFirst,
       slowLast,
@@ -745,8 +797,9 @@ export function runReport(
     ...(verbose
       ? []
       : [
-          "(summaries: --verbose lists each intent, cloud server bought or upgraded, augmentation decision and " +
-            "purchase, dialog handled, faction work choice and inferred hack target; #245)",
+          "(summaries: --verbose lists each intent, cloud server bought or upgraded, change of work, dialog " +
+            "handled, faction work choice, invitation travel, augmentation decision and purchase, and inferred hack " +
+            "target; #245)",
         ]),
     "",
     ...windowSection(facts),
@@ -1070,6 +1123,8 @@ interface IntentEpisode {
   outcome: IntentOutcome;
   firstSeenMs: number;
   doneAtMs: number | null;
+  /** The problems it reported while not done, each once (#245: why it was tried again). */
+  problemsBeforeDone: string[];
 }
 
 /**
@@ -1081,19 +1136,41 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
   const current = new Map<string, IntentEpisode>();
   for (const { atMs, intents } of facts.fast) {
     for (const outcome of intents) {
-      const known = current.get(outcome.id);
-      if (known === undefined || (known.outcome.done && !outcome.done) || outcome.tries < known.outcome.tries) {
-        const episode = { id: outcome.id, outcome, firstSeenMs: atMs, doneAtMs: outcome.done ? atMs : null };
+      let episode = current.get(outcome.id);
+      if (episode === undefined || (episode.outcome.done && !outcome.done) || outcome.tries < episode.outcome.tries) {
+        episode = { id: outcome.id, outcome, firstSeenMs: atMs, doneAtMs: null, problemsBeforeDone: [] };
         episodes.push(episode);
         current.set(outcome.id, episode);
-        continue;
       }
-      known.outcome = outcome;
-      if (outcome.done) known.doneAtMs ??= atMs;
+      episode.outcome = outcome;
+      if (outcome.done) episode.doneAtMs ??= atMs;
+      else if (outcome.problem !== null && !episode.problemsBeforeDone.includes(outcome.problem)) {
+        episode.problemsBeforeDone.push(outcome.problem);
+      }
     }
   }
   return episodes;
 }
+
+/**
+ * What an intent reports while its worker is still at it (#245): a ui backdoor's "installing the backdoor on CSEC:
+ * about 40 s left" (`ingame/src/workers/backdoor-standing.ts:36`), carried on as "… (its worker is still at it)"
+ * (`ingame/src/agent/intent-runner.ts:57`), or "its last worker is still running"
+ * (`ingame/src/agent/run-worker.ts:34`).
+ */
+const STILL_AT_IT = /: about \d+ s left|its worker is still at it|its last worker is still running/;
+
+/**
+ * Done after more than one try, everything reported before it its worker still at it (#245): a ui backdoor's second
+ * try is routine, as its first starts the backdoor and returns. Counted, not listed, by default. One tried again with
+ * nothing reported (no problem seen) is listed: why isn't known.
+ */
+const triedAgainWhileAtIt = ({ outcome, problemsBeforeDone }: IntentEpisode) =>
+  outcome.done &&
+  outcome.tries > 1 &&
+  outcome.problem === null &&
+  problemsBeforeDone.length > 0 &&
+  problemsBeforeDone.every((problem) => STILL_AT_IT.test(problem));
 
 function describeIntent(outcome: IntentOutcome): string {
   const backend = outcome.backend === null ? "" : ` (${outcome.backend})`;
@@ -1108,73 +1185,91 @@ function describeEpisode({ id, outcome, firstSeenMs, doneAtMs }: IntentEpisode):
   return `    ${id}: ${describeIntent(outcome)}; ${when}`;
 }
 
-/** "3 tries", "1 choice": a count and its noun. */
-const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-/** Counts of each, the most first, ties in the order first seen: "hacking for NiteSec ×19, hacking for CyberSec ×10" */
-function countEach(items: readonly string[]): string {
-  const counts = new Map<string, number>();
-  for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
-  return [...counts]
-    .sort(([, a], [, b]) => b - a)
-    .map(([item, count]) => `${item} ×${count}`)
-    .join(", ");
+/** One action's intents (the id's name before its arguments), counted by outcome. */
+interface ActionCounts {
+  done: number;
+  doneWithProblem: number;
+  triedAgainWhileAtIt: number;
+  notDone: number;
 }
 
 /**
  * The intents (#245): with `verbose`, each episode; else counts by action (the id's name before its arguments) and
- * outcome, the most first, then each episode not done, done after more than one try, or done with a problem.
+ * outcome, the most first, then each episode not done, done with a problem, or tried again for something besides its
+ * worker still at it (`triedAgainWhileAtIt`).
  */
 function intentLines(facts: RunFacts, verbose: boolean): string[] {
   const episodes = intentEpisodes(facts);
   if (verbose) return ["  intents:", ...(episodes.length === 0 ? ["    none"] : episodes.map(describeEpisode))];
   const lines = [`  intents: ${episodes.length}, by action and outcome (--verbose lists each):`];
-  const byAction = new Map<string, { done: number; withProblem: number; notDone: number }>();
-  for (const { id, outcome } of episodes) {
-    const action = id.split("(")[0] ?? id;
-    const counts = byAction.get(action) ?? { done: 0, withProblem: 0, notDone: 0 };
+  const byAction = new Map<string, ActionCounts>();
+  for (const episode of episodes) {
+    const action = episode.id.split("(")[0] ?? episode.id;
+    const counts = byAction.get(action) ?? { done: 0, doneWithProblem: 0, triedAgainWhileAtIt: 0, notDone: 0 };
     byAction.set(action, counts);
-    if (!outcome.done) counts.notDone += 1;
-    else {
-      counts.done += 1;
-      if (outcome.problem !== null) counts.withProblem += 1;
-    }
+    if (episode.outcome.done) counts.done += 1;
+    else counts.notDone += 1;
+    if (episode.outcome.done && episode.outcome.problem !== null) counts.doneWithProblem += 1;
+    if (triedAgainWhileAtIt(episode)) counts.triedAgainWhileAtIt += 1;
   }
-  const total = ({ done, notDone }: { done: number; notDone: number }) => done + notDone;
-  const ranked = [...byAction].sort(([a, x], [b, y]) => total(y) - total(x) || (a < b ? -1 : a > b ? 1 : 0));
-  for (const [action, { done, withProblem, notDone }] of ranked) {
+  const total = ({ done, notDone }: ActionCounts) => done + notDone;
+  const ranked = [...byAction].sort(
+    ([firstAction, firstCounts], [secondAction, secondCounts]) =>
+      total(secondCounts) - total(firstCounts) ||
+      (firstAction < secondAction ? -1 : firstAction > secondAction ? 1 : 0),
+  );
+  for (const [action, counts] of ranked) {
+    const notes = [
+      ...(counts.doneWithProblem > 0 ? [`${counts.doneWithProblem} with a problem`] : []),
+      ...(counts.triedAgainWhileAtIt > 0 ? [`${counts.triedAgainWhileAtIt} tried again while still at it`] : []),
+    ];
     const outcomes = [
-      ...(done > 0 ? [`${done} done${withProblem > 0 ? ` (${withProblem} with a problem)` : ""}`] : []),
-      ...(notDone > 0 ? [`${notDone} not done`] : []),
+      ...(counts.done > 0 ? [`${counts.done} done${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`] : []),
+      ...(counts.notDone > 0 ? [`${counts.notDone} not done`] : []),
     ];
     lines.push(`    ${action}: ${outcomes.join(", ")}`);
   }
   if (episodes.length === 0) lines.push("    none");
-  lines.push("  intents not done, done after more than one try, or done with a problem:");
-  const notable = episodes.filter(({ outcome }) => !outcome.done || outcome.tries > 1 || outcome.problem !== null);
+  lines.push("  intents not done, done with a problem, or tried again for something besides their worker still at it:");
+  const notable = episodes.filter(
+    (episode) =>
+      !episode.outcome.done ||
+      episode.outcome.problem !== null ||
+      (episode.outcome.tries > 1 && !triedAgainWhileAtIt(episode)),
+  );
   lines.push(...(notable.length === 0 ? ["    none"] : notable.map(describeEpisode)));
   return lines;
 }
 
+/** How many of an alert's words tell it from others (#245: run #3's 3 Source-File alerts among 108). */
+const ALERT_FIRST_WORDS = 4;
+
 /**
- * The dialogs the Agent handled (#245): with `verbose`, each, quoted; else counts by kind, the most first, and the
- * dialogs not handled, left blocking the page (section 4's failures).
+ * The dialogs the Agent handled (#245): with `verbose`, each, quoted; else counts by kind (an alert by its first
+ * words), the most first, and the dialogs not handled, left blocking the page (section 4's failures).
  */
 function dialogLines(facts: RunFacts, verbose: boolean): string[] {
-  const dialogs = facts.events.filter((event) => event.kind === "gameDialog");
-  const kindOf = (detail: unknown) => displayValue((fieldsOf(detail) as Partial<HandledDialog>).kind);
+  const dialogs = facts.events
+    .filter((event) => event.kind === "gameDialog")
+    .map(({ atMs, detail }) => {
+      const dialog = fieldsOf(detail) as Partial<HandledDialog>;
+      return { atMs, kind: displayValue(dialog.kind), text: displayValue(dialog.text) };
+    });
   if (verbose) {
     const lines = ["  dialogs handled:"];
-    for (const { atMs, detail } of dialogs) {
-      const text = displayValue((fieldsOf(detail) as Partial<HandledDialog>).text);
-      lines.push(`    ${formatIsoTime(atMs)}  ${kindOf(detail)}: ${quote(text, DIALOG_QUOTE_LENGTH)}`);
+    for (const { atMs, kind, text } of dialogs) {
+      lines.push(`    ${formatIsoTime(atMs)}  ${kind}: ${quote(text, DIALOG_QUOTE_LENGTH)}`);
     }
     if (dialogs.length === 0) lines.push("    none");
     return lines;
   }
-  const lines = ["  dialogs handled, by kind (--verbose lists each):"];
-  const counts = new Map<string, number>();
-  for (const { detail } of dialogs) counts.set(kindOf(detail), (counts.get(kindOf(detail)) ?? 0) + 1);
-  for (const [kind, count] of [...counts].sort(([, a], [, b]) => b - a)) lines.push(`    ${kind}: ${count}`);
+  const lines = ["  dialogs handled, by kind, an alert by its first words (--verbose lists each):"];
+  const kinds = dialogs.map(({ kind, text }) => {
+    if (kind !== "alert") return kind;
+    const words = text.split(/\s+/).filter((word) => word !== "");
+    return `alert "${words.slice(0, ALERT_FIRST_WORDS).join(" ")}${words.length > ALERT_FIRST_WORDS ? "…" : ""}"`;
+  });
+  for (const [kind, count] of countsOf(kinds)) lines.push(`    ${kind}: ${count}`);
   if (dialogs.length === 0) lines.push("    none");
   lines.push("  dialogs not handled (left blocking the page; section 4's failures):");
   const blocking = blockingEpisodes(facts);
@@ -1185,27 +1280,46 @@ function dialogLines(facts: RunFacts, verbose: boolean): string[] {
   return lines;
 }
 
+/** A work outcome in words (#151): "none wanted", "converged (ui)", "not converged (ui): a dialog … is open". */
+function describeWork(work: WorkOutcome | null): string {
+  if (work === null) return "none wanted";
+  const backend = work.backend ? ` (${work.backend})` : "";
+  return `${work.converged ? "converged" : "not converged"}${backend}${work.problem ? `: ${work.problem}` : ""}`;
+}
+
+/**
+ * The work as it changed (#151): with `verbose`, each change; else a line a cycle (#245), its changes counted by state
+ * and each with a problem listed. A new work wanted reads "not converged" with no problem until its first try
+ * (`ingame/src/agent/work.ts:44`), which is routine; one with a problem isn't.
+ */
+function workLines(facts: RunFacts, verbose: boolean): string[] {
+  const changes: { atMs: number; work: WorkOutcome | null; described: string }[] = [];
+  for (const { atMs, work } of facts.fast) {
+    if (work === undefined) continue;
+    const described = describeWork(work);
+    if (described !== changes.at(-1)?.described) changes.push({ atMs, work, described });
+  }
+  if (changes.length === 0) return ["  work, as it changed:", "    not reported"];
+  if (verbose) {
+    const each = changes.map(({ atMs, described }) => `    ${formatIsoTime(atMs)}  ${described}`);
+    return ["  work, as it changed:", ...each];
+  }
+  const lines = ["  work, as it changed, by cycle: each state counted, each problem listed (--verbose lists each):"];
+  for (const [label, inCycle] of Map.groupBy(changes, ({ atMs }) => facts.cycles.cycleLabelAt(atMs))) {
+    const states = inCycle.map(({ work }) => describeWork(work === null ? null : { ...work, problem: null }));
+    lines.push(`    ${label}: ${plural(inCycle.length, "change", "changes")}: ${describeCounts(states)}`);
+    for (const { atMs, work, described } of inCycle) {
+      if (work?.problem) lines.push(`      ${formatIsoTime(atMs)}  ${described}`);
+    }
+  }
+  return lines;
+}
+
 function actionsSection(facts: RunFacts, verbose: boolean): string[] {
   const lines = ["3. Actions", ...intentLines(facts, verbose)];
 
   lines.push(...cloudServerLines(facts, verbose));
-
-  lines.push("  work, as it changed:");
-  let previous: string | undefined;
-  let changes = 0;
-  for (const { atMs, work } of facts.fast) {
-    if (work === undefined) continue;
-    const described =
-      work === null
-        ? "none wanted"
-        : `${work.converged ? "converged" : "not converged"}${work.backend ? ` (${work.backend})` : ""}` +
-          `${work.problem ? `: ${work.problem}` : ""}`;
-    if (described === previous) continue;
-    previous = described;
-    changes++;
-    lines.push(`    ${formatIsoTime(atMs)}  ${described}`);
-  }
-  if (changes === 0) lines.push("    not reported");
+  lines.push(...workLines(facts, verbose));
 
   lines.push("  promotions:");
   const promotions = facts.events.filter((event) => event.kind === WORK_PROMOTION_EVENT_KIND);
@@ -1226,6 +1340,7 @@ function actionsSection(facts: RunFacts, verbose: boolean): string[] {
       formatIsoTime,
       facts.untilMs,
       facts.events.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND).map((event) => event.atMs),
+      verbose ? undefined : (atMs) => facts.cycles.cycleLabelAt(atMs),
     ),
   );
   lines.push(
@@ -1264,18 +1379,14 @@ function factionLines({ factionWork, cycles }: RunFacts, verbose: boolean): stri
     }
   } else {
     lines.push("    the brain's faction work, by cycle (--verbose lists each choice):");
-    const byCycle = new Map<string, { chosen: string[]; stopped: string[] }>();
-    for (const record of factionWork.records) {
-      const label = cycles.cycleLabelAt(record.atMs);
-      const tally = byCycle.get(label) ?? { chosen: [], stopped: [] };
-      byCycle.set(label, tally);
-      if (record.kind === "chosen") tally.chosen.push(`${record.choice.workType} for ${record.choice.faction}`);
-      else tally.stopped.push(record.reason);
-    }
-    for (const [label, { chosen, stopped }] of byCycle) {
+    for (const [label, records] of Map.groupBy(factionWork.records, ({ atMs }) => cycles.cycleLabelAt(atMs))) {
+      const chosen = records.flatMap((record) =>
+        record.kind === "chosen" ? [`${record.choice.workType} for ${record.choice.faction}`] : [],
+      );
+      const stopped = records.flatMap((record) => (record.kind === "stopped" ? [record.reason] : []));
       const parts = [
-        chosen.length === 0 ? "no choice" : `${plural(chosen.length, "choice", "choices")}: ${countEach(chosen)}`,
-        ...(stopped.length === 0 ? [] : [`stopped ${stopped.length} (${countEach(stopped)})`]),
+        chosen.length === 0 ? "no choice" : `${plural(chosen.length, "choice", "choices")}: ${describeCounts(chosen)}`,
+        ...(stopped.length === 0 ? [] : [`stopped ${stopped.length} (${describeCounts(stopped)})`]),
       ];
       lines.push(`      ${label}: ${parts.join("; ")}`);
     }
@@ -1398,9 +1509,10 @@ function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
 }
 
 /**
- * The cloud servers bought or upgraded (#194), each with its RAM and price (with `verbose`), or the fleet a line a
- * cycle (#245: its size before the cycle's first change and after its last, a change of the fleet's total at most once
- * a cycle), and the total. The price is BN1's (the brain's rule knows no other yet): in another BitNode, unknown.
+ * The cloud servers bought or upgraded (#194): with `verbose`, each with its RAM and price; by default (#245), the
+ * fleet a line a cycle, its count and RAM before the cycle's first change and after its last, with what was bought
+ * and upgraded and its price. Then the total. The price is BN1's (the brain's rule knows no other yet): in another
+ * BitNode, unknown.
  */
 function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
   const lines = [
@@ -1411,14 +1523,9 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
   const priceOf = ({ fromRam, toRam }: CloudServerChange) =>
     currentNode === 1 ? cloudServerPrice(toRam) - (fromRam === null ? 0 : cloudServerPrice(fromRam)) : null;
   let total = 0;
-  const byCycle = new Map<string, CloudServerChange[]>();
   for (const change of facts.cloudServerChanges) {
     const price = priceOf(change);
     total += price ?? 0;
-    const label = facts.cycles.cycleLabelAt(change.atMs);
-    const group = byCycle.get(label) ?? [];
-    group.push(change);
-    byCycle.set(label, group);
     if (!verbose) continue;
     const what =
       change.fromRam === null
@@ -1429,6 +1536,7 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
   }
   const fleet = ({ count, ram }: CloudFleet) =>
     count === 0 ? "none" : `${plural(count, "server", "servers")}, ${formatGigabytes(ram)}`;
+  const byCycle = Map.groupBy(facts.cloudServerChanges, ({ atMs }) => facts.cycles.cycleLabelAt(atMs));
   for (const [label, changes] of verbose ? [] : byCycle) {
     const [first, last] = [changes[0], changes.at(-1)] as [CloudServerChange, CloudServerChange];
     const bought = changes.filter((change) => change.fromRam === null).length;

@@ -41,6 +41,7 @@ import {
   formatEta,
   type OnlineClock,
 } from "./augmentations.ts";
+import { plural } from "./gap-report.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 
 /** The augmentation rule's events (#210): section 3's, so left out of section 1's timeline. */
@@ -159,7 +160,7 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
 }
 
 /** A donation not shown, or an install with no reset, in words: section 3 lists each, summarised or not (#245). */
-function anomalyOf(kind: string, fields: Record<string, unknown>): string {
+function describeUnfinished(kind: string, fields: Record<string, unknown>): string {
   if (kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND) {
     return (
       `donation not shown: ${describeDonation(fields as never)}, the faction state showing ` +
@@ -168,6 +169,78 @@ function anomalyOf(kind: string, fields: Record<string, unknown>): string {
   }
   const queued = Array.isArray(fields.queued) ? fields.queued.map(String) : [];
   return `install reported done but the game didn't reset (queue: ${describeAugmentations(queued)})`;
+}
+
+/** The events a donation not shown, or an install with no reset, is: listed under their cycle by default (#245). */
+const UNFINISHED_EVENT_KINDS = [AUGMENTATION_DONATION_FAILED_EVENT_KIND, AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND];
+/** The rule's events section 3's summary reads (#245): not its progress, which 2b judges. */
+const SUMMARISED_EVENT_KINDS = [
+  AUGMENTATION_BOUGHT_EVENT_KIND,
+  AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
+  AUGMENTATION_DONATED_EVENT_KIND,
+  AUGMENTATION_INSTALL_SENT_EVENT_KIND,
+  ...UNFINISHED_EVENT_KINDS,
+];
+
+/**
+ * One cycle's augmentation events in a line (#245): "bought 42 for $54,000,000: BitWire, Neurotrainer I, NeuroFlux
+ * Governor ×40 (levels 2–41); 1 install chosen (count reached); 2 donations: $1,000,000,000 to CyberSec, … ; install
+ * sent (the brain's)". `events` are in time order.
+ */
+function describeCycleEvents(events: readonly StoredEvent[]): string {
+  const fieldsOfKind = (kind: string) =>
+    events.filter((event) => event.kind === kind).map((event) => fieldsOf(event.detail));
+  const bought = fieldsOfKind(AUGMENTATION_BOUGHT_EVENT_KIND);
+  const others = bought
+    .filter((fields) => fields.augmentation !== NEUROFLUX_GOVERNOR)
+    .map((fields) => String(fields.augmentation));
+  const neuroFluxLevels = bought
+    .filter((fields) => fields.augmentation === NEUROFLUX_GOVERNOR)
+    .map((fields) => fields.level);
+  const knownLevels = neuroFluxLevels.filter(isFiniteNumber);
+  const levelsSpan =
+    knownLevels.length !== neuroFluxLevels.length
+      ? ""
+      : knownLevels.length === 1
+        ? ` (level ${knownLevels[0]})`
+        : ` (levels ${Math.min(...knownLevels)}–${Math.max(...knownLevels)})`;
+  const set = [
+    ...(others.length === 0 ? [] : [describeAugmentations(others)]),
+    ...(neuroFluxLevels.length === 0 ? [] : [`${NEUROFLUX_GOVERNOR} ×${neuroFluxLevels.length}${levelsSpan}`]),
+  ];
+  const spent = bought.reduce((sum, fields) => sum + (isFiniteNumber(fields.price) ? fields.price : 0), 0);
+  const parts = [
+    bought.length === 0 ? "bought none" : `bought ${bought.length} for ${formatMoney(spent)}: ${set.join(", ")}`,
+  ];
+  const chosen = fieldsOfKind(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND);
+  const calledOff = fieldsOfKind(AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND).length;
+  if (chosen.length > 0 || calledOff > 0) {
+    const reasons = [
+      ...new Set(chosen.map((fields) => (typeof fields.reason === "string" ? fields.reason : "reason not stored"))),
+    ];
+    parts.push(
+      plural(chosen.length, "install chosen", "installs chosen") +
+        (reasons.length > 0 ? ` (${reasons.join(", ")})` : "") +
+        (calledOff > 0 ? `, ${calledOff} called off` : ""),
+    );
+  }
+  const donated = fieldsOfKind(AUGMENTATION_DONATED_EVENT_KIND);
+  if (donated.length > 0) {
+    // By faction, its donations added up (#245 review: the install chosen's reason names another faction).
+    const byFaction = new Map<string, number>();
+    for (const fields of donated) {
+      const amount = isFiniteNumber(fields.amount) ? fields.amount : 0;
+      byFaction.set(String(fields.faction), (byFaction.get(String(fields.faction)) ?? 0) + amount);
+    }
+    const each = [...byFaction].map(([faction, amount]) => `${formatMoney(amount)} to ${faction}`);
+    parts.push(`${plural(donated.length, "donation", "donations")}: ${each.join(", ")}`);
+  }
+  const sent = fieldsOfKind(AUGMENTATION_INSTALL_SENT_EVENT_KIND).map((fields) =>
+    fields.source === "manual" ? "yours" : "the brain's",
+  );
+  if (sent.length > 0) parts.push(`install sent (${sent.join(", ")})`);
+  return parts.join("; ");
 }
 
 /**
@@ -369,7 +442,10 @@ export class AugmentationTimeline {
     this.#owned = reset.ownedAugs;
   }
 
-  /** Section 3's lines: each decision, purchase, install sent, install seen and cycle called off, in time order. */
+  /**
+   * Section 3's lines with --verbose (#245; `summaryLines` by default): each decision, purchase, install sent, install
+   * seen and cycle called off, in time order.
+   */
   actionLines(events: readonly StoredEvent[], formatTime: (ms: number) => string): string[] {
     const entries: { atMs: number; text: string }[] = [];
     for (const { atMs, kind, detail } of events) {
@@ -398,7 +474,7 @@ export class AugmentationTimeline {
             formatReputation(fields.after),
         });
       } else if (kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND) {
-        entries.push({ atMs, text: anomalyOf(kind, fields) });
+        entries.push({ atMs, text: describeUnfinished(kind, fields) });
       } else if (kind === AUGMENTATION_PROGRESS_EVENT_KIND) {
         entries.push({ atMs, text: `progress: ${describeStoredProgress(fields)}` });
       } else if (kind === AUGMENTATION_BOUGHT_EVENT_KIND) {
@@ -419,7 +495,7 @@ export class AugmentationTimeline {
       } else if (kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) {
         entries.push({ atMs, text: `install cycle called off: ${String(fields.reason)}` });
       } else if (kind === AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND) {
-        entries.push({ atMs, text: anomalyOf(kind, fields) });
+        entries.push({ atMs, text: describeUnfinished(kind, fields) });
       }
     }
     for (const install of this.installs) {
@@ -444,112 +520,32 @@ export class AugmentationTimeline {
 
   /**
    * Section 3's summary (#245; `actionLines` with --verbose): a line a cycle (`cycleOf` names it, as 2b does) with the
-   * set bought, NeuroFlux Governor's levels as one count, and its total price; the installs chosen and called off; the
-   * donations; the installs sent. A donation not shown, or an install with no reset, is listed under its cycle all the
-   * same. The progress events and the installs seen are left out: 2b says how each cycle went and what it installed.
+   * set bought, NeuroFlux Governor's levels as one count, and its total price; the installs chosen and why, and those
+   * called off; the donations, by faction; the installs sent. A donation not shown, or an install with no reset, is
+   * listed under its cycle all the same. The progress events and the installs seen are left out: 2b says how each cycle
+   * went and what it installed.
    */
   summaryLines(
     events: readonly StoredEvent[],
     formatTime: (ms: number) => string,
     cycleOf: (atMs: number) => string,
   ): string[] {
-    interface Tally {
-      bought: string[];
-      levels: number[];
-      spent: number;
-      chosen: number;
-      /** The reasons the installs were chosen for, as stored ("count reached"), each once. */
-      reasons: string[];
-      calledOff: number;
-      donations: number;
-      donated: number;
-      sent: string[];
-      anomalies: string[];
-    }
-    const cycles = new Map<string, Tally>();
-    const tallyOf = (atMs: number) => {
-      const label = cycleOf(atMs);
-      const known = cycles.get(label);
-      if (known !== undefined) return known;
-      const tally: Tally = {
-        bought: [],
-        levels: [],
-        spent: 0,
-        chosen: 0,
-        reasons: [],
-        calledOff: 0,
-        donations: 0,
-        donated: 0,
-        sent: [],
-        anomalies: [],
-      };
-      cycles.set(label, tally);
-      return tally;
-    };
-    for (const { atMs, kind, detail } of [...events].sort((a, b) => a.atMs - b.atMs)) {
-      const fields = fieldsOf(detail);
-      if (kind === AUGMENTATION_BOUGHT_EVENT_KIND) {
-        const tally = tallyOf(atMs);
-        if (fields.augmentation === NEUROFLUX_GOVERNOR) tally.levels.push(Number(fields.level));
-        else tally.bought.push(String(fields.augmentation));
-        if (isFiniteNumber(fields.price)) tally.spent += fields.price;
-      } else if (kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) {
-        const tally = tallyOf(atMs);
-        tally.chosen += 1;
-        const reason = typeof fields.reason === "string" ? fields.reason : "reason not stored";
-        if (!tally.reasons.includes(reason)) tally.reasons.push(reason);
-      } else if (kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) {
-        tallyOf(atMs).calledOff += 1;
-      } else if (kind === AUGMENTATION_DONATED_EVENT_KIND) {
-        const tally = tallyOf(atMs);
-        tally.donations += 1;
-        if (isFiniteNumber(fields.amount)) tally.donated += fields.amount;
-      } else if (kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND) {
-        tallyOf(atMs).sent.push(fields.source === "manual" ? "yours" : "the brain's");
-      } else if (
-        kind === AUGMENTATION_DONATION_FAILED_EVENT_KIND ||
-        kind === AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND
-      ) {
-        tallyOf(atMs).anomalies.push(`      ${formatTime(atMs)}  ${anomalyOf(kind, fields)}`);
-      }
-    }
     const lines = [
       "  augmentations, by cycle: the set bought, NeuroFlux Governor's levels as one count (--verbose lists each " +
         "decision and purchase):",
     ];
-    const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-    for (const [label, tally] of cycles) {
-      const count = tally.bought.length + tally.levels.length;
-      const levels = tally.levels.filter(Number.isFinite);
-      const neuroFlux =
-        tally.levels.length === 0
-          ? []
-          : [
-              `${NEUROFLUX_GOVERNOR} ×${tally.levels.length}` +
-                (levels.length !== tally.levels.length
-                  ? ""
-                  : levels.length === 1
-                    ? ` (level ${levels[0]})`
-                    : ` (levels ${Math.min(...levels)}–${Math.max(...levels)})`),
-            ];
-      const set = [...(tally.bought.length === 0 ? [] : [describeAugmentations(tally.bought)]), ...neuroFlux];
-      const parts = [
-        count === 0 ? "bought none" : `bought ${count} for ${formatMoney(tally.spent)}: ${set.join(", ")}`,
-      ];
-      if (tally.chosen > 0 || tally.calledOff > 0) {
-        parts.push(
-          plural(tally.chosen, "install chosen", "installs chosen") +
-            (tally.reasons.length > 0 ? ` (${tally.reasons.join(", ")})` : "") +
-            (tally.calledOff > 0 ? `, ${tally.calledOff} called off` : ""),
-        );
+    const summarised = events
+      .filter((event) => SUMMARISED_EVENT_KINDS.includes(event.kind))
+      .sort((first, second) => first.atMs - second.atMs);
+    for (const [label, inCycle] of Map.groupBy(summarised, ({ atMs }) => cycleOf(atMs))) {
+      lines.push(`    ${label}: ${describeCycleEvents(inCycle)}`);
+      for (const { atMs, kind, detail } of inCycle) {
+        if (UNFINISHED_EVENT_KINDS.includes(kind)) {
+          lines.push(`      ${formatTime(atMs)}  ${describeUnfinished(kind, fieldsOf(detail))}`);
+        }
       }
-      if (tally.donations > 0) {
-        parts.push(`${plural(tally.donations, "donation", "donations")}, ${formatMoney(tally.donated)}`);
-      }
-      if (tally.sent.length > 0) parts.push(`install sent (${tally.sent.join(", ")})`);
-      lines.push(`    ${label}: ${parts.join("; ")}`, ...tally.anomalies);
     }
-    if (cycles.size === 0) lines.push("    none");
+    if (summarised.length === 0) lines.push("    none");
     return lines;
   }
 

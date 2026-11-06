@@ -108,12 +108,13 @@ test.each(SEEDS)(
       .map((event) => (event.detail as { faction: string }).faction);
     expect(worked).not.toContain("CyberSec");
 
-    // The run report: the donation (its line, with --verbose: #245), and no donation failure.
-    const { text, failures } = runReport(
-      fresh.data.store,
-      { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() },
-      { verbose: true },
+    // The run report: the donation, by default in its cycle's line with its faction (#245), with --verbose its own
+    // line; and no donation failure.
+    const reportWindow = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
+    expect(runReport(fresh.data.store, reportWindow).text).toMatch(
+      /\n {4}BN1\.1 1: [^\n]*; 1 install chosen \(quick install\); 1 donation: \$[\d,]+ to CyberSec[;\n]/,
     );
+    const { text, failures } = runReport(fresh.data.store, reportWindow, { verbose: true });
     expect(text).toMatch(
       / {4}\S+ {2}donated \$[\d,]+ to CyberSec \(for 18,750 reputation\): reputation 5,\d{3} → 18,7\d\d/,
     );
