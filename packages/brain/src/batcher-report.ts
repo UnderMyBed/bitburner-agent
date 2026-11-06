@@ -838,7 +838,7 @@ export function batcherSection(
   );
   lines.push(...ramRecordLines(waits, total.ramWaits, true));
   // Hacks held for their batch's orders waiting, apart from the waits for RAM; orders that found their batch gone, its
-  // hack out first (#253: a hack time under a few tens of ms), never silent (#246's verification).
+  // hack out first (a bug since #253 made the hack the last out), never silent (#246's verification).
   if (anyWaitReporting) {
     lines.push(
       `  hacks held for their batch's orders waiting for RAM (#246): ${total.hacksHeldForBatch || "none"}; orders that ` +
@@ -848,7 +848,7 @@ export function batcherSection(
   // An order dropped, a failure: its batch's hack landed without it, a grow or weaken, the loss a short is.
   if (total.ordersDropped > 0) {
     const line =
-      `batch orders dropped: ${total.ordersDropped} found their batch gone (#253), the first seen at ` +
+      `batch orders dropped: ${total.ordersDropped} found their batch gone (a bug since #253), the first seen at ` +
       formatIsoTime(firstDroppedMs ?? firstMs);
     lines.push(`  ${line}`);
     failures.push(line);
