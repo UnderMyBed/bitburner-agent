@@ -24,6 +24,12 @@ export interface EngineInputs {
    * src/engine/bundle, forward slashes) → content. The game's own is covered by its commit and working tree.
    */
   tsconfigs: Record<string, string>;
+  /**
+   * The package.json files at and above our bundled sources and the game's root (#172): path (relative to
+   * src/engine/bundle, forward slashes) → the fields esbuild applies to the sources under them, as JSON. Those below
+   * the game's root (electron/package.json) are covered by its commit and working tree.
+   */
+  packageJsons: Record<string, string>;
 }
 
 export interface BundleReport {
@@ -49,6 +55,7 @@ export function engineFingerprint(inputs: EngineInputs): string {
   const { vendorCommit, vendorWorkingTree, vendorLockfile, buildScript, esbuildVersion } = inputs;
   const sources = sorted(inputs.bundleSources);
   const tsconfigs = sorted(inputs.tsconfigs);
+  const packageJsons = sorted(inputs.packageJsons);
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -59,9 +66,47 @@ export function engineFingerprint(inputs: EngineInputs): string {
         sources,
         esbuildVersion,
         tsconfigs,
+        packageJsons,
       ]),
     )
     .digest("hex");
+}
+
+/**
+ * What esbuild takes from a package.json for the sources under it: the nearest one's `type` (a source's module
+ * format), `sideEffects` (what tree shaking may drop) and `imports` (`#` specifiers), and, with platform "browser",
+ * the nearest one with a `browser` map remaps their imports. The others (`main`, `exports`, ...) apply only to an
+ * import of the package by name, which the bundle makes of neither.
+ */
+const APPLIED_PACKAGE_FIELDS = ["type", "sideEffects", "browser", "imports"] as const;
+
+/**
+ * The package.json files esbuild reads for the sources in each of `dirs` (#172): every one at or above each, as the
+ * nearest gives a source its `type`, `sideEffects` and `imports`, and the nearest with a `browser` map can be further
+ * up. Path (relative to `base`, forward slashes) → the fields esbuild applies (APPLIED_PACKAGE_FIELDS), as JSON, so a
+ * dependency's version, which can't change the bundle, doesn't rebuild it. Throws on one that isn't JSON, naming it.
+ */
+export function collectPackageJsons(dirs: string[], base: string): Record<string, string> {
+  const packageJsons: Record<string, string> = {};
+  for (const dir of dirs) {
+    for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+      const file = path.join(current, "package.json");
+      const key = path.relative(base, file).replaceAll("\\", "/");
+      if (!(key in packageJsons) && existsSync(file)) packageJsons[key] = appliedFields(file);
+      if (path.dirname(current) === current) break;
+    }
+  }
+  return packageJsons;
+}
+
+function appliedFields(file: string): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`${file} isn't JSON, so the engine's fingerprint can't cover it: ${(error as Error).message}`);
+  }
+  return JSON.stringify(Object.fromEntries(APPLIED_PACKAGE_FIELDS.map((field) => [field, parsed[field]])));
 }
 
 /**
@@ -136,6 +181,8 @@ export function collectEngineInputs(): EngineInputs {
     esbuildVersion: esbuild.version,
     // packages/sim/tsconfig.json's: esbuild ignores its `exclude`, which only keeps tsc off the bundle.
     tsconfigs: collectTsconfigs(enginePaths.bundleSourceDir),
+    // packages/sim/package.json for our sources, the game's own for its sources, and the repository's above both.
+    packageJsons: collectPackageJsons([enginePaths.bundleSourceDir, enginePaths.gameRoot], enginePaths.bundleSourceDir),
   };
 }
 

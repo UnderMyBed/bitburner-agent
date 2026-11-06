@@ -10,6 +10,7 @@ import {
   buildEngine,
   collectBundleSources,
   collectEngineInputs,
+  collectPackageJsons,
   collectTsconfigs,
   type EngineInputs,
   engineFingerprint,
@@ -31,6 +32,10 @@ const inputs: EngineInputs = {
   tsconfigs: {
     "../../../tsconfig.json": '{ "extends": "../../tsconfig.base.json" }',
     "../../../../../tsconfig.base.json": "{}",
+  },
+  packageJsons: {
+    "../../../package.json": '{"type":"module"}',
+    "../../../../../vendor/bitburner-src/package.json": "{}",
   },
 };
 
@@ -60,6 +65,21 @@ describe("engineFingerprint", () => {
       "root tsconfig it extends",
       { tsconfigs: { ...inputs.tsconfigs, "../../../../../tsconfig.base.json": '{ "compilerOptions": {} }' } },
     ],
+    // #172: esbuild applies their `type`, `sideEffects`, `browser` and `imports` to the sources under them.
+    [
+      "package.json esbuild applies to our sources",
+      { packageJsons: { ...inputs.packageJsons, "../../../package.json": '{"type":"commonjs"}' } },
+    ],
+    [
+      "package.json esbuild applies to the game's sources",
+      {
+        packageJsons: {
+          ...inputs.packageJsons,
+          "../../../../../vendor/bitburner-src/package.json": '{"sideEffects":false}',
+        },
+      },
+    ],
+    ["set of package.json files", { packageJsons: { ...inputs.packageJsons, "../../../../../package.json": "{}" } }],
   ])("changes when the %s changes", (_, change) => {
     expect(engineFingerprint({ ...inputs, ...change })).not.toBe(engineFingerprint(inputs));
   });
@@ -95,6 +115,72 @@ describe("collectEngineInputs", () => {
       "../../../../../tsconfig.node.json": read("tsconfig.node.json"),
       "../../../../../tsconfig.base.json": read("tsconfig.base.json"),
     });
+  });
+
+  test("reads the package.json files esbuild applies to our sources and the game's, and the repository's above (#172)", () => {
+    const packageJsons = collectEngineInputs().packageJsons;
+    // Any above the repository apply too, but they're the machine's, not the repository's.
+    const inRepository = Object.keys(packageJsons).filter((name) => !name.startsWith("../../../../../../"));
+    expect(inRepository.sort()).toEqual([
+      "../../../../../package.json",
+      "../../../../../vendor/bitburner-src/package.json",
+      "../../../package.json",
+    ]);
+    expect(packageJsons["../../../package.json"]).toBe('{"type":"module"}');
+    expect(packageJsons["../../../../../package.json"]).toBe('{"type":"module"}');
+    // The game's sets none of them (its `repository` has a `type`, which isn't the package's).
+    expect(packageJsons["../../../../../vendor/bitburner-src/package.json"]).toBe("{}");
+  });
+});
+
+describe("collectPackageJsons", () => {
+  /** A tree of files under a new temporary directory; returns its path. */
+  function tree(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(tmpdir(), "package-jsons-"));
+    for (const [name, content] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+      writeFileSync(path.join(root, name), content);
+    }
+    return root;
+  }
+
+  test("takes every package.json at or above each directory, once, with only the fields esbuild applies", () => {
+    const root = tree({
+      "pkg/package.json": JSON.stringify({
+        name: "pkg",
+        type: "module",
+        sideEffects: ["./src/stubs/*.js"],
+        dependencies: { a: "1.0.0" },
+        scripts: { build: "x" },
+      }),
+      // The nearest with a `browser` map remaps imports below it, even past a nearer package.json without one.
+      "package.json": JSON.stringify({
+        browser: { "./x.js": "./y.js" },
+        imports: { "#a": "./a.js" },
+        repository: { type: "git" },
+      }),
+      "game/package.json": JSON.stringify({ main: "main.js", version: "1.0.0" }),
+      // Not on either path up.
+      "other/package.json": JSON.stringify({ type: "commonjs" }),
+      "pkg/src/bundle/entry.ts": "",
+      "game/src/a.ts": "",
+    });
+    const bundle = path.join(root, "pkg/src/bundle");
+    const packageJsons = collectPackageJsons([bundle, path.join(root, "game")], bundle);
+    // Any above the temporary directory are the machine's.
+    const inTree = Object.fromEntries(
+      Object.entries(packageJsons).filter(([name]) => !name.startsWith("../../../../")),
+    );
+    expect(inTree).toEqual({
+      "../../package.json": '{"type":"module","sideEffects":["./src/stubs/*.js"]}',
+      "../../../package.json": '{"browser":{"./x.js":"./y.js"},"imports":{"#a":"./a.js"}}',
+      "../../../game/package.json": "{}",
+    });
+  });
+
+  test("fails on a package.json it can't read as JSON, naming it, rather than leave it out of the fingerprint", () => {
+    const root = tree({ "package.json": "{ type: module }", "src/a.ts": "" });
+    expect(() => collectPackageJsons([path.join(root, "src")], root)).toThrow(/package\.json/);
   });
 });
 
