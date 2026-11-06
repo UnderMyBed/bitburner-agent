@@ -1,6 +1,6 @@
 // agent/<deploymentId>/backdoor.js: a home worker that installs a backdoor through the game's terminal (#162), a `ui`
-// effector: there's no API for it before Singularity. Arguments: the server, and when to give up (the game's
-// `Date.now()`), so it ends within its Agent's round.
+// effector: there's no API for it before Singularity. Arguments: the server, and when to give up (the page's
+// monotonic clock), so it ends within its Agent's round.
 // - The game first: installed, with the terminal not left on the server, is done without touching the page. Refused
 //   as the terminal's `backdoor` would refuse it (the player's own, no root, the skill short) or with no way there:
 //   not done, with why, and nothing typed.
@@ -36,9 +36,9 @@ async function backdoorThroughTerminal(
   const { endsAtMs } = typed;
   const installed = () => ns.getServer(hostname).backdoorInstalled === true;
   // One that won't end within the round goes on alone: the round's time is the other intents'.
-  if (endsAtMs >= deadlineMs) return installingProblem(hostname, endsAtMs - Date.now());
+  if (endsAtMs >= deadlineMs) return installingProblem(hostname, endsAtMs);
   while (gamePage.terminalBusy() === true && !gamePage.stepsTimeUp()) await gamePage.waitARender();
-  if (gamePage.terminalBusy() === true) return installingProblem(hostname, endsAtMs - Date.now());
+  if (gamePage.terminalBusy() === true) return installingProblem(hostname, endsAtMs);
   if (!installed()) return `the terminal didn't install the backdoor on ${hostname}`;
   return gamePage.runTerminalCommand("home");
 }

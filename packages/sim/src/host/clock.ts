@@ -90,6 +90,12 @@ export interface VirtualClock {
    * it throws is reported as uncaught, as for any task.
    */
   queueTask(task: () => void, delayMs: number): void;
+  /**
+   * Steps the wall clock (`Date`) by `ms`, forward or back, as a time sync steps the PC's clock (#251: Windows Time
+   * stepped it +2,678 ms in run #3). `performance.now()` and every timer stay where they were, as in a browser, whose
+   * timers and `performance.now()` run on a monotonic clock; `now()` moves with `Date`.
+   */
+  stepWallClock(ms: number): void;
 }
 
 /** A string timer handler is code, which a browser evaluates in the global scope: an indirect eval. */
@@ -155,6 +161,12 @@ export function beginTask(): void {
  * - `clearTimeout` and `clearInterval` clear either kind, as in a browser, including an interval that moved to 4 ms,
  *   by its handle or the handle's number.
  */
+/** How many timer callbacks the page has run, all told: a test's measure of a script that wakes too often (#251). */
+let timersFired = 0;
+export function timersFiredSoFar(): number {
+  return timersFired;
+}
+
 function callTimersAsABrowserDoes(): void {
   type TimerFunction = (...args: unknown[]) => unknown;
   const timers = globalThis as unknown as Record<
@@ -175,6 +187,7 @@ function callTimersAsABrowserDoes(): void {
   const callbackFor = (handler: unknown, args: unknown[]) => {
     const run = typeof handler === "function" ? handler : () => evaluateGlobally(String(handler));
     return () => {
+      timersFired += 1;
       try {
         run.apply(globalThis.window ?? globalThis, args);
       } catch (error) {
@@ -275,6 +288,9 @@ export function installClock(epochMs: number, betweenTimers?: (continueTick: () 
         if (to === endMs) return false;
       }
     },
+    // fake-timers' own (fake-timers-src.js:2526-2542): `performance.now()` is kept, and every timer moves with `Date`,
+    // so it's still due as many ms from now as before.
+    stepWallClock: (ms) => clock.setSystemTime(clock.now + ms),
     queueTask: (task, delayMs) => {
       clock.setTimeout(() => {
         beginTask();

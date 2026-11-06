@@ -247,8 +247,8 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail:
         `the batcher is out of step on ${outOfStep.target}: ${outOfStep.desyncs} desync${outOfStep.desyncs === 1 ? "" : "s"}, ${outOfStep.late} late, ` +
         `${outOfStep.lost} lost lately; it stops hacking, prepares the target again and goes on, and the run report ` +
-        "fails the run, unless a clock step or page stall explains it and the batcher recovered by itself (a " +
-        "warning, #241)",
+        "fails the run, unless a page stall (or, for a batcher before #251, a clock step) explains it and the " +
+        "batcher recovered by itself (a warning, #241)",
     });
   }
   alerts.push(...augmentationAlerts(facts));

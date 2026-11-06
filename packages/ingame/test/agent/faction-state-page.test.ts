@@ -267,7 +267,7 @@ const since = (memory: FactionPageMemory, news: Partial<FactionReadContext> = {}
 });
 
 async function read(context: FactionReadContext, facts: FactionGameFacts) {
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const result: { state: FactionState | null; opened: string[]; memory: FactionPageMemory | null } = {
     state: null,
@@ -399,7 +399,7 @@ describe("reading the page", () => {
     // Read now: its 10-minute refresh counts from here.
     expect(result.memory?.factionsReadAtMs).toBe(NOW_MS);
     expect(result.state?.queuedAugmentations).toEqual(["BitWire"]);
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     expect(gamePage && sidebarFacts(gamePage).invitationsBadge).toBe(0);
   });
 
@@ -424,7 +424,7 @@ describe("reading the page", () => {
 describe("the worked faction's reputation, from its always-mounted prop", () => {
   test("the overview's, unfocused: its first span's `reputation`, not the rate's", () => {
     standInGame({ working: { faction: "CyberSec", reputation: 42.5 } });
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     expect(gamePage && workedFactionReputation(gamePage)).toEqual({ faction: "CyberSec", reputation: 42.5 });
   });
 
@@ -434,13 +434,13 @@ describe("the worked faction's reputation, from its always-mounted prop", () => 
     const description = element("p", { textContent: "Current Faction Reputation: " });
     description.append(reputationSpan(7.75), " (", reputationSpan("0.5 / sec"), ")");
     document.body.replaceChildren(title, description);
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     expect(gamePage && workedFactionReputation(gamePage)).toEqual({ faction: "NiteSec", reputation: 7.75 });
   });
 
   test("no faction work shown: none", () => {
     standInGame();
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     expect(gamePage && workedFactionReputation(gamePage)).toBeNull();
   });
 });
@@ -514,7 +514,7 @@ describe("around it, the page put back as found", () => {
       opened: [],
       memory: null,
     };
-    await reportPageEffect(ns, Date.now() + 1_500, {
+    await reportPageEffect(ns, performance.now() + 1_500, {
       isDone: () => result.state !== null,
       doing: "read the faction state through",
       steps: (gamePage, { wasFocused }) =>
@@ -571,7 +571,7 @@ describe("the worker: skipped where a page can't or mustn't be left (#197)", () 
     const { main } = await import("../../src/entries/faction-state.ts");
     await main({
       ...ns,
-      args: [JSON.stringify(context), Date.now() + 1_500],
+      args: [JSON.stringify(context), performance.now() + 1_500],
       disableLog: () => {},
       getResetInfo: () => ({ lastAugReset: 5, ownedAugs: new Map() }),
       getPlayer: () => ({ factions: ["CyberSec"] }),
@@ -595,7 +595,9 @@ describe("the worker: skipped where a page can't or mustn't be left (#197)", () 
     // Frozen at the last read, it would look to the brain like faction work earning nothing.
     standInGame({ joined: [CYBERSEC], startOn: "Stats", working: { faction: "CyberSec", reputation: 1_234.5 } });
     document.body.append(element("button", { textContent: "Play coin flip" }));
-    expect(await runWorker(since(memoryOf()))).toEqual({
+    // Its last read a refresh ago on the page's monotonic clock (#251): the Factions page is due.
+    const due = memoryOf({}, { factionsReadAtMs: performance.now() - FACTIONS_PAGE_REFRESH_MS });
+    expect(await runWorker(since(due))).toEqual({
       done: false,
       problem: null,
       skipped: factionStatePageProblems.casino,
@@ -608,6 +610,13 @@ describe("the worker: skipped where a page can't or mustn't be left (#197)", () 
     document.body.replaceChildren(element("h4", { textContent: "The BitVerse" }));
     expect(await runWorker()).toMatchObject({ skipped: factionStatePageProblems.noSidebar, problem: null });
     expect(clicks).toEqual([]);
+  });
+
+  test("read a moment ago on the page's monotonic clock (#251): the Factions page isn't due, so not opened", async () => {
+    standInGame({ joined: [CYBERSEC], startOn: "Stats" });
+    const recent = memoryOf({}, { factionsReadAtMs: performance.now() - 1_000 });
+    expect(await runWorker(since(recent))).toMatchObject({ done: true, problem: null });
+    expect(clicks).not.toContain("Factions");
   });
 
   test("otherwise read, the page put back", async () => {

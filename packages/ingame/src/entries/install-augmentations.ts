@@ -1,6 +1,6 @@
 // agent/<deploymentId>/install-augmentations.js: a home worker that installs the queued augmentations through the
 // game's page (#167), the `ui` backend's install, and arms the restart after it (architecture §5.7). Arguments: the
-// script to start after the reset (`agent/boot.js`), and when to give up (the game's `Date.now()`).
+// script to start after the reset (`agent/boot.js`), and when to give up (the page's monotonic clock).
 // - The steps and the restart timer are in ../page/install-page.ts: the game first (nothing left to install is done),
 //   the timer armed, then Install and its confirmation. The install kills this script; the timer starts `boot.js`.
 // - Around those steps, `reportPageEffect` (../page/page-effect.ts): never over an owner's dialog, back to the

@@ -50,7 +50,7 @@ test("focused, then the work ends during the steps: no Focus to click, so the pa
     document.body.replaceChildren(clickable("Terminal", "sidebar"), clickable("City", "sidebar")),
   );
   document.body.replaceChildren(unfocus);
-  await reportPageEffect(ns, Date.now() + 1_500, {
+  await reportPageEffect(ns, performance.now() + 1_500, {
     isDone: () => clicks.includes("City"),
     doing: "test through",
     steps: async (gamePage) => gamePage.openSidebarPage("City"),
@@ -73,7 +73,7 @@ test("faction work that can't start, for a player focused on their own work: foc
   );
   factionRow.append(paper);
   document.body.replaceChildren(clickable("Factions", "sidebar"), factionRow, clickable("Focus", "button"));
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const problem = await convergeWorkOnPage(
     gamePage,
@@ -93,7 +93,7 @@ function inTheCity(location: string, ...locationPage: HTMLElement[]) {
     document.body.replaceChildren(clickable("Terminal", "sidebar"), ...locationPage),
   );
   document.body.replaceChildren(clickable("City", "sidebar"), clickable("Terminal", "sidebar"), locationButton);
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   return gamePage;
 }
@@ -153,7 +153,7 @@ test("company work with a job in the field already (#153): that job's Work on th
       clickable("Work", "button", () => clicks.push("Joe's Guns'")),
     );
   document.body.replaceChildren(clickable("Job", "sidebar", jobPage), clickable("City", "sidebar"));
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const problem = await convergeWorkOnPage(
     gamePage,
@@ -196,7 +196,7 @@ function unfocusedAt(company: string, title: string, page: () => HTMLElement[]) 
   const sidebar = () => [clickable("Job", "sidebar", () => show()), clickable("Terminal", "sidebar"), header];
   const show = () => document.body.replaceChildren(...sidebar(), clickable("Focus", "button"), ...page());
   document.body.replaceChildren(...sidebar(), clickable("Focus", "button"));
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   return gamePage;
 }
@@ -315,7 +315,7 @@ test("a promotion check stopped on the way (#155): no Work for the company on th
 
 test("reportPageEffect's stepsWhenDone (#155): the steps go ahead though done, and the report takes reportAlso's", async () => {
   document.body.replaceChildren(clickable("Job", "sidebar"), clickable("Terminal", "sidebar"));
-  await reportPageEffect(ns, Date.now() + 1_500, {
+  await reportPageEffect(ns, performance.now() + 1_500, {
     isDone: () => true,
     doing: "test through",
     steps: async (gamePage) => gamePage.openSidebarPage("Job"),
@@ -328,7 +328,7 @@ test("reportPageEffect's stepsWhenDone (#155): the steps go ahead though done, a
   // Without it, done is done: nothing touched.
   clicks.length = 0;
   reports.length = 0;
-  await reportPageEffect(ns, Date.now() + 1_500, {
+  await reportPageEffect(ns, performance.now() + 1_500, {
     isDone: () => true,
     doing: "test through",
     steps: async (gamePage) => gamePage.openSidebarPage("Job"),
@@ -344,7 +344,7 @@ test("stepsWhenDone with the owner's dialog open (#155): the steps are skipped, 
   document.body.replaceChildren(clickable("Job", "sidebar"), dialog);
   for (const shown of [true, false]) {
     reports.length = 0;
-    await reportPageEffect(ns, Date.now() + 1_500, {
+    await reportPageEffect(ns, performance.now() + 1_500, {
       isDone: () => shown,
       doing: "test through",
       steps: async (gamePage) => gamePage.openSidebarPage("Job"),
@@ -386,7 +386,7 @@ test("a crime (#156): The Slums, then the crime's button, which starts it focuse
 });
 
 test("a crime as the page shows it (#156): the Work page's wording focused, the overview's unfocused", () => {
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const heist = { kind: "crime", crime: "Heist", focus: true } as const;
   document.body.replaceChildren(
@@ -444,7 +444,7 @@ test("a class the owner focused on, wanted unfocused (#158): not started again, 
     clickable("Terminal", "sidebar"),
     Object.assign(document.createElement("p"), { textContent: "You are studying Computer Science" }),
   );
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const computerScience = {
     kind: "class",
@@ -457,7 +457,7 @@ test("a class the owner focused on, wanted unfocused (#158): not started again, 
 });
 
 test("a class as the page shows it (#158): the Work page's title focused, the overview's unfocused, by type only", () => {
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const strength = { kind: "class", location: "Iron Gym", classType: "str", focus: false } as const;
   const title = document.createElement("h6");
@@ -478,7 +478,7 @@ test("a class as the page shows it (#158): the Work page's title focused, the ov
 });
 
 test("a class held back (#158): another city or too little money, unless a class of its type is under way", () => {
-  const gamePage = openGamePage(ns, Date.now() + 1_500);
+  const gamePage = openGamePage(ns, performance.now() + 1_500);
   if (!gamePage) throw new Error("no page");
   const algorithms = { kind: "class", location: "Rothman University", classType: "Algorithms", focus: false } as const;
   const sector12 = { money: 1_000, city: "Sector-12" };
@@ -503,7 +503,7 @@ describe("work not taken from the casino, nor without a sidebar (#203 review)", 
     const { main } = await import("../../src/entries/faction-work.ts");
     await main({
       ...ns,
-      args: ["CyberSec", "hacking", "true", Date.now() + 1_500],
+      args: ["CyberSec", "hacking", "true", performance.now() + 1_500],
       disableLog: () => {},
     } as unknown as NS);
     return reports.at(-1);
@@ -535,7 +535,7 @@ describe("work not taken from the casino, nor without a sidebar (#203 review)", 
 
   test("pageMustStayProblem: the Work page focused, with no sidebar, isn't a reason to stay", () => {
     document.body.replaceChildren(clickable("Do something else simultaneously", "button"));
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     if (!gamePage) throw new Error("no page");
     expect(pageMustStayProblem(gamePage)).toBeNull();
   });

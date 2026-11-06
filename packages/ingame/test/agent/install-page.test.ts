@@ -108,6 +108,21 @@ describe("the restart timer", () => {
     expect(ran).toEqual([]);
   });
 
+  test("a step's time is on the page's monotonic clock (#251): the wall clock stepped a minute on, it still waits", async () => {
+    vi.useFakeTimers();
+    optionsInSidebar();
+    const restart = armRestartAfterInstall(document, BOOT);
+    installAlert();
+    terminal({ typed: "ls" });
+    await vi.advanceTimersByTimeAsync(RESTART_STEP_LIMITS_MS.terminal - 500);
+    // `setSystemTime` moves `Date` alone, as a time sync does.
+    vi.setSystemTime(Date.now() + 60_000);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(restart.state().outcome).toBe("waiting");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(restart.state().outcome).toBe("reloading");
+  });
+
   test.each([
     ["a disabled terminal (an action running)", { disabled: true }, "the terminal didn't take the line"],
     ["a line never rendered: Enter is never sent", { neverRenders: true }, "the terminal didn't take the line"],
@@ -264,7 +279,7 @@ describe("the install's steps", () => {
     sidebarItem("Stats");
     sidebarItem("Augmentations", () => augmentationsPage({ enabled: false }));
     const nothingToInstall = { seen: false };
-    const gamePage = openGamePage(workerNs().ns, Date.now() + 1_000);
+    const gamePage = openGamePage(workerNs().ns, performance.now() + 1_000);
     if (!gamePage) throw new Error("no page");
     expect(await installOnPage(gamePage, BOOT, nothingToInstall)).toBeNull();
     expect(nothingToInstall.seen).toBe(true);
@@ -274,13 +289,13 @@ describe("the install's steps", () => {
   test("never an augmentation: no Augmentations beside Stats is nothing to install; without Stats, a collapsed section", async () => {
     sidebarItem("Stats");
     const nothingToInstall = { seen: false };
-    const gamePage = openGamePage(workerNs().ns, Date.now() + 700);
+    const gamePage = openGamePage(workerNs().ns, performance.now() + 700);
     if (!gamePage) throw new Error("no page");
     expect(await installOnPage(gamePage, BOOT, nothingToInstall)).toBeNull();
     expect(nothingToInstall.seen).toBe(true);
     document.body.replaceChildren();
     const collapsed = { seen: false };
-    const again = openGamePage(workerNs().ns, Date.now() + 700);
+    const again = openGamePage(workerNs().ns, performance.now() + 700);
     if (!again) throw new Error("no page");
     expect(await installOnPage(again, BOOT, collapsed)).toBe(
       'no "Augmentations" in the sidebar (is its section collapsed?)',
@@ -304,7 +319,7 @@ describe("the install's steps", () => {
       }),
     );
     terminal();
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     if (!gamePage) throw new Error("no page");
     const died = expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
     await vi.advanceTimersByTimeAsync(2_000);
@@ -333,7 +348,7 @@ describe("the install's steps", () => {
       }),
     );
     terminal();
-    const gamePage = openGamePage(ns, Date.now() + 1_500);
+    const gamePage = openGamePage(ns, performance.now() + 1_500);
     if (!gamePage) throw new Error("no page");
     const died = expect(installOnPage(gamePage, BOOT, { seen: false })).rejects.toThrow("ScriptDeath");
     await vi.advanceTimersByTimeAsync(2_000);
@@ -351,7 +366,7 @@ describe("the install's steps", () => {
     sidebarItem("Stats");
     sidebarItem("Augmentations", () => augmentationsPage({ enabled: true }));
     terminal();
-    const gamePage = openGamePage(workerNs().ns, Date.now() + 1_500);
+    const gamePage = openGamePage(workerNs().ns, performance.now() + 1_500);
     if (!gamePage) throw new Error("no page");
     const problem = installOnPage(gamePage, BOOT, { seen: false });
     await vi.advanceTimersByTimeAsync(2_000);

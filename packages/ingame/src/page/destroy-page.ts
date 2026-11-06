@@ -32,6 +32,7 @@
 //   left to the next Agent's dialog watcher, which closes each with its X and tells the brain what it said (owner
 //   decision 35): the terminal is typed into through React's props, which a dialog doesn't stop.
 import { WORLD_DAEMON } from "@bitburner-agent/core";
+import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { backdoorStanding } from "../workers/backdoor-standing.ts";
 import { findOnPage, type GamePage, pageDocument, playerEvent } from "./game-page.ts";
@@ -139,6 +140,6 @@ export async function destroyOnPage(
     if (!typed.backdoorEntered) restart.disarm();
     return typed.problem;
   }
-  const secondsLeft = Math.max(1, Math.ceil((typed.endsAtMs - Date.now()) / 1000));
+  const secondsLeft = Math.max(1, Math.ceil((typed.endsAtMs - monotonicMs()) / 1000));
   return `backdooring ${WORLD_DAEMON}: about ${secondsLeft} s left, then ${entering}`;
 }
