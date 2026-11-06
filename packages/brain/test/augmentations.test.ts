@@ -2399,12 +2399,35 @@ describe("held for Daedalus's count (#243)", () => {
     minuteOn({ reputation: 15_000, ownedAugs, earned: 11 * 6e6 }, money);
     expect(rule.view().progress?.countHold).toMatchObject({ way: "money", leftMs: 19 * MINUTE });
     expect(rule.view().progress?.countdown).toBeNull();
-    // Earning nothing now: once the income is measured (10 minutes on), it's never, and the hold is over, logged.
-    for (let minute = 12; minute <= 22; minute += 1) {
+    // Earning nothing now: held each minute while the income is unknown (its samples start again at the restart)...
+    for (let minute = 12; minute <= 20; minute += 1) {
       minuteOn({ reputation: 15_000, ownedAugs, earned: 11 * 6e6 }, money);
+      expect(rule.view().progress?.countHold).toMatchObject({ way: "money", leftMs: (30 - minute) * MINUTE });
     }
+    expect(lines.filter((line) => line.startsWith(OVER))).toEqual([]);
+    // ...and at 21, 10 minutes of samples measure it: none, so never, and the hold is over, logged once.
+    minuteOn({ reputation: 15_000, ownedAugs, earned: 11 * 6e6 }, money);
     expect(rule.view().progress?.countHold).toBeNull();
+    expect(lines.filter((line) => line.startsWith(OVER))).toEqual([
+      `${OVER}Magnetism Amplifier isn't within what's left of its 20 min`,
+    ]);
+  });
+
+  test("a hold's end logged before a restart isn't logged again by the restarted brain", () => {
+    online();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
+    expect(lines.filter((line) => line.startsWith(OVER))).toEqual([`${OVER}the rule no longer says install`]);
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
     expect(lines.filter((line) => line.startsWith(OVER))).toHaveLength(1);
+    // Held again in the window (the store's mark cleared), then restarted: the restarted brain logs this end.
+    minuteOn({ reputation: reputationFor(5 * MINUTE) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
+    expect(lines.filter((line) => line.startsWith(OVER))).toHaveLength(2);
   });
 
   test("a restarted brain whose hold has ended logs its end at its first decision", () => {
@@ -2444,6 +2467,53 @@ describe("held for Daedalus's count (#243)", () => {
     online();
     minuteOn({ reputation: reputationFor(5 * MINUTE), favor: 150 });
     expect(rule.view().progress?.countHold).toMatchObject({ way: "work", etaMs: expect.closeTo(2 * MINUTE, -3) });
+  });
+
+  test("donation routes tied (both at once): the cheapest seller's donation wins", () => {
+    const ENM = "Embedded Netburner Module";
+    const toCome = countablesToCome({
+      sold: [ENM],
+      state: {
+        installed: {},
+        queued: [],
+        sourceFile11Level: 0,
+        bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+      },
+      set: { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] },
+      joined: [
+        { name: "NiteSec", reputation: 0, favor: 150 },
+        { name: TBH, reputation: 10_000, favor: 150 },
+      ],
+      shops: new Map([
+        ["NiteSec", augmentationsSoldBy("NiteSec", 1, null)],
+        [TBH, BLACK_HAND_SHOP],
+      ]),
+      terms: {
+        sellers: {
+          [ENM]: [
+            { faction: "NiteSec", reputation: 0 },
+            { faction: TBH, reputation: 10_000 },
+          ],
+        },
+        neuroFluxSellers: [],
+        factionRep: 1,
+        factionWorkRepGain: 1,
+      },
+      person: workingPersonOf(playerWith(0)) as WorkingPerson,
+      conditions: workConditionsOf({ currentNode: 1, ownedAugs: {}, ownedSF: {} }, slow()),
+      work: { owners: null, brainWorks: false },
+      money: 1e15,
+      income: null,
+    });
+    expect(toCome).toEqual([
+      {
+        augmentation: ENM,
+        faction: TBH,
+        way: "donation",
+        etaMs: 0,
+        money: 250e6 + donationToReach(15_000 - 10_000, 1, 1),
+      },
+    ]);
   });
 
   test("a donation where the set already donates (#243 review): the faction raised to the larger, not both", () => {

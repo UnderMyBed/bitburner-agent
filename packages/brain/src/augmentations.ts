@@ -747,20 +747,27 @@ export function readOnlineClock(store: TelemetryStore): OnlineClock | null {
 }
 
 /** The hold's window as stored (#243), or null; a value the brain didn't write fails, as the clock does. */
-export function readCountHold(store: TelemetryStore): { lastAugReset: number; sinceOnlineMs: number } | null {
+export function readCountHold(
+  store: TelemetryStore,
+): { lastAugReset: number; sinceOnlineMs: number; ended?: boolean } | null {
   const value = store.getSetting(AUGMENTATION_COUNT_HOLD_SETTING);
   if (value === null) return null;
-  let hold: { lastAugReset?: unknown; sinceOnlineMs?: unknown } | null;
+  let hold: { lastAugReset?: unknown; sinceOnlineMs?: unknown; ended?: unknown } | null;
   try {
     hold = JSON.parse(value) as typeof hold;
   } catch {
     throw new Error(`the store's ${AUGMENTATION_COUNT_HOLD_SETTING} isn't JSON`);
   }
-  const { lastAugReset, sinceOnlineMs } = hold ?? {};
-  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(sinceOnlineMs) || sinceOnlineMs < 0) {
+  const { lastAugReset, sinceOnlineMs, ended } = hold ?? {};
+  if (
+    !isFiniteNumber(lastAugReset) ||
+    !isFiniteNumber(sinceOnlineMs) ||
+    sinceOnlineMs < 0 ||
+    (ended !== undefined && typeof ended !== "boolean")
+  ) {
     throw new Error(`the store's ${AUGMENTATION_COUNT_HOLD_SETTING} isn't a hold the brain wrote`);
   }
-  return { lastAugReset, sinceOnlineMs };
+  return { lastAugReset, sinceOnlineMs, ...(ended === true ? { ended: true } : {}) };
 }
 
 /** One to come for Daedalus's count (#243), with its money: what it adds to the set's, and any donation. */
@@ -890,13 +897,23 @@ export function countablesToCome({
         money: priceAdded,
       });
     }
+    // The soonest; a tie (both at once, say) to the cheaper: the seller whose donation is least.
     const soonest = routes.reduce<CountableWithMoney | undefined>(
-      (best, route) => (best === undefined || route.etaMs < best.etaMs ? route : best),
+      (best, route) =>
+        best === undefined || route.etaMs < best.etaMs || (route.etaMs === best.etaMs && route.money < best.money)
+          ? route
+          : best,
       undefined,
     );
     if (soonest !== undefined) toCome.push(soonest);
   }
   return toCome;
+}
+
+/** Whether someone works for `faction` under a hold (#243 review): the owner's faction work there, or A5's. */
+function worksFor(work: HoldWork, faction: string): boolean {
+  if (work.owners !== null) return work.owners.kind === "faction" && work.owners.faction === faction;
+  return work.brainWorks;
 }
 
 /** "Daedalus's count reachable this cycle, The Black Hand in ~17 min (by work at The Black Hand, $7,168,…; …)". */
@@ -1760,7 +1777,7 @@ export class AugmentationRule {
             })
           : null;
       if (countHold !== null) {
-        if (heldSinceOnlineMs === null) {
+        if (heldSinceOnlineMs === null || stored?.ended === true) {
           this.#store.setSetting(
             AUGMENTATION_COUNT_HOLD_SETTING,
             JSON.stringify({ lastAugReset: resetInfo.lastAugReset, sinceOnlineMs: countHold.sinceOnlineMs }),
@@ -1782,8 +1799,9 @@ export class AugmentationRule {
           waitingFor: `the install held for Daedalus's count: ${words}`,
         });
       }
-      // Its end, logged: held at the last update, or (a restarted brain's first decision) its window open.
-      if (countHeldBefore !== null || (firstDecision && windowOpen)) {
+      // Its end, logged: held at the last update, or (a restarted brain's first decision) its window open and its end
+      // not logged before the restart (the store says).
+      if (countHeldBefore !== null || (firstDecision && windowOpen && stored?.ended !== true)) {
         const countAfter = countAfterInstall(ownedAugs, installing);
         const holdLength = formatEta(DAEDALUS_COUNT_HOLD_MS);
         const endReason = !short
@@ -1794,11 +1812,16 @@ export class AugmentationRule {
               ? "the count reached at this install"
               : count.required - countAfter > 1
                 ? `this install would now leave it ${count.required - countAfter} short`
-                : !windowOpen
-                  ? `its ${holdLength} are up`
-                  : `${countHeldBefore?.augmentation ?? "the last"} isn't within what's left of its ${holdLength}`;
+                : countHeldBefore?.way === "work" && !worksFor(holdWork, countHeldBefore.faction)
+                  ? `nobody works for ${countHeldBefore.faction}`
+                  : !windowOpen
+                    ? `its ${holdLength} are up`
+                    : `${countHeldBefore?.augmentation ?? "the last"} isn't within what's left of its ${holdLength}`;
         this.#log(`augmentations: the hold for Daedalus's count is over: ${endReason}`);
         this.#countHoldEndLogged = true;
+        if (heldSinceOnlineMs !== null && stored !== null) {
+          this.#store.setSetting(AUGMENTATION_COUNT_HOLD_SETTING, JSON.stringify({ ...stored, ended: true }));
+        }
       }
       let redPillDonation: Donation | null = null;
       if (endgame.kind === "redPill") {

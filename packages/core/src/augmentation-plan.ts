@@ -617,8 +617,9 @@ export interface DaedalusCountHold<T extends CountableToCome = CountableToCome> 
 /**
  * Whether to hold an install the count rule chose, short of Daedalus's count (#243): held if it would leave the count
  * one short (`countAfterInstall`), this cycle has reached Daedalus's hacking or combat requirement (`skillsReached`,
- * core's `daedalusSkillsReached`: skills only rise across an install, so the next cycle reaches it again, and the
- * count is then what's missing; else a hold only delays the install's multipliers), and the soonest of `toCome` can
+ * core's `daedalusSkillsReached`: skills reset at an install, but the multipliers only rise, so the next cycle
+ * reaches it again, and the count is then what's missing; else a hold only delays the install's multipliers), and
+ * the soonest of `toCome` can
  * be bought within the hold's window: `DAEDALUS_COUNT_HOLD_MS` of time online from `heldSinceOnlineMs`, the cycle's
  * first hold (now, for none), never restarted, so no hold outlasts it. Null otherwise. Two or more short aren't held:
  * the rest seldom fits a cycle's cost, and their ETAs together (the work one faction at a time, each purchase dearer by

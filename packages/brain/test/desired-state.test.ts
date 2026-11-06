@@ -2409,7 +2409,8 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
         "augmentations.online",
         JSON.stringify({ lastAugReset: 0, onlineMs: 8 * 3_600_000, lastGameTimeMs: 7 * 3_600_000 }),
       );
-      const controller = new DesiredStateController({ channel, store });
+      const lines: string[] = [];
+      const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slow, 7 * 3_600_000 + MINUTE);
@@ -2418,10 +2419,11 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       expect(controller.factionsView().choice).toMatchObject({ faction: TBH, augmentation: TBH, held: true });
       // Not an install under way: the travel for group B's invitations goes on.
       expect(sentPurchases(connection)).toContainEqual(TRAVEL_CHONGQING);
-      // The brain's faction work switched off: nobody works for The Black Hand, so the hold is over.
+      // The brain's faction work switched off: nobody works for The Black Hand, so the hold is over, saying so.
       controller.setFactionWorkEnabled(false);
       send(connection, "medium", player(medium(1.5e9)));
       expect(controller.augmentationsView().progress?.countHold).toBeNull();
+      expect(lines).toContain("augmentations: the hold for Daedalus's count is over: nobody works for The Black Hand");
     });
 
     test("an install chosen: no cloud server at all, saying why, and the augmentation bought instead", () => {

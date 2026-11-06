@@ -666,7 +666,7 @@ M4 phase A's sixth slice ([#210](https://github.com/UnderMyBed/bitburner-agent/i
 
 - **Short of the count** (Daedalus neither joined nor invited, fewer installed than required): A6 counts any augmentation but NeuroFlux Governor and The Red Pill (core's `isWorthInstalling(name, true)`): in the set (hacking value first, then the cheapest), the counts and bars, the countdown, the lookahead's reserve, "nothing left" and the run report's "donations unused"; its progress says so ("…; short of Daedalus's count (23 of 30 augmentations installed): any augmentation counts"). A5 works for them once nothing with a hacking value is left to work for ([factions](#factions-and-their-work)).
 - **Held one short** (#243, [owner decision 56](../../docs/decisions/owner-decisions.md), a phase A exception to decision 51; core's `daedalusCountHold`): an install the count rule chose that would leave the count one short is held while the last can be bought within the hold's window. Run #3's BN1.2 installed at 29 of 30 with The Black Hand's augmentation 17 minutes off by work, and spent the next cycle (28 minutes) buying it.
-  - **Only once this cycle has reached Daedalus's hacking (2500) or combat (1500) requirement** (core's `daedalusSkillsReached`): skills only rise across an install, so the next cycle reaches it again, and the count is then what stands between the player and Daedalus. Before that, a hold would only delay the install's multipliers.
+  - **Only once this cycle has reached Daedalus's hacking (2500) or combat (1500) requirement** (core's `daedalusSkillsReached`): skills reset at an install, but the multipliers only rise, so the next cycle reaches it again, and the count is then what stands between the player and Daedalus. Before that, a hold would only delay the install's multipliers.
   - **The last:** each augmentation a joined faction sells that would add one (not NeuroFlux Governor or The Red Pill, not owned, queued or in the set, its prerequisites owned or queued), by its soonest route (`countablesToCome`), each the later of its reputation and its money:
     - its reputation reached at a seller: its money alone;
     - a donation (#225), at once: the seller whose donation is least; one the set already donates to is raised to the larger reputation, not both (as `planDonations` has it);
@@ -677,12 +677,13 @@ M4 phase A's sixth slice ([#210](https://github.com/UnderMyBed/bitburner-agent/i
   - **Over**, logged as "augmentations: the hold for Daedalus's count is over: …", with why:
     - "the count reached at this install" (the last reached and in the set: the countdown starts);
     - "this install would now leave it 2 short" (a purchase, or NeuroFlux Governor's first level, no longer covered);
+    - "nobody works for The Black Hand" (a hold by work: the owner's work set elsewhere, or A5's switch turned off);
     - "The Black Hand isn't within what's left of its 20 min";
     - "its 20 min are up";
     - "the rule no longer says install";
     - "Daedalus's count met" (it invites);
     - "the Augmentations switch turned off", or "waiting for …" (the snapshots, The Red Pill's way, or what core doesn't know);
-    - a restarted brain whose window is open logs the end at its first decision.
+    - a restarted brain whose window is open logs the end at its first decision, unless the store says it was logged before the restart (the window is marked ended, and unmarked if held again).
   - Two or more short aren't held: the rest seldom fits a cycle's cost.
   - A held install isn't an install, so it's never "Daedalus count stuck"; the install after a hold keeps #238's facts. It doesn't excuse a cycle overdue its install, as The Red Pill's way does.
 - **Tian Di Hui** has no enemies and sells eight; it invites only a player in Chongqing, New Tokyo or Ishima, with hacking 50 and $1m at the game's check (`Faction/FactionInfo.tsx:680-692`, every 2 s). While it sells one A6 would install, it isn't joined or invited, and the hacking level is 50, the brain visits Ishima (a Tian Di Hui city with a tech vendor, Omega Software, so home RAM and the TOR router are still bought there).
