@@ -10,12 +10,15 @@ import {
   chooseAugmentationsToBuy,
   donationToReach,
   type FactionState,
+  factionReputationPerSecond,
   isWorthInstalling,
   type MediumSnapshotData,
   type SlowSnapshotData,
+  type WorkingPerson,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
+  AUGMENTATION_COUNT_HOLD_SETTING,
   AUGMENTATION_CYCLE_SETTING,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_ONLINE_SETTING,
@@ -24,6 +27,7 @@ import {
   type AugmentationInputs,
   AugmentationRule,
   advanceOnlineClock,
+  countablesToCome,
   describeProgress,
   describeReason,
   earnedOf,
@@ -31,8 +35,10 @@ import {
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
+  readCountHold,
   readOnlineClock,
 } from "../src/augmentations.ts";
+import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
@@ -593,6 +599,8 @@ describe("the progress events (#222)", () => {
         setCost: expect.closeTo(FIVE_COST, 0),
         // Nothing installed: short of Daedalus's count (#228).
         short: { installed: 0, required: 30 },
+        // No install held for the count (#243).
+        countHold: null,
       },
     ]);
     // A NeuroFlux Governor level more, 5 minutes after the last recorded (the brain's time): recorded.
@@ -2014,5 +2022,525 @@ describe("what counts within reach at a commit while short (#238): Daedalus coun
       JSON.stringify({ lastAugReset: 0, installing: false, countFacts: { moneyAfterSet: 1, within: [{}] } }),
     );
     expect(() => readAugmentationCycle(store)).toThrow("isn't a note the brain wrote");
+  });
+});
+
+describe("held for Daedalus's count (#243)", () => {
+  const TBH = "The Black Hand";
+  const BLACK_HAND_SHOP = augmentationsSoldBy(TBH, 1, null);
+  const CYBERSEC_SHOP = augmentationsSoldBy("CyberSec", 1, null);
+  /** Augmentations sold by neither joined faction, to fill the count. */
+  const FILLERS = AUGMENTATION_NAMES.filter(
+    (name) =>
+      isWorthInstalling(name, true) &&
+      !BLACK_HAND_SHOP.includes(name) &&
+      !CYBERSEC_SHOP.includes(name) &&
+      name !== "Neural Wit Amplifier",
+  );
+  /**
+   * Run #3's 17:49 (2026-11-05), synthetic: 25 installed (all The Black Hand sells but its own augmentation, CyberSec's
+   * Gen I and II, NeuroFlux Governor and fillers sold by neither); Neural Wit Amplifier queued; CyberSec's other three
+   * reached, so the install takes it to 29 of 30. The 30th is "The Black Hand" (100,000), worked for.
+   */
+  const OWNED: Record<string, number> = Object.fromEntries(
+    [...BLACK_HAND_SHOP.filter((name) => name !== TBH && name !== NFG), GEN_I, GEN_II, NFG, ...FILLERS]
+      .slice(0, 25)
+      .map((name) => [name, name === NFG ? 5 : 1]),
+  );
+  /** A filler not in `OWNED`, to keep 25 installed when one is taken out. */
+  const SPARE = FILLERS.find((name) => !Object.hasOwn(OWNED, name)) as string;
+  const THREE = ["BitWire", "Synaptic Enhancement Implant", "Neurotrainer I"];
+  /** The three after Neural Wit Amplifier, dearest first; with The Black Hand, it first; what it adds. */
+  const THREE_COST = 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3;
+  const WITH_BLACK_HAND = 550e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+  const BLACK_HAND_MONEY = WITH_BLACK_HAND - THREE_COST;
+  const MONEY = WITH_BLACK_HAND + 10e6;
+  /** Daedalus's hacking reached this cycle (#243 review): the count is what's missing. */
+  const HACKING = 2_500;
+  const playerWith = (money: number, hacking = HACKING) => medium({ hacking, money });
+
+  function runThree({
+    reputation = 0,
+    favor = 0,
+    queued = ["Neural Wit Amplifier"],
+    invitations = [] as string[],
+    ownedAugs = OWNED,
+    earned = 0,
+  } = {}): SlowSnapshotData {
+    const data = slow({
+      joined: [
+        { name: "CyberSec", reputation: 18_750, favor: 0 },
+        { name: TBH, reputation, favor },
+      ],
+      queued,
+      ownedAugs,
+      earned,
+    });
+    const state = data.factions?.state as FactionState;
+    return { ...data, factions: { backend: "sim", state: { ...state, invitations }, problem: null } };
+  }
+  /** The work's rate at The Black Hand (A5's formula, hacking 2,500): what the hold's ETA is worked at. */
+  const RATE = (
+    bestWorkRate(
+      workingPersonOf(playerWith(0)) as WorkingPerson,
+      { name: TBH, reputation: 0, favor: 0 },
+      workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow()),
+    ) as { perSecond: number }
+  ).perSecond;
+  /** The Black Hand's reputation `etaMs` off by work. */
+  const reputationFor = (etaMs: number) => 100_000 - (RATE * etaMs) / 1000;
+  /** 8 h online (`hours`): the bar is 4, so the four count. */
+  const online = (hours = 8) => {
+    store.deleteSetting(AUGMENTATION_COUNT_HOLD_SETTING);
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: hours * HOUR, lastGameTimeMs: gameTimeMs }),
+    );
+    rule = newRule();
+  };
+  /** A minute on: the next slow snapshot, a minute more online. */
+  const minuteOn = (
+    fields: Parameters<typeof runThree>[0] = {},
+    money = MONEY,
+    more: Partial<AugmentationInputs> = {},
+  ) => {
+    gameTimeMs += MINUTE;
+    return update({ slowData: runThree(fields), mediumData: playerWith(money), ...more });
+  };
+  const chosen = () => events.filter((event) => event.type === "augmentationInstallChosen");
+  const heldLines = () => lines.filter((line) => line.startsWith("augmentations: install held for Daedalus's count"));
+  const OVER = "augmentations: the hold for Daedalus's count is over: ";
+
+  test("the fixture: 25 installed, the install takes it to 29 of 30, The Black Hand the 30th, worked for", () => {
+    expect(Object.keys(OWNED)).toHaveLength(25);
+    expect(OWNED).toMatchObject({ [GEN_I]: 1, [GEN_II]: 1, [NFG]: 5 });
+    expect(OWNED).not.toHaveProperty(TBH);
+    expect(RATE).toBeGreaterThan(0);
+  });
+
+  test("run #3's 17:49: held, The Black Hand ~17 min off by work; no countdown or install; its money held", () => {
+    online();
+    const ask = minuteOn({ reputation: reputationFor(17 * MINUTE) });
+    expect(ask).toEqual({ intent: null, install: false, committed: false });
+    const view = rule.view();
+    expect(view.set.map((each) => each.augmentation)).toEqual(THREE);
+    expect(view.progress).toMatchObject({ affordable: 4, bar: 4, reason: "count reached", countdown: null });
+    expect(view.progress?.held).toBe(
+      "Daedalus's count reachable this cycle, The Black Hand in ~17 min (by work at The Black Hand, " +
+        `${dollars(BLACK_HAND_MONEY)}; 29 of 30 after this install; held 20 min at most, 20 min left)`,
+    );
+    expect(view.progress?.countHold).toEqual({
+      augmentation: TBH,
+      faction: TBH,
+      way: "work",
+      etaMs: expect.closeTo(17 * MINUTE, -3),
+      money: BLACK_HAND_MONEY,
+      leftMs: 20 * MINUTE,
+    });
+    expect(view.waitingFor).toBe(`the install held for Daedalus's count: ${view.progress?.held}`);
+    // Held from cloud servers and home RAM alike: the counted purchases' money (the set and NeuroFlux Governor's
+    // levels), or the set's and The Black Hand's, the more.
+    expect(rule.reserve()).toBeCloseTo(WITH_BLACK_HAND, 0);
+    expect(dollars(BLACK_HAND_MONEY)).toBe("$1,111,159,900");
+    expect(rule.countdownReserve()).toBe(rule.reserve());
+    // Not the countdown (the travel for invitations goes on), and A5 works for The Black Hand.
+    expect(rule.countdownUnderWay()).toBe(false);
+    expect(rule.countHoldTarget()).toEqual({ faction: TBH, augmentation: TBH });
+    expect(heldLines()).toEqual([`augmentations: install held for Daedalus's count: ${view.progress?.held}`]);
+    expect(chosen()).toEqual([]);
+    expect(rule.countFacts()).toBeNull();
+    // The progress event says so, for the run report.
+    expect(progressEvents().at(-1)).toMatchObject({ held: view.progress?.held, countHold: { augmentation: TBH } });
+    // With $10b, the levels the money covers cost more: their money held, as the countdown would.
+    minuteOn({ reputation: reputationFor(16 * MINUTE) }, 10e9);
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    expect(rule.reserve()).toBeGreaterThan(2 * WITH_BLACK_HAND);
+  });
+
+  test("only once this cycle has reached Daedalus's hacking or combat requirement", () => {
+    online();
+    gameTimeMs += MINUTE;
+    update({ slowData: runThree({ reputation: reputationFor(MINUTE) }), mediumData: playerWith(MONEY, 2_499) });
+    expect(rule.view().progress).toMatchObject({ reason: "count reached", countHold: null });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    // Every combat skill at 1,500 is the other way in.
+    const combat = playerWith(MONEY, 2_499);
+    Object.assign(combat.player.skills as Record<string, number>, {
+      strength: 1_500,
+      defense: 1_500,
+      dexterity: 1_500,
+      agility: 1_500,
+    });
+    online();
+    gameTimeMs += MINUTE;
+    update({ slowData: runThree({ reputation: reputationFor(MINUTE) }), mediumData: combat });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+  });
+
+  test("the work counts only where someone works: A5 under the hold, or the owner's faction work there", () => {
+    const fiveOff = reputationFor(5 * MINUTE);
+    // A5's switch off, no owner's work: nobody earns The Black Hand's reputation, so no hold.
+    online();
+    minuteOn({ reputation: fiveOff }, MONEY, { holdWork: { owners: null, brainWorks: false } });
+    expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
+    // The owner's work elsewhere wins over A5: no hold either.
+    const elsewhere = { kind: "faction", faction: "CyberSec", workType: "hacking" } as const;
+    online();
+    minuteOn({ reputation: fiveOff }, MONEY, { holdWork: { owners: elsewhere, brainWorks: true } });
+    expect(rule.view().progress?.countHold).toBeNull();
+    // The owner's field work at The Black Hand: held, at that work's rate.
+    const there = { kind: "faction", faction: TBH, workType: "field" } as const;
+    const fieldRate = factionReputationPerSecond(workingPersonOf(playerWith(0)) as WorkingPerson, "field", {
+      favor: 0,
+      ...workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow()),
+    });
+    online();
+    minuteOn({ reputation: 100_000 - fieldRate * 300 }, MONEY, { holdWork: { owners: there, brainWorks: false } });
+    expect(rule.view().progress?.countHold).toMatchObject({ way: "work", etaMs: expect.closeTo(5 * MINUTE, -3) });
+  });
+
+  test("its reputation reached: the hold over, logged; the countdown, then the install of all five, 30 of 30", () => {
+    online();
+    minuteOn({ reputation: reputationFor(10 * MINUTE) });
+    expect(rule.view().progress?.countHold?.augmentation).toBe(TBH);
+    minuteOn({ reputation: 100_000 });
+    expect(lines).toContain(`${OVER}the count reached at this install`);
+    expect(rule.view().progress).toMatchObject({ affordable: 5, held: null, countHold: null });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(rule.countdownUnderWay()).toBe(true);
+    expect(rule.countHoldTarget()).toBeNull();
+    gameTimeMs += 90_000;
+    update({ slowData: runThree({ reputation: 100_000 }), mediumData: playerWith(MONEY) });
+    expect(chosen()).toEqual([expect.objectContaining({ reason: "count reached", affordable: 5 })]);
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual([TBH, ...THREE]);
+    expect(heldLines()).toHaveLength(1);
+  });
+
+  test("never past its 20 min: the ETA no longer fitting what's left ends it; the window never restarts", () => {
+    online();
+    // 5 min off (a second less, so floating point never decides), the reputation not rising: held to 15 of the 20.
+    const fiveOff = reputationFor(5 * MINUTE - 1_000);
+    minuteOn({ reputation: fiveOff });
+    for (let minute = 1; minute <= 15; minute += 1) {
+      minuteOn({ reputation: fiveOff });
+      expect(rule.view().progress?.countHold).not.toBeNull();
+    }
+    expect(rule.view().progress?.held).toMatch(/held 20 min at most, 5 min left\)$/);
+    expect(heldLines()).toHaveLength(1);
+    minuteOn({ reputation: fiveOff });
+    expect(rule.view().progress).toMatchObject({ held: null, countHold: null, reason: "count reached" });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(lines).toContain(`${OVER}The Black Hand isn't within what's left of its 20 min`);
+    // Seconds off now, but the window is the cycle's first, never restarted: 20 min from the hold's start, it's over.
+    minuteOn({ reputation: reputationFor(1_000) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    // The countdown the hold's end started is called off.
+    expect(rule.view().progress?.countdown).toBeNull();
+    for (let minute = 18; minute <= 20; minute += 1) minuteOn({ reputation: reputationFor(1_000) });
+    expect(rule.view().progress?.countHold).toBeNull();
+    expect(lines).toContain(`${OVER}its 20 min are up`);
+    // On to the install at 29, its facts recorded, as #238 has them.
+    gameTimeMs += 90_000;
+    update({ slowData: runThree({ reputation: reputationFor(1_000) }), mediumData: playerWith(MONEY) });
+    expect(chosen()).toEqual([expect.objectContaining({ reason: "count reached", affordable: 4 })]);
+    expect(rule.countFacts()).not.toBeNull();
+  });
+
+  test("each other end, logged: the count met, the rule not saying install, two short, the switch, snapshots", () => {
+    const held = () => {
+      online();
+      minuteOn({ reputation: reputationFor(5 * MINUTE) });
+      expect(rule.view().progress?.countHold).not.toBeNull();
+    };
+    held();
+    minuteOn({ reputation: reputationFor(5 * MINUTE), invitations: ["Daedalus"] });
+    expect(lines).toContain(`${OVER}Daedalus's count met`);
+    held();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
+    expect(lines).toContain(`${OVER}the rule no longer says install`);
+    held();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, MONEY, { enabled: false });
+    expect(lines).toContain(`${OVER}the Augmentations switch turned off`);
+    held();
+    gameTimeMs += MINUTE;
+    update({ slowData: runThree({ reputation: reputationFor(5 * MINUTE) }), mediumData: null });
+    expect(lines).toContain(`${OVER}waiting for the Agent's medium and slow snapshots`);
+    // NeuroFlux Governor not installed: its first level the 29th. The money for the three alone leaves it two short.
+    const ownedAugs = { ...Object.fromEntries(Object.entries(OWNED).filter(([name]) => name !== NFG)), [SPARE]: 1 };
+    const threeAlone = 10e6 + 7.5e6 * 1.9 + 4e6 * 1.9 ** 2;
+    online(10);
+    minuteOn({ reputation: reputationFor(5 * MINUTE), queued: [], ownedAugs });
+    expect(rule.view().progress).toMatchObject({ affordable: 3, countHold: { augmentation: TBH } });
+    minuteOn({ reputation: reputationFor(5 * MINUTE), queued: [], ownedAugs }, threeAlone + SLACK);
+    expect(lines).toContain(`${OVER}this install would now leave it 2 short`);
+    expect(rule.view().progress?.countdown).not.toBeNull();
+  });
+
+  test("a restarted brain keeps the hold's window (in the store): it never outlasts 20 min online", () => {
+    online();
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    for (let minute = 1; minute <= 10; minute += 1) minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 10 * MINUTE });
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 9 * MINUTE });
+    // A window the brain didn't write fails, at the start (as the commit's note does), not in a decision.
+    store.setSetting(AUGMENTATION_COUNT_HOLD_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    expect(() => readCountHold(store)).toThrow("isn't a hold the brain wrote");
+    expect(() => newRule()).toThrow("isn't a hold the brain wrote");
+    // Another cycle's window is none of this one's.
+    store.setSetting(AUGMENTATION_COUNT_HOLD_SETTING, JSON.stringify({ lastAugReset: -1, sinceOnlineMs: 0 }));
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress?.countHold).toMatchObject({ leftMs: 20 * MINUTE });
+  });
+
+  test("not held: the rule not saying install, two short, Daedalus inviting, or the last more than 20 min off", () => {
+    // One short after the install, the last a minute off, but 4 affordable under the bar of 7 at 2 h: no hold.
+    online(2);
+    minuteOn({ reputation: reputationFor(MINUTE) });
+    expect(rule.view().progress).toMatchObject({ affordable: 4, bar: 7, reason: null, countHold: null, held: null });
+    expect(rule.view().waitingFor).toMatch(/^the count to reach a bar: /);
+    // Two short: nothing queued, the three alone, the bar 3 at 10 h.
+    online(10);
+    minuteOn({ reputation: reputationFor(MINUTE), queued: [] });
+    expect(rule.view().progress).toMatchObject({ affordable: 3, reason: "count reached", countHold: null });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    // Daedalus inviting: not short, the hacking-value rule.
+    online();
+    minuteOn({ reputation: reputationFor(MINUTE), invitations: ["Daedalus"] });
+    expect(rule.view().progress?.countHold).toBeNull();
+    // 21 min off by work.
+    online();
+    minuteOn({ reputation: reputationFor(21 * MINUTE) });
+    expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(heldLines()).toEqual([]);
+  });
+
+  test("what's to come: never NeuroFlux Governor or The Red Pill, though reached and within the money", () => {
+    const toCome = countablesToCome({
+      sold: [NFG, "The Red Pill", TBH],
+      state: {
+        // NeuroFlux Governor not installed yet: its levels add one, but it isn't one to wait for (A6 buys it last).
+        installed: Object.fromEntries(Object.entries(OWNED).filter(([name]) => name !== NFG)),
+        queued: [],
+        sourceFile11Level: 0,
+        bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+      },
+      set: { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] },
+      joined: [
+        { name: TBH, reputation: 3e6, favor: 0 },
+        { name: "Daedalus", reputation: 3e6, favor: 0 },
+      ],
+      shops: new Map([
+        [TBH, BLACK_HAND_SHOP],
+        ["Daedalus", augmentationsSoldBy("Daedalus", 1, null)],
+      ]),
+      terms: undefined,
+      person: workingPersonOf(playerWith(0)) as WorkingPerson,
+      conditions: workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow()),
+      work: { owners: null, brainWorks: true },
+      money: 1e12,
+      income: null,
+    });
+    expect(toCome).toEqual([{ augmentation: TBH, faction: TBH, way: "money", etaMs: 0, money: 550e6 }]);
+  });
+
+  /** Magnetism Amplifier not installed (a filler in its place); The Black Hand at 15,000 reaches it. */
+  const withoutMagnetism = () => {
+    const ownedAugs = { ...OWNED, [SPARE]: 1 };
+    delete ownedAugs["Magnetism Amplifier"];
+    return ownedAugs;
+  };
+
+  test("by the money (#228, whatever its value): Magnetism Amplifier reached, its money at the income", () => {
+    const ownedAugs = withoutMagnetism();
+    expect(Object.keys(ownedAugs)).toHaveLength(25);
+    // Bought with the three, it goes first: $614,670,900 in all, $541,159,900 more than the three.
+    const withMagnetism = 250e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+    const money = withMagnetism - 60e6;
+    online();
+    // No income measured yet: not reachable by the money, not held.
+    minuteOn({ reputation: 15_000, ownedAugs }, money);
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(THREE);
+    expect(rule.view().progress?.countHold).toBeNull();
+    // $100k a second: 10 minutes for the $60m short. The income measured first, with no money (nothing to install).
+    online();
+    for (let minute = 0; minute <= 10; minute += 1) {
+      minuteOn({ reputation: 15_000, ownedAugs, earned: minute * 6e6 }, minute < 10 ? 0 : money);
+    }
+    expect(rule.view().progress?.countHold).toEqual({
+      augmentation: "Magnetism Amplifier",
+      faction: TBH,
+      way: "money",
+      etaMs: expect.closeTo(10 * MINUTE, -3),
+      money: withMagnetism - THREE_COST,
+      leftMs: 20 * MINUTE,
+    });
+    expect(rule.view().progress?.held).toMatch(
+      /^Daedalus's count reachable this cycle, Magnetism Amplifier in ~10 min \(at The Black Hand, its reputation /,
+    );
+    // Not by work: A5 isn't steered.
+    expect(rule.countHoldTarget()).toBeNull();
+  });
+
+  test("a restart with the money not yet covered: held on until the income is measured or the window ends", () => {
+    const ownedAugs = withoutMagnetism();
+    const withMagnetism = 250e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+    const money = withMagnetism - 60e6;
+    online();
+    for (let minute = 0; minute <= 10; minute += 1) {
+      minuteOn({ reputation: 15_000, ownedAugs, earned: minute * 6e6 }, minute < 10 ? 0 : money);
+    }
+    expect(rule.view().progress?.countHold).toMatchObject({ way: "money" });
+    // Restarted: no income for 10 minutes, but the window open, so the hold goes on, not the install at 29.
+    rule = newRule();
+    minuteOn({ reputation: 15_000, ownedAugs, earned: 11 * 6e6 }, money);
+    expect(rule.view().progress?.countHold).toMatchObject({ way: "money", leftMs: 19 * MINUTE });
+    expect(rule.view().progress?.countdown).toBeNull();
+    // Earning nothing now: held each minute while the income is unknown (its samples start again at the restart)...
+    for (let minute = 12; minute <= 20; minute += 1) {
+      minuteOn({ reputation: 15_000, ownedAugs, earned: 11 * 6e6 }, money);
+      expect(rule.view().progress?.countHold).toMatchObject({ way: "money", leftMs: (30 - minute) * MINUTE });
+    }
+    expect(lines.filter((line) => line.startsWith(OVER))).toEqual([]);
+    // ...and at 21, 10 minutes of samples measure it: none, so never, and the hold is over, logged once.
+    minuteOn({ reputation: 15_000, ownedAugs, earned: 11 * 6e6 }, money);
+    expect(rule.view().progress?.countHold).toBeNull();
+    expect(lines.filter((line) => line.startsWith(OVER))).toEqual([
+      `${OVER}Magnetism Amplifier isn't within what's left of its 20 min`,
+    ]);
+  });
+
+  test("a hold's end logged before a restart isn't logged again by the restarted brain", () => {
+    online();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
+    expect(lines.filter((line) => line.startsWith(OVER))).toEqual([`${OVER}the rule no longer says install`]);
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
+    expect(lines.filter((line) => line.startsWith(OVER))).toHaveLength(1);
+    // Held again in the window (the store's mark cleared), then restarted: the restarted brain logs this end.
+    minuteOn({ reputation: reputationFor(5 * MINUTE) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    rule = newRule();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) }, 0);
+    expect(lines.filter((line) => line.startsWith(OVER))).toHaveLength(2);
+  });
+
+  test("a restarted brain whose hold has ended logs its end at its first decision", () => {
+    online();
+    minuteOn({ reputation: reputationFor(5 * MINUTE) });
+    expect(rule.view().progress?.countHold).not.toBeNull();
+    rule = newRule();
+    lines.length = 0;
+    minuteOn({ reputation: reputationFor(5 * MINUTE), invitations: ["Daedalus"] });
+    expect(lines).toContain(`${OVER}Daedalus's count met`);
+  });
+
+  test("by a donation (#225): The Black Hand's donations unlocked, its price and donation at the income", () => {
+    const donation = donationToReach(100_000 - 50_000, 1, 1);
+    // $1m short of it alone (its value first, it would take the three's money); with the three, $140,670,900 short.
+    const money = 550e6 * 1.9 + donation - 1e6;
+    online();
+    for (let minute = 0; minute <= 10; minute += 1) {
+      minuteOn({ reputation: 50_000, favor: 150, earned: minute * 12e6 }, minute < 10 ? 0 : money, {
+        holdWork: { owners: null, brainWorks: false },
+      });
+    }
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(THREE);
+    expect(rule.view().progress?.countHold).toEqual({
+      augmentation: TBH,
+      faction: TBH,
+      way: "donation",
+      etaMs: expect.closeTo(703_354.5, -3),
+      money: BLACK_HAND_MONEY + donation,
+      leftMs: 20 * MINUTE,
+    });
+    expect(rule.view().progress?.held).toMatch(/The Black Hand in ~12 min \(by a donation to The Black Hand, /);
+  });
+
+  test("donations unlocked, but work sooner (#243 review): the work counts too, the sooner wins", () => {
+    // 5 min off at favour 0, 2 at 150 (the rate ×2.5); the donation's money not covered, with no income: work.
+    online();
+    minuteOn({ reputation: reputationFor(5 * MINUTE), favor: 150 });
+    expect(rule.view().progress?.countHold).toMatchObject({ way: "work", etaMs: expect.closeTo(2 * MINUTE, -3) });
+  });
+
+  test("donation routes tied (both at once): the cheapest seller's donation wins", () => {
+    const ENM = "Embedded Netburner Module";
+    const toCome = countablesToCome({
+      sold: [ENM],
+      state: {
+        installed: {},
+        queued: [],
+        sourceFile11Level: 0,
+        bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+      },
+      set: { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] },
+      joined: [
+        { name: "NiteSec", reputation: 0, favor: 150 },
+        { name: TBH, reputation: 10_000, favor: 150 },
+      ],
+      shops: new Map([
+        ["NiteSec", augmentationsSoldBy("NiteSec", 1, null)],
+        [TBH, BLACK_HAND_SHOP],
+      ]),
+      terms: {
+        sellers: {
+          [ENM]: [
+            { faction: "NiteSec", reputation: 0 },
+            { faction: TBH, reputation: 10_000 },
+          ],
+        },
+        neuroFluxSellers: [],
+        factionRep: 1,
+        factionWorkRepGain: 1,
+      },
+      person: workingPersonOf(playerWith(0)) as WorkingPerson,
+      conditions: workConditionsOf({ currentNode: 1, ownedAugs: {}, ownedSF: {} }, slow()),
+      work: { owners: null, brainWorks: false },
+      money: 1e15,
+      income: null,
+    });
+    expect(toCome).toEqual([
+      {
+        augmentation: ENM,
+        faction: TBH,
+        way: "donation",
+        etaMs: 0,
+        money: 250e6 + donationToReach(15_000 - 10_000, 1, 1),
+      },
+    ]);
+  });
+
+  test("a donation where the set already donates (#243 review): the faction raised to the larger, not both", () => {
+    // Magnetism Amplifier (15,000) not installed, The Black Hand at 10,000 with donations: the set donates for it.
+    const ownedAugs = withoutMagnetism();
+    const both = donationToReach(100_000 - 10_000, 1, 1);
+    const setsOwn = donationToReach(15_000 - 10_000, 1, 1);
+    // $1 short of The Black Hand alone with its donation, so the set is the three and Magnetism Amplifier.
+    const money = 550e6 + both - 1;
+    online();
+    for (let minute = 0; minute <= 10; minute += 1) {
+      minuteOn(
+        { reputation: 10_000, favor: 150, queued: [], ownedAugs, earned: minute * 60e9 },
+        minute < 10 ? 0 : money,
+        {
+          holdWork: { owners: null, brainWorks: false },
+        },
+      );
+    }
+    expect(rule.view().set.map((each) => each.augmentation)).toEqual(["Magnetism Amplifier", ...THREE]);
+    // In buy order with the set, it goes first: what it adds to the set's price, and its donation less the set's.
+    const setPrice = 250e6 + 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3;
+    const withIt = 550e6 + 250e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+    expect(rule.view().progress?.countHold).toMatchObject({
+      augmentation: TBH,
+      way: "donation",
+      money: expect.closeTo(withIt - setPrice + both - setsOwn, 0),
+    });
   });
 });

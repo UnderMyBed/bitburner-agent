@@ -625,7 +625,8 @@ export class AugmentationTimeline {
    * slow snapshots' count and the brain's own clock in its `augmentationProgress` events (which carries time from
    * before the window), and no install chosen in it in the window (from the window's start, for the first). A failure
    * only with the Augmentations switch on (the dashboard's, now: the store keeps no history of it), and not while The
-   * Red Pill's way held the rule (#215) at the cycle's last progress: shown, not counted, then.
+   * Red Pill's way held the rule (#215) at the cycle's last progress: shown, not counted, then. A hold for Daedalus's
+   * count (#243), 30 minutes at most, doesn't excuse it.
    */
   #overdueLines(
     events: readonly StoredEvent[],
@@ -659,7 +660,8 @@ export class AugmentationTimeline {
       if (chosen) continue;
       overdue++;
       const last = progress.at(-1);
-      const held = last === undefined ? null : fieldsOf(last.detail).held;
+      const fields = last === undefined ? {} : fieldsOf(last.detail);
+      const held = typeof fields.held === "string" && (fields.countHold ?? null) === null ? fields.held : null;
       const line =
         `install overdue: ${formatEta(onlineMs)} online in the cycle seen from ${formatTime(cycle.firstAtMs)} to ` +
         `${formatTime(cycle.lastAtMs)}, and no install chosen; its last counts: ` +

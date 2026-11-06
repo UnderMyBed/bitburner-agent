@@ -195,6 +195,59 @@ describe("chooseFactionWork", () => {
     });
   });
 
+  test("an install held for Daedalus's count (#243 review): its augmentation's seller worked for first", () => {
+    const medium = player(55);
+    const joined = { CyberSec: 0, "The Black Hand": 90_000 };
+    // Unheld, CyberSec's Neurotrainer I, the most value a second.
+    expect(chooseFactionWork(medium, slow({ joined })).choice?.augmentation).toBe("Neurotrainer I");
+    const held = { faction: "The Black Hand", augmentation: "The Black Hand" };
+    const rate = hackingRate(medium);
+    expect(chooseFactionWork(medium, slow({ joined }), 1, undefined, { held }).choice).toEqual({
+      faction: "The Black Hand",
+      workType: "hacking",
+      augmentation: "The Black Hand",
+      reputation: 90_000,
+      reputationNeeded: 100_000,
+      reputationPerSecond: rate,
+      etaSeconds: 10_000 / rate,
+      target: "augmentation",
+      augmentationReputation: 100_000,
+      favor: 0,
+      count: { installed: 0, required: 30 },
+      held: true,
+    });
+    expect(describeChoice(chooseFactionWork(medium, slow({ joined }), 1, undefined, { held }).choice as never)).toMatch(
+      /, for Daedalus's count: 0 of 30 augmentations installed, the install held for it$/,
+    );
+    // Its reputation reached (A6 buys it), or its seller not joined: the usual choice.
+    const reached = { CyberSec: 0, "The Black Hand": 100_000 };
+    expect(chooseFactionWork(medium, slow({ joined: reached }), 1, undefined, { held }).choice?.held).toBeUndefined();
+    expect(
+      chooseFactionWork(medium, slow({ joined: { CyberSec: 0 } }), 1, undefined, { held }).choice?.augmentation,
+    ).toBe("Neurotrainer I");
+  });
+
+  test("the hold's target goes to A5's work only with its switch on and no owner's work", () => {
+    const rule = ruleOf();
+    const held = { faction: "The Black Hand", augmentation: "The Black Hand" };
+    const inputs = {
+      mediumData: player(55),
+      slowData: slow({ joined: { CyberSec: 0, "The Black Hand": 90_000 } }),
+      slowAtMs: 0,
+      nowMs: 0,
+      ownersWork: false,
+      enabled: true,
+      countHoldTarget: held,
+    };
+    expect(rule.update(inputs).work).toEqual({ faction: "The Black Hand", workType: "hacking" });
+    expect(rule.update({ ...inputs, ownersWork: true }).work).toBeNull();
+    expect(rule.update({ ...inputs, enabled: false }).work).toBeNull();
+    expect(rule.update({ ...inputs, countHoldTarget: null }).work).toEqual({
+      faction: "CyberSec",
+      workType: "hacking",
+    });
+  });
+
   test("by value a second at the player's level: CyberSec's next targets at hacking 55", () => {
     // At 1,500, Synaptic Enhancement Implant (ln 1.03 over 500 left) before BitWire (hacking ×1.05 at level 55, 0.082,
     // over 2,250); Neurotrainer I is reached (A6's to buy).
