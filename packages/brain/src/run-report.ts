@@ -490,7 +490,7 @@ interface RunFacts extends RunWindow {
   hacking: HackingFold;
   /** The BitNodes and augmentation cycles (#244), and section 2's figures for each BitNode, in order. */
   cycles: BitNodeCycles;
-  segments: ProgressSegment[];
+  segments: { index: number; segment: ProgressSegment }[];
 }
 
 const isObject = (data: unknown): data is object => data !== null && typeof data === "object";
@@ -530,13 +530,24 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     }
     const events = store.eventsInWindow(window);
     const factionWork = new FactionWorkTimeline(events, BRAIN_STARTED_EVENT_KIND);
-    // The BitNodes and cycles (#244): the slow snapshots say where each starts, then each snapshot is put in its own.
-    const cycles = new BitNodeCycles(events, window);
-    const segments: ProgressSegment[] = [];
+    // The day before the window: an earlier brain start (section 1), and the install decisions (#244 review: a window
+    // opening after an install was chosen doesn't judge its buying).
+    const dayBefore = store.eventsInWindow({
+      environment: window.environment,
+      sinceMs: window.sinceMs - EARLIER_START_LOOKBACK_MS,
+      untilMs: window.sinceMs - 1,
+    });
+    // The BitNodes and cycles (#244): the slow snapshots say where each starts, then each snapshot is put in its own,
+    // or (-1) before the first BitNode's start, or with none known.
+    const cycles = new BitNodeCycles(events, window, dayBefore);
+    const segments = new Map<number, ProgressSegment>();
     const segmentAt = (index: number): ProgressSegment => {
-      const at = Math.max(0, index);
-      segments[at] ??= { fastSeen: false, factionState: new FactionStateFolding() };
-      return segments[at];
+      let segment = segments.get(index);
+      if (segment === undefined) {
+        segment = { fastSeen: false, factionState: new FactionStateFolding() };
+        segments.set(index, segment);
+      }
+      return segment;
     };
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
@@ -612,13 +623,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         batcherDeploy: data.batcherDeploy,
       });
     }
-    const earlierStarts = store
-      .eventsInWindow({
-        environment: window.environment,
-        sinceMs: window.sinceMs - EARLIER_START_LOOKBACK_MS,
-        untilMs: window.sinceMs - 1,
-      })
-      .filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
+    const earlierStarts = dayBefore.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
     const reloadsBefore = store
       .eventsInWindow({
         environment: window.environment,
@@ -654,8 +659,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
       hacking,
       cycles,
-      // A BitNode with nothing but slow snapshots has its segment from them; none at all, one empty segment.
-      segments: Array.from({ length: Math.max(1, segments.length) }, (_, index) => segmentAt(index)),
+      // In order: before the first BitNode (or none known), then each; nothing at all, one empty segment.
+      segments:
+        segments.size === 0
+          ? [{ index: -1, segment: segmentAt(-1) }]
+          : [...segments].sort(([a], [b]) => a - b).map(([index, segment]) => ({ index, segment })),
     };
   });
 }
@@ -866,9 +874,9 @@ function describeChange(first: string, last: string): string {
  */
 function progressSection(facts: RunFacts): string[] {
   const lines = ["2. Progress, first snapshot → last, in each BitNode", facts.cycles.bitNodesLine()];
-  for (const [index, segment] of facts.segments.entries()) {
+  for (const { index, segment } of facts.segments) {
     const bitNode = facts.cycles.bitNodes[index];
-    lines.push(`  ${bitNode?.label ?? "BitNode not recorded"}, first snapshot → last:`);
+    lines.push(`  ${bitNode?.label ?? facts.cycles.labelBefore()}, first snapshot → last:`);
     lines.push(...segmentProgressLines(facts, segment).map((line) => `  ${line}`));
     lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
   }

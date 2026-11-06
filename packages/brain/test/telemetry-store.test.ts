@@ -156,6 +156,25 @@ test("a read transaction sees the store as at its first read, whatever is writte
   reader.close();
 });
 
+test("a write transaction commits its writes together, or none of them if it throws", () => {
+  const count = () => store.events({ environment: "E1" }).length;
+  const result = store.writeTransaction(() => {
+    store.recordEvent(context, { atMs: 1, kind: "a", detail: null });
+    return "written";
+  });
+  expect([result, count()]).toEqual(["written", 1]);
+  expect(() =>
+    store.writeTransaction(() => {
+      store.recordEvent(context, { atMs: 2, kind: "b", detail: null });
+      throw new Error("write failed");
+    }),
+  ).toThrow("write failed");
+  expect(count()).toBe(1);
+  // The store takes writes again after a rollback.
+  store.writeTransaction(() => store.recordEvent(context, { atMs: 3, kind: "c", detail: null }));
+  expect(count()).toBe(2);
+});
+
 test("events round-trip in order, tagged", () => {
   store.recordEvent(context, { atMs: 5, kind: "agentConnected", detail: { agentSessionId: "s" } });
   store.recordEvent(context, { atMs: 6, kind: "connectionRejected", detail: { reason: "origin", detail: "x" } });

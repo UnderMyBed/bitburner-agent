@@ -85,12 +85,12 @@ interface SeenInstall {
   installed: string[];
 }
 
-const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-const formatMoney = (money: unknown) =>
+export const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+export const formatMoney = (money: unknown) =>
   isFiniteNumber(money) ? `$${Math.round(money).toLocaleString("en-US")}` : "unknown";
 const formatReputation = (reputation: unknown) =>
   isFiniteNumber(reputation) ? Math.round(reputation).toLocaleString("en-US") : "unknown";
-const fieldsOf = (detail: unknown) =>
+export const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
 
 /**

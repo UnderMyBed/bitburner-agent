@@ -20,7 +20,7 @@ import { STORE_FILE_NAME } from "../src/config.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
 import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
-import { findIncomeStalls, inferHackTargets, runReport } from "../src/run-report.ts";
+import { findIncomeStalls, inferHackTargets, runReport as reportOf } from "../src/run-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
 
@@ -28,14 +28,19 @@ const REPORT_CLI = path.resolve(import.meta.dirname, "../src/report-cli.ts");
 const T0 = Date.parse("2026-10-26T00:00:00Z");
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
+/** The BitNode and the cycle the slow snapshots show, unless said: an hour before the run (#244 review: not 1970). */
+const RESET = T0 - 60 * MINUTE;
 const at = (offsetMs: number) => new Date(T0 + offsetMs).toISOString();
 const context = { environment: "E0", release: "r" } as const;
 
 let directory: string;
 let store: TelemetryStore;
+/** The snapshots not yet written: `flush` writes them in one transaction, before any report reads the store. */
+let pending: Parameters<TelemetryStore["recordSnapshot"]>[1][] = [];
 beforeEach(() => {
   directory = mkdtempSync(path.join(os.tmpdir(), "run-report-"));
   store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+  pending = [];
 });
 afterEach(() => {
   store.close();
@@ -44,7 +49,7 @@ afterEach(() => {
 
 let sequenceNumber = 0;
 function snapshot(tier: string, offsetMs: number, data: unknown, gameTimeMs = 0) {
-  store.recordSnapshot(context, {
+  pending.push({
     agentSessionId: "session-1",
     tier,
     sequenceNumber: ++sequenceNumber,
@@ -54,6 +59,23 @@ function snapshot(tier: string, offsetMs: number, data: unknown, gameTimeMs = 0)
     data,
   });
 }
+/**
+ * Writes the pending snapshots in one transaction (#244 review): one commit, so one sync to disk, a run's (a run is
+ * hundreds of snapshots) rather than one each, which made this suite 100 s.
+ */
+function flush() {
+  const each = pending;
+  pending = [];
+  if (each.length === 0) return;
+  store.writeTransaction(() => {
+    for (const row of each) store.recordSnapshot(context, row);
+  });
+}
+/** The run report, after writing the pending snapshots. */
+const runReport = (...args: Parameters<typeof reportOf>) => {
+  flush();
+  return reportOf(...args);
+};
 const event = (offsetMs: number, kind: string, detail: unknown = {}) =>
   store.recordEvent(context, { atMs: T0 + offsetMs, kind, detail });
 
@@ -127,7 +149,7 @@ const slowData = (
   /** Null for none: an older Agent. */
   factions: FactionStateReading | null = factionState(),
 ): SlowSnapshotData => ({
-  resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 1, ownedAugs, ownedSF, bitNodeOptions: {} },
+  resetInfo: { lastAugReset: RESET, lastNodeReset: RESET, currentNode: 1, ownedAugs, ownedSF, bitNodeOptions: {} },
   purchasedServers,
   ...(factions === null ? {} : { factions }),
 });
@@ -248,32 +270,32 @@ describe("the sections", () => {
     }
     // 2. Progress, the player's own servers left out of the rooted count and the target.
     for (const line of [
-      "  money: $11,000 → $1,201,000",
-      "  hacking: 1 → 12",
-      "  other skills: strength 1 → 1",
-      "  home RAM: 8 GB → 16 GB",
-      "  home RAM used: 4 GB (unchanged)",
-      "  TOR router: no → yes",
-      "  port openers: none → BruteSSH.exe",
-      "  the game's servers rooted: 1 → 2",
+      "\n    money: $11,000 → $1,201,000",
+      "\n    hacking: 1 → 12",
+      "\n    other skills: strength 1 → 1",
+      "\n    home RAM: 8 GB → 16 GB",
+      "\n    home RAM used: 4 GB (unchanged)",
+      "\n    TOR router: no → yes",
+      "\n    port openers: none → BruteSSH.exe",
+      "\n    the game's servers rooted: 1 → 2",
       // n00dles and pserv-0, then foodnstuff too (#194).
       // n00dles and the brain's pserv-0: foodnstuff isn't among the static snapshot's servers.
-      "  the hack loop's hosts' RAM: 12 GB on 2 servers (unchanged)",
-      "  city: Sector-12 (unchanged)",
-      "  factions: none → CyberSec",
-      "  jobs: none (unchanged)",
-      "  installed augmentations: none → Neurotrainer I",
-      "  BitNode: 1 (unchanged)",
-      "  Source-Files: none → SF4.3",
-      "  purchased servers: none → pserv-0",
+      "\n    the hack loop's hosts' RAM: 12 GB on 2 servers (unchanged)",
+      "\n    city: Sector-12 (unchanged)",
+      "\n    factions: none → CyberSec",
+      "\n    jobs: none (unchanged)",
+      "\n    installed augmentations: none → Neurotrainer I",
+      "\n    BitNode: 1 (unchanged)",
+      "\n    Source-Files: none → SF4.3",
+      "\n    purchased servers: none → pserv-0",
       // The faction state (#197): reputation first → last, each invitation as first seen, the queue counted; under
       // its BitNode (#244).
       "    faction reputation and favour, first reading → last:\n      CyberSec: reputation 100 → 1,235, favour 0 " +
         "(unchanged)",
       `    faction invitations, as first seen:\n      CyberSec, ${at(10 * SECOND)}\n      Sector-12, ${at(RUN_MS)}`,
-      "  BitNodes: BN1.1 from 1970-01-01T00:00:00.000Z (before the window), not destroyed, ",
+      `  BitNodes: BN1.1 from ${at(-60 * MINUTE)} (before the window), not destroyed, `,
       "  BN1.1, first snapshot → last:\n    money: $11,000 → $1,201,000\n",
-      "  augmentations queued: none → NeuroFlux Governor ×2, BitWire",
+      "\n    augmentations queued: none → NeuroFlux Governor ×2, BitWire",
       `    n00dles: ${at(20 * SECOND)} to ${at(RUN_MS)}`,
     ]) {
       expect(text).toContain(line);
@@ -1806,9 +1828,9 @@ describe("augmentations and the reset (#210)", () => {
     );
   });
 
-  /** An `augmentationProgress` (#222) for the cycle the run's slow snapshots show (`lastAugReset` 0). */
+  /** An `augmentationProgress` (#222) for the cycle the run's slow snapshots show (`lastAugReset` RESET). */
   const progress = (fields: Record<string, unknown> = {}) => ({
-    lastAugReset: 0,
+    lastAugReset: RESET,
     affordable: 1,
     affordableWithNeuroFlux: 3,
     bar: 8,
@@ -1837,7 +1859,7 @@ describe("augmentations and the reset (#210)", () => {
           }),
         ],
         [5 * MINUTE, "augmentationProgress", progress({ held: "The Red Pill: Daedalus's reputation 1 of 2" })],
-        [6 * MINUTE, "augmentationProgress", { lastAugReset: 0 }],
+        [6 * MINUTE, "augmentationProgress", { lastAugReset: RESET }],
       ],
     });
     expect(report.text).toContain(
@@ -2043,20 +2065,24 @@ describe("donations (#225)", () => {
   test("donations unused (#225 review): weighed against the money left after the brain's counted set", () => {
     // The brain's set spent $1b of the $6b on another augmentation (none by donation): Gen I's $5.07b isn't left.
     const spent = donationRun({
-      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 0, affordable: 1, setCost: 1e9 }]],
+      events: [
+        [30 * SECOND, "augmentationProgress", { lastAugReset: RESET, byDonation: 0, affordable: 1, setCost: 1e9 }],
+      ],
     });
     expect(unused(spent)).toEqual([]);
     fresh();
     // A set that leaves enough: unused all the same.
     const room = donationRun({
-      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 0, affordable: 1, setCost: 1e8 }]],
+      events: [
+        [30 * SECOND, "augmentationProgress", { lastAugReset: RESET, byDonation: 0, affordable: 1, setCost: 1e8 }],
+      ],
     });
     expect(unused(room)).toHaveLength(1);
   });
 
   test("donations unused: not with the brain counting one, acting, the money short, or the favour short", () => {
     const counting = donationRun({
-      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: 0, byDonation: 1, affordable: 1 }]],
+      events: [[30 * SECOND, "augmentationProgress", { lastAugReset: RESET, byDonation: 1, affordable: 1 }]],
     });
     expect(unused(counting)).toEqual([]);
     fresh();
@@ -2096,7 +2122,14 @@ describe("donations (#225)", () => {
         [
           2 * MINUTE,
           "augmentationProgress",
-          { lastAugReset: 0, affordable: 1, affordableWithNeuroFlux: 1, bar: 8, barWithNeuroFlux: 12, byDonation: 1 },
+          {
+            lastAugReset: RESET,
+            affordable: 1,
+            affordableWithNeuroFlux: 1,
+            bar: 8,
+            barWithNeuroFlux: 12,
+            byDonation: 1,
+          },
         ],
         [
           3 * MINUTE,
@@ -2216,6 +2249,7 @@ test("formatDuration: to the second under an hour, to the minute over", () => {
 
 describe("the command", () => {
   function runCli(args: string[], dataDirectory = directory): { exitCode: number; output: string } {
+    flush();
     try {
       const output = execFileSync(process.execPath, [REPORT_CLI, "--data-dir", dataDirectory, ...args], {
         encoding: "utf8",
@@ -2512,6 +2546,7 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
 
   test("the command exits 0 on WARN", () => {
     incidentRun();
+    flush();
     const output = execFileSync(
       process.execPath,
       [REPORT_CLI, "--data-dir", directory, "--since", at(0), "--until", at(END_MS + 30 * SECOND)],

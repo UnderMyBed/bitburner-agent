@@ -1,15 +1,17 @@
 // The run report's BitNodes and augmentation cycles (#244): the window split at each destroy, each BitNode's milestones
-// with the time since its start, and a row per augmentation cycle (`lastAugReset` to the next reset) answering what
-// held it back. Folded as the run report reads the store: the slow snapshots first (they say where each BitNode and
-// cycle starts), then the medium and the fast ones, each put in the BitNode and cycle its time falls in. Read-only, and
-// from what the store already has: an older store's missing fields read as "not recorded", never a crash.
+// with the time since its start, and a block per augmentation cycle (`lastAugReset` to the next reset), with a summary
+// line each, answering what held it back. Folded as the run report reads the store: the slow snapshots first (they say
+// where each BitNode and cycle starts), then the medium and the fast ones, each put in the BitNode and cycle its time
+// falls in. Read-only, and from what the store already has: an older store's missing fields read "not recorded".
 import {
+  type AugmentationPurchaseState,
   acceptsDonations,
   augmentationBitNodeMultipliers,
   augmentationBuyOrder,
   augmentationCost,
   augmentationsSoldBy,
   DAEDALUS,
+  type DonationTerms,
   daedalusAugmentationsRequired,
   daedalusCountOf,
   donationsUnlocked,
@@ -29,9 +31,10 @@ import {
   type SlowSnapshotData,
   THE_RED_PILL,
 } from "@bitburner-agent/core";
-import { describeAugmentations } from "./augmentation-report.ts";
+import { describeAugmentations, fieldsOf, formatMoney, isFiniteNumber } from "./augmentation-report.ts";
 import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
+  AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_DONATED_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
@@ -43,13 +46,14 @@ import {
 import { SLOW_SNAPSHOT_GAP_MS } from "./factions.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import { shareBonusOf } from "./share.ts";
+import type { ReputationPoint } from "./share-report.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
 
 /**
  * How often a cycle's slow snapshots are judged for what held it back: its first, then the first at least this long
- * after the last judged. Run #3's question was answered by hand at 15 minutes; each judgement is three passes of core's
- * prices over the joined factions' augmentations.
+ * after the last judged, and any whose "factions" (nothing left to count) differs from the last judged's, so that
+ * answer is to the minute. Run #3's question was answered by hand at 15 minutes.
  */
 export const HELD_BACK_JUDGED_EVERY_MS = 5 * 60_000;
 /**
@@ -57,18 +61,40 @@ export const HELD_BACK_JUDGED_EVERY_MS = 5 * 60_000;
  * game's time isn't recorded): a reset's time (the game's) is then taken as the brain's, within the bounds below.
  */
 const CLOCK_OFFSET_SANE_MS = 24 * 3_600_000;
+/** The events that say whether an install was chosen, looked for in the day before the window too (#244 review). */
+export const INSTALL_DECISION_EVENT_KINDS = [
+  AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
+];
 
 /**
- * What more of would have raised the count the install rule waits on (core's `installRule`), at a slow snapshot:
- * - "reputation": more reputation at the joined factions (the money covering it) would count more;
- * - "money": more money would (the reputation reached, or a donation's to buy);
- * - "reputation and money": either would;
- * - "count": neither: everything worth installing at the joined factions is counted, and the cycle waits on the bar;
+ * What more of would have raised the count the install rule waits on (core's `installRule`), estimated at a slow
+ * snapshot (`heldBackOf`):
+ * - "reputation": more reputation at the joined factions whose donations are locked (the money covering it);
+ * - "money": more money (the reputation reached, or a donation's to buy where they're unlocked);
+ * - "reputation and money": either;
+ * - "count": neither: everything worth installing at the joined factions is counted (or can't be had, a prerequisite
+ *   sold only elsewhere), and the cycle waits on the bar;
  * - "factions": nothing worth installing is left unowned at the joined factions (none joined, early in a cycle, say):
  *   only another faction's would count more, or, with something to install, the bar or "nothing left" ends it.
  */
 export type HeldBack = "reputation" | "money" | "reputation and money" | "count" | "factions";
-const HELD_BACK_ORDER: HeldBack[] = ["reputation", "money", "reputation and money", "count", "factions"];
+/**
+ * A cycle's answers (#244 review): `HeldBack`'s, or the brain's own state from its `augmentationProgress` in force,
+ * where the count isn't what it waits on: "The Red Pill's way" (the rule held for Daedalus, its reputation or its
+ * donation, The Red Pill or the destroy, #215, #225: the progress's `held`), or "count reached" (a countdown running,
+ * or the install held for Daedalus's count, #243).
+ */
+export type CycleAnswer = HeldBack | "The Red Pill's way" | "count reached";
+const ANSWER_ORDER: CycleAnswer[] = [
+  "reputation",
+  "money",
+  "reputation and money",
+  "count",
+  "factions",
+  "The Red Pill's way",
+  "count reached",
+];
 
 /** The medium snapshot's figures a judgement needs: the money, and the `faction_rep` multiplier a donation is worth. */
 export interface PlayerFigures {
@@ -76,48 +102,93 @@ export interface PlayerFigures {
   factionRep: number;
 }
 
-const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-const fieldsOf = (value: unknown) =>
-  (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
-const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
 const formatWhole = (value: number) => Math.round(value).toLocaleString("en-US");
 const formatFavor = (favor: number) => favor.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
+/** A donation an augmentation needs: at `faction` (its reputation now), to `reputation`. */
+interface DonationNeed {
+  faction: string;
+  sellerReputation: number;
+  reputation: number;
+}
+
 /**
- * The most of `names` the money buys, the cheapest first, each with its prerequisites owned, queued or already counted
- * (core's `purchaseSequenceCost` in the game's buy order, so each purchase's ×1.9 is in it), and `extra` money on top
- * for each (a donation's, #225). A count, not the brain's set: its set is chosen by hacking value, which can count
- * fewer, so a count beside another must be the same measure's.
+ * How many of `names` the money buys, the cheapest first, each with its prerequisites owned, queued or counted already
+ * (passes again until none is added, so a prerequisite dearer than what needs it still counts it), at its price in the
+ * game's buy order (core's `purchaseSequenceCost`, each purchase's ×1.9 in it), with its donation (`donationFor`): one
+ * a faction, to the most reputation bought there (as the brain's plan, legacy `faction-manager.js:891`). Stops once it
+ * exceeds `stopAbove`. A count, not the brain's set (chosen by hacking value), so an estimate.
  */
-function countable(
+function countAffordable(
   names: readonly string[],
-  state: Parameters<typeof augmentationCost>[1],
+  state: AugmentationPurchaseState,
   money: number,
-  extra: (name: string) => number = () => 0,
+  donationFor: (name: string) => DonationNeed | null,
+  terms: Pick<DonationTerms, "factionRep" | "factionWorkRepGain">,
+  stopAbove = Number.POSITIVE_INFINITY,
 ): number {
-  const price = new Map(names.map((name) => [name, augmentationCost(name, state).money + extra(name)]));
+  const price = new Map(names.map((name) => [name, augmentationCost(name, state).money]));
   const cheapestFirst = [...names].sort((a, b) => (price.get(a) ?? 0) - (price.get(b) ?? 0));
   const chosen: string[] = [];
-  let extras = 0;
-  for (const name of cheapestFirst) {
-    if (missingPrerequisites(name, { installed: state.installed, queued: [...state.queued, ...chosen] }).length > 0)
-      continue;
-    const cost = purchaseSequenceCost(augmentationBuyOrder([...chosen, name]), state).money + extras + extra(name);
-    if (cost > money) continue;
-    chosen.push(name);
-    extras += extra(name);
+  let targets = new Map<string, DonationNeed>();
+  const donationMoney = (each: ReadonlyMap<string, DonationNeed>) =>
+    [...each.values()].reduce(
+      (sum, need) =>
+        sum + donationToReach(need.reputation - need.sellerReputation, terms.factionRep, terms.factionWorkRepGain),
+      0,
+    );
+  for (let added = true; added; ) {
+    added = false;
+    for (const name of cheapestFirst) {
+      if (chosen.includes(name)) continue;
+      if (missingPrerequisites(name, { installed: state.installed, queued: [...state.queued, ...chosen] }).length > 0)
+        continue;
+      const need = donationFor(name);
+      const tried = new Map(targets);
+      if (need !== null && need.reputation > (tried.get(need.faction)?.reputation ?? 0)) tried.set(need.faction, need);
+      const cost = purchaseSequenceCost(augmentationBuyOrder([...chosen, name]), state).money + donationMoney(tried);
+      if (cost > money) continue;
+      chosen.push(name);
+      targets = tried;
+      added = true;
+      if (chosen.length > stopAbove) return chosen.length;
+    }
   }
   return chosen.length;
 }
 
-/**
- * What held the count back at a slow snapshot (`HeldBack`), from its faction state and `ownedAugs` and the medium
- * snapshot's money: the augmentations worth installing (core's `isWorthInstalling`, any short of Daedalus's count) sold
- * by a joined faction and not owned or queued, counted three ways: as things are (reputation reached, or a donation's
- * money where donations are unlocked); with every one's reputation reached; and with the money unlimited. Null where
- * the snapshot doesn't say (no faction state, an unread one, malformed `resetInfo`) or core doesn't know a name in it.
- */
-export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldBack | null {
+/** How many of `names` can be had at all, whatever the money: their prerequisites owned, queued or among them. */
+function countHadAtAll(names: readonly string[], state: AugmentationPurchaseState): number {
+  const had: string[] = [];
+  for (let added = true; added; ) {
+    added = false;
+    for (const name of names) {
+      if (had.includes(name)) continue;
+      if (missingPrerequisites(name, { installed: state.installed, queued: [...state.queued, ...had] }).length > 0)
+        continue;
+      had.push(name);
+      added = true;
+    }
+  }
+  return had.length;
+}
+
+/** What a slow snapshot shows of the joined factions' shops, for `heldBackOf`; null where it doesn't say. */
+interface Shops {
+  state: FactionState;
+  purchaseState: AugmentationPurchaseState;
+  multipliers: ReturnType<typeof augmentationBitNodeMultipliers>;
+  joined: JoinedFaction[];
+  shops: Map<string, string[]>;
+  /**
+   * Worth installing (core's `isWorthInstalling`, any short of Daedalus's count), sold by a joined faction, not owned
+   * or queued. Never NeuroFlux Governor: its levels are endless, so more money always buys one more, and counting them
+   * would make every cycle "money"; the bar with them falls as the bar does.
+   */
+  unowned: string[];
+}
+
+function shopsOf(data: SlowSnapshotData): Shops | null {
   const reading = factionReadingOf(data);
   const state = reading?.state ?? null;
   const info = data.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
@@ -134,6 +205,8 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
       sourceFile11Level: ownedSF["11"] ?? 0,
       bitNodeMultipliers: multipliers,
     };
+    // Checked now: a name core doesn't know is null, not a throw later.
+    augmentationCost(NEUROFLUX_GOVERNOR, purchaseState);
     const joined = state.joined.filter((faction) => FACTION_NAMES.includes(faction.name));
     const shops = new Map(
       joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
@@ -147,35 +220,72 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
     });
     const owned = (name: string) =>
       Object.hasOwn(purchaseState.installed, name) || state.queuedAugmentations.includes(name);
-    const open = [...new Set([...shops.values()].flat())].filter(
+    const unowned = [...new Set([...shops.values()].flat())].filter(
       (name) => name !== NEUROFLUX_GOVERNOR && !owned(name) && isWorthInstalling(name, short),
     );
-    if (open.length === 0) return "factions";
-    const needed = new Map(open.map((name) => [name, augmentationCost(name, purchaseState).reputation]));
-    const reached = (name: string) =>
-      joined.some(
-        (faction) => shops.get(faction.name)?.includes(name) && faction.reputation >= (needed.get(name) ?? 0),
-      );
-    const terms = donationTermsOf(
+    return { state, purchaseState, multipliers, joined, shops, unowned };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a slow snapshot shows nothing left to count at the joined factions ("factions"), or null where unknown. */
+function nothingLeftAt(data: SlowSnapshotData): boolean | null {
+  const shops = shopsOf(data);
+  return shops === null ? null : shops.unowned.length === 0;
+}
+
+/**
+ * What held the count back at a slow snapshot (`HeldBack`), from its faction state and `ownedAugs` and the medium
+ * snapshot's money: the unowned augmentations worth installing (`Shops.unowned`), counted three ways
+ * (`countAffordable`): as things are (reputation reached, or a donation's money where the seller's donations are
+ * unlocked); with the reputation reached at every faction whose donations are locked (at one unlocked, the reputation
+ * is money's, so its donation is still paid); and with the money unlimited. Null where the snapshot doesn't say (no
+ * faction state, an unread one, malformed `resetInfo`) or core doesn't know a name in it.
+ */
+export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldBack | null {
+  const shops = shopsOf(data);
+  if (shops === null) return null;
+  const { purchaseState, multipliers, joined, unowned } = shops;
+  if (unowned.length === 0) return "factions";
+  try {
+    const needed = new Map(unowned.map((name) => [name, augmentationCost(name, purchaseState).reputation]));
+    const sellers = (name: string) => joined.filter((faction) => shops.shops.get(faction.name)?.includes(name));
+    const reached = (name: string) => sellers(name).some((faction) => faction.reputation >= (needed.get(name) ?? 0));
+    const unlocked = (faction: JoinedFaction) =>
+      acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers);
+    const donationTerms = donationTermsOf(
       joined,
-      shops,
-      open.filter((name) => !reached(name)),
+      shops.shops,
+      unowned.filter((name) => !reached(name)),
       player.factionRep,
       multipliers,
     );
-    // A donation's money for one no joined seller's reputation reaches: the least of its sellers taking donations.
-    const donation = (name: string) => {
-      if (reached(name)) return 0;
-      return Math.min(
-        ...(terms.sellers[name] ?? []).map((seller) =>
-          donationToReach((needed.get(name) ?? 0) - seller.reputation, terms.factionRep, terms.factionWorkRepGain),
-        ),
+    // Its donation, where no joined seller's reputation reaches it: at the seller taking donations with the most.
+    const donation = (name: string): DonationNeed | null => {
+      if (reached(name)) return null;
+      const donor = (donationTerms.sellers[name] ?? []).reduce<{ faction: string; reputation: number } | null>(
+        (best, each) => (best === null || each.reputation > best.reputation ? each : best),
+        null,
       );
+      return donor === null
+        ? null
+        : { faction: donor.faction, sellerReputation: donor.reputation, reputation: needed.get(name) ?? 0 };
     };
-    const buyable = open.filter((name) => reached(name) || (terms.sellers[name]?.length ?? 0) > 0);
-    const now = countable(buyable, purchaseState, player.money, donation);
-    const withReputation = countable(open, purchaseState, player.money) > now;
-    const withMoney = countable(buyable, purchaseState, Number.POSITIVE_INFINITY) > now;
+    const buyable = unowned.filter((name) => reached(name) || (donationTerms.sellers[name]?.length ?? 0) > 0);
+    const now = countAffordable(buyable, purchaseState, player.money, donation, donationTerms);
+    // Reputation reached where donations are locked: one sold only where they're unlocked still pays its donation.
+    const lockedSomewhere = (name: string) => sellers(name).some((faction) => !unlocked(faction));
+    const withReputation =
+      countAffordable(
+        unowned,
+        purchaseState,
+        player.money,
+        (name) => (lockedSomewhere(name) ? null : donation(name)),
+        donationTerms,
+        now,
+      ) > now;
+    const withMoney = countHadAtAll(buyable, purchaseState) > now;
     if (withReputation && withMoney) return "reputation and money";
     if (withReputation) return "reputation";
     if (withMoney) return "money";
@@ -187,12 +297,12 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
 
 /** "BN1.2": the BitNode and its level, one more than its Source-File's (the game's own count). */
 function bitNodeLabel(currentNode: number, ownedSF: Record<string, unknown>): string {
-  const level = isNumber(ownedSF[String(currentNode)]) ? (ownedSF[String(currentNode)] as number) : 0;
-  return `BN${currentNode}.${level + 1}`;
+  const level = ownedSF[String(currentNode)];
+  return `BN${currentNode}.${(isFiniteNumber(level) ? level : 0) + 1}`;
 }
 
-/** When a milestone was first seen: its time, or before the window (true at the BitNode's first look, started before). */
-interface Seen {
+/** When a milestone was first seen: its time, or before the window; and the faction, for the first one joined. */
+interface Milestone {
   atMs: number;
   beforeWindow: boolean;
   detail?: string;
@@ -203,19 +313,23 @@ interface BitNode {
   lastNodeReset: number;
   label: string;
   currentNode: number;
-  /** Its start, by the brain's clock: `lastNodeReset`, within its first and the previous BitNode's last slow snapshot. */
+  /** Its start by the brain's clock: `lastNodeReset`, from the previous BitNode's last slow snapshot to its first. */
   startMs: number;
+  /** Begun before the window, with an install in it before the window too: its first look's cycle isn't its first. */
+  installedBeforeWindow: boolean;
   firstSlowAtMs: number;
   lastSlowAtMs: number;
   firstMediumAtMs: number | null;
   /** The newest record in it: a snapshot of any tier, or an event. */
   lastRecordMs: number;
-  firstFaction: Seen | null;
-  donationsUnlocked: Map<string, Seen>;
-  daedalusCount: Seen | null;
+  firstFaction: Milestone | null;
+  donationsUnlocked: Map<string, Milestone>;
+  daedalusCount: Milestone | null;
   daedalusRequired: number | null;
-  daedalusJoined: Seen | null;
-  redPill: Seen | null;
+  daedalusJoined: Milestone | null;
+  /** Daedalus's favour as the slow snapshots first showed it joined: above 0, it was joined in a cycle before. */
+  daedalusFirstFavor: number | null;
+  redPill: Milestone | null;
 }
 
 /** A medium snapshot's figures, as a cycle keeps them. */
@@ -226,11 +340,12 @@ interface MediumPoint {
   factionRep: number | null;
 }
 
-/** A slow snapshot judged for what held its cycle back, and the time online it stands for. */
-interface Sample {
+/** A slow snapshot to judge for what held its cycle back, and the time online it stands for (to the next one). */
+interface Judgement {
   atMs: number;
   data: SlowSnapshotData;
   onlineMs: number;
+  nothingLeft: boolean | null;
 }
 
 /** An augmentation cycle the window's slow snapshots show (`lastAugReset`), and what the report keeps of it. */
@@ -241,15 +356,15 @@ interface Cycle {
   firstSlowAtMs: number;
   lastSlowAtMs: number;
   clock: OnlineClock | null;
-  /** The first install the brain chose at or after its start (never with none): judged until then. */
+  /** The install the brain chose at or after its start and didn't call off (never with none): judged until then. */
   chosenAtMs: number;
   ownedAugs: Record<string, number> | null;
   ownedSF: Record<string, number>;
   currentNode: number;
-  /** Each faction's favour as first seen in it: an install leaves every faction, so one shows only once joined again. */
+  /** Each faction's favour as first seen in it: an install leaves every faction, so one shows once joined again. */
   favorSeen: Map<string, number>;
   lastJoined: JoinedFaction[] | null;
-  samples: Sample[];
+  judgements: Judgement[];
   medium: MediumPoint[];
   /** The fast snapshots' share bonuses, added up, and how many had a batcher health field (absent: older Agent). */
   shareSum: number;
@@ -257,65 +372,78 @@ interface Cycle {
   targets: string[];
 }
 
+/** What a cycle's summary line and block say, worked out once. */
+interface CycleView {
+  label: string;
+  start: string;
+  length: string;
+  endedBy: string;
+  count: string;
+  heldBack: string;
+  topAnswer: string;
+  lines: string[];
+}
+
 /**
- * The BitNodes and cycles over a window (#244). `events` are the window's; the slow snapshots come first, in order,
- * then the medium and the fast ones, each in order.
+ * The BitNodes and cycles over a window (#244). `events` are the window's, and `earlier` the install decisions in the
+ * day before it (`INSTALL_DECISION_EVENT_KINDS`): a window opening after an install was chosen doesn't judge its
+ * buying. The slow snapshots come first, in order, then the medium and the fast ones, each in order.
  */
 export class BitNodeCycles {
   readonly bitNodes: BitNode[] = [];
   readonly #cycles: Cycle[] = [];
   readonly #events: readonly StoredEvent[];
+  readonly #decisions: readonly StoredEvent[];
   readonly #sinceMs: number;
 
-  constructor(events: readonly StoredEvent[], { sinceMs }: { sinceMs: number }) {
+  constructor(events: readonly StoredEvent[], { sinceMs }: { sinceMs: number }, earlier: readonly StoredEvent[] = []) {
     this.#events = events;
+    this.#decisions = [...earlier, ...events]
+      .filter((event) => INSTALL_DECISION_EVENT_KINDS.includes(event.kind))
+      .sort((a, b) => a.atMs - b.atMs);
     this.#sinceMs = sinceMs;
   }
 
-  /** The BitNode `atMs` falls in (the first for a time before them all), or -1 with none seen. */
+  /**
+   * The BitNode `atMs` falls in, or -1: none seen, or before the first's start (an earlier BitNode's snapshots, with no
+   * slow snapshot of it in the window: never mixed into the first's progress, #244 review).
+   */
   bitNodeIndexAt(atMs: number): number {
-    if (this.bitNodes.length === 0) return -1;
-    return Math.max(
-      0,
-      this.bitNodes.findLastIndex((bitNode) => bitNode.startMs <= atMs),
-    );
+    return this.bitNodes.findLastIndex((bitNode) => bitNode.startMs <= atMs);
   }
 
+  /** The cycle `atMs` falls in, or none before the first's start. */
   #cycleAt(atMs: number): Cycle | undefined {
-    if (this.#cycles.length === 0) return undefined;
-    return this.#cycles[
-      Math.max(
-        0,
-        this.#cycles.findLastIndex((cycle) => cycle.startMs <= atMs),
-      )
-    ];
+    return this.#cycles.findLast((cycle) => cycle.startMs <= atMs);
   }
 
   /** A reset's time by the brain's clock: the game's, moved by this snapshot's clocks' offset, within the bounds. */
   static #startOf(resetMs: number, atMs: number, gameTimeMs: number, earliestMs: number): number {
     const offset = atMs - gameTimeMs;
-    const moved = resetMs + (isNumber(offset) && Math.abs(offset) <= CLOCK_OFFSET_SANE_MS ? offset : 0);
+    const moved = resetMs + (isFiniteNumber(offset) && Math.abs(offset) <= CLOCK_OFFSET_SANE_MS ? offset : 0);
     return Math.max(earliestMs, Math.min(atMs, moved));
   }
 
   addSlow(atMs: number, gameTimeMs: number, data: SlowSnapshotData): void {
     const info = data.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
     const { lastAugReset, lastNodeReset, currentNode } = info ?? {};
-    if (!isNumber(lastAugReset) || !isNumber(lastNodeReset) || !Number.isInteger(currentNode)) return;
+    if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(lastNodeReset) || !Number.isInteger(currentNode)) return;
     const ownedSF = fieldsOf(info?.ownedSF) as Record<string, number>;
     const ownedAugs = typeof info?.ownedAugs === "object" && info.ownedAugs !== null ? info.ownedAugs : null;
     let bitNode = this.bitNodes.at(-1);
     if (bitNode?.lastNodeReset !== lastNodeReset) {
+      const startMs = BitNodeCycles.#startOf(
+        lastNodeReset,
+        atMs,
+        gameTimeMs,
+        bitNode?.lastSlowAtMs ?? Number.NEGATIVE_INFINITY,
+      );
       bitNode = {
         lastNodeReset,
         label: bitNodeLabel(currentNode as number, ownedSF),
         currentNode: currentNode as number,
-        startMs: BitNodeCycles.#startOf(
-          lastNodeReset,
-          atMs,
-          gameTimeMs,
-          bitNode?.lastSlowAtMs ?? Number.NEGATIVE_INFINITY,
-        ),
+        startMs,
+        installedBeforeWindow: startMs < this.#sinceMs && lastAugReset !== lastNodeReset,
         firstSlowAtMs: atMs,
         lastSlowAtMs: atMs,
         firstMediumAtMs: null,
@@ -325,6 +453,7 @@ export class BitNodeCycles {
         daedalusCount: null,
         daedalusRequired: null,
         daedalusJoined: null,
+        daedalusFirstFavor: null,
         redPill: null,
       };
       this.bitNodes.push(bitNode);
@@ -347,13 +476,13 @@ export class BitNodeCycles {
         firstSlowAtMs: atMs,
         lastSlowAtMs: atMs,
         clock: null,
-        chosenAtMs: this.#installChosenAtOrAfter(startMs),
+        chosenAtMs: this.#installChosenFrom(startMs),
         ownedAugs: ownedAugs as Record<string, number> | null,
         ownedSF,
         currentNode: currentNode as number,
         favorSeen: new Map(),
         lastJoined: null,
-        samples: [],
+        judgements: [],
         medium: [],
         shareSum: 0,
         shareCount: 0,
@@ -366,34 +495,49 @@ export class BitNodeCycles {
     const before = cycle.clock?.onlineMs ?? 0;
     cycle.clock = advanceOnlineClock(cycle.clock, gameTimeMs, lastAugReset).clock;
     const { chosenAtMs } = cycle;
-    const current = cycle.samples.at(-1);
+    const current = cycle.judgements.at(-1);
     if (current !== undefined && atMs <= chosenAtMs) current.onlineMs += cycle.clock.onlineMs - before;
-    if (atMs < chosenAtMs && (current === undefined || atMs - current.atMs >= HELD_BACK_JUDGED_EVERY_MS)) {
-      cycle.samples.push({ atMs, data, onlineMs: 0 });
+    if (atMs < chosenAtMs) {
+      const nothingLeft = nothingLeftAt(data);
+      if (
+        current === undefined ||
+        atMs - current.atMs >= HELD_BACK_JUDGED_EVERY_MS ||
+        nothingLeft !== current.nothingLeft
+      ) {
+        cycle.judgements.push({ atMs, data, onlineMs: 0, nothingLeft });
+      }
     }
     const state = factionReadingOf(data)?.state ?? null;
     if (state !== null) {
       for (const { name, favor } of state.joined) if (!cycle.favorSeen.has(name)) cycle.favorSeen.set(name, favor);
       cycle.lastJoined = state.joined;
     }
-    this.#slowMilestones(bitNode, atMs, data, state, ownedSF);
+    this.#slowMilestones(bitNode, cycle, atMs, data, state, ownedSF);
   }
 
-  /** The first install the brain chose at or after `atMs`, or never. */
-  #installChosenAtOrAfter(atMs: number): number {
-    return (
-      this.#events.find((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND && event.atMs >= atMs)?.atMs ??
-      Number.POSITIVE_INFINITY
-    );
+  /**
+   * The install the brain chose from `atMs` on and didn't call off before choosing again (#244 review: a cycle called
+   * off goes on), or never. Its decisions from the day before the window too.
+   */
+  #installChosenFrom(atMs: number): number {
+    let pending: StoredEvent | null = null;
+    for (const decision of this.#decisions) {
+      if (decision.atMs < atMs) continue;
+      if (decision.kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) pending = null;
+      else if (pending !== null) return pending.atMs;
+      else pending = decision;
+    }
+    return pending?.atMs ?? Number.POSITIVE_INFINITY;
   }
 
-  #seen(bitNode: BitNode, atMs: number, firstLookMs: number | null, detail?: string): Seen {
+  #milestone(bitNode: BitNode, atMs: number, firstLookMs: number | null, detail?: string): Milestone {
     const beforeWindow = atMs === firstLookMs && bitNode.startMs < this.#sinceMs;
     return { atMs, beforeWindow, ...(detail === undefined ? {} : { detail }) };
   }
 
   #slowMilestones(
     bitNode: BitNode,
+    cycle: Cycle,
     atMs: number,
     data: SlowSnapshotData,
     state: FactionState | null,
@@ -404,23 +548,27 @@ export class BitNodeCycles {
       const multipliers = augmentationBitNodeMultipliers(bitNode.currentNode, ownedSF);
       bitNode.daedalusRequired = daedalusAugmentationsRequired(bitNode.currentNode, ownedSF);
       if (bitNode.daedalusCount === null && Object.keys(ownedAugs).length >= bitNode.daedalusRequired) {
-        bitNode.daedalusCount = this.#seen(bitNode, atMs, bitNode.firstSlowAtMs);
+        bitNode.daedalusCount = this.#milestone(bitNode, atMs, bitNode.firstSlowAtMs);
       }
       for (const faction of state?.joined ?? []) {
+        if (faction.name === DAEDALUS) bitNode.daedalusFirstFavor ??= faction.favor;
         if (bitNode.donationsUnlocked.has(faction.name) || !acceptsDonations(faction.name, null)) continue;
+        // Favour changes only at an install: dated at the one that raised it, not at the join after it (#244 review).
         if (donationsUnlocked(faction.favor, multipliers)) {
-          bitNode.donationsUnlocked.set(faction.name, this.#seen(bitNode, atMs, bitNode.firstSlowAtMs));
+          bitNode.donationsUnlocked.set(faction.name, {
+            atMs: cycle.startMs,
+            beforeWindow: cycle.startMs < this.#sinceMs,
+          });
         }
       }
     } catch {}
     const redPill = Object.hasOwn(ownedAugs, THE_RED_PILL) || (state?.queuedAugmentations ?? []).includes(THE_RED_PILL);
-    if (redPill && bitNode.redPill === null) bitNode.redPill = this.#seen(bitNode, atMs, bitNode.firstSlowAtMs);
+    if (redPill && bitNode.redPill === null) bitNode.redPill = this.#milestone(bitNode, atMs, bitNode.firstSlowAtMs);
   }
 
   addMedium(atMs: number, data: MediumSnapshotData): void {
     const player = fieldsOf(data?.player);
-    const index = this.bitNodeIndexAt(atMs);
-    const bitNode = this.bitNodes[index];
+    const bitNode = this.bitNodes[this.bitNodeIndexAt(atMs)];
     if (bitNode !== undefined) {
       bitNode.firstMediumAtMs ??= atMs;
       bitNode.lastRecordMs = Math.max(bitNode.lastRecordMs, atMs);
@@ -429,10 +577,12 @@ export class BitNodeCycles {
         : [];
       const [first] = factions;
       if (bitNode.firstFaction === null && first !== undefined) {
-        bitNode.firstFaction = this.#seen(bitNode, atMs, bitNode.firstMediumAtMs, first);
+        bitNode.firstFaction = bitNode.installedBeforeWindow
+          ? { atMs, beforeWindow: true, detail: first }
+          : this.#milestone(bitNode, atMs, bitNode.firstMediumAtMs, first);
       }
       if (bitNode.daedalusJoined === null && factions.includes(DAEDALUS)) {
-        bitNode.daedalusJoined = this.#seen(bitNode, atMs, bitNode.firstMediumAtMs);
+        bitNode.daedalusJoined = this.#milestone(bitNode, atMs, bitNode.firstMediumAtMs);
       }
     }
     const cycle = this.#cycleAt(atMs);
@@ -441,9 +591,9 @@ export class BitNodeCycles {
     const factionRep = fieldsOf(player.mults).faction_rep;
     cycle.medium.push({
       atMs,
-      money: isNumber(player.money) ? player.money : null,
-      hacking: isNumber(hacking) ? hacking : null,
-      factionRep: isNumber(factionRep) ? factionRep : null,
+      money: isFiniteNumber(player.money) ? player.money : null,
+      hacking: isFiniteNumber(hacking) ? hacking : null,
+      factionRep: isFiniteNumber(factionRep) ? factionRep : null,
     });
   }
 
@@ -459,12 +609,10 @@ export class BitNodeCycles {
     );
     cycle.shareCount += 1;
     const target = fieldsOf(batcher).target;
-    if (typeof target === "string" && cycle.targets.at(-1) !== target && !cycle.targets.includes(target)) {
-      cycle.targets.push(target);
-    }
+    if (typeof target === "string" && !cycle.targets.includes(target)) cycle.targets.push(target);
   }
 
-  // --- The lines ------------------------------------------------------------------------------------------------------
+  // --- The lines -----------------------------------------------------------------------------------------------------
 
   /**
    * The BitNodes line (#244): each entered in the window, with its start, and destroyed (the next one seen) or not,
@@ -474,22 +622,30 @@ export class BitNodeCycles {
     if (this.bitNodes.length === 0) return "  BitNodes: not recorded (no slow snapshot in the window)";
     const each = this.bitNodes.map((bitNode, index) => {
       const next = this.bitNodes[index + 1];
-      const from = `from ${formatIsoTime(bitNode.startMs)}${bitNode.startMs < this.#sinceMs ? " (before the window)" : ""}`;
+      const before = bitNode.startMs < this.#sinceMs ? " (before the window)" : "";
+      const from = `from ${formatIsoTime(bitNode.startMs)}${before}`;
       if (next !== undefined) {
         return `${bitNode.label} ${from}, destroyed after ${formatDuration(next.startMs - bitNode.startMs)}`;
       }
       const endMs = Math.max(bitNode.lastRecordMs, ...this.#eventsIn(index).map((event) => event.atMs));
       const sent = this.#destroySentIn(index);
-      return (
-        `${bitNode.label} ${from}, ${sent === null ? "not destroyed" : `destroy sent at ${formatIsoTime(sent)}, the next BitNode not seen`}` +
-        `, ${formatDuration(endMs - bitNode.startMs)} by the window's last record`
-      );
+      const destroyed =
+        sent === null ? "not destroyed" : `destroy sent at ${formatIsoTime(sent)}, the next BitNode not seen`;
+      const lasted = formatDuration(endMs - bitNode.startMs);
+      return `${bitNode.label} ${from}, ${destroyed}, ${lasted} by the window's last record`;
     });
     return `  BitNodes: ${each.join("; ")}`;
   }
 
+  /** The label of the progress before the first BitNode's start (`bitNodeIndexAt`'s -1), or none known at all. */
+  labelBefore(): string {
+    const first = this.bitNodes[0];
+    return first === undefined
+      ? "BitNode not recorded"
+      : `before ${first.label}'s start (an earlier BitNode, with no slow snapshot of it in the window)`;
+  }
+
   #eventsIn(index: number): StoredEvent[] {
-    if (this.bitNodes.length === 0) return [];
     return this.#events.filter((event) => this.bitNodeIndexAt(event.atMs) === index);
   }
 
@@ -501,21 +657,30 @@ export class BitNodeCycles {
   milestoneLines(index: number): string[] {
     const bitNode = this.bitNodes[index];
     if (bitNode === undefined) return [];
-    const since = (seen: Seen | null, what = "") =>
-      seen === null
+    const since = (milestone: Milestone | null, what = "") =>
+      milestone === null
         ? "not in the window"
-        : seen.beforeWindow
+        : milestone.beforeWindow
           ? `${what}before the window`
-          : `${what}+${formatDuration(seen.atMs - bitNode.startMs)} (${formatIsoTime(seen.atMs)})`;
+          : `${what}+${formatDuration(milestone.atMs - bitNode.startMs)} (${formatIsoTime(milestone.atMs)})`;
     const lines = ["milestones (the time since the BitNode's start):"];
+    const first = bitNode.firstFaction;
+    lines.push(`  first faction joined: ${since(first, first?.detail === undefined ? "" : `${first.detail}, `)}`);
+    const unlocked = [...bitNode.donationsUnlocked].map(([faction, milestone]) => since(milestone, `${faction} `));
     lines.push(
-      `  first faction joined: ${since(bitNode.firstFaction, bitNode.firstFaction?.detail ? `${bitNode.firstFaction.detail}, ` : "")}`,
+      "  donations unlocked (at the install that raised the favour): " +
+        (unlocked.length === 0 ? "none in the window" : unlocked.join(", ")),
     );
-    const unlocked = [...bitNode.donationsUnlocked].map(([faction, seen]) => since(seen, `${faction} `));
-    lines.push(`  donations unlocked: ${unlocked.length === 0 ? "none in the window" : unlocked.join(", ")}`);
     const required = bitNode.daedalusRequired === null ? "" : ` (${bitNode.daedalusRequired} installed)`;
     lines.push(`  Daedalus's count reached${required}: ${since(bitNode.daedalusCount)}`);
-    lines.push(`  Daedalus joined: ${since(bitNode.daedalusJoined)}`);
+    // Joined in the window with favour already: joined first in a cycle before the window (#244 review).
+    const joined = bitNode.daedalusJoined;
+    const rejoined =
+      joined !== null &&
+      !joined.beforeWindow &&
+      (bitNode.daedalusFirstFavor ?? 0) > 0 &&
+      bitNode.startMs < this.#sinceMs;
+    lines.push(`  Daedalus joined: ${rejoined ? `before the window; again ${since(joined)}` : since(joined)}`);
     const bought = this.#eventsIn(index).find(
       (event) => event.kind === AUGMENTATION_BOUGHT_EVENT_KIND && fieldsOf(event.detail).augmentation === THE_RED_PILL,
     );
@@ -538,103 +703,150 @@ export class BitNodeCycles {
   }
 
   /**
-   * Section 2b (#244): each cycle, a BitNode at a time. `readings` are the brain's worked faction's reputation
-   * (`FactionWorkTimeline.readings`).
+   * Section 2b (#244): a summary line per cycle (the issue's table), then each cycle's block, a BitNode at a time.
+   * `readings` are the brain's worked faction's reputation (`FactionWorkTimeline.readings`).
    */
-  section(readings: readonly { atMs: number; faction: string; reputation: number }[]): string[] {
+  section(readings: readonly ReputationPoint[]): string[] {
     const lines = [
       "2b. Augmentation cycles (each from an install's lastAugReset to the next reset; #244)",
-      `  held back by: what more of would have raised the count the install rule waits on, judged every ` +
-        `${formatDuration(HELD_BACK_JUDGED_EVERY_MS)} of a cycle's slow snapshots until its install was chosen, by ` +
-        "time online: reputation (the money covering it), money (the reputation reached, or a donation's), " +
-        "reputation and money, count (neither: it waits on the bar), or factions (nothing left to count at the " +
-        "joined factions)",
+      "  held back by: what more of would have raised the count the install rule waits on, estimated (the cheapest " +
+        `first, not the brain's set) every ${formatDuration(HELD_BACK_JUDGED_EVERY_MS)} of a cycle's slow snapshots ` +
+        "until its install was chosen, by time online: reputation (the money covering it), money (the reputation " +
+        "reached, or a donation's), reputation and money, count (neither: it waits on the bar), factions (nothing " +
+        "left to count at the joined factions); or the brain's own state where the count isn't what it waits on: The " +
+        "Red Pill's way (held for Daedalus, The Red Pill or the destroy), count reached (a countdown, or held for " +
+        "Daedalus's count)",
     ];
     if (this.#cycles.length === 0) return [...lines, "  not recorded (no slow snapshot in the window)"];
+    const views = this.#cycles.map((cycle, index) => this.#view(cycle, index, readings));
+    const header = ["cycle", "start", "length", "ended by", "count", "held back by (most)"];
+    const rows = [
+      header,
+      ...views.map((view) => [view.label, view.start, view.length, view.endedBy, view.count, view.topAnswer]),
+    ];
+    const widths = header.map((_, column) => Math.max(...rows.map((row) => (row[column] ?? "").length)));
+    lines.push("  summary, one line a cycle:");
+    for (const row of rows)
+      lines.push(
+        `    ${row
+          .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+          .join("  ")
+          .trimEnd()}`,
+      );
     for (const [bitNodeIndex, bitNode] of this.bitNodes.entries()) {
       lines.push(`  ${bitNode.label}:`);
-      const cycles = this.#cycles.filter((cycle) => cycle.bitNode === bitNodeIndex);
-      for (const cycle of cycles) {
-        const index = this.#cycles.indexOf(cycle);
-        lines.push(...this.#cycleLines(cycle, index, cycles.indexOf(cycle) + 1, readings).map((line) => `    ${line}`));
+      for (const [index, cycle] of this.#cycles.entries()) {
+        if (cycle.bitNode === bitNodeIndex) lines.push(...(views[index]?.lines ?? []).map((line) => `    ${line}`));
       }
     }
     return lines;
   }
 
-  #cycleLines(
-    cycle: Cycle,
-    index: number,
-    number: number,
-    readings: readonly { atMs: number; faction: string; reputation: number }[],
-  ): string[] {
+  #view(cycle: Cycle, index: number, readings: readonly ReputationPoint[]): CycleView {
     const next = this.#cycles[index + 1];
     const installed = next !== undefined && next.bitNode === cycle.bitNode;
+    const destroyed = next !== undefined && !installed;
+    const number = this.#cycles.filter((each, at) => each.bitNode === cycle.bitNode && at <= index).length;
     const endMs = next?.startMs ?? Math.max(cycle.lastSlowAtMs, ...cycle.medium.map((point) => point.atMs));
     const inCycle = (atMs: number) => atMs >= cycle.startMs && (next === undefined || atMs < next.startMs);
-    const events = this.#events.filter((event) => inCycle(event.atMs));
+    const events = this.#events.filter((event) => inCycle(event.atMs)).sort((a, b) => a.atMs - b.atMs);
     // The brain's clock in its progress events carries time from before the window (#222).
-    const progressOnline = this.#events
-      .filter(
-        (event) =>
-          event.kind === AUGMENTATION_PROGRESS_EVENT_KIND && fieldsOf(event.detail).lastAugReset === cycle.lastAugReset,
-      )
+    const progressOnline = this.#progressOf(cycle)
       .map((event) => fieldsOf(event.detail).onlineMs)
-      .filter(isNumber);
+      .filter(isFiniteNumber);
     const onlineMs = Math.max(cycle.clock?.onlineMs ?? 0, ...progressOnline);
-    const from = `${formatIsoTime(cycle.startMs)}${cycle.startMs < this.#sinceMs ? " (before the window)" : ""}`;
+    const start = `${formatIsoTime(cycle.startMs)}${cycle.startMs < this.#sinceMs ? " (before the window)" : ""}`;
     const length = `${formatDuration(endMs - cycle.startMs)}${next === undefined ? " so far" : ""}`;
+    const endedBy = this.#endedBy(next, installed, events);
+    const { line: installedLine, count } = this.#installed(cycle, installed ? next : undefined, destroyed);
+    const { line: heldBack, top } = this.#heldBack(cycle);
     const lines = [
-      `cycle ${number} from ${from}, ${length} (${formatDuration(onlineMs)} online), ${this.#endedBy(cycle, next, events)}`,
-    ];
-    lines.push(`  ${this.#installedLine(cycle, installed ? next : undefined, next !== undefined && !installed)}`);
-    lines.push(`  held back by: ${this.#heldBack(cycle)}`);
-    lines.push(
+      `cycle ${number} from ${start}, ${length} (${formatDuration(onlineMs)} online), ${endedBy}`,
+      `  ${installedLine}`,
+      `  held back by: ${heldBack}`,
       `  faction work: ${this.#workLine(
         readings.filter((each) => inCycle(each.atMs)),
         events,
       )}`,
-    );
-    lines.push(`  favour: ${this.#favourLine(cycle, installed ? next : undefined, next !== undefined && !installed)}`);
-    const moneys = cycle.medium.map((point) => point.money).filter(isNumber);
+      `  favour: ${this.#favourLine(cycle, installed ? next : undefined, destroyed)}`,
+    ];
+    // The money unspent while it was judged: once the install is chosen, the set's buying spends it.
+    const chosen = Number.isFinite(cycle.chosenAtMs);
+    const moneys = cycle.medium
+      .filter((point) => !chosen || point.atMs <= cycle.chosenAtMs)
+      .map((point) => point.money)
+      .filter(isFiniteNumber);
     const share =
       cycle.shareCount === 0 ? "not recorded" : `×${(cycle.shareSum / cycle.shareCount).toFixed(2)} on average`;
     lines.push(
-      `  share bonus: ${share}; most money unspent: ${moneys.length === 0 ? "not recorded" : formatMoney(Math.max(...moneys))}`,
+      `  share bonus: ${share}; most money unspent${chosen ? " until its install was chosen" : ""}: ` +
+        (moneys.length === 0 ? "not recorded" : formatMoney(Math.max(...moneys))),
     );
-    const hacking = cycle.medium.map((point) => point.hacking).filter(isNumber);
+    const hacking = cycle.medium.map((point) => point.hacking).filter(isFiniteNumber);
+    const [firstHacking] = hacking;
     lines.push(
       `  hacking: ${
-        hacking.length === 0
+        firstHacking === undefined
           ? "not recorded"
-          : `${formatWhole(hacking[0] as number)} → ${formatWhole(hacking.at(-1) as number)}, most ${formatWhole(Math.max(...hacking))}`
+          : `${formatWhole(firstHacking)} → ${formatWhole(hacking.at(-1) ?? firstHacking)}, ` +
+            `most ${formatWhole(Math.max(...hacking))}`
       }`,
     );
-    lines.push(
-      `  the batcher's targets: ${cycle.shareCount === 0 ? "not recorded" : cycle.targets.length === 0 ? "none" : cycle.targets.join(", ")}`,
-    );
-    return lines;
+    const targets =
+      cycle.shareCount === 0 ? "not recorded" : cycle.targets.length === 0 ? "none" : cycle.targets.join(", ");
+    lines.push(`  the batcher's targets: ${targets}`);
+    const label = `${this.bitNodes[cycle.bitNode]?.label ?? "?"} ${number}`;
+    const short = endedBy.replace(/^ended by an? /, "").replace("not ended in the window", "not ended");
+    return {
+      label,
+      start: formatIsoTime(cycle.startMs),
+      length,
+      endedBy: short,
+      count,
+      heldBack,
+      topAnswer: top,
+      lines,
+    };
   }
 
-  /** "ended by an install (count reached)", "… (yours)", "ended by a destroy", or "not ended in the window". */
-  #endedBy(cycle: Cycle, next: Cycle | undefined, events: readonly StoredEvent[]): string {
+  /** The progress events of a cycle (#222), by its `lastAugReset`, in time order. */
+  #progressOf(cycle: Cycle): StoredEvent[] {
+    return this.#events
+      .filter(
+        (event) =>
+          event.kind === AUGMENTATION_PROGRESS_EVENT_KIND && fieldsOf(event.detail).lastAugReset === cycle.lastAugReset,
+      )
+      .sort((a, b) => a.atMs - b.atMs);
+  }
+
+  /**
+   * "ended by an install (count reached)": its last install chosen and not called off after (#244 review), with its
+   * reason; "… (yours)" for one from your queue; "… (none chosen in the window)"; "ended by a destroy"; or "not ended
+   * in the window". `events` are the cycle's, in time order.
+   */
+  #endedBy(next: Cycle | undefined, installed: boolean, events: readonly StoredEvent[]): string {
     if (next === undefined) return "not ended in the window";
-    if (next.bitNode !== cycle.bitNode) return "ended by a destroy";
-    const chosen = events.find((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND);
-    if (chosen !== undefined) {
+    if (!installed) return "ended by a destroy";
+    let chosen: StoredEvent | null = null;
+    for (const event of events) {
+      if (event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) chosen = event;
+      if (event.kind === AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND) chosen = null;
+    }
+    if (chosen !== null) {
       const reason = fieldsOf(chosen.detail).reason;
       return `ended by an install (${typeof reason === "string" ? reason : "reason not stored"})`;
     }
-    const sent = events.find((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND);
+    const sent = events.findLast((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND);
     if (sent !== undefined && fieldsOf(sent.detail).source === "manual") return "ended by an install (yours)";
     return "ended by an install (none chosen in the window)";
   }
 
   /**
    * What the install installed (the next cycle's `ownedAugs` gained, NeuroFlux Governor a level at a time), and
-   * Daedalus's count before → after; none at a destroy, and not yet for a cycle still going.
+   * Daedalus's count before → after: "installed: 2 (BitWire, NeuroFlux Governor); Daedalus's count 4 → 5 of 30"; none
+   * at a destroy, and not yet for a cycle still going. And the count alone, for the summary: "4 → 5", or "4".
    */
-  #installedLine(cycle: Cycle, next: Cycle | undefined, destroyed: boolean): string {
+  #installed(cycle: Cycle, next: Cycle | undefined, destroyed: boolean): { line: string; count: string } {
     const count = (owned: Record<string, number> | null) => (owned === null ? null : Object.keys(owned).length);
     let required = "";
     try {
@@ -643,70 +855,101 @@ export class BitNodeCycles {
     const before = count(cycle.ownedAugs);
     if (next === undefined || cycle.ownedAugs === null || next.ownedAugs === null) {
       const installed = destroyed ? "none, the BitNode destroyed" : next === undefined ? "not yet" : "not recorded";
-      return `installed: ${installed}; Daedalus's count ${before === null ? "not recorded" : `${before}${required}`}`;
+      const counted = before === null ? "not recorded" : String(before);
+      return {
+        line: `installed: ${installed}; Daedalus's count ${before === null ? counted : `${before}${required}`}`,
+        count: counted,
+      };
     }
     const gained: string[] = [];
     for (const [name, level] of Object.entries(next.ownedAugs)) {
-      for (let each = isNumber(cycle.ownedAugs[name]) ? cycle.ownedAugs[name] : 0; each < level; each += 1)
-        gained.push(name);
+      const had = cycle.ownedAugs[name];
+      for (let each = isFiniteNumber(had) ? had : 0; each < level; each += 1) gained.push(name);
     }
-    return (
-      `installed: ${gained.length}${gained.length === 0 ? "" : ` (${describeAugmentations(gained)})`}; ` +
-      `Daedalus's count ${before} → ${count(next.ownedAugs)}${required}`
-    );
+    const counted = `${before} → ${count(next.ownedAugs)}`;
+    return {
+      line:
+        `installed: ${gained.length}${gained.length === 0 ? "" : ` (${describeAugmentations(gained)})`}; ` +
+        `Daedalus's count ${counted}${required}`,
+      count: counted,
+    };
   }
 
-  /** The cycle's judgements, by time online: "reputation (92% of 50 min), count (8%)". */
-  #heldBack(cycle: Cycle): string {
-    const totals = new Map<HeldBack, number>();
+  /**
+   * The cycle's answers by time online: "reputation (92% of 50 min online judged), count (8%)", each judgement the
+   * brain's own state where its progress in force held the rule (The Red Pill's way) or had the count reached, else
+   * `heldBackOf` with the latest medium snapshot's money. And the top answer, for the summary: "reputation 92%".
+   */
+  #heldBack(cycle: Cycle): { line: string; top: string } {
+    const progress = this.#progressOf(cycle);
+    const totals = new Map<CycleAnswer, number>();
     let judged = 0;
     let unjudged = 0;
-    for (const sample of cycle.samples) {
-      const figures =
-        cycle.medium.findLast((point) => point.atMs <= sample.atMs && point.money !== null) ??
-        cycle.medium.find((point) => point.money !== null);
-      const held =
-        figures === undefined
-          ? null
-          : heldBackOf(sample.data, { money: figures.money as number, factionRep: figures.factionRep ?? 1 });
-      if (held === null) {
+    for (const judgement of cycle.judgements) {
+      const answer = this.#answerAt(cycle, judgement, progress);
+      if (answer === null) {
         unjudged += 1;
         continue;
       }
-      judged += sample.onlineMs;
-      totals.set(held, (totals.get(held) ?? 0) + sample.onlineMs);
+      judged += judgement.onlineMs;
+      totals.set(answer, (totals.get(answer) ?? 0) + judgement.onlineMs);
     }
-    if (cycle.samples.length === 0) return "not judged: its install was chosen before its first slow snapshot";
-    if (unjudged === cycle.samples.length) {
-      return "not judged: no faction state or money recorded with its slow snapshots";
+    const none = (line: string) => ({ line, top: "—" });
+    if (cycle.judgements.length === 0) return none("not judged: its install was chosen before its first slow snapshot");
+    if (unjudged === cycle.judgements.length) {
+      return none("not judged: no faction state or money recorded with its slow snapshots");
     }
-    if (judged === 0) return "nothing: its install was chosen at once";
-    const shares = HELD_BACK_ORDER.filter((held) => (totals.get(held) ?? 0) > 0)
-      .sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0))
-      .map((held, rank) => {
-        const percent = Math.round((100 * (totals.get(held) ?? 0)) / judged);
-        return `${held} (${percent}%${rank === 0 ? ` of ${formatDuration(judged)} online judged` : ""})`;
-      });
-    return shares.join(", ") + (unjudged > 0 ? `; ${unjudged} not judged (no faction state or money)` : "");
+    if (judged === 0) {
+      return none(
+        Number.isFinite(cycle.chosenAtMs)
+          ? "nothing: its install was chosen at once"
+          : "not judged yet: no time online between its slow snapshots (one so far, or gaps)",
+      );
+    }
+    const ranked = ANSWER_ORDER.filter((answer) => (totals.get(answer) ?? 0) > 0).sort(
+      (a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0),
+    );
+    const percent = (answer: CycleAnswer) => Math.round((100 * (totals.get(answer) ?? 0)) / judged);
+    const shares = ranked.map(
+      (answer, rank) =>
+        `${answer} (${percent(answer)}%${rank === 0 ? ` of ${formatDuration(judged)} online judged` : ""})`,
+    );
+    const [top] = ranked;
+    return {
+      line: shares.join(", ") + (unjudged > 0 ? `; ${unjudged} not judged (no faction state or money)` : ""),
+      top: top === undefined ? "—" : `${top} ${percent(top)}%`,
+    };
+  }
+
+  /** One judgement's answer (`CycleAnswer`), or null where it can't be judged. */
+  #answerAt(cycle: Cycle, judgement: Judgement, progress: readonly StoredEvent[]): CycleAnswer | null {
+    const inForce = fieldsOf(progress.findLast((event) => event.atMs <= judgement.atMs)?.detail);
+    if (typeof inForce.held === "string") return "The Red Pill's way";
+    if (isFiniteNumber(fieldsOf(inForce.countdown).endsInMs) || Object.keys(fieldsOf(inForce.countHold)).length > 0) {
+      return "count reached";
+    }
+    const figures =
+      cycle.medium.findLast((point) => point.atMs <= judgement.atMs && point.money !== null) ??
+      cycle.medium.find((point) => point.money !== null);
+    if (figures === undefined) return null;
+    return heldBackOf(judgement.data, { money: figures.money as number, factionRep: figures.factionRep ?? 1 });
   }
 
   /**
    * The brain's worked factions in the cycle (#203's readings): each one's reputation gained between readings no more
-   * than `SLOW_SNAPSHOT_GAP_MS` apart (a donation's left out, #225), and that over the time between them.
+   * than `SLOW_SNAPSHOT_GAP_MS` apart (a donation's left out, #225), and that over the time between them. One with a
+   * single reading says nothing, and is left out.
    */
-  #workLine(
-    readings: readonly { atMs: number; faction: string; reputation: number }[],
-    events: readonly StoredEvent[],
-  ): string {
-    if (readings.length === 0) return "none recorded";
+  #workLine(readings: readonly ReputationPoint[], events: readonly StoredEvent[]): string {
     const factions = new Map<string, { earned: number; ms: number }>();
-    const last = new Map<string, { atMs: number; reputation: number }>();
-    for (const { atMs, faction, reputation } of readings) {
+    const last = new Map<string, ReputationPoint>();
+    for (const reading of readings) {
+      const { atMs, faction, reputation } = reading;
+      const before = last.get(faction);
+      last.set(faction, reading);
+      if (before === undefined || atMs - before.atMs > SLOW_SNAPSHOT_GAP_MS) continue;
       const totals = factions.get(faction) ?? { earned: 0, ms: 0 };
       factions.set(faction, totals);
-      const before = last.get(faction);
-      last.set(faction, { atMs, reputation });
-      if (before === undefined || atMs - before.atMs > SLOW_SNAPSHOT_GAP_MS) continue;
       const donated = events
         .filter(
           (event) =>
@@ -717,25 +960,26 @@ export class BitNodeCycles {
         )
         .map((event) => {
           const { before: from, after: to } = fieldsOf(event.detail);
-          return isNumber(from) && isNumber(to) ? Math.max(0, to - from) : 0;
+          return isFiniteNumber(from) && isFiniteNumber(to) ? Math.max(0, to - from) : 0;
         })
         .reduce((sum, each) => sum + each, 0);
       totals.earned += Math.max(0, reputation - before.reputation - donated);
       totals.ms += atMs - before.atMs;
     }
+    if (factions.size === 0) return "none recorded";
     return [...factions]
       .map(
         ([faction, { earned, ms }]) =>
-          `${faction} +${formatWhole(earned)} reputation` +
-          (ms > 0 ? ` at ${(earned / (ms / 1000)).toFixed(2)}/s` : ""),
+          `${faction} +${formatWhole(earned)} reputation at ${(earned / (ms / 1000)).toFixed(2)}/s`,
       )
       .join("; ");
   }
 
   /**
-   * The favour at the faction nearest donations (#225): of the joined factions taking donations, the one not yet
-   * unlocked whose favour after the install is most; else one unlocked. After an install, the next cycle's favour, or
-   * core's `favorAfterInstall` where it doesn't show it; at a destroy, favour is lost.
+   * The favour at the faction nearest donations (#225): of the joined factions taking donations whose donations aren't
+   * unlocked, the one whose favour after the install is most; with all unlocked, the one with the most. After an
+   * install, the next cycle's favour as first seen there, or core's `favorAfterInstall` where it isn't ("(predicted)");
+   * at a destroy, favour is lost. "BitRunners 5 → 96; donations at 150", "Daedalus 150, donations unlocked".
    */
   #favourLine(cycle: Cycle, next: Cycle | undefined, destroyed: boolean): string {
     const joined = cycle.lastJoined?.filter((faction) => acceptsDonations(faction.name, null));
@@ -746,7 +990,7 @@ export class BitNodeCycles {
       const threshold = favorToDonate(multipliers);
       const after = (faction: JoinedFaction) => {
         const shown = next?.favorSeen.get(faction.name);
-        return isNumber(shown)
+        return isFiniteNumber(shown)
           ? { favor: shown, predicted: false }
           : { favor: favorAfterInstall(faction.favor, faction.reputation), predicted: true };
       };
