@@ -226,9 +226,10 @@ describe("renderReport for the stable watcher", () => {
     // Core's game data is regenerated from the new game (#193), and its generated headers aren't hand-edited.
     expect(text).toContain("then regenerate core's game data with `node packages/sim/scripts/generate-game-data.ts`");
     expect(text).toContain("Skip `packages/core/src/augmentation-data.ts` and `faction-data.ts`");
-    // No smoke checks (owner decision 45, #198): a live run read back with the run report, with decision 55's gate.
+    // No smoke checks (owner decision 45, #198): step 2's live run, read back with the run report, with decision 55's
+    // gate. A bump has no release review issue: its warnings are explained on the bump issue itself.
     expect(text).toContain(
-      "then a live run read back with `npm run report` ([after a run](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md#after-a-run-the-run-report)), which must PASS, or WARN with each warning explained on the review issue (owner decisions 45 and 55).",
+      "step 2), including its live run read back with `npm run report` ([after a run](https://github.com/UnderMyBed/bitburner-agent/blob/main/docs/setup.md#after-a-run-the-run-report)), which must PASS, or WARN with each warning explained on this issue (owner decisions 45 and 55).",
     );
     expect(text).not.toMatch(/smoke/i);
     expect(text).not.toContain("0005-forward-compat-dev-branch.md");
