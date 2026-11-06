@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  AUGMENTATION_NAMES,
   type FactionState,
   type FactionStateReading,
   type FastSnapshotData,
@@ -13,6 +14,7 @@ import {
   newBatcherHealth,
   type SlowSnapshotData,
   type StaticSnapshotData,
+  type WorkOutcome,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAugmentationsEnabled } from "../src/augmentations.ts";
@@ -232,7 +234,8 @@ function cleanRun({
 }
 
 const window = { environment: "E0", sinceMs: T0, untilMs: T0 + RUN_MS + 30 * SECOND } as const;
-const report = () => runReport(store, window);
+/** The report of `window`; `verbose` (#245) lists section 3's every line, which the tests of those lines read. */
+const report = (options: { verbose?: boolean } = {}) => runReport(store, window, options);
 
 describe("the sections", () => {
   test("a clean run is PASS, and each section says what happened", () => {
@@ -301,19 +304,28 @@ describe("the sections", () => {
       expect(text).toContain(line);
     }
     expect(text).toContain("hack loop target, inferred from");
-    // 3. Actions.
+    // 3. Actions, summarised (#245): the intent tried twice listed.
     for (const line of [
+      "  intents: 1, by action and outcome (--verbose lists each):\n    buyTor: 1 done\n",
       `    buyTor(Alpha Enterprises): done after 2 tries (ui); done by ${at(60 * SECOND)}`,
-      `    ${at(10 * SECOND)}  none wanted`,
       // pserv-0 was there from the first medium snapshot: not bought in the window (#194).
-      "  cloud servers bought or upgraded (from the medium snapshots):\n    none",
-      `    ${at(30 * SECOND)}  not converged (sim): busy`,
-      `    ${at(40 * SECOND)}  converged (sim)`,
+      "  cloud servers bought or upgraded (from the medium snapshots), the fleet by cycle (--verbose lists each):\n" +
+        "    none",
+      // The work: its changes counted, the one with a problem listed.
+      "  work, as it changed, by cycle: each state counted, each problem listed (--verbose lists each):\n" +
+        "    BN1.1 1: 3 changes: none wanted, not converged (sim), converged (sim)\n" +
+        `      ${at(30 * SECOND)}  not converged (sim): busy\n`,
       `    ${at(12 * MINUTE)}  Noodle Bar: Waiter → Head Waiter`,
-      `    ${at(3 * MINUTE)}  alert: "Message received from unknown sender: I know you can sense i…"`,
+      "  dialogs handled, by kind, an alert by its first words (--verbose lists each):\n" +
+        '    alert "Message received from unknown…": 1\n' +
+        "  dialogs not handled (left blocking the page; section 4's failures):\n    none\n",
     ]) {
       expect(text).toContain(line);
     }
+    // --verbose: each, quoted.
+    expect(report({ verbose: true }).text).toContain(
+      `    ${at(3 * MINUTE)}  alert: "Message received from unknown sender: I know you can sense i…"`,
+    );
     // 4. Health.
     expect(text).toContain(
       `    ${fastOffsets().length} snapshots, first ${at(10 * SECOND)}, last ${at(RUN_MS)}; before the first, 10 s ` +
@@ -334,7 +346,7 @@ describe("the sections", () => {
           ],
         }),
     });
-    const { text } = report();
+    const { text } = report({ verbose: true });
     expect(text).toContain(
       `    travel(Aevum): done after 1 try (sim); done by ${at(30 * SECOND)}\n` +
         `    travel(Aevum): not done, 2 tries (sim): no money; first seen ${at(MINUTE)}`,
@@ -410,10 +422,17 @@ describe("the sections", () => {
       "  BitNode not recorded, first snapshot → last:\n    no medium snapshot (the player and the servers) in the window",
       "\n    no slow snapshot (the BitNode, augmentations, Source-Files, purchased servers) in the window",
       "    none moved",
-      "  intents:\n    none",
+      "  intents: 0, by action and outcome (--verbose lists each):\n    none\n" +
+        "  intents not done, done with a problem, or tried again for something besides their worker still at it:\n" +
+        "    none",
       "  work, as it changed:\n    not reported",
       "  promotions:\n    none",
-      "  dialogs handled:\n    none",
+      "  dialogs handled, by kind, an alert by its first words (--verbose lists each):\n    none",
+      "    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54), by cycle " +
+        "(--verbose lists each):\n      none",
+      "    the brain's faction work, by cycle (--verbose lists each choice):\n      none",
+      "  augmentations, by cycle: the set bought, NeuroFlux Governor's levels as one count (--verbose lists each " +
+        "decision and purchase):\n    none",
       "  the ceilings now: unknown: no medium snapshot",
       "  actual: unknown: fewer than two slow snapshots in the window",
     ]) {
@@ -464,7 +483,7 @@ describe("cloud servers (#194)", () => {
 
   test("each bought or upgraded, when, its RAM and BN1's price, and the total; the hosts' RAM", () => {
     withPurchases();
-    const { text, failures } = report();
+    const { text, failures } = report({ verbose: true });
     expect(failures).toEqual([]);
     expect(text).toContain(
       "  cloud servers bought or upgraded (from the medium snapshots):\n" +
@@ -473,14 +492,26 @@ describe("cloud servers (#194)", () => {
         "    in all: 1 bought, 1 upgraded, $3,520,000",
     );
     expect(text).toContain("\n    the hack loop's hosts' RAM: 12 GB on 2 servers → 76 GB on 3 servers\n");
+    // The default (#245): the fleet, a line a cycle (no slow snapshot before the last: one cycle).
+    expect(report().text).toContain(
+      "  cloud servers bought or upgraded (from the medium snapshots), the fleet by cycle (--verbose lists each):\n" +
+        `    BN1.1 1, ${at(5 * MINUTE)} to ${at(12 * MINUTE)}: 1 server, 8 GB → 2 servers, 72 GB (1 bought, ` +
+        `1 upgraded, ` +
+        "$3,520,000)\n    in all: 1 bought, 1 upgraded, $3,520,000",
+    );
   });
 
   test("outside BN1, the price is unknown", () => {
     withPurchases(2);
-    const { text } = report();
+    const { text } = report({ verbose: true });
     expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 2`);
     expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
     expect(text).toContain("    the brain buys none in BitNode 2: cloud server prices are known only in BN1\n");
+    expect(report().text).toContain(
+      `    BN2.1 1, ${at(5 * MINUTE)} to ${at(12 * MINUTE)}: 1 server, 8 GB → 2 servers, 72 GB ` +
+        `(1 bought, 1 upgraded)\n` +
+        "    in all: 1 bought, 1 upgraded\n",
+    );
   });
 
   test("in BN1, no word of other BitNodes' prices", () => {
@@ -490,8 +521,14 @@ describe("cloud servers (#194)", () => {
 
   test("a cloud server gone from the snapshots (an install deletes them) and bought again is bought again", () => {
     withPurchases(1, { gone: true });
-    expect(report().text).toContain(
+    expect(report({ verbose: true }).text).toContain(
       `    ${at(16 * MINUTE)}  pserv-1 bought, 8 GB, $440,000\n    in all: 2 bought, 1 upgraded, $3,960,000`,
+    );
+    // The fleet from its size before the cycle's first change to after its last: pserv-0, and pserv-1 at 8 GB again.
+    expect(report().text).toContain(
+      `    BN1.1 1, ${at(5 * MINUTE)} to ${at(16 * MINUTE)}: 1 server, 8 GB → 2 servers, 16 GB (2 bought, ` +
+        `1 upgraded, ` +
+        "$3,960,000)\n",
     );
   });
 
@@ -543,10 +580,19 @@ function hackingRun({
   earning,
   relaunchAtMs = Number.POSITIVE_INFINITY,
   relaunchFall = 0,
+  runMs = RUN_MS,
+  money = () => 0,
+  factions = () => factionState(),
 }: {
   earning: (ceilings: Extract<HackingCeiling, { known: true }>) => number;
   relaunchAtMs?: number;
   relaunchFall?: number;
+  /** How long it runs, `RUN_MS` unless said. */
+  runMs?: number;
+  /** The player's money in the medium snapshots (#245), 0 unless said. */
+  money?: (offsetMs: number) => number;
+  /** The slow snapshots' faction state (#245), nothing joined unless said; null for none, an older Agent. */
+  factions?: (offsetMs: number) => FactionStateReading | null;
 }): Extract<HackingCeiling, { known: true }> {
   const servers: StaticSnapshotData = {
     servers: [
@@ -573,12 +619,15 @@ function hackingRun({
   event(0, "brainStarted", { release: "r" });
   snapshot("static", 10 * SECOND, servers);
   for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
-  for (let offsetMs = 10 * SECOND; offsetMs <= 10 * SECOND + RUN_MS; offsetMs += 10 * SECOND) {
-    snapshot("medium", offsetMs, medium);
+  for (let offsetMs = 10 * SECOND; offsetMs <= 10 * SECOND + runMs; offsetMs += 10 * SECOND) {
+    snapshot("medium", offsetMs, { ...medium, player: { ...player, money: money(offsetMs) } });
     const count =
       1e9 + ((offsetMs - 10 * SECOND) / 1000) * earning(ceiling) - (offsetMs >= relaunchAtMs ? relaunchFall : 0);
-    if ((offsetMs - 10 * SECOND) % MINUTE === 0)
-      snapshot("slow", offsetMs, { ...slowData(), moneySources: { hacking: count } });
+    if ((offsetMs - 10 * SECOND) % MINUTE === 0) {
+      // The game's time with it (#245): 2b's judgements count the time online by it.
+      const slow = { ...slowData([], {}, {}, factions(offsetMs)), moneySources: { hacking: count } };
+      snapshot("slow", offsetMs, slow, offsetMs);
+    }
   }
   return ceiling;
 }
@@ -1320,7 +1369,13 @@ describe("backdoors for the hacker factions (#195)", () => {
     });
     event(55 * SECOND, "gameDialog", { kind: "factionInvitation", text: INVITED });
     event(56 * SECOND, "gameDialog", { kind: "alert", text: "Would you like to join NiteSec? (not an invitation)" });
-    const { text, failures } = report();
+    // By default (#245), a line a server; no slow snapshot, so no cycle to time it by.
+    expect(report().text).toContain(
+      "  backdoors (the hacker factions' servers, for their invitations; --verbose lists each change):\n" +
+        "    CSEC: not backdoored at the window's start; backdoored 1 time; CyberSec's invitation 1 time\n" +
+        "    avmnite-02h: not backdoored at the window's start\n",
+    );
+    const { text, failures } = report({ verbose: true });
     expect(text).toContain(
       "  backdoors (the hacker factions' servers, for their invitations):\n" +
         `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; CyberSec's invitation at ` +
@@ -1338,6 +1393,9 @@ describe("backdoors for the hacker factions (#195)", () => {
   test("one backdoored with no invitation seen says so", () => {
     hackerRun({ csec: (offsetMs) => ({ rooted: true, backdoored: offsetMs >= MINUTE }) });
     expect(report().text).toContain(
+      "    CSEC: not backdoored at the window's start; backdoored 1 time; no invitation from CyberSec seen",
+    );
+    expect(report({ verbose: true }).text).toContain(
       `    CSEC: not backdoored at the window's start; backdoored by ${at(MINUTE)}; no invitation from CyberSec seen`,
     );
   });
@@ -1345,6 +1403,7 @@ describe("backdoors for the hacker factions (#195)", () => {
   test("one backdoored before the window: its invitation came before too", () => {
     hackerRun({ csec: () => ({ rooted: true, backdoored: true }) });
     expect(report().text).toContain("    CSEC: backdoored at the window's start\n");
+    expect(report({ verbose: true }).text).toContain("    CSEC: backdoored at the window's start\n");
   });
 
   test("overdue: rooted, at its level and not backdoored for 5 minutes or more", () => {
@@ -1410,7 +1469,10 @@ describe("backdoors for the hacker factions (#195)", () => {
       csec: (offsetMs) => ({ rooted: true, backdoored: !reset(offsetMs) }),
       intents: (offsetMs) => (offsetMs > 10 * MINUTE && offsetMs < 12 * MINUTE ? [intent(BACKDOOR_CSEC)] : []),
     });
-    const { text, failures } = report();
+    expect(report().text).toContain(
+      "    CSEC: backdoored at the window's start; backdoored 1 time; no invitation from CyberSec seen\n",
+    );
+    const { text, failures } = report({ verbose: true });
     expect(failures).toEqual([]);
     expect(text).toContain(
       `    CSEC: backdoored at the window's start; not backdoored from ${at(10 * MINUTE)} (a reset); backdoored by ` +
@@ -1467,7 +1529,7 @@ describe("backdoors for the hacker factions (#195)", () => {
   test("no medium snapshot: said so", () => {
     event(0, "brainStarted", { release: "r" });
     snapshot("fast", 10 * SECOND, fastData());
-    expect(report().text).toContain(
+    expect(report({ verbose: true }).text).toContain(
       "  backdoors (the hacker factions' servers, for their invitations):\n    no medium snapshot",
     );
   });
@@ -1525,7 +1587,12 @@ describe("factions and their work (#203)", () => {
       etaSeconds: 5_500,
     });
     event(15 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
-    const { text, failures } = report();
+    // The default (#245): the choices counted, in the cycle the slow snapshots show.
+    expect(report().text).toContain(
+      "    the brain's faction work, by cycle (--verbose lists each choice):\n" +
+        "      BN1.1 1: 2 choices: hacking for CyberSec ×2; stopped 1 (your work on the dashboard)\n",
+    );
+    const { text, failures } = report({ verbose: true });
     expect(text).toContain(
       "  factions (joins, and the brain's faction work):\n" +
         `    joined: CyberSec by ${at(30 * SECOND)}\n` +
@@ -1548,7 +1615,7 @@ describe("factions and their work (#203)", () => {
     event(0, "brainStarted", { release: "r" });
     for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
     snapshot("medium", 10 * SECOND, mediumData({ money: 1 }));
-    const { text } = report();
+    const { text } = report({ verbose: true });
     expect(text).toContain(
       "    joined: none\n    city factions' invitations passed over (not of the city group the brain chose, decision 54): none\n" +
         "    the brain's faction work, as chosen:\n      none\n    reputation gained with the brain's work on it: none",
@@ -1638,7 +1705,8 @@ describe("augmentations and the reset (#210)", () => {
       snapshot("slow", offsetMs, data);
     }
     for (const [offsetMs, kind, detail] of augmentationEvents) event(offsetMs, kind, detail);
-    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + RUN_MS });
+    // Each decision and purchase, as these tests read them: --verbose (#245).
+    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + RUN_MS }, { verbose: true });
   }
   const CHOSEN = {
     set: [{ augmentation: "BitWire", price: 10e6 }],
@@ -2035,7 +2103,8 @@ describe("donations (#225)", () => {
       snapshot("slow", offsetMs, slowData([], {}, {}, factions), 1e12 + offsetMs);
     }
     for (const [offsetMs, kind, detail] of donationEvents) event(offsetMs, kind, detail);
-    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + DONATION_RUN_MS });
+    // Each donation, as these tests read them: --verbose (#245).
+    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + DONATION_RUN_MS }, { verbose: true });
   }
   const unused = (report: { failures: string[] }) =>
     report.failures.filter((failure) => failure.startsWith("donations unused"));
@@ -2247,6 +2316,703 @@ test("formatDuration: to the second under an hour, to the minute over", () => {
   expect(formatDuration(74 * MINUTE + 59 * SECOND)).toBe("1 h 14 min");
 });
 
+describe("summaries by default, --verbose for the detail (#245)", () => {
+  const BUSY_MS = 60 * MINUTE;
+  const INSTALL_MS = 30 * MINUTE;
+  const busyWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + BUSY_MS + 30 * SECOND } as const;
+  const CLOUD_SERVERS = 20;
+  /**
+   * The default report's most lines and characters for `busyRun` (#245): its own are 195 and 13,875; --verbose's
+   * lines (909) are over 4 times the bound.
+   */
+  const BUSY_REPORT_LINES = 200;
+  const BUSY_REPORT_CHARACTERS = 14_500;
+  /**
+   * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
+   * a minute apart from 1 min, all upgraded to 32 GB at 25 min; the install at 30 min deletes them; in cycle 2, ten
+   * bought at 64 GB at 40 min.
+   */
+  function cloudRam(index: number, offsetMs: number): number | null {
+    if (offsetMs < INSTALL_MS) return offsetMs < (index + 1) * MINUTE ? null : offsetMs >= 25 * MINUTE ? 32 : 8;
+    return index < 10 && offsetMs >= 40 * MINUTE ? 64 : null;
+  }
+  /** The n-th intent, given every 10 s and done at once: a cloud server bought, one upgraded and a travel, in turn. */
+  const intentAt = (n: number) =>
+    intent([`buyServer(pserv-${n}, 8)`, `upgradeServer(pserv-${n}, 16)`, `travel(City-${n})`][n % 3] as string, {
+      done: true,
+    });
+  const choice = (faction: string) => ({
+    faction,
+    workType: "hacking",
+    augmentation: "Neurotrainer I",
+    reputation: 2,
+    reputationNeeded: 1_000,
+    reputationPerSecond: 0.5,
+    etaSeconds: 1_996,
+  });
+  /** A ui backdoor's first try, which starts it and returns (`ingame/src/workers/backdoor-standing.ts:36`). */
+  const STARTED = (hostname: string) => `installing the backdoor on ${hostname}: about 30 s left`;
+  /**
+   * The work at `offsetMs`: a new work wanted every 5 minutes, "not converged" with no problem until its first try (a
+   * fast snapshot), then converged; at 33 min, a dialog left for the owner in the way for 3 snapshots.
+   */
+  function workAt(offsetMs: number): WorkOutcome {
+    if (offsetMs % (5 * MINUTE) === 0) return { converged: false, problem: null, backend: null };
+    if (offsetMs >= 33 * MINUTE && offsetMs < 33 * MINUTE + 6 * SECOND) {
+      return { converged: false, problem: "a dialog the Agent leaves for the owner is open", backend: "ui" };
+    }
+    return { converged: true, problem: null, backend: "ui" };
+  }
+  const invitation = (offsetMs: number, phase: string, city: string, factions: string[]) =>
+    event(offsetMs, "invitationTravel", { phase, city, factions, money: 2e8, installed: 3, required: 30 });
+
+  /**
+   * An hour's busy run, an install at 30 min (run #3's report, 3,270 lines, in small): 375 intents (10 of them ui
+   * backdoors done on the try after the one that started them, one tried again for a real problem), 30 cloud servers
+   * bought and 20 upgraded, 62 augmentations bought (60 of them NeuroFlux Governor levels), 120 dialogs, 26 changes of
+   * work, 30 faction work choices, 11 invitation events, an augmentation progress a minute, and the batcher on n00dles,
+   * then joesguns. And five failures: a cloud purchase done with a problem, a dialog left blocking, a donation not
+   * shown, an install with no reset, and a hold with no invitation.
+   */
+  function busyRun() {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("static", 10 * SECOND, staticData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= BUSY_MS; offsetMs += 2 * SECOND) {
+      const intents: IntentOutcome[] = [];
+      if (offsetMs % (10 * SECOND) === 0) intents.push(intentAt(offsetMs / (10 * SECOND) - 1));
+      for (let index = 0; index < 10; index++) {
+        const startedMs = 2 * MINUTE + index * 20 * SECOND;
+        const hostname = `server-${index}`;
+        if (offsetMs === startedMs) {
+          intents.push(intent(`backdoor(${hostname})`, { problem: STARTED(hostname), backend: "ui" }));
+        }
+        if (offsetMs === startedMs + 2 * SECOND) {
+          intents.push(intent(`backdoor(${hostname})`, { done: true, tries: 2, backend: "ui" }));
+        }
+      }
+      if (offsetMs === 8 * MINUTE) {
+        intents.push(intent("backdoor(phantasy)", { problem: "couldn't connect to max-hardware", backend: "ui" }));
+      }
+      if (offsetMs === 8 * MINUTE + 2 * SECOND) {
+        intents.push(intent("backdoor(phantasy)", { done: true, tries: 2, backend: "ui" }));
+      }
+      if (offsetMs >= 5 * MINUTE && offsetMs <= 5 * MINUTE + 10 * SECOND) {
+        const done = offsetMs === 5 * MINUTE + 10 * SECOND;
+        intents.push(intent("travel(Aevum)", { done, tries: done ? 2 : 1, problem: done ? null : "no Travel button" }));
+      }
+      // Tried again with nothing reported: why isn't known, so listed.
+      if (offsetMs === 6 * MINUTE) intents.push(intent("travel(Volhaven)"));
+      if (offsetMs === 6 * MINUTE + 2 * SECOND) intents.push(intent("travel(Volhaven)", { done: true, tries: 2 }));
+      if (offsetMs === 12 * MINUTE) {
+        intents.push(intent("buyServer(pserv-x, 8)", { done: true, problem: "bought as pserv-x-0" }));
+      }
+      if (offsetMs >= 50 * MINUTE) intents.push(intent("backdoor(foodnstuff)", { tries: 2 }));
+      const blocking =
+        offsetMs >= 45 * MINUTE && offsetMs <= 45 * MINUTE + 4 * SECOND ? "A dialog nothing closed" : null;
+      const target = offsetMs < 25 * MINUTE ? "n00dles" : "joesguns";
+      snapshot(
+        "fast",
+        offsetMs,
+        fastData({
+          intents,
+          dialogs: { handled: [], blocking },
+          work: workAt(offsetMs),
+          batcher: { ...newBatcherHealth(target, "run-a", 0), state: "batching" },
+        }),
+      );
+    }
+    for (let offsetMs = 10 * SECOND; offsetMs <= BUSY_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({
+        money: 1e9 + offsetMs,
+        factions: ["CyberSec", "NiteSec"],
+        noodles: { money: offsetMs, security: 1 },
+      });
+      data.servers = data.servers.filter((server) => !server.hostname.startsWith("pserv-"));
+      for (let index = 0; index < CLOUD_SERVERS; index++) {
+        const maxRam = cloudRam(index, offsetMs);
+        if (maxRam === null) continue;
+        data.servers.push({
+          hostname: `pserv-${index}`,
+          maxRam,
+          cpuCores: 1,
+          hasAdminRights: true,
+          backdoorInstalled: false,
+          moneyAvailable: 0,
+          hackDifficulty: 1,
+        });
+      }
+      snapshot("medium", offsetMs, data);
+    }
+    const cloudNames = Array.from({ length: CLOUD_SERVERS }, (_, index) => `pserv-${index}`);
+    for (let offsetMs = 30 * SECOND; offsetMs <= BUSY_MS; offsetMs += MINUTE) {
+      const installed = offsetMs >= INSTALL_MS;
+      const reputation = (1_000 * offsetMs) / MINUTE;
+      const data = slowData(
+        cloudNames,
+        installed ? { "NeuroFlux Governor": 61, BitWire: 1, "Neurotrainer I": 1 } : { "NeuroFlux Governor": 1 },
+        {},
+        factionState({
+          joined: [
+            { name: "CyberSec", reputation, favor: 0 },
+            { name: "NiteSec", reputation, favor: 0 },
+          ],
+        }),
+      );
+      if (installed) data.resetInfo.lastAugReset = T0 + INSTALL_MS;
+      snapshot("slow", offsetMs, data, offsetMs);
+    }
+    // Cycle 1's install: chosen, two donations, BitWire, Neurotrainer I and 40 NeuroFlux Governor levels, sent.
+    event(20 * MINUTE, "augmentationInstallChosen", {
+      set: [{ augmentation: "BitWire", price: 10e6 }],
+      cost: 10e6,
+      queued: [],
+      onlineMs: 20 * MINUTE,
+      reason: "nothing left",
+    });
+    event(20 * MINUTE + 10 * SECOND, "augmentationDonated", {
+      faction: "CyberSec",
+      amount: 1e9,
+      reputation: 5_000,
+      before: 0,
+      after: 5_000,
+    });
+    event(20 * MINUTE + 20 * SECOND, "augmentationDonated", {
+      faction: "NiteSec",
+      amount: 2e9,
+      reputation: 6_000,
+      before: 0,
+      after: 6_000,
+    });
+    const bought = (offsetMs: number, augmentation: string, level: number, price: number) =>
+      event(offsetMs, "augmentationBought", { augmentation, faction: "CyberSec", level, price, queueLength: level });
+    bought(21 * MINUTE, "BitWire", 1, 10e6);
+    bought(21 * MINUTE + SECOND, "Neurotrainer I", 1, 4e6);
+    for (let level = 2; level <= 41; level++) bought(22 * MINUTE + level * SECOND, "NeuroFlux Governor", level, 1e6);
+    event(29 * MINUTE, "augmentationInstallSent", { source: "brain", queued: ["BitWire", "Neurotrainer I"] });
+    // Cycle 2's: 20 more levels, a donation not shown, and an install reported done with no reset.
+    for (let level = 42; level <= 61; level++) bought(50 * MINUTE + level * SECOND, "NeuroFlux Governor", level, 2e6);
+    event(55 * MINUTE, "augmentationDonationFailed", {
+      faction: "CyberSec",
+      amount: 3e9,
+      reputation: 9_000,
+      shown: 5_000,
+      donatedAtMs: T0 + 54 * MINUTE,
+    });
+    for (let minute = 1; minute <= 60; minute++) event(minute * MINUTE + 5 * SECOND, "augmentationProgress", {});
+    event(56 * MINUTE, "augmentationInstallNotReset", { queued: ["NeuroFlux Governor"] });
+    // Yours, near the window's end: not judged for its reset.
+    event(57 * MINUTE, "augmentationInstallSent", { source: "manual", queued: ["NeuroFlux Governor"] });
+    // The invitations first, the messages more, then 3 Source-File alerts: counted the most first, alerts by their
+    // first words.
+    for (let n = 0; n < 20; n++) {
+      event(n * 2 * MINUTE + 5 * SECOND, "gameDialog", {
+        kind: "factionInvitation",
+        text: "Would you like to join Sector-12?",
+      });
+    }
+    for (let n = 0; n < 100; n++) {
+      const text =
+        n < 97
+          ? `Message received from unknown sender: I know you can sense it. (${n})`
+          : "You received a Source-File for destroying a BitNode!";
+      event(n * 30 * SECOND + 15 * SECOND, "gameDialog", { kind: "alert", text });
+    }
+    // CyberSec first, NiteSec more: likewise.
+    for (let minute = 1; minute <= 29; minute++) {
+      event(minute * MINUTE + 1, "factionWorkChosen", choice(minute % 3 === 1 ? "CyberSec" : "NiteSec"));
+    }
+    event(31 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    event(45 * MINUTE + 1, "factionWorkChosen", choice("CyberSec"));
+    event(46 * MINUTE + 1, "factionWorkStopped", { reason: "your work on the dashboard" });
+    // Invitations (#228): cycle 1's city group, travels, holds and invitations; cycle 2's hold with none.
+    event(3 * MINUTE, "cityGroupChosen", { group: "B", factions: ["Chongqing", "New Tokyo", "Ishima"], values: [] });
+    invitation(4 * MINUTE, "travel", "Ishima", ["Tian Di Hui"]);
+    invitation(4 * MINUTE + 1, "hold", "Ishima", ["Tian Di Hui"]);
+    invitation(6 * MINUTE, "invited", "Ishima", ["Tian Di Hui"]);
+    invitation(7 * MINUTE, "travel", "Chongqing", ["Chongqing"]);
+    invitation(9 * MINUTE, "travel", "Ishima", ["Ishima"]);
+    invitation(9 * MINUTE + 1, "hold", "Ishima", ["Ishima"]);
+    invitation(10 * MINUTE, "invited", "Ishima", ["Ishima"]);
+    invitation(32 * MINUTE, "travel", "Ishima", ["Ishima"]);
+    invitation(32 * MINUTE + 1, "hold", "Ishima", ["Ishima"]);
+    invitation(37 * MINUTE + 1, "notInvited", "Ishima", ["Ishima"]);
+  }
+  const sectionOf = (text: string, from: string, to: string) => text.slice(text.indexOf(from), text.indexOf(to));
+
+  test("the default: each block summarised, within a length bound; --verbose: every line", () => {
+    busyRun();
+    const brief = runReport(store, busyWindow);
+    const verbose = runReport(store, busyWindow, { verbose: true });
+    const lines = brief.text.split("\n");
+    expect(lines.length).toBeLessThanOrEqual(BUSY_REPORT_LINES);
+    expect(brief.text.length).toBeLessThanOrEqual(BUSY_REPORT_CHARACTERS);
+    expect(verbose.text.split("\n").length).toBeGreaterThan(4 * BUSY_REPORT_LINES);
+    expect(lines[1]).toBe(
+      "(summaries: --verbose lists each intent, cloud server bought or upgraded, change of work, dialog handled, " +
+        "faction work choice, invitation travel, augmentation decision and purchase, and inferred hack target; #245)",
+    );
+    expect(verbose.text.split("\n")[1]).toBe("");
+    const actions = sectionOf(brief.text, "3. Actions", "4. Health");
+    for (const block of [
+      // Intents: counts by action and outcome, the most first; a ui backdoor's second try routine (counted); then
+      // each not done, with a problem, or tried again for something besides its worker still at it.
+      "  intents: 375, by action and outcome (--verbose lists each):\n" +
+        "    travel: 122 done\n" +
+        "    buyServer: 121 done (1 with a problem)\n" +
+        "    upgradeServer: 120 done\n" +
+        "    backdoor: 11 done (10 tried again while still at it), 1 not done\n" +
+        "  intents not done, done with a problem, or tried again for something besides their worker still at it:\n" +
+        `    travel(Aevum): done after 2 tries (sim); done by ${at(5 * MINUTE + 10 * SECOND)}\n` +
+        `    travel(Volhaven): done after 2 tries (sim); done by ${at(6 * MINUTE + 2 * SECOND)}\n` +
+        `    backdoor(phantasy): done after 2 tries (ui); done by ${at(8 * MINUTE + 2 * SECOND)}\n` +
+        `    buyServer(pserv-x, 8): done after 1 try (sim): bought as pserv-x-0; done by ${at(12 * MINUTE)}\n` +
+        `    backdoor(foodnstuff): not done, 2 tries (sim); first seen ${at(50 * MINUTE)}\n`,
+      // Cloud servers: the fleet, a line a cycle.
+      "  cloud servers bought or upgraded (from the medium snapshots), the fleet by cycle (--verbose lists each):\n" +
+        `    BN1.1 1, ${at(MINUTE)} to ${at(25 * MINUTE)}: none → 20 servers, 640 GB (20 bought, 20 upgraded, ` +
+        "$35,200,000)\n" +
+        `    BN1.1 2, at ${at(40 * MINUTE)}: none → 10 servers, 640 GB (10 bought, 0 upgraded, $35,200,000)\n` +
+        "    in all: 30 bought, 20 upgraded, $70,400,000\n",
+      // The work: its changes counted a cycle, each with a problem listed.
+      "  work, as it changed, by cycle: each state counted, each problem listed (--verbose lists each):\n" +
+        "    BN1.1 1: 11 changes: converged (ui) ×6, not converged ×5\n" +
+        "    BN1.1 2: 15 changes: not converged ×7, converged (ui) ×7, not converged (ui)\n" +
+        `      ${at(33 * MINUTE)}  not converged (ui): a dialog the Agent leaves for the owner is open\n`,
+      // Dialogs: counts by kind, an alert by its first words, and any left blocking.
+      "  dialogs handled, by kind, an alert by its first words (--verbose lists each):\n" +
+        '    alert "Message received from unknown…": 97\n' +
+        "    factionInvitation: 20\n" +
+        '    alert "You received a Source-File…": 3\n' +
+        "  dialogs not handled (left blocking the page; section 4's failures):\n" +
+        `    from ${at(45 * MINUTE)} to ${at(45 * MINUTE + 4 * SECOND)}: "A dialog nothing closed"\n`,
+      // Faction work: the choices counted, a line a cycle.
+      "    the brain's faction work, by cycle (--verbose lists each choice):\n" +
+        "      BN1.1 1: 29 choices: hacking for NiteSec ×19, hacking for CyberSec ×10\n" +
+        "      BN1.1 2: 1 choice: hacking for CyberSec; stopped 2 (your work on the dashboard ×2)\n",
+      // Invitations: a line a cycle; a hold with no invitation listed.
+      "    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54), by cycle " +
+        "(--verbose lists each):\n" +
+        "      BN1.1 1: city group B; 3 travels (Ishima ×2, Chongqing); 2 holds; invited: Tian Di Hui, Ishima\n" +
+        "      BN1.1 2: 1 travel (Ishima); 1 hold; invited: none\n" +
+        `        ${at(37 * MINUTE + 1)}  NOT INVITED 5 min into the hold in Ishima: Ishima (3 of 30 installed)\n`,
+      // Augmentations: the set bought a cycle, NeuroFlux Governor's levels as one count, donations by faction; a
+      // donation not shown, always.
+      "  augmentations, by cycle: the set bought, NeuroFlux Governor's levels as one count (--verbose lists each " +
+        "decision and purchase):\n" +
+        "    BN1.1 1: bought 42 for $54,000,000: BitWire, Neurotrainer I, NeuroFlux Governor ×40 (levels 2–41); 1 " +
+        "install chosen (nothing left); 2 donations: $1,000,000,000 to CyberSec, $2,000,000,000 to NiteSec; install " +
+        "sent (the brain's)\n" +
+        "    BN1.1 2: bought 20 for $40,000,000: NeuroFlux Governor ×20 (levels 42–61); install sent (yours)\n" +
+        `      ${at(55 * MINUTE)}  donation not shown: $3,000,000,000 to CyberSec (for 9,000 reputation), the ` +
+        "faction state showing 5,000\n" +
+        `      ${at(56 * MINUTE)}  install reported done but the game didn't reset (queue: NeuroFlux Governor)\n`,
+    ]) {
+      expect(actions).toContain(block);
+    }
+    expect(actions).not.toContain("progress: ");
+    expect(actions).not.toContain("(7)");
+    // The hack loop's target: the batcher's own, from its health, not inferred; the same target is another stretch
+    // after the install.
+    const progress = sectionOf(brief.text, "2. Progress", "2b. Augmentation cycles");
+    expect(progress).toContain(
+      "  the batcher's targets, from its health in the fast snapshots (--verbose adds the hack loop's target " +
+        "inferred from the servers):\n" +
+        `    n00dles: ${at(10 * SECOND)} to ${at(25 * MINUTE - 2 * SECOND)}\n` +
+        `    joesguns: ${at(25 * MINUTE)} to ${at(INSTALL_MS - 2 * SECOND)}\n` +
+        `    joesguns: ${at(INSTALL_MS)} to ${at(BUSY_MS)}\n`,
+    );
+    expect(progress).not.toContain("hack loop target, inferred");
+
+    // --verbose: each line, as before.
+    for (const line of [
+      "  intents:\n",
+      `    buyServer(pserv-0, 8): done after 1 try (sim); done by ${at(10 * SECOND)}\n`,
+      `    backdoor(server-0): done after 2 tries (ui); done by ${at(2 * MINUTE + 2 * SECOND)}\n`,
+      `    ${at(MINUTE)}  pserv-0 bought, 8 GB, $440,000\n`,
+      `    ${at(25 * MINUTE)}  pserv-19 upgraded, 8 GB → 32 GB, $1,320,000\n`,
+      `  work, as it changed:\n    ${at(10 * SECOND)}  converged (ui)\n    ${at(5 * MINUTE)}  not converged\n`,
+      `    ${at(22 * MINUTE + 41 * SECOND)}  bought NeuroFlux Governor (level 41) from CyberSec for $1,000,000 ` +
+        "(queue 41)\n",
+      `    ${at(MINUTE + 5 * SECOND)}  progress: the counts not stored\n`,
+      `    ${at(15 * SECOND)}  alert: "Message received from unknown sender: I know you can sense i…"\n`,
+      `      ${at(MINUTE + 1)}  hacking for CyberSec, for Neurotrainer I (reputation 2 of 1,000, 0.50/s: ` +
+        "about 33 min)\n",
+      `      ${at(4 * MINUTE)}  travel to Ishima for Tian Di Hui's invitation (3 of 30 installed)\n`,
+      "  hack loop target, inferred from the game's servers",
+      `  the batcher's targets, from its health in the fast snapshots:\n    n00dles: ${at(10 * SECOND)} to `,
+    ]) {
+      expect(verbose.text).toContain(line);
+    }
+  });
+
+  test("the verdict, and every failure, warning and check line, are the same with --verbose or without", () => {
+    busyRun();
+    const brief = runReport(store, busyWindow);
+    const verbose = runReport(store, busyWindow, { verbose: true });
+    expect(brief.failures.length).toBeGreaterThanOrEqual(5);
+    expect(verbose.failures).toEqual(brief.failures);
+    expect(verbose.warnings).toEqual(brief.warnings);
+    const fromVerdict = (text: string) => text.slice(text.indexOf("\nVerdict: "));
+    expect(fromVerdict(brief.text)).toMatch(/^\nVerdict: FAIL\n/);
+    expect(fromVerdict(verbose.text)).toBe(fromVerdict(brief.text));
+    // Sections 4 to 6, the checks, whole.
+    const checks = (text: string) => text.slice(text.indexOf("\n4. Health"), text.indexOf("\nVerdict: "));
+    expect(checks(brief.text)).toContain("\n5. Hacking");
+    expect(checks(verbose.text)).toBe(checks(brief.text));
+    for (const failure of brief.failures) {
+      expect(checks(brief.text)).toContain(failure);
+    }
+  });
+
+  describe("a run of many cycles: each block a line a cycle, however busy each cycle is", () => {
+    const CYCLE_MS = 10 * MINUTE;
+    /**
+     * `cycles` cycles of 10 minutes, a destroy before the sixth and the eleventh (BN1.2, BN1.3), each as busy as
+     * `busyness` says: that many ui backdoors (routine), cloud server purchases, changes of work, alerts, faction work
+     * choices, NeuroFlux Governor levels and invitation travels. One change of work a cycle has a problem. And what
+     * comes again each reset (#245's second round, run #3's longest lines): CSEC backdoored 2 min after each cycle's
+     * start and 10 s later each cycle, the factions joined growing a minute at a time from 2, 3 more augmentations
+     * installed at each install, and 25 cloud servers.
+     */
+    function cyclesRun(cycles: number, busyness: number) {
+      const startOf = (cycle: number) => cycle * CYCLE_MS;
+      const cycleAt = (offsetMs: number) => Math.floor(offsetMs / CYCLE_MS);
+      const bitNodeStart = (cycle: number) => (cycle < 5 ? 0 : cycle < 10 ? 5 : 10);
+      const FACTIONS = ["CyberSec", "NiteSec", "The Black Hand", "BitRunners", "Tian Di Hui", "Sector-12"];
+      const factionsOf = (inCycle: number) =>
+        [...FACTIONS, "Aevum", "Netburners", "Daedalus", "Chongqing", "Ishima"].slice(
+          0,
+          2 + Math.floor(inCycle / MINUTE),
+        );
+      const cloudNames = Array.from({ length: 25 }, (_, index) => "pserv-" + index);
+      const untilMs = startOf(cycles);
+      event(0, "brainStarted", { release: "r" });
+      snapshot("static", 10 * SECOND, staticData());
+      // Each cycle's `busyness` things a step apart, on the fast snapshots' 2 s.
+      const step = Math.floor((CYCLE_MS - 20 * SECOND) / busyness / 2_000) * 2_000;
+      for (let offsetMs = 10 * SECOND; offsetMs < untilMs; offsetMs += 2 * SECOND) {
+        const cycle = cycleAt(offsetMs);
+        const inCycle = offsetMs - startOf(cycle);
+        const n = Math.floor(inCycle / step);
+        const intents: IntentOutcome[] = [];
+        if (inCycle % step === 0 && n < busyness) {
+          intents.push(intent(`backdoor(s-${cycle}-${n})`, { problem: STARTED(`s-${cycle}-${n}`), backend: "ui" }));
+          intents.push(intent(`buyServer(p-${cycle}-${n}, 8)`, { done: true }));
+        }
+        if (inCycle % step === 2 * SECOND && n < busyness) {
+          intents.push(intent(`backdoor(s-${cycle}-${n})`, { done: true, tries: 2, backend: "ui" }));
+        }
+        const work: WorkOutcome =
+          inCycle % step === 0
+            ? { converged: false, problem: null, backend: null }
+            : inCycle === 4 * SECOND
+              ? { converged: false, problem: "a dialog the Agent leaves for the owner is open", backend: "ui" }
+              : { converged: true, problem: null, backend: "ui" };
+        const target = cycle % 2 === 0 ? "n00dles" : "joesguns";
+        snapshot(
+          "fast",
+          offsetMs,
+          fastData({ intents, work, batcher: { ...newBatcherHealth(target, "run-a", 0), state: "batching" } }),
+        );
+      }
+      for (let offsetMs = 10 * SECOND; offsetMs < untilMs; offsetMs += 10 * SECOND) {
+        const cycle = cycleAt(offsetMs);
+        const inCycle = offsetMs - startOf(cycle);
+        const data = mediumData({
+          money: 1e9 + offsetMs,
+          noodles: { money: offsetMs, security: 1 },
+          factions: factionsOf(inCycle),
+        });
+        data.servers.push({
+          hostname: "CSEC",
+          maxRam: 8,
+          cpuCores: 1,
+          hasAdminRights: true,
+          backdoorInstalled: inCycle >= (cycle === 0 ? 3 * MINUTE : 2 * MINUTE + cycle * 10 * SECOND),
+          moneyAvailable: 0,
+          hackDifficulty: 1,
+        });
+        snapshot("medium", offsetMs, data);
+      }
+      for (let offsetMs = 30 * SECOND; offsetMs <= untilMs; offsetMs += MINUTE) {
+        const cycle = cycleAt(offsetMs);
+        const first = bitNodeStart(cycle);
+        const owned = Object.fromEntries(
+          AUGMENTATION_NAMES.slice(0, 5 + 3 * (cycle - first)).map((name) => [name, 1] as [string, number]),
+        );
+        const ownedSF: Record<string, number> = first === 0 ? {} : { 1: first / 5 };
+        const data = slowData(cloudNames, owned, ownedSF, factionState({ joined: [] }));
+        data.resetInfo.lastNodeReset = T0 + startOf(first);
+        data.resetInfo.lastAugReset = T0 + startOf(cycle);
+        snapshot("slow", offsetMs, data, offsetMs);
+      }
+      for (let cycle = 0; cycle < cycles; cycle++) {
+        const at0 = startOf(cycle) + 30 * SECOND;
+        event(at0, "cityGroupChosen", { group: "B", factions: [], values: [] });
+        for (let n = 0; n < busyness; n++) {
+          const atMs = at0 + 1 + n * 1_000;
+          event(atMs, "gameDialog", { kind: "alert", text: `Message received from unknown sender: ${n}` });
+          event(atMs, "factionWorkChosen", choice(n % 2 === 0 ? "CyberSec" : "NiteSec"));
+          event(atMs, "augmentationBought", {
+            augmentation: "NeuroFlux Governor",
+            faction: "CyberSec",
+            level: cycle * busyness + n + 2,
+            price: 1e6,
+            queueLength: n + 1,
+          });
+          invitation(atMs, "travel", n % 2 === 0 ? "Ishima" : "Chongqing", ["Ishima"]);
+        }
+      }
+      return { environment: "E0", sinceMs: T0, untilMs: T0 + untilMs + 30 * SECOND } as const;
+    }
+    /** A block of section 3 from its heading to the next line at its indentation or less. */
+    function blockOf(text: string, heading: string): string[] {
+      const lines = text.split("\n");
+      const start = lines.findIndex((line) => line.startsWith(heading));
+      if (start === -1) throw new Error(`no block ${heading}`);
+      const indentation = heading.length - heading.trimStart().length;
+      const end = lines.findIndex(
+        (line, index) => index > start && line.length - line.trimStart().length <= indentation,
+      );
+      return lines.slice(start, end);
+    }
+    /** Each summarised block's most lines, for `cycles` cycles: a line a cycle, and the few kept whole. */
+    const BLOCKS: [heading: string, most: (cycles: number) => number][] = [
+      ["  intents: ", () => 6],
+      ["  cloud servers bought or upgraded", (cycles) => cycles + 2],
+      ["  work, as it changed", (cycles) => 2 * cycles + 1],
+      ["  dialogs handled", () => 3],
+      ["    the brain's faction work", (cycles) => cycles + 1],
+      ["    invitations travelled for", (cycles) => cycles + 1],
+      ["  augmentations, by cycle", (cycles) => cycles + 1],
+      ["  the batcher's targets", (cycles) => cycles + 1],
+    ];
+
+    test.each([
+      [6, 10],
+      [6, 40],
+      [14, 10],
+    ])(
+      "%i cycles, %i of each a cycle: each block within its bound, the report within its characters",
+      (cycles, busy) => {
+        const runWindow = cyclesRun(cycles, busy);
+        const brief = runReport(store, runWindow);
+        for (const [heading, most] of BLOCKS) {
+          expect(blockOf(brief.text, heading).length, heading).toBeLessThanOrEqual(most(cycles));
+        }
+        // About 1,350 characters a cycle (2b's block is most of it), and 8,600 besides: 16,721 for 6 cycles at 10 of
+        // each, 16,756 at 40, and 27,606 for 14 over 3 BitNodes. Not how busy each cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_000 + 1_400 * cycles);
+        // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
+        // and each BitNode's lists.
+        const lines = brief.text.split("\n");
+        // The first cycle's 3 min, then 2 min 10 s on, 10 s more each cycle.
+        const lastMs = 2 * MINUTE + (cycles - 1) * 10 * SECOND;
+        const most = Math.max(3 * MINUTE, lastMs);
+        const mostIn = lastMs <= 3 * MINUTE ? "BN1.1 1" : cycles <= 10 ? `BN1.2 ${cycles - 5}` : `BN1.3 ${cycles - 10}`;
+        expect(lines).toContain(
+          `    CSEC: not backdoored at the window's start; backdoored in ${cycles} cycles, 2 min 10 s to ` +
+            `${formatDuration(most)} after the cycle's start (the most in ${mostIn}); no invitation from CyberSec seen`,
+        );
+        expect(lines).toContain(
+          "    joined: 11 factions, each first in: at the window's start: 2, BN1.1 1: 9 (--verbose lists each " +
+            "with when)",
+        );
+        expect(lines).toContain("    purchased servers: 25 (unchanged)");
+        expect(lines).toContain(
+          "    factions: 2 → 11 (+ The Black Hand, BitRunners, Tian Di Hui, Sector-12, Aevum, Netburners, and 3 more)",
+        );
+        expect(lines.filter((line) => line.startsWith("    installed augmentations: 5 → 17 (+ "))).toHaveLength(
+          cycles >= 10 ? 2 : 1,
+        );
+        const progress = brief.text.slice(brief.text.indexOf("2. Progress"), brief.text.indexOf("2b. "));
+        // The BitNodes line aside: one entry a BitNode.
+        for (const line of progress.split("\n").filter((each) => !each.startsWith("  BitNodes: "))) {
+          expect(line.length, line).toBeLessThanOrEqual(200);
+        }
+        expect(blockOf(brief.text, "  work, as it changed")).toContain(
+          `      ${at(CYCLE_MS + 4 * SECOND)}  not converged (ui): a dialog the Agent leaves for the owner is open`,
+        );
+        expect(blockOf(brief.text, "    invitations travelled for")).toContain(
+          `      BN1.2 1: city group B; ${busy} travels (Ishima ×${busy / 2}, Chongqing ×${busy / 2}); ` +
+            "0 holds; invited: none",
+        );
+        expect(runReport(store, runWindow, { verbose: true }).failures).toEqual(brief.failures);
+      },
+    );
+  });
+
+  test("the hack loop's target inferred leaves out a reset, when every server's money moves (#245)", () => {
+    // n00dles worked throughout; an install at 10 min puts foodnstuff's money back too.
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({ money: offsetMs, noodles: { money: offsetMs, security: 1 } });
+      if (offsetMs >= 10 * MINUTE) {
+        (data.servers.find((server) => server.hostname === "foodnstuff") as { moneyAvailable: number }).moneyAvailable =
+          1_000;
+      }
+      snapshot("medium", offsetMs, data);
+    }
+    for (let offsetMs = 30 * SECOND; offsetMs <= RUN_MS; offsetMs += MINUTE) {
+      const data = slowData();
+      if (offsetMs >= 10 * MINUTE) data.resetInfo.lastAugReset = T0 + 10 * MINUTE - 5 * SECOND;
+      snapshot("slow", offsetMs, data);
+    }
+    const { text } = report();
+    expect(text).toContain(
+      "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
+        `(the owner's own scripts would show too; not across an install or a destroy):\n    ` +
+        `n00dles: ${at(20 * SECOND)} to ${at(RUN_MS)}\n\n2b. `,
+    );
+    expect(text).not.toContain("foodnstuff + n00dles");
+  });
+
+  test("…and on the game's own clock, where 2b's estimate of the reset is late (a clock offset over a day)", () => {
+    // The game's clock 2 days behind the brain's: 2b takes the reset at the next slow snapshot (10:30, after the
+    // medium snapshot at 10:00 that shows it); the snapshots' game times put it between 9:50 and 10:00.
+    const gameOf = (offsetMs: number) => T0 + offsetMs - 2 * 24 * 60 * MINUTE;
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData(), gameOf(offsetMs));
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const data = mediumData({ money: offsetMs, noodles: { money: offsetMs, security: 1 } });
+      if (offsetMs >= 10 * MINUTE) {
+        (data.servers.find((server) => server.hostname === "foodnstuff") as { moneyAvailable: number }).moneyAvailable =
+          1_000;
+      }
+      snapshot("medium", offsetMs, data, gameOf(offsetMs));
+    }
+    for (let offsetMs = 30 * SECOND; offsetMs <= RUN_MS; offsetMs += MINUTE) {
+      const data = slowData();
+      data.resetInfo.lastNodeReset = gameOf(-60 * MINUTE);
+      data.resetInfo.lastAugReset = offsetMs >= 10 * MINUTE ? gameOf(10 * MINUTE - 5 * SECOND) : gameOf(-60 * MINUTE);
+      snapshot("slow", offsetMs, data, gameOf(offsetMs));
+    }
+    const { text } = report();
+    expect(text).toContain(`\n    n00dles: ${at(20 * SECOND)} to ${at(RUN_MS)}\n\n2b. `);
+    expect(text).not.toContain("foodnstuff + n00dles");
+  });
+
+  test("the batcher's target: the same target after a gap in its looks is another stretch", () => {
+    // n00dles throughout, but no batcher health from 5 to 6 min (the batcher stopped).
+    event(0, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) {
+      const stopped = offsetMs > 5 * MINUTE && offsetMs < 6 * MINUTE;
+      snapshot("fast", offsetMs, stopped ? fastData() : fastData({ batcher: newBatcherHealth("n00dles", "a", 0) }));
+    }
+    snapshot("medium", 10 * SECOND, mediumData({ money: 1 }));
+    expect(report().text).toContain(
+      `    n00dles: ${at(10 * SECOND)} to ${at(5 * MINUTE)}\n    n00dles: ${at(6 * MINUTE)} to ${at(RUN_MS)}\n`,
+    );
+  });
+
+  test("5. Hacking: each hour says what held the cycle back, from 2b's judgements in it, and money unspent", () => {
+    // Hour 1 (and the judgement at hour 2's start): reputation short at CyberSec, money plenty; then everything
+    // reached and affordable (the count); hour 3: everything reached, no money; hour 4: the count again, judged until
+    // the install is chosen at 3 h 35 min, the money unspent until then, not the $3e15 after it.
+    const hourOf = (offsetMs: number) => Math.floor((offsetMs - 10 * SECOND) / (60 * MINUTE));
+    const chosenAtMs = 215 * MINUTE + 10 * SECOND;
+    hackingRun({
+      earning: (ceilings) => ceilings.batcherIncomePerSecond / 1_000,
+      runMs: 240 * MINUTE,
+      money: (offsetMs) => (hourOf(offsetMs) === 2 ? 0 : offsetMs > chosenAtMs ? 3e15 : 1e15),
+      factions: (offsetMs) =>
+        factionState({
+          joined: [{ name: "CyberSec", reputation: offsetMs <= 60 * MINUTE + 10 * SECOND ? 0 : 1e9, favor: 0 }],
+        }),
+    });
+    event(chosenAtMs, "augmentationInstallChosen", { set: [], cost: 0, queued: [], reason: "count reached" });
+    const { text } = runReport(store, { ...window, untilMs: T0 + 241 * MINUTE });
+    const section = sectionOf(text, "5. Hacking", "6. The batcher");
+    const hours = section.slice(section.indexOf("  each hour:\n")).split("\n").slice(1, 9);
+    const hourLine = expect.stringMatching(/^ {4}\$[\d,]+\/s: 0\.1% of the batcher ceiling /);
+    expect(hours).toEqual([
+      hourLine,
+      "      held back by reputation, not income (100% of 1 h 0 min online judged in the hour); most money unspent " +
+        "$1,000,000,000,000,000",
+      hourLine,
+      "      held back by count, not income (92% of 1 h 0 min online judged in the hour; reputation 8%); most money " +
+        "unspent $1,000,000,000,000,000",
+      hourLine,
+      "      held back by money: income (100% of 1 h 0 min online judged in the hour)",
+      hourLine,
+      "      held back by count, not income (100% of 35 min online judged in the hour); most money unspent " +
+        "$1,000,000,000,000,000",
+    ]);
+  });
+
+  test("5. Hacking: an hour with nothing judged in it says so (an older store, no faction state)", () => {
+    hackingRun({
+      earning: (ceilings) => ceilings.batcherIncomePerSecond / 2,
+      runMs: 130 * MINUTE,
+      factions: () => null,
+    });
+    const { text } = runReport(store, { ...window, untilMs: T0 + 131 * MINUTE });
+    const section = sectionOf(text, "5. Hacking", "6. The batcher");
+    expect(section.match(/\n {6}held back by: not judged in the hour \(no faction state or money\)\n/g)).toHaveLength(
+      3,
+    );
+  });
+
+  test("5. Hacking: an hour or less, the window's line says what held the cycle back", () => {
+    hackingRun({ earning: (ceilings) => ceilings.batcherIncomePerSecond / 2 });
+    const { text } = report();
+    const windowLine = text.split("\n").findIndex((line) => line.startsWith("  over the window: "));
+    expect(text.split("\n")[windowLine + 1]).toBe(
+      "    held back by factions (100% of 20 min online judged in the hour); most money unspent $0",
+    );
+    expect(text).not.toContain("  each hour:");
+  });
+});
+
+test("inferHackTargets: a reset between two medium snapshots isn't a move (#245: every server's money moves)", () => {
+  const medium = (atMs: number, noodles: number, zer0: number) => ({
+    atMs,
+    gameTimeMs: atMs + 1_000,
+    data: {
+      player: {},
+      hasTorRouter: false,
+      programs: [],
+      servers: [
+        {
+          hostname: "n00dles",
+          maxRam: 4,
+          cpuCores: 1,
+          hasAdminRights: true,
+          moneyAvailable: noodles,
+          hackDifficulty: 1,
+        },
+        { hostname: "zer0", maxRam: 8, cpuCores: 1, hasAdminRights: true, moneyAvailable: zer0, hackDifficulty: 1 },
+      ],
+    },
+  });
+  const snapshots = [medium(0, 1, 5), medium(10, 2, 5), medium(20, 3, 9), medium(30, 4, 9)];
+  const brain = (...brainMs: number[]) => ({ brainMs, gameMs: [] });
+  // The reset at 15: the move from 10 to 20 is the reset's, not the hack loop's.
+  expect(inferHackTargets(snapshots, new Set(), brain(15))).toEqual([{ servers: ["n00dles"], fromMs: 10, toMs: 30 }]);
+  // At 20 itself it's between them too; at 10, between the two before, not the move.
+  expect(inferHackTargets(snapshots, new Set(), brain(20))).toEqual([{ servers: ["n00dles"], fromMs: 10, toMs: 30 }]);
+  expect(inferHackTargets(snapshots, new Set(), brain(10))).toEqual([
+    { servers: ["n00dles", "zer0"], fromMs: 20, toMs: 20 },
+    { servers: ["n00dles"], fromMs: 30, toMs: 30 },
+  ]);
+  // On the game's clock (each snapshot's game time a second after its receipt): 1,020 is the third's, so between the
+  // second and the third; 1,021 is between the third and the fourth.
+  expect(inferHackTargets(snapshots, new Set(), { brainMs: [], gameMs: [1_020] })).toEqual([
+    { servers: ["n00dles"], fromMs: 10, toMs: 30 },
+  ]);
+  expect(inferHackTargets(snapshots, new Set(), { brainMs: [], gameMs: [1_021] })).toEqual([
+    { servers: ["n00dles"], fromMs: 10, toMs: 10 },
+    { servers: ["n00dles", "zer0"], fromMs: 20, toMs: 20 },
+  ]);
+  // None: every move counts.
+  expect(inferHackTargets(snapshots, new Set())).toEqual([
+    { servers: ["n00dles"], fromMs: 10, toMs: 10 },
+    { servers: ["n00dles", "zer0"], fromMs: 20, toMs: 20 },
+    { servers: ["n00dles"], fromMs: 30, toMs: 30 },
+  ]);
+});
+
 describe("the command", () => {
   function runCli(args: string[], dataDirectory = directory): { exitCode: number; output: string } {
     flush();
@@ -2295,6 +3061,18 @@ describe("the command", () => {
     expect(runCli(["--since", at(0), ...until, "--environment", "E9"]).exitCode).toBe(2);
     // Another environment's window is empty here.
     expect(runCli(["--since", at(0), ...until, "--environment", "E2"]).exitCode).toBe(2);
+  });
+
+  test("--verbose lists each line; without it, the summaries (#245)", () => {
+    cleanRun({ fast: () => fastData({ intents: [intent("travel(Aevum)", { done: true })] }) });
+    const brief = runCli(["--since", at(0), ...until]);
+    expect(brief.output).toContain("  intents: 1, by action and outcome (--verbose lists each):\n    travel: 1 done\n");
+    expect(brief.output).not.toContain("    travel(Aevum): done after 1 try");
+    const verbose = runCli(["--since", at(0), ...until, "--verbose"]);
+    expect(verbose.output).toContain(
+      `  intents:\n    travel(Aevum): done after 1 try (sim); done by ${at(10 * SECOND)}\n`,
+    );
+    expect(verbose.exitCode).toBe(brief.exitCode);
   });
 
   test("without --since, the window starts at the newest brain start", () => {

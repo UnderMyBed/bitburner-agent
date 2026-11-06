@@ -95,11 +95,14 @@ test.each(SEEDS)(
       augmentation: "Neurotrainer I",
       reputationNeeded: 1_000,
     });
-    const { text, failures } = runReport(fresh.data.store, {
-      environment: "E1",
-      sinceMs: EPOCH_MS,
-      untilMs: game.clock.now(),
-    });
+    // By default (#245), the choices counted in the cycle; the join's intent and each choice, as lines with --verbose.
+    const reportWindow = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
+    const summary = runReport(fresh.data.store, reportWindow).text.split("\n");
+    expect(summary).toContainEqual(
+      expect.stringMatching(/^ {6}BN1\.1 1: \d+ choices?: hacking for CyberSec( ×\d+)?(, |;|$)/),
+    );
+    expect(summary).toContainEqual(expect.stringMatching(/^ {4}joinFaction: \d+ done/));
+    const { text, failures } = runReport(fresh.data.store, reportWindow, { verbose: true });
     const lines = text.split("\n");
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}joinFaction\(CyberSec\): done after 1 try \(sim\); done by /),

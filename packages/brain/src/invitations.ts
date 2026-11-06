@@ -55,6 +55,7 @@ import {
   TIAN_DI_HUI_MONEY,
   TRAVEL_COST,
 } from "@bitburner-agent/core";
+import { describeCounts, plural } from "./gap-report.ts";
 
 /** Where the brain goes for Tian Di Hui's invitation: a Tian Di Hui city with a tech vendor (Omega Software). */
 export const TIAN_DI_HUI_TRAVEL_CITY = "Ishima";
@@ -797,23 +798,66 @@ function describeInvitationEvent(kind: string, detail: unknown): string {
   return `${String(phase)} (not a phase this brain stores)`;
 }
 
-/** The factions section's lines (#228): each cycle's city group, the travels, the holds and the invitations. */
+/**
+ * The factions section's lines (#228): each cycle's city group, the travels, the holds and the invitations. With
+ * `cycleOf` (the run report's default, #245), a line a cycle (`cycleOf` names it, as 2b does): the city group chosen,
+ * the travels by city, the holds and the factions that invited; a hold with no invitation, or a phase this brain
+ * doesn't store, is listed under it all the same. Without, each event.
+ */
 export function invitationLines(
   events: readonly Stored[],
   formatTime: (ms: number) => string,
   untilMs: number,
   brainStartsMs: readonly number[] = [],
+  cycleOf?: (atMs: number) => string,
 ): string[] {
-  const lines = ["    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54):"];
   const own = events.filter((event) =>
     [INVITATION_TRAVEL_EVENT_KIND, CITY_GROUP_CHOSEN_EVENT_KIND].includes(event.kind),
   );
-  for (const { atMs, kind, detail } of own) {
-    lines.push(`      ${formatTime(atMs)}  ${describeInvitationEvent(kind, detail)}`);
+  const lines =
+    cycleOf === undefined
+      ? ["    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54):"]
+      : [
+          "    invitations travelled for (Tian Di Hui, and the city group the brain chose, decision 54), by cycle " +
+            "(--verbose lists each):",
+        ];
+  if (cycleOf === undefined) {
+    for (const { atMs, kind, detail } of own) {
+      lines.push(`      ${formatTime(atMs)}  ${describeInvitationEvent(kind, detail)}`);
+    }
+  } else {
+    for (const [label, inCycle] of Map.groupBy(own, ({ atMs }) => cycleOf(atMs))) {
+      lines.push(...invitationCycleLines(label, inCycle, formatTime));
+    }
   }
   if (own.length === 0) lines.push("      none");
   lines.push(waitingLine(events, untilMs, brainStartsMs));
   return lines;
+}
+
+/** One cycle's invitation events (#245), summarised: "BN1.2 3: city group B; 2 travels (Ishima ×2); 1 hold; …". */
+function invitationCycleLines(label: string, events: readonly Stored[], formatTime: (ms: number) => string): string[] {
+  const groups: string[] = [];
+  const travels: string[] = [];
+  const invited: string[] = [];
+  const listed: string[] = [];
+  let holds = 0;
+  for (const { atMs, kind, detail } of events) {
+    const fields = fieldsOf(detail);
+    if (kind === CITY_GROUP_CHOSEN_EVENT_KIND) {
+      groups.push(typeof fields.group === "string" ? `city group ${fields.group}` : "no city group");
+    } else if (fields.phase === "travel") travels.push(String(fields.city));
+    else if (fields.phase === "hold") holds += 1;
+    else if (fields.phase === "invited") invited.push(...namesOf(fields.factions));
+    else listed.push(`        ${formatTime(atMs)}  ${describeInvitationEvent(kind, detail)}`);
+  }
+  const parts = [
+    ...(groups.length === 0 ? [] : [describeCounts(groups)]),
+    travels.length === 0 ? "no travel" : `${plural(travels.length, "travel", "travels")} (${describeCounts(travels)})`,
+    plural(holds, "hold", "holds"),
+    `invited: ${invited.length === 0 ? "none" : describeCounts(invited)}`,
+  ];
+  return [`      ${label}: ${parts.join("; ")}`, ...listed];
 }
 
 /**

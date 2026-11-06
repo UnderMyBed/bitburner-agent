@@ -423,8 +423,13 @@ export class HackingFold {
     return { whole: sum(intervals), stretches: byStretch.filter((each) => each !== undefined).map(sum), best };
   }
 
-  /** Section 5's lines; a line in `failures` for hacking that earned more than all the rooted RAM could. */
-  section(failures: string[]): string[] {
+  /**
+   * Section 5's lines; a line in `failures` for hacking that earned more than all the rooted RAM could. `heldBack`, a
+   * line under each hour's, or the window's with an hour or less (#245): what held the cycle back then, so a low
+   * share of the ceiling while money wasn't what it waited on (reputation, say, with money unspent) doesn't read as a
+   * failure.
+   */
+  section(failures: string[], heldBack?: (fromMs: number, toMs: number) => string): string[] {
     const lines = [
       "5. Hacking (actual: the slow snapshots' money sources; the ceilings: the most a batcher, and any hacker, could " +
         "earn with the hack loop's hosts' RAM at the hacking level then, from the game's formulas)",
@@ -453,9 +458,14 @@ export class HackingFold {
     lines.push(`  over the window: ${describeAgainst(whole)}`);
     const unjudgedMs = (this.#money.at(-1)?.atMs ?? 0) - (this.#money[0]?.atMs ?? 0) - whole.judgedMs;
     if (unjudgedMs > 0) lines.push(`    not judged: ${hoursOf(unjudgedMs)} with the ceilings unknown`);
+    // Under an hour, or one, the window is the hour (#245 review): its line under the window's.
+    if (stretches.length <= 1 && heldBack !== undefined) lines.push(`    ${heldBack(whole.fromMs, whole.toMs)}`);
     if (stretches.length > 1) {
       lines.push("  each hour:");
-      for (const stretch of stretches) lines.push(`    ${describeAgainst(stretch)}`);
+      for (const stretch of stretches) {
+        lines.push(`    ${describeAgainst(stretch)}`);
+        if (heldBack !== undefined) lines.push(`      ${heldBack(stretch.fromMs, stretch.toMs)}`);
+      }
     }
     const allowance = this.serversMoneyFell();
     if (whole.earned > whole.bound + allowance) {

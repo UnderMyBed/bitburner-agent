@@ -85,3 +85,20 @@ export function describePageHeap(pageHeapsBytes: number[]): string {
     "reported it)"
   );
 }
+
+/** "1 choice", "3 choices": a count and its noun (#245). */
+export const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+/** How many of each, the most first, ties in the order first seen (#245). */
+export function countsOf(items: readonly string[]): [item: string, count: number][] {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
+  return [...counts].sort(([, firstCount], [, secondCount]) => secondCount - firstCount);
+}
+
+/** `countsOf` in words: "hacking for NiteSec ×19, hacking for CyberSec"; one of a kind has no "×1". */
+export function describeCounts(items: readonly string[]): string {
+  return countsOf(items)
+    .map(([item, count]) => (count === 1 ? item : `${item} ×${count}`))
+    .join(", ");
+}
