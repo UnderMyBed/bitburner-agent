@@ -1603,6 +1603,8 @@ test("a short backdoor (#162): one that ends within the round is waited for, and
     gameTimeoutMs: 20_000,
   });
   expect(outcome()).toMatchObject({ done: true, tries: 1, problem: null, backend: "ui" });
+  // Read once the Terminal is back (`terminalText`): the save's $1b in Sector-12 earns its invitation, the brain joins
+  // it (#228), and the Agent's next faction state read can have the page on Factions after this fast snapshot (#256).
   const text = await terminalText(page);
   expect(text.lastIndexOf("Connected to home")).toBeGreaterThan(text.indexOf("Backdoor on 'n00dles' successful!"));
   await expect(page.locator(TERMINAL_INPUT).locator("xpath=preceding-sibling::p").innerText()).resolves.toMatch(

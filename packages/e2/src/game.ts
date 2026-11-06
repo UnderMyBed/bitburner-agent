@@ -343,21 +343,35 @@ export async function freshGame(
  * (which closes on a game timer, so stays while game time stands still) can lie over it.
  */
 export async function typeCommand(page: Page, command: string): Promise<void> {
-  // As a player types: once the Terminal is on the page. The Agent's faction state read (#197) can have it on Factions
-  // or Augmentations mid-round, and game time stands still between a test's steps, so it's moved on until the Terminal
-  // is back (#212). With it there, no time passes.
-  await advanceUntil(page, async () => (await page.locator(TERMINAL_INPUT).count()) === 1, {
-    realTimeoutMs: 30_000,
-    gameTimeoutMs: 5_000,
-  });
+  // As a player types: once the Terminal is on the page.
+  await untilTerminalShown(page);
   await page.locator(TERMINAL_INPUT).focus();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
 }
 
-/** The terminal's output so far. */
-export function terminalText(page: Page): Promise<string> {
+/** The terminal's output so far, once the Terminal is on the page. */
+export async function terminalText(page: Page): Promise<string> {
+  await untilTerminalShown(page);
   return page.locator("#terminal").innerText();
+}
+
+/**
+ * Moves game time on until the Terminal is on the page, for at most 5 s of it. The Agent's faction state read (#197) can
+ * have the page on Factions or Augmentations mid-round, after the round's fast snapshot was sent (a join since the last
+ * read opens Factions, #256). Game time stands still between a test's steps, so a test that looked then would wait
+ * for ever (#212). With the Terminal there, no time passes.
+ */
+async function untilTerminalShown(page: Page): Promise<void> {
+  try {
+    await advanceUntil(page, async () => (await page.locator(TERMINAL_INPUT).count()) === 1, {
+      realTimeoutMs: 30_000,
+      gameTimeoutMs: 5_000,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`The Terminal isn't on the page: ${reason}`, { cause: error });
+  }
 }
 
 /** Clicks the tutorial's "Exit Tutorial" button, and waits for the tutorial to close. */
