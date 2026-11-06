@@ -11,8 +11,13 @@
 // - After the reset, the player's multipliers are the five's and NeuroFlux Governor's, and home has its new RAM.
 // - On to the second install (#238): NeuroFlux Governor's levels alone at 6 of 30, with nothing that counts within
 //   reach. The report says so as information, and doesn't fail "Daedalus count stuck" (#229's check did).
-// CI runs seed 1; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
-import type { MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
+// - Held for Daedalus's count (#243), a second test: run #3's 17:49 in the engine (25 installed, four reached, The
+//   Black Hand's augmentation 12 minutes off by work, hacking past 2500), held until it's reached, then one install at
+//   30; with `AUGMENTATION_DAEDALUS=1`, on to Daedalus's invitation (37.5 virtual minutes from the edit on seeds 1
+//   to 5; on main's code, without the hold, 61.2 to 104.7). `AUGMENTATION_DAEDALUS_LOG` names a file for its progress.
+// CI runs seed 1, to the install; `AUGMENTATION_SEEDS` (`1,2,3`, say) runs others.
+import { appendFileSync } from "node:fs";
+import { augmentationsSoldBy, DAEDALUS, type MediumSnapshotData, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
 import { runReport } from "../src/run-report.ts";
@@ -257,5 +262,213 @@ test.each(SEEDS)(
           .map(([name, level]) => (level > 1 ? `${name} ${level}` : name))
           .join(", ")}; ${((resetAt - editedAtMs) / 1000).toFixed(0)} s from the edit to the reset`,
     );
+  },
+);
+
+// --- Held for Daedalus's count (#243): run #3's 17:49 in the engine, on to Daedalus's invitation --------------------
+
+/** `AUGMENTATION_DAEDALUS`: 1, on to Daedalus's invitation; unset or 0 (CI), to the install. Else it fails loudly. */
+function toDaedalus(text: string | undefined): boolean {
+  if (text === undefined || text === "0") return false;
+  if (text === "1") return true;
+  throw new Error(`AUGMENTATION_DAEDALUS is ${JSON.stringify(text)}: give 1, or 0 (or leave it unset)`);
+}
+const TO_DAEDALUS = toDaedalus(process.env.AUGMENTATION_DAEDALUS);
+const BLACK_HAND = "The Black Hand";
+/**
+ * Before the Agent, harness edits stand in for the run so far: 25 installed, the cheap ones every faction the brain
+ * could join soon sells (so none comes within reach in the hold, and Tian Di Hui isn't visited): The Black Hand's all
+ * but its own augmentation, Tian Di Hui's eight, city group A's (Sector-12 and Aevum, joined, banning B and C), Gen I
+ * and NeuroFlux Governor. At the edit, hacking past 2500 too: Daedalus's requirement reached this cycle, so the count
+ * is what's missing (the hold's condition, #243 review).
+ */
+const RUN_3_INSTALLED = [
+  ...augmentationsSoldBy(BLACK_HAND, 1, null).filter((name) => name !== BLACK_HAND && name !== "NeuroFlux Governor"),
+  ...augmentationsSoldBy("Tian Di Hui", 1, null).filter((name) => name !== "NeuroFlux Governor"),
+  "Augmented Targeting I",
+  "Augmented Targeting II",
+  "CashRoot Starter Kit",
+  "PCMatrix",
+  "Synaptic Enhancement Implant",
+  "Neurotrainer I",
+  "Cranial Signal Processors - Gen I",
+  "NeuroFlux Governor",
+];
+/**
+ * Four reached by the edit, CyberSec joined at 18,750 and NiteSec at 20,000: the install takes the count to 29 of 30
+ * (run #3's four came from BitRunners and The Black Hand).
+ */
+const REACHED_FOUR = [
+  "Cranial Signal Processors - Gen II",
+  "BitWire",
+  "Neurotrainer II",
+  "Neural-Retention Enhancement",
+];
+/**
+ * The Black Hand's augmentation this far off by A5's work when the four are reached: run #3's was 17 minutes; 12 here,
+ * within the 20-minute hold with room for the purchases and the work's start.
+ */
+const BLACK_HAND_OFF_MS = 12 * MINUTE;
+/**
+ * The hacking ramp after an install, a harness edit standing in for it (the same in both runs, as the suite can't run
+ * the hours to hacking 2500): this long after each reset, hacking past 2500 and $200b (Daedalus's other two
+ * requirements, `FactionInfo.tsx:141-142`). About run #3's 28-minute cycle less the work and purchases in it.
+ */
+const RAMP_MS = 20 * MINUTE;
+/** Hacking experience past level 2500 at any multiplier from 1 (`calculateSkill`: 32 × ln(exp + 534.6) − 200). */
+const PAST_2500_EXP = 1e40;
+/** Each stage's bound: the hold and the install; on to Daedalus, the cycles to its invitation. */
+const HELD_WITHIN_MS = 45 * MINUTE;
+const DAEDALUS_WITHIN_MS = 3 * 60 * MINUTE;
+
+test("AUGMENTATION_DAEDALUS: 1 on, unset or 0 off; anything else fails loudly", () => {
+  expect([toDaedalus(undefined), toDaedalus("0"), toDaedalus("1")]).toEqual([false, false, true]);
+  for (const odd of ["", "true", "2"]) expect(() => toDaedalus(odd)).toThrow(/AUGMENTATION_DAEDALUS/);
+});
+
+test.each(SEEDS)(
+  "seed %i: at 25 of 30 with four reached, the install held for The Black Hand (#243), then 30 installed" +
+    (TO_DAEDALUS ? ", and on to Daedalus's invitation" : ""),
+  { timeout: TO_DAEDALUS ? 1_800_000 : 300_000 },
+  async (seed) => {
+    expect(RUN_3_INSTALLED).toHaveLength(25);
+    expect(REACHED_FOUR).toHaveLength(4);
+    const fresh = await freshStartOf({
+      withDesiredState: true,
+      seed,
+      beforeAgent: async ({ simulation }) => {
+        for (const augmentation of RUN_3_INSTALLED)
+          await simulation.diagnostics.giveInstalledAugmentation(augmentation);
+        await simulation.diagnostics.joinFactionWithReputation("Sector-12", 0);
+        await simulation.diagnostics.joinFactionWithReputation("Aevum", 0);
+        await simulation.diagnostics.joinFactionWithReputation(BLACK_HAND, 0);
+      },
+    });
+    const { game, brain, simulation } = fresh;
+    const slow = () => fresh.latest<SlowSnapshotData>("slow");
+    const startMs = game.clock.now();
+    const at = (ms: number) => `${((ms - startMs) / MINUTE).toFixed(1)} min`;
+    const notes: string[] = [];
+    const note = (line: string) => {
+      notes.push(line);
+      if (process.env.AUGMENTATION_DAEDALUS_LOG) appendFileSync(process.env.AUGMENTATION_DAEDALUS_LOG, `${line}\n`);
+    };
+    // Sharing off, so A5's rate is A6's (the share's bonus left out); the money kept until the hold or the commit, and
+    // no install before the edit (a quick install of NeuroFlux Governor's levels would reset its hacking level).
+    const controller = fresh.controller();
+    controller.setAugmentationsEnabled(false);
+    controller.setShareEnabled(false);
+    controller.setProgramsEnabled(false);
+    controller.setHomeRamEnabled(false);
+    controller.setCloudServersEnabled(false);
+
+    // 15 minutes in, hacking past 2500; a minute on, A5's hacking work at a faction (CyberSec, joined by its backdoor),
+    // at favour 0: The Black Hand's rate too. At it, the harness puts The Black Hand's augmentation 12 minutes off, the
+    // four within reach, and the money for them and it. The hold then has A5 work for The Black Hand.
+    await game.run(15 * MINUTE);
+    await simulation.diagnostics.gainHackingExp(PAST_2500_EXP);
+    await game.run(MINUTE);
+    await game.runUntil(() => controller.factionsView().choice?.workType === "hacking", 10 * MINUTE);
+    expect((fresh.medium()?.player.skills as { hacking?: number } | undefined)?.hacking).toBeGreaterThanOrEqual(2500);
+    expect(controller.factionsView().choice?.favor).toBe(0);
+    const rate = controller.factionsView().choice?.reputationPerSecond as number;
+    expect(rate).toBeGreaterThan(0);
+    await simulation.diagnostics.joinFactionWithReputation(BLACK_HAND, 100_000 - (rate * BLACK_HAND_OFF_MS) / 1000);
+    await simulation.diagnostics.joinFactionWithReputation("CyberSec", 18_750);
+    await simulation.diagnostics.joinFactionWithReputation("NiteSec", 20_000);
+    await simulation.diagnostics.setMoney(50e9);
+    controller.setAugmentationsEnabled(true);
+    const editedAtMs = game.clock.now();
+    note(`seed ${seed}: edited at ${at(editedAtMs)}, The Black Hand at ${rate.toFixed(2)} a second`);
+    const held = () => controller.augmentationsView().progress?.countHold != null;
+    await game.runUntil(() => held() || controller.augmentationsView().committed, 5 * MINUTE);
+    controller.setProgramsEnabled(true);
+    controller.setHomeRamEnabled(true);
+    controller.setCloudServersEnabled(true);
+
+    // Each install's time and count; the hacking ramp's stand-in after each; Daedalus's invitation.
+    const startedAt = slow()?.resetInfo.lastAugReset as number;
+    let lastReset = startedAt;
+    const resetsSeenAtMs: number[] = [];
+    let ramped = true;
+    const installs: string[] = [];
+    const daedalusSeen = () => {
+      const state = slow()?.factions?.state;
+      return (
+        state?.invitations.includes(DAEDALUS) === true || state?.joined.some((each) => each.name === DAEDALUS) === true
+      );
+    };
+    const installedCount = () => Object.keys(slow()?.resetInfo.ownedAugs ?? {}).length;
+    const watch = async () => {
+      const reset = slow()?.resetInfo.lastAugReset as number;
+      if (reset !== lastReset) {
+        lastReset = reset;
+        const seenAtMs = game.clock.now();
+        resetsSeenAtMs.push(seenAtMs);
+        ramped = false;
+        installs.push(`${at(seenAtMs)}: ${installedCount()}`);
+        note(`seed ${seed}: install seen at ${at(seenAtMs)}, ${installedCount()} installed`);
+      }
+      const lastSeenAtMs = resetsSeenAtMs.at(-1);
+      if (!ramped && lastSeenAtMs !== undefined && game.clock.now() >= lastSeenAtMs + RAMP_MS) {
+        ramped = true;
+        await simulation.diagnostics.gainHackingExp(PAST_2500_EXP);
+        await simulation.diagnostics.setMoney(200e9);
+      }
+    };
+    const until = async (done: () => boolean, withinMs: number) => {
+      const endMs = game.clock.now() + withinMs;
+      while (!done()) {
+        if (game.clock.now() > endMs) throw new Error(`not within ${withinMs / MINUTE} virtual minutes`);
+        await game.run(30_000);
+        await watch();
+      }
+    };
+
+    // The hold, then its end as The Black Hand's reputation comes, and the install of the five: 30 of 30.
+    await until(() => installs.length > 0, HELD_WITHIN_MS);
+    expect(brain.logLines).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          "^augmentations: install held for Daedalus's count: Daedalus's count reachable this cycle, The Black Hand " +
+            "in ~1\\d min \\(by work at The Black Hand, ",
+        ),
+      ),
+    );
+    expect(brain.logLines).toContain(
+      "augmentations: the hold for Daedalus's count is over: the count reached at this install",
+    );
+    const chosen = fresh.data.store
+      .eventsInWindow({ environment: "E1", sinceMs: editedAtMs, untilMs: game.clock.now() })
+      .filter((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)
+      .map((event) => event.detail as { set: { augmentation: string }[] });
+    expect(chosen).toHaveLength(1);
+    expect(chosen[0]?.set.map((each) => each.augmentation).sort()).toEqual([BLACK_HAND, ...REACHED_FOUR].sort());
+    await game.run(MINUTE);
+    expect(installedCount()).toBe(30);
+    const { text, failures } = runReport(fresh.data.store, {
+      environment: "E1",
+      sinceMs: EPOCH_MS,
+      untilMs: game.clock.now(),
+    });
+    expect(text.split("\n")).toContainEqual(
+      expect.stringMatching(
+        /^ {4}\S+ {2}progress: .*; held: Daedalus's count reachable this cycle, The Black Hand in ~/,
+      ),
+    );
+    expect(failures).toEqual([]);
+    const heldMs = (resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs;
+    note(`seed ${seed}: held, then installed at 30: ${(heldMs / MINUTE).toFixed(1)} min from the edit to the reset`);
+
+    if (TO_DAEDALUS) {
+      await until(daedalusSeen, DAEDALUS_WITHIN_MS);
+      note(
+        `seed ${seed}: Daedalus invited ${((game.clock.now() - editedAtMs) / MINUTE).toFixed(1)} min after the edit; ` +
+          `installs ${installs.join(", ")}`,
+      );
+      const after = runReport(fresh.data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() });
+      expect(after.failures).toEqual([]);
+    }
+    console.log(notes.join("\n"));
   },
 );

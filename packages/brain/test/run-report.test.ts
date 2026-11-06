@@ -1928,6 +1928,23 @@ describe("augmentations and the reset (#210)", () => {
     );
   });
 
+  test("held for Daedalus's count (#243): the progress says so; it doesn't excuse a cycle overdue", () => {
+    const words =
+      "Daedalus's count reachable this cycle, The Black Hand in ~17 min (by work at The Black Hand, $1,111,159,900; " +
+      "29 of 30 after this install; held 30 min at most, 30 min left)";
+    const countHold = { augmentation: "The Black Hand", faction: "The Black Hand", way: "work", etaMs: 1, money: 1 };
+    const report = augmentationRun({
+      events: [
+        [3 * MINUTE, "augmentationProgress", { ...OVERDUE, held: words, countHold: { ...countHold, leftMs: 1 } }],
+      ],
+    });
+    expect(report.text).toContain(`; held: ${words}`);
+    expect(overdueFailures(report)).toEqual([
+      expect.stringMatching(/^install overdue: 16\.2 h online .*; held: Daedalus/),
+    ]);
+    expect(report.text).not.toContain("(held for The Red Pill's way: not a failure)");
+  });
+
   test("install overdue by the slow snapshots' own clock (no progress recorded); a gap in the game's time left out", () => {
     /** Slow snapshots 3 minutes apart for 16 h, the game's time with them, but one step of 4 at `gapAfterMs`. */
     function longRun(gapAfterMs: number | null) {

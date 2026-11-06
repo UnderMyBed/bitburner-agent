@@ -119,6 +119,15 @@ export interface DaedalusFigures {
   skills: { hacking: number; strength: number; defense: number; dexterity: number; agility: number };
 }
 
+/** Whether `skills` meet Daedalus's hacking requirement, or every combat one (`Faction/FactionInfo.tsx:141-145`). */
+export function daedalusSkillsReached(
+  skills: DaedalusFigures["skills"],
+  required: Pick<ReturnType<typeof daedalusRequirements>, "hacking" | "combat">,
+): boolean {
+  const { hacking, strength, defense, dexterity, agility } = skills;
+  return hacking >= required.hacking || Math.min(strength, defense, dexterity, agility) >= required.combat;
+}
+
 /** What Daedalus's invitation still needs, worded, in its order; empty when it's met. */
 export function daedalusMissing(figures: DaedalusFigures, required: ReturnType<typeof daedalusRequirements>): string[] {
   const missing: string[] = [];
@@ -129,9 +138,8 @@ export function daedalusMissing(figures: DaedalusFigures, required: ReturnType<t
   if (figures.money < required.money) {
     missing.push(`$${count(figures.money)} of $${count(required.money)}`);
   }
-  const { hacking, strength, defense, dexterity, agility } = figures.skills;
-  const combat = Math.min(strength, defense, dexterity, agility) >= required.combat;
-  if (hacking < required.hacking && !combat) {
+  const { hacking } = figures.skills;
+  if (!daedalusSkillsReached(figures.skills, required)) {
     missing.push(
       `hacking ${count(hacking)} of ${count(required.hacking)} (or every combat skill ${count(required.combat)})`,
     );
