@@ -47,8 +47,10 @@ interface Gate {
   heldSnapshots: number;
   /** The snapshots the count needs now: more after a failed backup. */
   snapshotsNeeded: number;
-  /** Why its guard failed on the latest medium snapshot, or null. */
+  /** Why its guard failed on the latest medium snapshot, or on the latest update for the queue's part, or null. */
   guardFailure: string | null;
+  /** Its guard failed on the queue alone (#271): judged again on every update, so it clears there too. */
+  heldByQueue: boolean;
   /** Why the count started again (a failed backup, a release that went stale), or null. */
   restartedBecause: string | null;
   /** The request of the backup being taken: only its answer counts. */
@@ -62,6 +64,7 @@ const newGate = (): Gate => ({
   heldSnapshots: 0,
   snapshotsNeeded: GUARD_SNAPSHOTS,
   guardFailure: null,
+  heldByQueue: false,
   restartedBecause: null,
   backupRequest: null,
   releasedSnapshots: 0,
@@ -91,15 +94,28 @@ export function guardFailure(
   staticData: StaticSnapshotData | null,
 ): string | null {
   if (resetsTheGame(intent)) {
-    const first = queue[0];
-    if (first !== undefined && first.id !== intent.id) return `${first.id}, queued before it, isn't done`;
-    return intent.action === "destroyBitNode" ? worldDaemonGuardFailure(medium, staticData) : null;
+    return (
+      queueGuardFailure(intent, queue) ??
+      (intent.action === "destroyBitNode" ? worldDaemonGuardFailure(medium, staticData) : null)
+    );
   }
   if (intent.action !== "joinFaction") return null;
   const joined = (medium.player as { factions?: unknown } | undefined)?.factions;
   if (!Array.isArray(joined)) return "the medium snapshot has no list of the factions joined";
   const joinedEnemy = (FACTION_ENEMIES[intent.args.faction] ?? []).find((enemy) => joined.includes(enemy));
   return joinedEnemy === undefined ? null : `${intent.args.faction}'s enemy ${joinedEnemy} is joined`;
+}
+
+/**
+ * The part of `intent`'s guard that reads only the queue, not a snapshot (#271), or null: a reset's, nothing queued
+ * before it undone. Judged on every update as well as on medium snapshots, as the owner's queuing can put an intent
+ * ahead of the brain's own install or destroy (#210, #215) at any time. The join's guard and w0r1d_d43m0n's read the
+ * snapshots, so they wait for the next.
+ */
+export function queueGuardFailure(intent: Intent, queue: Intent[]): string | null {
+  if (!resetsTheGame(intent)) return null;
+  const first = queue[0];
+  return first !== undefined && first.id !== intent.id ? `${first.id}, queued before it, isn't done` : null;
 }
 
 /** w0r1d_d43m0n's preconditions on the snapshots (#175): `worldDaemonProblem`, or what a snapshot lacks for them. */
@@ -138,20 +154,36 @@ export class IrreversibleIntentGates {
   /**
    * The queue now: a gate for each irreversible intent in it, in its order; those that left are dropped. One no longer
    * first goes back to counting (#269 review): only the first is judged, so one left out or counting there would go on
-   * unwatched, and go out beside the first, or on a stale release.
+   * unwatched, and go out beside the first, or on a stale release. The first's guard on the queue (`queueGuardFailure`)
+   * is judged here too, on every update (#271): failing, it goes back to counting, out or not, so it needs its guard and
+   * a new backup again once what's ahead of it is done.
    */
   sync(queue: Intent[]): void {
     const kept = new Map<string, Gate>();
     for (const intent of queue.filter(isIrreversibleIntent))
       kept.set(intent.id, this.#gates.get(intent.id) ?? newGate());
     let first = true;
-    for (const gate of kept.values()) {
-      if (!first && (gate.stage !== "counting" || gate.heldSnapshots > 0)) {
+    for (const [id, gate] of kept) {
+      if (first) this.#judgeQueue(gate, queue.find((each) => each.id === id) as Intent, queue);
+      else if (gate.stage !== "counting" || gate.heldSnapshots > 0) {
         this.#restart(gate, "another irreversible intent was queued ahead of it");
       }
       first = false;
     }
     this.#gates = kept;
+  }
+
+  /** The first gate's guard on the queue alone (#271): failing, back to counting; holding again, no longer held for it. */
+  #judgeQueue(gate: Gate, intent: Intent, queue: Intent[]): void {
+    const failure = queueGuardFailure(intent, queue);
+    if (failure !== null) {
+      gate.guardFailure = failure;
+      gate.heldByQueue = true;
+      if (gate.stage !== "counting" || gate.heldSnapshots > 0) this.#restart(gate, null);
+    } else if (gate.heldByQueue) {
+      gate.guardFailure = null;
+      gate.heldByQueue = false;
+    }
   }
 
   /** The connected Agent changed: every gate starts again, and a backup still being taken releases nothing. */
@@ -176,6 +208,7 @@ export class IrreversibleIntentGates {
     const intent = queue.find((each) => each.id === id);
     if (intent === undefined) return;
     gate.guardFailure = guardFailure(intent, medium, queue, staticData);
+    gate.heldByQueue = gate.guardFailure !== null && gate.guardFailure === queueGuardFailure(intent, queue);
     if (gate.guardFailure !== null) {
       this.#restart(gate, null);
       return;

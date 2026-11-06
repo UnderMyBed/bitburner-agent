@@ -1437,6 +1437,41 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(backupNow).toHaveBeenCalledTimes(1);
     });
 
+    test("out, then the owner queues a travel ahead of it (#271): withdrawn at once, held for it, then a new backup", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      pastCountdown(connection, richMedium(0));
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+      // The owner's travel goes ahead of the brain's install: its guard, judged on this update, not the next snapshot.
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+      // The travel done: not out on its old release, but past its guard and a new backup.
+      reportedDone(connection, AEVUM.id);
+      expect(sentIds()).toEqual([]);
+      expect(waitingFor(INSTALL.id)).toBe("waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)");
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(2);
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+    });
+
+    test("its backup being taken when the owner queues ahead of it (#271): that backup releases nothing", async () => {
+      const { controller, connection, sentIds, waitingFor, backupNow, settleBackup } = connectedWithLoopOff();
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      pastCountdown(connection, richMedium(0));
+      for (let each = 0; each < 2; each += 1) send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+      controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([AEVUM.id]);
+      expect(waitingFor(INSTALL.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+    });
+
     test("the install reported done with no reset in the next slow snapshot: withdrawn, alerted (#213 re-review)", async () => {
       const { controller, connection, sentIds, settleBackup } = connectedWithLoopOff();
       const sent: { type: string }[] = [];
@@ -1709,6 +1744,28 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         expect(stored).toEqual([
           { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1 },
         ]);
+      });
+
+      test("out, then the owner queues a travel ahead of it (#271): withdrawn at once, held for it, then a new backup", async () => {
+        const { controller, connection, sentIds, waitingFor, backupNow, settleBackup, daemonMedium } = withTheRedPill();
+        for (let each = 0; each < 3; each += 1) daemonMedium();
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([BRAINS.id]);
+        controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+        expect(sentIds()).toEqual(["travel(Aevum)"]);
+        expect(waitingFor(BRAINS.id)).toBe("held: travel(Aevum), queued before it, isn't done");
+        send(connection, "fast", {
+          degradedTiers: [],
+          pageHeapUsedBytes: null,
+          game: null,
+          intents: [{ id: "travel(Aevum)", done: true, tries: 1, problem: null, backend: "sim" }],
+        });
+        expect(sentIds()).toEqual([]);
+        daemonMedium();
+        daemonMedium();
+        expect(backupNow).toHaveBeenCalledTimes(2);
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([BRAINS.id]);
       });
 
       test("a restarted brain keeps its destroy's note, asking again until the reset shows (#215 review)", () => {
