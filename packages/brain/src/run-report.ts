@@ -1097,9 +1097,8 @@ function segmentProgressLines(facts: RunFacts, segment: ProgressSegment, verbose
       `  BitNode: ${describeChange(displayValue(slowFirst.resetInfo?.currentNode), displayValue(slowLast.resetInfo?.currentNode))}`,
     );
     lines.push(`  Source-Files: ${describeListChange(sourceFilesOf(slowFirst), sourceFilesOf(slowLast), verbose)}`);
-    lines.push(
-      `  purchased servers: ${describeListChange(namesOf(slowFirst.purchasedServers), namesOf(slowLast.purchasedServers), verbose)}`,
-    );
+    const [serversFirst, serversLast] = [namesOf(slowFirst.purchasedServers), namesOf(slowLast.purchasedServers)];
+    lines.push(`  purchased servers: ${describeListChange(serversFirst, serversLast, verbose)}`);
     lines.push(...factionProgressLines(segment.factionState, slowLast));
   }
   return lines;
@@ -1487,7 +1486,8 @@ function backdoorSummaryLines(facts: RunFacts): string[] {
       const least = Math.min(...afterStart.map(({ afterMs }) => afterMs));
       parts.push(
         `backdoored in ${plural(backdoored.length, "cycle", "cycles")}, ${formatDuration(least)} to ` +
-          `${formatDuration(longest.afterMs)} after the cycle's start (the most in ${facts.cycles.cycleLabelAt(longest.atMs)})`,
+          `${formatDuration(longest.afterMs)} after the cycle's start (the most in ` +
+          `${facts.cycles.cycleLabelAt(longest.atMs)})`,
       );
     }
     const last = changes.at(-1);
@@ -1511,8 +1511,8 @@ function backdoorSummaryLines(facts: RunFacts): string[] {
 }
 
 /**
- * The hacker factions' servers (#195), with --verbose: when the medium snapshots first showed each backdoored (or gone again, after a
- * reset), and the invitation that followed, where the Agent handled its dialog: a `gameDialog` event of kind
+ * The hacker factions' servers (#195), with --verbose: when the medium snapshots first showed each backdoored (or
+ * gone again, after a reset), and the invitation that followed, where the Agent handled its dialog: a `gameDialog` event of kind
  * `factionInvitation` naming the faction ("Would you like to join CyberSec?").
  */
 function backdoorLines(facts: RunFacts, verbose: boolean): string[] {

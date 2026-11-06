@@ -2815,7 +2815,8 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
             `${formatDuration(most)} after the cycle's start (the most in ${mostIn}); no invitation from CyberSec seen`,
         );
         expect(lines).toContain(
-          "    joined: 11 factions, each first in: at the window's start: 2, BN1.1 1: 9 (--verbose lists each with when)",
+          "    joined: 11 factions, each first in: at the window's start: 2, BN1.1 1: 9 (--verbose lists each " +
+            "with when)",
         );
         expect(lines).toContain("    purchased servers: 25 (unchanged)");
         expect(lines).toContain(
