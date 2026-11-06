@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { PINNED_GAME } from "@bitburner-agent/core";
 import * as esbuild from "esbuild";
-import { describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test } from "vitest";
 import {
   buildEngine,
   collectBundleSources,
@@ -18,6 +18,7 @@ import {
   engineFingerprint,
   gameDependencies,
   holdModules,
+  pathIsUnder,
 } from "../src/engine/build.ts";
 import { enginePaths } from "../src/engine/paths.ts";
 import { checkVendorInstall, lockfileHash, writeSetupStamp } from "../src/engine/vendor.ts";
@@ -269,19 +270,45 @@ describe("gameDependencies (#267)", () => {
     [`${dir}/${name}/server.js`]: `module.exports = ${JSON.stringify(`${copy}, server`)};`,
   });
 
-  /** Bundles pkg/src/bundle/entry.js (importing `imports`) as the engine does, with or without the plugin. */
-  async function bundle(files: Record<string, string>, imports: string[], pinned = true): Promise<string> {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  interface BundleOptions {
+    /** Off, to show what esbuild does on its own. */
+    withGameDependencies?: boolean;
+    /** Reaches the game, or our bundle's directory, through a junction, as a linked vendor would be. */
+    linked?: "game" | "bundle";
+    /** The directory the plugin takes for our sources, from the real one (default: that one). */
+    pluginBundleDir?: (bundleDir: string) => string;
+  }
+
+  /** Bundles pkg/src/bundle/entry.js (importing `imports`) as the engine does. */
+  async function bundle(files: Record<string, string>, imports: string[], options: BundleOptions = {}) {
+    const { withGameDependencies = true, linked, pluginBundleDir = (dir: string) => dir } = options;
     const lines = imports.map((name, i) => `import v${i} from ${JSON.stringify(name)}; console.log(v${i});`);
+    // game/src is where the plugin resolves from, as the game's own sources do: it needs to exist.
     const root = tree({ ...files, "pkg/src/bundle/entry.js": lines.join("\n"), "game/src/a.js": "" }, "hoist-");
-    const bundleDir = path.join(root, "pkg/src/bundle");
+    roots.push(root);
+    let bundleDir = path.join(root, "pkg/src/bundle");
+    let gameRoot = path.join(root, "game");
+    if (linked === "game") {
+      linkDirectory(gameRoot, path.join(root, "linked/game"));
+      gameRoot = path.join(root, "linked/game");
+    } else if (linked === "bundle") {
+      linkDirectory(bundleDir, path.join(root, "linked/bundle"));
+      bundleDir = path.join(root, "linked/bundle");
+    }
     const result = await esbuild.build({
       entryPoints: [path.join(bundleDir, "entry.js")],
       bundle: true,
       format: "cjs",
       platform: "browser",
       write: false,
+      metafile: true,
       logLevel: "silent",
-      plugins: pinned ? [gameDependencies(bundleDir, path.join(root, "game"))] : [],
+      plugins: withGameDependencies ? [gameDependencies(pluginBundleDir(bundleDir), gameRoot)] : [],
     });
     return result.outputFiles[0]?.text ?? "";
   }
@@ -289,7 +316,7 @@ describe("gameDependencies (#267)", () => {
   test("a package hoisted to the root's node_modules is still bundled from the game's", async () => {
     const files = { ...lib("node_modules", "lib", "root copy"), ...lib("game/node_modules", "lib", "game copy") };
     // The hazard: esbuild walks up from our sources, so the root's copy comes first.
-    expect(await bundle(files, ["lib"], false)).toContain('"root copy"');
+    expect(await bundle(files, ["lib"], { withGameDependencies: false })).toContain('"root copy"');
     const text = await bundle(files, ["lib", "lib/server.js"]);
     expect(text).toContain('"game copy"');
     expect(text).toContain('"game copy, server"');
@@ -309,7 +336,10 @@ describe("gameDependencies (#267)", () => {
     await expect(bundle(files, ["lib"])).rejects.toThrow(
       /lib \(imported by .*entry\.js\) resolves to .*node_modules.lib.index\.js, not in the game's node_modules/,
     );
-    await expect(bundle({}, ["nowhere"])).rejects.toThrow(/nowhere .* isn't installed, not in the game's node_modules/);
+    // esbuild's own reason, not a guess at one.
+    await expect(bundle({}, ["nowhere"])).rejects.toThrow(
+      /nowhere \(imported by .*entry\.js\) can't be resolved from the game's sources \(Could not resolve "nowhere"/,
+    );
   });
 
   test("leaves the game's own imports and our relative ones alone", async () => {
@@ -323,10 +353,70 @@ describe("gameDependencies (#267)", () => {
     expect(text).toContain('"game copy"');
   });
 
+  test("leaves a game dependency's own imports alone: its nested copy stays its own", async () => {
+    const files = {
+      "game/node_modules/dep/package.json": JSON.stringify({ name: "dep", main: "index.js" }),
+      "game/node_modules/dep/index.js": 'module.exports = require("lib");',
+      ...lib("game/node_modules/dep/node_modules", "lib", "nested copy"),
+      ...lib("game/node_modules", "lib", "game copy"),
+    };
+    const text = await bundle(files, ["dep"]);
+    expect(text).toContain('"nested copy"');
+    expect(text).not.toContain("game copy");
+  });
+
+  test.each(["game", "bundle"] as const)(
+    "pins through a junctioned %s directory, as esbuild resolves it to its real path",
+    async (linked) => {
+      const files = { ...lib("node_modules", "lib", "root copy"), ...lib("game/node_modules", "lib", "game copy") };
+      const text = await bundle(files, ["lib"], { linked });
+      expect(text).toContain('"game copy"');
+      expect(text).not.toContain("root copy");
+    },
+  );
+
+  test("fails closed: a package bundled from outside the game's node_modules fails the build, naming it", async () => {
+    // The plugin told our sources are elsewhere (as a path that doesn't match esbuild's would), so it pins nothing.
+    const files = { ...lib("node_modules", "lib", "root copy"), ...lib("game/node_modules", "lib", "game copy") };
+    const elsewhere = (bundleDir: string) => path.join(bundleDir, "../../../game/src");
+    await expect(bundle(files, ["lib"], { pluginBundleDir: elsewhere })).rejects.toThrow(
+      /bundled from outside the game's node_modules: .*node_modules.lib.index\.js/,
+    );
+  });
+
+  test("leaves `#` imports to esbuild: the package.json `imports` of our sources", async () => {
+    const files = {
+      "pkg/src/package.json": JSON.stringify({ imports: { "#local": "./bundle/local.js" } }),
+      "pkg/src/bundle/local.js": 'module.exports = "local";',
+    };
+    expect(await bundle(files, ["#local"])).toContain('"local"');
+  });
+
   test("the engine's build pins our imports through it, and no longer searches the game's node_modules last", () => {
     const options = engineBuildOptions();
     expect(options.plugins?.map((plugin) => plugin.name)).toContain("game-dependencies");
     expect(options.nodePaths).toBeUndefined();
+    // The plugin's check reads the metafile.
+    expect(options.metafile).toBe(true);
+  });
+});
+
+describe("pathIsUnder", () => {
+  test("on Windows, ignores case and the separator, as its file system does", () => {
+    expect(pathIsUnder("c:\\Repo\\Game\\node_modules\\lib\\index.js", "C:\\repo\\game\\node_modules", "win32")).toBe(
+      true,
+    );
+    expect(pathIsUnder("C:/repo/game/node_modules/lib/index.js", "C:\\repo\\game\\node_modules", "win32")).toBe(true);
+  });
+
+  test("elsewhere, case matters", () => {
+    expect(pathIsUnder("/repo/Game/node_modules/lib/index.js", "/repo/game/node_modules", "linux")).toBe(false);
+    expect(pathIsUnder("/repo/game/node_modules/lib/index.js", "/repo/game/node_modules", "linux")).toBe(true);
+  });
+
+  test("takes a sibling with the same prefix, or the directory itself, as not under it", () => {
+    expect(pathIsUnder("/repo/game/node_modules2/lib.js", "/repo/game/node_modules", "linux")).toBe(false);
+    expect(pathIsUnder("C:\\repo\\game\\node_modules", "C:\\repo\\game\\node_modules", "win32")).toBe(false);
   });
 });
 

@@ -247,31 +247,76 @@ function gameModules(): esbuild.Plugin {
 }
 
 /**
- * Our bundled sources' bare imports (`react`, `react-dom/server`, `lodash`: page.ts) resolved as the game's own sources
- * resolve them, to the game's node_modules only (#267). esbuild walks up from the importer, so from our sources it
- * would try packages/sim/node_modules and the repository's node_modules first: a copy hoisted there by one of our
- * dependencies would be bundled beside the game's, and the fingerprint, which covers only the game's lockfile, wouldn't
- * see it. One that resolves anywhere else, the game not having it, fails the build, naming it.
+ * Whether `file` is inside `dir` (not `dir` itself). On Windows, case and the separator don't count, as its file system
+ * ignores them: a drive or folder written in another case is the same place. `path.win32.relative` compares them so.
+ */
+export function pathIsUnder(file: string, dir: string, platform: NodeJS.Platform = process.platform): boolean {
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  const relative = paths.relative(dir, file);
+  return relative !== "" && !relative.startsWith("..") && !paths.isAbsolute(relative);
+}
+
+/** A metafile input's path, without its namespace (`raw:`, from gameModules; a drive letter is one letter, kept). */
+const inputPath = (input: string) => input.replace(/^[A-Za-z][\w-]+:(?=.)/, "");
+
+/**
+ * Our bundled sources' bare imports (`react`, `react-dom`, `react-dom/server`, `lodash`: page.ts) resolved as the
+ * game's own sources resolve them, to the game's node_modules only (#267). esbuild walks up from the importer, so from
+ * our sources it would try packages/sim/node_modules and the repository's node_modules first: a copy hoisted there by
+ * one of our dependencies would be bundled beside the game's, and the fingerprint, which covers only the game's
+ * lockfile, wouldn't see it. One that resolves anywhere else, or not at all, fails the build, naming it. `#` imports
+ * (package.json `imports`) are left to esbuild; a `browser` map's remap of a bare name no longer applies to our sources.
+ *
+ * It fails closed: if it misses one of our imports (an importer path esbuild writes differently), the build still
+ * fails once it ends, on any file it bundled from a node_modules outside the game's. That needs `metafile: true`.
  */
 export function gameDependencies(bundleDir: string, gameRoot: string): esbuild.Plugin {
   return {
     name: "game-dependencies",
     setup(build) {
-      // Real paths: esbuild gives the importer's and the result's (a junctioned node_modules resolves to its target).
-      const ourSources = realpathSync.native(bundleDir) + path.sep;
+      // Real paths, as esbuild gives the importer's and the result's (a junctioned directory resolves to its target).
+      const ourSourcesRealPath = realpathSync.native(bundleDir);
       const gameSources = path.join(gameRoot, "src");
-      const gameModules = path.join(gameRoot, "node_modules");
-      build.onResolve({ filter: /^[^./]/ }, async (args) => {
-        if (!args.importer.startsWith(ourSources) || path.isAbsolute(args.path)) return undefined;
-        const result = await build.resolve(args.path, { kind: args.kind, resolveDir: gameSources });
-        const theirs = existsSync(gameModules) ? realpathSync.native(gameModules) + path.sep : undefined;
-        if (result.errors.length > 0 || theirs === undefined || !result.path.startsWith(theirs)) {
-          const found = result.errors.length > 0 ? "isn't installed" : `resolves to ${result.path}`;
+      const gameNodeModules = path.join(gameRoot, "node_modules");
+      // Read once: the game's node_modules is installed before a build (checkVendorInstall), and doesn't move during it.
+      const gameNodeModulesRealPath = existsSync(gameNodeModules) ? realpathSync.native(gameNodeModules) : undefined;
+      const inGameNodeModules = (file: string) =>
+        gameNodeModulesRealPath !== undefined &&
+        (pathIsUnder(file, gameNodeModulesRealPath) || pathIsUnder(file, gameNodeModules));
+      // Not `#` imports: esbuild resolves those through the importer's package.json `imports`.
+      build.onResolve({ filter: /^[^./#]/ }, async (args) => {
+        // Our own resolve below, from the game's sources, comes back through here: it's left to esbuild.
+        if (args.pluginData?.gameDependencies === true) return undefined;
+        if (!pathIsUnder(args.importer, ourSourcesRealPath) || path.isAbsolute(args.path)) return undefined;
+        const result = await build.resolve(args.path, {
+          kind: args.kind,
+          resolveDir: gameSources,
+          pluginData: { gameDependencies: true },
+        });
+        const failure =
+          result.errors.length > 0
+            ? `can't be resolved from the game's sources (${result.errors[0]?.text})`
+            : inGameNodeModules(result.path)
+              ? undefined
+              : `resolves to ${result.path}, not in the game's node_modules`;
+        if (failure !== undefined)
+          return { errors: [{ text: `${args.path} (imported by ${args.importer}) ${failure}` }] };
+        return { path: result.path, namespace: result.namespace, sideEffects: result.sideEffects };
+      });
+      build.onEnd((result) => {
+        if (result.errors.length > 0) return undefined;
+        if (result.metafile === undefined) {
           return {
-            errors: [{ text: `${args.path} (imported by ${args.importer}) ${found}, not in the game's node_modules` }],
+            errors: [{ text: "game-dependencies checks the bundled files from the metafile: set metafile: true" }],
           };
         }
-        return { path: result.path, namespace: result.namespace, sideEffects: result.sideEffects };
+        const workingDir = build.initialOptions.absWorkingDir ?? process.cwd();
+        const outside = Object.keys(result.metafile.inputs)
+          .map((input) => path.resolve(workingDir, inputPath(input)))
+          .filter((file) => file.split(/[\\/]/).includes("node_modules") && !inGameNodeModules(file));
+        if (outside.length === 0) return undefined;
+        const listed = outside.slice(0, 5).join(", ") + (outside.length > 5 ? `, and ${outside.length - 5} more` : "");
+        return { errors: [{ text: `bundled from outside the game's node_modules: ${listed}` }] };
       });
     },
   };
@@ -299,6 +344,8 @@ export function engineBuildOptions(): esbuild.BuildOptions {
     // gameModules first: its aliases (`crypto`, `monaco-editor`, ...) take those names before gameDependencies.
     plugins: [gameModules(), gameDependencies(enginePaths.bundleSourceDir, enginePaths.gameRoot)],
     sourcemap: "linked",
+    // gameDependencies checks the bundled files from it, and buildEngine's report reads it.
+    metafile: true,
     logLevel: "error",
   };
 }
@@ -343,6 +390,7 @@ export async function buildEngine({ force = false } = {}): Promise<BuildResult> 
   }
 
   const result = await esbuild.build({ ...engineBuildOptions(), metafile: true, write: false });
+  if (result.metafile === undefined) throw new Error("esbuild returned no metafile");
 
   // Write each output to a temporary file and rename it, so a concurrent load never sees a half-written bundle.
   mkdirSync(path.dirname(enginePaths.bundle), { recursive: true });
