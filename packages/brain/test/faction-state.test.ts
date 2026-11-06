@@ -114,10 +114,10 @@ test("sim backend: each slow snapshot has CyberSec's rising reputation, Sector-1
   const last = Math.round(states.at(-1)?.joined[0]?.reputation as number).toLocaleString("en-US");
   // And (#225) its favour after the next install, and the reputation still to earn this cycle for donations.
   expect(
-    lines.find((line) => line.startsWith(`    CyberSec: reputation ${first} → ${last}, favour 0 (unchanged); `)),
+    lines.find((line) => line.startsWith(`      CyberSec: reputation ${first} → ${last}, favour 0 (unchanged); `)),
   ).toMatch(/; \d+\.\d after the next install; donations unlock at 150 favour, [\d,]+ more reputation this cycle$/);
-  expect(lines.find((line) => line.startsWith("    Sector-12, "))).toBeDefined();
-  expect(lines).toContain("  augmentations queued: Neurotrainer I, NeuroFlux Governor ×2 (unchanged)");
+  expect(lines.find((line) => line.startsWith("      Sector-12, "))).toBeDefined();
+  expect(lines).toContain("    augmentations queued: Neurotrainer I, NeuroFlux Governor ×2 (unchanged)");
   expect(report.text).toContain(
     "  faction state unread (slow snapshots in a row whose faction state couldn't be read, #197; 3 or more is a " +
       "failure):\n    none",
@@ -201,5 +201,5 @@ test("ui backend with its worker gone from home: unread, one event, then after 3
     `faction state unread from ${slowTimes[0]} to ${slowTimes.at(-1)} (${slows.length} slow snapshots in a row, ui): ` +
       problem,
   ]);
-  expect(report.text).toContain("  faction reputation and favour, first reading → last:\n    never read");
+  expect(report.text).toContain("    faction reputation and favour, first reading → last:\n      never read");
 });

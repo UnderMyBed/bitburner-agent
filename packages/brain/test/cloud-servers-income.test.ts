@@ -129,7 +129,7 @@ test.each(SEEDS)(
     expect(report.text).toMatch(/\n {4}\S+ {2}pserv-0 bought, \d+ GB, \$[\d,]+\n/);
     expect(report.text).toMatch(/\n {4}in all: \d+ bought, \d+ upgraded, \$[\d,]+\n/);
     expect(report.text).toMatch(
-      /\n {2}the hack loop's hosts' RAM: [\d.]+ GB on \d+ servers? → [\d.]+ GB on \d+ servers\n/,
+      /\n {2}BN1\.1, first snapshot → last:\n(?: {4}.*\n)*? {4}the hack loop's hosts' RAM: [\d.]+ GB on \d+ servers? → [\d.]+ GB on \d+ servers\n/,
     );
     expect(report.failures).toEqual([]);
   },

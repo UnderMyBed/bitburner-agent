@@ -27,6 +27,7 @@ import {
   WeakenTimes,
 } from "./clock-incidents.ts";
 import { cloudServerPrice } from "./cloud-servers.ts";
+import { BitNodeCycles } from "./cycle-report.ts";
 import {
   BACKDOOR_OVERDUE_AFTER_MS,
   INCOME_STALLED_AFTER_MS,
@@ -428,6 +429,21 @@ class CloudServerChanges {
   }
 }
 
+/**
+ * Section 2's figures for one BitNode (#244): its first and last snapshots of each tier and its faction state, so its
+ * progress is first → last within it, never across a destroy. One, the BitNode unknown, with no slow snapshot.
+ */
+interface ProgressSegment {
+  mediumFirst?: MediumSnapshotData;
+  mediumLast?: MediumSnapshotData;
+  slowFirst?: SlowSnapshotData;
+  slowLast?: SlowSnapshotData;
+  homeRamUsedFirst?: unknown;
+  homeRamUsedLast?: unknown;
+  fastSeen: boolean;
+  factionState: FactionStateFolding;
+}
+
 /** What the report reads from the store for a window, folded as it's read. */
 interface RunFacts extends RunWindow {
   events: StoredEvent[];
@@ -472,6 +488,9 @@ interface RunFacts extends RunWindow {
   earlierBrainStartMs: number | null;
   /** Hacking income against the ceiling (#196). */
   hacking: HackingFold;
+  /** The BitNodes and augmentation cycles (#244), and section 2's figures for each BitNode, in order. */
+  cycles: BitNodeCycles;
+  segments: { index: number; segment: ProgressSegment }[];
 }
 
 const isObject = (data: unknown): data is object => data !== null && typeof data === "object";
@@ -511,6 +530,25 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     }
     const events = store.eventsInWindow(window);
     const factionWork = new FactionWorkTimeline(events, BRAIN_STARTED_EVENT_KIND);
+    // The day before the window: an earlier brain start (section 1), and the install decisions (#244 review: a window
+    // opening after an install was chosen doesn't judge its buying).
+    const dayBefore = store.eventsInWindow({
+      environment: window.environment,
+      sinceMs: window.sinceMs - EARLIER_START_LOOKBACK_MS,
+      untilMs: window.sinceMs - 1,
+    });
+    // The BitNodes and cycles (#244): the slow snapshots say where each starts, then each snapshot is put in its own,
+    // or (-1) before the first BitNode's start, or with none known.
+    const cycles = new BitNodeCycles(events, window, dayBefore);
+    const segments = new Map<number, ProgressSegment>();
+    const segmentAt = (index: number): ProgressSegment => {
+      let segment = segments.get(index);
+      if (segment === undefined) {
+        segment = { fastSeen: false, factionState: new FactionStateFolding() };
+        segments.set(index, segment);
+      }
+      return segment;
+    };
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
     const resetsMs = new Set<number>();
@@ -525,6 +563,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       const lastAugReset = data.resetInfo?.lastAugReset;
       if (typeof lastAugReset === "number" && Number.isFinite(lastAugReset)) resetsMs.add(lastAugReset);
       factionState.add(atMs, data);
+      cycles.addSlow(atMs, gameTimeMs, data);
+      const segment = segmentAt(cycles.bitNodes.length - 1);
+      segment.slowFirst ??= data;
+      segment.slowLast = data;
+      segment.factionState.add(atMs, data);
       factionWork.addSlow(atMs, data);
       augmentations.addSlow(atMs, data, gameTimeMs);
       for (const name of namesOf(data.purchasedServers)) {
@@ -546,6 +589,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       snapshotCount++;
       mediumFirst ??= data;
       mediumLast = data;
+      cycles.addMedium(atMs, data);
+      const segment = segmentAt(cycles.bitNodeIndexAt(atMs));
+      segment.mediumFirst ??= data;
+      segment.mediumLast = data;
       const playerMoney = playerOf(data).money;
       if (typeof playerMoney === "number") money.push({ atMs, money: playerMoney });
       inference.add(atMs, data);
@@ -558,6 +605,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const fast: FastPoint[] = [];
     for (const { atMs, gameTimeMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
+      cycles.addFast(atMs, gameTimeMs, data.batcher);
+      const segment = segmentAt(cycles.bitNodeIndexAt(atMs));
+      if (!segment.fastSeen) segment.homeRamUsedFirst = data.game?.homeRamUsed;
+      segment.fastSeen = true;
+      segment.homeRamUsedLast = data.game?.homeRamUsed;
       fast.push({
         atMs,
         gameTimeMs,
@@ -571,13 +623,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         batcherDeploy: data.batcherDeploy,
       });
     }
-    const earlierStarts = store
-      .eventsInWindow({
-        environment: window.environment,
-        sinceMs: window.sinceMs - EARLIER_START_LOOKBACK_MS,
-        untilMs: window.sinceMs - 1,
-      })
-      .filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
+    const earlierStarts = dayBefore.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
     const reloadsBefore = store
       .eventsInWindow({
         environment: window.environment,
@@ -612,6 +658,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       augmentationsEnabled: readAugmentationsEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
       hacking,
+      cycles,
+      // In order: before the first BitNode (or none known), then each; nothing at all, one empty segment.
+      segments:
+        segments.size === 0
+          ? [{ index: -1, segment: segmentAt(-1) }]
+          : [...segments].sort(([a], [b]) => a - b).map(([index, segment]) => ({ index, segment })),
     };
   });
 }
@@ -648,6 +700,8 @@ export function runReport(
     ...windowSection(facts),
     "",
     ...progressSection(facts),
+    "",
+    ...facts.cycles.section(facts.factionWork.readings),
     "",
     ...actionsSection(facts),
     "",
@@ -813,11 +867,37 @@ function describeChange(first: string, last: string): string {
   return first === last ? `${last} (unchanged)` : `${first} → ${last}`;
 }
 
-/** Start to end, from the first and last snapshots of each tier in the window. */
+/**
+ * Start to end, from the first and last snapshots of each tier, a BitNode at a time (#244: never across a destroy,
+ * which starts money, hacking and the rest again), each with its milestones; then the hack loop's target over the
+ * window.
+ */
 function progressSection(facts: RunFacts): string[] {
-  const lines = ["2. Progress, first snapshot → last"];
-  const first = facts.mediumFirst;
-  const last = facts.mediumLast;
+  const lines = ["2. Progress, first snapshot → last, in each BitNode", facts.cycles.bitNodesLine()];
+  for (const { index, segment } of facts.segments) {
+    const bitNode = facts.cycles.bitNodes[index];
+    lines.push(`  ${bitNode?.label ?? facts.cycles.labelBefore()}, first snapshot → last:`);
+    lines.push(...segmentProgressLines(facts, segment).map((line) => `  ${line}`));
+    lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
+  }
+  lines.push(
+    "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
+      "(the owner's own scripts would show too):",
+  );
+  for (const stretch of facts.targets) {
+    lines.push(
+      `    ${stretch.servers.join(" + ")}: ${formatIsoTime(stretch.fromMs)} to ${formatIsoTime(stretch.toMs)}`,
+    );
+  }
+  if (facts.targets.length === 0) lines.push("    none moved");
+  return lines;
+}
+
+/** One BitNode's progress (#244), first snapshot → last of each tier in it. */
+function segmentProgressLines(facts: RunFacts, segment: ProgressSegment): string[] {
+  const lines: string[] = [];
+  const first = segment.mediumFirst;
+  const last = segment.mediumLast;
   if (first === undefined || last === undefined) {
     lines.push("  no medium snapshot (the player and the servers) in the window");
   } else {
@@ -835,11 +915,9 @@ function progressSection(facts: RunFacts): string[] {
     }
     lines.push(`  home RAM: ${describeChange(formatGigabytes(homeRamOf(first)), formatGigabytes(homeRamOf(last)))}`);
   }
-  const fastFirst = facts.fast[0];
-  const fastLast = facts.fast.at(-1);
-  if (fastFirst !== undefined && fastLast !== undefined) {
+  if (segment.fastSeen) {
     lines.push(
-      `  home RAM used: ${describeChange(formatGigabytes(fastFirst.homeRamUsed), formatGigabytes(fastLast.homeRamUsed))}`,
+      `  home RAM used: ${describeChange(formatGigabytes(segment.homeRamUsedFirst), formatGigabytes(segment.homeRamUsedLast))}`,
     );
   }
   if (first !== undefined && last !== undefined) {
@@ -868,7 +946,7 @@ function progressSection(facts: RunFacts): string[] {
     );
     lines.push(`  jobs: ${describeChange(listOrNone(jobsOf(playerFirst.jobs)), listOrNone(jobsOf(playerLast.jobs)))}`);
   }
-  const { slowFirst, slowLast } = facts;
+  const { slowFirst, slowLast } = segment;
   if (slowFirst === undefined || slowLast === undefined) {
     lines.push("  no slow snapshot (the BitNode, augmentations, Source-Files, purchased servers) in the window");
   } else {
@@ -885,18 +963,8 @@ function progressSection(facts: RunFacts): string[] {
     lines.push(
       `  purchased servers: ${describeChange(listOrNone(namesOf(slowFirst.purchasedServers)), listOrNone(namesOf(slowLast.purchasedServers)))}`,
     );
-    lines.push(...factionProgressLines(facts.factionState, slowLast));
+    lines.push(...factionProgressLines(segment.factionState, slowLast));
   }
-  lines.push(
-    "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
-      "(the owner's own scripts would show too):",
-  );
-  for (const stretch of facts.targets) {
-    lines.push(
-      `    ${stretch.servers.join(" + ")}: ${formatIsoTime(stretch.fromMs)} to ${formatIsoTime(stretch.toMs)}`,
-    );
-  }
-  if (facts.targets.length === 0) lines.push("    none moved");
   return lines;
 }
 
