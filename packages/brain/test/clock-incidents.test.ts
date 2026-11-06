@@ -40,7 +40,7 @@ function run3({
   gameStepAt = 354 as number | null,
   brainStepAt = 364 as number | null,
   stepMs = 2_678,
-  brainStepMs = stepMs,
+  brainStepMs = null as number | null,
   lastRound = 400,
 } = {}) {
   const fast = [];
@@ -48,7 +48,7 @@ function run3({
   for (let round = 330; round <= lastRound; round++) {
     const trueMs = 1_800 + 2_000 * round;
     const game = trueMs + (gameStepAt !== null && round >= gameStepAt ? stepMs : 0);
-    const received = trueMs + (brainStepAt !== null && round >= brainStepAt ? brainStepMs : 0);
+    const received = trueMs + (brainStepAt !== null && round >= brainStepAt ? (brainStepMs ?? stepMs) : 0);
     fast.push(point(received, game));
     if (round % 5 === 0) medium.push(point(received, game));
   }
