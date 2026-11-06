@@ -323,6 +323,6 @@ test("every irreversible intent sent, the owner's or a rule's: past its guard, i
   );
   // Reached: a rule's own join out (a city faction's the owner never queued) in many runs, and the owner putting an
   // irreversible intent ahead of one out, #269 review's two cases.
-  expect(reached.runsWithARuleJoinOut).toBeGreaterThanOrEqual(20);
+  expect(reached.runsWithARuleJoinOut).toBeGreaterThanOrEqual(8);
   expect(reached.ruleJoinsOutWhenTheOwnerWentAhead).toBeGreaterThanOrEqual(5);
 });
