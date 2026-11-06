@@ -66,6 +66,9 @@ const expectations: Record<string, EnvironmentExpectation> = {
   },
   "packages/ingame/tsconfig.json": nodeEnvironment,
   "packages/legacy/tsconfig.json": nodeEnvironment,
+  // The fast model (#260): pure, like core, so the planner can run it anywhere.
+  "packages/model/tsconfig.json": { allowed: [], rejected: [nodeGlobal, nodeModule, domGlobal] },
+  "packages/model/test/tsconfig.json": nodeEnvironment,
   "tools/tsconfig.json": nodeEnvironment,
   // These two configs' options are Node's, but their programs also see the DOM through what their files import:
   // @types/jsdom (the simulator's host emulates the page with jsdom; vitest.config.ts imports vitest/config, which

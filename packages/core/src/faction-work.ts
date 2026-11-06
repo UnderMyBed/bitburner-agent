@@ -119,6 +119,37 @@ export function factionReputationPerSecond(
   return perCycle * focusBonus * FACTION_WORK_CYCLES_PER_SECOND;
 }
 
+/** Passive reputation's least, a cycle (`Faction/FactionHelpers.tsx:162`): 1 every 2 minutes. */
+export const PASSIVE_REPUTATION_LEAST_PER_CYCLE = 1 / 120;
+
+/**
+ * The reputation a second a joined faction gains while not worked for (#260; `processPassiveFactionRepGain`,
+ * `Faction/FactionHelpers.tsx:132-170`): the best of its hacking, security and field work's rate a cycle (each type,
+ * whether or not the faction offers it), times 1% plus a tenth of a percent a point of favour, at most 10%; never
+ * below `PASSIVE_REPUTATION_LEAST_PER_CYCLE`; five cycles a second, focus aside; times the BitNode's
+ * `FactionPassiveRepGain` (1 in BN1, 0 in BN2: `BitNode/BitNode.tsx:587`). Not for the faction worked for, a gang's or
+ * a special one (the caller's).
+ */
+export function passiveFactionReputationPerSecond(
+  person: WorkingPerson,
+  favor: number,
+  sourceFile15Level: number,
+  factionWorkRepGain: number,
+  shareBonus = 1,
+  factionPassiveRepGain = 1,
+): number {
+  const favorMult = Math.min(0.1, favor / 1000 + 0.01);
+  const perCycle = Math.max(
+    ...(["hacking", "security", "field"] as const).map(
+      (workType) =>
+        factionReputationPerCycle(person, workType, favor, sourceFile15Level, factionWorkRepGain, shareBonus) *
+        favorMult,
+    ),
+    PASSIVE_REPUTATION_LEAST_PER_CYCLE,
+  );
+  return perCycle * FACTION_WORK_CYCLES_PER_SECOND * factionPassiveRepGain;
+}
+
 /**
  * The multipliers that make the brain's hacking pay more or come sooner (#203): skill, speed, money, growth, chance and
  * experience, and faction reputation, which brings the next augmentation nearer.

@@ -1,5 +1,13 @@
 export { AUGMENTATION_BITNODE_MULTIPLIERS, AUGMENTATIONS } from "./augmentation-data.ts";
 export {
+  type AugmentationShops,
+  augmentationEndgame,
+  augmentationShops,
+  type Endgame,
+  type EndgameHold,
+  installJudgement,
+} from "./augmentation-decision.ts";
+export {
   type AugmentationSet,
   affordableCounts,
   augmentationBuyOrder,
@@ -38,6 +46,7 @@ export {
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
 } from "./augmentation-plan.ts";
+export { type CountableWithMoney, countablesToCome, donationTermsOf, type HoldWork } from "./augmentation-reach.ts";
 export {
   AUGMENTATION_NAMES,
   AUGMENTATION_PRICE_GROWTH,
@@ -184,6 +193,21 @@ export {
   worldDaemonProblem,
 } from "./bitnodes.ts";
 export {
+  type CityGroupChoice,
+  type CityGroupValue,
+  chooseCityGroup,
+  cityGroupValues,
+  cityInvitation,
+  type InvitationInputs,
+  joinedGroup,
+  joinedOrInvited,
+  TIAN_DI_HUI_TRAVEL_CITY,
+  tianDiHuiVisit,
+  tianDiHuiWanted,
+  type Visit,
+  visitsFor,
+} from "./city-groups.ts";
+export {
   CLASS_LOCATION_NAMES,
   CLASS_LOCATIONS,
   CLASS_MONEY_GUARD_SECONDS,
@@ -300,9 +324,29 @@ export {
   hackingSkillValue,
   hackingValue,
   MAX_SKILL_LEVEL,
+  PASSIVE_REPUTATION_LEAST_PER_CYCLE,
+  passiveFactionReputationPerSecond,
   UNFOCUSED_WORK_BONUS,
   type WorkingPerson,
 } from "./faction-work.ts";
+export {
+  bestCandidate,
+  bestWorkRate,
+  type FactionWorkChoice,
+  factionWorkChoice,
+  heldWork,
+  RED_PILL_EARNED_SHARE,
+  redPillTarget,
+  redPillWork,
+  WORK_TO_AUGMENTATION_WITHIN,
+  WORK_TYPE_SWITCH_GAIN,
+  type WorkCandidate,
+  type WorkConditions,
+  type WorkResetInfo,
+  type WorkTarget,
+  workCandidates,
+  workTarget,
+} from "./faction-work-choice.ts";
 export {
   CITY_FACTION_GROUPS,
   DAEDALUS,
@@ -358,7 +402,7 @@ export {
   WEAKEN_SECURITY_PER_THREAD,
   WEAKEN_TIME_PER_HACK_TIME,
 } from "./hacking-ceiling.ts";
-export { HOME_RAM_LIMIT, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
+export { HOME_RAM_LIMIT, homeRamUpgradePrice, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
   type ActionName,

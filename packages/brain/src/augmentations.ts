@@ -40,7 +40,7 @@
 //   Pill is worth installing (core's `isWorthInstalling`), in the set (hacking value first, then the cheapest), the
 //   counts and bars, the countdown, the lookahead's reserve and "nothing left"; the progress says so.
 // - Held for Daedalus's count (#243, core's `daedalusCountHold`): an install the count rule chose that would leave the
-//   count one short is held while the last can be bought within the hold's window (`DAEDALUS_COUNT_HOLD_MS`, 30 min
+//   count one short is held while the last can be bought within the hold's window (`DAEDALUS_COUNT_HOLD_MS`, 20 min
 //   online from the cycle's first hold, kept in the store): its reputation by work at A5's rate for its seller, or a
 //   donation, and the money at the income (`countablesToCome`). No countdown meanwhile; the countdown's money (or the
 //   set's and the last's, if more) held back from cloud servers and home RAM; the progress, the dashboard and the log
@@ -48,45 +48,38 @@
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
-  acceptsDonations,
-  affordableCounts,
+  type AugmentationShops,
   augmentationBitNodeMultipliers,
-  augmentationBuyOrder,
   augmentationCost,
-  augmentationsSoldBy,
+  augmentationEndgame,
+  augmentationShops,
   type CountableToCome,
   type CountableWithinReach,
   chooseAugmentationsToBuy,
   countAfterInstall,
+  countablesToCome,
   countablesWithinReach,
   countdownExtensionMs,
   DAEDALUS,
   DAEDALUS_COUNT_HOLD_MS,
   type DaedalusCount,
   type Donation,
-  type DonationSeller,
-  type DonationTerms,
   daedalusCountHold,
   daedalusCountOf,
-  daedalusMissing,
   daedalusRequirements,
   daedalusSkillsReached,
-  donationsUnlocked,
+  donationTermsOf,
   donationToReach,
-  FACTION_NAMES,
   type FactionState,
   factionReadingKind,
   factionReadingOf,
-  factionReputationPerSecond,
+  type HoldWork,
   INSTALL_COUNTDOWN_MS,
   type InstallReason,
   type Intent,
-  installRule,
+  installJudgement,
   intentId,
-  isWorthInstalling,
-  type JoinedFaction,
   type MediumSnapshotData,
-  missingPrerequisites,
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
@@ -94,14 +87,16 @@ import {
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
-  type WorkingPerson,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
-import { bestWorkRate, redPillTarget, type WorkConditions, workConditionsOf, workingPersonOf } from "./factions.ts";
+import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
-import type { OwnersWork } from "./work.ts";
+
+// What's within reach beyond a joined seller's reputation moved to core (#260); these names stay here for the brain's
+// other modules and tests.
+export { type CountableWithMoney, countablesToCome, donationTermsOf, type HoldWork } from "@bitburner-agent/core";
 
 /** The dashboard's switch (#210): on unless turned off (owner decision 48). */
 export const AUGMENTATIONS_ENABLED_SETTING = "augmentations.enabled";
@@ -664,39 +659,6 @@ export function describeDonation({ faction, amount, reputation }: Donation): str
   return `${formatMoney(amount)} to ${faction} (for ${Math.round(reputation).toLocaleString("en-US")} reputation)`;
 }
 
-/**
- * What buying with donations needs now (#225): the joined factions taking donations with them unlocked (the gang's
- * isn't modelled, none in BN1), selling each of `wanted` (augmentations no joined seller's reputation reaches) and
- * NeuroFlux Governor, and the multipliers on a donation's reputation.
- */
-export function donationTermsOf(
-  joined: readonly JoinedFaction[],
-  shops: ReadonlyMap<string, readonly string[]>,
-  wanted: readonly string[],
-  factionRep: number,
-  multipliers: { FactionWorkRepGain: number; FavorToDonateToFaction: number },
-): DonationTerms {
-  // No gang is modelled (none in BN1): the gang's faction would take none.
-  const donors = joined.filter(
-    (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
-  );
-  const sellersOf = (name: string): DonationSeller[] =>
-    donors
-      .filter((faction) => shops.get(faction.name)?.includes(name))
-      .map(({ name: faction, reputation }) => ({ faction, reputation }));
-  const sellers: Record<string, DonationSeller[]> = {};
-  for (const name of wanted) {
-    const each = sellersOf(name);
-    if (each.length > 0) sellers[name] = each;
-  }
-  return {
-    sellers,
-    neuroFluxSellers: sellersOf(NEUROFLUX_GOVERNOR),
-    factionRep,
-    factionWorkRepGain: multipliers.FactionWorkRepGain,
-  };
-}
-
 /** The bars' clock (#222): the game's time online since the install `lastAugReset`, and the last slow snapshot's. */
 export interface OnlineClock {
   lastAugReset: number;
@@ -768,146 +730,6 @@ export function readCountHold(
     throw new Error(`the store's ${AUGMENTATION_COUNT_HOLD_SETTING} isn't a hold the brain wrote`);
   }
   return { lastAugReset, sinceOnlineMs, ...(ended === true ? { ended: true } : {}) };
-}
-
-/** One to come for Daedalus's count (#243), with its money: what it adds to the set's, and any donation. */
-export type CountableWithMoney = CountableToCome & { money: number };
-
-/**
- * Who works for a faction while an install is held (#243): the owner's work wins (only faction work at the seller
- * earns it reputation, at that work type); else A5 (its switch on) works for the held augmentation's seller.
- */
-export interface HoldWork {
-  owners: OwnersWork | null;
-  brainWorks: boolean;
-}
-
-/**
- * Each augmentation a joined faction sells that would add one to Daedalus's count after an install (#243): not
- * NeuroFlux Governor or The Red Pill, not owned or queued (`state`'s queue) or in `set`, its prerequisites owned,
- * queued or in the set; and when it can be bought, by its soonest route, each the later of its reputation and its
- * money:
- * - reached at a joined seller (`way` "money"): its money alone;
- * - a donation (`terms`, at the seller whose donation is least, from its reputation now, #225): at once, with the
- *   donation's money; a seller the set already donates to is raised to the larger reputation, not both (as
- *   `planDonations` has it, legacy `faction-manager.js:891`), so only the difference is its;
- * - work, the sooner of that and a donation: only at a seller someone works for: the owner's faction work there, at
- *   its work type; or, with no owner's work and A5's switch on, A5 under the hold (`bestWorkRate`, the work's formula;
- *   the share's bonus left out, the safe side);
- * - its money: the set with it, in buy order (`augmentationBuyOrder`: a dear one goes first), with the set's donations
- *   and its own, beyond `money`, at `income` a second. With no income measured, only what `money` covers, unless
- *   `assumeMoney` (a hold's window already open: a restart or a gap lost the income for 10 minutes), when the money
- *   is taken as coming until the income is measured or the window ends.
- */
-export function countablesToCome({
-  sold,
-  state,
-  set,
-  joined,
-  shops,
-  terms,
-  person,
-  conditions,
-  work,
-  money,
-  income,
-  assumeMoney = false,
-}: {
-  sold: readonly string[];
-  state: AugmentationPurchaseState;
-  set: AugmentationSet;
-  joined: readonly JoinedFaction[];
-  shops: ReadonlyMap<string, readonly string[]>;
-  terms: DonationTerms | undefined;
-  person: WorkingPerson;
-  conditions: WorkConditions;
-  work: HoldWork;
-  money: number;
-  income: number | null;
-  assumeMoney?: boolean;
-}): CountableWithMoney[] {
-  const setNames = set.purchases.map((purchase) => purchase.name);
-  const afterSet = { ...state, queued: [...state.queued, ...setNames] };
-  const moneyMsFor = (addedMoney: number) => {
-    const moneyShort = set.money + set.donationMoney + addedMoney - money;
-    if (moneyShort <= 0) return 0;
-    if (income !== null && income > 0) return (moneyShort / income) * 1000;
-    return income === null && assumeMoney ? 0 : Number.POSITIVE_INFINITY;
-  };
-  /** The work's reputation a second at `seller` under the hold, or null where nobody works for it. */
-  const workRate = (seller: JoinedFaction): number | null => {
-    if (work.owners !== null) {
-      if (work.owners.kind !== "faction" || work.owners.faction !== seller.name) return null;
-      const { keep: _keep, ...rateConditions } = conditions;
-      const perSecond = factionReputationPerSecond(person, work.owners.workType, {
-        favor: seller.favor,
-        ...rateConditions,
-      });
-      return perSecond > 0 ? perSecond : null;
-    }
-    return work.brainWorks ? (bestWorkRate(person, seller, conditions)?.perSecond ?? null) : null;
-  };
-  const toCome: CountableWithMoney[] = [];
-  for (const name of sold) {
-    if (name === NEUROFLUX_GOVERNOR || name === THE_RED_PILL) continue;
-    if (Object.hasOwn(afterSet.installed, name) || afterSet.queued.includes(name)) continue;
-    if (missingPrerequisites(name, afterSet).length > 0) continue;
-    const { reputation } = augmentationCost(name, afterSet);
-    const priceAdded = purchaseSequenceCost(augmentationBuyOrder([...setNames, name]), state).money - set.money;
-    const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
-    const reachedAt = sellers.find((seller) => seller.reputation >= reputation)?.name;
-    if (reachedAt !== undefined) {
-      toCome.push({
-        augmentation: name,
-        faction: reachedAt,
-        way: "money",
-        etaMs: moneyMsFor(priceAdded),
-        money: priceAdded,
-      });
-      continue;
-    }
-    const routes: CountableWithMoney[] = [];
-    for (const seller of terms?.sellers[name] ?? []) {
-      // The set's donation there, if any, raised to this one's reputation: only the difference is this one's.
-      const planned = set.donations.find((each) => each.faction === seller.faction);
-      const donateFor = (target: number) =>
-        donationToReach(target - seller.reputation, terms?.factionRep ?? 1, terms?.factionWorkRepGain ?? 1);
-      const donation =
-        planned === undefined
-          ? donateFor(reputation)
-          : donateFor(Math.max(planned.reputation, reputation)) - planned.amount;
-      const addedMoney = priceAdded + donation;
-      routes.push({
-        augmentation: name,
-        faction: seller.faction,
-        way: "donation",
-        etaMs: moneyMsFor(addedMoney),
-        money: addedMoney,
-      });
-    }
-    for (const seller of sellers) {
-      const perSecond = workRate(seller);
-      if (perSecond === null) continue;
-      const workMs = ((reputation - seller.reputation) / perSecond) * 1000;
-      routes.push({
-        augmentation: name,
-        faction: seller.name,
-        way: "work",
-        etaMs: Math.max(workMs, moneyMsFor(priceAdded)),
-        money: priceAdded,
-      });
-    }
-    // The soonest; a tie (both at once, say) to the cheaper: the seller whose donation is least.
-    const soonest = routes.reduce<CountableWithMoney | undefined>(
-      (best, route) =>
-        best === undefined || route.etaMs < best.etaMs || (route.etaMs === best.etaMs && route.money < best.money)
-          ? route
-          : best,
-      undefined,
-    );
-    if (soonest !== undefined) toCome.push(soonest);
-  }
-  return toCome;
 }
 
 /** Whether someone works for `faction` under a hold (#243 review): the owner's faction work there, or A5's. */
@@ -1535,30 +1357,11 @@ export class AugmentationRule {
       sourceFile11Level: ownedSF["11"] ?? 0,
       bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
     };
-    const joined = state.joined.filter((faction) => FACTION_NAMES.includes(faction.name));
-    const shops = new Map(
-      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
-    );
-    const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
-    const reputationOf = (faction: string) => joined.find((each) => each.name === faction)?.reputation ?? 0;
-    /** The joined seller with the most reputation covering what `augmentation` needs now, or null. */
-    const sellerOf = (augmentation: string): string | null => {
-      const needed = augmentationCost(augmentation, purchaseState).reputation;
-      let best: string | null = null;
-      for (const [faction, shop] of shops) {
-        if (
-          shop.includes(augmentation) &&
-          reputationOf(faction) >= needed &&
-          (best === null || reputationOf(faction) > reputationOf(best))
-        ) {
-          best = faction;
-        }
-      }
-      return best;
-    };
     const owned = (name: string) => Object.hasOwn(ownedAugs, name) || queue.includes(name);
-    const sold = [...new Set([...shops.values()].flat())].filter((name) => name !== NEUROFLUX_GOVERNOR);
-    const reached = sold.filter((name) => !owned(name) && sellerOf(name) !== null);
+    // The joined factions' shops and what's reached: core's (#260), the fast model's too.
+    const shopsView = augmentationShops(state.joined, currentNode, purchaseState, owned);
+    const { joined, shops, sold, reached, sellerOf, reputationOf } = shopsView;
+    const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
     const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
     const hackingLevel = player.person.skills.hacking;
     // Short of Daedalus's count (#228): any augmentation counts.
@@ -1596,9 +1399,7 @@ export class AugmentationRule {
         purchaseState,
         installable,
         queue,
-        shops,
-        joined,
-        reputationOf,
+        shops: shopsView,
         destroyWanted,
       });
       // The Red Pill's donation first (#225 review): the counts are budgeted without its money.
@@ -1631,47 +1432,24 @@ export class AugmentationRule {
       const onlineMs = this.#onlineClock?.lastAugReset === resetInfo.lastAugReset ? this.#onlineClock.onlineMs : 0;
       // The game's time since the last install counts the time the game was closed: only a quick install's limit.
       const sinceResetMs = Math.max(0, slowGameTimeMs - resetInfo.lastAugReset);
-      const neuroFluxReputation = Math.max(
-        0,
-        ...[...shops].filter(([, shop]) => shop.includes(NEUROFLUX_GOVERNOR)).map(([faction]) => reputationOf(faction)),
-      );
       /**
-       * The counts and the rule with `spare` money and the set it covers. Nothing left: no augmentation worth installing
-       * at the joined factions that isn't owned or in the set and could be bought after it (its prerequisites owned or
-       * in the set; one sold by no joined faction never can be). `laterMs` on, both clocks are that much later (the
-       * lookahead's: a quick install's 20 minutes may be over by then, #222 review).
+       * The counts and the rule with `spare` money and the set it covers (core's `installJudgement`, #260). `laterMs`
+       * on, both clocks are that much later (the lookahead's: a quick install's 20 minutes may be over by then, #222
+       * review).
        */
-      const judge = (spare: number, covered: AugmentationSet, laterMs = 0) => {
-        const names = covered.purchases.map((purchase) => purchase.name);
-        // Counted from what an install would really install, never an `augmentationNotQueued` (#222 review).
-        const counts = affordableCounts({
+      const judge = (spare: number, covered: AugmentationSet, laterMs = 0) =>
+        installJudgement({
           state: purchaseState,
           installable,
           set: covered,
           money: spare,
-          neuroFluxReputation,
-          donations: terms,
+          shops: shopsView,
+          owned,
+          terms,
           short,
-        });
-        const afterSet = { installed: ownedAugs, queued: [...queue, ...names] };
-        const left = sold.filter(
-          (name) =>
-            isWorthInstalling(name, short) &&
-            !owned(name) &&
-            !names.includes(name) &&
-            missingPrerequisites(name, afterSet).length === 0,
-        );
-        const rule = installRule({
           onlineMs: onlineMs + laterMs,
           sinceResetMs: sinceResetMs + laterMs,
-          installing: installable.length + names.length,
-          neuroFluxLevels: counts.neuroFluxLevels,
-          nothingLeft: left.length === 0,
-          affordable: counts.affordable,
-          affordableWithNeuroFlux: counts.affordableWithNeuroFlux,
         });
-        return { counts, rule };
-      };
       const { counts, rule } = judge(budget, set);
       const progress = (
         held: string | null,
@@ -2154,8 +1932,6 @@ export class AugmentationRule {
     installable,
     queue,
     shops,
-    joined,
-    reputationOf,
     destroyWanted,
   }: {
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -2164,108 +1940,64 @@ export class AugmentationRule {
     /** What an install would install, and the queue the plan counts (with each `augmentationNotQueued`). */
     installable: string[];
     queue: string[];
-    shops: Map<string, string[]>;
-    joined: readonly JoinedFaction[];
-    reputationOf: (faction: string) => number;
+    shops: AugmentationShops;
     destroyWanted: boolean;
   }): Endgame {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
-    const count = (value: number) => Math.floor(value).toLocaleString("en-US");
-    if (Object.hasOwn(ownedAugs, THE_RED_PILL)) {
-      if (!destroyWanted) return { kind: "none" };
-      return {
-        kind: "hold",
-        why: "destroy",
-        reserve: 0,
-        waitingFor:
-          `the BitNode's destroy: ${THE_RED_PILL} is installed, and an install would reset the hacking level ` +
-          "w0r1d_d43m0n needs (the destroy switched on)",
-      };
-    }
-    if (installable.includes(THE_RED_PILL)) return { kind: "redPill", donation: null };
-    if (queue.includes(THE_RED_PILL)) {
-      return {
-        kind: "hold",
-        why: "redPillNotQueued",
-        reserve: 0,
-        waitingFor:
-          `${THE_RED_PILL} reported bought but not in the faction state's queue (the augmentationNotQueued alert): ` +
-          "no install without it",
-      };
-    }
-    const needed = augmentationCost(THE_RED_PILL, purchaseState).reputation;
-    const sellers = [...shops].filter(([, shop]) => shop.includes(THE_RED_PILL)).map(([faction]) => faction);
-    if (sellers.some((faction) => reputationOf(faction) >= needed)) return { kind: "redPill", donation: null };
-    const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
-    const sellerFactions = joined.filter((faction) => sellers.includes(faction.name));
-    // Donations unlocked at a seller (#225, A8's way): its reputation bought once the money covers the donation, held
-    // back from cloud servers, home RAM and programs meanwhile; an install now would lose what's earned toward it. No
-    // gang is modelled (none in BN1): the gang's faction would take none.
-    const donor = sellerFactions.find(
-      (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
-    );
-    if (donor !== undefined) {
-      const amount = donationToReach(
-        needed - donor.reputation,
-        player.person.mults.faction_rep,
-        multipliers.FactionWorkRepGain,
-      );
-      if (player.money >= amount) {
-        return { kind: "redPill", donation: { faction: donor.name, reputation: needed, amount } };
-      }
-      return {
-        kind: "hold",
-        why: "redPill",
-        reserve: amount,
-        waitingFor:
-          `${THE_RED_PILL}: the money for ${donor.name}'s donation, ${formatMoney(amount)} for its reputation ` +
-          `(${formatMoney(player.money)} now)`,
-      };
-    }
-    // Daedalus's favour (#225, legacy `autopilot.js:920-931`): its reputation this cycle unlocks its donations at the
-    // next install, A5's target for it (`redPillTarget`: not once 90% of The Red Pill's is earned, legacy
-    // `work-for-factions.js:829`). Never where they're unlocked from the start (BN8's `FavorToDonateToFaction` of 0):
-    // the donor above.
-    const daedalus = sellerFactions.find((faction) => faction.name === DAEDALUS);
-    const target = daedalus === undefined ? null : redPillTarget(needed, daedalus, multipliers.FavorToDonateToFaction);
-    if (daedalus !== undefined && target?.reason === "donations" && daedalus.reputation >= target.reputation) {
-      return { kind: "daedalusDonations" };
-    }
-    if (sellers.length > 0) {
-      const best = sellers.reduce((most, each) => (reputationOf(each) > reputationOf(most) ? each : most));
-      return {
-        kind: "hold",
-        why: "redPill",
-        reserve: 0,
-        waitingFor:
-          `${THE_RED_PILL}: ${best}'s reputation ${count(reputationOf(best))} of ${count(needed)} (an install now ` +
-          "would lose it)",
-      };
-    }
-    if (!augmentationsSoldBy(DAEDALUS, currentNode, null).includes(THE_RED_PILL)) return { kind: "none" };
-    const required = daedalusRequirements(currentNode, ownedSF);
-    const skills = player.person.skills;
-    // Installed as Daedalus counts them (#228, core's `daedalusCountOf`, A5's and A6's too): NeuroFlux Governor once.
-    const { installed } = daedalusCountOf({
+    // The decision is core's (#260), the fast model's too; the words are the brain's.
+    const endgame = augmentationEndgame({
+      installed: ownedAugs,
+      installable,
+      queue,
+      state: purchaseState,
+      shops,
+      money: player.money,
+      factionRep: player.person.mults.faction_rep,
+      figures: { money: player.money, skills: player.person.skills },
       currentNode,
       ownedSF,
-      installed: ownedAugs,
-      joined,
-      invitations: [],
+      destroyWanted,
     });
-    const figures = { augmentations: installed, money: player.money, skills };
-    const missing = daedalusMissing(figures, required);
-    // Held only with nothing but the money missing: a count or a skill short is missing too.
-    const onlyMoney = missing.length === 0 || (missing.length === 1 && figures.money < required.money);
-    if (!onlyMoney) return { kind: "none" };
-    return {
+    if (endgame.kind !== "hold") return endgame;
+    const count = (value: number) => Math.floor(value).toLocaleString("en-US");
+    const hold = (why: HoldReason, waitingFor: string): Endgame => ({
       kind: "hold",
-      why: "daedalus",
-      reserve: required.money,
-      waitingFor:
-        `${DAEDALUS}'s invitation (${missing.join(", ") || "the game's next check"}): an install now would reset the ` +
-        "money and the hacking level",
-    };
+      why,
+      reserve: endgame.reserve,
+      waitingFor,
+    });
+    switch (endgame.why) {
+      case "destroy":
+        return hold(
+          "destroy",
+          `the BitNode's destroy: ${THE_RED_PILL} is installed, and an install would reset the hacking level ` +
+            "w0r1d_d43m0n needs (the destroy switched on)",
+        );
+      case "redPillNotQueued":
+        return hold(
+          "redPillNotQueued",
+          `${THE_RED_PILL} reported bought but not in the faction state's queue (the augmentationNotQueued alert): ` +
+            "no install without it",
+        );
+      case "redPill":
+        return "donation" in endgame
+          ? hold(
+              "redPill",
+              `${THE_RED_PILL}: the money for ${endgame.donation.faction}'s donation, ` +
+                `${formatMoney(endgame.donation.amount)} for its reputation (${formatMoney(endgame.money)} now)`,
+            )
+          : hold(
+              "redPill",
+              `${THE_RED_PILL}: ${endgame.seller.faction}'s reputation ${count(endgame.seller.reputation)} of ` +
+                `${count(endgame.seller.needed)} (an install now would lose it)`,
+            );
+      case "daedalus":
+        return hold(
+          "daedalus",
+          `${DAEDALUS}'s invitation (${endgame.missing.join(", ") || "the game's next check"}): an install now would ` +
+            "reset the money and the hacking level",
+        );
+    }
   }
 
   /**

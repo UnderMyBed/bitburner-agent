@@ -1,0 +1,5 @@
+{
+  // Pure, like core: no DOM and no Node, so the planner can run it anywhere.
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"]
+}

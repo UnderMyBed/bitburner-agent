@@ -12,6 +12,8 @@ import {
   hackingSkillValue,
   hackingValue,
   MAX_SKILL_LEVEL,
+  PASSIVE_REPUTATION_LEAST_PER_CYCLE,
+  passiveFactionReputationPerSecond,
   UNFOCUSED_WORK_BONUS,
   type WorkingPerson,
 } from "../src/faction-work.ts";
@@ -194,4 +196,29 @@ test("hackingValue: the hacking skill weighed by the level, the other multiplier
   expect(hackingValue("Augmented Targeting I", 300)).toBe(0);
   expect(hackingValue("The Red Pill", 300)).toBe(0);
   expect(() => hackingValue("No Such Augmentation", 300)).toThrow(/No Such Augmentation/);
+});
+
+test("passive reputation (#260): 1% plus a tenth of a percent a point of favour of the best rate a cycle, at most 10%", () => {
+  // FRESH at favour 0: hacking work's 55/975 a cycle, 1% of it, under the least of 1/120: the least, 5 a second.
+  expect(passiveFactionReputationPerSecond(FRESH, 0, 0, 1)).toBeCloseTo(
+    PASSIVE_REPUTATION_LEAST_PER_CYCLE * FACTION_WORK_CYCLES_PER_SECOND,
+    12,
+  );
+  // MOVED at favour 50: 6% of its best type's rate a cycle, with the share bonus; none in a BitNode with 0.
+  const best = Math.max(
+    ...(["hacking", "security", "field"] as const).map((type) => factionReputationPerCycle(MOVED, type, 50, 0, 1, 1.4)),
+  );
+  expect(passiveFactionReputationPerSecond(MOVED, 50, 0, 1, 1.4)).toBeCloseTo(best * 0.06 * 5, 12);
+  expect(
+    passiveFactionReputationPerSecond(MOVED, 500, 0, 1, 1.4) / passiveFactionReputationPerSecond(MOVED, 90, 0, 1, 1.4),
+  ).toBeCloseTo(
+    factionReputationPerCycle(MOVED, "hacking", 500, 0, 1, 1.4) /
+      factionReputationPerCycle(MOVED, "hacking", 90, 0, 1, 1.4),
+    9,
+  );
+  expect(passiveFactionReputationPerSecond(MOVED, 50, 0, 1, 1.4, 0)).toBe(0);
+  // The game's constants: 1 every 2 minutes, favour / 1000 + 0.01 to 0.1 (`Faction/FactionHelpers.tsx:157-162`).
+  const helpers = source("Faction/FactionHelpers.tsx");
+  expect(helpers).toContain("Math.min(0.1, faction.favor / 1000 + 0.01)");
+  expect(helpers).toContain("fRep * favorMult, 1 / 120)");
 });

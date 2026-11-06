@@ -3,6 +3,7 @@
 // 34's pattern). Which purchase goes first, of this and the programs, is the controller's (desired-state.ts).
 import {
   HOME_RAM_LIMIT,
+  homeRamUpgradePrice,
   isUpgradableHomeRam,
   type MediumSnapshotData,
   type SlowSnapshotData,
@@ -10,6 +11,9 @@ import {
 } from "@bitburner-agent/core";
 import { readSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
+
+// Moved to core (#260), for the fast model too; the name stays here for the brain's tests.
+export { homeRamUpgradePrice } from "@bitburner-agent/core";
 
 export const HOME_RAM_ENABLED_SETTING = "homeRam.enabled";
 
@@ -19,15 +23,6 @@ const RESTRICTED_HOME_RAM_LIMIT = 128;
 /** The dashboard's switch: on unless the owner turned it off. */
 export function readHomeRamEnabled(store: TelemetryStore): boolean {
   return readSwitch(store, HOME_RAM_ENABLED_SETTING, true);
-}
-
-/**
- * What doubling home's RAM from `ram` GB costs in BN1, as the game works it out
- * (`PersonObjects/Player/PlayerObjectServerMethods.ts:30`), in the same order so the result is the same number. Other
- * BitNodes multiply it (`HomeComputerRamCost`, `BitNode/BitNode.tsx`): a later slice adds them.
- */
-export function homeRamUpgradePrice(ram: number): number {
-  return ram * 32_000 * 1.58 ** Math.log2(ram);
 }
 
 /** Home's RAM, the next upgrade and why it isn't bought yet. */
