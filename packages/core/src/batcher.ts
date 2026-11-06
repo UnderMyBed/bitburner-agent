@@ -921,10 +921,11 @@ export interface LaunchOrder {
 
 /**
  * Whether a batch's hack must wait (#246's review): another of its batch's orders waits for room. Out, the hack would
- * leave the batch's books, and the waiting order with them: a hack without its grow, and no short counted.
+ * leave the batch's books, and the waiting order with them: a hack without its grow, and no short counted. Not `hack`:
+ * the batcher runs this, and the game would charge hack's RAM for the name (RamCalculations.ts:436).
  */
-export function hackWaitsForItsBatch(hack: LaunchOrder, waiting: Iterable<LaunchOrder>): boolean {
-  for (const each of waiting) if (each !== hack && each.batch === hack.batch) return true;
+export function hackWaitsForItsBatch(hackOrder: LaunchOrder, waiting: Iterable<LaunchOrder>): boolean {
+  for (const each of waiting) if (each !== hackOrder && each.batch === hackOrder.batch) return true;
   return false;
 }
 
