@@ -25,13 +25,19 @@ test("20 virtual minutes from a fresh start: the hack loop's progress, its purch
   expect(line("  brain starts:")).toBe(
     "  brain starts: 0; Agent connections: 1, disconnections: 0; relaunches: 0; deploys: 1; save backups: 1",
   );
-  // Progress: money and hacking up, TOR, programs and home RAM bought, servers rooted, n00dles worked.
-  expect(line("  money: $1,262 → $")).toBeDefined();
-  expect(line("  hacking: 1 → ")).toMatch(/^ {2}hacking: 1 → \d{2,}$/);
-  expect(line("  TOR router:")).toBe("  TOR router: no → yes");
-  expect(line("  port openers:")).toMatch(/^ {2}port openers: none → BruteSSH\.exe/);
-  expect(line("  home RAM:")).toMatch(/^ {2}home RAM: 8 GB → (16|32|64) GB$/);
-  expect(line("  the game's servers rooted:")).toMatch(/^ {2}the game's servers rooted: 0 → \d{2}$/);
+  // Progress, under its one BitNode (#244): money and hacking up, TOR, programs and home RAM bought, servers rooted,
+  // n00dles worked.
+  expect(line("  BitNodes: BN1.1 from ")).toMatch(/, not destroyed, \d+ min( \d+ s)? by the window's last record$/);
+  expect(line("  BN1.1, first snapshot → last:")).toBeDefined();
+  expect(line("    money: $1,262 → $")).toBeDefined();
+  expect(line("    hacking: 1 → ")).toMatch(/^ {4}hacking: 1 → \d{2,}$/);
+  expect(line("    TOR router:")).toBe("    TOR router: no → yes");
+  expect(line("    port openers:")).toMatch(/^ {4}port openers: none → BruteSSH\.exe/);
+  expect(line("    home RAM:")).toMatch(/^ {4}home RAM: 8 GB → (16|32|64) GB$/);
+  expect(line("    the game's servers rooted:")).toMatch(/^ {4}the game's servers rooted: 0 → \d{2}$/);
+  // Its one cycle (#244): the fresh start's, not ended.
+  expect(line("    cycle 1 from ")).toMatch(/, not ended in the window$/);
+  expect(line("      held back by: ")).toBeDefined();
   expect(line("    n00dles: ")).toBeDefined();
   // The purchases, each done on its first try through the simulator's own effectors.
   for (const id of ["buyTor(Alpha Enterprises)", "buyProgram(BruteSSH.exe)", "upgradeHomeRam(8, Alpha Enterprises)"]) {

@@ -266,9 +266,13 @@ describe("the sections", () => {
       "  BitNode: 1 (unchanged)",
       "  Source-Files: none → SF4.3",
       "  purchased servers: none → pserv-0",
-      // The faction state (#197): reputation first → last, each invitation as first seen, the queue counted.
-      "  faction reputation and favour, first reading → last:\n    CyberSec: reputation 100 → 1,235, favour 0 (unchanged)",
-      `  faction invitations, as first seen:\n    CyberSec, ${at(10 * SECOND)}\n    Sector-12, ${at(RUN_MS)}`,
+      // The faction state (#197): reputation first → last, each invitation as first seen, the queue counted; under
+      // its BitNode (#244).
+      "    faction reputation and favour, first reading → last:\n      CyberSec: reputation 100 → 1,235, favour 0 " +
+        "(unchanged)",
+      `    faction invitations, as first seen:\n      CyberSec, ${at(10 * SECOND)}\n      Sector-12, ${at(RUN_MS)}`,
+      "  BitNodes: BN1.1 from 1970-01-01T00:00:00.000Z (before the window), not destroyed, ",
+      "  BN1.1, first snapshot → last:\n    money: $11,000 → $1,201,000\n",
       "  augmentations queued: none → NeuroFlux Governor ×2, BitWire",
       `    n00dles: ${at(20 * SECOND)} to ${at(RUN_MS)}`,
     ]) {
@@ -980,8 +984,8 @@ describe("each failure is a FAIL, with its line", () => {
     snapshot("fast", 10 * SECOND, fastData());
     snapshot("slow", 10 * SECOND, slowData([], {}, {}, { backend: "ui", state: null, problem: "no game page" }));
     const { text } = report();
-    expect(text).toContain("  faction reputation and favour, first reading → last:\n    never read");
-    expect(text).toContain("  faction invitations, as first seen:\n    never read");
+    expect(text).toContain("    faction reputation and favour, first reading → last:\n      never read");
+    expect(text).toContain("    faction invitations, as first seen:\n      never read");
     expect(text).toContain("  augmentations queued: unknown (unchanged)");
   });
 

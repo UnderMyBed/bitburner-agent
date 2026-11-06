@@ -231,6 +231,25 @@ test.each(SEEDS)(
         "reach",
     );
     expect(second.failures).toEqual([]);
+    // The cycles (#244): the quick install's, the NeuroFlux Governor one's, and the third under way, each judged.
+    const cycles = second.text
+      .slice(second.text.indexOf("2b. Augmentation cycles"), second.text.indexOf("3. Actions"))
+      .split("\n");
+    expect(cycles).toContainEqual(
+      expect.stringMatching(/^ {4}cycle 1 from .*, ended by an install \(quick install\)$/),
+    );
+    expect(cycles).toContainEqual(
+      expect.stringMatching(/^ {6}installed: \d+ \(.*Neurotrainer I.*\); Daedalus's count 0 → 6 of 30$/),
+    );
+    expect(cycles).toContainEqual(expect.stringMatching(/^ {4}cycle 2 from .*, ended by an install \(.+\)$/));
+    expect(cycles).toContainEqual(
+      expect.stringMatching(/^ {6}installed: \d+ \(NeuroFlux Governor ×\d+\); Daedalus's count 6 → 6 of 30$/),
+    );
+    expect(cycles).toContainEqual(expect.stringMatching(/^ {4}cycle 3 from .*, not ended in the window$/));
+    expect(cycles.filter((line) => /^ {6}held back by: \w+.* \(\d+% of .* online judged\)/.test(line))).toHaveLength(3);
+    expect(cycles).toContainEqual(
+      expect.stringMatching(/^ {6}favour: CyberSec 0 → \d+(\.\d+)?( \(predicted\))?; donations at 150$/),
+    );
     console.log(
       `seed ${seed}: hacking ${levelBefore} 17 min after the start, ${levelAfter} 20 min after the install (home ` +
         `${homeRamBefore} GB, then ${homeRam()} GB); ` +
