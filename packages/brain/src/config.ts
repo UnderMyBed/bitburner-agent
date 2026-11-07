@@ -34,6 +34,12 @@ export interface BrainConfig {
   steamAppId: number;
   /** The game's executable name, as tasklist shows it. */
   gameExecutable: string;
+  /**
+   * Thinning at the brain's start (#283), opted into: the days before the newest snapshot the telemetry store keeps
+   * whole; older fast and medium snapshots are thinned, which can't be undone. Absent (the default, never written) or
+   * null: no thinning at the start; `npm run thin` thins by hand.
+   */
+  telemetryKeptWholeDays?: number | null;
 }
 
 /**
@@ -125,6 +131,11 @@ export function defaultConfig(): BrainConfig {
   };
 }
 
+/** Whether `days` can be the days a store keeps whole: a whole number, at least 1. */
+export function isKeptWholeDays(days: unknown): days is number {
+  return Number.isInteger(days) && (days as number) >= 1;
+}
+
 /** Reads `<dataDirectory>/config.json`, creating the directory and the file (with a new token) the first time. */
 export function loadOrCreateConfig(dataDirectory: string): BrainConfig {
   const configPath = path.join(dataDirectory, CONFIG_FILE_NAME);
@@ -135,6 +146,19 @@ export function loadOrCreateConfig(dataDirectory: string): BrainConfig {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
+  return readConfigFile(configPath);
+}
+
+/**
+ * Reads `<dataDirectory>/config.json` without creating it (`npm run thin`, #283's review): null where there's none,
+ * and a config that isn't valid throws, as for the brain.
+ */
+export function readConfig(dataDirectory: string): BrainConfig | null {
+  const configPath = path.join(dataDirectory, CONFIG_FILE_NAME);
+  return existsSync(configPath) ? readConfigFile(configPath) : null;
+}
+
+function readConfigFile(configPath: string): BrainConfig {
   let config: unknown;
   try {
     config = JSON.parse(readFileSync(configPath, "utf8"));
@@ -183,6 +207,10 @@ function configProblem(config: unknown): string | null {
   // A bare file name: it goes into tasklist's filter and taskkill's arguments.
   if (typeof fields.gameExecutable !== "string" || !/^[\w .-]+\.exe$/i.test(fields.gameExecutable)) {
     return "gameExecutable must be the game's .exe file name, with no folder (the default is bitburner.exe)";
+  }
+  const days = fields.telemetryKeptWholeDays;
+  if (days !== undefined && days !== null && !isKeptWholeDays(days)) {
+    return "telemetryKeptWholeDays must be a whole number of days, at least 1, or absent or null for no thinning at the start";
   }
   return null;
 }

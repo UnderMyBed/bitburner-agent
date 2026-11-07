@@ -2,13 +2,15 @@
 // data in the repo's .data/ unless told otherwise. It runs the control channel and stores what the Agent reports,
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
 // to run (the hack loop, #134, and the intents, #141: the hacking programs, #136, home's RAM, #138, and the owner's
-// manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself.
+// manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself. It holds a lock file
+// in its data directory while it runs (#283's review), and at start thins the store's old data if config.json opts in.
 import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
+import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
@@ -24,6 +26,7 @@ import { brainChannel, recordChannelEvents, recordEvents } from "./record-channe
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
 import { readShareEnabled } from "./share.ts";
+import { thinStoreAtStart } from "./store-thinning.ts";
 import { setSupervisionPaused } from "./supervision.ts";
 import { Supervisor, shouldSupervise } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
@@ -43,12 +46,40 @@ function log(message: string): void {
 try {
   const dataDirectory = resolveDataDirectory(process.argv.slice(2), process.env);
   const config = loadOrCreateConfig(dataDirectory);
+  // Before the store is opened, so `npm run thin` never thins under a brain starting, nor one about to be restarted
+  // (the runner's process is in it too). Removed only on a clean stop: after a crash it stays, and the runner's process
+  // keeps it counting until the restart claims it again (#297's re-review). A lock it can't write is logged, not fatal.
+  const runnerPid = Number(process.env[BRAIN_RUNNER_PID_VARIABLE]);
+  const holdsLock = claimBrainLock(
+    dataDirectory,
+    { pid: process.pid, runnerPid: Number.isInteger(runnerPid) && runnerPid > 0 ? runnerPid : null },
+    log,
+  );
+  process.on("exit", (code) => {
+    if (code === 0 && holdsLock) removeBrainLock(dataDirectory, process.pid);
+  });
   const release = brainRelease();
   // Built from this checkout's sources on every start, so the brain always deploys the code it was started from.
   const buildDirectory = path.join(dataDirectory, INGAME_BUILD_DIRECTORY_NAME);
   await buildInGameBundles({ outputDirectory: buildDirectory });
   const build = readInGameBuild(buildDirectory);
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  // Old data thinned (#283) before this run starts, never in its hot path, and only if config.json opts in: it can't be
+  // undone. Logged; a failure doesn't stop the start, and is the dashboard's alert.
+  // Absent or null: off (#297's re-review).
+  const keptWholeDays = config.telemetryKeptWholeDays ?? null;
+  const storeThinningFailure =
+    keptWholeDays === null
+      ? null
+      : thinStoreAtStart(store, {
+          context: { environment: config.environment, release },
+          nowMs: systemClock.now(),
+          keptWholeDays,
+          log,
+        });
+  if (keptWholeDays === null) {
+    log("store thinning at start: off (telemetryKeptWholeDays isn't set in config.json; npm run thin thins by hand)");
+  }
   // This run of the brain starts here, after the build: everything stored after this event is this run's, for the
   // dashboard, and the Agent gets its 60 s to reconnect from now.
   const startedAtMs = systemClock.now();
@@ -162,6 +193,7 @@ try {
         worldDaemon: desiredState.worldDaemonView(),
         worldDaemonStall: desiredState.worldDaemonStall(),
         share: desiredState.shareView(),
+        storeThinningFailure,
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {

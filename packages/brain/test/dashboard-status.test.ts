@@ -83,6 +83,7 @@ const status = (
     factionWorkStall = null,
     augmentations = idleAugmentations,
     installAwaitingRestart = null,
+    storeThinningFailure = null,
   }: {
     income?: IncomeFacts | null;
     loop?: HackLoopView;
@@ -92,6 +93,7 @@ const status = (
     factionWorkStall?: FactionWorkStall | null;
     augmentations?: AugmentationsView;
     installAwaitingRestart?: { id: string; sinceMs: number } | null;
+    storeThinningFailure?: { atMs: number; failure: string } | null;
   } = {},
 ) =>
   buildDashboardStatus({
@@ -114,6 +116,7 @@ const status = (
     factionWorkStall,
     augmentations,
     installAwaitingRestart,
+    storeThinningFailure,
     nowMs,
   });
 
@@ -249,6 +252,14 @@ test("cloudServerProblem (#194): from the controller's view of cloud servers, wh
   expect(status(nowMs, { cloud: { ...cloudServers, problem } }).alerts).toMatchObject([
     { name: "cloudServerProblem", sinceMs: nowMs, detail: expect.stringContaining(problem) },
   ]);
+  expect(status(nowMs).alerts).toEqual([]);
+});
+
+test("storeThinningFailed (#283's review): from the brain start's thinning that failed", () => {
+  const nowMs = STARTED_AT_MS + 30_000;
+  expect(
+    status(nowMs, { storeThinningFailure: { atMs: STARTED_AT_MS - 1, failure: "disk full" } }).alerts,
+  ).toMatchObject([{ name: "storeThinningFailed", sinceMs: STARTED_AT_MS - 1 }]);
   expect(status(nowMs).alerts).toEqual([]);
 });
 

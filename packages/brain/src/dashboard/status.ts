@@ -190,6 +190,8 @@ export interface DashboardStatusOptions {
   worldDaemonStall?: WorldDaemonStall | null;
   /** Sharing's view (#224), the controller's. */
   share?: ShareView;
+  /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
+  storeThinningFailure?: { atMs: number; failure: string } | null;
   nowMs: number;
 }
 
@@ -222,6 +224,7 @@ export function buildDashboardStatus({
   worldDaemon,
   worldDaemonStall = null,
   share,
+  storeThinningFailure = null,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -362,6 +365,7 @@ export function buildDashboardStatus({
       augmentationDonationsFailed: augmentations.donationsFailed ?? [],
       installAwaitingRestart,
       worldDaemonStall,
+      storeThinningFailure,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })

@@ -11,6 +11,7 @@ import type { SlowSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { brainReleaseOf, campaignReport } from "../src/campaign-report.ts";
 import { STORE_FILE_NAME } from "../src/config.ts";
+import { thinStore } from "../src/store-thinning.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const CAMPAIGN_CLI = path.resolve(import.meta.dirname, "../src/campaign-cli.ts");
@@ -354,6 +355,21 @@ describe("the campaign report", () => {
     campaign();
     expect(thin.snapshots({ environment: "E0" }).some((each) => each.tier === "fast")).toBe(false);
     expect(campaignReport(thin, { environment: "E0" })).toBe(report());
+  });
+
+  test("the same report after #283's own thinning of the full store: its stubs are fast and medium snapshots alone", () => {
+    campaign();
+    // A fast snapshot two days on, the newest: with a day kept whole, the whole campaign is thinned.
+    snapshot(full, V110, "fast", m(870) + 2 * 24 * 60 * MINUTE, fast);
+    const whole = report();
+    const thinning = thinStore(full, {
+      context: { environment: "E0", release: V110 },
+      nowMs: m(870) + 2 * 24 * 60 * MINUTE,
+      keptWholeDays: 1,
+    });
+    expect(thinning.thinned.fast).toBeGreaterThan(0);
+    expect(thinning.thinned.medium).toBeGreaterThan(0);
+    expect(report()).toBe(whole);
   });
 
   test("a fresh save's BitNode from its start, an older BitNode's save loaded, a slow snapshot it can't read", () => {

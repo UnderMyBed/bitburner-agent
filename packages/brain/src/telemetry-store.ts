@@ -65,6 +65,52 @@ const SCHEMA = `
   );
 `;
 
+/**
+ * Thinning (#283): before a cutoff, the first fast and medium snapshot stored in each minute of the brain's clock stays
+ * whole, and each other keeps its row (its times, session and sequence number) with its data cut to a stub,
+ * `{"thinned":true}`, a fast one's with its `degradedTiers`, `pageHeapUsedBytes` and `resetIntents` (the ids of the
+ * install and destroy intents it held): what the run report's time checks, its reloads and the gap report read of every
+ * snapshot. The other tiers, the events and the settings are never thinned.
+ */
+export const THINNED_SNAPSHOT_TIERS = ["fast", "medium"] as const;
+/** One snapshot of each thinned tier a minute stays whole. */
+export const WHOLE_SNAPSHOT_EVERY_MS = 60_000;
+/**
+ * The intents that reset the game (an install, a destroy): a fast stub keeps the ids of those the Agent held, since a
+ * heartbeat gap after one is the game reloading (#240), which the run report reads at the snapshot before the gap.
+ */
+export const RESET_INTENT_ACTIONS = ["installAugmentations", "destroyBitNode"] as const;
+/** How a stub's JSON starts: `json_object` keeps its keys in order. */
+const THINNED_PREFIX = '{"thinned":';
+const RESET_INTENT_IDS = `json((SELECT json_group_array(json_extract(value, '$.id')) FROM json_each(data, '$.intents')
+    WHERE type = 'object' AND json_type(value, '$.id') = 'text'
+      AND (${RESET_INTENT_ACTIONS.map((action) => `json_extract(value, '$.id') LIKE '${action}(%'`).join(" OR ")})))`;
+const THINNED_STUB = `CASE tier WHEN 'fast' THEN json_object('thinned', json('true'),
+    'degradedTiers', json_extract(data, '$.degradedTiers'),
+    'pageHeapUsedBytes', json_extract(data, '$.pageHeapUsedBytes'),
+    'resetIntents', ${RESET_INTENT_IDS})
+  ELSE '{"thinned":true}' END`;
+/** The snapshots thinning would cut to a stub in a span: thinned tiers, not yet stubs, not their minute's first. */
+const THINNED_TIERS_SQL = THINNED_SNAPSHOT_TIERS.map((tier) => `'${tier}'`).join(", ");
+const THINNABLE = `environment = :environment AND tier IN (${THINNED_TIERS_SQL}) AND received_at_ms >= :fromMs
+  AND received_at_ms < :beforeMs AND substr(data, 1, ${THINNED_PREFIX.length}) <> '${THINNED_PREFIX}'
+  AND id NOT IN (SELECT MIN(id) FROM snapshots WHERE environment = :environment AND tier IN (${THINNED_TIERS_SQL})
+    AND received_at_ms >= :fromMs AND received_at_ms < :beforeMs
+    GROUP BY tier, CAST(received_at_ms / :everyMs AS INTEGER))`;
+
+/** Whether a snapshot's data is a thinned one's stub (#283): its times hold, what it said is gone. */
+export function isThinnedReading(data: unknown): boolean {
+  return data !== null && typeof data === "object" && (data as { thinned?: unknown }).thinned === true;
+}
+
+/** What one thinning did to a tier (#283): how many snapshots it cut to a stub, and their data's bytes then and now. */
+export interface ThinnedTier {
+  tier: string;
+  count: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}
+
 const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
   missed_before, data`;
 const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
@@ -428,6 +474,72 @@ export class TelemetryStore {
       )
       .get(environment, ...kinds, afterEventId, sinceMs) as { count: number };
     return row.count;
+  }
+
+  /** When the newest snapshot from an environment was received, or null with none (#283: thinning's cutoff). */
+  newestSnapshotMs({ environment }: { environment: Environment }): number | null {
+    const row = this.#database
+      .prepare("SELECT MAX(received_at_ms) AS newest FROM snapshots WHERE environment = ?")
+      .get(environment) as { newest: number | null };
+    return row.newest;
+  }
+
+  /**
+   * What `thinSnapshots` would cut over the same span, by tier, changing nothing (#283: a dry run, and whether to
+   * back the store up first).
+   */
+  thinnableSnapshots({
+    environment,
+    fromMs,
+    beforeMs,
+  }: {
+    environment: Environment;
+    fromMs: number;
+    beforeMs: number;
+  }): ThinnedTier[] {
+    const span = { environment, fromMs, beforeMs, everyMs: WHOLE_SNAPSHOT_EVERY_MS };
+    const tiers = this.#database
+      .prepare(
+        `SELECT tier, COUNT(*) AS count, SUM(length(CAST(data AS BLOB))) AS bytes_before,
+          SUM(length(CAST(${THINNED_STUB} AS BLOB))) AS bytes_after FROM snapshots WHERE ${THINNABLE}
+          GROUP BY tier ORDER BY tier`,
+      )
+      .all(span) as { tier: string; count: number; bytes_before: number; bytes_after: number }[];
+    return tiers.map((row) => ({
+      tier: row.tier,
+      count: row.count,
+      bytesBefore: row.bytes_before,
+      bytesAfter: row.bytes_after,
+    }));
+  }
+
+  /**
+   * Thins the fast and medium snapshots received from `fromMs` up to `beforeMs` (#283, `THINNED_SNAPSHOT_TIERS`): each
+   * but the first stored in its minute is cut to a stub. Give both on a minute, so no minute is split between two
+   * thinnings. Returns, by tier, those it cut (none already a stub); call it in a write transaction.
+   */
+  thinSnapshots(span: { environment: Environment; fromMs: number; beforeMs: number }): ThinnedTier[] {
+    const tiers = this.thinnableSnapshots(span);
+    this.#database
+      .prepare(`UPDATE snapshots SET data = ${THINNED_STUB} WHERE ${THINNABLE}`)
+      .run({ ...span, everyMs: WHOLE_SNAPSHOT_EVERY_MS });
+    return tiers;
+  }
+
+  /**
+   * Moves what the write-ahead log holds into the file and empties the log (#283: a thinning rewrites many pages, which
+   * the log would otherwise keep at that size).
+   */
+  checkpoint(): void {
+    this.#database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  /**
+   * Writes a compacted copy of the store to `filePath`, which mustn't exist (#283: the backup before a thinning, and
+   * `--vacuum`'s new file). SQLite's `VACUUM INTO` writes it there directly, with no temporary file elsewhere.
+   */
+  vacuumInto(filePath: string): void {
+    this.#database.prepare("VACUUM INTO ?").run(filePath);
   }
 
   getSetting(key: string): string | null {

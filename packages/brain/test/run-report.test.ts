@@ -25,6 +25,7 @@ import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
 import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { findIncomeStalls, inferHackTargets, runReport as reportOf } from "../src/run-report.ts";
+import { thinStore } from "../src/store-thinning.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
 
@@ -3343,6 +3344,22 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     expect(text.split("\n").slice(-3)).toEqual(["Verdict: FAIL", `  ${tooMany}`, `  warning: ${WARNING}`]);
   });
 
+  test("thinned (#283): the same step and stalls, from every snapshot's times, and the same verdict", () => {
+    incidentRun({ stallsAfter: [600, 750] });
+    const whole = runReport(store, incidentWindow);
+    thinBefore(END_MS + MINUTE);
+    const thinned = runReport(store, incidentWindow);
+    const incidentsOf = (text: string) =>
+      text.split("\n").filter((line) => /^ {4}(clock step|page stalled) /.test(line));
+    expect(incidentsOf(whole.text)).toHaveLength(3);
+    expect(incidentsOf(thinned.text)).toEqual(incidentsOf(whole.text));
+    expect(thinned.failures).toEqual(whole.failures);
+    // The batcher's desyncs still put down to the step, seen at the whole snapshots, a minute apart.
+    expect(thinned.warnings).toEqual([
+      expect.stringMatching(/^batcher out of step after a clock step: 1615 desyncs .*; recovered in /),
+    ]);
+  });
+
   test("the command exits 0 on WARN", () => {
     incidentRun();
     flush();
@@ -3757,5 +3774,239 @@ describe("an install or a destroy the reset followed, with no done record (#286)
       expect(text).toContain("    travel: 2 not done\n");
       expect(stuck(failures)).toEqual([`intent stuck: travel(Aevum), not done, 5 tries (ui): ${NO_MONEY}`]);
     });
+  });
+});
+
+/**
+ * Thins the store (#283) as a brain started a day after `cutoffOffsetMs` would, keeping a day whole: a slow snapshot
+ * then, out of the window, is the newest record, so the cutoff is `cutoffOffsetMs` (on a minute).
+ */
+function thinBefore(cutoffOffsetMs: number) {
+  const DAY = 24 * 60 * MINUTE;
+  snapshot("slow", DAY + cutoffOffsetMs, slowData());
+  flush();
+  return thinStore(store, { context, nowMs: T0 + DAY + cutoffOffsetMs, keptWholeDays: 1 });
+}
+/** The report's lines in one text and not the other: [only in `first`, only in `second`]. */
+function linesApart(first: string, second: string): [string[], string[]] {
+  const [a, b] = [first.split("\n"), second.split("\n")];
+  return [a.filter((line) => !b.includes(line)), b.filter((line) => !a.includes(line))];
+}
+
+describe("over a thinned store (#283)", () => {
+  /** A busy run's fast snapshots: an intent done after a minute, work converging, the batcher batching. */
+  const busyFast = (offsetMs: number) =>
+    fastData({
+      intents:
+        offsetMs < 70 * SECOND
+          ? [intent("buyTor(Alpha Enterprises)")]
+          : [intent("buyTor(Alpha Enterprises)", { done: true, tries: 2, backend: "ui" })],
+      work: offsetMs < 30 * SECOND ? null : { converged: offsetMs >= 40 * SECOND, problem: null, backend: "sim" },
+      pageHeapUsedBytes: (offsetMs === 100 * SECOND ? 300 : 100) * 1024 * 1024,
+      batcher: { ...newBatcherHealth("n00dles", "run-a", 0), state: "batching", batchesStarted: offsetMs / 1000 },
+    });
+  const headings = (text: string) => text.split("\n").filter((line) => /^(\d\. |Verdict)/.test(line));
+  const DAY = 24 * 60 * MINUTE;
+
+  const note = (lastOffsetMs: number, fast: number, medium: number) =>
+    `  note: the store is thinned (#283) in this window, up to ${at(lastOffsetMs)}: ${fast} fast and ${medium} medium ` +
+    "snapshots there keep only their times, one of each a minute kept whole. The heartbeat's gaps, clock steps, page " +
+    "stalls and the page heap read every one; the rest read the whole ones, so their times there are within a " +
+    "minute, what came and went within one isn't seen, a backdoor overdue (it needs medium snapshots within 30 s) and " +
+    "a batcher stuck on a poor target (looks within 6 s) aren't judged there, and the batcher not running for 3 fast " +
+    "snapshots in a row counts whole ones, a minute apart";
+
+  test("a clean run thinned throughout: PASS, the same sections and time checks; only what came and went within a minute differs", () => {
+    cleanRun({ fast: busyFast });
+    const whole = report();
+    // 596 fast snapshots from 10 s to 20 min, every 2 s: all but the first of each minute; 120 medium likewise.
+    expect(thinBefore(RUN_MS + MINUTE).thinned).toEqual({ fast: 575, medium: 99 });
+    const thinned = report();
+    expect(thinned.failures).toEqual([]);
+    expect(thinned.warnings).toEqual([]);
+    expect(headings(thinned.text)).toEqual(headings(whole.text));
+    expect(headings(thinned.text).at(-1)).toBe("Verdict: PASS");
+    expect(linesApart(whole.text, thinned.text)).toEqual([
+      [
+        `    buyTor(Alpha Enterprises): done after 2 tries (ui); done by ${at(70 * SECOND)}`,
+        "    BN1.1 1: 3 changes: none wanted, not converged (sim), converged (sim)",
+      ],
+      [
+        note(RUN_MS - 2 * SECOND, 575, 99),
+        // Seen done at the next whole snapshot, a minute's.
+        `    buyTor(Alpha Enterprises): done after 2 tries (ui); done by ${at(2 * MINUTE)}`,
+        // Not converged for 10 s, within a minute: not seen.
+        "    BN1.1 1: 2 changes: none wanted, converged (sim)",
+      ],
+    ]);
+    // The time checks read every snapshot: the heartbeat's count, its longest interval, and the page heap's 300 MB at
+    // 1 min 40 s, a thinned snapshot's.
+    expect(thinned.text).toContain(`    596 snapshots, first ${at(10 * SECOND)}, last ${at(RUN_MS)}; `);
+    expect(thinned.text).toContain("    longest interval 2.0 s\n    no gaps");
+    expect(thinned.text).toContain("  page heap: first 100.0 MB, last 100.0 MB, lowest 100.0 MB, highest 300.0 MB");
+    // The batcher's target one stretch across the thinned minutes, not one a minute.
+    expect(thinned.text).toContain(`    n00dles: ${at(10 * SECOND)} to ${at(RUN_MS)}\n`);
+  });
+
+  test("the batcher seen stopped at a whole snapshot there ends its stretch: the thinned ones after don't carry it on", () => {
+    // Stopped from 2:00 to 2:05: the 2:00 snapshot is a minute's whole one.
+    cleanRun({
+      fast: (offsetMs) => ({
+        ...busyFast(offsetMs),
+        batcher: offsetMs >= 2 * MINUTE && offsetMs <= 2 * MINUTE + 5 * SECOND ? null : busyFast(offsetMs).batcher,
+      }),
+    });
+    expect(report().text).toContain(
+      `    n00dles: ${at(10 * SECOND)} to ${at(2 * MINUTE - 2 * SECOND)}\n    n00dles: ${at(2 * MINUTE + 6 * SECOND)} to `,
+    );
+    thinBefore(RUN_MS + MINUTE);
+    // Seen running at 1:00, stopped at 2:00, running at 3:00: two stretches, as before, at the minutes' times.
+    expect(report().text).toContain(
+      `    n00dles: ${at(10 * SECOND)} to ${at(MINUTE)}\n    n00dles: ${at(3 * MINUTE)} to ${at(RUN_MS)}\n`,
+    );
+  });
+
+  test("a window ending between whole snapshots: the BitNodes line the same (#296's ResetDetection), the last readings a minute's", () => {
+    cleanRun({ fast: busyFast });
+    // The window ends at 19:59, so its last fast and medium snapshots are stubs (the minute's whole ones at 19:00).
+    const before = { ...window, untilMs: T0 + RUN_MS - SECOND };
+    const whole = runReport(store, before).text;
+    thinBefore(RUN_MS + MINUTE);
+    const thinned = runReport(store, before);
+    const bitNodes =
+      `  BitNodes: BN1.1 from ${at(-60 * MINUTE)} (before the window), not destroyed, 1 h 19 min by the window's last ` +
+      "record\n";
+    expect(whole).toContain(bitNodes);
+    expect(thinned.text).toContain(bitNodes);
+    expect(thinned.failures).toEqual([]);
+    // Besides the note and the two within-a-minute lines, the window's last readings are 19:00's whole ones: the money
+    // (in section 2 and the World Daemon's), the batcher's target and its batches, a minute short.
+    const [onlyWhole, onlyThinned] = linesApart(whole, thinned.text);
+    expect([onlyWhole.length, onlyThinned.length]).toEqual([7, 8]);
+    expect(onlyThinned).toContain(`    n00dles: ${at(10 * SECOND)} to ${at(19 * MINUTE)}`);
+    expect(onlyThinned).toContain("    money: $11,000 → $1,141,000");
+  });
+
+  test("thinned up to the window's middle: PASS, no gap or stall where the thinned part ends", () => {
+    cleanRun({ fast: busyFast });
+    const whole = report();
+    thinBefore(10 * MINUTE);
+    const thinned = report();
+    expect(thinned.failures).toEqual([]);
+    expect(thinned.text).toContain(note(10 * MINUTE - 2 * SECOND, 24 + 9 * 29, 4 + 9 * 5));
+    expect(linesApart(whole.text, thinned.text)[1]).toHaveLength(3);
+  });
+
+  test("its failures fail the same: a heartbeat gap, an intent stuck, a dialog left blocking, an income stall", () => {
+    cleanRun({
+      skipFast: (offsetMs) => offsetMs > 3 * MINUTE && offsetMs < 3 * MINUTE + 10 * SECOND,
+      fast: (offsetMs) =>
+        fastData({
+          intents: [intent("buyTor(Alpha Enterprises)", { tries: 5, problem: "no City in the sidebar" })],
+          dialogs: { handled: [], blocking: offsetMs >= MINUTE && offsetMs <= 2 * MINUTE ? "Are you sure?" : null },
+        }),
+      money: (offsetMs) => (offsetMs < 5 * MINUTE ? 1_000 + offsetMs : 1_000 + 5 * MINUTE),
+    });
+    const whole = report();
+    expect(whole.failures).toHaveLength(4);
+    thinBefore(RUN_MS + MINUTE);
+    expect(report().failures).toEqual(whole.failures);
+  });
+
+  test("what came and went within a minute isn't seen: a dialog blocking 20 s between two whole snapshots", () => {
+    cleanRun({
+      fast: (offsetMs) =>
+        fastData({
+          dialogs: { handled: [], blocking: offsetMs >= 70 * SECOND && offsetMs <= 90 * SECOND ? "x" : null },
+        }),
+    });
+    expect(report().failures).toEqual([`dialog left blocking from ${at(70 * SECOND)} to ${at(90 * SECOND)}: "x"`]);
+    thinBefore(RUN_MS + MINUTE);
+    expect(report().failures).toEqual([]);
+  });
+
+  test("section 1 says what a thinning in the window did, or that it failed", () => {
+    cleanRun();
+    thinBefore(RUN_MS + MINUTE);
+    event(RUN_MS, "storeThinned", {
+      beforeMs: T0,
+      fromMs: null,
+      keptWholeDays: 14,
+      thinned: { fast: 3, medium: 2 },
+      bytesBefore: 2_500_000,
+      bytesAfter: 1_000,
+    });
+    event(RUN_MS, "storeThinned", { beforeMs: T0 });
+    event(RUN_MS, "storeThinningFailed", { failure: "disk I/O error" });
+    const { text, failures } = report();
+    expect(text).toContain(
+      `  ${at(RUN_MS)}  store thinned before ${at(0)} (the last 14 days before the newest snapshot kept whole; ` +
+        "before, one fast and one medium snapshot a minute): 3 fast and 2 medium snapshots cut to their times, their " +
+        "data 2.5 MB → 0.0 MB\n" +
+        `  ${at(RUN_MS)}  store thinned: {"beforeMs":${T0}}\n` +
+        `  ${at(RUN_MS)}  store thinning FAILED, the store left as it was: disk I/O error\n`,
+    );
+    // The brain started all the same: not the run's failure.
+    expect(failures).toEqual([]);
+  });
+
+  test("a thinning at this brain's start, just before its brainStarted, is in the default window's section 1; an older one isn't", () => {
+    // Before an earlier brain start in the day before: another run's.
+    event(-2 * 60 * MINUTE, "storeThinned", { beforeMs: T0 - DAY, thinned: { fast: 1, medium: 0 }, keptWholeDays: 9 });
+    event(-60 * MINUTE, "brainStarted", { release: "r0" });
+    // This start's: a thinning, and one that failed, just before cleanRun's brainStarted at T0.
+    event(-3 * SECOND, "storeThinned", {
+      beforeMs: T0 - 14 * DAY,
+      fromMs: null,
+      keptWholeDays: 14,
+      thinned: { fast: 30, medium: 6 },
+      bytesBefore: 9_000_000,
+      bytesAfter: 7_000,
+      tookMs: 2_500,
+    });
+    event(-2 * SECOND, "storeThinningFailed", { failure: "disk I/O error" });
+    cleanRun();
+    const { text, failures } = report();
+    expect(text).toContain(
+      `1. The window\n  note: the brain also started at ${at(-60 * MINUTE)}, 1 h 0 min before the window: for a run that ` +
+        "spans a restart, give --since\n" +
+        `  ${at(-3 * SECOND)}  store thinned before ${at(-14 * DAY)} (the last 14 days before the newest snapshot ` +
+        "kept whole; before, one fast and one medium snapshot a minute): 30 fast and 6 medium snapshots cut to their " +
+        "times, their data 9.0 MB → 0.0 MB, in 2.5 s (before the window)\n" +
+        `  ${at(-2 * SECOND)}  store thinning FAILED, the store left as it was: disk I/O error (before the window)\n`,
+    );
+    expect(text).not.toContain("the last 9 days");
+    expect(failures).toEqual([]);
+  });
+
+  test("npm run thin after the run isn't the run's last record: no gap to it", () => {
+    cleanRun();
+    // A thinning by hand 20 s after the run's last fast snapshot, in the window.
+    event(RUN_MS + 20 * SECOND, "storeThinned", { beforeMs: T0 - DAY });
+    event(RUN_MS + 25 * SECOND, "storeThinningFailed", { failure: "x" });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`after the run's last record (${at(RUN_MS)}), 30 s to its end`);
+  });
+
+  test("a gap after a reset intent held only at a thinned snapshot is still the game reloading: its stub keeps the id", () => {
+    // The install held at 1:02 alone (a stub after 1:00's whole one); the Agent silent 1:02 to 1:40, back at 1:35.
+    cleanRun({
+      skipFast: (offsetMs) => offsetMs > 62 * SECOND && offsetMs < 100 * SECOND,
+      fast: (offsetMs) =>
+        fastData({ intents: offsetMs === 62 * SECOND ? [intent("installAugmentations()", { done: true })] : [] }),
+    });
+    event(95 * SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    const expected =
+      `    gap: ${at(62 * SECOND)} to ${at(100 * SECOND)} (38.0 s); during it: agentConnected at ${at(95 * SECOND)}; ` +
+      "before it, the Agent held installAugmentations() (expected: the game reloading after the " +
+      "installAugmentations() the Agent held)\n";
+    const whole = report();
+    expect(whole.failures).toEqual([]);
+    expect(whole.text).toContain(expected);
+    thinBefore(RUN_MS + MINUTE);
+    const thinned = report();
+    expect(thinned.failures).toEqual([]);
+    expect(thinned.text).toContain(expected);
   });
 });

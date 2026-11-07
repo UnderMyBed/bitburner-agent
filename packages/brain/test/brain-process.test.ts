@@ -2,26 +2,30 @@
 // serving, what the Agent says stored, and the gap report's exit codes.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { BRAIN_LOCK_FILE_NAME, isAlive, runningBrain, writeBrainLock } from "../src/brain-lock.ts";
 import {
   type BrainConfig,
   CONFIG_FILE_NAME,
   DEFAULT_DATA_DIRECTORY,
   loadOrCreateConfig,
+  readConfig,
   resolveDataDirectory,
   STORE_FILE_NAME,
 } from "../src/config.ts";
 import { readSupervisionSwitch } from "../src/supervision.ts";
-import { TelemetryStore } from "../src/telemetry-store.ts";
+import { isThinnedReading, TelemetryStore } from "../src/telemetry-store.ts";
 
 const BRAIN_MAIN = path.resolve(import.meta.dirname, "../src/main.ts");
+const BRAIN_START = path.resolve(import.meta.dirname, "../src/start.ts");
 const GAPS_CLI = path.resolve(import.meta.dirname, "../src/gaps-cli.ts");
 
 let dataDirectory: string;
@@ -60,7 +64,19 @@ test("the config and its token are created once, and kept", () => {
     steamAppId: 1812820,
     gameExecutable: "bitburner.exe",
   });
+  // Thinning at the start is the owner's to opt into (#283's review): never written, so off.
+  expect(first).not.toHaveProperty("telemetryKeptWholeDays");
   expect(loadOrCreateConfig(dataDirectory)).toEqual(first);
+});
+
+test("readConfig reads a config.json, and never creates one (npm run thin, #283's review)", () => {
+  expect(readConfig(dataDirectory)).toBeNull();
+  expect(existsSync(path.join(dataDirectory, CONFIG_FILE_NAME))).toBe(false);
+  const created = loadOrCreateConfig(dataDirectory);
+  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...created, telemetryKeptWholeDays: 3 }));
+  expect(readConfig(dataDirectory)).toEqual({ ...created, telemetryKeptWholeDays: 3 });
+  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...created, telemetryKeptWholeDays: 0 }));
+  expect(() => readConfig(dataDirectory)).toThrow(/telemetryKeptWholeDays must be a whole number/);
 });
 
 test.each([
@@ -78,6 +94,13 @@ test.each([
   ["a game executable that isn't an .exe", { gameExecutable: "bitburner" }, /gameExecutable must be/],
   ["no backups kept", { saveBackupsKept: 0 }, /saveBackupsKept must be a whole number, at least 1/],
   ["a fraction of a backup kept", { saveBackupsKept: 2.5 }, /saveBackupsKept must be a whole number, at least 1/],
+  [
+    "no days kept whole",
+    { telemetryKeptWholeDays: 0 },
+    /telemetryKeptWholeDays must be a whole number of days, at least 1, or absent or null for no thinning at the start/,
+  ],
+  ["a fraction of a day kept whole", { telemetryKeptWholeDays: 1.5 }, /telemetryKeptWholeDays must be a whole number/],
+  ["days kept whole as text", { telemetryKeptWholeDays: "14" }, /telemetryKeptWholeDays must be a whole number/],
 ])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
   const config = loadOrCreateConfig(dataDirectory);
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...config, ...changes }));
@@ -136,20 +159,23 @@ interface StartedBrain {
   controlPort: number;
   remoteFileApiPort: number;
   dashboardPort: number;
+  /** What it has logged so far. */
+  output: () => string;
 }
 
-async function startBrain(): Promise<StartedBrain> {
+async function startBrain(changes: Partial<BrainConfig> = {}): Promise<StartedBrain> {
   const config: BrainConfig = {
     ...loadOrCreateConfig(dataDirectory),
     environment: "E2",
     controlPort: 0,
     remoteFileApiPort: 0,
     dashboardPort: 0,
+    ...changes,
   };
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify(config));
   brain = spawn(process.execPath, [BRAIN_MAIN, "--data-dir", dataDirectory], { stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
-  const ports = await new Promise<Omit<StartedBrain, "config">>((resolve, reject) => {
+  const ports = await new Promise<Omit<StartedBrain, "config" | "output">>((resolve, reject) => {
     brain?.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString();
       const control = /control channel on 127\.0\.0\.1:(\d+)/.exec(output);
@@ -165,7 +191,7 @@ async function startBrain(): Promise<StartedBrain> {
     });
     brain?.once("exit", (code) => reject(new Error(`brain exited ${code}: ${output}`)));
   });
-  return { config, ...ports };
+  return { config, ...ports, output: () => output };
 }
 
 async function stopBrain(): Promise<void> {
@@ -325,6 +351,124 @@ function runGaps(args: string[]): { exitCode: number; output: string } {
     return { exitCode: failed.status, output: failed.stdout + failed.stderr };
   }
 }
+
+/** E2's (the test brain's): two minutes of fast snapshots 40 days ago, and the newest 20 days ago. */
+function oldFastSnapshots() {
+  const DAY = 24 * 60 * 60_000;
+  const oldMs = Math.floor((Date.now() - 40 * DAY) / 60_000) * 60_000;
+  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  let sequenceNumber = 0;
+  for (const [offsetMs, tier] of [
+    ...Array.from({ length: 60 }, (_, index) => [index * 2_000, "fast"] as const),
+    [20 * DAY, "fast"] as const,
+  ]) {
+    store.recordSnapshot(
+      { environment: "E2", release: "r" },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: ++sequenceNumber,
+        gameTimeMs: 0,
+        receivedAtMs: oldMs + offsetMs,
+        missedBefore: 0,
+        data: { degradedTiers: [], pageHeapUsedBytes: null, game: { homeProcesses: [] } },
+      },
+    );
+  }
+  store.close();
+}
+/** The kinds of the brain's events, and whether any fast snapshot is thinned. */
+function storeNow() {
+  const store = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
+  const kinds = store.events({ environment: "E2" }).map((event) => event.kind);
+  const thinned = store.snapshots({ environment: "E2" }).some((snapshot) => isThinnedReading(snapshot.data));
+  store.close();
+  return { kinds, thinned };
+}
+
+test("the brain's start thins nothing unless config.json opts in (#283's review), and says so; null is off too", async () => {
+  oldFastSnapshots();
+  const { output } = await startBrain({ telemetryKeptWholeDays: null });
+  expect(output()).toContain(
+    " brain: store thinning at start: off (telemetryKeptWholeDays isn't set in config.json; npm run thin thins by hand)",
+  );
+  expect(storeNow()).toEqual({ kinds: ["brainStarted"], thinned: false });
+});
+
+test("opted in, the brain thins its store's old data as it starts (#283), logs it, and records it before its start", async () => {
+  // The cutoff is 14 days before the newest snapshot, 20 days ago: the two minutes 40 days ago are thinned.
+  oldFastSnapshots();
+  const { output } = await startBrain({ telemetryKeptWholeDays: 14 });
+  expect(output()).toMatch(/ brain: store thinned before .*: 58 fast and 0 medium snapshots cut to their times/);
+  expect(storeNow()).toEqual({ kinds: ["storeThinned", "brainStarted"], thinned: true });
+});
+
+test("the brain holds its lock file while it runs (#283's review); stopped or killed, it's running no more", async () => {
+  expect(runningBrain(dataDirectory)).toBeNull();
+  await startBrain();
+  const lock = runningBrain(dataDirectory);
+  // Run as a test runs it, with no runner (start.ts) above it.
+  expect(lock).toEqual({ pid: brain?.pid, runnerPid: null, path: path.join(dataDirectory, BRAIN_LOCK_FILE_NAME) });
+  // A signal it handles removes the lock as it exits; on Windows a kill leaves it, naming a dead process.
+  await stopBrain();
+  brain = undefined;
+  expect(runningBrain(dataDirectory)).toBeNull();
+});
+
+test("a brain that crashes under npm run brain's runner leaves its lock, which the runner keeps counting (#297's re-review)", async () => {
+  // Its control port taken: the brain starts, claims its lock, fails to listen and exits 1; the runner waits 5 s.
+  const taken = createServer();
+  await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", resolve));
+  const config: BrainConfig = {
+    ...loadOrCreateConfig(dataDirectory),
+    environment: "E2",
+    controlPort: (taken.address() as { port: number }).port,
+    remoteFileApiPort: 0,
+    dashboardPort: 0,
+  };
+  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify(config));
+  const runner = spawn(process.execPath, [BRAIN_START, "--data-dir", dataDirectory], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    let output = "";
+    await new Promise<void>((resolve, reject) => {
+      runner.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+        if (/brain runner: the brain exited \(code 1\); restarting in 5 s/.test(output)) resolve();
+      });
+      runner.once("exit", (code) => reject(new Error(`runner exited ${code}: ${output}`)));
+    });
+    // Between the crash and the restart: the brain's process is gone, its runner's alive, and the lock still counts.
+    const lock = runningBrain(dataDirectory);
+    expect(lock).toMatchObject({ runnerPid: runner.pid, path: path.join(dataDirectory, BRAIN_LOCK_FILE_NAME) });
+    expect(isAlive(lock?.pid as number)).toBe(false);
+  } finally {
+    // Within the runner's 5 s wait, so no brain is left behind.
+    const exited = once(runner, "exit");
+    runner.kill();
+    await exited;
+    taken.close();
+  }
+});
+
+test("a lock the brain can't write doesn't stop it starting (#297's re-review): logged", async () => {
+  mkdirSync(path.join(dataDirectory, BRAIN_LOCK_FILE_NAME));
+  const { output } = await startBrain();
+  expect(output()).toMatch(
+    / brain: brain lock: couldn't write .*brain\.lock .*: npm run thin can tell this brain runs by its dashboard's port alone/,
+  );
+  // And a config.json with no telemetryKeptWholeDays at all (startBrain's): off.
+  expect(output()).toContain(" brain: store thinning at start: off ");
+});
+
+test("another brain's live lock is left as it is (#297's re-review): the second brain doesn't take it", async () => {
+  // This test's own process stands for a first brain, running.
+  writeBrainLock(dataDirectory, { pid: process.pid, runnerPid: null });
+  const { output } = await startBrain();
+  expect(output()).toContain(` brain: brain lock: another brain's process ${process.pid} holds `);
+  expect(runningBrain(dataDirectory)).toMatchObject({ pid: process.pid });
+});
 
 test("the gap report's command: 0 with no gaps, 1 with gaps, 2 when it can't run", () => {
   expect(runGaps(["--since", "2026-10-26T00:00:00Z"]).exitCode).toBe(2);
