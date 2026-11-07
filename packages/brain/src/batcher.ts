@@ -65,6 +65,36 @@ function figuresOf(staticData: StaticSnapshotData, target: string): HackingTarge
 }
 
 /**
+ * Where the batcher runs on `hosts`, their RAM, and the RAM its batches can count on there (`batchRamGb`), whatever the
+ * target; or why it can't run. `planBatcher`'s, and `chooseBatcher`'s steps' (#274).
+ */
+function batcherRoomOf(
+  mediumData: MediumSnapshotData,
+  hosts: string[],
+  current: string | null,
+): { runOn: string; hostsRam: (readonly [string, number])[]; ramGb: number } | { why: string } {
+  const ramOf = new Map(
+    mediumData.servers
+      .filter((server) => typeof server?.hostname === "string" && isNumber(server.maxRam))
+      .map((server) => [server.hostname, server.maxRam]),
+  );
+  const hostsRam = hosts.map((host) => [host, ramOf.get(host) ?? 0] as const).filter(([, ram]) => ram > 0);
+  if (hostsRam.length === 0) return { why: "no host with RAM" };
+  const onHome = (ramOf.get("home") ?? 0) - HOME_KEPT_FOR_THE_AGENT_GB >= BATCHER_RAM_BUDGET_GB;
+  const holds = (host: string) =>
+    host === "home" ? onHome : hosts.includes(host) && (ramOf.get(host) ?? 0) >= BATCHER_RAM_BUDGET_GB;
+  const largest = [...hostsRam]
+    .filter(([, ram]) => ram >= BATCHER_RAM_BUDGET_GB)
+    .sort(([a, ramA], [b, ramB]) => ramB - ramA || (a < b ? -1 : 1))
+    .map(([host]) => host)[0];
+  // Kept where it runs while it still fits there (#211): a move restarts it.
+  const runOn = current !== null && holds(current) ? current : onHome ? "home" : largest;
+  if (runOn === undefined) return { why: "no host holds the batcher" };
+  const operationsRam = hostsRam.map(([host, ram]) => (host === runOn ? ram - BATCHER_RAM_BUDGET_GB : ram));
+  return { runOn, hostsRam, ramGb: batchRamGb(operationsRam) };
+}
+
+/**
  * The batcher's desired state (#205), on `target` and `hosts` (the hack loop's), or why there's none:
  * - **where it runs:** where it runs now (`current`), while that still holds it (#211: a move restarts it); else home,
  *   when its RAM in the medium snapshot leaves the batcher's budget (`BATCHER_RAM_BUDGET_GB`) beyond what home keeps
@@ -86,25 +116,10 @@ export function planBatcher(
   if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
   const figures = figuresOf(staticData, target);
   if (figures === null) return { batcher: null, why: `the static snapshot has no figures for ${target}` };
-  const ramOf = new Map(
-    mediumData.servers
-      .filter((server) => typeof server?.hostname === "string" && isNumber(server.maxRam))
-      .map((server) => [server.hostname, server.maxRam]),
-  );
-  const hostsRam = hosts.map((host) => [host, ramOf.get(host) ?? 0] as const).filter(([, ram]) => ram > 0);
-  if (hostsRam.length === 0) return { batcher: null, why: "no host with RAM" };
-  const onHome = (ramOf.get("home") ?? 0) - HOME_KEPT_FOR_THE_AGENT_GB >= BATCHER_RAM_BUDGET_GB;
-  const holds = (host: string) =>
-    host === "home" ? onHome : hosts.includes(host) && (ramOf.get(host) ?? 0) >= BATCHER_RAM_BUDGET_GB;
-  const largest = [...hostsRam]
-    .filter(([, ram]) => ram >= BATCHER_RAM_BUDGET_GB)
-    .sort(([a, ramA], [b, ramB]) => ramB - ramA || (a < b ? -1 : 1))
-    .map(([host]) => host)[0];
-  // Kept where it runs while it still fits there (#211): a move restarts it.
-  const runOn = current !== null && holds(current) ? current : onHome ? "home" : largest;
-  if (runOn === undefined) return { batcher: null, why: "no host holds the batcher" };
-  const operationsRam = hostsRam.map(([host, ram]) => (host === runOn ? ram - BATCHER_RAM_BUDGET_GB : ram));
-  const ramGb = batchRamGb(operationsRam) * ramShare;
+  const room = batcherRoomOf(mediumData, hosts, current);
+  if ("why" in room) return { batcher: null, why: room.why };
+  const { runOn, hostsRam } = room;
+  const ramGb = room.ramGb * ramShare;
   const plan = batchPlan(figures, player, ramGb);
   if (plan === null) return { batcher: null, why: `no batch on ${target} fits the hosts' RAM, or it can't be hacked` };
   return {
@@ -125,13 +140,28 @@ export function planBatcher(
   };
 }
 
-/** How many targets, best by A1's batcher ceiling, `chooseBatcher` plans: a plan is costlier than a ceiling. */
-export const BATCHER_TARGETS_PLANNED = 5;
 /**
  * How far ahead `chooseBatcher` weighs a target's income (#206): what it earns in this long, less the time to prepare
  * it and for its first batch to land. A1's score is the best 10 minutes.
  */
 export const BATCHER_TARGET_HORIZON_MS = 15 * 60_000;
+/**
+ * How many targets, best by A1's batcher ceiling, `chooseBatcher` plans of all, and of the steps (#274): a plan is
+ * costlier than a ceiling, 0.1 to 4 ms on BN1's richest at hacking 1,300, and 365 ms on one whose hacking level is the
+ * player's (its tiny share a thread, many threads to try). Every target prepared is planned too, whatever its rank.
+ */
+export const BATCHER_TARGETS_PLANNED = 5;
+/**
+ * How far ahead `chooseBatcher` weighs a next target (#274): what it earns in this long, less the time to prepare it on
+ * the next's RAM and for its first batch to land; one that earns nothing in it isn't the next. Preparing it beside the
+ * batches costs at most the next's share of their RAM, and none where they leave it idle, so it may take longer than
+ * `BATCHER_TARGET_HORIZON_MS`: after an install every target but n00dles is at 3 times its minimum security, and in
+ * BN1.3's exit run one weaken there took 17 to 32 minutes on the richest (its first batch 23 to 44 minutes away), past
+ * the 15 minutes, so none was ever the next. A cycle there ran 28 minutes to 2.3 hours. That holds at BN1.3's speed
+ * (about 2.4 times); at speed 1, ecorp's first batch after an install is about 102 minutes away, past the hour, but the
+ * reach (`BATCHER_MOST_IDLE_MS`) binds first, and steps lead there.
+ */
+export const BATCHER_NEXT_HORIZON_MS = 60 * 60_000;
 /** How much more a new target must be worth over the horizon than the one batched to move to it: a move costs. */
 export const BATCHER_MOVE_GAIN = 1.25;
 /**
@@ -143,7 +173,7 @@ export const BATCHER_NEXT_RAM_SHARE = 0.2;
  * The longest a move or a start may leave the brain without income (#216's review), under the 10 minutes of
  * `incomeStalled`: with nothing batched, a target is chosen only if it earns within it; while one earns, only once
  * it's prepared (#236), and only if its first batch lands within it of the batches out (#237's review). Past it, it's
- * prepared as the next instead.
+ * neither moved to nor sent as the next (#274); a step within it is, on the way.
  */
 export const BATCHER_MOST_IDLE_MS = 5 * 60_000;
 /**
@@ -164,9 +194,16 @@ export interface BatcherTargetWorth {
 
 /**
  * The batcher's desired state with the brain's own target (#206), or why there's none. The candidates are the game's
- * servers rooted with money that the player can hack (`batcherTargetsOf`), the `BATCHER_TARGETS_PLANNED` best by A1's
- * batcher ceiling, the one sent and the one batched now. Each is planned (`planBatcher`) on the hosts, and its worth is
- * its plan's income over `BATCHER_TARGET_HORIZON_MS` less the time until it earns: preparing it (core's
+ * servers rooted with money that the player can hack (`batcherTargetsOf`): the `BATCHER_TARGETS_PLANNED` best by A1's
+ * batcher ceiling, the one sent, its next and the one batched now, and since #274 every one prepared now (only one
+ * prepared can be moved to while one earns) and the steps. The steps are the `BATCHER_TARGETS_PLANNED` best by the
+ * ceiling of those that might be the next (#278's review): a move from the one batched can reach them (a weaken at
+ * their minimum within `BATCHER_MOST_IDLE_MS` of its; with nothing batched, a weaken within it, as a target chosen then
+ * must earn within it), they earn within `BATCHER_NEXT_HORIZON_MS` on the next's RAM, and at twice A1's ceiling they'd
+ * be worth the move and gain more than the batches lose. On a move, or with nothing batched, the steps from the one
+ * chosen too. In BN1.3's exit run the 5 best were all a weaken at 3 times their minimum past the horizon, and the mid
+ * targets that led to them were never weighed. Each is planned (`planBatcher`) on the hosts, and its worth is its
+ * plan's income over `BATCHER_TARGET_HORIZON_MS` less the time until it earns: preparing it (core's
  * `preparationTimeMs`, from its money and security in the medium snapshot), then a weaken's time for its first batch.
  * A target is prepared on the RAM the batches of the one batched now leave (#216's review), or all of it.
  * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching`, from the batcher's
@@ -175,22 +212,29 @@ export interface BatcherTargetWorth {
  * - **Earning through a move (#236):** while one earns (batched), another is chosen only once it's prepared (at its
  *   minimum security and maximum money in the medium snapshot), so its first batch is a weaken away and the batches out
  *   land meanwhile: within `BATCHER_MOST_IDLE_MS` of their weaken (#237's review: a weaken of over 5 minutes doesn't
- *   leave 5 minutes idle). One still to prepare is the next instead, prepared beside the batches: a move to it never
- *   stops the income while it's prepared, as it did in run #2.
+ *   leave 5 minutes idle). One still to prepare, that a move could reach, is the next instead, prepared beside the
+ *   batches: a move to it never stops the income while it's prepared, as it did in run #2.
  * - **The move:** of those, the worthiest; the one sent is kept unless another is worth `BATCHER_MOVE_GAIN` times it.
- * - **The next:** of the rest, the one worth most once prepared (its income less a batch's weaken), if that's worth the
- *   move from the one chosen and it can be prepared within the horizon on its RAM: while the chosen one earns, what its
- *   batches leave, at least `BATCHER_NEXT_RAM_SHARE` of it (#237's review); otherwise that share alone, as the chosen
- *   one prepares on the rest (#237's re-review). The batcher prepares it beside the batches, which are planned on the
- *   rest, and once it's prepared the same test moves to it, so its RAM never sits idle. While one earns, any target the
- *   rule before #236 would have moved to (prepared within `BATCHER_MOST_IDLE_MS` on the RAM the batches leave) is
- *   preparable, so no better target is left without a path to it. The next sent is kept unless another is worth
- *   `BATCHER_MOVE_GAIN` times it once prepared (#236): a next dropped wastes its waves out, which hold their RAM for a
- *   weaken's time at its security.
- * - **A next it never moves to (#237's re-review):** one whose weaken at its minimum security is more than
- *   `BATCHER_MOST_IDLE_MS` longer than the earning target's is prepared, kept as the next and never moved to while that
- *   one earns, since the move would leave the brain that long without income; the brain's log shows it as the next
- *   throughout. It predates #236.
+ * - **The next:** of the rest worth the move from the one chosen once prepared (its income over the horizon less a
+ *   batch's weaken, against the chosen one's once batched, as the move to it will be: #278's re-review), and that a
+ *   move from it could reach once prepared (a weaken at its minimum within `BATCHER_MOST_IDLE_MS` of the chosen one's; #274: before, a next past it was prepared, kept and never moved to
+ *   while that one earned), those earning within `BATCHER_NEXT_HORIZON_MS` on its RAM (#274: within
+ *   `BATCHER_TARGET_HORIZON_MS` before, which no weaken at 3 times the minimum of BN1's richest met) whose gain over
+ *   the chosen one after that, over the hour, is more than its batches lose meanwhile on four fifths of the RAM (#278's
+ *   review: nothing where they leave a fifth idle); of them, the one worth most over the hour, its income less the time
+ *   until it earns. Its RAM: while the chosen one earns, what its batches leave, at least `BATCHER_NEXT_RAM_SHARE` of
+ *   it (#237's review); otherwise that share alone, as the chosen one prepares on the rest (#237's re-review). The
+ *   batcher prepares it beside the batches, which are planned on the rest, and once it's prepared the same test moves
+ *   to it, so its RAM never sits idle. So a target worth a path from the one batched (worth the move once prepared,
+ *   reachable, earning within the hour and worth its cost) gets a move or a next, a step at least: from n00dles to
+ *   BN1's richest, a mid target first (#274's property test, batcher-choice.property.test.ts).
+ * - **The limit that remains:** a richer target whose weaken is more than `BATCHER_MOST_IDLE_MS` past the batched one's
+ *   is reached only through a chain of steps, each worth a path from the last; with no such chain, it isn't. At speed 1
+ *   and hacking 1,300, alpha-ent's weaken is 6.9 minutes and clarkinc's 12.3: from n00dles, clarkinc is a chain away.
+ * - **The next sent is kept** unless another is worth `BATCHER_MOVE_GAIN` times it over the hour (#236): a next dropped
+ *   wastes its waves out, which hold their RAM for a weaken's time at its security. While it's still worth the move and
+ *   reachable it stays a candidate, even if it no longer earns within the hour or gains enough (#278's review: hosts
+ *   lost, as at 01:00 in BN1.3's exit run, 424 to 261 TB).
  */
 export function chooseBatcher(
   staticData: StaticSnapshotData,
@@ -211,31 +255,90 @@ export function chooseBatcher(
     }))
     .sort((a, b) => b.ceiling - a.ceiling || (a.hostname < b.hostname ? -1 : 1));
   const sent = current?.config.target ?? null;
-  const weighed = byCeiling.filter(
-    (each, index) => index < BATCHER_TARGETS_PLANNED || each.hostname === batching || each.hostname === sent,
-  );
-  const nowOf = new Map(
+  const sentNext = current?.config.next?.target ?? null;
+  const serverOf = new Map(
     mediumData.servers
       .filter((server) => typeof server?.hostname === "string")
       .map((server) => [server.hostname, server] as const),
   );
-  let firstWhy: string | null = null;
-  const plans: { hostname: string; figures: HackingTarget; plan: PlannedBatcher }[] = [];
-  for (const { hostname, figures } of weighed) {
-    const plan = planBatcher(staticData, mediumData, hostname, hosts, current?.runOn ?? null);
-    if (plan.batcher === null) firstWhy ??= plan.why;
-    else plans.push({ hostname, figures, plan });
-  }
-  // The RAM a target is prepared on: what the batches of the one batched now leave, or all of it.
-  const batchedPeakGb = plans.find((each) => each.hostname === batching)?.plan.peakRamGb ?? 0;
-  const planned: Weighed[] = plans.map(({ hostname, figures, plan }) => {
-    const server = nowOf.get(hostname);
-    const now = {
+  const nowOf = (hostname: string, figures: HackingTarget) => {
+    const server = serverOf.get(hostname);
+    return {
       money: isNumber(server?.moneyAvailable) ? server.moneyAvailable : 0,
       security: isNumber(server?.hackDifficulty) ? server.hackDifficulty : figures.minDifficulty * 3,
     };
+  };
+  const weakenOf = (figures: HackingTarget) => operationTimeMs("weaken1", figures, player);
+  const runOn = current?.runOn ?? null;
+  let firstWhy: string | null = null;
+  const plans = new Map<string, PlannedBatcher | null>();
+  const planOf = (hostname: string) => {
+    if (!plans.has(hostname)) {
+      const plan = planBatcher(staticData, mediumData, hostname, hosts, runOn);
+      if (plan.batcher === null) firstWhy ??= plan.why;
+      plans.set(hostname, plan.batcher === null ? null : plan);
+    }
+    return plans.get(hostname) ?? null;
+  };
+  /** What a target's batches lose a second on four fifths of the RAM, as they do while a next is prepared (#278). */
+  const lostPerSecondOf = (hostname: string, incomePerSecond: number) => {
+    const rest = planBatcher(staticData, mediumData, hostname, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
+    return rest.batcher === null ? incomePerSecond : Math.max(0, incomePerSecond - rest.incomePerSecond);
+  };
+  const room = batcherRoomOf(mediumData, hosts, runOn);
+  const ramGb = "why" in room ? 0 : room.ramGb;
+  /**
+   * The steps (#274): the first `BATCHER_TARGETS_PLANNED` by the ceiling that might be the next from `from` (with none,
+   * a target chosen with nothing batched, which earns within BATCHER_MOST_IDLE_MS of none): a move reaches them (a
+   * weaken at their minimum within BATCHER_MOST_IDLE_MS of its), they earn within BATCHER_NEXT_HORIZON_MS on `share`
+   * of the RAM (#278's review), and they're worth the move once prepared (against `from` batched, as the move to them
+   * will be: #278's re-review) and gain more than the batches lose meanwhile. Those two are checked first at twice
+   * A1's ceiling on the RAM, as no plan beats the ceiling, and then on the plan, made as each is met (#278's
+   * re-review), so one that fails on its plan takes no step's place.
+   */
+  const stepsFrom = (
+    from: { hostname: string; incomePerSecond: number; lostPerSecond: number } | null,
+    share: number,
+  ) => {
+    const fromWeakenMs = from === null ? 0 : weakenOf(figuresOf(staticData, from.hostname) as HackingTarget);
+    const steps: string[] = [];
+    for (const { hostname, figures, ceiling } of byCeiling) {
+      if (steps.length >= BATCHER_TARGETS_PLANNED) break;
+      if (hostname === from?.hostname) continue;
+      const weakenMs = weakenOf(figures);
+      if (weakenMs - fromWeakenMs > BATCHER_MOST_IDLE_MS) continue;
+      const untilMs = preparationTimeMs(figures, player, nowOf(hostname, figures), ramGb * share) + weakenMs;
+      if (!(untilMs < BATCHER_NEXT_HORIZON_MS)) continue;
+      const worthy = (incomePerSecond: number) =>
+        from === null ||
+        (incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - weakenMs) >=
+          from.incomePerSecond * BATCHER_TARGET_HORIZON_MS * BATCHER_MOVE_GAIN &&
+          (incomePerSecond - from.incomePerSecond) * (BATCHER_NEXT_HORIZON_MS - untilMs) >
+            from.lostPerSecond * untilMs);
+      if (!worthy(2 * ceiling * ramGb)) continue;
+      const plan = planOf(hostname);
+      if (plan !== null && worthy(plan.incomePerSecond)) steps.push(hostname);
+    }
+    return steps;
+  };
+  // The one batched first: what its batches leave is the RAM a target is prepared on, and where the steps start.
+  const batchedPlan = batching === null ? null : planOf(batching);
+  const batchedPeakGb = batchedPlan?.peakRamGb ?? 0;
+  const steps =
+    batchedPlan === null || batching === null
+      ? stepsFrom(null, BATCHER_NEXT_RAM_SHARE)
+      : stepsFrom(
+          {
+            hostname: batching,
+            incomePerSecond: batchedPlan.incomePerSecond,
+            lostPerSecond: lostPerSecondOf(batching, batchedPlan.incomePerSecond),
+          },
+          Math.max(BATCHER_NEXT_RAM_SHARE, 1 - batchedPlan.peakRamGb / batchedPlan.ramGb),
+        );
+  const weigh = (hostname: string, figures: HackingTarget, plan: PlannedBatcher): Weighed => {
+    const now = nowOf(hostname, figures);
     const preparingGb = Math.max(plan.ramGb - batchedPeakGb, plan.ramGb * BATCHER_NEXT_RAM_SHARE);
-    const firstBatchMs = operationTimeMs("weaken1", figures, player);
+    const firstBatchMs = weakenOf(figures);
     const untilEarningMs =
       hostname === batching ? 0 : preparationTimeMs(figures, player, now, preparingGb) + firstBatchMs;
     return {
@@ -255,7 +358,26 @@ export function chooseBatcher(
         worth: plan.incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - untilEarningMs),
       },
     };
-  });
+  };
+  const weighedOf = new Map<string, Weighed>();
+  const weighAll = (names: (string | null)[]) => {
+    for (const { hostname, figures } of byCeiling) {
+      if (weighedOf.has(hostname) || !names.includes(hostname)) continue;
+      const plan = planOf(hostname);
+      if (plan !== null) weighedOf.set(hostname, weigh(hostname, figures, plan));
+    }
+  };
+  weighAll(
+    byCeiling
+      .filter(
+        ({ hostname, figures }, index) =>
+          index < BATCHER_TARGETS_PLANNED ||
+          [batching, sent, sentNext, ...steps].includes(hostname) ||
+          isTargetPrepared(figures, nowOf(hostname, figures)),
+      )
+      .map(({ hostname }) => hostname),
+  );
+  const planned = [...weighedOf.values()];
   if (planned.length === 0) return { batcher: null, why: firstWhy ?? "no target can be planned" };
   // While one earns, it or one prepared (#236); of those, the worthiest earning soon; with none such, the soonest.
   const earning = planned.find((each) => each.weighed.target === batching);
@@ -273,7 +395,6 @@ export function chooseBatcher(
   // Kept while nothing is worth the move; one worth nothing gives way (nothing is less than 0).
   const chosen =
     kept !== undefined && worthiest.weighed.worth < kept.weighed.worth * BATCHER_MOVE_GAIN ? kept : worthiest;
-  const worths = planned.map((each) => each.weighed);
   // The next target's RAM: what the chosen one's batches leave, at least BATCHER_NEXT_RAM_SHARE of it (#237's review),
   // while it's the one earning; otherwise (nothing batched yet, or a move to it under way) a fifth, as it has its own
   // preparation to do on the rest (#237's re-review). The batches are planned on four fifths as before: the same plan
@@ -281,33 +402,50 @@ export function chooseBatcher(
   const leftShare = 1 - chosen.peakRamGb / chosen.ramGb;
   const nextShare = chosen === earning ? Math.max(BATCHER_NEXT_RAM_SHARE, leftShare) : BATCHER_NEXT_RAM_SHARE;
   const nextGb = (each: Weighed) => each.ramGb * nextShare;
-  // Of the rest preparable on it within the horizon and worth the move once prepared, the worthiest; the one sent kept
-  // unless that's worth BATCHER_MOVE_GAIN times it (#236).
-  const nextTargetCandidates = planned
+  const chosenName = chosen.weighed.target;
+  const lostPerSecond = lostPerSecondOf(chosenName, chosen.weighed.incomePerSecond);
+  // The chosen one's worth once batched (#278's re-review): what the move to the next is weighed against then, so on a
+  // move, or with nothing batched, a next the later move would refuse isn't sent. While it earns, its worth now.
+  const chosenBatchedWorth = chosen.weighed.incomePerSecond * BATCHER_TARGET_HORIZON_MS;
+  // A move now, or none batched: the steps from the one chosen too (#278's review), as the next is reached from it.
+  if (chosen !== earning) {
+    const from = { hostname: chosenName, incomePerSecond: chosen.weighed.incomePerSecond, lostPerSecond };
+    weighAll(stepsFrom(from, nextShare));
+  }
+  const worths = byCeiling.flatMap(({ hostname }) => weighedOf.get(hostname)?.weighed ?? []);
+  const untilNextEarnsMs = (each: Weighed) =>
+    preparationTimeMs(each.figures, player, each.now, nextGb(each)) + each.firstBatchMs;
+  // Of the rest worth the move from the chosen one once prepared and that the move can reach from it (a weaken within
+  // BATCHER_MOST_IDLE_MS of its), those earning within BATCHER_NEXT_HORIZON_MS whose gain over the chosen one after
+  // that, over the hour, is more than its batches lose on four fifths of the RAM meanwhile (#278's review); of them,
+  // the worthiest over the hour. A gain above 0 is one within the hour: worth the move once prepared, it earns more
+  // than the chosen one. The one sent is kept unless another is worth BATCHER_MOVE_GAIN times it (#236), even
+  // if it no longer earns within the hour or gains (#278's review: hosts lost), its waves out, as long as the RAM
+  // will ever prepare it.
+  const nextTargetCandidates = [...weighedOf.values()]
     .filter(
       (each) =>
         each !== chosen &&
-        each.preparedWorth >= chosen.weighed.worth * BATCHER_MOVE_GAIN &&
-        preparationTimeMs(each.figures, player, each.now, nextGb(each)) <= BATCHER_TARGET_HORIZON_MS,
+        each.preparedWorth >= chosenBatchedWorth * BATCHER_MOVE_GAIN &&
+        each.firstBatchMs - chosen.firstBatchMs <= BATCHER_MOST_IDLE_MS,
     )
-    .sort((a, b) => b.preparedWorth - a.preparedWorth);
-  const sentNext = nextTargetCandidates.find((each) => each.weighed.target === current?.config.next?.target);
+    .map((each) => {
+      const untilMs = untilNextEarnsMs(each);
+      const afterMs = Math.max(0, BATCHER_NEXT_HORIZON_MS - untilMs);
+      const gain = (each.weighed.incomePerSecond - chosen.weighed.incomePerSecond) * afterMs - lostPerSecond * untilMs;
+      return { each, untilMs, worth: each.weighed.incomePerSecond * afterMs, gain };
+    })
+    // The one sent, its waves out, while it will ever be prepared (#278's re-review); any other, on its gain.
+    .filter(({ each, untilMs, gain }) => (each.weighed.target === sentNext && Number.isFinite(untilMs)) || gain > 0)
+    .sort((a, b) => b.worth - a.worth);
+  const keptNext = nextTargetCandidates.find(({ each }) => each.weighed.target === sentNext);
   const worthiestNext = nextTargetCandidates[0];
   const next =
-    sentNext !== undefined &&
-    worthiestNext !== undefined &&
-    worthiestNext.preparedWorth < sentNext.preparedWorth * BATCHER_MOVE_GAIN
-      ? sentNext
-      : worthiestNext;
+    keptNext !== undefined && worthiestNext !== undefined && worthiestNext.worth < keptNext.worth * BATCHER_MOVE_GAIN
+      ? keptNext.each
+      : worthiestNext?.each;
   if (next === undefined) return { batcher: chosen.state, worths };
-  const rest = planBatcher(
-    staticData,
-    mediumData,
-    chosen.weighed.target,
-    hosts,
-    current?.runOn ?? null,
-    1 - BATCHER_NEXT_RAM_SHARE,
-  );
+  const rest = planBatcher(staticData, mediumData, chosenName, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
   if (rest.batcher === null) return { batcher: chosen.state, worths };
   const nextConfig = { target: next.weighed.target, figures: next.figures, ramGb: nextGb(next) };
   return { batcher: { ...rest.batcher, config: { ...rest.batcher.config, next: nextConfig } }, worths };
