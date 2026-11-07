@@ -12,7 +12,9 @@ import {
   CampaignFold,
   campaignViews,
   describeEnding,
+  installsOfLevel,
   type ReleaseShare,
+  sum,
 } from "./campaign-model.ts";
 import { formatDuration, formatIsoTime, plural } from "./gap-report.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
@@ -24,7 +26,6 @@ import type { Environment, TelemetryStore } from "./telemetry-store.ts";
  */
 export const STARTER_ALLOWANCE_MS = 5 * 60_000;
 const atLeast = (shown: string, isLowerBound: boolean) => (isLowerBound ? `≥ ${shown}` : shown);
-const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 
 /** "2 h 0 min in 1 gap", or "none". */
 function describeLeftOut(gapsMs: readonly number[]): string {
@@ -127,18 +128,16 @@ function bitNodeSection(views: readonly BitNodeView[]): string[] {
   ];
   const rows = views.map((view) => {
     const { bitNode } = view;
-    const sofar = view.ending.destroyedAtMs === null ? " so far" : "";
-    const unseenInstalls = bitNode.installedBeforeFirstLook;
-    const how = view.begunBefore ? " (before the store)" : bitNode.entry === "save loaded" ? " (a save loaded)" : "";
+    const sofar = view.soFar ? " so far" : "";
     return [
       view.name,
-      `${formatIsoTime(bitNode.startMs)}${how}`,
+      `${formatIsoTime(bitNode.startMs)}${view.startNote === null ? "" : ` (${view.startNote})`}`,
       describeEnding(view.ending, formatIsoTime),
-      atLeast(`${formatDuration(view.wallMs)}${sofar}`, bitNode.entry === "save loaded"),
-      atLeast(`${formatDuration(bitNode.clock.onlineMs)}${sofar}`, !view.startSeen),
+      atLeast(`${formatDuration(view.wallMs)}${sofar}`, view.wallAtLeast),
+      atLeast(`${formatDuration(bitNode.clock.onlineMs)}${sofar}`, view.onlineAtLeast),
       describeLeftOut(view.gapsMs),
-      atLeast(String(view.cycles), unseenInstalls),
-      atLeast(describeInstalls(view.installs, view.byHand), unseenInstalls),
+      atLeast(String(view.cycles), view.countsAtLeast),
+      atLeast(describeInstalls(view.installs, view.byHand), view.countsAtLeast),
       bitNode.ownedAugs === null ? "not recorded" : String(Object.keys(bitNode.ownedAugs).length),
       String(view.brainStarts),
       [...bitNode.releases.keys()].join(", "),
@@ -153,7 +152,7 @@ function bitNodeSection(views: readonly BitNodeView[]): string[] {
     const shares = [...bitNode.releases].map(([release, share]) => `${release} ${formatDuration(share.onlineMs)}`);
     lines.push(`    time online by release: ${shares.join(", ")}`);
     const installed = Object.entries(bitNode.ownedAugs ?? {}).flatMap(([name, level]) =>
-      Array.from({ length: isFiniteNumber(level) && level > 1 ? level : 1 }, () => name),
+      Array.from({ length: installsOfLevel(level) }, () => name),
     );
     lines.push(
       `    installed at its last look: ${bitNode.ownedAugs === null ? "not recorded" : describeAugmentations(installed)}`,

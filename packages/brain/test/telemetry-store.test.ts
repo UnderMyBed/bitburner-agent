@@ -150,6 +150,12 @@ test("the slow snapshots' resetInfo alone (#285): by arrival, after a place, to 
   expect(ids(store.iterateSlowResetInfo({ environment: "E1", throughId: 5 }))).toEqual([2, 1, 5]);
   // By row, after a row: the slow ones of the environment only.
   expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 2 }))).toEqual([5, 6, 7]);
+  // At most a batch; and by the tier index (the page closed for days): the same rows.
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 2, limit: 2 }))).toEqual([5, 6]);
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 2, byTierIndex: true }))).toEqual([5, 6, 7]);
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 0, limit: 3, byTierIndex: true }))).toEqual([
+    1, 2, 5,
+  ]);
   expect(store.slowResetInfoAfterId({ environment: "E1", afterId: 7 })).toEqual([]);
   expect(store.lastSnapshotId()).toBe(7);
 });

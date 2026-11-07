@@ -371,8 +371,8 @@ export class TelemetryStore {
   }
 
   /**
-   * The slow snapshots' `resetInfo` in order of arrival (`ORDER BY received_at_ms, id`), after the place `after` in that
-   * order if given, of the rows up to `throughId` if given, at most `limit`, one row at a time: the campaign's read
+   * The slow snapshots' `resetInfo` in order of arrival (`ORDER BY received_at_ms, id`), after the place `after` in
+   * that order if given, of the rows up to `throughId` if given, at most `limit`, one row at a time: the campaign's read
    * (#290, #285).
    */
   *iterateSlowResetInfo({
@@ -396,16 +396,32 @@ export class TelemetryStore {
   }
 
   /**
-   * The slow snapshots stored after the row `afterId`, in the order stored, with their `resetInfo` (the dashboard's
-   * timeline, #285, once it has read the rest). By the row id's range alone (the `+` keeps SQLite off the tier index):
-   * the few rows of every tier stored since.
+   * The slow snapshots stored after the row `afterId`, in the order stored, at most `limit`, with their `resetInfo`
+   * (the dashboard's timeline, #285, once it has read the rest). By the row id's range alone (the `+` keeps SQLite off
+   * the tier index), reading every tier's rows since: few, with the page open (a minute holds about 37). Or
+   * `byTierIndex`, by the slow tier's index (its entries scanned and sorted by id), so the rows of every other tier
+   * aren't read: the page closed for days (`RECENT_ROWS`, the timeline's choice).
    */
-  slowResetInfoAfterId({ environment, afterId }: { environment: Environment; afterId: number }): SlowResetInfo[] {
-    const rows = this.#database
-      .prepare(
-        `SELECT ${RESET_INFO_COLUMNS} FROM snapshots WHERE id > ? AND +environment = ? AND +tier = 'slow' ORDER BY id`,
-      )
-      .all(afterId, environment) as Record<string, string | number | null>[];
+  slowResetInfoAfterId({
+    environment,
+    afterId,
+    limit = -1,
+    byTierIndex = false,
+  }: {
+    environment: Environment;
+    afterId: number;
+    limit?: number;
+    byTierIndex?: boolean;
+  }): SlowResetInfo[] {
+    const sql = !byTierIndex
+      ? `SELECT ${RESET_INFO_COLUMNS} FROM snapshots WHERE id > ? AND +environment = ? AND +tier = 'slow'
+            ORDER BY id LIMIT ?`
+      : `SELECT ${RESET_INFO_COLUMNS} FROM snapshots INDEXED BY snapshots_by_tier_and_time
+            WHERE id > ? AND environment = ? AND tier = 'slow' ORDER BY id LIMIT ?`;
+    const rows = this.#database.prepare(sql).all(afterId, environment, limit) as Record<
+      string,
+      string | number | null
+    >[];
     return rows.map(slowResetInfoOfRow);
   }
 

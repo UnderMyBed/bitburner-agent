@@ -194,35 +194,62 @@ function duration(ms) {
 const plural = (count, one, many) => `${count.toLocaleString()} ${count === 1 ? one : many}`;
 /** The timeline as last drawn (#285): drawn again only when it changes, so a BitNode opened stays open. */
 let timelineDrawn = null;
+/** The BitNodes open (their index), kept across drawings, the "Reading…" ones in between included. */
+const timelineOpen = new Set();
+/** Whether the newest BitNode has been opened, at the first drawing that lists any. */
+let timelineFirstOpened = false;
+const TIMELINE_CYCLE_KINDS = {
+  start: "from the BitNode's start",
+  "seen first": "its first look (an install before it not seen)",
+  install: "",
+  save: "a save loaded from a cycle not seen (not an install)",
+};
 
 /** Each BitNode played, newest first, its cycles inside (#285): the campaign report's model, kept up to date. */
-function renderTimeline(timeline) {
+function renderTimeline(timeline, brainStartedAtMs) {
   const box = document.querySelector("#timeline div");
-  const drawn = timeline === null ? "none" : `${timeline.version} ${timeline.problem}`;
+  const drawn = timeline === null ? "none" : `${brainStartedAtMs} ${timeline.version} ${timeline.problem}`;
   if (drawn === timelineDrawn) return;
-  const firstDrawing = timelineDrawn === null;
   timelineDrawn = drawn;
-  if (timeline === null) return box.replaceChildren(element("div", "Not given by this brain.", "muted"));
-  const open = new Set([...box.querySelectorAll("details[open]")].map((each) => each.dataset.key));
+  for (const each of box.querySelectorAll("details")) {
+    if (each.open) timelineOpen.add(each.dataset.key);
+    else timelineOpen.delete(each.dataset.key);
+  }
+  if (timeline === null) {
+    box.replaceChildren(element("div", "Not given by this brain.", "muted"));
+    return;
+  }
+  if (!timelineFirstOpened && timeline.bitNodes.length > 0) {
+    timelineOpen.add(String(timeline.bitNodes.length - 1));
+    timelineFirstOpened = true;
+  }
   const lines = [];
   if (timeline.problem !== null) lines.push(element("div", `Couldn't read the timeline: ${timeline.problem}`, "bad"));
+  if (timeline.failed !== null) {
+    lines.push(element("div", `${plural(timeline.failed.count, "slow snapshot", "slow snapshots")} couldn't be folded, left out (the first: ${timeline.failed.first}).`, "bad"));
+  }
   const unread = timeline.unread > 0 ? `; ${plural(timeline.unread, "slow snapshot", "slow snapshots")} with no resetInfo, left out` : "";
   if (timeline.reading !== null) {
     lines.push(element("div", `Reading the store: ${plural(timeline.reading.slowSnapshots, "slow snapshot", "slow snapshots")} so far.`, "muted"));
-  } else if (timeline.bitNodes.length === 0) {
-    lines.push(element("div", `No BitNode in the store yet: no slow snapshot shows one${unread}.`, "muted"));
-  } else {
+  } else if (timeline.bitNodes.length > 0) {
     lines.push(element("div", `${plural(timeline.bitNodes.length, "BitNode", "BitNodes")}, the newest first, from ${plural(timeline.slowSnapshots, "slow snapshot", "slow snapshots")}${unread}. ≥: at least (its start, or its first cycle, not seen in the store).`, "muted"));
+  } else if (timeline.problem === null) {
+    // With a problem, nothing is known of the store yet: it may well have BitNodes.
+    lines.push(element("div", `No BitNode in the store yet: no slow snapshot shows one${unread}.`, "muted"));
   }
   const atLeast = (text, isLowerBound) => (isLowerBound ? `≥ ${text}` : text);
-  const newest = timeline.bitNodes.length - 1;
   const bitNodes = timeline.bitNodes.map((bitNode, index) => {
     const details = element("details");
     details.dataset.key = String(index);
-    details.open = firstDrawing ? index === newest : open.has(String(index));
+    details.open = timelineOpen.has(String(index));
     const soFar = bitNode.soFar ? " so far" : "";
-    const ending =
-      bitNode.endedAtMs !== null ? bitNode.ending.replace("{at}", time(bitNode.endedAtMs)) : bitNode.ending === "not yet" ? "not ended yet" : bitNode.ending;
+    const ending = !bitNode.ended
+      ? "not ended yet"
+      : bitNode.endedAtMs === null ? bitNode.ending : bitNode.ending.replace("{at}", time(bitNode.endedAtMs));
+    const augmentations = bitNode.augmentations === null
+      ? "not recorded"
+      : plural(bitNode.augmentations.kinds, "kind", "kinds") +
+        (bitNode.augmentations.neuroFluxLevel > 0 ? `, NeuroFlux Governor at level ${bitNode.augmentations.neuroFluxLevel}` : "");
     details.append(
       element(
         "summary",
@@ -236,37 +263,34 @@ function renderTimeline(timeline) {
       element(
         "div",
         `Left out of the time online: ${bitNode.gapCount === 0 ? "none" : `${duration(bitNode.leftOutMs)} in ${plural(bitNode.gapCount, "gap", "gaps")}`}. ` +
-          `Augmentations installed at its last look: ${bitNode.augmentations ?? "not recorded"}. Releases: ${bitNode.releases.join(", ")}.`,
+          `Augmentations installed at its last look: ${augmentations}. ` +
+          (bitNode.savesLoaded > 0 ? `Saves loaded in it: ${bitNode.savesLoaded}. ` : "") +
+          `Releases: ${bitNode.releases.join(", ")}.`,
         "muted",
       ),
     );
     const cycles = element("table");
     // Numbered from its start: from 2 at least where an install came before its first look.
     let count = bitNode.countsAtLeast ? 1 : 0;
-    const kindText = { start: "from the BitNode's start", "seen first": "its first look (an install before it not seen)", install: "", save: "a save loaded (not an install)" };
-    const last = bitNode.cycleList.length - 1;
     cycles.replaceChildren(
-      ...bitNode.cycleList.map((cycle, cycleIndex) => {
+      ...bitNode.cycleList.map((cycle) => {
         const row = element("tr");
         const label = cycle.kind === "save" ? "save" : `cycle ${atLeast(String(++count), bitNode.countsAtLeast)}`;
-        const endedBy =
-          cycle.endedBy.length > 0
-            ? cycle.endedBy
-                .map((install) =>
-                  `installed ${time(install.atMs)}${install.byHand ? " by hand" : ""}: ` +
-                  (install.augmentationCount === null
-                    ? "augmentations not recorded"
-                    : `${plural(install.augmentationCount, "augmentation", "augmentations")} (${install.augmentations})`),
-                )
-                .join("; ")
-            : cycleIndex === last
-              ? bitNode.endedAtMs === null ? "going on" : "ended with the BitNode"
-              : "no install seen";
+        const ends = [
+          ...cycle.endedBy.map((install) =>
+            `installed ${time(install.atMs)}${install.byHand ? " by hand" : ""}: ` +
+            (install.augmentationCount === null
+              ? "augmentations not recorded"
+              : `${plural(install.augmentationCount, "augmentation", "augmentations")} (${install.augmentations})`),
+          ),
+          ...cycle.leftForSaveAtMs.map((atMs) => `left for a save loaded ${time(atMs)}`),
+          ...(cycle.current ? [bitNode.ended ? "ended with the BitNode" : "going on"] : []),
+        ];
         row.append(
           element("th", label),
-          element("td", `from ${time(cycle.startMs)}${kindText[cycle.kind] ? `, ${kindText[cycle.kind]}` : ""}`),
-          element("td", `${duration(cycle.onlineMs)} online`),
-          element("td", endedBy),
+          element("td", `from ${time(cycle.startMs)}${TIMELINE_CYCLE_KINDS[cycle.kind] ? `, ${TIMELINE_CYCLE_KINDS[cycle.kind]}` : ""}`),
+          element("td", `${atLeast(duration(cycle.onlineMs), cycle.onlineAtLeast)} online`),
+          element("td", ends.length === 0 ? "no install seen" : ends.join("; ")),
         );
         return row;
       }),
@@ -735,7 +759,7 @@ function render(status) {
         })),
   );
 
-  renderTimeline(status.timeline ?? null);
+  renderTimeline(status.timeline ?? null, status.brainStartedAtMs);
 
   const events = document.querySelector("#events table");
   events.replaceChildren(

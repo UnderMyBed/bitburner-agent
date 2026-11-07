@@ -129,6 +129,9 @@ const timeline = (batch?: number) => new CampaignTimeline({ store, environment: 
 const withoutVersion = ({ version: _, ...rest }: CampaignTimelineView) => rest;
 const cyclesOf = (bitNode: TimelineBitNode | undefined) =>
   bitNode?.cycleList.map((cycle) => [cycle.kind, cycle.startMs, cycle.onlineMs, cycle.endedBy]);
+/** Each cycle's kind, whether it's the current one, the saves loaded that left it, and its time online at least. */
+const flagsOf = (bitNode: TimelineBitNode | undefined) =>
+  bitNode?.cycleList.map((cycle) => [cycle.kind, cycle.current, cycle.leftForSaveAtMs, cycle.onlineAtLeast]);
 
 describe("the timeline of BitNodes and installs (#285)", () => {
   test("each BitNode: its start, how it ended, its time online and by the clock, its cycles and installs", () => {
@@ -159,9 +162,16 @@ describe("the timeline of BitNodes and installs (#285)", () => {
       cycles: 3,
       installs: 2,
       byHand: 0,
-      augmentations: 4,
+      ended: true,
+      savesLoaded: 0,
+      augmentations: { kinds: 4, neuroFluxLevel: 2 },
       releases: ["v1.0.0"],
     });
+    // Its first cycle's time online at least (its start unseen); the last the current one, ended with the BitNode.
+    expect(flagsOf(bn1)).toEqual([
+      ["seen first", false, [], true],
+      ["install", true, [], false],
+    ]);
     // Its first look's cycle, then the install's: the step across it split at the install (30.5), the destroy's step
     // (60 to 60.5) the last cycle's.
     expect(cyclesOf(bn1)).toEqual([
@@ -195,7 +205,7 @@ describe("the timeline of BitNodes and installs (#285)", () => {
       cycles: 3,
       installs: 2,
       byHand: 1,
-      augmentations: 3,
+      augmentations: { kinds: 3, neuroFluxLevel: 1 },
     });
     expect(cyclesOf(bn2)).toEqual([
       [
@@ -214,7 +224,20 @@ describe("the timeline of BitNodes and installs (#285)", () => {
       ["install", m(150.5), minutes(30), []],
     ]);
     // The save loaded goes on in the cycle it's from, which an install ends again: from the save's augmentations.
-    expect(bn3).toMatchObject({ name: "BN1.3", onlineMs: minutes(60), wallMs: minutes(60), cycles: 3, installs: 2 });
+    expect(bn3).toMatchObject({
+      name: "BN1.3",
+      onlineMs: minutes(60),
+      wallMs: minutes(60),
+      cycles: 3,
+      installs: 2,
+      savesLoaded: 1,
+    });
+    // The save at 211 left the second cycle for the first; the install from it began the third, the current one.
+    expect(flagsOf(bn3)).toEqual([
+      ["start", false, [], false],
+      ["install", false, [m(211)], false],
+      ["install", true, [], false],
+    ]);
     expect(cyclesOf(bn3)).toEqual([
       [
         "start",
@@ -237,6 +260,7 @@ describe("the timeline of BitNodes and installs (#285)", () => {
       name: "BN1.4",
       ending: "not yet",
       endedAtMs: null,
+      ended: false,
       destroyed: false,
       soFar: true,
       wallMs: minutes(29.5),
@@ -254,21 +278,38 @@ describe("the timeline of BitNodes and installs (#285)", () => {
     }
   });
 
-  test("the campaign report's own rows: the same names, endings, times, cycles and installs", () => {
+  test("the campaign report's own rows: the same names, starts, endings, times, cycles and installs", () => {
     campaign();
+    // Then a save of BN1.3 loaded: a BitNode entered by a save, its wall clock and time online at least.
+    play(271, 280, { node: 180.5, aug: 220.5, sf: 2, augs: EARLY });
     const report = campaignReport(store, { environment: "E0" });
     const lines = report.split("\n");
     const start = lines.findIndex((line) => line.startsWith("BitNodes, one row each")) + 2;
-    const rows = lines.slice(start, start + 4).map((line) => line.trim().split(/ {2,}/));
+    const rows = lines.slice(start, start + 5).map((line) => line.trim().split(/ {2,}/));
     const atLeast = (shown: string, isLowerBound: boolean) => (isLowerBound ? `≥ ${shown}` : shown);
     const { bitNodes } = timeline().read();
+    expect(bitNodes.map((bitNode) => [bitNode.name, bitNode.start])).toEqual([
+      ["BN1.1", "before the store"],
+      ["BN1.2", null],
+      ["BN1.3", null],
+      ["BN1.4", null],
+      ["BN1.3 #2", "a save loaded"],
+    ]);
+    expect(bitNodes[4]).toMatchObject({ wallAtLeast: true, onlineAtLeast: true, ended: false });
     expect(rows.map((row) => row[0])).toEqual(bitNodes.map((bitNode) => bitNode.name));
     bitNodes.forEach((bitNode, index) => {
       const soFar = bitNode.soFar ? " so far" : "";
-      const [, , ended, wall, online, , cycles, installs] = rows[index] ?? [];
+      const [, started, ended, wall, online, , cycles, installs] = rows[index] ?? [];
+      expect(started).toBe(`${formatIsoTime(bitNode.startMs)}${bitNode.start === null ? "" : ` (${bitNode.start})`}`);
       expect(ended).toBe(
         describeEnding(
-          { text: bitNode.ending, atMs: bitNode.endedAtMs, destroyedAtMs: null, unseenAfter: false },
+          {
+            text: bitNode.ending,
+            atMs: bitNode.endedAtMs,
+            ended: bitNode.ended,
+            destroyedAtMs: null,
+            unseenAfter: false,
+          },
           formatIsoTime,
         ),
       );
@@ -372,6 +413,122 @@ describe("the timeline of BitNodes and installs (#285)", () => {
     expect(timeline().read()).toMatchObject({ slowSnapshots: 3, unread: 1 });
   });
 
+  test("a BitNode that goes on, or ends, in a cycle a save went back to: that cycle the current one (#285 review)", () => {
+    // The brain started before the BitNode: its start is seen.
+    event(-1, "brainStarted");
+    play(1, 10, { node: 0, aug: 0 });
+    installSent(10.3);
+    play(11, 20, { node: 0, aug: 10.5, augs: EARLY });
+    // A save from the first cycle loaded: the second left for it, the first goes on.
+    play(21, 30, { node: 0, aug: 0 });
+    const goingOn = timeline().read().bitNodes[0];
+    expect(goingOn?.savesLoaded).toBe(1);
+    expect(flagsOf(goingOn)).toEqual([
+      ["start", true, [], false],
+      ["install", false, [m(21)], false],
+    ]);
+    // Then destroyed in it: the first cycle ended with the BitNode.
+    event(30.3, "bitNodeDestroySent");
+    play(31, 32, { node: 30.5, aug: 30.5, sf: 1 });
+    const destroyed = timeline().read().bitNodes[0];
+    expect(destroyed).toMatchObject({ ended: true, destroyed: true });
+    expect(flagsOf(destroyed)?.map(([kind, current]) => [kind, current])).toEqual([
+      ["start", true],
+      ["install", false],
+    ]);
+  });
+
+  test("the brain's install sent stored after the slow snapshot showing the install: by hand till then, not after", () => {
+    play(1, 10, { node: 0, aug: 0 });
+    play(11, 12, { node: 0, aug: 10.5, augs: EARLY });
+    const kept = timeline();
+    expect(kept.read().bitNodes[0]?.cycleList[0]?.endedBy[0]?.byHand).toBe(true);
+    // Its event, timed before the install, stored late (a write delayed): the install is the brain's.
+    installSent(10.3);
+    const after = kept.read();
+    expect(after.bitNodes[0]?.byHand).toBe(0);
+    expect(after.bitNodes[0]?.cycleList[0]?.endedBy[0]?.byHand).toBe(false);
+  });
+
+  test("after the first read, a batch a poll too: the page closed for days catches up a batch at a time", () => {
+    play(1, 10, { node: 0, aug: 0 });
+    const kept = timeline(100);
+    kept.read();
+    // 250 slow snapshots, each tier stored (the page closed meanwhile).
+    play(11, 260, { node: 0, aug: 0 }, true);
+    const reads = [1, 2, 3, 4].map(() => {
+      kept.read();
+      return kept.slowSnapshotsRead;
+    });
+    expect(reads).toEqual([110, 210, 260, 260]);
+    // 3,250 rows of every tier since: by the row id's range.
+    expect(kept.tierIndexReads).toBe(0);
+    expect(withoutVersion(kept.read())).toEqual(withoutVersion(timeline().read()));
+    // Past `recentRows` rows since, by the slow tier's index: the same timeline.
+    const byIndex = new CampaignTimeline({ store, environment: "E0", recentRows: 1_000 });
+    byIndex.read();
+    play(261, 360, { node: 0, aug: 0 }, true);
+    expect(withoutVersion(byIndex.read())).toEqual(withoutVersion(timeline().read()));
+    expect(byIndex.tierIndexReads).toBe(1);
+    // Then a slow snapshot alone: by the range again.
+    play(361, 361, { node: 0, aug: 0 });
+    byIndex.read();
+    expect(byIndex.tierIndexReads).toBe(1);
+  });
+
+  test("a read failing part way: what it folded shown, the failure with it; then the view without it", () => {
+    play(1, 10, { node: 0, aug: 0 });
+    const kept = timeline();
+    kept.read();
+    play(11, 20, { node: 0, aug: 0 });
+    const eventsAfterId = store.eventsAfterId.bind(store);
+    store.eventsAfterId = () => {
+      throw new Error("the events couldn't be read");
+    };
+    const failed = kept.read();
+    expect(failed.problem).toBe("the events couldn't be read");
+    // The slow snapshots it folded before failing are in it.
+    expect(failed.slowSnapshots).toBe(20);
+    store.eventsAfterId = eventsAfterId;
+    const recovered = kept.read();
+    expect(recovered.problem).toBeNull();
+    expect(withoutVersion(recovered)).toEqual(withoutVersion(timeline().read()));
+  });
+
+  test("a slow snapshot the fold fails on is skipped and counted, logged once, never read again", () => {
+    play(1, 10, { node: 0, aug: 0 });
+    const failures: unknown[] = [];
+    const kept = new CampaignTimeline({ store, environment: "E0", onError: (error) => failures.push(error) });
+    kept.read();
+    play(11, 12, { node: 0, aug: 0 });
+    const slowResetInfoAfterId = store.slowResetInfoAfterId.bind(store);
+    // A row whose resetInfo throws as the fold reads it: one the model can't fold.
+    store.slowResetInfoAfterId = (query) =>
+      slowResetInfoAfterId(query).map((row, index) =>
+        index === 0
+          ? {
+              ...row,
+              resetInfo: Object.defineProperty({}, "lastAugReset", {
+                enumerable: true,
+                get: () => {
+                  throw new Error("a resetInfo the fold can't read");
+                },
+              }),
+            }
+          : row,
+      );
+    const view = kept.read();
+    store.slowResetInfoAfterId = slowResetInfoAfterId;
+    expect(view.problem).toBeNull();
+    expect(view.failed).toEqual({ count: 1, first: "row 11: a resetInfo the fold can't read" });
+    expect(view.slowSnapshots).toBe(12);
+    expect(failures).toHaveLength(1);
+    // Never read again: the next poll goes on past it.
+    play(13, 13, { node: 0, aug: 0 });
+    expect(kept.read()).toMatchObject({ slowSnapshots: 13, failed: { count: 1 }, problem: null });
+    expect(failures).toHaveLength(1);
+  });
+
   test("a failure is shown in the timeline, not thrown, and handed on once while it lasts", () => {
     campaign();
     const failures: unknown[] = [];
@@ -460,11 +617,22 @@ describe("a large store", () => {
     }
     const wholeMs = performance.now() - wholeStarted;
     expect(whole).toBe(count + 1);
+    // The page closed for a week: over 10,000 rows since, so the next poll goes by the tier index (#285 review).
+    const week = 7 * 1_440;
+    store.writeTransaction(() => {
+      for (let minute = count + 1; minute <= count + week; minute++) snapshot("slow", m(minute), data(minute));
+    });
+    const weekStarted = performance.now();
+    kept.read();
+    const weekMs = performance.now() - weekStarted;
+    expect(kept.slowSnapshotsRead).toBe(count + 1 + week);
+    expect(kept.tierIndexReads).toBe(1);
     console.log(
       `timeline over ${count} slow snapshots (store built in ${builtMs.toFixed(0)} ms): first read ` +
         `${firstReadMs.toFixed(0)} ms in ${polls} polls (the longest ${longestPollMs.toFixed(0)} ms); a poll with nothing ` +
         `new ${idleMs.toFixed(2)} ms; with one slow snapshot ${pollMs.toFixed(2)} ms; npm run campaign's report ` +
-        `${reportMs.toFixed(0)} ms (each slow snapshot parsed whole, as it read them before: ${wholeMs.toFixed(0)} ms)`,
+        `${reportMs.toFixed(0)} ms (each slow snapshot parsed whole, as it read them before: ${wholeMs.toFixed(0)} ms); ` +
+        `the poll after a week away (${week} slow snapshots, by the tier index) ${weekMs.toFixed(0)} ms`,
     );
   });
 });

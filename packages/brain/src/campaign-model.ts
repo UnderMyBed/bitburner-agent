@@ -98,6 +98,8 @@ export interface CampaignCycle {
   onlineMs: number;
   /** The installs that ended it: one, unless a save loaded back to it was installed from again. */
   endedBy: Install[];
+  /** Each time a save loaded left it (the brain's clock: the first slow snapshot after), for another cycle (#285). */
+  leftForSaveAtMs: number[];
 }
 
 /** A BitNode as the campaign keeps it. */
@@ -144,7 +146,8 @@ const ownedAugsOf = (info: ResetInfo) =>
   typeof info.ownedAugs === "object" && info.ownedAugs !== null ? info.ownedAugs : null;
 
 /** An `ownedAugs` level as installs: NeuroFlux Governor's level is its installs, any other's 1. */
-const installsOfLevel = (level: unknown) => (isFiniteNumber(level) && level > 1 ? level : 1);
+export const installsOfLevel = (level: unknown) => (isFiniteNumber(level) && level > 1 ? level : 1);
+export const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 
 /** Each augmentation installed from `before` to `after` (`ownedAugs`), once a level; null where either is unknown. */
 export function augmentationsGained(
@@ -259,6 +262,7 @@ export class CampaignFold {
       // clock set back before an install makes its `lastAugReset` earlier than the last look: read as a save loaded.
       if (bitNode.augResets.has(cycle.lastAugReset) || cycle.lastAugReset < bitNode.lastGameTimeMs) {
         bitNode.savesLoadedAtMs.push(atMs);
+        stepFrom.cycle?.leftForSaveAtMs.push(atMs);
         this.#enter(bitNode, cycle.lastAugReset, "save", cycle.startMs);
       } else {
         const install: Install = {
@@ -301,7 +305,7 @@ export class CampaignFold {
   #enter(bitNode: CampaignBitNode, lastAugReset: number, kind: CampaignCycle["kind"], startMs: number): void {
     let entered = bitNode.cycleList.find((each) => each.lastAugReset === lastAugReset);
     if (entered === undefined) {
-      entered = { lastAugReset, kind, startMs, onlineMs: 0, endedBy: [] };
+      entered = { lastAugReset, kind, startMs, onlineMs: 0, endedBy: [], leftForSaveAtMs: [] };
       bitNode.cycleList.push(entered);
     }
     bitNode.currentCycle = entered;
@@ -342,6 +346,8 @@ export class CampaignFold {
 export interface Ending {
   text: string;
   atMs: number | null;
+  /** False only for the newest BitNode with no end seen ("not yet"): it goes on. */
+  ended: boolean;
   destroyedAtMs: number | null;
   /** Destroyed, with BitNodes the store didn't see before the next: its destroy's time unknown, never a clear. */
   unseenAfter: boolean;
@@ -369,6 +375,14 @@ export interface BitNodeView {
   /** The time online left out, each gap (the start's only where the store saw it). */
   gapsMs: number[];
   brainStarts: number;
+  /** How the store came to it, where its start wasn't seen: begun before the store's first record, or a save loaded. */
+  startNote: "before the store" | "a save loaded" | null;
+  /** Not destroyed: its wall clock and time online run to its end, or its last look, "so far". */
+  soFar: boolean;
+  /** Lower bounds ("≥"): its wall clock (a save loaded), time online (its start unseen), cycles and installs. */
+  wallAtLeast: boolean;
+  onlineAtLeast: boolean;
+  countsAtLeast: boolean;
 }
 
 /** The campaign over the slow snapshots folded and the events (`CAMPAIGN_EVENT_KINDS`, in the order stored). */
@@ -421,12 +435,13 @@ function viewOf(
   // The installs seen, and the one its first look showed already (those before it unseen: at least).
   const installs = bitNode.installs.length + (bitNode.installedBeforeFirstLook ? 1 : 0);
   const played = bitNodes.slice(0, index + 1).filter((each) => each.label === bitNode.label).length;
+  const ending = endingOf(bitNode, next, its);
   return {
     bitNode,
     name: played === 1 ? bitNode.label : `${bitNode.label} #${played}`,
     begunBefore,
     startSeen,
-    ending: endingOf(bitNode, next, its),
+    ending,
     // To the next BitNode's start, or its last look where BitNodes the store didn't see came between.
     wallMs: (unseenAfter(next) ? bitNode.lastSlowAtMs : (next?.startMs ?? bitNode.lastSlowAtMs)) - bitNode.startMs,
     // Its first cycle, from `lastNodeReset`, and one more for each install.
@@ -435,6 +450,11 @@ function viewOf(
     byHand: bitNode.installs.filter((install) => install.byHand).length,
     gapsMs: startSeen && bitNode.startLeftOutMs > 0 ? [bitNode.startLeftOutMs, ...bitNode.gapsMs] : bitNode.gapsMs,
     brainStarts: its.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND).length,
+    startNote: begunBefore ? "before the store" : bitNode.entry === "save loaded" ? "a save loaded" : null,
+    soFar: ending.destroyedAtMs === null,
+    wallAtLeast: bitNode.entry === "save loaded",
+    onlineAtLeast: !startSeen,
+    countsAtLeast: bitNode.installedBeforeFirstLook,
   };
 }
 
@@ -461,12 +481,13 @@ function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, i
   const ended = (text: string, atMs: number | null, destroyedAtMs: number | null = null) => ({
     text,
     atMs,
+    ended: true,
     destroyedAtMs,
     unseenAfter: false,
   });
   if (next === undefined) {
     return sent === undefined
-      ? ended("not yet", null)
+      ? { ...ended("not yet", null), ended: false }
       : ended("destroy sent {at}, the next BitNode not seen", sent.atMs);
   }
   const at = next.startMs;
@@ -477,7 +498,13 @@ function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, i
     case "gained":
       return ended("destroyed {at}", at, at);
     case "gained, unseen":
-      return { text: "destroyed, BitNodes unseen before {at}", atMs: at, destroyedAtMs: null, unseenAfter: true };
+      return {
+        text: "destroyed, BitNodes unseen before {at}",
+        atMs: at,
+        ended: true,
+        destroyedAtMs: null,
+        unseenAfter: true,
+      };
     case "unseen":
       return ended("BitNodes unseen before {at}", at);
     case "overridden":
