@@ -5,6 +5,7 @@ import type { IntentOutcome } from "@bitburner-agent/core";
 import type { DonationFailed, InstallAwaitingRestart, NotQueued } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
+import type { DataBackupProblem } from "../data-backup.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
 import type { WorldDaemonStall } from "../world-daemon.ts";
@@ -55,7 +56,8 @@ export type AlertName =
   | "augmentationDonationFailed"
   | "installNotRestarted"
   | "worldDaemonStalled"
-  | "storeThinningFailed";
+  | "storeThinningFailed"
+  | "dataBackupFailed";
 
 export interface Alert {
   name: AlertName;
@@ -133,6 +135,8 @@ export interface AlertFacts {
   worldDaemonStall?: WorldDaemonStall | null;
   /** This brain start's store thinning, failed (#283's review), or null. Optional for the callers that don't thin. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
+  /** The newest data backup's problem (#284), until one is taken cleanly; null or absent: none. */
+  dataBackupProblem?: DataBackupProblem | null;
 }
 
 /**
@@ -149,7 +153,7 @@ export interface IncomeFacts {
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
  * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then one augmentationDonationFailed per
- * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then storeThinningFailed.
+ * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then storeThinningFailed, then dataBackupFailed.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -269,6 +273,18 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
       detail:
         `the store's thinning at this start failed, so the store is as it was: ${thinning.failure} (the brain runs on; ` +
         "the next start tries again)",
+    });
+  }
+  const backup = facts.dataBackupProblem ?? null;
+  if (backup !== null) {
+    alerts.push({
+      name: "dataBackupFailed",
+      sinceMs: backup.atMs,
+      detail:
+        backup.kind === "failed"
+          ? `the data directory's backup failed: ${backup.failure} (the brain plays on, and tries again within the hour)`
+          : `the data directory's backup was taken, but older ones weren't removed, so they use more disk: ` +
+            `${backup.failure} (the next backup tries again)`,
     });
   }
   return alerts;

@@ -4,6 +4,12 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import {
+  DATA_BACKUPS_DIRECTORY_NAME,
+  DEFAULT_DATA_BACKUP_INTERVAL_HOURS,
+  DEFAULT_DATA_BACKUPS_KEPT,
+  MAX_DATA_BACKUP_INTERVAL_HOURS,
+} from "./data-backup.ts";
 import { MAX_BACKUP_INTERVAL_MS } from "./save-backups.ts";
 import { ENVIRONMENTS, type Environment } from "./telemetry-store.ts";
 
@@ -40,6 +46,30 @@ export interface BrainConfig {
    * null: no thinning at the start; `npm run thin` thins by hand.
    */
   telemetryKeptWholeDays?: number | null;
+  /**
+   * The data backup (#284): how many to keep, the newest; 0 for none (and then no thinning at the start). Absent (the
+   * default, never written): 2.
+   */
+  dataBackupsKept?: number;
+  /** Hours between data backups, from the newest. Absent: 24. */
+  dataBackupIntervalHours?: number;
+  /**
+   * Where the data backups go: a folder, relative to the data directory unless absolute. Absent: `backups` in the data
+   * directory. Somewhere else (another disk, say) only if the owner sets it.
+   */
+  dataBackupDirectory?: string;
+}
+
+/** The data backup's settings (#284) from config.json, its absent fields at their defaults, and its folder resolved. */
+export function dataBackupSettings(
+  config: BrainConfig,
+  dataDirectory: string,
+): { backupsKept: number; intervalHours: number; directory: string } {
+  return {
+    backupsKept: config.dataBackupsKept ?? DEFAULT_DATA_BACKUPS_KEPT,
+    intervalHours: config.dataBackupIntervalHours ?? DEFAULT_DATA_BACKUP_INTERVAL_HOURS,
+    directory: path.resolve(dataDirectory, config.dataBackupDirectory ?? DATA_BACKUPS_DIRECTORY_NAME),
+  };
 }
 
 /**
@@ -211,6 +241,26 @@ function configProblem(config: unknown): string | null {
   const days = fields.telemetryKeptWholeDays;
   if (days !== undefined && days !== null && !isKeptWholeDays(days)) {
     return "telemetryKeptWholeDays must be a whole number of days, at least 1, or absent or null for no thinning at the start";
+  }
+  const { dataBackupsKept, dataBackupIntervalHours, dataBackupDirectory } = fields;
+  if (dataBackupsKept !== undefined && !(Number.isInteger(dataBackupsKept) && dataBackupsKept >= 0)) {
+    return `dataBackupsKept must be a whole number, 0 for no data backups (the default is ${DEFAULT_DATA_BACKUPS_KEPT})`;
+  }
+  if (
+    dataBackupIntervalHours !== undefined &&
+    !(
+      typeof dataBackupIntervalHours === "number" &&
+      dataBackupIntervalHours > 0 &&
+      dataBackupIntervalHours <= MAX_DATA_BACKUP_INTERVAL_HOURS
+    )
+  ) {
+    return `dataBackupIntervalHours must be a number of hours above 0 and at most ${MAX_DATA_BACKUP_INTERVAL_HOURS} (the default is ${DEFAULT_DATA_BACKUP_INTERVAL_HOURS})`;
+  }
+  if (
+    dataBackupDirectory !== undefined &&
+    (typeof dataBackupDirectory !== "string" || dataBackupDirectory.trim() === "")
+  ) {
+    return "dataBackupDirectory must be a folder, or absent for backups in the data directory";
   }
   return null;
 }

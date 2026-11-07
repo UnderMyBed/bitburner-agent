@@ -15,6 +15,7 @@ import type { BackdoorDue } from "../src/backdoors.ts";
 import type { BatcherView } from "../src/batcher.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
+import type { DataBackupProblem } from "../src/data-backup.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
 import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
@@ -84,6 +85,7 @@ const status = (
     augmentations = idleAugmentations,
     installAwaitingRestart = null,
     storeThinningFailure = null,
+    dataBackupProblem = null,
   }: {
     income?: IncomeFacts | null;
     loop?: HackLoopView;
@@ -94,6 +96,7 @@ const status = (
     augmentations?: AugmentationsView;
     installAwaitingRestart?: { id: string; sinceMs: number } | null;
     storeThinningFailure?: { atMs: number; failure: string } | null;
+    dataBackupProblem?: DataBackupProblem | null;
   } = {},
 ) =>
   buildDashboardStatus({
@@ -117,6 +120,7 @@ const status = (
     augmentations,
     installAwaitingRestart,
     storeThinningFailure,
+    dataBackupProblem,
     nowMs,
   });
 
@@ -253,6 +257,14 @@ test("cloudServerProblem (#194): from the controller's view of cloud servers, wh
     { name: "cloudServerProblem", sinceMs: nowMs, detail: expect.stringContaining(problem) },
   ]);
   expect(status(nowMs).alerts).toEqual([]);
+});
+
+test("dataBackupFailed (#284): from the newest data backup's problem, gone once one is taken cleanly", () => {
+  const nowMs = STARTED_AT_MS + 30_000;
+  expect(
+    status(nowMs, { dataBackupProblem: { atMs: STARTED_AT_MS + 5_000, kind: "failed", failure: "disk full" } }).alerts,
+  ).toMatchObject([{ name: "dataBackupFailed", sinceMs: STARTED_AT_MS + 5_000 }]);
+  expect(status(nowMs, { dataBackupProblem: null }).alerts).toEqual([]);
 });
 
 test("storeThinningFailed (#283's review): from the brain start's thinning that failed", () => {

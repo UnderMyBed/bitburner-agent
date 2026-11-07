@@ -3,7 +3,8 @@
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
 // to run (the hack loop, #134, and the intents, #141: the hacking programs, #136, home's RAM, #138, and the owner's
 // manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself. It holds a lock file
-// in its data directory while it runs (#283's review), and at start thins the store's old data if config.json opts in.
+// in its data directory while it runs (#283's review), backs the data directory up at its start and each day (#284),
+// and at start thins the store's old data if config.json opts in, once a backup holds it.
 import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
@@ -12,9 +13,16 @@ import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
 import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
-import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
+import {
+  CONFIG_FILE_NAME,
+  dataBackupSettings,
+  loadOrCreateConfig,
+  resolveDataDirectory,
+  STORE_FILE_NAME,
+} from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
+import { backupBeforeThinning, DataBackups, describeDataBackup } from "./data-backup.ts";
 import { DesiredStateController } from "./desired-state.ts";
 import { readFactionWorkEnabled } from "./factions.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
@@ -63,19 +71,44 @@ try {
   const buildDirectory = path.join(dataDirectory, INGAME_BUILD_DIRECTORY_NAME);
   await buildInGameBundles({ outputDirectory: buildDirectory });
   const build = readInGameBuild(buildDirectory);
-  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  const storePath = path.join(dataDirectory, STORE_FILE_NAME);
+  const store = TelemetryStore.open(storePath);
+  // The data directory's rotating backup (#284): made before the thinning, which waits for one to hold what it cuts;
+  // its first at the interval is taken after `brainStarted`. 0 kept: none. Each logged and recorded with the brain's
+  // release; a failure is the dashboard's alert, and never stops play.
+  const backupSettings = dataBackupSettings(config, dataDirectory);
+  const backupIntervalMs = backupSettings.intervalHours * 3_600_000;
+  const dataBackups =
+    backupSettings.backupsKept === 0
+      ? null
+      : new DataBackups({
+          dataDirectory,
+          storePath,
+          configPath: path.join(dataDirectory, CONFIG_FILE_NAME),
+          savesDirectory: path.join(dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME),
+          backupDirectory: backupSettings.directory,
+          backupsKept: backupSettings.backupsKept,
+          backupIntervalMs,
+          clock: systemClock,
+        });
+  const stopRecordingDataBackups = dataBackups
+    ? recordEvents(dataBackups, store, { environment: config.environment, release })
+    : () => undefined;
+  dataBackups?.subscribe(({ type, ...detail }) => log(describeDataBackup(type, detail)));
   // Old data thinned (#283) before this run starts, never in its hot path, and only if config.json opts in: it can't be
-  // undone. Logged; a failure doesn't stop the start, and is the dashboard's alert.
-  // Absent or null: off (#297's re-review).
+  // undone, so only once a data backup holds what it cuts (#284). Logged; a failure doesn't stop the start, and is the
+  // dashboard's alert. Absent or null: off (#297's re-review).
   const keptWholeDays = config.telemetryKeptWholeDays ?? null;
   const storeThinningFailure =
     keptWholeDays === null
       ? null
-      : thinStoreAtStart(store, {
+      : await thinStoreAtStart(store, {
           context: { environment: config.environment, release },
           nowMs: systemClock.now(),
           keptWholeDays,
           log,
+          backupFirst: (beforeMs) =>
+            backupBeforeThinning(dataBackups, { beforeMs, nowMs: systemClock.now(), intervalMs: backupIntervalMs }),
         });
   if (keptWholeDays === null) {
     log("store thinning at start: off (telemetryKeptWholeDays isn't set in config.json; npm run thin thins by hand)");
@@ -87,6 +120,8 @@ try {
     { environment: config.environment, release },
     { atMs: startedAtMs, kind: BRAIN_STARTED_EVENT_KIND, detail: { release } },
   );
+  // At this start if one is due, then each interval: in a worker thread, off the event loop.
+  dataBackups?.start();
   // Its numbering seeded from the store, so an Agent reconnecting after a restart carries on (#119).
   const channel = brainChannel({ token: config.token, clock: systemClock, store, environment: config.environment });
   // A promotion the Agent took (#155) is logged as well as stored.
@@ -194,6 +229,7 @@ try {
         worldDaemonStall: desiredState.worldDaemonStall(),
         share: desiredState.shareView(),
         storeThinningFailure,
+        dataBackupProblem: dataBackups?.problem() ?? null,
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {
@@ -263,6 +299,12 @@ try {
     `save backups in ${path.join(dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME, config.environment)}, ` +
       `every ${config.saveBackupIntervalMinutes} min, the newest ${config.saveBackupsKept} kept`,
   );
+  log(
+    dataBackups === null
+      ? "data backups: off (config.json's dataBackupsKept is 0)"
+      : `data backups in ${backupSettings.directory}, every ${backupSettings.intervalHours} h from the newest, ` +
+          `the newest ${backupSettings.backupsKept} kept`,
+  );
   log(`dashboard on http://127.0.0.1:${dashboardServer.port}/`);
   log(
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, the batcher ${readBatcherEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
@@ -290,6 +332,9 @@ try {
     stopRecordingBackups();
     stopRecordingRules();
     stopLoggingBackups();
+    // Before the store closes: a data backup under way is cut short with the process, and records nothing.
+    dataBackups?.stop();
+    stopRecordingDataBackups();
     await dashboardServer.close();
     await remoteFileApiServer.close();
     await controlServer.close();

@@ -21,6 +21,8 @@ export const SAVE_BACKUPS_DIRECTORY_NAME = "saves";
 /** A backup's file name: its UTC time, with `-` for `:` (which Windows doesn't allow), then `.json.gz`. */
 const BACKUP_FILE_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z\.json\.gz$/;
 const PARTIAL_SUFFIX = ".partial";
+/** Whether a file in an environment's folder is a save backup: the data backup (#284) copies the newest. */
+export const isSaveBackupFileName = (name: string) => BACKUP_FILE_NAME.test(name);
 /** The longest delay a timer takes: Node runs a longer one after 1 ms. */
 export const MAX_BACKUP_INTERVAL_MS = 2 ** 31 - 1;
 

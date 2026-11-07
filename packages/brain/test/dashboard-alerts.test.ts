@@ -108,6 +108,35 @@ describe("augmentations (#210)", () => {
     expect(activeAlerts({ ...quiet, storeThinningFailure: null })).toEqual([]);
   });
 
+  test("the data backup failed, or wasn't rotated (#284): with why, from its time", () => {
+    const atMs = quiet.nowMs - 60_000;
+    expect(activeAlerts({ ...quiet, dataBackupProblem: { atMs, kind: "failed", failure: "disk full" } })).toEqual([
+      {
+        name: "dataBackupFailed",
+        sinceMs: atMs,
+        detail: "the data directory's backup failed: disk full (the brain plays on, and tries again within the hour)",
+      },
+    ]);
+    expect(activeAlerts({ ...quiet, dataBackupProblem: { atMs, kind: "notRotated", failure: "EBUSY" } })).toEqual([
+      {
+        name: "dataBackupFailed",
+        sinceMs: atMs,
+        detail:
+          "the data directory's backup was taken, but older ones weren't removed, so they use more disk: EBUSY (the " +
+          "next backup tries again)",
+      },
+    ]);
+    // After storeThinningFailed.
+    expect(
+      activeAlerts({
+        ...quiet,
+        dataBackupProblem: { atMs, kind: "failed", failure: "x" },
+        storeThinningFailure: { atMs, failure: "y" },
+      }).map((alert) => alert.name),
+    ).toEqual(["storeThinningFailed", "dataBackupFailed"]);
+    expect(activeAlerts({ ...quiet, dataBackupProblem: null })).toEqual([]);
+  });
+
   test("an install reported done that the game didn't reset: at once (#213 re-review)", () => {
     const awaiting = { id: "installAugmentations()", sinceMs: quiet.nowMs - 1, doneNotReset: true };
     expect(activeAlerts({ ...quiet, installAwaitingRestart: awaiting })).toEqual([

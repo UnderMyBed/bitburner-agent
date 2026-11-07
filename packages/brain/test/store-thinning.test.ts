@@ -239,7 +239,7 @@ describe("what thinning keeps (#283)", () => {
     expect(statSync(path.join(directory, `${STORE_FILE_NAME}-wal`)).size).toBe(0);
   });
 
-  test("a log it can't empty after the commit is said, not taken for a failed thinning (#297's re-review)", () => {
+  test("a log it can't empty after the commit is said, not taken for a failed thinning (#297's re-review)", async () => {
     run(0, 3 * MINUTE);
     run(DAY + 2 * MINUTE, DAY + 2 * MINUTE + 2 * SECOND);
     const failing = new Proxy(store, {
@@ -255,7 +255,13 @@ describe("what thinning keeps (#283)", () => {
     });
     const lines: string[] = [];
     expect(
-      thinStoreAtStart(failing, { context, nowMs: T0 + DAY + 2 * MINUTE, keptWholeDays: 1, log: (l) => lines.push(l) }),
+      await thinStoreAtStart(failing, {
+        context,
+        nowMs: T0 + DAY + 2 * MINUTE,
+        keptWholeDays: 1,
+        log: (l) => lines.push(l),
+        backupFirst: async () => null,
+      }),
     ).toBeNull();
     expect(lines).toEqual([
       expect.stringMatching(
@@ -470,12 +476,15 @@ describe("what it says (#283)", () => {
     expect(describeThinning({ ...result, beforeMs: null })).toBe("store thinning: no snapshots recorded yet");
   });
 
-  test("at the brain's start: logged; a failure logged, recorded and returned for the dashboard, never thrown", () => {
+  test("at the brain's start: logged; a failure logged, recorded and returned for the dashboard, never thrown", async () => {
     run(0, 3 * MINUTE);
     run(DAY + 2 * MINUTE, DAY + 2 * MINUTE + 2 * SECOND);
     const lines: string[] = [];
     const log = (line: string) => lines.push(line);
-    expect(thinStoreAtStart(store, { context, nowMs: T0 + DAY + 2 * MINUTE, keptWholeDays: 1, log })).toBeNull();
+    const backupFirst = async () => null;
+    expect(
+      await thinStoreAtStart(store, { context, nowMs: T0 + DAY + 2 * MINUTE, keptWholeDays: 1, log, backupFirst }),
+    ).toBeNull();
     expect(lines).toEqual([expect.stringMatching(/^store thinned before 2026-10-26T00:02:00\.000Z .*58 fast/)]);
     // Thinning that fails (a disk error, say): logged and recorded, the store as it was.
     run(DAY + 3 * MINUTE, DAY + 3 * MINUTE + 2 * SECOND);
@@ -492,7 +501,9 @@ describe("what it says (#283)", () => {
       },
     });
     lines.length = 0;
-    expect(thinStoreAtStart(failing, { context, nowMs: T0 + DAY + 3 * MINUTE, keptWholeDays: 1, log })).toEqual({
+    expect(
+      await thinStoreAtStart(failing, { context, nowMs: T0 + DAY + 3 * MINUTE, keptWholeDays: 1, log, backupFirst }),
+    ).toEqual({
       atMs: T0 + DAY + 3 * MINUTE,
       failure: "disk I/O error",
     });
@@ -507,11 +518,54 @@ describe("what it says (#283)", () => {
     store.close();
     store = TelemetryStore.openReadOnly(path.join(directory, STORE_FILE_NAME));
     lines.length = 0;
-    thinStoreAtStart(store, { context, nowMs: T0 + DAY + 3 * MINUTE, keptWholeDays: 1, log });
+    await thinStoreAtStart(store, { context, nowMs: T0 + DAY + 3 * MINUTE, keptWholeDays: 1, log, backupFirst });
     expect(lines).toEqual([
       expect.stringMatching(/^store thinning FAILED, the store left as it was: .*readonly/),
       expect.stringMatching(/^store thinning's failure not recorded: .*readonly/),
     ]);
+  });
+
+  test("at the brain's start, it thins only once a data backup holds what it cuts (#284), given its cutoff", async () => {
+    run(0, 3 * MINUTE);
+    run(DAY + 2 * MINUTE, DAY + 2 * MINUTE + 2 * SECOND);
+    const wholeBefore = store.snapshots({ environment: "E0" });
+    const lines: string[] = [];
+    const log = (line: string) => lines.push(line);
+    const asked: number[] = [];
+    const options = { context, nowMs: T0 + DAY + 2 * MINUTE, keptWholeDays: 1, log };
+    // No backup: nothing thinned, and the failure logged, recorded and returned for the dashboard's alert.
+    const noBackup = async (beforeMs: number) => {
+      asked.push(beforeMs);
+      return "the backup before it failed: disk full";
+    };
+    expect(await thinStoreAtStart(store, { ...options, backupFirst: noBackup })).toEqual({
+      atMs: T0 + DAY + 2 * MINUTE,
+      failure: "no data backup holds what it would cut (#284): the backup before it failed: disk full",
+    });
+    expect(asked).toEqual([T0 + 2 * MINUTE]);
+    expect(lines).toEqual([
+      "store thinning FAILED, the store left as it was: no data backup holds what it would cut (#284): the backup " +
+        "before it failed: disk full",
+    ]);
+    expect(store.snapshots({ environment: "E0" })).toEqual(wholeBefore);
+    expect(store.events({ environment: "E0" }).map((event) => event.kind)).toEqual([STORE_THINNING_FAILED_EVENT_KIND]);
+    // A backup first: thinned, after it.
+    const order: string[] = [];
+    expect(
+      await thinStoreAtStart(store, {
+        ...options,
+        log: (line) => order.push(line),
+        backupFirst: async () => {
+          order.push("backed up");
+          return null;
+        },
+      }),
+    ).toBeNull();
+    expect(order).toEqual(["backed up", expect.stringMatching(/^store thinned before .*58 fast/)]);
+    // Nothing more to cut: no backup asked for.
+    asked.length = 0;
+    expect(await thinStoreAtStart(store, { ...options, backupFirst: noBackup })).toBeNull();
+    expect(asked).toEqual([]);
   });
 });
 

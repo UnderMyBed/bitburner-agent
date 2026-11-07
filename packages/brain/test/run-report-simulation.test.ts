@@ -23,7 +23,7 @@ test("20 virtual minutes from a fresh start: the hack loop's progress, its purch
 
   // The window: the deploy and the Agent's session.
   expect(line("  brain starts:")).toBe(
-    "  brain starts: 0; Agent connections: 1, disconnections: 0; relaunches: 0; deploys: 1; save backups: 1",
+    "  brain starts: 0; Agent connections: 1, disconnections: 0; relaunches: 0; deploys: 1; save backups: 1; data backups: 0",
   );
   // Progress, under its one BitNode (#244): money and hacking up, TOR, programs and home RAM bought, servers rooted,
   // n00dles worked.
