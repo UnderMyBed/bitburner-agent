@@ -5,7 +5,6 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_BACKUP_INTERVAL_MS } from "./save-backups.ts";
-import { DEFAULT_KEPT_WHOLE_DAYS } from "./store-thinning.ts";
 import { ENVIRONMENTS, type Environment } from "./telemetry-store.ts";
 
 export const DATA_DIRECTORY_VARIABLE = "BITBURNER_AGENT_DATA_DIR";
@@ -36,8 +35,9 @@ export interface BrainConfig {
   /** The game's executable name, as tasklist shows it. */
   gameExecutable: string;
   /**
-   * The days of the brain's records the telemetry store keeps whole (#283); older ones are thinned at its start. Absent
-   * from a config made before #283: `DEFAULT_KEPT_WHOLE_DAYS`.
+   * Thinning at the brain's start (#283), opted into: the days before the newest snapshot the telemetry store keeps
+   * whole; older fast and medium snapshots are thinned, which can't be undone. Absent (the default, never written): no
+   * thinning at the start; `npm run thin` thins by hand.
    */
   telemetryKeptWholeDays?: number;
 }
@@ -128,13 +128,7 @@ export function defaultConfig(): BrainConfig {
     // Verified on the reference rig: steamapps/appmanifest_1812820.acf names Bitburner (#94).
     steamAppId: 1812820,
     gameExecutable: "bitburner.exe",
-    telemetryKeptWholeDays: DEFAULT_KEPT_WHOLE_DAYS,
   };
-}
-
-/** `telemetryKeptWholeDays` (#283), or the default where a config made before it says nothing. */
-export function keptWholeDaysOf(config: BrainConfig): number {
-  return config.telemetryKeptWholeDays ?? DEFAULT_KEPT_WHOLE_DAYS;
 }
 
 /** Whether `days` can be the days a store keeps whole: a whole number, at least 1. */
@@ -152,6 +146,19 @@ export function loadOrCreateConfig(dataDirectory: string): BrainConfig {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
+  return readConfigFile(configPath);
+}
+
+/**
+ * Reads `<dataDirectory>/config.json` without creating it (`npm run thin`, #283's review): null where there's none,
+ * and a config that isn't valid throws, as for the brain.
+ */
+export function readConfig(dataDirectory: string): BrainConfig | null {
+  const configPath = path.join(dataDirectory, CONFIG_FILE_NAME);
+  return existsSync(configPath) ? readConfigFile(configPath) : null;
+}
+
+function readConfigFile(configPath: string): BrainConfig {
   let config: unknown;
   try {
     config = JSON.parse(readFileSync(configPath, "utf8"));
@@ -202,7 +209,7 @@ function configProblem(config: unknown): string | null {
     return "gameExecutable must be the game's .exe file name, with no folder (the default is bitburner.exe)";
   }
   if (fields.telemetryKeptWholeDays !== undefined && !isKeptWholeDays(fields.telemetryKeptWholeDays)) {
-    return `telemetryKeptWholeDays must be a whole number of days, at least 1 (the default is ${DEFAULT_KEPT_WHOLE_DAYS})`;
+    return "telemetryKeptWholeDays must be a whole number of days, at least 1, or absent for no thinning at the start";
   }
   return null;
 }

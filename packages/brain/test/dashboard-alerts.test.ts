@@ -94,6 +94,20 @@ describe("augmentations (#210)", () => {
     expect(activeAlerts({ ...quiet, worldDaemonStall: null })).toEqual([]);
   });
 
+  test("the store's thinning at this start failed (#283's review): with why, from its time", () => {
+    const failure = { atMs: quiet.nowMs - 60_000, failure: "disk I/O error" };
+    expect(activeAlerts({ ...quiet, storeThinningFailure: failure })).toEqual([
+      {
+        name: "storeThinningFailed",
+        sinceMs: failure.atMs,
+        detail:
+          "the store's thinning at this start failed, so the store is as it was: disk I/O error (the brain runs on; " +
+          "the next start tries again)",
+      },
+    ]);
+    expect(activeAlerts({ ...quiet, storeThinningFailure: null })).toEqual([]);
+  });
+
   test("an install reported done that the game didn't reset: at once (#213 re-review)", () => {
     const awaiting = { id: "installAugmentations()", sinceMs: quiet.nowMs - 1, doneNotReset: true };
     expect(activeAlerts({ ...quiet, installAwaitingRestart: awaiting })).toEqual([

@@ -1,22 +1,29 @@
-// npm run thin -- [--data-dir <dir>] [--environment E0] [--kept-whole-days <days>] [--vacuum]
-// Thins the telemetry store as the brain's start does (#283, store-thinning.ts), by config.json's
-// `telemetryKeptWholeDays` unless --kept-whole-days says, and the environment config.json names unless --environment
-// does. --vacuum then compacts the file, which gives the freed pages back (the brain only reuses them): it rewrites
-// the whole file, so it's refused while the brain's dashboard answers. Exits 0 when done, 2 when it couldn't run.
-import { statSync } from "node:fs";
+// npm run thin -- [--data-dir <dir>] [--environment E0] [--kept-whole-days <days>] [--dry-run] [--no-backup] [--vacuum]
+// Thins the telemetry store by hand (#283, store-thinning.ts): fast and medium snapshots older than the days kept whole
+// before the newest snapshot (--kept-whole-days, else config.json's `telemetryKeptWholeDays`, else 14), in the
+// environment config.json names unless --environment does. It can't be undone, so before a thinning that cuts
+// anything it writes a compacted copy of the store beside it, `telemetry.pre-thinning-<time>.sqlite`, unless
+// --no-backup. --dry-run says what it would cut, and the bytes, and changes nothing. --vacuum then compacts the file,
+// which gives the freed pages back (SQLite only reuses them): a compacted copy, swapped in. Every run is refused while
+// the brain runs (its lock file names a live process, or its dashboard's port answers): it would hold the store's
+// write lock longer than the brain's writes wait. Reads config.json without creating it. Exits 0 when done, 2 when it
+// couldn't run.
+import { renameSync, rmSync, statSync } from "node:fs";
 import { connect } from "node:net";
+import path from "node:path";
 import process from "node:process";
+import { runningBrain } from "./brain-lock.ts";
 import {
+  defaultConfig,
   environmentFlag,
   existingStorePath,
   flagValue,
   isKeptWholeDays,
-  keptWholeDaysOf,
-  loadOrCreateConfig,
+  readConfig,
   resolveDataDirectory,
 } from "./config.ts";
 import { brainRelease } from "./release.ts";
-import { describeThinning, thinStore } from "./store-thinning.ts";
+import { cutAny, DEFAULT_KEPT_WHOLE_DAYS, describeThinning, megabytes, thinStore } from "./store-thinning.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 
 /** How long a connection to the dashboard may take before nothing's taken to answer there. */
@@ -36,35 +43,62 @@ function answers(port: number): Promise<boolean> {
   });
 }
 
-const megabytes = (bytes: number) => `${(bytes / 1_000_000).toFixed(1)} MB`;
+/** A time as a file name's part: the ISO time without its colons and dots. */
+const fileTime = (epochMs: number) => new Date(epochMs).toISOString().replace(/[:.]/g, "-");
 
 try {
   const argv = process.argv.slice(2);
   const storePath = existingStorePath(argv, process.env);
-  const config = loadOrCreateConfig(resolveDataDirectory(argv, process.env));
+  const dataDirectory = resolveDataDirectory(argv, process.env);
+  const ownConfig = readConfig(dataDirectory);
+  const config = ownConfig ?? defaultConfig();
   const environment = flagValue(argv, "--environment") === undefined ? config.environment : environmentFlag(argv);
   const daysText = flagValue(argv, "--kept-whole-days");
-  const keptWholeDays = daysText === undefined ? keptWholeDaysOf(config) : Number(daysText);
+  const keptWholeDays =
+    daysText === undefined ? (config.telemetryKeptWholeDays ?? DEFAULT_KEPT_WHOLE_DAYS) : Number(daysText);
   if (!isKeptWholeDays(keptWholeDays)) throw new Error("--kept-whole-days must be a whole number of days, at least 1");
-  const vacuum = argv.includes("--vacuum");
-  // Port 0 (tests) is the system's choice: there's no telling where a brain would answer.
-  if (vacuum && config.dashboardPort !== 0 && (await answers(config.dashboardPort))) {
+  const brain = runningBrain(dataDirectory);
+  if (brain !== null) {
     throw new Error(
-      `the brain's dashboard answers on 127.0.0.1:${config.dashboardPort}: stop the brain before --vacuum, which ` +
-        "rewrites the whole file",
+      `the brain is running (its lock, ${brain.path}, names process ${brain.pid}` +
+        `${brain.runnerPid === null ? "" : ` and its runner ${brain.runnerPid}`}): stop it first. If it isn't, ` +
+        "delete that file",
     );
   }
+  // Port 0 (tests) is the system's choice: there's no telling where a brain would answer. With no config.json, no brain
+  // has run in this directory (it writes one at its start), so another directory's brain's dashboard isn't asked.
+  if (ownConfig !== null && config.dashboardPort !== 0 && (await answers(config.dashboardPort))) {
+    throw new Error(`the brain's dashboard answers on 127.0.0.1:${config.dashboardPort}: stop the brain first`);
+  }
   const store = TelemetryStore.open(storePath);
+  let open = true;
   try {
-    const context = { environment, release: brainRelease() };
-    console.log(describeThinning(thinStore(store, { context, nowMs: Date.now(), keptWholeDays })));
-    if (vacuum) {
-      const sizeBefore = statSync(storePath).size;
-      store.vacuum();
-      console.log(`compacted: ${megabytes(sizeBefore)} → ${megabytes(statSync(storePath).size)}`);
+    const options = { context: { environment, release: brainRelease() }, nowMs: Date.now(), keptWholeDays };
+    const wouldCut = thinStore(store, { ...options, dryRun: true });
+    if (argv.includes("--dry-run")) {
+      console.log(describeThinning(wouldCut));
+    } else {
+      if (cutAny(wouldCut) && !argv.includes("--no-backup")) {
+        const backupPath = path.join(dataDirectory, `telemetry.pre-thinning-${fileTime(options.nowMs)}.sqlite`);
+        store.vacuumInto(backupPath);
+        console.log(`backed up first: ${backupPath} (${megabytes(statSync(backupPath).size)})`);
+      }
+      console.log(describeThinning(thinStore(store, options)));
+      if (argv.includes("--vacuum")) {
+        // A compacted copy beside the store, swapped in once the store is closed: nothing in the system's temp folder.
+        const sizeBefore = statSync(storePath).size;
+        const compactedPath = `${storePath}.compacted`;
+        store.vacuumInto(compactedPath);
+        store.close();
+        open = false;
+        // Closing checkpointed and removed the old file's log; one left over must never be read into the new file.
+        for (const suffix of ["-wal", "-shm"]) rmSync(`${storePath}${suffix}`, { force: true });
+        renameSync(compactedPath, storePath);
+        console.log(`compacted: ${megabytes(sizeBefore)} → ${megabytes(statSync(storePath).size)}`);
+      }
     }
   } finally {
-    store.close();
+    if (open) store.close();
   }
 } catch (error) {
   console.error(`thin: ${error instanceof Error ? error.message : String(error)}`);

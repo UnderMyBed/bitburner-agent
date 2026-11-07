@@ -79,11 +79,18 @@ import {
 import {
   describeThinning,
   STORE_THINNED_EVENT_KIND,
+  STORE_THINNING_EVENT_KINDS,
   STORE_THINNING_FAILED_EVENT_KIND,
   type StoreThinning,
 } from "./store-thinning.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
-import { type Environment, isThinnedReading, type StoredEvent, type TelemetryStore } from "./telemetry-store.ts";
+import {
+  type Environment,
+  isThinnedReading,
+  RESET_INTENT_ACTIONS,
+  type StoredEvent,
+  type TelemetryStore,
+} from "./telemetry-store.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
 import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
 
@@ -147,8 +154,8 @@ export const EARLIER_START_LOOKBACK_MS = 24 * 60 * 60_000;
 const DIALOG_QUOTE_LENGTH = 60;
 /** How much of a blocking dialog's text a failure line quotes. */
 const BLOCKING_QUOTE_LENGTH = 120;
-/** The intents that reset the game, so a gap after one is expected (#164, #175). */
-const RESET_ACTIONS = ["installAugmentations", "destroyBitNode"];
+/** The intents that reset the game, so a gap after one is expected (#164, #175): a thinned fast snapshot keeps them. */
+const RESET_ACTIONS: readonly string[] = RESET_INTENT_ACTIONS;
 /** The events that explain a silence: the brain, the game or the Agent starting or stopping. */
 const RESTART_EVENT_KINDS = [
   BRAIN_STARTED_EVENT_KIND,
@@ -467,6 +474,8 @@ class FactionStateFolding {
  */
 interface FastTime extends FastSnapshotTime {
   pageHeapUsedBytes: unknown;
+  /** The install and destroy intents the Agent held (#240's reloads): a thinned one's stub keeps their ids. */
+  resetIntents: string[];
 }
 
 /**
@@ -624,6 +633,11 @@ interface RunFacts extends RunWindow {
   augmentationsEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
   earlierBrainStartMs: number | null;
+  /**
+   * The store's thinnings, and those that failed, in the day before the window since its last brain start (#283's
+   * review): a brain start's comes just before its `brainStarted`, so before a default window.
+   */
+  thinningsBefore: StoredEvent[];
   /** Hacking income against the ceiling (#196). */
   hacking: HackingFold;
   /** The BitNodes and augmentation cycles (#244), and section 2's figures for each BitNode, in order. */
@@ -759,8 +773,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     for (const { atMs, gameTimeMs, agentSessionId, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
       const { degradedTiers, pageHeapUsedBytes } = data;
-      fastTimes.push({ atMs, gameTimeMs, degradedTiers, pageHeapUsedBytes });
-      if (isThinnedReading(data)) {
+      const stubbed = isThinnedReading(data);
+      const resetIntents = stubbed
+        ? namesOf((data as { resetIntents?: unknown }).resetIntents)
+        : resetIntentIds(Array.isArray(data.intents) ? data.intents : []);
+      fastTimes.push({ atMs, gameTimeMs, degradedTiers, pageHeapUsedBytes, resetIntents });
+      if (stubbed) {
         thinned.fast++;
         thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
         batcherTargets.heard({ atMs, gameTimeMs });
@@ -789,6 +807,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       });
     }
     const earlierStarts = dayBefore.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
+    const lastStartBeforeMs = earlierStarts.at(-1)?.atMs ?? Number.NEGATIVE_INFINITY;
+    const thinningsBefore = dayBefore.filter(
+      (event) => STORE_THINNING_EVENT_KINDS.includes(event.kind) && event.atMs >= lastStartBeforeMs,
+    );
     const reloadsBefore = store
       .eventsInWindow({
         environment: window.environment,
@@ -825,6 +847,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       hackLoopEnabled: readHackLoopEnabled(store),
       augmentationsEnabled: readAugmentationsEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
+      thinningsBefore,
       hacking,
       cycles,
       // In order: before the first BitNode (or none known), then each; nothing at all, one empty segment.
@@ -950,6 +973,10 @@ function windowSection(facts: RunFacts): string[] {
         "restart, give --since",
     );
   }
+  // A thinning at this brain's start, just before its `brainStarted` (#283's review), or a failed one.
+  for (const event of facts.thinningsBefore) {
+    lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)} (before the window)`);
+  }
   const { thinned } = facts;
   if (thinned.lastMs !== null) {
     lines.push(
@@ -957,7 +984,9 @@ function windowSection(facts: RunFacts): string[] {
         `${thinned.fast} fast and ${thinned.medium} medium snapshots there keep only their times, one of each a ` +
         "minute kept whole. The heartbeat's gaps, clock steps, page stalls and the page heap read every one; the " +
         "rest read the whole ones, so their times there are within a minute, what came and went within one isn't " +
-        "seen, and a backdoor overdue and a batcher stuck on a poor target aren't judged there",
+        "seen, a backdoor overdue (it needs medium snapshots within 30 s) and a batcher stuck on a poor target (looks " +
+        "within 6 s) aren't judged there, and the batcher not running for 3 fast snapshots in a row counts whole " +
+        "ones, a minute apart",
     );
   }
   // Section 3's: the actions, with the rules' events (#203, #210).
@@ -2031,10 +2060,14 @@ function stallLines(facts: RunFacts, gaps: Gap[], failures: string[]): string[] 
   return lines;
 }
 
-/** The run's last record: its newest fast snapshot or event. Silence after it is the run having ended. */
+/**
+ * The run's last record: its newest fast snapshot or event, not the store's thinning's (`npm run thin` after a run
+ * isn't the run, #283's review). Silence after it is the run having ended.
+ */
 function runEndMs(facts: RunFacts): number | null {
   // Events are in the order stored, which isn't always the order of their times.
-  const times = [...facts.fastTimes.slice(-1), ...facts.events].map(({ atMs }) => atMs);
+  const runEvents = facts.events.filter((event) => !STORE_THINNING_EVENT_KINDS.includes(event.kind));
+  const times = [...facts.fastTimes.slice(-1), ...runEvents].map(({ atMs }) => atMs);
   return times.length === 0 ? null : times.reduce((latest, time) => Math.max(latest, time));
 }
 
@@ -2055,10 +2088,17 @@ function explainSilence(facts: RunFacts, fromMs: number, toMs: number): string {
 
 /** The reset intents (an install, a destroy) the Agent held at its last fast snapshot by `atMs`. */
 function resetIntentsHeld(facts: RunFacts, atMs: number): string[] {
-  const before = facts.fast.filter((point) => point.atMs <= atMs).at(-1);
-  return (before?.intents ?? [])
-    .filter((outcome) => RESET_ACTIONS.some((action) => outcome.id.startsWith(`${action}(`)))
-    .map((outcome) => outcome.id);
+  // Every fast snapshot's, a thinned one's too (#283's review): its stub keeps them.
+  return facts.fastTimes.filter((point) => point.atMs <= atMs).at(-1)?.resetIntents ?? [];
+}
+
+/** The install and destroy intents among a fast snapshot's (#240). */
+function resetIntentIds(intents: readonly unknown[]): string[] {
+  return intents
+    .map((outcome) => fieldsOf(outcome).id)
+    .filter(
+      (id): id is string => typeof id === "string" && RESET_ACTIONS.some((action) => id.startsWith(`${action}(`)),
+    );
 }
 
 /**

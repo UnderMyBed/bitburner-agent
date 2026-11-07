@@ -2,10 +2,13 @@
 // (restart-on-crash.ts), in this terminal. Ctrl+C stops it for good. Its arguments go to the brain as they are.
 import path from "node:path";
 import process from "node:process";
+import { BRAIN_RUNNER_PID_VARIABLE } from "./brain-lock.ts";
 import { restartOnCrash } from "./restart-on-crash.ts";
 
 const BRAIN_MAIN = path.join(import.meta.dirname, "main.ts");
 
+// The brain names this process in its lock file (#283's review): alive through a crash and the restart after it.
+process.env[BRAIN_RUNNER_PID_VARIABLE] = String(process.pid);
 const runner = restartOnCrash({
   command: process.execPath,
   args: [BRAIN_MAIN, ...process.argv.slice(2)],

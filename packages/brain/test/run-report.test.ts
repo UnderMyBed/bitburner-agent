@@ -3806,13 +3806,15 @@ describe("over a thinned store (#283)", () => {
       batcher: { ...newBatcherHealth("n00dles", "run-a", 0), state: "batching", batchesStarted: offsetMs / 1000 },
     });
   const headings = (text: string) => text.split("\n").filter((line) => /^(\d\. |Verdict)/.test(line));
+  const DAY = 24 * 60 * MINUTE;
 
   const note = (lastOffsetMs: number, fast: number, medium: number) =>
     `  note: the store is thinned (#283) in this window, up to ${at(lastOffsetMs)}: ${fast} fast and ${medium} medium ` +
     "snapshots there keep only their times, one of each a minute kept whole. The heartbeat's gaps, clock steps, page " +
     "stalls and the page heap read every one; the rest read the whole ones, so their times there are within a " +
-    "minute, what came and went within one isn't seen, and a backdoor overdue and a batcher stuck on a poor target " +
-    "aren't judged there";
+    "minute, what came and went within one isn't seen, a backdoor overdue (it needs medium snapshots within 30 s) and " +
+    "a batcher stuck on a poor target (looks within 6 s) aren't judged there, and the batcher not running for 3 fast " +
+    "snapshots in a row counts whole ones, a minute apart";
 
   test("a clean run thinned throughout: PASS, the same sections and time checks; only what came and went within a minute differs", () => {
     cleanRun({ fast: busyFast });
@@ -3917,12 +3919,73 @@ describe("over a thinned store (#283)", () => {
     event(RUN_MS, "storeThinningFailed", { failure: "disk I/O error" });
     const { text, failures } = report();
     expect(text).toContain(
-      `  ${at(RUN_MS)}  store thinned before ${at(0)} (the last 14 days of records kept whole; before, one fast and ` +
-        "one medium snapshot a minute): 3 fast and 2 medium snapshots cut to their times, their data 2.5 MB → 0.0 MB\n" +
+      `  ${at(RUN_MS)}  store thinned before ${at(0)} (the last 14 days before the newest snapshot kept whole; ` +
+        "before, one fast and one medium snapshot a minute): 3 fast and 2 medium snapshots cut to their times, their " +
+        "data 2.5 MB → 0.0 MB\n" +
         `  ${at(RUN_MS)}  store thinned: {"beforeMs":${T0}}\n` +
         `  ${at(RUN_MS)}  store thinning FAILED, the store left as it was: disk I/O error\n`,
     );
     // The brain started all the same: not the run's failure.
     expect(failures).toEqual([]);
+  });
+
+  test("a thinning at this brain's start, just before its brainStarted, is in the default window's section 1; an older one isn't", () => {
+    // Before an earlier brain start in the day before: another run's.
+    event(-2 * 60 * MINUTE, "storeThinned", { beforeMs: T0 - DAY, thinned: { fast: 1, medium: 0 }, keptWholeDays: 9 });
+    event(-60 * MINUTE, "brainStarted", { release: "r0" });
+    // This start's: a thinning, and one that failed, just before cleanRun's brainStarted at T0.
+    event(-3 * SECOND, "storeThinned", {
+      beforeMs: T0 - 14 * DAY,
+      fromMs: null,
+      keptWholeDays: 14,
+      thinned: { fast: 30, medium: 6 },
+      bytesBefore: 9_000_000,
+      bytesAfter: 7_000,
+      tookMs: 2_500,
+    });
+    event(-2 * SECOND, "storeThinningFailed", { failure: "disk I/O error" });
+    cleanRun();
+    const { text, failures } = report();
+    expect(text).toContain(
+      `1. The window\n  note: the brain also started at ${at(-60 * MINUTE)}, 1 h 0 min before the window: for a run that ` +
+        "spans a restart, give --since\n" +
+        `  ${at(-3 * SECOND)}  store thinned before ${at(-14 * DAY)} (the last 14 days before the newest snapshot ` +
+        "kept whole; before, one fast and one medium snapshot a minute): 30 fast and 6 medium snapshots cut to their " +
+        "times, their data 9.0 MB → 0.0 MB, in 2.5 s (before the window)\n" +
+        `  ${at(-2 * SECOND)}  store thinning FAILED, the store left as it was: disk I/O error (before the window)\n`,
+    );
+    expect(text).not.toContain("the last 9 days");
+    expect(failures).toEqual([]);
+  });
+
+  test("npm run thin after the run isn't the run's last record: no gap to it", () => {
+    cleanRun();
+    // A thinning by hand 20 s after the run's last fast snapshot, in the window.
+    event(RUN_MS + 20 * SECOND, "storeThinned", { beforeMs: T0 - DAY });
+    event(RUN_MS + 25 * SECOND, "storeThinningFailed", { failure: "x" });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`after the run's last record (${at(RUN_MS)}), 30 s to its end`);
+  });
+
+  test("a gap after a reset intent held only at a thinned snapshot is still the game reloading: its stub keeps the id", () => {
+    // The install held at 1:02 alone (a stub after 1:00's whole one); the Agent silent 1:02 to 1:40, back at 1:35.
+    cleanRun({
+      skipFast: (offsetMs) => offsetMs > 62 * SECOND && offsetMs < 100 * SECOND,
+      fast: (offsetMs) =>
+        fastData({ intents: offsetMs === 62 * SECOND ? [intent("installAugmentations()", { done: true })] : [] }),
+    });
+    event(95 * SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    const expected =
+      `    gap: ${at(62 * SECOND)} to ${at(100 * SECOND)} (38.0 s); during it: agentConnected at ${at(95 * SECOND)}; ` +
+      "before it, the Agent held installAugmentations() (expected: the game reloading after the " +
+      "installAugmentations() the Agent held)\n";
+    const whole = report();
+    expect(whole.failures).toEqual([]);
+    expect(whole.text).toContain(expected);
+    thinBefore(RUN_MS + MINUTE);
+    const thinned = report();
+    expect(thinned.failures).toEqual([]);
+    expect(thinned.text).toContain(expected);
   });
 });

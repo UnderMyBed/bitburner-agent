@@ -68,17 +68,27 @@ const SCHEMA = `
 /**
  * Thinning (#283): before a cutoff, the first fast and medium snapshot stored in each minute of the brain's clock stays
  * whole, and each other keeps its row (its times, session and sequence number) with its data cut to a stub,
- * `{"thinned":true}`, a fast one's with its `degradedTiers` and `pageHeapUsedBytes`: what the run report's time checks
- * and the gap report read of every snapshot. The other tiers, the events and the settings are never thinned.
+ * `{"thinned":true}`, a fast one's with its `degradedTiers`, `pageHeapUsedBytes` and `resetIntents` (the ids of the
+ * install and destroy intents it held): what the run report's time checks, its reloads and the gap report read of every
+ * snapshot. The other tiers, the events and the settings are never thinned.
  */
 export const THINNED_SNAPSHOT_TIERS = ["fast", "medium"] as const;
 /** One snapshot of each thinned tier a minute stays whole. */
 export const WHOLE_SNAPSHOT_EVERY_MS = 60_000;
+/**
+ * The intents that reset the game (an install, a destroy): a fast stub keeps the ids of those the Agent held, since a
+ * heartbeat gap after one is the game reloading (#240), which the run report reads at the snapshot before the gap.
+ */
+export const RESET_INTENT_ACTIONS = ["installAugmentations", "destroyBitNode"] as const;
 /** How a stub's JSON starts: `json_object` keeps its keys in order. */
 const THINNED_PREFIX = '{"thinned":';
+const RESET_INTENT_IDS = `json((SELECT json_group_array(json_extract(value, '$.id')) FROM json_each(data, '$.intents')
+    WHERE type = 'object' AND json_type(value, '$.id') = 'text'
+      AND (${RESET_INTENT_ACTIONS.map((action) => `json_extract(value, '$.id') LIKE '${action}(%'`).join(" OR ")})))`;
 const THINNED_STUB = `CASE tier WHEN 'fast' THEN json_object('thinned', json('true'),
     'degradedTiers', json_extract(data, '$.degradedTiers'),
-    'pageHeapUsedBytes', json_extract(data, '$.pageHeapUsedBytes'))
+    'pageHeapUsedBytes', json_extract(data, '$.pageHeapUsedBytes'),
+    'resetIntents', ${RESET_INTENT_IDS})
   ELSE '{"thinned":true}' END`;
 /** The snapshots thinning would cut to a stub in a span: thinned tiers, not yet stubs, not their minute's first. */
 const THINNED_TIERS_SQL = THINNED_SNAPSHOT_TIERS.map((tier) => `'${tier}'`).join(", ");
@@ -467,11 +477,10 @@ export class TelemetryStore {
   }
 
   /**
-   * Thins the fast and medium snapshots received from `fromMs` up to `beforeMs` (#283, `THINNED_SNAPSHOT_TIERS`): each
-   * but the first stored in its minute is cut to a stub. Give both on a minute, so no minute is split between two
-   * thinnings. Returns, by tier, those it cut (none already a stub); call it in a write transaction.
+   * What `thinSnapshots` would cut over the same span, by tier, changing nothing (#283: a dry run, and whether to
+   * back the store up first).
    */
-  thinSnapshots({
+  thinnableSnapshots({
     environment,
     fromMs,
     beforeMs,
@@ -488,7 +497,6 @@ export class TelemetryStore {
           GROUP BY tier ORDER BY tier`,
       )
       .all(span) as { tier: string; count: number; bytes_before: number; bytes_after: number }[];
-    this.#database.prepare(`UPDATE snapshots SET data = ${THINNED_STUB} WHERE ${THINNABLE}`).run(span);
     return tiers.map((row) => ({
       tier: row.tier,
       count: row.count,
@@ -498,12 +506,32 @@ export class TelemetryStore {
   }
 
   /**
-   * Compacts the file (#283, `npm run thin -- --vacuum`): SQLite reuses the pages thinning frees, so the file stops
-   * growing, but only this gives them back. It rewrites the whole file, so only with nothing else writing to it.
+   * Thins the fast and medium snapshots received from `fromMs` up to `beforeMs` (#283, `THINNED_SNAPSHOT_TIERS`): each
+   * but the first stored in its minute is cut to a stub. Give both on a minute, so no minute is split between two
+   * thinnings. Returns, by tier, those it cut (none already a stub); call it in a write transaction.
    */
-  vacuum(): void {
-    this.#database.exec("VACUUM");
+  thinSnapshots(span: { environment: Environment; fromMs: number; beforeMs: number }): ThinnedTier[] {
+    const tiers = this.thinnableSnapshots(span);
+    this.#database
+      .prepare(`UPDATE snapshots SET data = ${THINNED_STUB} WHERE ${THINNABLE}`)
+      .run({ ...span, everyMs: WHOLE_SNAPSHOT_EVERY_MS });
+    return tiers;
+  }
+
+  /**
+   * Moves what the write-ahead log holds into the file and empties the log (#283: a thinning rewrites many pages, which
+   * the log would otherwise keep at that size).
+   */
+  checkpoint(): void {
     this.#database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  /**
+   * Writes a compacted copy of the store to `filePath`, which mustn't exist (#283: the backup before a thinning, and
+   * `--vacuum`'s new file). SQLite's `VACUUM INTO` writes it there directly, with no temporary file elsewhere.
+   */
+  vacuumInto(filePath: string): void {
+    this.#database.prepare("VACUUM INTO ?").run(filePath);
   }
 
   getSetting(key: string): string | null {

@@ -54,7 +54,8 @@ export type AlertName =
   | "augmentationNotQueued"
   | "augmentationDonationFailed"
   | "installNotRestarted"
-  | "worldDaemonStalled";
+  | "worldDaemonStalled"
+  | "storeThinningFailed";
 
 export interface Alert {
   name: AlertName;
@@ -130,6 +131,8 @@ export interface AlertFacts {
   installAwaitingRestart: InstallAwaitingRestart | null;
   /** A step on the path to the World Daemon stalled (#215): the controller's, or null. */
   worldDaemonStall?: WorldDaemonStall | null;
+  /** This brain start's store thinning, failed (#283's review), or null. Optional for the callers that don't thin. */
+  storeThinningFailure?: { atMs: number; failure: string } | null;
 }
 
 /**
@@ -146,7 +149,7 @@ export interface IncomeFacts {
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
  * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then one augmentationDonationFailed per
- * donation not shown (#225), then installNotRestarted, then worldDaemonStalled.
+ * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then storeThinningFailed.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -257,6 +260,16 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     // The rule raises it `WORLD_DAEMON_STALLED_AFTER_MS` (5 minutes) after the step could be done (#215).
     const minutes = Math.floor((facts.nowMs - stall.sinceMs) / 60_000);
     alerts.push({ name: "worldDaemonStalled", sinceMs: stall.sinceMs, detail: `${stall.detail}, for ${minutes} min` });
+  }
+  const thinning = facts.storeThinningFailure ?? null;
+  if (thinning !== null) {
+    alerts.push({
+      name: "storeThinningFailed",
+      sinceMs: thinning.atMs,
+      detail:
+        `the store's thinning at this start failed, so the store is as it was: ${thinning.failure} (the brain runs on; ` +
+        "the next start tries again)",
+    });
   }
   return alerts;
 }
