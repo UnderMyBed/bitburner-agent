@@ -341,6 +341,7 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
     const doneAtRound = new Map<string, number>();
     const invitedAt = new Map<string, number>();
     const shownAt: Record<string, number> = {};
+    const askedAt: Record<string, number> = {};
     let held: { hostname: string; nextTryRound: number } | null = null;
     let joining: { faction: string; round: number } | null = null;
     const joined: string[] = [];
@@ -377,7 +378,10 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
         });
         const hostname = FOUR.find((host) => backdoorIntent(host).id === intent?.id);
         const heldNow = held as { hostname: string } | null;
-        if (hostname !== undefined && heldNow?.hostname !== hostname) held = { hostname, nextTryRound: round + 1 };
+        if (hostname !== undefined && heldNow?.hostname !== hostname) {
+          held = { hostname, nextTryRound: round + 1 };
+          askedAt[`asked ${hostname}`] = at - termsAt;
+        }
       }
       if (round % (SLOW_MS / ROUND_MS) === 0) {
         if (joining !== null && round > joining.round) {
@@ -393,7 +397,7 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
         if (next !== null) joining = { faction: next, round: round + 1 };
       }
     }
-    return shownAt;
+    return { ...shownAt, ...askedAt };
   }
 
   /** The mean of `joinsAfter` over the terms' place in a slow snapshot's minute and the check's phase (midpoints). */
@@ -445,6 +449,12 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
     }
     // BitRunners last: three minutes after CyberSec, a slow snapshot a join.
     expect((simulated.BitRunners as number) - (simulated.CyberSec as number)).toBeCloseTo(3 * SLOW_MS, -2);
+    // The backdoors asked for 40 s apart: the medium snapshot after the last one's done is seen.
+    const asks = FOUR.map((host) => simulated[`asked ${host}`] as number);
+    const first = new JoinPipeline();
+    first.hackerFaction(0, 54, HACKING, SPEED);
+    for (const [index, ask] of asks.slice(1).entries()) expect(ask - (asks[index] as number)).toBeCloseTo(40_000, 3);
+    expect(Math.abs((asks[1] as number) - first.backdoorFreeAtMs)).toBeLessThan(300);
   });
 
   test("the model's copies of the Agent's, the game's and the gate's constants are theirs", () => {

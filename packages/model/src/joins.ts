@@ -65,6 +65,11 @@ export class JoinPipeline {
   /** When the last join shows in a slow snapshot: the next is chosen there at the soonest. */
   #joinFreeAtMs = Number.NEGATIVE_INFINITY;
 
+  /** When the next backdoor may be asked for, ms (for its tests). */
+  get backdoorFreeAtMs(): number {
+    return this.#backdoorFreeAtMs;
+  }
+
   /** A join chosen at the slow snapshot `seenAtMs` (or the one showing the last join), shown a slow snapshot later. */
   #join(seenAtMs: number): number {
     this.#joinFreeAtMs = Math.max(seenAtMs, this.#joinFreeAtMs) + SLOW_MS;
@@ -95,12 +100,13 @@ export class JoinPipeline {
 
   /**
    * A city group's `factions` factions in the order visited, the money in hand at `termsAtMs`: the first travel at
-   * the medium snapshot after, each next at the slow snapshot that shows the last's invitation. Each join goes
-   * through the gate within its slow snapshot's minute (two medium snapshots and a backup, then the Agent's round).
+   * the medium snapshot after, each next at the slow snapshot that shows the last's invitation, so a slow snapshot
+   * apart, as the joins are: the joins' queue carries the visits. Each join goes through the gate within its slow
+   * snapshot's minute (two medium snapshots and a backup, then the Agent's round).
    */
   cityGroup(termsAtMs: number, factions: number): number[] {
     if (GATE_MEDIUM_SNAPSHOTS * MEDIUM_MS + ROUND_MS >= SLOW_MS) throw new RangeError("the gate outlasts a minute");
     const firstSeenAtMs = termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS + INVITATION_CHECK_MS / 2);
-    return Array.from({ length: factions }, (_, index) => this.#join(firstSeenAtMs + index * SLOW_MS));
+    return Array.from({ length: factions }, () => this.#join(firstSeenAtMs));
   }
 }

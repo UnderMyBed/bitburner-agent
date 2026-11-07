@@ -15,6 +15,11 @@ describe("one join, a fresh pipeline", () => {
     expect(new JoinPipeline().hackerFaction(0, 530, 600, 1.8)).toBe(MEDIUM_MS / 2 + MEDIUM_MS + 25_000 + SLOW_MS);
     // A backdoor of 9.5 s pushes the invitation past the next medium snapshot: 10 s more.
     expect(new JoinPipeline().hackerFaction(0, 54, 54, 0.8)).toBe(110_000);
+    // At the edge: the round (2 s), 7.56 s of backdoor and the check's 1 s on average make 10.56 s, past the next
+    // medium snapshot; without the round or the check's second, short of it. (The spread of the check straddles the
+    // snapshot here, so the true mean lies between 100 and 110 s: the parity test keeps clear of the edge.)
+    expect(backdoorMs(54, 55, 1)).toBeCloseTo(7_559.5, 0);
+    expect(new JoinPipeline().hackerFaction(0, 54, 55, 1)).toBe(110_000);
     // From another time, the same wait.
     expect(new JoinPipeline().hackerFaction(1_234, 530, 600, 1.8)).toBe(101_234);
   });
@@ -36,8 +41,13 @@ describe("the pipeline", () => {
     const shown = [54, 207, 350, 530].map((required) => pipeline.hackerFaction(0, required, 600, 1.8));
     // The invitations 40 s apart, but the joins a slow snapshot each: one a minute after the first.
     expect(shown).toEqual([100_000, 160_000, 220_000, 280_000]);
-    // Tried in the round after the ask, done at the try 15 rounds on, seen a round later: 34 s, so the next medium.
+    // Tried in the round after the ask, done at the try 15 rounds on, seen a round later: 34 s, so the next medium
+    // snapshot: the next asked for 40 s after.
     expect(ROUND_MS + ROUNDS_BETWEEN_TRIES * ROUND_MS + ROUND_MS).toBe(34_000);
+    const one = new JoinPipeline();
+    expect(one.backdoorFreeAtMs).toBe(Number.NEGATIVE_INFINITY);
+    one.hackerFaction(0, 54, 600, 1.8);
+    expect(one.backdoorFreeAtMs).toBe(MEDIUM_MS / 2 + 40_000);
   });
 
   test("a backdoor longer than the tries' 30 s takes another try before the next is asked for", () => {
@@ -46,6 +56,7 @@ describe("the pipeline", () => {
     const slow = new JoinPipeline();
     expect(backdoorMs(54, 1, 0.1)).toBeCloseTo(155_637, 0);
     expect(slow.hackerFaction(0, 54, 1, 0.1)).toBe(250_000);
+    expect(slow.backdoorFreeAtMs).toBe(195_000);
     const fast = new JoinPipeline();
     fast.hackerFaction(0, 54, 600, 1.8);
     expect(slow.hackerFaction(0, 207, 600, 1.8)).toBe(310_000);

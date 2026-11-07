@@ -499,6 +499,11 @@ describe("the share from the state (#263), not the install index", () => {
       9,
     );
     expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb: 1e3 })).toBe(1);
+    // `batchesUseFactor` scales it: half the batches' RAM, half the use, below all of it.
+    expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }, 0.5)).toBeCloseTo(
+      batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }) / 2,
+      12,
+    );
     // The ports reach the targets: with none open, only the small no-port servers, whose batches need far less.
     expect(batchesUseOf({ hacking: 4000, mults: late, ports: 0, hostsGb })).toBeLessThan(
       batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }) / 10,
