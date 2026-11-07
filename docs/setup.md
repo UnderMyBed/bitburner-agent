@@ -182,6 +182,30 @@ It prints seven sections (1, 2, 2b, then 3 to 6), then a verdict:
 
 **The verdict** is `PASS`; `WARN` and one `warning:` line each when nothing failed but something went wrong that isn't yet a failure: something outside the brain that was put right by itself (#241: the batcher out of step after a page stall, or for a batcher before #251 a clock step, batching again, or not yet seen to), or the batcher an hour or more on poor targets, short of 2 hours in the cycle (#275); or `FAIL` and one line per failure from sections 4 to 6, then any warnings. A release needs PASS, or WARN with each warning explained on the review issue ([releasing](releasing.md)). It exits 0 on PASS or WARN, 1 on FAIL, and 2 when it couldn't run (no store, no brain start to begin from, a window that ends before it starts, or nothing recorded in the window). **On a FAIL,** each line has its times: look at that stretch in section 1 (what the brain and the Agent did then) and section 3 (what the Agent was trying; `--verbose` lists each intent with its times), and at the brain's terminal for those times. An income stall usually means the hack loop's target changed or the loop stopped: section 2's target line shows which. Put the report's output on the issue for the run ([packages/brain](../packages/brain/README.md#the-run-report)). **A PASS** means nothing in sections 4 and 5 went wrong while something was recorded. Silence after the run's last record isn't counted (the run stopping looks the same), so an Agent that hung with its connection still open would show only as the heartbeat line's time from the last record to the window's end.
 
+## The campaign report
+
+`npm run campaign` is the campaign's scoreboard: every BitNode in the store, across every run and brain restart, with how long it took to destroy, its cycles and installs, and which release played it (#290). It's what the releases are judged on ("did v1.0.1 clear BN1.4 faster than v1.0.0?"). Like the run report it only reads, so it's safe while the brain runs.
+
+```
+npm run campaign
+```
+
+It prints:
+- **A row per BitNode** ("BN1.2": the number and level; "BN1.4 #2" for one played again): its start, how it ended, the time to its end by the clock and **online** (the game and the brain both up), the time **left out** of that (the game closed, or the brain or the Agent away for over 3 minutes: the game goes on offline, so this says how much of a clear wasn't watched), the cycles, the installs (and how many **by hand**: from your queue, the game's Install button or a Soft Reset, not the brain's own rule), the augmentations installed, the brain starts, and the releases. "≥" marks what's at least that: a BitNode begun before the store's first record or reached by loading a save, or whose first look showed an install already. Under it, each BitNode's Source-Files as entered, its time online by release, its augmentations by name, and any save loaded in it.
+- **How a BitNode ended:**
+  - **destroyed**: its Source-File went up a level, or at the Source-File's cap (level 3) the brain sent the destroy just before; with its Source-File overridden in the BitNode's options, the brain's destroy says it, else it's **unknown**;
+  - **destroyed, BitNodes unseen**: its Source-File went up more than a level, or another one rose too, so BitNodes were played that the store didn't see (never a clear of its own); **BitNodes unseen** where only another rose;
+  - **a save loaded**: the next BitNode's start is before this one's last look, so a save was loaded, older or newer (never counted as a destroy);
+  - **a new game**: a Source-File was lost, or there was none (b1t_flum3 needs one);
+  - **b1t_flum3**: another BitNode with no Source-File gained (at the cap, it could also be a destroy you did by hand);
+  - for the newest BitNode, **destroy sent**, the next BitNode not seen yet, or **not yet**.
+- **A row per release and BitNode it played:** its time online there, its cycles and installs, and whether it destroyed it. "A clear of its own" is a BitNode one release played from its start to its destroy, with no install by hand and no save loaded in it ("yes, with a save loaded in it" otherwise): the fair comparison. Another release that played only its first 5 minutes or less, with no install (a brain upgraded just after a destroy), doesn't stop it; its share is printed beside the clear (proposed owner decision 61).
+- **Compared:** each BitNode two releases or more cleared on their own, the fastest online first, with each clear's time left out and the Source-Files it was entered with.
+
+A release is the brain's version (`git describe`, "v1.0.1"), whatever the Agent's build. Upgrading mid-BitNode splits its time between the two releases, so neither has a clear of its own there. Running the brain from an untagged or changed checkout makes every commit its own release ("v1.0.0-4-gabc1234"), so a clear to compare is a tagged release's.
+
+It exits 0 with the report, and 2 when it couldn't run: no store, or no BitNode in it.
+
 ## When something's wrong
 
 - **The dashboard says "Brain unreachable", or doesn't load:** the brain isn't running. If its terminal shows `brain runner:` restart lines, it's crashing at start: the lines before them say why. If the terminal was closed, start it again.

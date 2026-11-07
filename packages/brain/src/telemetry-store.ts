@@ -327,19 +327,27 @@ export class TelemetryStore {
     }
   }
 
-  /** The events in a window (both edges included), in the order stored: the run report. */
+  /**
+   * The events in a window (both edges included), of `kinds` if given, in the order stored: the run report, and the
+   * campaign report's few kinds over the whole store (#290).
+   */
   eventsInWindow({
     environment,
     sinceMs,
     untilMs,
+    kinds,
   }: {
     environment: Environment;
     sinceMs: number;
     untilMs: number;
+    kinds?: string[];
   }): (RecordContext & StoredEvent)[] {
+    const ofKinds = kinds ? `AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
     const rows = this.#database
-      .prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND at_ms BETWEEN ? AND ? ORDER BY id`)
-      .all(environment, sinceMs, untilMs) as Record<string, string | number>[];
+      .prepare(
+        `SELECT ${EVENT_COLUMNS} FROM events WHERE environment = ? AND at_ms BETWEEN ? AND ? ${ofKinds} ORDER BY id`,
+      )
+      .all(environment, sinceMs, untilMs, ...(kinds ?? [])) as Record<string, string | number>[];
     return rows.map(eventOfRow);
   }
 
