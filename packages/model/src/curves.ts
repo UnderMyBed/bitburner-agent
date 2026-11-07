@@ -124,11 +124,20 @@ export class Curves {
 
   /**
    * The clocks `stepMs` later: each advances at home's pace times the operations' speed against the reference's at the
-   * same point, (level + 50) × hacking_speed (`Hacking.ts:60-80`), to the power of its exponent.
+   * same point, (level + 50) × hacking_speed (`Hacking.ts:60-80`), to the power of its exponent. Before the cycle's
+   * first cloud server (`beforeCloud`) the money's pace is at most `Calibration.moneyPaceMost`: the batches have only
+   * the world servers then, so the level can't speed the money past the RAM.
    */
-  advanceClocks(clocks: Clocks, stepMs: number, multipliers: HackingMultipliers, homeRamGb: number): Clocks {
-    const { expPaceExponent, moneyPaceExponent } = this.calibration;
+  advanceClocks(
+    clocks: Clocks,
+    stepMs: number,
+    multipliers: HackingMultipliers,
+    homeRamGb: number,
+    beforeCloud = false,
+  ): Clocks {
+    const { expPaceExponent, moneyPaceExponent, moneyPaceMost } = this.calibration;
     const homeSpeed = this.homeSpeedOf(homeRamGb);
+    const mostMoneyPace = beforeCloud ? moneyPaceMost : Number.POSITIVE_INFINITY;
     let { exp, money } = clocks;
     for (let done = 0; done < stepMs; done += CLOCK_SUBSTEP_MS) {
       const speed =
@@ -136,7 +145,7 @@ export class Curves {
         ((this.hackingLevelAt(exp, this.reference) + 50) * this.reference.hacking_speed);
       const minutes = (Math.min(CLOCK_SUBSTEP_MS, stepMs - done) / MINUTE_MS) * homeSpeed;
       exp += minutes * speed ** expPaceExponent;
-      money += minutes * speed ** moneyPaceExponent;
+      money += minutes * Math.min(mostMoneyPace, speed ** moneyPaceExponent);
     }
     return { exp, money };
   }
