@@ -67,6 +67,7 @@ Every seed that didn't pass is explained here, per run: what stopped it, and whe
 - **3cf08f9 (the M1 release):** none; all 8 seeds reached 12 hours.
 - **58f0c4d (M2's run):** none; all 8 seeds reached 12 hours.
 - **7990834 (M3's run):** none; all 8 seeds reached 12 hours.
+- **614978a (the 1.0.0 release, M4 phase A, the fifth and sixth runs):** none; all 8 seeds reached 12 hours, on Node 26.13.0 and on 24.22.1.
 - **Before the first run**, attempts to run the baseline to a destroy found four problems in the simulator, all fixed before it ([#33](https://github.com/UnderMyBed/bitburner-agent/issues/33) has the detail):
   - [#73](https://github.com/UnderMyBed/bitburner-agent/issues/73): results depended on when garbage collection ran, through the game's module cache.
   - [#74](https://github.com/UnderMyBed/bitburner-agent/issues/74): the virtual clock's cost grew with the timers pending, so tens of thousands of scripts slowed it to a crawl.
@@ -94,6 +95,16 @@ Reading the third run (58f0c4d, M2's run, [#100](https://github.com/UnderMyBed/b
 
 Reading the fourth run (7990834, M3's run, [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140#issuecomment-6477585240)): M3 changed the simulator's engine build and bundle and `packages/core`, so it ran. It ran first on M3's first candidate, fa9c5dc, and again after #155 (company promotions) moved the candidate to 7990834; every seed's final state hash was the same both times. The game columns are identical to 58f0c4d's at every checkpoint: M3's changes didn't change what the fork's game does. The speed, 102×, isn't comparable: this run shared the machine with E2 and the workloads, three runs at once ([the benchmarks](benchmarks.md), run alone, are the speed check). The heap is 118 MB at 12 h (median), and seed 3 again went furthest, to 161 MB. M3's candidate then moved on to 33ec5d6 ([#184](https://github.com/UnderMyBed/bitburner-agent/issues/184), [#185](https://github.com/UnderMyBed/bitburner-agent/issues/185), [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187)). From 7990834 to 33ec5d6, releasing step 2's check lists only `packages/core`'s `control-protocol.ts`, `hack-loop.ts` and `index.ts`, and the simulator loads only `PINNED_GAME` from core (`packages/sim/src/engine/build.ts`), so the baseline didn't run again: 7990834's rows stand for 33ec5d6 (releasing step 2, owner decision 32).
 
+Reading the fifth run (614978a on Node 26.13.0, the 1.0.0 release, M4 phase A, [#276](https://github.com/UnderMyBed/bitburner-agent/issues/276#issuecomment-6703331699)): it ran because the simulator's engine build and bundle, its host and `packages/core` changed (#172, #267, and phase A's slices), and because the machine's Node moved from 24.22.1 to 26.13.0. **All 8 seeds reached 12 hours**, in about 57 real minutes, at a median 103× real time. **Every seed's final state hash differs from the earlier runs'**, which had matched the first run's through 7990834, so the game columns moved:
+- **4 h:** money $61.7m against $202m; hacking 238 (210–279) against 242, the same 6 augmentations and 64 GB.
+- **8 h:** money $1.69b against $2.04b; hacking 341 (259–374) against 323, the same 11 augmentations and 128 GB.
+- **12 h:** money $14.6b against $2.59b; hacking 493 (208–662) against 411, 15 augmentations against 14, home 2048 GB against 512 GB.
+- **The heap is about 28–30 MB lower** at every checkpoint (83, 86 and 90 MB against 113, 116 and 118 MB), as the [benchmarks](benchmarks.md)' Node 26 row is. Seed 2 was the exception at 12 h, at 134 MB, and the slowest seed, at 631 s.
+
+The legacy fork's scripts didn't change, so the shift came from the Node bump, the simulator's changes, or both. The sixth run separates them.
+
+Reading the sixth run (614978a on Node 24.22.1, the 1.0.0 release, [#276](https://github.com/UnderMyBed/bitburner-agent/issues/276#issuecomment-6704388377)): the same commit, rerun on the Node the earlier runs used. **All 8 seeds reached 12 hours**, at a median 106× real time. **The game columns are identical to 7990834's at every checkpoint** (money, hacking, augmentations and home RAM), and so is the heap (113, 116 and 118 MB); seed 3 again went furthest, to 162 MB, and was the slowest, at 667 s. So the simulator's changes since 7990834 don't move the fork's game, and **the fifth run's shift is Node 26's alone** ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282), which also covers the machine's global mise config overriding the repo's `.node-version`). **Until #282 settles it, M4 phase B compares with the baseline on the pinned Node 24** (CI's, `.node-version`): with these rows, not the fifth run's. The run printed its rows as `614978a-dirty`; they're recorded as `614978a`, since the only uncommitted change was the benchmarks row, a docs file the simulator doesn't load.
+
 | Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Speed | Real time per seed |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-10-25 | 4799701 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 111 MB | 117x | 6 min |
@@ -108,3 +119,9 @@ Reading the fourth run (7990834, M3's run, [#140](https://github.com/UnderMyBed/
 | 2026-10-28 | 7990834 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 113 MB | 102x | 7 min |
 | 2026-10-28 | 7990834 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 116 MB | 102x | 7 min |
 | 2026-10-28 | 7990834 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 118 MB | 102x | 7 min |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..8 | 4 h | 8/8 | $61.7m ($17.6m–$1.27b) | 238 (210–279) | 6 | 64 GB | 83 MB | 103x | 6 min |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..8 | 8 h | 8/8 | $1.69b ($1.2m–$6.9b) | 341 (259–374) | 11 | 128 GB | 86 MB | 103x | 6 min |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..8 | 12 h | 8/8 | $14.6b ($9.06m–$1.11t) | 493 (208–662) | 15 | 2048 GB | 90 MB | 103x | 6 min |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 4 h | 8/8 | $202m ($1.41m–$1.15b) | 242 (163–285) | 6 | 64 GB | 113 MB | 106x | 7 min |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 8 h | 8/8 | $2.04b ($8.81m–$3.05b) | 323 (254–356) | 11 | 128 GB | 116 MB | 106x | 7 min |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 1..8 | 12 h | 8/8 | $2.59b ($1.09b–$1.89t) | 411 (344–723) | 14 | 512 GB | 118 MB | 106x | 7 min |

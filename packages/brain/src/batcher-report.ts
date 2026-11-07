@@ -365,9 +365,9 @@ export const BATCHER_POOR_TARGET_RATIO = 100;
 export const BATCHER_STUCK_WARNS_AFTER_MS = 60 * 60_000;
 /**
  * How long on poor targets in one cycle, all of it, every stretch's whatever its length (#277's review), fails the run
- * (proposed in #275, for the owner to confirm): twice the warning's, past any preparation. The BN1.3 run's cycle
- * 7 was stuck 2 h 9 min on n00dles by this check, 9 minutes past it (#274). A failure blocks a release (decision 55's
- * gate).
+ * (owner decision 59, proposed in #275 for the owner to confirm): twice the warning's, past any preparation. The
+ * BN1.3 run's cycle 7 was stuck 2 h 9 min on n00dles by this check, 9 minutes past it (#274). A failure blocks a
+ * release (decision 55's gate).
  */
 export const BATCHER_STUCK_FAILS_AFTER_MS = 2 * BATCHER_STUCK_WARNS_AFTER_MS;
 /**
