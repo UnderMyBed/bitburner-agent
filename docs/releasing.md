@@ -4,15 +4,15 @@ A release is a tag on `main` with notes. A milestone release closes a milestone 
 
 ## Versions
 
-`0.<milestone>.<patch>` until the release we expect to destroy BN1.1, which is 1.0.0 (owner decision 47):
+`0.<milestone>.<patch>` until 1.0.0, the release for M4 phase A's exit (owner decision 47):
 - **`0.<n>.0`** closes milestone M\<n\>: v0.1.0 is M1, v0.2.0 is M2, and so on.
 - **`0.<n>.<patch>`**, with patch 1 and up, fixes the last released milestone (n), for example after play-testing finds a bug.
 
-The scheme moves to 1.x with 1.0.0, the first release we expect to destroy BN1.1 (owner decision 47). The campaign starting earlier, with M4 phase A (owner decision 46), doesn't change it.
+The scheme moved to 1.x with 1.0.0, the first release to destroy BN1 on its own (owner decision 47). The campaign starting earlier, with M4 phase A (owner decision 46), didn't change it.
 
-In 1.x (owner decision 57):
+In 1.x (owner decisions 57 and 58):
 - **1.0.0** marks M4 phase A's exit, a playable BN1. It doesn't close M4, which stays open for phase B ([below](#a-release-that-doesnt-close-its-milestone)).
-- **`1.0.<patch>`**, with patch 1 and up, fixes 1.0.0, for example 1.0.1 with the exit run's fixes.
+- **`1.0.<patch>`**, with patch 1 and up, fixes 1.0.0, for example 1.0.1 with the exit run's fixes (owner decision 58).
 - **1.1.0** ends M4 phase B, and closes M4.
 
 The numbers after 1.1.0 aren't decided yet.
@@ -102,10 +102,23 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 ## A release that doesn't close its milestone
 
 A release can end a phase of a milestone rather than the whole of it: 1.0.0 ends M4 phase A, and M4 stays open for phase B (owner decision 57). It follows the milestone release's steps, with these differences:
-- **Step 3:** the review checks the phase's exit criterion ([architecture §13](architecture.md#13-milestones)). An issue the later phase holds stays in the milestone, with that as its reason.
-- **Step 4:** the README, plan.md and the packages' status lines show the phase done, and the milestone still under way.
-- **Step 5:** the title names the phase: `--title "v1.0.0 — M4 phase A — A playable BN1"`.
-- **Step 6:** close the release task, the review issue and the phase's epic (#191 for M4 phase A), but **not the milestone**: skip the two `gh api` commands. The milestone closes with the release that ends its last phase (1.1.0 for M4).
+- **Step 3:** the review checks the phase's exit criterion ([architecture §13](architecture.md#13-milestones)). An issue the later phase holds, or a patch of this release (1.0.1), stays in the milestone, with that as its reason.
+- **Step 4:** the README and plan.md show the phase done and the milestone still under way; the packages' status lines show what the phase added.
+- **Step 5:** the title names the phase:
+
+  ```
+  gh release create v1.0.0 -R UnderMyBed/bitburner-agent --draft --target <full sha> \
+    --title "v1.0.0 — M4 phase A — A playable BN1" --notes-file <notes file>
+  ```
+
+  The notes' Known issues lists the follow-ups that stay in the milestone, as well as any other open issue that affects use.
+- **Step 6:** once the owner agrees, publish it:
+
+  ```
+  gh release edit v1.0.0 -R UnderMyBed/bitburner-agent --draft=false
+  ```
+
+  Then close the release task (if there is one), the review issue and the phase's epic (#191 for M4 phase A), but **not the milestone**: skip the two `gh api` commands. The milestone closes with the release that ends its last phase (1.1.0 for M4).
 
 ## A patch release
 
