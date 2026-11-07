@@ -158,10 +158,11 @@ test.each(SEEDS)(
     expect(lines).toContainEqual(expect.stringMatching(/The Red Pill reached: it links w0r1d_d43m0n once installed$/));
     expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 1$/));
     // The install's and the destroy's workers die in the reset before they report; the slow snapshots after show each
-    // done (#286): another `lastAugReset`, then another BitNode.
+    // done (#286): another `lastAugReset`, then another BitNode. And none of either is left not done.
     for (const id of [/installAugmentations\(\)/, /destroyBitNode\(1\)/]) {
       const done = /: done: the reset followed, \d+ tr(y|ies)( \(\w+\))?; the reset seen by /;
       expect(lines).toContainEqual(expect.stringMatching(new RegExp(`^ {4}${id.source}${done.source}`)));
+      expect(lines).not.toContainEqual(expect.stringMatching(new RegExp(`^ {4}${id.source}: not done`)));
     }
     expect(failures).toEqual([]);
     console.log(

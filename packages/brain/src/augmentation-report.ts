@@ -442,16 +442,24 @@ export class AugmentationTimeline {
     this.#owned = reset.ownedAugs;
   }
 
+  /** Whether a slow snapshot by `atMs` showed a `lastAugReset`: with none, a reset after it can't be told (#286). */
+  resetKnownBy(atMs: number): boolean {
+    return this.#resets.some((reset) => reset.atMs <= atMs);
+  }
+
   /**
    * When the first slow snapshot after `afterMs`, up to `untilMs`, arrived showing another `lastAugReset` than the last
-   * one by `afterMs` (any, with none by then): an install seen done, or a destroy (it resets `lastAugReset` too,
-   * `PlayerObjectGeneralMethods.ts:145`, `:126`). Null for none. Section 4's installs sent, and section 3's install
-   * intents with no done record (#286: the reset kills the worker before it reports).
+   * one by `afterMs`: an install seen done, or a destroy (it resets `lastAugReset` too,
+   * `PlayerObjectGeneralMethods.ts:145`, `:126`). Null for none, and with no slow snapshot by `afterMs`
+   * (`resetKnownBy`): the window's first is no change (#286 review), as `BitNodeCycles.bitNodeSeenBetween`'s first
+   * BitNode isn't. Section 4's installs sent, and section 3's install intents with no done record (#286: the reset kills
+   * the worker before it reports).
    */
   resetSeenBetween(afterMs: number, untilMs: number): number | null {
     const before = this.#resets.filter((reset) => reset.atMs <= afterMs).at(-1);
+    if (before === undefined) return null;
     const seen = this.#resets.find(
-      (reset) => reset.atMs > afterMs && reset.atMs <= untilMs && reset.lastAugReset !== before?.lastAugReset,
+      (reset) => reset.atMs > afterMs && reset.atMs <= untilMs && reset.lastAugReset !== before.lastAugReset,
     );
     return seen?.atMs ?? null;
   }
@@ -566,8 +574,9 @@ export class AugmentationTimeline {
   /**
    * Section 4's lines, each failure added to `failures`: a purchase not queued (the rule's event); an install reported
    * done with no reset in the next slow snapshot (the rule's event, #213 re-review); an install sent with no slow
-   * snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first, nor where the
-   * cycle was called off meanwhile: withdrawn; one reported done with no reset is the failure above); and a cycle
+   * snapshot showing another `lastAugReset` within `withinMs` (not judged where the window ends first, or where no slow
+   * snapshot came before it, #286 review; nor where the cycle was called off meanwhile: withdrawn; one reported done with
+   * no reset is the failure above); and a cycle
    * overdue its install (#222, `#overdueLines`).
    */
   healthLines(
@@ -613,6 +622,10 @@ export class AugmentationTimeline {
     let notSeen = 0;
     for (const sent of events.filter((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND)) {
       if (sent.atMs + withinMs > untilMs) continue;
+      if (!this.resetKnownBy(sent.atMs)) {
+        lines.push(`    install sent at ${formatTime(sent.atMs)}, before the window's first slow snapshot: not judged`);
+        continue;
+      }
       if (this.resetSeenBetween(sent.atMs, sent.atMs + withinMs) !== null) continue;
       const reportedDone = notReset.find((event) => event.atMs >= sent.atMs && event.atMs <= sent.atMs + withinMs);
       if (reportedDone !== undefined) {
