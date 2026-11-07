@@ -336,7 +336,7 @@ npm run sim -- packages/sim/scenarios/lean.json [--seeds 1..8] [--workers 4] [--
 
 ## Benchmarks
 
-The benchmark measures each workload's speed and the heap over a 7-virtual-day lean run. It appends a row to [docs/sim/benchmarks.md](../../docs/sim/benchmarks.md), unless the row regressed compared with the last row from the same machine (`--accept` records it anyway). It runs before every release and isn't part of CI.
+The benchmark measures each workload's speed and the heap over a 7-virtual-day lean run. It appends a row to [docs/sim/benchmarks.md](../../docs/sim/benchmarks.md), unless the row regressed compared with the last row from the same machine and Node major (`previousRow`; `--accept` records it anyway). It runs only on the repo's pinned Node major and exits 2 on another ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)). It runs before every release and isn't part of CI.
 
 ```
 npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept]
@@ -348,6 +348,8 @@ npm run bench -w @bitburner-agent/sim -- --profile <workload> [--out file.cpupro
 ## Determinism
 
 **The guarantee:** the same seed, epoch, fixture, prompt rules, network, game settings and sequence of calls give the same `stateHash()`, on any machine. Step sizes don't matter while the parent sends nothing to the page's sockets. Once it replies, its replies are delivered at the next `advance`, so the step sizes become part of the call sequence ([Network](#network)). Garbage collection doesn't change it either, including the full collections `diagnostics.heap()` takes, because the build holds every compiled script module ([Differences from a browser](#differences-from-a-browser)). `test/new-game.test.ts` checks this, including golden hashes recorded on one OS and verified on another in CI.
+
+**On one Node major.** Scripts and the game run on the host Node's V8, and V8 versions can differ where the language leaves a result to the engine. `Array.prototype.sort` calls a comparator differently on arrays of 3 to 7 elements in Node 24's V8 (13.6) than in Node 26's (14.6), so a script that sorts with a random comparator, as the legacy fork's IPvGO script does, draws `Math.random` a different number of times and the game diverges ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282), [parity](../../docs/sim/parity.md) 4.17). So results are recorded on the repo's pinned Node, `.node-version`: `npm run sim`, the baseline and the bench exit 2 on another major (`checkNodeVersion`, `src/node-version.ts`), and `test/node-version.test.ts` fails on one.
 
 Other packages only use `Simulation`; the rest of this section describes the host side. Each simulation process sets itself up in this order (`installHost`, `src/host/install.ts`). The order matters, because the engine reads these while its modules load (e.g. `Engine._lastUpdate` reads `Date`):
 
@@ -410,6 +412,7 @@ Deliberate differences:
 - **Compiled script modules are never dropped.** The game caches each script's compiled module by its source. On v3.0.1 the cache holds modules weakly, so a browser's garbage collector can drop one whenever no file has that source any more; the next script with the same source then gets a fresh module, with its module-level variables reset. Here the cache holds every module, as upstream dev's does ([#73](https://github.com/UnderMyBed/bitburner-agent/issues/73)), so a script's module-level state lasts as long as the simulation, and results don't depend on when the collector runs. Our in-game code must not depend on module-level state either lasting or resetting (architecture R10). Memory: one module per distinct source ever compiled, kept for the simulation's life. Most of that is Node's, which never frees an imported module, as the game's own comment says of browsers (`NetscriptJSEvaluator.ts:39`); the cache adds its key, the source text.
 - **A 0 ms timer set while the clock is advancing waits 1 ms.** fake-timers needs that for virtual time to move through a chain of them; Chromium runs them at once. So a chain of 0 ms timeouts (a loop on `await ns.sleep(0)`) takes 1 ms a link until its nesting level passes 6, then 4 ms a link, as in a browser: up to 6 ms longer in all (5 ms for one a request starts). Otherwise timers follow Chromium 146 (Steam's Electron 41): delays as WebIDL reads them, and the nesting clamp ([#80](https://github.com/UnderMyBed/bitburner-agent/issues/80), [parity §8](../../docs/sim/parity.md#8-the-simulators-own-parity-layer)).
 - **Script modules whose top-level code awaits a timer can't load.** The import barrier holds virtual time until the import finishes, so the timer never fires. In a browser the script would just start late. The host gives up after 30 s of real time, with an error naming the module, rather than hanging.
+- **Node's V8, not Steam's.** Scripts and the game run on the host Node's V8: 13.6 on the pinned Node 24, where Steam's Electron 41 has 14.6 (inferred from Chromium 146's version, not measured on Steam's build). The one difference known to change games: `Array.prototype.sort` calls a comparator differently on arrays of 3 to 7 elements, which matters when the comparator draws random numbers ([Determinism](#determinism), [#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)).
 
 The [browser-parity audit](../../docs/sim/parity.md) lists every difference from a browser and what the simulator does about it; its [summary](../../docs/sim/parity.md#summary) lists any open gaps and the deliberate differences.
 
@@ -419,6 +422,7 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 |---|---|
 | "The game's dependencies are not installed" / "are out of date" | Run `npm run setup:engine`. Needed after a fresh clone and after the submodule's lockfile changes. |
 | "Simulation failed to start" | The host's own error follows. A `ReferenceError: … is not defined` means the browser environment was missing when the engine loaded; use `installHost`, which gets the order right. |
+| "Node v26.13.0 isn't the repo's Node 24 (.node-version)…" from `npm run sim`, the baseline or the bench (exit 2) | The shell's Node isn't the pinned major. Seeded games differ between majors ([Determinism](#determinism)), so results are only recorded on the pinned one. With mise, run from the clone, whose `mise.toml` selects it, and unset any `MISE_NODE_VERSION`; otherwise install Node 24 ([setup](../../docs/setup.md#before-you-start)). |
 | A process that loaded the engine never exits on its own | The game's module-level timers keep it alive. `Simulation.close()` ends it; other code that loads the engine must call `process.exit()`. |
 
 ## Layout
@@ -431,6 +435,7 @@ The [browser-parity audit](../../docs/sim/parity.md) lists every difference from
 | `src/bench/` | Benchmark results as `benchmarks.md` rows and the regression check (`report.ts`), profile summaries (`profile.ts`) |
 | `scenarios/` | Workload scenarios (lean, batch, churn, copies) and their scripts |
 | `src/simulation.ts`, `src/options.ts`, `src/rpc.ts`, `src/protocol.ts` | The parent side: `Simulation`, option resolution (epoch, reading saves), the RPC client, the message types |
+| `src/node-version.ts` | The repo's Node pin: `REPO_ROOT`, `.node-version`'s major, and `checkNodeVersion`, which the sim, baseline and bench scripts call first (#282) |
 | `fixtures-local/` | Real Steam saves for local-only tests. Gitignored: never commit them |
 | `src/host/` | Code that runs inside a simulation process: `main.ts` (entry), `install.ts` (setup order), DOM, randomness, clock, script modules and the import barrier (`scripts.ts`), the event log (`events.ts`), prompt rules (`prompts.ts`), machine-independent paths (`paths.ts`), heap and CPU profile measurement (`measure.ts`), engine loading |
 | `src/host/parity/` | Browser-parity fixes: locale pin, IndexedDB, synchronous gzip, uncaught errors and stack traces, the network (offline, but for sockets to the parent), Node's globals hidden |

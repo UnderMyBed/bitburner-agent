@@ -1,15 +1,13 @@
 // npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers k] [--wall-limit minutes]
 //   [--max-heap MB] [--json out.json]
 // The fork baseline's CLI (src/cli.ts, docs/sim/baselines.md), with progress lines on stderr. Exits 0 if every seed
-// reached 12 virtual hours, 1 if any didn't, and 2 if it couldn't run at all.
-import path from "node:path";
+// reached 12 virtual hours, 1 if any didn't, and 2 if it couldn't run at all, as on a Node other than the repo's.
 import process from "node:process";
-import { buildEngine, commitId, rigId, runScenario } from "@bitburner-agent/sim";
+import { buildEngine, checkNodeVersion, commitId, REPO_ROOT, rigId, runScenario } from "@bitburner-agent/sim";
 import { baselineCli } from "../src/cli.ts";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
-
 process.exitCode = await baselineCli(process.argv.slice(2), {
+  checkNode: () => checkNodeVersion(),
   buildEngine,
   runScenario,
   commit: () => commitId(REPO_ROOT),

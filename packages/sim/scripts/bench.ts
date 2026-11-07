@@ -1,8 +1,9 @@
 // npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept] | [-- --profile <workload> [--out file.cpuprofile]]
 // Benchmarks the simulator: each workload's median speed over its seeds, and the heap over a 7-virtual-day lean run.
 // Appends the results as a row of docs/sim/benchmarks.md, unless they regressed: more than 20% worse than the last
-// row from this machine (docs/sim/benchmarks.md has the rules). A regressed row is recorded only with --accept.
-// Exits 0 if nothing regressed, 1 if something did, and 2 if it couldn't run.
+// row from this machine on this Node major (docs/sim/benchmarks.md has the rules). A regressed row is recorded only
+// with --accept.
+// Exits 0 if nothing regressed, 1 if something did, and 2 if it couldn't run, as on a Node other than the repo's.
 // With --profile, it instead profiles one run of a workload, writes the profile and prints where the time went.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
   formatRow,
   growthPerDay,
   parseRows,
+  previousRow,
   regressions,
   rigId,
   rowText,
@@ -21,13 +23,13 @@ import {
   type Workload,
 } from "../src/bench/report.ts";
 import { buildEngine } from "../src/engine/build.ts";
+import { checkNodeVersion, REPO_ROOT } from "../src/node-version.ts";
 import type { CpuProfile } from "../src/protocol.ts";
 import { runScenario, startScenario } from "../src/scenario/run.ts";
 import { loadScenario, scenarioSeeds } from "../src/scenario/spec.ts";
 
 const USAGE =
   "usage: npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept] | [-- --profile <workload> [--out file.cpuprofile]]";
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const RESULTS = path.join(REPO_ROOT, "docs/sim/benchmarks.md");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HEAP_DAYS = 7;
@@ -85,7 +87,8 @@ async function bench({ dryRun, accept }: { dryRun: boolean; accept: boolean }): 
   const earlier = parseRows(markdown);
   const found = regressions(row, earlier);
   console.log(`\n${formatRow(row)}`);
-  if (!earlier.some((r) => r.rig === row.rig)) console.log(`(no earlier row from rig ${row.rig}: nothing compared)`);
+  if (!previousRow(row, earlier))
+    console.log(`(no earlier row from rig ${row.rig} on Node ${row.node}'s major: nothing compared)`);
   if (dryRun) console.log("(dry run: not recorded)");
   else if (found.length > 0 && !accept)
     console.log("(regressed: not recorded; see docs/sim/benchmarks.md#regressions)");
@@ -140,6 +143,13 @@ function options() {
   return { mode: "profile" as const, workload: values.profile, out };
 }
 
+try {
+  // A row is only comparable with rows from the same Node major (#282).
+  checkNodeVersion();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+}
 let chosen: ReturnType<typeof options>;
 try {
   chosen = options();

@@ -11,6 +11,8 @@ export const USAGE =
   "[--max-heap MB (default: Node's)] [--json out.json]";
 
 export interface ScenarioCliDeps {
+  /** Throws unless this is the repo's pinned Node major (`checkNodeVersion`, #282): checked before anything else. */
+  checkNode: () => void;
   buildEngine: () => Promise<unknown>;
   runScenario: (
     scenario: Scenario,
@@ -22,10 +24,11 @@ export interface ScenarioCliDeps {
 
 /**
  * Runs the CLI. Returns the exit code: 0 if every seed passed, 1 if any didn't, 2 if it couldn't run at all (bad usage,
- * a bad scenario, a build failure). Every option is checked before the engine is built.
+ * a bad scenario, a build failure, a Node other than the repo's). Every option is checked before the engine is built.
  */
 export async function scenarioCli(argv: string[], deps: ScenarioCliDeps): Promise<number> {
   try {
+    deps.checkNode();
     const { positionals, values } = parseArgs({
       args: argv,
       allowPositionals: true,

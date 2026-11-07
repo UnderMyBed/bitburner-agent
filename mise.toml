@@ -1,0 +1,5 @@
+# The repo's Node for mise, which doesn't read .node-version by default (#282). Keep it the same major as
+# .node-version, which CI follows: packages/sim/test/node-version.test.ts checks they agree. Tools only: on the
+# reference machine mise used it without `mise trust`; if mise asks, run `mise trust` here. docs/setup.md has more.
+[tools]
+node = "24"

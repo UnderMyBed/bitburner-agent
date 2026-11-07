@@ -125,17 +125,28 @@ export function rowText(markdown: string, row: BenchRow): string {
   return `${text}${formatRow(row)}\n`;
 }
 
-/** A regression is more than this much worse than the last row from the same rig. */
+/** A regression is more than this much worse than the last row from the same rig and Node major. */
 export const REGRESSION = 0.2;
 /** Heap growth this small (MB per day) is noise, whatever the ratio. */
 const HEAP_NOISE_MB = 1;
 
+/** The Node major of a row's Node column ("v24.22.1" is 24). */
+const nodeMajor = (node: string) => node.replace(/^v/, "").split(".")[0];
+
 /**
- * What got worse by more than 20% since the last row from the same rig: a workload's speed, or the heap's growth per
- * day (compared as recorded, to 0.1 MB). Empty if nothing did, or there's no earlier row from this rig.
+ * The last row to compare with: the last from the same rig and Node major. Node majors differ in speed and heap (Node
+ * 26 ran lean 26% faster than 24 on the reference rig), so a row from another major isn't a fair baseline (#282).
+ */
+export function previousRow(row: BenchRow, earlier: BenchRow[]): BenchRow | undefined {
+  return earlier.filter((r) => r.rig === row.rig && nodeMajor(r.node) === nodeMajor(row.node)).at(-1);
+}
+
+/**
+ * What got worse by more than 20% since the last row from the same rig and Node major: a workload's speed, or the
+ * heap's growth per day (compared as recorded, to 0.1 MB). Empty if nothing did, or there's no such earlier row.
  */
 export function regressions(row: BenchRow, earlier: BenchRow[]): string[] {
-  const previous = earlier.filter((r) => r.rig === row.rig).at(-1);
+  const previous = previousRow(row, earlier);
   if (!previous) return [];
   const since = `than ${previous.date} (${previous.commit})`;
   const found: string[] = [];
