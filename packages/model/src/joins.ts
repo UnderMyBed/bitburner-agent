@@ -1,27 +1,32 @@
 /**
  * How long a join takes after its terms are met (#294's item 1): the game's timings and the brain's and the Agent's
- * cadence, each wait at its mean, not fitted. Until #294 the model joined at the step the terms were met; BN1.3's brain
- * joined BitRunners 1 to 6 minutes after its level allowed (#263's extract). The faction counts as joined once the
+ * cadence, as an exact expectation, not fitted. Until #294 the model joined at the step the terms were met; BN1.3's
+ * brain joined BitRunners 1 to 6 minutes after its level allowed (#263's extract). A faction counts as joined once the
  * brain's slow snapshot shows it: A5 works from that snapshot's faction state (packages/brain/src/factions.ts).
- * - **The snapshots** (core's `SNAPSHOT_TIER_PERIOD_MS`): the Agent's round every 2 s, the medium snapshot every 10 s,
- *   the slow one, with the faction state, every 60 s (packages/ingame/src/agent/snapshotter.ts). A wait for the next of
- *   a period is half of it, on average.
- * - **A hacker faction** (CyberSec, NiteSec, The Black Hand, BitRunners): the brain asks for the backdoor at the first
- *   medium snapshot that shows its server rooted at the level (packages/brain/src/backdoors.ts `chooseBackdoor`); the
- *   Agent starts it in its next round (packages/ingame/src/agent/intent-runner.ts); the backdoor takes a quarter of the
- *   hack time (`Terminal/Terminal.ts:242`, `NetscriptFunctions/Singularity.ts:525`), at the server's security 1 (`Server/Server.ts:79-83`:
- *   its data's 0 is skipped); the game checks for invitations every 10 engine cycles of 200 ms (`engine.tsx:177-182`);
- *   the Agent's dialog watcher answers the invitation in its next round, which opens the Factions page at the next slow
- *   snapshot (packages/ingame/src/page/faction-state-page.ts); the brain joins it (`chooseJoin`), the Agent in its next
- *   round, and the next slow snapshot, a period after, shows it joined.
- * - **Tian Di Hui:** in Sector-12 after an install, the brain travels to Ishima once a medium snapshot shows hacking 50
- *   and the money (packages/brain/src/invitations.ts), then as a hacker faction from the game's check.
- * - **A city group:** a travel and an invitation a city, each shown in a slow snapshot before the next travel; each
- *   join waits at the irreversible gate (two medium snapshots and a save backup, packages/brain/src/irreversible-gate.ts
- *   `GUARD_SNAPSHOTS`) and a slow snapshot before the next, one at a time.
- * - **Daedalus:** the game's check, then as a hacker faction's invitation.
+ * - **The clocks.** The Agent's rounds every 2 s, its medium snapshot every 5th round and its slow one every 30th,
+ *   counted from the same round, so every slow snapshot is a medium one (core's `SNAPSHOT_TIER_PERIOD_MS`;
+ *   packages/ingame/src/agent/snapshotter.ts:4-5). The game's invitation check runs on its own clock, every 10 engine
+ *   cycles of 200 ms (`engine.tsx:177-182`, `Constants.ts:19`). The terms are met at a time uniform against both.
+ * - **A hacker faction** (CyberSec, NiteSec, The Black Hand, BitRunners): the brain asks for the backdoor at the
+ *   first medium snapshot that shows its server rooted at the level (packages/brain/src/backdoors.ts
+ *   `chooseBackdoor`), one server at a time in that order; the Agent tries it in its next round, which starts it, and
+ *   again every 15 rounds until it's installed (packages/ingame/src/agent/intent-runner.ts); the brain sees it done in
+ *   the next round's fast snapshot and asks for the next at the medium snapshot after. The backdoor takes a quarter of
+ *   the hack time (`Terminal/Terminal.ts:242`, `NetscriptFunctions/Singularity.ts:525`) at security 1
+ *   (`Server/ServerHelpers.ts:367` skips the data's 0, so `Server/Server.ts:79-83` leaves 1). The game invites at its
+ *   next check; the Agent's faction state reader answers the dialog and opens the Factions page at the next slow
+ *   snapshot (packages/ingame/src/page/faction-state-page.ts); the brain joins it (`chooseJoin`), the Agent in its
+ *   next round, and the next slow snapshot shows it joined.
+ * - **One join a slow snapshot:** the brain joins the first invitation in the order invited and sees it joined only in
+ *   the next slow snapshot, so the next join waits for that (`JoinPipeline`).
+ * - **Tian Di Hui:** the brain travels to Ishima at the medium snapshot that shows hacking 50 and the money
+ *   (packages/brain/src/invitations.ts), the Agent in its next round; then as a hacker faction from the game's check.
+ * - **A city group:** a travel a city, the next once the slow snapshot shows the last's invitation; each join waits
+ *   at the irreversible gate (`GATE_MEDIUM_SNAPSHOTS` medium snapshots and a save backup,
+ *   packages/brain/src/irreversible-gate.ts), within the slow snapshot's minute.
+ * - **Daedalus:** the game's check on its terms, then the slow snapshot.
  * Left out: the hack loop's root (every 30 s, packages/ingame/src/agent/hack-loop.ts), as the level, not the port
- * opener, comes last in the model's runs; a save backup's seconds.
+ * opener, comes last in the model's runs; a slow snapshot that waits a round or more for time to read the factions.
  */
 import { SNAPSHOT_TIER_PERIOD_MS } from "@bitburner-agent/core";
 
@@ -30,44 +35,72 @@ const { fast: ROUND_MS, medium: MEDIUM_MS, slow: SLOW_MS } = SNAPSHOT_TIER_PERIO
 export const INVITATION_CHECK_MS = 10 * 200;
 /** The irreversible gate's medium snapshots before a city faction's join goes out (the brain's `GUARD_SNAPSHOTS`). */
 export const GATE_MEDIUM_SNAPSHOTS = 2;
-
-/** From an invitation in the game to the faction joined in the brain's slow snapshot: the tail every join shares. */
-const FROM_INVITATION_MS = INVITATION_CHECK_MS / 2 + ROUND_MS + SLOW_MS / 2 + SLOW_MS;
+/** Rounds between the Agent's tries of an intent not done (packages/ingame/src/agent/intent-runner.ts:23). */
+export const ROUNDS_BETWEEN_TRIES = 15;
 
 /**
- * A backdoor's time, ms: a quarter of the game's hack time (`Hacking.ts:59-80`) on the faction's server at security 1,
+ * A backdoor's time, ms: a quarter of the game's hack time (`Hacking.ts:60-80`) on the faction's server at security 1,
  * `5 × (2.5 × required + 500) / (hacking + 50)` s over the hacking speed (BN1's multiplier 1, no intelligence).
  */
 export function backdoorMs(requiredHacking: number, hacking: number, hackingSpeed: number): number {
   return ((5 * (2.5 * requiredHacking + 500)) / (hacking + 50) / hackingSpeed / 4) * 1000;
 }
 
-/** A hacker faction: from its server rooted at the level to the faction joined in the brain's slow snapshot, ms. */
-export function hackerFactionJoinMs(requiredHacking: number, hacking: number, hackingSpeed: number): number {
-  return MEDIUM_MS / 2 + ROUND_MS + backdoorMs(requiredHacking, hacking, hackingSpeed) + FROM_INVITATION_MS;
-}
-
-/** Tian Di Hui: from hacking 50 and the money in hand to the faction joined in the brain's slow snapshot, ms. */
-export function tianDiHuiJoinMs(): number {
-  return MEDIUM_MS / 2 + ROUND_MS + FROM_INVITATION_MS;
-}
-
-/** Daedalus: from its terms met to the faction joined in the brain's slow snapshot, ms. */
-export function daedalusJoinMs(): number {
-  return FROM_INVITATION_MS;
-}
+/**
+ * From a medium snapshot to the first slow snapshot after an invitation `afterMs` later, its mean over the medium
+ * snapshot's place among the six of a slow snapshot's minute: the medium snapshot after the invitation, then half the
+ * rest of the minute. Exact where `afterMs`'s own spread (the game's check) doesn't cross a medium snapshot.
+ */
+const toSlowAfterMedium = (afterMs: number) => MEDIUM_MS * Math.ceil(afterMs / MEDIUM_MS) + (SLOW_MS - MEDIUM_MS) / 2;
 
 /**
- * A city group's factions, in the order visited: from the money in hand to each joined in the brain's slow snapshot,
- * ms. Each city a travel and its invitation shown in a slow snapshot; each join after its invitation and the one
- * before, through the irreversible gate, then shown a slow snapshot later.
+ * The joins of a cycle, in the order their terms are met, each at the time the brain's slow snapshot shows it joined:
+ * the mean over the clocks' phases, exact where the order of the waits doesn't change from one phase to another
+ * (tested against the brain's own rules in packages/brain/test/backdoors.test.ts). Times in ms on any one clock; a
+ * fresh pipeline each cycle.
  */
-export function cityGroupJoinsMs(factions: number): number[] {
-  const visitMs = MEDIUM_MS / 2 + ROUND_MS + INVITATION_CHECK_MS / 2 + ROUND_MS + SLOW_MS / 2;
-  const joinMs = GATE_MEDIUM_SNAPSHOTS * MEDIUM_MS + ROUND_MS + SLOW_MS;
-  const joined: number[] = [];
-  for (let index = 0; index < factions; index++) {
-    joined.push(Math.max((index + 1) * visitMs, joined[index - 1] ?? 0) + joinMs);
+export class JoinPipeline {
+  /** When the next backdoor may be asked for: the medium snapshot after the last one's reported done. */
+  #backdoorFreeAtMs = Number.NEGATIVE_INFINITY;
+  /** When the last join shows in a slow snapshot: the next is chosen there at the soonest. */
+  #joinFreeAtMs = Number.NEGATIVE_INFINITY;
+
+  /** A join chosen at the slow snapshot `seenAtMs` (or the one showing the last join), shown a slow snapshot later. */
+  #join(seenAtMs: number): number {
+    this.#joinFreeAtMs = Math.max(seenAtMs, this.#joinFreeAtMs) + SLOW_MS;
+    return this.#joinFreeAtMs;
   }
-  return joined;
+
+  /** A hacker faction whose server's terms (the level, the ports) are met at `termsAtMs`. */
+  hackerFaction(termsAtMs: number, requiredHacking: number, hacking: number, hackingSpeed: number): number {
+    const askedAtMs = Math.max(termsAtMs + MEDIUM_MS / 2, this.#backdoorFreeAtMs);
+    const takesMs = backdoorMs(requiredHacking, hacking, hackingSpeed);
+    // Tried in the next round, which starts it; done at the first try after it ends; seen in the next round's fast
+    // snapshot, and the next asked for at the medium snapshot after.
+    const triesMs = ROUNDS_BETWEEN_TRIES * ROUND_MS;
+    const doneAfterMs = ROUND_MS + triesMs * Math.max(1, Math.ceil(takesMs / triesMs));
+    this.#backdoorFreeAtMs = askedAtMs + MEDIUM_MS * Math.ceil((doneAfterMs + ROUND_MS) / MEDIUM_MS);
+    return this.#join(askedAtMs + toSlowAfterMedium(ROUND_MS + takesMs + INVITATION_CHECK_MS / 2));
+  }
+
+  /** Tian Di Hui, with hacking 50 and the money in hand at `termsAtMs`: the travel, then the game's check. */
+  tianDiHui(termsAtMs: number): number {
+    return this.#join(termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS + INVITATION_CHECK_MS / 2));
+  }
+
+  /** Daedalus, its terms met at `termsAtMs`: the game's check, then the next slow snapshot. */
+  daedalus(termsAtMs: number): number {
+    return this.#join(termsAtMs + INVITATION_CHECK_MS / 2 + SLOW_MS / 2);
+  }
+
+  /**
+   * A city group's `factions` factions in the order visited, the money in hand at `termsAtMs`: the first travel at
+   * the medium snapshot after, each next at the slow snapshot that shows the last's invitation. Each join goes
+   * through the gate within its slow snapshot's minute (two medium snapshots and a backup, then the Agent's round).
+   */
+  cityGroup(termsAtMs: number, factions: number): number[] {
+    if (GATE_MEDIUM_SNAPSHOTS * MEDIUM_MS + ROUND_MS >= SLOW_MS) throw new RangeError("the gate outlasts a minute");
+    const firstSeenAtMs = termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS + INVITATION_CHECK_MS / 2);
+    return Array.from({ length: factions }, (_, index) => this.#join(firstSeenAtMs + index * SLOW_MS));
+  }
 }

@@ -122,31 +122,36 @@ describe("BN1.3's own figures", () => {
 describe("seen (no longer held out), downstream: today's rules on BN1.3's own measured curves", () => {
   const model = read({ policy: TODAYS_POLICY, measured: BN1_3_CYCLES });
 
-  test("its range: every cycle in it (#263's left it at the 5th)", () => {
+  test("its range: every cycle within the bound, but the 3rd and the 6th run 10 and 9 min past BN1.3's own ends", () => {
+    // In range is the 60-min bound, set for the fitted curves. On measured curves a cycle that runs past its own end
+    // reads them extrapolated: the 3rd runs 81 min on BN1.3's 70.8, the 6th 103 on 93.9; the rest within 3 min.
     expect(model.run.outOfRange).toEqual([]);
     expect(model.run.cycles).toHaveLength(10);
-    expect(model.run.destroyedAtMs).not.toBeNull();
+    const past = model.run.cycles.map((cycle) => Math.round(cycle.extrapolatedMinutes));
+    expect(past).toEqual([2, 0, 10, 0, 0, 9, 0, 1, 3, 0]);
   });
 
-  test("the 5th cycle's quick install at 17 min, BN1.3's at 18.5 [25%]; BitRunners joined at 11 min (BN1.3: 10-15)", () => {
+  test("the 5th cycle's quick install at 17 min, BN1.3's at 18.5 [25%]; BitRunners joined at 10 min (BN1.3: 10-15)", () => {
     // #294's joins: BitRunners after its backdoor, the invitation and the brain's slow snapshots, not at the level
-    // (#263: at 8 min, and A5 worked it); Tian Di Hui's four came within the 20 minutes.
+    // (#263: at 8 min, and A5 worked it); Tian Di Hui's four came within the 20 minutes. BN1.3's slow snapshot at
+    // 10 min didn't show BitRunners yet, so the model's 10 is at the edge of its range.
     expect(model.run.cycles[4]?.reason).toBe("quick install");
     expect(Math.abs(off(model.lengthMin(4), actualLengthMin(4)))).toBeLessThan(0.25);
     expect(model.mostWorked(4)).toBe("Tian Di Hui");
-    expect(model.joinedAt("BitRunners", 5)).toBe(11);
+    expect(model.joinedAt("BitRunners", 5)).toBe(10);
   });
 
-  test("both donations at BN1.3's installs, the 7th and the 9th; the destroy +0.5%", () => {
+  test("both donations at BN1.3's installs, the 7th and the 9th; the installs where BN1.3's came (the destroy −0.3%)", () => {
+    // The installs match; that's not the time within each cycle, which the lengths check (below).
     expect(model.unlockedAt("BitRunners")).toBe(BN1_3.donationsUnlockedAtInstall.BitRunners);
     expect(model.unlockedAt(DAEDALUS)).toBe(BN1_3.donationsUnlockedAtInstall.Daedalus);
-    expect(off((model.run.destroyedAtMs ?? 0) / MINUTE_MS, BN1_3.destroyedAtMinutes)).toBeCloseTo(0.005, 2);
+    expect(off((model.run.destroyedAtMs ?? 0) / MINUTE_MS, BN1_3.destroyedAtMinutes)).toBeCloseTo(-0.003, 2);
   });
 
-  test("#244's five phases [15%]: −2%, +3%, +1%, +7%, −11%", () => {
+  test("#244's five phases [15%]: −3%, +2%, +1%, +3%, −11%", () => {
     const offs = model.phases.map((minutes, index) => off(minutes, BN1_3_PHASES[index] as number));
     for (const [index, by] of offs.entries()) expect(Math.abs(by), `phase ${index + 1}`).toBeLessThanOrEqual(0.15);
-    expect(offs.map((by) => Math.round(by * 100))).toEqual([-2, 3, 1, 7, -11]);
+    expect(offs.map((by) => Math.round(by * 100))).toEqual([-3, 2, 1, 3, -11]);
   });
 
   test("each cycle's length [25%]; the count after the 1st to 5th [one]; known: the 6th and 7th 2 and 4 short", () => {
@@ -164,16 +169,16 @@ describe("seen (no longer held out), downstream: today's rules on BN1.3's own me
     expect(worked).toEqual([true, true, false, true, true, true, false, false, true]);
   });
 
-  test("each cycle's first cloud server at 11 to 14 min, BN1.3's between 10 and 15; Daedalus's at 17 (BN1.3: 15-20)", () => {
+  test("the first cloud server at 11 to 14 min in cycles 1-8 (BN1.3: 10-15); at 17 and 18 in the 9th and 10th (15-20)", () => {
     // #294: the brain's rule (a full 10-minute window of its income measure from the Agent's start, one purchase a
     // medium snapshot). BN1.3's medium snapshots show no cloud RAM at 10 min in every cycle, some at 15 but in the 9th
-    // (Daedalus's $100b held), some at 20.
+    // and 10th (Daedalus's $100b held), some at 20.
     for (const cycle of [1, 2, 3, 4, 5, 6, 7, 8]) {
       const minutes = model.firstCloudMin.get(cycle) ?? Number.NaN;
       expect(minutes, `cycle ${cycle}`).toBeGreaterThan(10);
       expect(minutes, `cycle ${cycle}`).toBeLessThanOrEqual(15);
     }
-    expect(model.firstCloudMin.get(9)).toBe(17);
+    expect([model.firstCloudMin.get(9), model.firstCloudMin.get(10)]).toEqual([17, 18]);
   });
 
   test("the cash [×2]: 7 of 9 readings within it (#263's: under 2% at 20 min in cycles 1 to 3)", () => {
@@ -199,43 +204,50 @@ describe("seen (no longer held out), downstream: today's rules on BN1.3's own me
     expect(ratios[0]).toBeGreaterThan(5);
   });
 
-  test("the share's excess (the bonus less 1) a cycle, cycles 2 to 5 [10%]; known: the 1st's +23%", () => {
-    for (const index of [1, 2, 3, 4]) {
-      const actual = BN1_3_PER_CYCLE[index]?.share as number;
-      const excess = off((model.run.cycles[index]?.shareBonus ?? 0) - 1, actual - 1);
-      expect(Math.abs(excess), `cycle ${index + 1}`).toBeLessThan(0.1);
-    }
-    expect(off((model.run.cycles[0]?.shareBonus ?? 0) - 1, (BN1_3_PER_CYCLE[0]?.share as number) - 1)).toBeGreaterThan(
-      0.2,
+  test("the share's excess (the bonus less 1) a cycle, cycles 3 to 5 [10%]; known: the 1st +19%, the 2nd −10.1%", () => {
+    const offs = [0, 1, 2, 3, 4].map((index) =>
+      off((model.run.cycles[index]?.shareBonus ?? 0) - 1, (BN1_3_PER_CYCLE[index]?.share as number) - 1),
     );
+    for (const index of [2, 3, 4]) expect(Math.abs(offs[index] as number), `cycle ${index + 1}`).toBeLessThan(0.1);
+    expect(offs[0]).toBeGreaterThan(0.15);
+    expect(offs[1]).toBeCloseTo(-0.101, 3);
   });
 });
 
 describe("seen (no longer held out), independent: the fitted model from BN1.3's start", () => {
   const model = read({ policy: TODAYS_POLICY });
 
-  test("its range: the 8th cycle, Daedalus's grind, runs out of it (130 min past the curves' 120)", () => {
+  test("its range: the 8th cycle, Daedalus's grind, runs out of it (114 min past the curves' 120)", () => {
     expect(model.run.outOfRange).toEqual([8]);
-    expect(model.run.cycles[7]?.extrapolatedMinutes).toBeGreaterThan(125);
+    expect(Math.round(model.run.cycles[7]?.extrapolatedMinutes ?? 0)).toBe(114);
   });
 
-  test("BitRunners' donations unlock at the 7th install, BN1.3's [same install]; at 8 h 30 min, against 9 h 9 min", () => {
+  test("the 5th cycle's quick install at 17 min, BN1.3's at 18.5 [25%]; BitRunners joined at 12 min (BN1.3: 10-15)", () => {
+    // #263's run worked BitRunners from 8 min and missed it (79 min). With #294's joins Tian Di Hui's four came first.
+    expect(model.inRange(5)).toBe(true);
+    expect(model.run.cycles[4]?.reason).toBe("quick install");
+    expect(Math.abs(off(model.lengthMin(4), actualLengthMin(4)))).toBeLessThan(0.25);
+    expect(model.mostWorked(4)).toBe("Tian Di Hui");
+    expect(model.joinedAt("BitRunners", 5)).toBe(12);
+  });
+
+  test("BitRunners' donations unlock at the 7th install, BN1.3's [same install]; at 8 h 35 min, against 9 h 9 min", () => {
     // In range. Its time spans BN1.3's stuck 6th and 7th (#274): confounded.
     expect(model.inRange(7)).toBe(true);
     expect(model.unlockedAt("BitRunners")).toBe(BN1_3.donationsUnlockedAtInstall.BitRunners);
     expect(off(model.run.cycles[6]?.endMs ?? 0, (BN1_3.installsAtMinutes[6] as number) * MINUTE_MS)).toBeCloseTo(
-      -0.071,
+      -0.063,
       2,
     );
   });
 
-  test("phase 1 +13% [15%]; known misses, in range: phase 2 −34%, phase 3 0 min against 86", () => {
-    // Phase 2 and 3 span BN1.3's stuck batcher, so their size is confounded, but not that the model joins Daedalus in
-    // the cycle after the donations unlock, where BN1.3 took another (the stuck 8th).
+  test("phases 1 and 2 [15%]: −4%, −10%; known miss, in range: phase 3, 0 min against 86", () => {
+    // Phase 2 spans BN1.3's stuck batcher, so its size is confounded. Phase 3: the model joins Daedalus in the cycle
+    // after the donations unlock, where BN1.3 took another (the stuck 8th).
     expect(model.endInstalls.slice(0, 3).every((install) => model.inRange(install))).toBe(true);
     const [first, second, third] = model.phases.map((minutes, index) => off(minutes, BN1_3_PHASES[index] as number));
-    expect(first).toBeCloseTo(0.13, 2);
-    expect(second).toBeCloseTo(-0.34, 2);
+    expect(first).toBeCloseTo(-0.035, 2);
+    expect(second).toBeCloseTo(-0.1, 2);
     expect(third).toBe(-1);
   });
 
@@ -243,52 +255,55 @@ describe("seen (no longer held out), independent: the fitted model from BN1.3's 
     expect(model.inRange(model.endInstalls[3] as number)).toBe(false);
   });
 
-  test("cycles 1 to 3: each length [25%], the count after [one]; the level at the end, cycles 1 to 4 [15%]", () => {
-    expect(model.inRange(4)).toBe(true);
-    for (const index of [0, 1, 2]) {
-      const actual = BN1_3_PER_CYCLE[index];
-      const cycle = model.run.cycles[index];
+  test("cycles 1 to 7: each length [25%]; the count after the 1st to 6th [one]; known: the 7th 2 over", () => {
+    expect(model.inRange(7)).toBe(true);
+    for (const index of [0, 1, 2, 3, 4, 5, 6]) {
       expect(Math.abs(off(model.lengthMin(index), actualLengthMin(index))), `cycle ${index + 1}`).toBeLessThan(0.25);
-      expect(Math.abs((cycle?.countAfter ?? 0) - (actual?.count ?? 0)), `cycle ${index + 1}`).toBeLessThanOrEqual(1);
     }
-    for (const index of [0, 1, 2, 3]) {
-      const level = model.run.cycles[index]?.hackingAtEnd ?? 0;
-      expect(Math.abs(off(level, BN1_3_PER_CYCLE[index]?.hacking ?? 0)), `cycle ${index + 1}`).toBeLessThan(0.15);
-    }
+    const shorts = BN1_3_PER_CYCLE.slice(0, 7).map(
+      (actual, index) => actual.count - (model.run.cycles[index]?.countAfter ?? 0),
+    );
+    expect(shorts).toEqual([0, 1, 0, 1, 0, 1, -2]);
   });
 
-  test("known misses: the 4th cycle 73 min (BN1.3's 141), 16 installed after it (14); the 5th 126 min (a quick install)", () => {
-    expect(off(model.lengthMin(3), actualLengthMin(3))).toBeLessThan(-0.4);
-    expect(model.run.cycles[3]?.countAfter).toBe(16);
-    expect(model.lengthMin(4)).toBe(126);
-    expect(model.run.cycles[4]?.reason).toBe("count reached");
-    // BitRunners joined at 13 min, within BN1.3's 10-15 (#294's joins); A5 works it, as BN1.3's 4th did.
-    expect(model.joinedAt("BitRunners", 5)).toBe(13);
-    expect(model.mostWorked(4)).toBe("BitRunners");
+  test("the level at the end, cycles 2 to 4 [15%]; known: the 1st +17%, the 5th +21%", () => {
+    const offs = [0, 1, 2, 3, 4].map((index) =>
+      off(model.run.cycles[index]?.hackingAtEnd ?? 0, BN1_3_PER_CYCLE[index]?.hacking ?? 0),
+    );
+    for (const index of [1, 2, 3]) expect(Math.abs(offs[index] as number), `cycle ${index + 1}`).toBeLessThan(0.15);
+    expect(offs[0]).toBeGreaterThan(0.15);
+    expect(offs[4]).toBeGreaterThan(0.15);
   });
 
-  test("the faction worked most, cycles 1 and 2, and its favour after the 1st [20% or 2]; known: the 2nd's favour, the 3rd and 4th", () => {
-    expect([0, 1].map((index) => model.mostWorked(index))).toEqual(["CyberSec", "CyberSec"]);
-    expect(Math.abs((model.run.cycles[0]?.favorAfter.CyberSec ?? 0) - 5.18)).toBeLessThanOrEqual(2);
-    // 18.7 against 23.62: −21%.
-    expect(off(model.run.cycles[1]?.favorAfter.CyberSec ?? 0, 23.62)).toBeLessThan(-0.2);
-    expect([2, 3].map((index) => model.mostWorked(index))).toEqual(["CyberSec", "NiteSec"]);
-  });
-
-  test("each cycle's first cloud server at 11 to 13 min (BN1.3's between 10 and 15); Daedalus's at 11 (BN1.3: 15-20)", () => {
-    for (const cycle of [1, 2, 3, 4, 5, 6, 7]) {
-      const minutes = model.firstCloudMin.get(cycle) ?? Number.NaN;
-      expect(minutes, `cycle ${cycle}`).toBeGreaterThan(10);
-      expect(minutes, `cycle ${cycle}`).toBeLessThanOrEqual(13);
+  test("the faction worked most as BN1.3's in cycles 1, 2, 4, 5 and 6, its favour after [20% or 2]; known: the 3rd", () => {
+    for (const index of [0, 1, 3, 4, 5]) {
+      const actual = BN1_3_PER_CYCLE[index];
+      const faction = actual?.faction as string;
+      const actualFavor = actual?.favorAfter as number;
+      expect(model.mostWorked(index), `cycle ${index + 1}`).toBe(faction);
+      expect(
+        Math.abs((model.run.cycles[index]?.favorAfter[faction] ?? 0) - actualFavor),
+        `cycle ${index + 1}`,
+      ).toBeLessThanOrEqual(Math.max(0.2 * actualFavor, 2));
     }
-    // The model's Daedalus cycle (its 8th) reaches hacking 2,500 only after its first server, so no $100b hold first.
+    // The 3rd works CyberSec for Cranial Signal Processors Gen II before NiteSec, as on run #3 (validation.test.ts):
+    // NiteSec's favour after it 31.5, BN1.3's 41.01.
+    expect(model.mostWorked(2)).toBe("CyberSec");
+    expect(model.run.cycles[2]?.favorAfter.NiteSec).toBeLessThan(41.01 * 0.8);
+  });
+
+  test("the first cloud server at 11 min in cycles 2-7 (BN1.3: 10-15); known: the 1st at 16, Daedalus's at 12 (15-20)", () => {
+    for (const cycle of [2, 3, 4, 5, 6, 7]) expect(model.firstCloudMin.get(cycle), `cycle ${cycle}`).toBe(11);
+    // The 1st waits on its payback over the world servers past 15 min; the model's Daedalus cycle (its 8th) reaches
+    // hacking 2,500 only after its first server, so no $100b hold first.
+    expect(model.firstCloudMin.get(1)).toBe(16);
     expect(model.run.cycles[7]?.reason).toBe("Daedalus donations");
-    expect(model.firstCloudMin.get(8)).toBe(11);
+    expect(model.firstCloudMin.get(8)).toBe(12);
   });
 
-  test("known miss, out of range: the money 5, 10 and 15 min into Daedalus's cycle, ×0.09, ×14, ×680 BN1.3's", () => {
+  test("known miss, out of range: the money 5, 10 and 15 min into Daedalus's cycle, ×0.02, ×1.6, ×350 BN1.3's", () => {
     // BN1.3's 9th held $100b for Daedalus from 8.6 min, bought no cloud server by 15 min, and its money rose about $1b
-    // a minute on the world servers alone. The model's money runs away from its first cloud server (11 min) on: the
+    // a minute on the world servers alone. The model's money runs away from its first cloud server (12 min) on: the
     // batches' ramp on the new RAM isn't modelled.
     const daedalusCycle = model.run.cycles.findIndex((cycle) => cycle.reason === "Daedalus donations") + 1;
     expect(model.inRange(daedalusCycle)).toBe(false);
@@ -296,26 +311,25 @@ describe("seen (no longer held out), independent: the fitted model from BN1.3's 
       (minutes) =>
         model.grossAt(daedalusCycle, minutes) / (BN1_3_CYCLES[8]?.points.find(([at]) => at === minutes)?.[2] as number),
     );
-    expect(ratios[0]).toBeLessThan(0.2);
-    expect(ratios[1]).toBeGreaterThan(10);
+    expect(ratios[0]).toBeLessThan(0.05);
+    expect(ratios[1]).toBeGreaterThan(1);
+    expect(ratios[1]).toBeLessThan(3);
     expect(ratios[2]).toBeGreaterThan(300);
   });
 
-  test("the share's excess, cycles 2 to 5 [10%]: 3 of 4 (the 2nd −11%); known: the 1st's +16%", () => {
+  test("the share's excess, cycles 3 to 5 [10%]; known: the 1st +12%, the 2nd −12%", () => {
     expect(model.inRange(5)).toBe(true);
-    const offs = [1, 2, 3, 4].map((index) =>
+    const offs = [0, 1, 2, 3, 4].map((index) =>
       off((model.run.cycles[index]?.shareBonus ?? 0) - 1, (BN1_3_PER_CYCLE[index]?.share as number) - 1),
     );
-    expect(offs.filter((by) => Math.abs(by) < 0.1)).toHaveLength(3);
-    expect(offs[0]).toBeLessThan(-0.1);
-    expect(off((model.run.cycles[0]?.shareBonus ?? 0) - 1, (BN1_3_PER_CYCLE[0]?.share as number) - 1)).toBeGreaterThan(
-      0.1,
-    );
+    for (const index of [2, 3, 4]) expect(Math.abs(offs[index] as number), `cycle ${index + 1}`).toBeLessThan(0.1);
+    expect(offs[0]).toBeGreaterThan(0.1);
+    expect(offs[1]).toBeLessThan(-0.1);
   });
 
-  test("the share's RAM, cycles 2 to 5 at BN1.3's readings the model's cycles reach [×2.1]: 19 of 20", () => {
+  test("the share's RAM, cycles 2 to 5 at BN1.3's readings the model's cycles reach [×2.1]: 22 of 23", () => {
     // Home's RAM less the Agent's 8 GB and the 32 kept; the batches' hosts, at core's plan, share nothing here. The
-    // model's 2nd and 4th cycles end before BN1.3's last readings. The miss: the 2nd at 30 min, ×0.25.
+    // miss: the 2nd at 30 min, ×0.25.
     expect(model.inRange(5)).toBe(true);
     const ratios = BN1_3_SHARE_RAM.filter(({ cycle }) => cycle >= 2 && cycle <= 5).flatMap(({ cycle, points }) =>
       points.flatMap(([minutes, gb]) => {
@@ -323,14 +337,14 @@ describe("seen (no longer held out), independent: the fitted model from BN1.3's 
         return shared === undefined ? [] : [{ cycle, minutes, ratio: shared / gb }];
       }),
     );
-    expect(ratios).toHaveLength(20);
-    expect(ratios.filter(({ ratio }) => ratio >= 1 / 2.1 && ratio <= 2.1)).toHaveLength(19);
+    expect(ratios).toHaveLength(23);
+    expect(ratios.filter(({ ratio }) => ratio >= 1 / 2.1 && ratio <= 2.1)).toHaveLength(22);
     expect(ratios.find(({ ratio }) => ratio < 1 / 2.1)).toMatchObject({ cycle: 2, minutes: 30 });
   });
 
-  test("known miss: the cash, cycles 1 to 4 [×2]: 4 of 9 within (the 3rd ×0.03 and ×0.08, the 1st at 30 min ×10)", () => {
+  test("the cash, cycles 1 to 4 [×2]: 6 of 9 within; known: the 3rd ×0.03 and ×0.10, the 2nd at 30 min ×0.23", () => {
     expect(model.inRange(4)).toBe(true);
     const ratios = BN1_3_CASH.map(({ cycle, minutes, cash }) => model.cashAt(cycle, minutes) / cash);
-    expect(ratios.filter((ratio) => Math.abs(Math.log2(ratio)) < 1)).toHaveLength(4);
+    expect(ratios.filter((ratio) => Math.abs(Math.log2(ratio)) < 1)).toHaveLength(6);
   });
 });

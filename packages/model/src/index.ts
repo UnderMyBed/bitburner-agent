@@ -1,4 +1,4 @@
-export { BATCH_TARGETS, type BatchesState, batchesPeakGbOf, batchesUseOf } from "./batches.ts";
+export { BATCH_TARGETS, type BatchesState, batchesPeakGbOf, batchesUseFromPeak, batchesUseOf } from "./batches.ts";
 export {
   CALIBRATION,
   type Calibration,
@@ -13,6 +13,7 @@ export {
   COMPARISON_GRID,
   COMPARISON_STARTS,
   type ComparisonSetting,
+  comparisonByStart,
   FAVOUR_FIRST_POLICY,
   GRID_LATER_MS,
   MILESTONES,
@@ -20,6 +21,7 @@ export {
   milestonesOf,
   type PairedComparison,
   pairedComparison,
+  startInRange,
   verdictOf,
 } from "./compare.ts";
 export {
@@ -69,12 +71,10 @@ export {
 } from "./cycles.ts";
 export {
   backdoorMs,
-  cityGroupJoinsMs,
-  daedalusJoinMs,
   GATE_MEDIUM_SNAPSHOTS,
-  hackerFactionJoinMs,
   INVITATION_CHECK_MS,
-  tianDiHuiJoinMs,
+  JoinPipeline,
+  ROUNDS_BETWEEN_TRIES,
 } from "./joins.ts";
 export {
   afterPurchase,

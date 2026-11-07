@@ -1,13 +1,14 @@
 /**
- * The batches' use of their hosts (#294's item 5), for #242's share: from the state, by core's own batch maths, not by
- * the cycle's index. The brain's batcher (packages/brain/src/batcher.ts) runs on the hack loop's hosts (the rooted world
- * servers and the cloud servers) and plans with core's `batchPlan` (#204) on the target worth most; the share fills
- * what it leaves, up to core's `SHARE_MOST_USE`. A plan's RAM is bounded by its target's money as well as by the RAM
- * (#275): at most a batch of `MAX_BATCH_SHARE` every `MIN_BATCH_SPACING_MS`, which needs less RAM as the level and the
- * hacking speed shorten the operations and a thread takes more of the money. So the batches fill the hosts in the
- * early cycles and leave most of them at a high level: core's plan gives 100% at run #3's 4th cycle (its one reading,
- * 82%: both past 80%, so the hosts share nothing) and 9-10% at BN1.3's 9th's level (its share left about 10%).
- * Nothing fitted: the targets are the game's (`BATCH_TARGETS`), the maths core's.
+ * The batches' use of their hosts (#294's item 5), for #242's share: from the state, by core's own batch maths, not
+ * by the cycle's index. The brain's batcher (packages/brain/src/batcher.ts) runs on the hack loop's hosts (the rooted
+ * world servers and the cloud servers) and plans with core's `batchPlan` (#204) on the target worth most; the share
+ * fills what it leaves, up to core's `SHARE_MOST_USE`. A plan's RAM is bounded by its target's money as well as by the
+ * RAM (#275): at most a batch of `MAX_BATCH_SHARE` every `MIN_BATCH_SPACING_MS`, which needs less RAM as the level and
+ * the hacking speed shorten the operations and a thread takes more of the money. So the batches fill the hosts in the
+ * early cycles and leave most of them at a high level: core's plan gives 99% to 100% at run #3's 4th cycle (its one
+ * reading, 82%: both past 80%, so the hosts share nothing) and 12% to 16% at hacking 4,000 to 5,000 at the model's
+ * Daedalus cycle's multipliers (BN1.3's 9th left about 10%). Nothing fitted: the targets are the game's
+ * (`BATCH_TARGETS`), the maths core's.
  */
 import {
   batchHoldsMs,
@@ -138,11 +139,16 @@ export function batchesPeakGbOf({ hacking, mults, ports }: BatchesState): number
 }
 
 /**
- * The batches' use of their hosts' RAM (`hostsGb`, the rooted world servers and the cloud servers), 0 to 1 (#294):
- * their most (`batchesPeakGbOf`) over the hosts' batch RAM, at most all of it (with less, core's `batchPlan` fills
- * it). 1 with nothing to hack or no RAM.
+ * The batches' use of their hosts' RAM (`hostsGb`, the rooted world servers and the cloud servers), 0 to 1, from
+ * their most (`peakGb`, `batchesPeakGbOf`) times `factor` (`Calibration.batchesUseFactor`): at most all of it (with
+ * less, core's `batchPlan` fills it); all of it with no RAM a batch can use.
  */
-export function batchesUseOf(state: BatchesState & { hostsGb: number }): number {
-  if (!(batchRamGb([state.hostsGb]) > 0)) return 1;
-  return Math.min(1, batchesPeakGbOf(state) / state.hostsGb);
+export function batchesUseFromPeak(peakGb: number, hostsGb: number, factor = 1): number {
+  if (!(batchRamGb([hostsGb]) > 0)) return 1;
+  return Math.min(1, (factor * peakGb) / hostsGb);
+}
+
+/** The batches' use of their hosts' RAM in `state` (#294): `batchesUseFromPeak` on `batchesPeakGbOf`. */
+export function batchesUseOf(state: BatchesState & { hostsGb: number }, factor = 1): number {
+  return batchesUseFromPeak(batchesPeakGbOf(state), state.hostsGb, factor);
 }

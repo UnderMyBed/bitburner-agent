@@ -15,7 +15,6 @@ import { describe, expect, test } from "vitest";
 import {
   afterPurchase,
   BATCH_TARGETS,
-  batchesPeakGbOf,
   batchesUseOf,
   CALIBRATION,
   CLOUD_SERVER_INCOME_WINDOW_MS,
@@ -469,7 +468,8 @@ describe("the share from the state (#263), not the install index", () => {
       return { hacking_chance, hacking_speed, hacking_money, hacking_grow };
     };
     // Run #3's 4th cycle (its one reading: the batches held 82% of the cloud), at the multipliers the brain's rules
-    // install on its measured curves: core's plan fills the hosts at its level (878 to 1,061 from 30 min on).
+    // install on its measured curves: core's plan fills 99% to 100% of the hosts at its level (878 to 1,061 from
+    // 30 min on). Past 80% both, so the hosts share nothing either way.
     const downstream = runModel(RUN_3_BN1_2.start, {
       policy: RUN_3_POLICY,
       measured: RUN_3_CYCLES,
@@ -477,16 +477,21 @@ describe("the share from the state (#263), not the install index", () => {
     });
     const run3Mults = mults(downstream.cycles[3]?.multipliers ?? multipliersOf({}, 1));
     for (const hacking of [878, 1061]) {
-      expect(batchesUseOf({ hacking, mults: run3Mults, ports: 5, hostsGb }), `hacking ${hacking}`).toBeGreaterThan(0.8);
+      expect(batchesUseOf({ hacking, mults: run3Mults, ports: 5, hostsGb }), `hacking ${hacking}`).toBeGreaterThan(
+        0.99,
+      );
     }
-    // At hacking 4,000 to 5,000 and BN1.3's 9th cycle's multipliers (the model's run of it: hacking_money ×11), about a
-    // tenth: the target's money bounds the batches, not the RAM. BN1.3's 9th shared about 90% of its cloud (#263's
+    // At hacking 4,000 to 5,000 and the multipliers of the model's own Daedalus cycle from BN1.3's start, 16% and
+    // 12%: the target's money bounds the batches, not the RAM. BN1.3's 9th shared about 90% of its cloud (#263's
     // extract), so its batches used about 10%. Seen, not held out (#294).
-    const late = { hacking_chance: 3.45, hacking_speed: 3.38, hacking_money: 11.19, hacking_grow: 5.23 };
+    const independent = runModel(BN1_3_START, { policy: TODAYS_POLICY });
+    const daedalusCycle = independent.cycles.find((cycle) => cycle.reason === "Daedalus donations");
+    const late = mults(daedalusCycle?.multipliers ?? multipliersOf({}, 1));
+    expect(late.hacking_money).toBeGreaterThan(5);
     for (const hacking of [4000, 5000]) {
       const use = batchesUseOf({ hacking, mults: late, ports: 5, hostsGb });
       expect(use, `hacking ${hacking}`).toBeGreaterThan(0.05);
-      expect(use, `hacking ${hacking}`).toBeLessThan(0.15);
+      expect(use, `hacking ${hacking}`).toBeLessThan(0.2);
     }
     // Fewer hosts, the same batches: a larger share of them, all at most; nothing to hack, all of them (no share).
     expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb: hostsGb / 4 })).toBeCloseTo(
@@ -499,6 +504,35 @@ describe("the share from the state (#263), not the install index", () => {
       batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }) / 10,
     );
     expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb: 0 })).toBe(1);
+  });
+
+  test("a cycle's first cloud server `cloudDelayMs` later than the brain's first full window (the grid's variant)", () => {
+    // At a step of a medium snapshot, the 2nd cycle (the 1st's first server waits on its payback past both): the first
+    // full window at 10 min 20 s; the first server just after it, or 5 min later.
+    const firstCloud = (cloudDelayMs: number) => {
+      const at = new Map<number, number>();
+      let cycle = 0;
+      let last = -1;
+      runModel(RUN_3_BN1_2.start, {
+        policy: RUN_3_POLICY,
+        stepMs: PURCHASE_EVERY_MS,
+        horizonMs: 70 * MINUTE_MS,
+        cloudDelayMs,
+        onStep: ({ onlineMs, purse }) => {
+          if (onlineMs < last) cycle += 1;
+          last = onlineMs;
+          if (!at.has(cycle) && purse.cloudServersRamGb.length > 0) at.set(cycle, onlineMs);
+        },
+      });
+      return at;
+    };
+    const window = FIRST_INCOME_SAMPLE_MS + CLOUD_SERVER_INCOME_WINDOW_MS;
+    const modelled = firstCloud(0);
+    const later = firstCloud(5 * MINUTE_MS);
+    expect(modelled.get(1)).toBeGreaterThan(window);
+    expect(modelled.get(1)).toBeLessThanOrEqual(window + MINUTE_MS);
+    expect(later.get(1)).toBeGreaterThan(window + 5 * MINUTE_MS);
+    expect(later.get(1)).toBeLessThanOrEqual(window + 6 * MINUTE_MS);
   });
 
   test("in a run, each step's batches' use is core's most over the hosts, times `batchesUseFactor`, at most all", () => {
@@ -520,13 +554,13 @@ describe("the share from the state (#263), not the install index", () => {
         const multipliers = run.cycles[step.cycle]?.multipliers;
         if (multipliers === undefined) continue;
         const { hacking_chance, hacking_speed, hacking_money, hacking_grow } = multipliers;
-        const peakGb = batchesPeakGbOf({
+        const state = {
           hacking: step.hacking,
           mults: { hacking_chance, hacking_speed, hacking_money, hacking_grow },
           ports: Math.min(portsOpen(step.purse), 5),
-        });
-        const hostsGb = step.worldRamGb + cloudRamOf(step.purse);
-        expect(step.batchesUse).toBeCloseTo(Math.min(1, (factor * peakGb) / hostsGb), 12);
+          hostsGb: step.worldRamGb + cloudRamOf(step.purse),
+        };
+        expect(step.batchesUse).toBe(batchesUseOf(state, factor));
         if (step.batchesUse < 1) below += 1;
       }
       expect(below, `factor ${factor}`).toBeGreaterThan(0);

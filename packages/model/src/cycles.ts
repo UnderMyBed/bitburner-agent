@@ -1,7 +1,7 @@
 /**
- * The cycle model (the fast model, #13: slice 1, #260; slice 2, #263; slice 3, #294): BN1 stepped a minute at a time from the
- * BitNode's start to its destroy, install to install, with the brain's own choices made by core's own functions on the
- * model's state, so it can't drift from the brain:
+ * The cycle model (the fast model, #13: slice 1, #260; slice 2, #263; slice 3, #294): BN1 stepped a minute at a
+ * time from the BitNode's start to its destroy, install to install, with the brain's own choices made by core's own
+ * functions on the model's state, so it can't drift from the brain:
  * - A5's work (core's `factionWorkChoice`: the most hacking value per second of work, The Red Pill first, toward
  *   donations' favour, the count; `factionReputationPerSecond` at the modelled level, `faction_rep` and favour);
  * - the joins: the hacker factions by their servers (`HACKER_FACTION_JOINS`), Tian Di Hui, the city group (core's
@@ -67,10 +67,10 @@ import {
   type WorkConditions,
   type WorkingPerson,
 } from "@bitburner-agent/core";
-import { batchesPeakGbOf } from "./batches.ts";
+import { batchesPeakGbOf, batchesUseFromPeak } from "./batches.ts";
 import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS, ROOTED_WORLD_RAM_GB_BY_PORTS } from "./calibration.ts";
 import { type Clocks, Curves, homeRamAfter, measuredAt } from "./curves.ts";
-import { cityGroupJoinsMs, daedalusJoinMs, hackerFactionJoinMs, tianDiHuiJoinMs } from "./joins.ts";
+import { JoinPipeline } from "./joins.ts";
 import {
   afterPurchase,
   cloudRamOf,
@@ -314,8 +314,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   if (stepMs % PURCHASE_EVERY_MS !== 0)
     throw new RangeError(`the step must be a whole number of ${PURCHASE_EVERY_MS} ms`);
   const joinDelay = options.joinDelay ?? "modelled";
-  const delayOf = (modelledMs: number) =>
-    joinDelay === "instant" ? 0 : modelledMs + (joinDelay === "modelled" ? 0 : joinDelay);
+  const laterMs = typeof joinDelay === "number" ? joinDelay : 0;
   const cloudDelayMs = options.cloudDelayMs ?? 0;
   // The batches' peak RAM by the level and the ports, within a cycle (its multipliers fixed): core's batch maths.
   let peaks = new Map<string, number>();
@@ -337,6 +336,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   let firstRateAtMs: number | null = null;
   // The joins under way (#294): each faction, and when the brain's slow snapshot shows it joined.
   let pendingJoins = new Map<string, number>();
+  let joinPipeline = new JoinPipeline();
   let stats = freshStats();
 
   for (let now = 0; now <= horizonMs; now += stepMs) {
@@ -409,34 +409,35 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       break;
     }
 
-    // The joins: each from its terms met, as long as the brain and the game take to it (#294, ./joins.ts); joined once
-    // the brain's slow snapshot shows it, at the first step at or past that (a minute late at most).
+    // The joins: each from its terms met, as long as the brain and the game take to it (#294, ./joins.ts), one join a
+    // slow snapshot. The terms were met within the last step, half a step back on average; joined at the step nearest
+    // the slow snapshot that shows it, so within half a step of it, either way.
+    const termsAtMs = Math.max(cycleStartMs, now - stepMs / 2);
     const join = (name: string) => {
       if (joined.some((each) => each.name === name)) return;
       joined = [...joined, { name, reputation: 0, favor: favor.get(name) ?? 0 }];
       events.push({ atMs: now, kind: "joined", faction: name });
     };
-    const termsMet = (name: string, modelledMs: number) => {
-      if (!pendingJoins.has(name) && !joined.some((each) => each.name === name)) {
-        pendingJoins.set(name, now + delayOf(modelledMs));
-      }
+    const due = (name: string) => !pendingJoins.has(name) && !joined.some((each) => each.name === name);
+    const termsMet = (name: string, shownAtMs: number) => {
+      if (due(name)) pendingJoins.set(name, joinDelay === "instant" ? now : shownAtMs + laterMs);
     };
     const joinDue = () => {
       for (const [name, atMs] of pendingJoins) {
-        if (atMs > now) continue;
+        if (atMs > now + stepMs / 2) continue;
         pendingJoins.delete(name);
         join(name);
       }
     };
     for (const { faction, hacking: level, ports } of HACKER_FACTION_JOINS) {
       // Its server's port openers bought (#263), the TOR router first.
-      if (hacking >= level && portsOpen(purse) >= ports) {
-        termsMet(faction, hackerFactionJoinMs(level, hacking, multipliers.hacking_speed));
+      if (hacking >= level && portsOpen(purse) >= ports && due(faction)) {
+        termsMet(faction, joinPipeline.hackerFaction(termsAtMs, level, hacking, multipliers.hacking_speed));
       }
     }
     // Tian Di Hui: hacking 50 and $1m held in one of its cities, a ticket away (`Faction/FactionInfo.tsx:680-692`).
-    if (hacking >= TIAN_DI_HUI_HACKING && money >= TIAN_DI_HUI_MONEY + TRAVEL_COST) {
-      termsMet(TIAN_DI_HUI, tianDiHuiJoinMs());
+    if (hacking >= TIAN_DI_HUI_HACKING && money >= TIAN_DI_HUI_MONEY + TRAVEL_COST && due(TIAN_DI_HUI)) {
+      termsMet(TIAN_DI_HUI, joinPipeline.tianDiHui(termsAtMs));
     }
     joinDue();
     const state = (): FactionState => ({ joined, invitations: [], queuedAugmentations: [] });
@@ -457,14 +458,16 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     );
     if (group !== null) {
       cityGroup = group.group;
-      if (money >= group.money) {
-        const joinsMs = cityGroupJoinsMs(group.factions.length);
-        for (const [index, faction] of group.factions.entries()) termsMet(faction, joinsMs[index] as number);
+      const newFactions = group.factions.filter(due);
+      if (money >= group.money && newFactions.length > 0) {
+        const shownAtMs = joinPipeline.cityGroup(termsAtMs, newFactions.length);
+        for (const [index, faction] of newFactions.entries()) termsMet(faction, shownAtMs[index] as number);
       }
     }
     const daedalus = daedalusRequirements(currentNode, ownedSF);
-    if (count().installed >= daedalus.augmentations && hacking >= daedalus.hacking && money >= daedalus.money) {
-      termsMet(DAEDALUS, daedalusJoinMs());
+    const daedalusTerms = hacking >= daedalus.hacking && money >= daedalus.money;
+    if (count().installed >= daedalus.augmentations && daedalusTerms && due(DAEDALUS)) {
+      termsMet(DAEDALUS, joinPipeline.daedalus(termsAtMs));
     }
     joinDue();
 
@@ -618,7 +621,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       peaks.set(key, peakGb);
     }
     const hostsGb = worldRamOf(held) + cloudRamOf(held);
-    return hostsGb > 0 ? Math.min(1, (peakGb * curves.calibration.batchesUseFactor) / hostsGb) : 1;
+    return batchesUseFromPeak(peakGb, hostsGb, curves.calibration.batchesUseFactor);
   }
 
   function work(choice: FactionWorkChoice): void {
@@ -698,6 +701,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     cloudIncome = new IncomeWindow();
     firstRateAtMs = null;
     pendingJoins = new Map();
+    joinPipeline = new JoinPipeline();
     peaks = new Map();
     stats = freshStats();
   }

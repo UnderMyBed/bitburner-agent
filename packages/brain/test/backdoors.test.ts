@@ -1,4 +1,5 @@
 // The brain's backdoors for the hacker factions (#195): which server is due, why none is, and the rule's log.
+import { readFileSync } from "node:fs";
 import {
   HACKER_FACTION_SERVERS,
   hackTimeSeconds,
@@ -6,10 +7,18 @@ import {
   SNAPSHOT_TIER_PERIOD_MS,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { backdoorMs, HACKER_FACTION_JOINS, hackerFactionJoinMs, INVITATION_CHECK_MS } from "@bitburner-agent/model";
+import {
+  backdoorMs,
+  GATE_MEDIUM_SNAPSHOTS,
+  HACKER_FACTION_JOINS,
+  INVITATION_CHECK_MS,
+  JoinPipeline,
+  ROUNDS_BETWEEN_TRIES,
+} from "@bitburner-agent/model";
 import { describe, expect, test } from "vitest";
 import { BackdoorRule, backdoorIntent, chooseBackdoor } from "../src/backdoors.ts";
 import { chooseJoin } from "../src/factions.ts";
+import { GUARD_SNAPSHOTS } from "../src/irreversible-gate.ts";
 import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 /** The four as a game might roll them (`Server/data/servers.ts`): CSEC at 54, and so on. */
@@ -302,55 +311,147 @@ describe("BackdoorRule: the controller's side, and the brain's log", () => {
   });
 });
 
-describe("brain against the fast model (#294): a hacker faction's join, timed through the brain's own rules", () => {
-  // run4theh111z at 530 (`network`), the level reaching it at `termsAt`: 600 then, the hacking speed 1.8.
-  const REQUIRED = 530;
+describe("brain against the fast model (#294): a hacker faction's join, the brain's own rules on the game's clocks", () => {
+  // The network's four servers at 54, 207, 350 and 530; the level reaching 600 at `termsAt`, the hacking speed 1.8.
   const HACKING = 600;
   const SPEED = 1.8;
   const { fast: ROUND_MS, medium: MEDIUM_MS, slow: SLOW_MS } = SNAPSHOT_TIER_PERIOD_MS;
-  /** The first tick of a `periodMs` clock (from 0) after `atMs`. */
-  const nextTick = (atMs: number, periodMs: number) => (Math.floor(atMs / periodMs) + 1) * periodMs;
+  const REQUIRED: Record<string, number> = { CSEC: 54, "avmnite-02h": 207, "I.I.I.I": 350, run4theh111z: 530 };
+  const FACTION_OF = Object.fromEntries(HACKER_FACTION_SERVERS.map(({ hostname, faction }) => [hostname, faction]));
+
+  /**
+   * The ms from `termsAt` to each faction's join in the slow snapshot that shows it. The Agent's rounds every 2 s
+   * from 0 carry the medium snapshot every 5th and the slow one every 30th
+   * (packages/ingame/src/agent/snapshotter.ts:4-5); the game's invitation check every 2 s from `checkAt`
+   * (`engine.tsx:177-182`). The brain's own `BackdoorRule` asks on each medium snapshot, serially; the Agent tries an
+   * intent the round after the brain sends it and every 15 rounds after (`ROUNDS_BETWEEN_TRIES`), the first try
+   * starting the backdoor, a try after its end reporting it done in the next round's fast snapshot; the game invites at
+   * its next check; the brain's `chooseJoin` picks the join at a slow snapshot from the invitations shown, in the order
+   * invited; the Agent joins in the next round, and the next slow snapshot shows it.
+   */
+  function joinsAfter(
+    termsAt: number,
+    checkAt: number,
+    backdoored: string[],
+    hacking = HACKING,
+    speed = SPEED,
+  ): Record<string, number> {
+    const rule = new BackdoorRule();
+    const completesAt = new Map<string, number>();
+    const doneAtRound = new Map<string, number>();
+    const invitedAt = new Map<string, number>();
+    const shownAt: Record<string, number> = {};
+    let held: { hostname: string; nextTryRound: number } | null = null;
+    let joining: { faction: string; round: number } | null = null;
+    const joined: string[] = [];
+    const due = FOUR.filter((host) => !backdoored.includes(host));
+    for (let round = 0; Object.keys(shownAt).length < due.length; round++) {
+      const at = round * ROUND_MS;
+      if (round > 10_000) throw new Error("the joins never came");
+      // The Agent's try of the held intent, sent in an earlier round.
+      // Once done, never run again while it's sent (intent-runner.ts).
+      if (held !== null && !doneAtRound.has(held.hostname) && round >= held.nextTryRound) {
+        const ends = completesAt.get(held.hostname);
+        if (ends === undefined) {
+          completesAt.set(held.hostname, at + backdoorMs(REQUIRED[held.hostname] as number, hacking, speed));
+        }
+        if (ends !== undefined && ends <= at) doneAtRound.set(held.hostname, round);
+        else held.nextTryRound = round + ROUNDS_BETWEEN_TRIES;
+      }
+      for (const [hostname, ends] of completesAt) {
+        if (ends <= at && !invitedAt.has(hostname)) {
+          invitedAt.set(hostname, checkAt + INVITATION_CHECK_MS * Math.ceil((ends - checkAt) / INVITATION_CHECK_MS));
+        }
+      }
+      if (round % (MEDIUM_MS / ROUND_MS) === 0) {
+        const installed = [...backdoored, ...[...completesAt].filter(([, ends]) => ends <= at).map(([host]) => host)];
+        const doneIds = new Set(
+          [...doneAtRound].filter(([, doneRound]) => doneRound < round).map(([host]) => backdoorIntent(host).id),
+        );
+        const intent = rule.intent({
+          staticData: network,
+          mediumData: medium(at >= termsAt ? hacking : 53, { backdoored: installed }),
+          mediumAtMs: at,
+          resetAt: 1,
+          doneIds,
+        });
+        const hostname = FOUR.find((host) => backdoorIntent(host).id === intent?.id);
+        const heldNow = held as { hostname: string } | null;
+        if (hostname !== undefined && heldNow?.hostname !== hostname) held = { hostname, nextTryRound: round + 1 };
+      }
+      if (round % (SLOW_MS / ROUND_MS) === 0) {
+        if (joining !== null && round > joining.round) {
+          joined.push(joining.faction);
+          shownAt[joining.faction] = at - termsAt;
+          joining = null;
+        }
+        const invitations = [...invitedAt]
+          .filter(([, invited]) => invited < at)
+          .sort((a, b) => a[1] - b[1])
+          .map(([host]) => FACTION_OF[host] as string);
+        const next: string | null = joining === null ? chooseJoin(invitations, joined).next : null;
+        if (next !== null) joining = { faction: next, round: round + 1 };
+      }
+    }
+    return shownAt;
+  }
+
+  /** The mean of `joinsAfter` over the terms' place in a slow snapshot's minute and the check's phase (midpoints). */
+  function meanJoins(backdoored: string[], hacking = HACKING, speed = SPEED): Record<string, number> {
+    const sums: Record<string, number> = {};
+    let runs = 0;
+    for (let terms = 0; terms < 240; terms++) {
+      for (let check = 0; check < 8; check++) {
+        const shown = joinsAfter(SLOW_MS + (terms + 0.5) * 250, (check + 0.5) * 250, backdoored, hacking, speed);
+        for (const [faction, ms] of Object.entries(shown)) sums[faction] = (sums[faction] ?? 0) + ms;
+        runs += 1;
+      }
+    }
+    return Object.fromEntries(Object.entries(sums).map(([faction, sum]) => [faction, sum / runs]));
+  }
 
   test("the backdoor's time is the game's, a quarter of the hack time at security 1 (core's `hackTimeSeconds`)", () => {
     const player = { skills: { hacking: HACKING, intelligence: 0 }, mults: { hacking_speed: SPEED } } as never;
-    const hackSeconds = hackTimeSeconds({ hackDifficulty: 1, requiredHackingSkill: REQUIRED }, player);
-    expect(backdoorMs(REQUIRED, HACKING, SPEED)).toBeCloseTo((hackSeconds / 4) * 1000, 6);
+    const hackSeconds = hackTimeSeconds({ hackDifficulty: 1, requiredHackingSkill: 530 }, player);
+    expect(backdoorMs(530, HACKING, SPEED)).toBeCloseTo((hackSeconds / 4) * 1000, 6);
     // The model's terms are the brain's servers and factions, in its order (core's `HACKER_FACTION_SERVERS`).
     expect(HACKER_FACTION_JOINS.map((each) => each.faction)).toEqual(
       HACKER_FACTION_SERVERS.map((each) => each.faction),
     );
   });
 
-  test("the mean over the snapshots' phases, from the terms met to the join in a slow snapshot, is `hackerFactionJoinMs`", () => {
-    // The brain's own `BackdoorRule` on the medium snapshots (every 10 s) and `chooseJoin` on the slow ones (60 s); the
-    // Agent's rounds (2 s), the game's backdoor and its invitation check (2 s) as their sources say (./joins.ts).
-    let total = 0;
-    let runs = 0;
-    for (let termsAt = 0; termsAt < SLOW_MS; termsAt += 500) {
-      const rule = new BackdoorRule();
-      const backdoored = ["CSEC", "avmnite-02h", "I.I.I.I"];
-      let askedAt: number | null = null;
-      for (let atMs = 0; askedAt === null; atMs += MEDIUM_MS) {
-        const intent = rule.intent({
-          staticData: network,
-          mediumData: medium(atMs >= termsAt ? HACKING : REQUIRED - 1, { backdoored }),
-          mediumAtMs: atMs,
-          resetAt: 1,
-          doneIds: new Set(),
-        });
-        if (intent?.id === backdoorIntent("run4theh111z").id) askedAt = atMs;
-      }
-      const doneAt = nextTick(askedAt, ROUND_MS) + backdoorMs(REQUIRED, HACKING, SPEED);
-      const answeredAt = nextTick(nextTick(doneAt, INVITATION_CHECK_MS), ROUND_MS);
-      const shownAt = nextTick(answeredAt, SLOW_MS);
-      expect(chooseJoin(["BitRunners"], []).next).toBe("BitRunners");
-      const joinedAt = nextTick(shownAt, ROUND_MS);
-      total += nextTick(joinedAt, SLOW_MS) - termsAt;
-      runs += 1;
+  test("BitRunners alone due: the mean from its terms to its join in a slow snapshot is the model's [0.3 s]", () => {
+    const simulated = meanJoins(["CSEC", "avmnite-02h", "I.I.I.I"]).BitRunners as number;
+    const modelled = new JoinPipeline().hackerFaction(0, 530, HACKING, SPEED);
+    expect(Math.abs(simulated - modelled)).toBeLessThan(300);
+    // The medium snapshot after, then the slow snapshot after the invitation, then the next: 100 s.
+    expect(modelled).toBe(100_000);
+  });
+
+  test("a slow backdoor (CyberSec at hacking 54, speed 0.8: 9.5 s) puts the invitation past the next medium snapshot [0.3 s]", () => {
+    const simulated = meanJoins(["avmnite-02h", "I.I.I.I", "run4theh111z"], 54, 0.8).CyberSec as number;
+    const modelled = new JoinPipeline().hackerFaction(0, 54, 54, 0.8);
+    expect(Math.abs(simulated - modelled)).toBeLessThan(300);
+    expect(modelled).toBe(110_000);
+  });
+
+  test("all four due at once: the backdoors one at a time in `chooseBackdoor`'s order, one join a slow snapshot [0.3 s]", () => {
+    const simulated = meanJoins([]);
+    const pipeline = new JoinPipeline();
+    for (const [hostname, required] of Object.entries(REQUIRED)) {
+      const faction = FACTION_OF[hostname] as string;
+      const modelled = pipeline.hackerFaction(0, required, HACKING, SPEED);
+      expect(Math.abs((simulated[faction] as number) - modelled), faction).toBeLessThan(300);
     }
-    const modelled = hackerFactionJoinMs(REQUIRED, HACKING, SPEED);
-    expect(Math.abs(total / runs - modelled)).toBeLessThan(2_500);
-    // About a minute and a half or more: the step the model joins at is at least two minutes after the terms.
-    expect(modelled).toBeGreaterThan(90_000);
+    // BitRunners last: three minutes after CyberSec, a slow snapshot a join.
+    expect((simulated.BitRunners as number) - (simulated.CyberSec as number)).toBeCloseTo(3 * SLOW_MS, -2);
+  });
+
+  test("the model's copies of the Agent's, the game's and the gate's constants are theirs", () => {
+    const runner = readFileSync(new URL("../../ingame/src/agent/intent-runner.ts", import.meta.url), "utf8");
+    expect(runner).toContain(`const ROUNDS_BETWEEN_TRIES = ${ROUNDS_BETWEEN_TRIES};`);
+    const engine = readFileSync(new URL("../../../vendor/bitburner-src/src/engine.tsx", import.meta.url), "utf8");
+    expect(engine).toContain(`Engine.Counters.checkFactionInvitations = ${INVITATION_CHECK_MS / 200};`);
+    expect(GATE_MEDIUM_SNAPSHOTS).toBe(GUARD_SNAPSHOTS);
   });
 });

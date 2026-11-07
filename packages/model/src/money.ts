@@ -56,7 +56,7 @@ export const PURCHASE_EVERY_MS = SNAPSHOT_TIER_PERIOD_MS.medium;
  */
 export const FIRST_INCOME_SAMPLE_MS = 2 * PURCHASE_EVERY_MS;
 
-/** The hack loop's income as the brain measures it (cloud-servers.ts `HackLoopIncomeRate`): a second, and a GB a second. */
+/** The hack loop's income as the brain measures it (cloud-servers.ts `HackLoopIncomeRate`): a second, a GB a second. */
 export interface IncomeRate {
   perSecond: number;
   perGbSecond: number;

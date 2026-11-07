@@ -1,19 +1,20 @@
-// The paired comparison for #247 (#263's work item 6): the verdict's rule, the milestones' range, the favour-first
-// policy, and the grid's structural variants.
+// The paired comparison for #247 (#263's work item 6, #294): the verdict's rule, the milestones' range, the
+// favour-first policy, the grid's variants, and a verdict a start.
 import { describe, expect, test } from "vitest";
 import {
   CALIBRATION,
   COMPARISON_GRID,
   COMPARISON_STARTS,
   calibrationSteps,
+  comparisonByStart,
   FAVOUR_FIRST_POLICY,
   GRID_LATER_MS,
   type ModelRun,
-  type ModelStart,
   milestonesOf,
   type PolicyView,
   pairedComparison,
   runModel,
+  startInRange,
   TODAYS_POLICY,
   verdictOf,
 } from "../src/index.ts";
@@ -126,25 +127,30 @@ describe("the paired comparison", () => {
     expect(compared.settings[1]?.first.donationsUnlocked).not.toBe(compared.settings[0]?.first.donationsUnlocked);
   });
 
-  test("a setting with a start of its own (#294) runs both policies from it, not from the comparison's", () => {
-    const fresh = { currentNode: 1, ownedSF: {} };
-    const grid = [{ name: "from SF1.2", options: { horizonMs: 10 * 60 * MINUTE_MS }, start: BN1_3.start }];
-    const compared = pairedComparison(fresh, TODAYS_POLICY, FAVOUR_FIRST_POLICY, grid);
-    const options = { horizonMs: 10 * 60 * MINUTE_MS };
-    expect(compared.settings[0]?.first).toEqual(
-      milestonesOf(runModel(BN1_3.start, { ...options, policy: TODAYS_POLICY }), 30),
-    );
-    expect(compared.settings[0]?.second).toEqual(
-      milestonesOf(runModel(BN1_3.start, { ...options, policy: FAVOUR_FIRST_POLICY }), 30),
-    );
-    expect(compared.settings[0]?.first).not.toEqual(
-      milestonesOf(runModel(fresh, { ...options, policy: TODAYS_POLICY }), 30),
-    );
+  test("each start its own verdict over the whole grid; a start under 32 GB of home, out of the measured range, none", () => {
+    const grid = [{ name: "as fitted", options: { horizonMs: 10 * 60 * MINUTE_MS } }];
+    const byStart = comparisonByStart(TODAYS_POLICY, FAVOUR_FIRST_POLICY, COMPARISON_STARTS, grid);
+    expect(byStart.map(({ start }) => start)).toEqual(COMPARISON_STARTS.map((each) => each.start));
+    for (const { start, comparison } of byStart) {
+      expect(comparison.settings[0]?.first).toEqual(
+        milestonesOf(runModel(start, { horizonMs: 10 * 60 * MINUTE_MS, policy: TODAYS_POLICY }), 30),
+      );
+      expect(comparison.startInRange).toBe(startInRange(start));
+    }
+    // Home's RAM at the start: 8 GB with no Source-File (out), 32 GB with SF1 (in).
+    expect(COMPARISON_STARTS.map(({ start }) => startInRange(start))).toEqual([false, true, true]);
+    // Out of range, a difference of one sign at every setting is still no answer: favour first unlocks the donations
+    // 30 min sooner from a fresh BN1.1 as fitted.
+    const fresh = pairedComparison(COMPARISON_STARTS[0]?.start as never, TODAYS_POLICY, FAVOUR_FIRST_POLICY, [
+      { name: "as fitted", options: {} },
+    ]);
+    expect(verdictOf(fresh.settings.map((each) => each.difference.donationsUnlocked)).answer).toBe("second sooner");
+    expect(fresh.verdict.donationsUnlocked.answer).toBe("no answer");
   });
 
-  test("the grid: as fitted, the structural variants, every refit step, the batches' use, the joins, the first cloud server, the starts", () => {
-    const options = COMPARISON_GRID.filter((setting) => setting.start === undefined).map((setting) => setting.options);
-    expect(COMPARISON_GRID).toHaveLength(20);
+  test("the grid: as fitted, the structural variants, every refit step, the batches' use, the joins, the first cloud server", () => {
+    const options = COMPARISON_GRID.map((setting) => setting.options);
+    expect(COMPARISON_GRID).toHaveLength(17);
     expect(options).toContainEqual({});
     expect(options).toContainEqual({ money: "gross" });
     expect(options).toContainEqual({ share: "index" });
@@ -157,21 +163,19 @@ describe("the paired comparison", () => {
     expect(options).toContainEqual({ joinDelay: GRID_LATER_MS });
     expect(options).toContainEqual({ cloudDelayMs: GRID_LATER_MS });
     expect(GRID_LATER_MS).toBe(5 * MINUTE_MS);
-    // The starts: a fresh BN1.1, run #3's SF1.1 and BN1.3's SF1.2.
-    const starts = COMPARISON_GRID.flatMap((setting) => (setting.start === undefined ? [] : [setting.start]));
-    expect(starts).toEqual(COMPARISON_STARTS.map((each) => each.start));
-    expect(starts.map((start) => start.ownedSF["1"] ?? 0)).toEqual([0, 1, 2]);
+    // The starts are crossed with the grid, not in it: a fresh BN1.1, run #3's SF1.1 and BN1.3's SF1.2.
+    expect(COMPARISON_STARTS.map(({ start }) => start.ownedSF["1"] ?? 0)).toEqual([0, 1, 2]);
   });
 
-  test("#247's comparison on the full grid, for the record (the model isn't fit for #247): the figures pinned", () => {
-    // Count first (today's brain) against favour first, minutes, the least and the most difference over the 20
-    // settings, the three starts among them. From BN1.3's start: favour first unlocks the donations later at 14 of the
-    // 15 paired settings (19 to 94 min), sooner at #260's gross money (−65), and 5 settings have no pair; Daedalus's
-    // count likewise (−1 to 104). From a fresh BN1.1, 13 settings have no pair (the fresh runs go out of range before
-    // the donations). No answer on either; Daedalus's join and the destroy are out of range everywhere. Each
-    // milestone: the verdict, the least and the most difference, and the settings with no pair.
-    const summary = (start: ModelStart) => {
-      const { verdict, settings } = pairedComparison(start, TODAYS_POLICY, FAVOUR_FIRST_POLICY);
+  test("#247's comparison, each start over the 17 settings, for the record (the model isn't fit for #247): pinned", () => {
+    // Count first (today's brain) against favour first, minutes, the least and the most difference, and the settings
+    // with no pair. From SF1.1: count first reaches Daedalus's count sooner at every setting (2 to 97 min), the one
+    // answer; the donations no answer (#260's gross money flips it, −45). From SF1.2: 14 of the 17 settings have no
+    // pair (favour first's runs go out of range first), so no answer. From a fresh BN1.1 (8 GB, out of the measured
+    // range): favour first would unlock the donations sooner at all 16 paired settings (18 to 48 min), but the start
+    // gives no answer. Daedalus's join and the destroy are out of range everywhere.
+    const summaries = comparisonByStart(TODAYS_POLICY, FAVOUR_FIRST_POLICY).map(({ comparison }) => {
+      const { verdict, settings } = comparison;
       const unpaired = (milestone: keyof typeof verdict) =>
         settings.filter((setting) => setting.difference[milestone] === null).length;
       return Object.fromEntries(
@@ -185,18 +189,27 @@ describe("the paired comparison", () => {
           ],
         ]),
       );
-    };
-    expect(summary({ currentNode: 1, ownedSF: {} })).toEqual({
-      donationsUnlocked: ["no answer", -20, 94, 13],
-      daedalusCount: ["no answer", 40, 104, 13],
-      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 20],
-      destroyed: ["no answer", Number.NaN, Number.NaN, 20],
     });
-    expect(summary(BN1_3.start)).toEqual({
-      donationsUnlocked: ["no answer", -65, 94, 5],
-      daedalusCount: ["no answer", -1, 104, 5],
-      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 20],
-      destroyed: ["no answer", Number.NaN, Number.NaN, 20],
-    });
+    const outOfRange = ["no answer", Number.NaN, Number.NaN, 17];
+    expect(summaries).toEqual([
+      {
+        donationsUnlocked: ["no answer", -48, -18, 1],
+        daedalusCount: ["no answer", 7, 46, 1],
+        daedalusJoined: outOfRange,
+        destroyed: outOfRange,
+      },
+      {
+        donationsUnlocked: ["no answer", -45, 69, 0],
+        daedalusCount: ["first sooner", 2, 97, 0],
+        daedalusJoined: outOfRange,
+        destroyed: outOfRange,
+      },
+      {
+        donationsUnlocked: ["no answer", -54, 48, 14],
+        daedalusCount: ["no answer", 18, 78, 14],
+        daedalusJoined: outOfRange,
+        destroyed: outOfRange,
+      },
+    ]);
   }, 120_000);
 });

@@ -1,23 +1,32 @@
 /**
  * The paired comparison (#263's work item 6, for #247): two policies run on the same model at each setting of a grid,
- * the calibration's sensitivities and the structural variants (#260's gross money, the share by install index), and
- * compared setting by setting. A difference counts only if it has the same sign at every setting, each run's milestone
+ * from a start, and compared setting by setting. The grid (`COMPARISON_GRID`) is the calibration's sensitivities and
+ * the structural variants: #260's gross money and share by install index, and #294's joins at once or later and the
+ * first cloud server later. A difference counts only if it has the same sign at every setting, each run's milestone
  * inside the curves' range (`ModelRun.outOfRange`): a spread that crosses zero, or a milestone out of range or never
- * reached, is no answer. #247's first rule (a difference only beyond the grid's spread) compared unpaired ranges, with
- * one parameter varied at a time, and missed errors in the model's structure (#262's review).
+ * reached, is no answer. A start is a known state, not an uncertainty, so each gets its own verdict over the whole
+ * grid (`comparisonByStart`, #294's review); a start the curves weren't measured from (home under 32 GB) gives none.
+ * #247's first rule (a difference only beyond the grid's spread) compared unpaired ranges, with one parameter varied
+ * at a time, and missed errors in the model's structure (#262's review).
  */
 import { augmentationsSoldBy, DAEDALUS, isWorthInstalling, TIAN_DI_HUI } from "@bitburner-agent/core";
 import { CALIBRATION, calibrationSteps, HACKER_FACTION_JOINS } from "./calibration.ts";
-import { type CyclePolicy, type ModelOptions, type ModelRun, type ModelStart, runModel } from "./cycles.ts";
+import {
+  type CyclePolicy,
+  type ModelOptions,
+  type ModelRun,
+  type ModelStart,
+  runModel,
+  startHomeRamGb,
+} from "./cycles.ts";
 
-/** A setting of the grid: the options both policies run at, and the start, if not the comparison's own. */
+/** A setting of the grid: the options both policies run at. */
 export interface ComparisonSetting {
   name: string;
   options: Omit<ModelOptions, "policy" | "onStep" | "onWork">;
-  start?: ModelStart;
 }
 
-/** The starts the grid runs from (#294): the sign of #263's comparison flipped between a fresh BN1.1 and BN1.3's. */
+/** The starts compared from, each over the whole grid (#294): #263's sign flipped between a fresh BN1.1 and SF1.2. */
 export const COMPARISON_STARTS: readonly { name: string; start: ModelStart }[] = [
   { name: "from a fresh BN1.1 (no Source-File, 8 GB home)", start: { currentNode: 1, ownedSF: {} } },
   { name: "from SF1.1 (run #3's BN1.2)", start: { currentNode: 1, ownedSF: { "1": 1 } } },
@@ -28,11 +37,10 @@ export const COMPARISON_STARTS: readonly { name: string; start: ModelStart }[] =
 export const GRID_LATER_MS = 5 * 60_000;
 
 /**
- * The grid #247 compares on, 20 settings: the model as fitted; the structural variants (#260's gross money and share
+ * The grid #247 compares on, 17 settings: the model as fitted; the structural variants (#260's gross money and share
  * by install index; #294's joins at once, as slice 2 had them); every fitted constant of the curve a step either way
  * (`calibrationSteps`, the refit's own); the batches using half what core's plan gives (#294's share by the state, so
- * the cloud shares more); the joins and the first cloud server 5 minutes later than modelled; and the three starts
- * (`COMPARISON_STARTS`).
+ * the cloud shares more); the joins and the first cloud server 5 minutes later than modelled.
  */
 export const COMPARISON_GRID: readonly ComparisonSetting[] = [
   { name: "as fitted", options: {} },
@@ -43,8 +51,15 @@ export const COMPARISON_GRID: readonly ComparisonSetting[] = [
   { name: "joins: at once (slice 2's)", options: { joinDelay: "instant" } },
   { name: "joins: 5 min later than modelled", options: { joinDelay: GRID_LATER_MS } },
   { name: "the first cloud server: 5 min later than modelled", options: { cloudDelayMs: GRID_LATER_MS } },
-  ...COMPARISON_STARTS.map(({ name, start }) => ({ name, options: {}, start })),
 ];
+
+/**
+ * Whether `start` is in the curves' measured range: home's RAM at the start 32 GB or more (SF1). Every run the curves
+ * are fitted on starts at 32 GB; a fresh BN1.1's 8 GB rests on `firstCycleSpeed`, which no run measures.
+ */
+export function startInRange(start: ModelStart): boolean {
+  return startHomeRamGb(start.ownedSF["1"] ?? 0) >= 32;
+}
 
 /** #247's milestones. */
 export const MILESTONES = ["donationsUnlocked", "daedalusCount", "daedalusJoined", "destroyed"] as const;
@@ -72,6 +87,8 @@ export function milestonesOf(run: ModelRun, required: number): Record<Milestone,
 }
 
 export interface PairedComparison {
+  /** Whether the start is in the curves' measured range (`startInRange`): if not, every verdict is no answer. */
+  startInRange: boolean;
   /** By setting: each milestone's time under each policy, and `second` less `first`, ms (null for no pair). */
   settings: {
     name: string;
@@ -87,8 +104,8 @@ export interface PairedComparison {
 }
 
 /**
- * `first` and `second` from `start` (or the setting's own) at every setting of `grid`, paired. Daedalus's count is
- * BN1's 30 unless `required` says otherwise.
+ * `first` and `second` from `start` at every setting of `grid`, paired; every verdict no answer from a start out of
+ * the curves' range (`startInRange`). Daedalus's count is BN1's 30 unless `required` says otherwise.
  */
 export function pairedComparison(
   start: ModelStart,
@@ -97,9 +114,10 @@ export function pairedComparison(
   grid: readonly ComparisonSetting[] = COMPARISON_GRID,
   required = 30,
 ): PairedComparison {
-  const settings = grid.map(({ name, options, start: own }) => {
-    const a = milestonesOf(runModel(own ?? start, { ...options, policy: first }), required);
-    const b = milestonesOf(runModel(own ?? start, { ...options, policy: second }), required);
+  const inRange = startInRange(start);
+  const settings = grid.map(({ name, options }) => {
+    const a = milestonesOf(runModel(start, { ...options, policy: first }), required);
+    const b = milestonesOf(runModel(start, { ...options, policy: second }), required);
     const difference = Object.fromEntries(
       MILESTONES.map((milestone) => {
         const [x, y] = [a[milestone], b[milestone]];
@@ -109,9 +127,27 @@ export function pairedComparison(
     return { name, first: a, second: b, difference };
   });
   const verdict = Object.fromEntries(
-    MILESTONES.map((milestone) => [milestone, verdictOf(settings.map((each) => each.difference[milestone]))]),
+    MILESTONES.map((milestone) => {
+      const each = verdictOf(settings.map((setting) => setting.difference[milestone]));
+      return [milestone, inRange ? each : { ...each, answer: "no answer" }];
+    }),
   ) as PairedComparison["verdict"];
-  return { settings, verdict };
+  return { startInRange: inRange, settings, verdict };
+}
+
+/** `pairedComparison` from each of `starts` over the whole `grid`: a verdict a start (#294's review). */
+export function comparisonByStart(
+  first: CyclePolicy,
+  second: CyclePolicy,
+  starts: readonly { name: string; start: ModelStart }[] = COMPARISON_STARTS,
+  grid: readonly ComparisonSetting[] = COMPARISON_GRID,
+  required = 30,
+): { name: string; start: ModelStart; comparison: PairedComparison }[] {
+  return starts.map(({ name, start }) => ({
+    name,
+    start,
+    comparison: pairedComparison(start, first, second, grid, required),
+  }));
 }
 
 /**
