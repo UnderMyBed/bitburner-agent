@@ -9,9 +9,6 @@
 // its level), so the owner's queuing goes ahead of the brain's own reset, out or not (#271). The gate's example tests
 // are
 // desired-state.test.ts's; the reset and done rules over the owner's queue, PR #268's property.
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
@@ -28,7 +25,7 @@ import {
   WORLD_DAEMON,
 } from "@bitburner-agent/core";
 import fc from "fast-check";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { RELEASED_SNAPSHOTS } from "../src/irreversible-gate.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
@@ -124,8 +121,6 @@ const stepsFor = (brainResets: boolean) =>
 const anyStep = stepsFor(false);
 type Step = typeof anyStep extends fc.Arbitrary<infer Each> ? Each : never;
 
-let directory: string;
-let storeCount = 0;
 /** Across the runs, so the property is seen to reach what it's for. */
 const reached = {
   runsWithARuleJoinOut: 0,
@@ -135,16 +130,13 @@ const reached = {
   reversibleAheadOfTheBrainsInstallOut: 0,
   reversibleAheadOfTheBrainsDestroyOut: 0,
 };
-beforeAll(() => {
-  directory = mkdtempSync(path.join(os.tmpdir(), "irreversible-intents-property-"));
-});
-afterAll(() => {
-  rmSync(directory, { recursive: true, force: true });
-});
 
 /** A brain with every rule on, an Agent connected, the steps played: what each desired state sent breaks of R8. */
 async function play(brainsReset: "none" | "install" | "destroy", steps: Step[]): Promise<string[]> {
-  const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
+  // In memory (#279): a store on disk cost each run about 14 ms to create and each snapshot a write synced to disk, two
+  // thirds of the floor test's 15 s locally (27 s on a slow CI runner, against its 30 s timeout). Each run starts from
+  // an empty store either way, and nothing here reads one back after the run, so the runs and their counts are the same.
+  const store = TelemetryStore.open(":memory:");
   store.setSetting("hackLoop.enabled", "false");
   const channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
   channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });

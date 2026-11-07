@@ -15,9 +15,6 @@
 //   each intent in it sent.
 // Each rule's example tests are desired-state.test.ts's; the reset itself, in the simulator, install-restart.test.ts's
 // and destroy-restart.test.ts's.
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
@@ -36,7 +33,7 @@ import {
   WORLD_DAEMON,
 } from "@bitburner-agent/core";
 import fc from "fast-check";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { readManualIntents } from "../src/manual-intents.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
@@ -174,8 +171,6 @@ const stepsFor = (brainResets: boolean) =>
 const anyStep = stepsFor(false);
 type Step = typeof anyStep extends fc.Arbitrary<infer Each> ? Each : never;
 
-let directory: string;
-let storeCount = 0;
 /** Across the runs, so the property is seen to reach what it checks. */
 const reached = {
   resetsInTheSteps: 0,
@@ -188,12 +183,6 @@ const reached = {
   runsWithTheBrainsInstallOut: 0,
   runsWithTheBrainsDestroyOut: 0,
 };
-beforeAll(() => {
-  directory = mkdtempSync(path.join(os.tmpdir(), "desired-state-property-"));
-});
-afterAll(() => {
-  rmSync(directory, { recursive: true, force: true });
-});
 
 /**
  * A brain on a fresh store, an Agent connected to it, the steps played, then a stable game until the owner's queue
@@ -206,7 +195,9 @@ async function play(
   initialQueue: number[],
   steps: Step[],
 ): Promise<string[]> {
-  const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
+  // In memory (#279): a store on disk cost each run about 14 ms to create and each snapshot a write synced to disk, most
+  // of the runs' time. A brain started again in a run takes the same store object, as a restart reads the same file.
+  const store = TelemetryStore.open(":memory:");
   store.setSetting("hackLoop.enabled", "false");
   if (!rulesOn) for (const setting of RULE_SWITCHES) store.setSetting(setting, "false");
   /** The game's last resets, as its slow snapshot says. */
