@@ -108,6 +108,11 @@ Reading the sixth row (7990834, M3's run after #155 moved its candidate, the ref
 - **The heap still doesn't grow.** It starts 0.1 MB lower and ends 0.1 MB lower than the fifth row's.
 - **M3's candidate then moved on to 33ec5d6** ([#184](https://github.com/UnderMyBed/bitburner-agent/issues/184), [#185](https://github.com/UnderMyBed/bitburner-agent/issues/185), [#187](https://github.com/UnderMyBed/bitburner-agent/issues/187)). The benchmark didn't run on it, an explained exception, recorded on [#140](https://github.com/UnderMyBed/bitburner-agent/issues/140): nothing it runs changed (`packages/sim`, `packages/legacy`, the game's source and the lockfile are as on 7990834, and of `packages/core`, which changed only in `control-protocol.ts`, `hack-loop.ts` and `index.ts`, the simulator loads only `PINNED_GAME`, `packages/sim/src/engine/build.ts`), and a run then would have shared the machine with five builders, so it wouldn't be comparable. 7990834's row stands for 33ec5d6.
 
+Reading the seventh row (614978a, the 1.0.0 release, the reference rig, [#276](https://github.com/UnderMyBed/bitburner-agent/issues/276#issuecomment-6703824927)):
+- Every workload is faster than the sixth row (lean +26%, batch +16%, churn +15%, copies +16%), and the heap is about 31 MB lower at both ends. The benchmark found no regression.
+- **It ran on Node 26.13.0; the earlier rows ran on 24.22.1.** The Node bump probably accounts for much of the change, so this row isn't a like-for-like comparison with the rows above. A later run on Node 24 (the repo's `.node-version`) may look slower than this row without anything having regressed: lean about 21% slower, the reverse of this row's 26% gain, which is past the 20% [regression](#regressions) threshold. Read such a run against the 24.22.1 rows too, or run it on Node 26, before treating it as a regression.
+- **The heap still doesn't grow.**
+
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
 
 | Date | Commit | Rig | Node | lean | batch | churn | copies | Heap start | Heap end | Heap growth per day |
@@ -118,3 +123,4 @@ Rows are appended at the end of this file, so keep the results table last. When 
 | 2026-10-27 | 58f0c4d | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26866x | 10014x | 492x | 12081x | 105.3 MB | 95.1 MB | +0.0 MB |
 | 2026-10-28 | fa9c5dc | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26799x | 9945x | 475x | 12245x | 106.5 MB | 96.4 MB | +0.0 MB |
 | 2026-10-28 | 7990834 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26245x | 10042x | 442x | 12081x | 106.4 MB | 96.3 MB | +0.0 MB |
+| 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 33180x | 11650x | 510x | 14008x | 75.8 MB | 65.5 MB | +0.0 MB |
