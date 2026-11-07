@@ -158,14 +158,15 @@ describe("the baseline CLI", () => {
     expect(errors.join("\n")).toMatch(message);
   });
 
-  test("refuses a Node other than the repo's with exit 2, before building the engine (#282)", async () => {
+  test("refuses a Node other than the repo's with exit 2, before reading its arguments or building (#282)", async () => {
     const buildEngine = vi.fn(async () => undefined);
     const other = pinnedNodeMajor() + 2;
     const { all, runScenario, errors } = deps([seed(1, true)], {
       buildEngine,
       checkNode: () => checkNodeVersion(undefined, `${other}.1.0`),
     });
-    expect(await baselineCli([], all)).toBe(2);
+    // A positional argument: a usage error, had the arguments been read first.
+    expect(await baselineCli(["extra"], all)).toBe(2);
     expect(buildEngine).not.toHaveBeenCalled();
     expect(runScenario).not.toHaveBeenCalled();
     expect(errors).toEqual([nodeVersionError(pinnedNodeMajor(), `${other}.1.0`)]);

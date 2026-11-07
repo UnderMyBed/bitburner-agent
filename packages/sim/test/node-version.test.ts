@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { sfc32 } from "../src/host/rng.ts";
 import { checkNodeVersion, nodeVersionError, parseNodeMajor, pinnedNodeMajor, REPO_ROOT } from "../src/node-version.ts";
@@ -10,7 +12,8 @@ import { checkNodeVersion, nodeVersionError, parseNodeMajor, pinnedNodeMajor, RE
  * sfc32(n) per length, as the legacy fork's go.js sorts its moves (packages/legacy/fork/go.js:1352-1353): how many
  * times it calls the comparator, and the order it leaves. The two V8s differ for 3 to 7 elements only (measured over
  * 0 to 80, 100, 150, 200, 361, 500 and 1000), which is what made the BN1 baseline's seeded games differ (#282). Steam's
- * Electron 41 is Chromium 146, whose V8 is 14.6: Node 26's, not Node 24's.
+ * Electron 41.4.0 is Chromium 146, so its V8 should be 14.6, Node 26's: inferred from the versions, not measured on
+ * Steam's build.
  */
 const SORT_BY_NODE: Record<number, { v8: string; byLength: Record<number, { calls: number; order: string }> }> = {
   24: {
@@ -38,6 +41,30 @@ const SORT_BY_NODE: Record<number, { v8: string; byLength: Record<number, { call
     },
   },
 };
+
+/** The Node version in a mise.toml's `[tools]` table: `node = "24"` or `node = '24'`, comments and spacing aside. */
+function miseNode(toml: string): string | undefined {
+  let inTools = false;
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim();
+    if (line.startsWith("[")) inTools = /^\[\s*tools\s*\]$/.test(line);
+    else if (inTools) {
+      const node = /^"?node"?\s*=\s*(["'])([^"']+)\1$/.exec(line);
+      if (node) return node[2];
+    }
+  }
+  return undefined;
+}
+
+/** Runs a script on this Node, made to report another version (`process.versions.node`) before the script loads. */
+const OTHER_NODE = "99.0.0";
+async function runAsOtherNode(script: string, args: string[]) {
+  const pretend = `data:text/javascript,Object.defineProperty(process.versions,"node",{value:"${OTHER_NODE}"})`;
+  return promisify(execFile)(process.execPath, ["--import", pretend, script, ...args], { cwd: REPO_ROOT }).then(
+    ({ stdout, stderr }) => ({ code: 0, stdout, stderr }),
+    (error: { code: number; stdout: string; stderr: string }) => error,
+  );
+}
 
 function randomSorts(): Record<number, { calls: number; order: string }> {
   const byLength: Record<number, { calls: number; order: string }> = {};
@@ -87,10 +114,30 @@ describe("the repo's Node pin (#282)", () => {
   });
 
   test("the repo's mise.toml selects the same Node major as .node-version, which mise doesn't read by default", () => {
-    const mise = readFileSync(path.join(REPO_ROOT, "mise.toml"), "utf8");
-    const node = /^\[tools\][^[]*^node = "([^"]+)"$/m.exec(mise);
-    expect(node?.[1]).toBeDefined();
-    expect(parseNodeMajor(node?.[1] ?? "")).toBe(pinnedNodeMajor());
+    const node = miseNode(readFileSync(path.join(REPO_ROOT, "mise.toml"), "utf8"));
+    expect(node).toBeDefined();
+    expect(parseNodeMajor(node ?? "")).toBe(pinnedNodeMajor());
+  });
+
+  test.each([
+    ['[tools]\nnode = "24"', "24"],
+    ["# a comment\n[tools]\nnode='24.22.1' # pinned\n", "24.22.1"],
+    ['[env]\nX = "1"\n[tools]\npython = "3"\n"node" = "26"', "26"],
+    ['[tools]\npython = "3"\n[env]\nnode = "24"', undefined],
+    ['node = "24"', undefined],
+  ])("mise.toml %j gives node %j", (toml, node) => {
+    expect(miseNode(toml)).toBe(node);
+  });
+
+  test.each([
+    ["packages/sim/scripts/run-scenario.ts", ["packages/sim/scenarios/lean.json"]],
+    ["packages/sim/scripts/bench.ts", ["--dry-run"]],
+    ["packages/legacy/scripts/baseline.ts", ["--seeds", "1"]],
+  ])("%s refuses another Node major with exit 2, before doing anything else", async (script, args) => {
+    const { code, stdout, stderr } = await runAsOtherNode(script, args);
+    expect(code).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr.trim()).toBe(nodeVersionError(pinnedNodeMajor(), OTHER_NODE));
   });
 
   test("the tests run on the pinned Node, as CI's setup-node takes it from .node-version", () => {
@@ -104,7 +151,8 @@ describe("the repo's Node pin (#282)", () => {
     expect(randomSorts()).toEqual(expected?.byLength);
   });
 
-  test("the two measured V8s differ for 3 to 7 elements and agree for 2 and 8", () => {
+  // Documents the measurements recorded above, which the test before this one checks live on the pinned Node.
+  test("the measurements recorded here: the two V8s differ for 3 to 7 elements and agree for 2 and 8", () => {
     const [node24, node26] = [SORT_BY_NODE[24]?.byLength ?? {}, SORT_BY_NODE[26]?.byLength ?? {}];
     for (const n of [2, 8]) expect(node24[n]).toEqual(node26[n]);
     for (const n of [3, 4, 5, 6, 7]) expect(node24[n]).not.toEqual(node26[n]);

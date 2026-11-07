@@ -412,11 +412,12 @@ describe("the CLI", () => {
     ]);
   });
 
-  test("refuses a Node other than the repo's with exit 2, before building the engine (#282)", async () => {
+  test("refuses a Node other than the repo's with exit 2, before reading its arguments or building (#282)", async () => {
     const other = `${pinnedNodeMajor() + 2}.1.0`;
     const calls: string[] = [];
     const errors: string[] = [];
-    const code = await scenarioCli(["packages/sim/scenarios/lean.json"], {
+    // No scenario file: a usage error, had the arguments been read first.
+    const code = await scenarioCli([], {
       checkNode: () => checkNodeVersion(undefined, other),
       buildEngine: async () => calls.push("build"),
       runScenario: async (scenario) => {

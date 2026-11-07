@@ -89,14 +89,15 @@ npm run sim -- <scenario.json> [--seeds a..b | a,b,c] [--workers k] [--wall-limi
 - `--seeds` overrides the scenario's seeds; `--workers` the pool size, which by default is `availableParallelism() − 2`, at least 1 (architecture §9.1, ADR 0006).
 - `--wall-limit` is a hard limit on each seed's real time, in whole minutes; a seed past it is killed and fails ("wall limit: …"). `--max-heap` caps each simulation's V8 heap, in MB (at least 256). Neither is set by default. `--wall-limit` takes up to 35,791 minutes (`MAX_WALL_LIMIT_MS`).
 - npm runs it from the repository root, so the scenario and `--json` paths are relative to that.
-- It exits 0 if every seed passed, 1 if any didn't, and 2 if it couldn't run at all (bad usage, a bad scenario, a build failure).
+- It exits 0 if every seed passed, 1 if any didn't, and 2 if it couldn't run at all (bad usage, a bad scenario, a build failure, or a Node other than the repo's, `.node-version`: it checks that first, [#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)).
 
 From code, `@bitburner-agent/sim` exports these:
 - `runScenario`, `runSeed`, `startScenario` (a simulation set up as a scenario says, not yet run), `loadScenario`;
 - `formatRun` and `formatProgress`, the CLIs' table and progress line;
 - `parseSeeds`, `parseWorkers`, `parseWallLimit` and `parseMaxHeap`, which parse the CLIs' options (this CLI's and the baseline's);
 - `aggregate` and `distribution`, the run's aggregate and its min / median / p90 / max;
-- `growthPerDay`, `rigId` and `commitId`, the benchmarks' heap statistic, machine name and commit ([benchmarks](benchmarks.md)); the baseline reuses the last two.
+- `growthPerDay`, `rigId` and `commitId`, the benchmarks' heap statistic, machine name and commit ([benchmarks](benchmarks.md)); the baseline reuses the last two;
+- `checkNodeVersion`, `nodeVersionError`, `parseNodeMajor`, `pinnedNodeMajor` and `REPO_ROOT`, the repo's Node pin (`.node-version`), which this CLI, the baseline and the bench check first ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)).
 
 `runScenario`/`runSeed` take these options besides the seeds and workers:
 - `wallLimitMs`: a hard limit on each seed's real time, from 1 ms to `MAX_WALL_LIMIT_MS` (2^31 − 1 ms, about 24.8 days, the longest a timer can wait), over the span `wallMs` counts. Booting has its own 60 s limit; writing files and starting scripts aren't timed. The parent enforces it with its own timer: past it, it kills the seed's simulation process, mid-piece if need be, and the seed fails with an error starting "wall limit:", keeping the checkpoints it had.

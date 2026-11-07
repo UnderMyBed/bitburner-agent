@@ -30,7 +30,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
 
 2. **Run the heavy suites on it.** Check out the candidate commit, run each suite, and post its printed table on the review issue, naming the commit:
    - the workloads: `npm run sim -- packages/sim/scenarios/<name>.json` for each `.json` file there
-   - the BN1 baseline, **only when it can change** (owner decision 32). It's deterministic: on the same code and Node version, it gives the same results.
+   - the BN1 baseline, **only when it can change** (owner decision 32). It's deterministic: on the same code and Node major, it gives the same results. It runs only on the repo's pinned Node major (`.node-version`), and exits 2 on another ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)).
      - **Its last run** is the Commit of the last rows in [`docs/sim/baselines.md`](sim/baselines.md), or of rows already on this release's review issue, which reach that file only at step 4. Drop a `-dirty` suffix.
      - **Check what it runs on** since then, docs and tests aside:
 
@@ -38,7 +38,7 @@ Do these in order. All evidence goes on the milestone's review issue (the "M\<n\
        git diff --stat <last run> <candidate> -- packages/sim packages/legacy packages/core vendor/bitburner-src package-lock.json tsconfig.json tsconfig.base.json tsconfig.node.json ':(exclude,glob)**/*.md' ':(exclude,glob)**/test/**'
        ```
 
-       Also compare `node --version` with the last rows' Node column.
+       Also compare `node --version` with the last rows' Node column. A different version counts as a change. A different major can't run at all unless `.node-version` changed with it: the baseline and the bench refuse any other.
      - **Nothing changed:** don't run it. Post the empty output and the last rows' commit on the review issue.
      - **Something changed:** run it. Or, if a change can't reach the simulation (code the simulator never loads), say why on the review issue instead. To run it, `npm run baseline -w @bitburner-agent/legacy` plays the legacy fork's BN1 baseline over its 8 seeds, to 4, 8 and 12 virtual hours, and prints its rows. It takes about an hour on one core. A seed that hits its 60-minute limit has gone wrong ([running it](sim/baselines.md#running-it)). Explain any failed seed in the file's Failures section at step 4.
      - **At M4 (phase B),** run it whatever the check says: the planner is compared with it then.

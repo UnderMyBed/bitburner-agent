@@ -23,14 +23,13 @@ import {
   type Workload,
 } from "../src/bench/report.ts";
 import { buildEngine } from "../src/engine/build.ts";
-import { checkNodeVersion } from "../src/node-version.ts";
+import { checkNodeVersion, REPO_ROOT } from "../src/node-version.ts";
 import type { CpuProfile } from "../src/protocol.ts";
 import { runScenario, startScenario } from "../src/scenario/run.ts";
 import { loadScenario, scenarioSeeds } from "../src/scenario/spec.ts";
 
 const USAGE =
   "usage: npm run bench -w @bitburner-agent/sim [-- --dry-run | --accept] | [-- --profile <workload> [--out file.cpuprofile]]";
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const RESULTS = path.join(REPO_ROOT, "docs/sim/benchmarks.md");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HEAP_DAYS = 7;
@@ -146,7 +145,7 @@ function options() {
 
 try {
   // A row is only comparable with rows from the same Node major (#282).
-  checkNodeVersion(REPO_ROOT);
+  checkNodeVersion();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(2);
