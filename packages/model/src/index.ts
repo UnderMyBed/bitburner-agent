@@ -8,6 +8,17 @@ export {
   RUN_3_SHARE_BONUS,
 } from "./calibration.ts";
 export {
+  COMPARISON_GRID,
+  type ComparisonSetting,
+  FAVOUR_FIRST_POLICY,
+  MILESTONES,
+  type Milestone,
+  milestonesOf,
+  type PairedComparison,
+  pairedComparison,
+  verdictOf,
+} from "./compare.ts";
+export {
   type Clocks,
   Curves,
   type HackingMultipliers,
@@ -41,6 +52,7 @@ export {
   programsPrice,
   RUN_3_POLICY,
   runModel,
+  SHARE_HOME_KEPT_GB,
   SPECIAL_FACTIONS,
   shareBonusOf,
   shareBonusOfState,

@@ -52,6 +52,7 @@ import {
   passiveFactionReputationPerSecond,
   QUICK_INSTALL_COUNTDOWN_MS,
   reputationToUnlockDonations,
+  SHARE_MOST_USE,
   SHARE_RAM_GB,
   shareBonusOfPower,
   THE_RED_PILL,
@@ -107,6 +108,12 @@ export interface CyclePolicy {
   /** #243's hold for Daedalus's count (owner decision 56): today's brain holds; run #3's (main 7c741cc) didn't. */
   daedalusCountHold: boolean;
   /**
+   * #242's share (PR #259): home's RAM shares beside the batches' hosts, less what it keeps for the Agent
+   * (`shareBonusOfState`). Absent, it does: today's brain. Run #3's brain and the simulator probe's (main 412d97b) came
+   * before it, and shared under one cap over every host, home included, which the batches' use filled.
+   */
+  homeShares?: boolean;
+  /**
    * A joined faction to work for toward the favour that unlocks its donations at the next install, in place of A5's
    * choice; null for A5's. Ignored for a faction not joined, or with that favour's reputation earned.
    */
@@ -119,9 +126,9 @@ export interface CyclePolicy {
 }
 
 /** Today's brain: every rule as on main. */
-export const TODAYS_POLICY: CyclePolicy = { name: "today's brain", daedalusCountHold: true };
-/** Run #3's brain (main 7c741cc, 2026-11-05): before #243's hold. The validation's. */
-export const RUN_3_POLICY: CyclePolicy = { name: "run #3's brain", daedalusCountHold: false };
+export const TODAYS_POLICY: CyclePolicy = { name: "today's brain", daedalusCountHold: true, homeShares: true };
+/** Run #3's brain (main 7c741cc, 2026-11-05): before #243's hold and #242's share. The fit's. */
+export const RUN_3_POLICY: CyclePolicy = { name: "run #3's brain", daedalusCountHold: false, homeShares: false };
 
 /** Why a cycle ended: A6's reason, or the policy's own install. */
 export type ModelInstallReason = InstallReason | "policy";
@@ -317,10 +324,13 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     // servers. The money in hand is what's left (#263); with `money: "gross"`, A6 and the joins see the gross instead.
     const ports = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
     purse = spendThroughCycle(purse, gross, income, onlineMs, holds, ROOTED_WORLD_RAM_GB_BY_PORTS[ports] as number);
+    // The ports after the step's purchases: the hosts the share sees.
+    const portsNow = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
     const cash = gross - purse.spent;
     const money = byCash ? cash : gross;
+    const worldRamGb = ROOTED_WORLD_RAM_GB_BY_PORTS[portsNow] as number;
     const shareBonus = byState
-      ? shareBonusOfState(purse, curves.calibration)
+      ? shareBonusOfState(purse, curves.calibration, policy.homeShares ?? true, worldRamGb)
       : shareBonusOf(curves.calibration, cycles.length);
     options.onStep?.({ atMs: now, onlineMs, hacking, money, gross, income, shareBonus, purse, clocks });
     if (Object.hasOwn(installed, THE_RED_PILL) && hacking >= WORLD_DAEMON_HACKING) {
@@ -642,13 +652,32 @@ export function holdsOf(
 }
 
 /**
- * The share bonus while working, from the cycle's RAM (#263; core's `shareBonusOfPower`, the game's
- * `calculateShareBonus`): `Calibration.shareRamShare` of home's and the cloud servers' RAM in share threads of
- * `SHARE_RAM_GB` each. The RAM, not the install index (#260's), so a policy that moves the installs gets its own.
+ * What home keeps free of share threads for the Agent's workers, GB: the brain's `SHARE_HOME_KEPT_GB`
+ * (packages/brain/src/share.ts, 4 × `HOME_KEPT_FOR_THE_AGENT_GB`), checked equal by the brain's tests.
  */
-export function shareBonusOfState(purse: Purse, calibration: Calibration): number {
-  const ram = purse.homeRamGb + cloudRamOf(purse);
-  return shareBonusOfPower(1 + (calibration.shareRamShare * ram) / SHARE_RAM_GB);
+export const SHARE_HOME_KEPT_GB = 32;
+
+/**
+ * The share bonus while working, from the cycle's RAM (#263; core's `shareBonusOfPower`, the game's
+ * `calculateShareBonus`), in share threads of `SHARE_RAM_GB` each. The RAM, not the install index (#260's), so a
+ * policy that moves the installs gets its own.
+ * - `homeShares` (#242, today's brain): core's `shareRound` on the cycle's hosts. Home, which the batches never use,
+ *   shares all but `SHARE_HOME_KEPT_GB`; the batches' hosts (the rooted world servers, `worldRamGb`, and the cloud
+ *   servers) only up to `SHARE_MOST_USE` of their RAM in use, which the batches' use (`batchesUseOfHosts`, run #3's
+ *   82%) already passes, so nothing there. The game's rule on measured inputs, with nothing fitted.
+ * - Else (run #3's brain, before #242): one cap over every host, which the batches' use filled for long stretches, and
+ *   the share gapped between rounds (#242's table: ×1.0 in up to 69% of an hour's fast samples). Not the rule's to say:
+ *   `Calibration.shareRamShare` of home's and the cloud servers' RAM, fitted on run #3.
+ */
+export function shareBonusOfState(purse: Purse, calibration: Calibration, homeShares = false, worldRamGb = 0): number {
+  if (!homeShares) {
+    const ram = purse.homeRamGb + cloudRamOf(purse);
+    return shareBonusOfPower(1 + (calibration.shareRamShare * ram) / SHARE_RAM_GB);
+  }
+  const homeGb = Math.max(0, purse.homeRamGb - SHARE_HOME_KEPT_GB);
+  const batchesHostsGb = (SHARE_MOST_USE - calibration.batchesUseOfHosts) * (worldRamGb + cloudRamOf(purse));
+  const threads = Math.floor((homeGb + Math.max(0, batchesHostsGb)) / SHARE_RAM_GB);
+  return shareBonusOfPower(1 + threads);
 }
 
 function isCountRule(reason: ModelInstallReason): boolean {

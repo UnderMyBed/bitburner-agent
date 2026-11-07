@@ -127,7 +127,7 @@ export class Curves {
    * same point, (level + 50) × hacking_speed (`Hacking.ts:60-80`), to the power of its exponent.
    */
   advanceClocks(clocks: Clocks, stepMs: number, multipliers: HackingMultipliers, homeRamGb: number): Clocks {
-    const { expPaceExponent, moneyPaceExponent } = this.calibration;
+    const { expPaceExponent, moneyPaceExponent, moneyPaceMost } = this.calibration;
     const homeSpeed = this.homeSpeedOf(homeRamGb);
     let { exp, money } = clocks;
     for (let done = 0; done < stepMs; done += CLOCK_SUBSTEP_MS) {
@@ -136,7 +136,7 @@ export class Curves {
         ((this.hackingLevelAt(exp, this.reference) + 50) * this.reference.hacking_speed);
       const minutes = (Math.min(CLOCK_SUBSTEP_MS, stepMs - done) / MINUTE_MS) * homeSpeed;
       exp += minutes * speed ** expPaceExponent;
-      money += minutes * speed ** moneyPaceExponent;
+      money += minutes * Math.min(moneyPaceMost, speed ** moneyPaceExponent);
     }
     return { exp, money };
   }

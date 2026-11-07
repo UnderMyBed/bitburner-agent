@@ -38,6 +38,7 @@ import {
   runModel,
   shareBonusOfState,
   spendThroughCycle,
+  TODAYS_POLICY,
 } from "../src/index.ts";
 import { RUN_3_BN1_2 } from "./fixtures.ts";
 
@@ -368,6 +369,32 @@ describe("the share from the state (#263), not the install index", () => {
     expect(cloudRamOf(purse)).toBe(4096);
     expect(shareBonusOfState(purse, CALIBRATION)).toBe(shareBonusOfPower(1 + threads));
     expect(shareBonusOfState(freshPurse(1024), CALIBRATION)).toBeLessThan(shareBonusOfState(purse, CALIBRATION));
+  });
+
+  test("#242's (today's brain): home's RAM less what it keeps, in threads; the batches' hosts past 80% use, none", () => {
+    const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
+    // BN1.3's 2nd cycle shared 8.2k GB of home's 8.2k at ×1.30 (#263's extract): (8192 − 32) / 4 = 2040 threads.
+    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBe(shareBonusOfPower(1 + 2040));
+    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBeCloseTo(1.3, 2);
+    // At run #3's 82% the cloud servers share nothing; at 70%, a tenth of the batches' hosts, world and cloud.
+    const lessUse = { ...CALIBRATION, batchesUseOfHosts: 0.7 };
+    const tenth = Math.floor((8160 + 0.1 * (3168.8 + 2 ** 21)) / SHARE_RAM_GB);
+    expect(shareBonusOfState(purse, lessUse, true, 3168.8)).toBeCloseTo(shareBonusOfPower(1 + tenth), 12);
+    // A home within what it keeps shares nothing: ×1 (BN1.3's 1st cycle at 15 min, home 32 GB).
+    expect(shareBonusOfState(freshPurse(32), CALIBRATION, true, 100)).toBe(1);
+    // Run #3's brain (before #242): the fitted share of all the RAM.
+    expect(shareBonusOfState(purse, CALIBRATION, false, 3168.8)).toBe(shareBonusOfState(purse, CALIBRATION));
+  });
+
+  test("a policy without `homeShares` is today's brain, #242's share; run #3's says false", () => {
+    const today = runModel(RUN_3_BN1_2.start, { policy: TODAYS_POLICY, horizonMs: 2 * 60 * MINUTE_MS });
+    const absent = runModel(RUN_3_BN1_2.start, {
+      policy: { name: "absent", daedalusCountHold: true },
+      horizonMs: 2 * 60 * MINUTE_MS,
+    });
+    expect(absent.cycles).toEqual(today.cycles);
+    expect(RUN_3_POLICY.homeShares).toBe(false);
+    expect(TODAYS_POLICY.homeShares).toBe(true);
   });
 
   test("a cycle's share is its RAM's, so a policy that moves the installs gets its own; by index, run #3's", () => {

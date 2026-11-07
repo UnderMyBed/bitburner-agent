@@ -1,15 +1,15 @@
-// The cycle model's validation (#260, #263): #263's gate, each check labelled for what it can show:
+// The cycle model's validation on run #3, the run it's fitted on (#260, #263), each check labelled for what it
+// can show:
 // - independent: the simulator's fresh BN1.1 (nothing of it was fitted), first;
 // - downstream: run #3's cycles 1 to 6, the rules on its measured level and income a cycle. They share inputs with what
 //   they check (the rate is the level times the share; the count and the favour turn on the money and the cycle's
 //   length; the measured curves restart at run #3's truth each cycle), so they check the rules' mechanism;
 // - fitted, so consistency only: the curve against run #3's own level, the share against run #3's own.
-// #263's gate is not met (slice 2, part 1; the model README's "#263's gate: not met"): BitRunners' donations unlock at
-// the 7th install, not the 6th; phases 3 to 5 of #244's table are out by far more than 15%; the simulator's first
-// install is 19% early. Those are tested as known misses, so a change to any is seen; BN1.3's data, held out, is the
-// next validation (#263). Each tolerance is in the test's name.
+// BitRunners' donations unlock at the 7th install, not the 6th; phases 3 to 5 of #244's table are out by far more than
+// 15%; the simulator's first install is 21% early. Those are tested as known misses, so a change to any is seen. The
+// held-out validation, on BN1.3, is test/bn1-3.test.ts (#263's part 2). Each tolerance is in the test's name.
 import { describe, expect, test } from "vitest";
-import { type ModelRun, RUN_3_CYCLES, RUN_3_POLICY, RUN_3_SHARE_BONUS, runModel, TODAYS_POLICY } from "../src/index.ts";
+import { type ModelRun, RUN_3_CYCLES, RUN_3_POLICY, RUN_3_SHARE_BONUS, runModel } from "../src/index.ts";
 import { RUN_3_BN1_2, RUN_3_CASH, RUN_3_PER_CYCLE, SIMULATOR_SEED_1 } from "./fixtures.ts";
 
 const MINUTE_MS = 60_000;
@@ -22,7 +22,7 @@ const mostWorked = (workMinutes: Record<string, number>) =>
 
 describe("independent: the simulator's first cycles (a fresh BN1.1, on the curve fitted to BN1.2)", () => {
   const run = runModel(SIMULATOR_SEED_1.start, {
-    policy: TODAYS_POLICY,
+    policy: SIMULATOR_SEED_1.policy,
     horizonMs: SIMULATOR_SEED_1.horizonMinutes * MINUTE_MS,
   });
 
@@ -34,9 +34,9 @@ describe("independent: the simulator's first cycles (a fresh BN1.1, on the curve
     expect(off((run.cycles[1]?.endMs ?? 0) / MINUTE_MS, 122)).toBeLessThanOrEqual(0.15);
   });
 
-  test("known miss: the 1st install at about 57 min comes 19% early [15%], the hacking ramp at 8 GB too fast", () => {
-    // 46 min. The model reaches the simulator's 290 by 45 min, not 55: firstCycleSpeed was fitted on BN1.2, whose home
-    // starts at 32 GB, so BN1.1's 8 GB is out of its range.
+  test("known miss: the 1st install at about 57 min comes 21% early [15%], the hacking ramp at 8 GB too fast", () => {
+    // 45 min. firstCycleSpeed is fitted on BN1.2, whose home starts at 32 GB, as BN1.3's does: BN1.1's 8 GB is out of
+    // every run's range. The simulator's figures are the one independent check, so they aren't fitted on.
     const early = 1 - (run.cycles[0]?.endMs ?? 0) / MINUTE_MS / 57;
     expect(early).toBeGreaterThan(0.15);
     expect(early).toBeLessThan(0.25);

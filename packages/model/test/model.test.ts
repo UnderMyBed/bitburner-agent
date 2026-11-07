@@ -108,23 +108,52 @@ describe("the calibration", () => {
       return (level + money / 3) / readings;
     };
     const fitted = error({});
-    // 0.2003 at the fit (12% on the level, ×1.8 on the money; #263 refitted it once home's RAM came from the cash), a
-    // local best by coordinate descent at these steps; the bound keeps the fit within a thousandth of it.
-    expect(fitted).toBeLessThan(0.201);
-    const { expPaceExponent, moneyPaceExponent, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
-    // The refit's own steps: ±0.0625 on the exponents (0.5625, #260's, among them), ±0.05 on the first cycle's
-    // speed, ×2 and ÷2 on home's RAM (256 GB, #260's, among them).
+    // 0.1817 at the fit, a local best by coordinate descent at these steps (#263's part 2 refitted it with the money's
+    // pace cap, from part 1's 0.2003); the bound keeps the fit within a thousandth of it.
+    expect(fitted).toBeLessThan(0.1825);
+    const { expPaceExponent, moneyPaceExponent, moneyPaceMost, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
+    // The refit's own steps: ±0.0625 on the exponents (0.5, part 1's, among them), ±0.05 on the first cycle's speed
+    // (0.8, part 1's), ×2 and ÷2 on home's RAM (256 GB on the way from part 1's 512), ±0.25 on the pace cap.
     for (const neighbour of [
       { expPaceExponent: expPaceExponent - 0.0625 },
       { expPaceExponent: expPaceExponent + 0.0625 },
       { moneyPaceExponent: moneyPaceExponent - 0.0625 },
       { moneyPaceExponent: moneyPaceExponent + 0.0625 },
+      { moneyPaceMost: moneyPaceMost - 0.25 },
+      { moneyPaceMost: moneyPaceMost + 0.25 },
       { firstCycleSpeed: firstCycleSpeed - 0.05 },
       { firstCycleSpeed: firstCycleSpeed + 0.05 },
       { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 2 },
       { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 2 },
     ]) {
       expect(fitted, JSON.stringify(neighbour)).toBeLessThanOrEqual(error(neighbour));
+    }
+  });
+
+  test("fitted: the money's pace cap brings run #3's 7th to 9th cycles' 15 min to its own, from ×1,000 over", () => {
+    // Run #3's $1.05e10-1.34e10 at 15 min into its 7th to 10th cycles: the world servers' few TB, before any cloud
+    // server. Uncapped, the level's pace ran the money's clock 5-6 times over, to $1e13. Fitted on these, so
+    // consistency only: BN1.3's 9th and 10th, held out, are test/bn1-3.test.ts's.
+    const grossAt15 = (calibration: Partial<typeof CALIBRATION>) => {
+      const seen: number[] = [];
+      runModel(RUN_3_BN1_2.start, {
+        policy: RUN_3_POLICY,
+        calibration,
+        onStep: ({ onlineMs, gross }) => {
+          if (onlineMs === 15 * MINUTE_MS) seen.push(gross);
+        },
+      });
+      return seen;
+    };
+    const capped = grossAt15({});
+    const uncapped = grossAt15({ moneyPaceMost: Number.POSITIVE_INFINITY });
+    for (const cycle of [7, 8, 9]) {
+      const actual = RUN_3_CYCLES[cycle - 1]?.points.find(([minutes]) => minutes === 15)?.[2] ?? Number.NaN;
+      const ratio = (capped[cycle - 1] ?? 0) / actual;
+      expect(ratio, `cycle ${cycle}`).toBeGreaterThan(0.5);
+      expect(ratio, `cycle ${cycle}`).toBeLessThan(2);
+      // Uncapped, the 9th is The Red Pill's, over within 15 min.
+      if (cycle < 9) expect((uncapped[cycle - 1] ?? 0) / actual, `cycle ${cycle}, uncapped`).toBeGreaterThan(100);
     }
   });
 
@@ -431,12 +460,18 @@ describe("the model", () => {
     // The window: 20 minutes from the first hold, never restarted.
     expect(hold(19 * 60_000, 0)).toBeNull();
   });
-  test("today's policy is run #3's on this path: no install in it would leave Daedalus's count one short (#243)", () => {
+  test("#243's hold is run #3's brain's on this path: no install in it would leave Daedalus's count one short", () => {
     // The model's 7th install takes the count from 25 to 34, past 29, so #243's hold never arises on run #3's path
-    // (run #3's own 7th took it to 29). The hold's wiring is checked by the probes, not by a run in reach.
-    const today = runModel(RUN_3_BN1_2.start, { policy: TODAYS_POLICY });
+    // (run #3's own 7th took it to 29). The hold's wiring is checked by the probes, not by a run in reach. Today's
+    // brain differs from run #3's by #242's share too, which moves the path: it's left out here.
+    const today = runModel(RUN_3_BN1_2.start, { policy: { ...TODAYS_POLICY, homeShares: false } });
     expect(today.cycles.every((cycle) => cycle.heldMinutes === 0)).toBe(true);
     expect(today.cycles).toEqual(run3.cycles);
+  });
+
+  test("#242's share moves run #3's path: today's brain shares home's RAM, run #3's didn't", () => {
+    const today = runModel(RUN_3_BN1_2.start, { policy: TODAYS_POLICY });
+    expect(today.cycles[2]?.shareBonus).toBeGreaterThan((run3.cycles[2]?.shareBonus ?? 0) + 0.02);
   });
 
   test("a policy's favour grind works the faction it names toward its donations", () => {

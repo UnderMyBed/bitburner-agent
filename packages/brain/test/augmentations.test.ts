@@ -48,6 +48,7 @@ import {
 import * as cloud from "../src/cloud-servers.ts";
 import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions.ts";
 import { PURCHASE_PRICES } from "../src/programs.ts";
+import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
@@ -2708,5 +2709,7 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
     expect(model.MIN_CLOUD_SERVER_RAM).toBe(cloud.MIN_CLOUD_SERVER_RAM);
     // The programs in the order the brain buys them (TOR first, then core's port openers), at the brain's prices.
     expect(model.PROGRAM_PRICES).toEqual([TOR_ROUTER, ...PORT_OPENER_PROGRAMS].map((item) => PURCHASE_PRICES[item]));
+    // What home keeps free of #242's share (the model's `shareBonusOfState`).
+    expect(model.SHARE_HOME_KEPT_GB).toBe(SHARE_HOME_KEPT_GB);
   });
 });

@@ -194,6 +194,15 @@ export interface Calibration {
    */
   expPaceExponent: number;
   moneyPaceExponent: number;
+  /**
+   * The most the money's clock may run faster than the reference's (#263, part 2). At high multipliers the level's pace
+   * ran the money's early minutes 5-6 times over, to $1e13 by 15 min into a 7th cycle, against run #3's $1.05e10 to
+   * $1.34e10 in its 7th to 10th. Those minutes are bound by the RAM, not the level: an install loses the cloud servers,
+   * the batches never run on home, and no server is bought before the income window (10 min) and a 15-minute payback,
+   * so the batches have only the world servers' few TB. Fitted on run #3 alone (its cycles 1 to 6, and its 7th to 10th
+   * up to 20 min, `test/model.test.ts`).
+   */
+  moneyPaceMost: number;
   /** The share bonus while working, by cycle (`RUN_3_SHARE_BONUS`); past the list, its last: `share: "index"` only. */
   shareBonusByCycle: readonly number[];
   /**
@@ -204,6 +213,13 @@ export interface Calibration {
    * (3% without the 4th, whose 1.16 its brain's share before #242 made, not its RAM).
    */
   shareRamShare: number;
+  /**
+   * The batches' use of their hosts' RAM (the rooted world servers and the cloud servers), for #242's share
+   * (`CyclePolicy.homeShares`): a round may take their use to core's `SHARE_MOST_USE` (0.8), so above it the batches'
+   * hosts share nothing and home alone does. Run #3's 4th cycle's, from its store: "its batches held 82% of the cloud
+   * servers" (#242). Measured on run #3, not fitted.
+   */
+  batchesUseOfHosts: number;
 }
 
 export const CALIBRATION: Calibration = {
@@ -213,12 +229,14 @@ export const CALIBRATION: Calibration = {
     { cycle: 5, multipliers: { hacking: 2.2613, hacking_exp: 3.1379, hacking_speed: 1.7787, hacking_money: 1.6434 } },
     { cycle: 6, multipliers: { hacking: 2.8541, hacking_exp: 3.7007, hacking_speed: 2.0035, hacking_money: 2.5329 } },
   ],
-  firstCycleSpeed: 0.8,
-  fullSpeedHomeRamGb: 512,
+  firstCycleSpeed: 0.85,
+  fullSpeedHomeRamGb: 128,
   expPaceExponent: 0.625,
-  moneyPaceExponent: 0.5,
+  moneyPaceExponent: 0.5625,
+  moneyPaceMost: 1,
   shareBonusByCycle: RUN_3_SHARE_BONUS,
   shareRamShare: 0.01,
+  batchesUseOfHosts: 0.82,
 };
 
 /**
