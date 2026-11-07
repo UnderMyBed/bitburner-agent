@@ -9,6 +9,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   BATCHER_RAM_BUDGET_GB,
   type BatchShort,
+  batcherIncomePerGigabyteSecond,
   batchPlan,
   batchRamGb,
   CONTROL_PROTOCOL_VERSION,
@@ -28,6 +29,7 @@ import {
   BATCHER_MOST_IDLE_MS,
   BATCHER_MOVE_GAIN,
   BATCHER_MOVE_IDLE_FAILS_AFTER_MS,
+  BATCHER_NEXT_HORIZON_MS,
   BATCHER_NEXT_RAM_SHARE,
   BATCHER_TARGET_HORIZON_MS,
   type BatcherTargetWorth,
@@ -895,7 +897,7 @@ describe("chooseBatcher (#206)", () => {
     expect(rich.untilEarningMs).toBeGreaterThan(BATCHER_TARGET_HORIZON_MS);
     expect(rich.worth).toBe(0);
     expect(chosen.batcher.config.target).toBe("n00dles");
-    // No next target: rich can't be prepared on the next's part of the RAM within the horizon either.
+    // No next target: rich doesn't earn on the next's part of the RAM within BATCHER_NEXT_HORIZON_MS either (#274).
     expect(chosen.batcher.config.next).toBeUndefined();
   });
 
@@ -1685,11 +1687,13 @@ describe("chooseBatcher, a target move (#236)", () => {
     expect(chosen.batcher.config.spacingMs).toBe(sent.batcher.config.spacingMs);
     expect(chosen.batcher.config.hackShare).toBe(sent.batcher.config.hackShare);
     // Nothing batched yet (#237's re-review: a fresh start, after an install or a restart, a move under way): n00dles
-    // still to start, so no leftover is known; the next is weighed on a fifth, where it isn't preparable, and n00dles'
-    // own preparation keeps the rest.
+    // still to start, so no leftover is known; the next is weighed on a fifth, and n00dles' own preparation keeps the
+    // rest. On a fifth it isn't prepared within BATCHER_TARGET_HORIZON_MS, but it is within BATCHER_NEXT_HORIZON_MS
+    // (#274): the next, on a fifth.
     const starting = chosenOf(network, data, null, null);
     expect(starting.batcher.config.target).toBe("n00dles");
-    expect(starting.batcher.config.next).toBeUndefined();
+    expect(starting.batcher.config.next).toMatchObject({ target: "slow" });
+    expect(starting.batcher.config.next?.ramGb).toBeCloseTo(whole.ramGb * BATCHER_NEXT_RAM_SHARE, 3);
   });
 
   test("a prepared target whose weaken is over BATCHER_MOST_IDLE_MS (#237's review): its idle is the weaken past the batches'", () => {
@@ -1711,6 +1715,311 @@ describe("chooseBatcher, a target move (#236)", () => {
     const chosen = chosenOf(network, data, sent, "n00dles");
     expect(worthOf(chosen, "rich").worth).toBeGreaterThanOrEqual(worthOf(chosen, "n00dles").worth * BATCHER_MOVE_GAIN);
     expect(chosen.batcher.config.target).toBe("rich");
+  });
+});
+
+describe("chooseBatcher, off a poor target (#274)", () => {
+  // BN1.3's exit run at 23:00, synthetic: hacking 1,327 and 424 TB of cloud servers, n00dles batched, the richest
+  // targets at 3 times their minimum security after the install, each a weaken there past BATCHER_TARGET_HORIZON_MS,
+  // and rho-construction prepared. The game's figures (servers.ts), money 25 times the initial (Server.ts:76), the
+  // minimum a third of the base (:83). Before #274 the brain weighed the 5 best by A1's ceiling alone, none of which
+  // could be moved to (none prepared) or be the next (none prepared within the horizon): n00dles for hours.
+  const player = {
+    skills: { hacking: 1327, intelligence: 0 },
+    mults: { hacking_chance: 1.6, hacking_speed: 2.3, hacking_money: 2, hacking_grow: 1.6 },
+  };
+  const FIGURES = {
+    n00dles: N00DLES,
+    phantasy: { moneyMax: 600_000_000, minDifficulty: 7, requiredHackingSkill: 100, serverGrowth: 35 },
+    "rho-construction": { moneyMax: 15_000_000_000, minDifficulty: 17, requiredHackingSkill: 500, serverGrowth: 50 },
+    "b-and-a": { moneyMax: 500_000_000_000, minDifficulty: 27, requiredHackingSkill: 1050, serverGrowth: 70 },
+    "4sigma": { moneyMax: 500_000_000_000, minDifficulty: 22, requiredHackingSkill: 1100, serverGrowth: 90 },
+    clarkinc: { moneyMax: 500_000_000_000, minDifficulty: 18, requiredHackingSkill: 1100, serverGrowth: 60 },
+    "kuai-gong": { moneyMax: 625_000_000_000, minDifficulty: 32, requiredHackingSkill: 1150, serverGrowth: 90 },
+    ecorp: { moneyMax: 1_250_000_000_000, minDifficulty: 33, requiredHackingSkill: 1250, serverGrowth: 99 },
+    megacorp: { moneyMax: 1_250_000_000_000, minDifficulty: 33, requiredHackingSkill: 1250, serverGrowth: 99 },
+    blade: { moneyMax: 500_000_000_000, minDifficulty: 31, requiredHackingSkill: 1100, serverGrowth: 80 },
+  } as const;
+  type Name = keyof typeof FIGURES;
+  const RICHEST: Name[] = ["b-and-a", "4sigma", "clarkinc", "kuai-gong", "ecorp", "megacorp", "blade"];
+  const HOSTS_RAM = { "pserv-0": 262_144, "pserv-1": 131_072, "pserv-2": 32_768, "pserv-3": 8_192 };
+  const HOSTS = Object.keys(HOSTS_RAM);
+  const staticData: StaticSnapshotData = {
+    servers: [
+      staticServer("home", { purchasedByPlayer: true, moneyMax: 0 }),
+      ...Object.entries(FIGURES).map(([hostname, figures]) => staticServer(hostname, figures)),
+    ],
+  };
+  /** The snapshot at 23:00: those named prepared, the rest as the install left them (3 times the minimum, 4% money). */
+  function at(prepared: Name[], securityTimes: Partial<Record<Name, number>> = {}): MediumSnapshotData {
+    const data = medium(player.skills.hacking, {});
+    data.player = { ...data.player, ...player };
+    const server = (hostname: string, maxRam: number, money: number, security: number) => ({
+      hostname,
+      maxRam,
+      cpuCores: 1,
+      hasAdminRights: true,
+      backdoorInstalled: false,
+      moneyAvailable: money,
+      hackDifficulty: security,
+    });
+    data.servers = [
+      ...Object.entries(FIGURES).map(([hostname, { moneyMax, minDifficulty }]) =>
+        prepared.includes(hostname as Name)
+          ? server(hostname, 0, moneyMax, minDifficulty)
+          : server(hostname, 0, moneyMax / 25, minDifficulty * (securityTimes[hostname as Name] ?? 3)),
+      ),
+      ...Object.entries(HOSTS_RAM).map(([hostname, ram]) => server(hostname, ram, 0, 1)),
+    ];
+    return data;
+  }
+  const weakenMs = (name: Name, security?: number) => operationTimeMs("weaken1", FIGURES[name], player, security);
+  const incomeOf = (data: MediumSnapshotData, name: Name) => {
+    const plan = planBatcher(staticData, data, name, HOSTS);
+    return plan.batcher === null ? 0 : plan.incomePerSecond;
+  };
+  /**
+   * The brain's choices from `batching`, as the batcher would follow them: each next prepared before the next choice,
+   * and a move (only ever to one prepared while one earns) batched at once. The target batched after each.
+   */
+  function follow(data: MediumSnapshotData, batching: Name, choices: number): { batched: string[]; nexts: string[] } {
+    let current = planBatcher(staticData, data, batching, HOSTS).batcher;
+    let batched: string = batching;
+    const trail = { batched: [] as string[], nexts: [] as string[] };
+    for (let choice = 0; choice < choices; choice++) {
+      const chosen = chooseBatcher(staticData, data, HOSTS, current, batched);
+      if (chosen.batcher === null) throw new Error(chosen.why);
+      const next = chosen.batcher.config.next?.target;
+      if (next !== undefined) {
+        const { moneyMax, minDifficulty } = FIGURES[next as Name];
+        data.servers = data.servers.map((server) =>
+          server.hostname === next ? { ...server, moneyAvailable: moneyMax, hackDifficulty: minDifficulty } : server,
+        );
+      }
+      batched = chosen.batcher.config.target;
+      current = chosen.batcher;
+      trail.batched.push(batched);
+      trail.nexts.push(next ?? "none");
+    }
+    return trail;
+  }
+
+  test("the shape: the richest pay thousands of times n00dles, each a weaken past the horizon, rho-construction out of the 5 best", () => {
+    const data = at(["n00dles", "rho-construction"]);
+    for (const name of RICHEST) {
+      expect(incomeOf(data, name)).toBeGreaterThan(1000 * incomeOf(data, "n00dles"));
+      expect(weakenMs(name, 3 * FIGURES[name].minDifficulty)).toBeGreaterThan(BATCHER_TARGET_HORIZON_MS);
+    }
+    // A1's ceiling ranks the richest first, rho-construction after them: the 5 best were all weighed before #274.
+    const ceilingOf = (name: Name) => batcherIncomePerGigabyteSecond(FIGURES[name], player, 1);
+    const byCeiling = (Object.keys(FIGURES) as Name[]).sort((a, b) => ceilingOf(b) - ceilingOf(a));
+    expect(byCeiling.indexOf("rho-construction")).toBeGreaterThanOrEqual(5);
+    // Rho-construction prepared, its weaken under BATCHER_MOST_IDLE_MS: a move from n00dles leaves little idle.
+    expect(weakenMs("rho-construction") - weakenMs("n00dles")).toBeLessThanOrEqual(BATCHER_MOST_IDLE_MS);
+    expect(incomeOf(data, "rho-construction")).toBeGreaterThan(1000 * incomeOf(data, "n00dles"));
+  });
+
+  test("at 23:00: off n00dles to rho-construction, prepared, a richer next prepared beside it; then the richest", () => {
+    const data = at(["n00dles", "rho-construction"]);
+    const sent = planBatcher(staticData, data, "n00dles", HOSTS).batcher;
+    const chosen = chooseBatcher(staticData, data, HOSTS, sent, "n00dles");
+    if (chosen.batcher === null) throw new Error(chosen.why);
+    expect(chosen.batcher.config.target).toBe("rho-construction");
+    // The next: one of the richest, though a weaken at its security now is past BATCHER_TARGET_HORIZON_MS, earning
+    // within BATCHER_NEXT_HORIZON_MS on the next's RAM, and one a move from rho-construction can reach.
+    const next = chosen.batcher.config.next;
+    expect(RICHEST).toContain(next?.target);
+    const name = next?.target as Name;
+    const now = { money: FIGURES[name].moneyMax / 25, security: 3 * FIGURES[name].minDifficulty };
+    const untilMs = preparationTimeMs(FIGURES[name], player, now, next?.ramGb ?? 0) + weakenMs(name);
+    expect(untilMs).toBeGreaterThan(BATCHER_TARGET_HORIZON_MS);
+    expect(untilMs).toBeLessThan(BATCHER_NEXT_HORIZON_MS);
+    expect(weakenMs(name) - weakenMs("rho-construction")).toBeLessThanOrEqual(BATCHER_MOST_IDLE_MS);
+    // Followed: clarkinc, the most income of all on these hosts, batched within 3 choices, and kept.
+    const income = Object.fromEntries((Object.keys(FIGURES) as Name[]).map((each) => [each, incomeOf(data, each)]));
+    expect(Math.max(...Object.values(income))).toBe(income.clarkinc);
+    const trail = follow(at(["n00dles", "rho-construction"]), "n00dles", 5);
+    expect(trail.batched.slice(0, 3)).toContain("clarkinc");
+    expect(trail.batched.at(-1)).toBe("clarkinc");
+    expect(trail.nexts.at(-1)).toBe("none");
+  });
+
+  test("nothing prepared but n00dles: the next is a step a move can reach (rho-construction), never one it can't", () => {
+    // Clarkinc's weaken at its minimum is just over BATCHER_MOST_IDLE_MS past n00dles': prepared, a move from n00dles
+    // to it would leave too long without a hack, so it can't be the next while n00dles earns. Before #274, a next like
+    // it was prepared and kept, and never moved to (#237's re-review).
+    expect(weakenMs("clarkinc") - weakenMs("n00dles")).toBeGreaterThan(BATCHER_MOST_IDLE_MS);
+    const data = at(["n00dles"]);
+    const sent = planBatcher(staticData, data, "n00dles", HOSTS).batcher;
+    const chosen = chooseBatcher(staticData, data, HOSTS, sent, "n00dles");
+    if (chosen.batcher === null) throw new Error(chosen.why);
+    expect(chosen.batcher.config.target).toBe("n00dles");
+    expect(chosen.batcher.config.next?.target).toBe("rho-construction");
+    // Followed: rho-construction, then clarkinc, each prepared as the next first.
+    const trail = follow(at(["n00dles"]), "n00dles", 6);
+    expect(trail.batched.slice(0, 5)).toContain("rho-construction");
+    expect(trail.batched.at(-1)).toBe("clarkinc");
+  });
+
+  test("the next is the one worth most over BATCHER_NEXT_HORIZON_MS: a target soon prepared before a richer one later", () => {
+    // From rho-construction batched: clarkinc earns most once prepared, but at 3 times its minimum it's prepared later
+    // than 4sigma at half that; over the next's horizon 4sigma is worth more.
+    const data = at(["rho-construction"], { "4sigma": 1.5 });
+    const sent = planBatcher(staticData, data, "rho-construction", HOSTS).batcher;
+    const chosen = chooseBatcher(staticData, data, HOSTS, sent, "rho-construction");
+    if (chosen.batcher === null) throw new Error(chosen.why);
+    expect(chosen.batcher.config.target).toBe("rho-construction");
+    const ramGb = chosen.batcher.config.next?.ramGb ?? 0;
+    const nextWorth = (name: Name, security: number) => {
+      const now = { money: FIGURES[name].moneyMax / 25, security };
+      const untilMs = preparationTimeMs(FIGURES[name], player, now, ramGb) + weakenMs(name);
+      return { untilMs, worth: incomeOf(data, name) * Math.max(0, BATCHER_NEXT_HORIZON_MS - untilMs) };
+    };
+    const clarkinc = nextWorth("clarkinc", 3 * FIGURES.clarkinc.minDifficulty);
+    const sigma = nextWorth("4sigma", 1.5 * FIGURES["4sigma"].minDifficulty);
+    expect(incomeOf(data, "clarkinc") * (BATCHER_TARGET_HORIZON_MS - weakenMs("clarkinc"))).toBeGreaterThan(
+      incomeOf(data, "4sigma") * (BATCHER_TARGET_HORIZON_MS - weakenMs("4sigma")),
+    );
+    expect(sigma.untilMs).toBeLessThan(clarkinc.untilMs);
+    expect(sigma.worth).toBeGreaterThan(clarkinc.worth);
+    expect(chosen.batcher.config.next?.target).toBe("4sigma");
+    // Clarkinc sent as the next: kept, as 4sigma isn't worth BATCHER_MOVE_GAIN times it over that horizon.
+    expect(sigma.worth).toBeLessThan(clarkinc.worth * BATCHER_MOVE_GAIN);
+    const clarkincNext = { ...chosen.batcher.config.next, target: "clarkinc", figures: FIGURES.clarkinc };
+    const sentClarkinc = { ...chosen.batcher, config: { ...chosen.batcher.config, next: clarkincNext } };
+    const kept = chooseBatcher(staticData, data, HOSTS, sentClarkinc as typeof sent, "rho-construction");
+    expect(kept.batcher?.config.next?.target).toBe("clarkinc");
+  });
+});
+
+describe("chooseBatcher, weighed beyond the 5 best by the ceiling (#274)", () => {
+  /** A server in the medium snapshot: a host with RAM, or a target with its money and security now. */
+  const serverAt = (hostname: string, maxRam: number, money: number, security: number) => ({
+    hostname,
+    maxRam,
+    cpuCores: 1,
+    hasAdminRights: true,
+    backdoorInstalled: false,
+    moneyAvailable: money,
+    hackDifficulty: security,
+  });
+  /** Hacking 100 at `speed`, the two 1 TB hosts, n00dles prepared, and each target with its money and security. */
+  function worldAt(targets: Record<string, [number, number]>, speed = 1): MediumSnapshotData {
+    const data = medium(100, {});
+    data.player = { ...data.player, mults: { ...MULTS, hacking_speed: speed } };
+    data.servers = [
+      serverAt("n00dles", 0, N00DLES.moneyMax, N00DLES.minDifficulty),
+      ...CHOICE_HOSTS.map((hostname) => serverAt(hostname, 1024, 0, 1)),
+      ...Object.entries(targets).map(([hostname, [money, security]]) => serverAt(hostname, 0, money, security)),
+    ];
+    return data;
+  }
+  const chosenOf = (staticData: StaticSnapshotData, data: MediumSnapshotData, sent: BatcherState | null) => {
+    const chosen = chooseBatcher(staticData, data, CHOICE_HOSTS, sent, sent?.config.target ?? null);
+    if (chosen.batcher === null) throw new Error(chosen.why);
+    return chosen;
+  };
+  type BatcherState = NonNullable<ReturnType<typeof planBatcher>["batcher"]>;
+
+  // Six targets richer than "late" lead A1's ceiling, as after an install: 3 times their minimum security, 4% money.
+  const RICHER = ["rich-0", "rich-1", "rich-2", "rich-3", "rich-4", "rich-5"];
+  const LATE = { ...RICH, moneyMax: RICH.moneyMax * 0.9 };
+  const wide: StaticSnapshotData = {
+    servers: [
+      staticServer("n00dles", N00DLES),
+      ...RICHER.map((hostname, index) =>
+        staticServer(hostname, { ...RICH, moneyMax: RICH.moneyMax * (1.1 + index / 100) }),
+      ),
+      staticServer("late", LATE),
+    ],
+  };
+  const afterAnInstall = Object.fromEntries(
+    RICHER.map((hostname, index) => [hostname, [(RICH.moneyMax * (1.1 + index / 100)) / 25, 3 * RICH.minDifficulty]]),
+  ) as Record<string, [number, number]>;
+  const isFirstByCeiling = (name: string, of: number) => {
+    const player = { skills: { hacking: 100, intelligence: 0 }, mults: MULTS };
+    const ceilings = wide.servers.map((server) =>
+      batcherIncomePerGigabyteSecond(server as unknown as typeof RICH, player, 1),
+    );
+    const own = ceilings[wide.servers.findIndex((server) => server.hostname === name)] as number;
+    return ceilings.filter((each) => each > own).length < of;
+  };
+
+  test("a target prepared, however far down by the ceiling: moved to while n00dles earns", () => {
+    expect(isFirstByCeiling("late", 6)).toBe(false);
+    const data = worldAt({ ...afterAnInstall, late: [LATE.moneyMax, LATE.minDifficulty] });
+    const sent = planBatcher(wide, data, "n00dles", CHOICE_HOSTS).batcher;
+    expect(chosenOf(wide, data, sent).batcher.config.target).toBe("late");
+  });
+
+  test("the next sent, however far down by the ceiling: kept while it's prepared", () => {
+    // Late half prepared, at 1.5 times its minimum, as the next sent beside n00dles' batches.
+    const data = worldAt({ ...afterAnInstall, late: [LATE.moneyMax / 2, 1.5 * LATE.minDifficulty] });
+    const sent = planBatcher(wide, data, "n00dles", CHOICE_HOSTS).batcher as BatcherState;
+    const fresh = chosenOf(wide, data, sent);
+    expect(fresh.batcher.config.next?.target).toMatch(/^rich-/);
+    const lateNext = { ...fresh.batcher.config.next, target: "late", figures: LATE } as BatcherState["config"]["next"];
+    const kept = chosenOf(wide, data, { ...fresh.batcher, config: { ...fresh.batcher.config, next: lateNext } });
+    expect(kept.batcher.config.target).toBe("n00dles");
+    expect(kept.batcher.config.next?.target).toBe("late");
+  });
+
+  test("the steps are reckoned from the one batched: one whose own weaken is long reaches one past BATCHER_MOST_IDLE_MS", () => {
+    // Hacking 100: base's weaken 4 minutes, prepared and batched; step's 7, richer, at 3 times its minimum; and five
+    // far richer still after an install, first by the ceiling, a weaken of 20 minutes, which nothing here can move to.
+    const base = { moneyMax: 100_000_000, minDifficulty: 10, requiredHackingSkill: 52, serverGrowth: 50 };
+    const step = { moneyMax: 10_000_000_000, minDifficulty: 11, requiredHackingSkill: 96, serverGrowth: 50 };
+    const far = { moneyMax: 1_000_000_000_000, minDifficulty: 42, requiredHackingSkill: 80, serverGrowth: 50 };
+    const FAR = ["far-0", "far-1", "far-2", "far-3", "far-4"];
+    const world: StaticSnapshotData = {
+      servers: [
+        staticServer("n00dles", N00DLES),
+        staticServer("base", base),
+        staticServer("step", step),
+        ...FAR.map((hostname) => staticServer(hostname, far)),
+      ],
+    };
+    const data = worldAt({
+      base: [base.moneyMax, base.minDifficulty],
+      step: [step.moneyMax, 3 * step.minDifficulty],
+      ...Object.fromEntries(FAR.map((hostname) => [hostname, [far.moneyMax / 25, 3 * far.minDifficulty]])),
+    });
+    const weakenMs = (figures: typeof base) => operationTimeMs("weaken1", figures, PLAYER_100);
+    expect(weakenMs(step)).toBeGreaterThan(BATCHER_MOST_IDLE_MS);
+    expect(weakenMs(step) - weakenMs(base)).toBeLessThanOrEqual(BATCHER_MOST_IDLE_MS);
+    expect(weakenMs(far) - weakenMs(base)).toBeGreaterThan(BATCHER_MOST_IDLE_MS);
+    const ceilingOf = (figures: typeof base) => batcherIncomePerGigabyteSecond(figures, PLAYER_100, 1);
+    expect(ceilingOf(far)).toBeGreaterThan(ceilingOf(step));
+    const sent = planBatcher(world, data, "base", CHOICE_HOSTS).batcher;
+    const chosen = chosenOf(world, data, sent);
+    expect(chosen.batcher.config.target).toBe("base");
+    expect(chosen.batcher.config.next?.target).toBe("step");
+  });
+
+  test("the next's bound counts its first batch: one prepared within BATCHER_NEXT_HORIZON_MS but earning after isn't", () => {
+    // Rich after an install, alone beside n00dles batched, at a speed that puts its preparation within the hour and its
+    // first batch past it; a little faster, both within it.
+    const world: StaticSnapshotData = { servers: [staticServer("n00dles", N00DLES), staticServer("rich", RICH)] };
+    const now = { money: RICH.moneyMax / 25, security: 3 * RICH.minDifficulty };
+    const timesAt = (speed: number) => {
+      const data = worldAt({ rich: [now.money, now.security] }, speed);
+      const player = { skills: { hacking: 100, intelligence: 0 }, mults: { ...MULTS, hacking_speed: speed } };
+      const batched = planBatcher(world, data, "n00dles", CHOICE_HOSTS);
+      const whole = planBatcher(world, data, "rich", CHOICE_HOSTS);
+      if (batched.batcher === null || whole.batcher === null) throw new Error("no plan");
+      const nextGb = whole.ramGb * Math.max(BATCHER_NEXT_RAM_SHARE, 1 - batched.peakRamGb / batched.ramGb);
+      const preparingMs = preparationTimeMs(RICH, player, now, nextGb);
+      return { data, preparingMs, weakenMs: operationTimeMs("weaken1", RICH, player), sent: batched.batcher };
+    };
+    const atOne = timesAt(1);
+    const speed = (2 * atOne.preparingMs + atOne.weakenMs) / (2 * BATCHER_NEXT_HORIZON_MS);
+    const slow = timesAt(speed);
+    expect(slow.preparingMs).toBeLessThan(BATCHER_NEXT_HORIZON_MS);
+    expect(slow.preparingMs + slow.weakenMs).toBeGreaterThan(BATCHER_NEXT_HORIZON_MS);
+    expect(chosenOf(world, slow.data, slow.sent).batcher.config.next).toBeUndefined();
+    const quicker = timesAt(speed * 1.2);
+    expect(quicker.preparingMs + quicker.weakenMs).toBeLessThan(BATCHER_NEXT_HORIZON_MS);
+    expect(chosenOf(world, quicker.data, quicker.sent).batcher.config.next?.target).toBe("rich");
   });
 });
 
