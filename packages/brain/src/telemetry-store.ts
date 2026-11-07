@@ -116,7 +116,7 @@ export class TelemetryStore {
     return new TelemetryStore(new DatabaseSync(filePath, { readOnly: true, timeout: BUSY_TIMEOUT_MS }));
   }
 
-  /** The journal mode in force: `wal` for a store opened with `open`. */
+  /** The journal mode in force: `wal` for a store opened with `open` on a file, `memory` for one on `:memory:`. */
   journalMode(): string {
     return (this.#database.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
   }
