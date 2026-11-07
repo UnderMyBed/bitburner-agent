@@ -77,10 +77,12 @@ interface Stretch {
   sf?: number | Record<string, number>;
   /** The game's clock less the brain's, in minutes: none, one machine's. */
   gameOffset?: number;
+  /** The BitNode's `sourceFileOverrides` (its options): `ownedSF` then shows each at its override. */
+  overrides?: Record<string, number>;
   augs?: Record<string, number>;
 }
 /** A stretch of play: a slow snapshot a minute; in the full store a medium and a fast one every 10 s besides. */
-function play({ from, to, release, node, aug, bitNode = 1, sf = 0, augs = {}, gameOffset = 0 }: Stretch) {
+function play({ from, to, release, node, aug, bitNode = 1, sf = 0, augs = {}, gameOffset = 0, overrides }: Stretch) {
   const ownedSF: Record<string, number> = typeof sf === "number" ? (sf === 0 ? {} : { "1": sf }) : sf;
   const resetInfo = {
     lastAugReset: m(aug),
@@ -88,7 +90,7 @@ function play({ from, to, release, node, aug, bitNode = 1, sf = 0, augs = {}, ga
     currentNode: bitNode,
     ownedAugs: augs,
     ownedSF,
-    bitNodeOptions: {},
+    bitNodeOptions: overrides === undefined ? {} : { sourceFileOverrides: overrides },
   };
   const slow: SlowSnapshotData = { resetInfo, purchasedServers: [] };
   for (const store of [full, thin]) {
@@ -470,46 +472,159 @@ describe("the campaign report", () => {
     ]);
   });
 
-  test("b1t_flum3, a new game, and a destroy at the cap the brain didn't send: none a destroy", () => {
+  test("b1t_flum3, a new game, BitNodes unseen, and a destroy at the cap the brain didn't send: none a destroy", () => {
     event(-1, V100, "brainStarted", { release: "v1.0.0" });
     play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5 });
-    play({ from: 11, to: 20, release: V100, node: 10.5, aug: 10.5, sf: 2 });
-    // b1t_flum3 into BN2: no Source-File gained, though a destroy was sent (SF1.2: below the cap).
-    event(19.5, V100, "bitNodeDestroySent", {});
-    play({ from: 21, to: 30, release: V100, node: 20.5, aug: 20.5, bitNode: 2, sf: 2 });
+    play({ from: 11, to: 20, release: V100, node: 10.5, aug: 10.5, sf: 1 });
+    play({ from: 21, to: 30, release: V100, node: 20.5, aug: 20.5, sf: 2 });
+    // b1t_flum3 into BN2: no Source-File gained, though a destroy was sent after the last look (SF1.2: below the cap).
+    event(30.2, V100, "bitNodeDestroySent", {});
+    play({ from: 31, to: 40, release: V100, node: 30.5, aug: 30.5, bitNode: 2, sf: 2 });
     // A new game: every Source-File gone.
-    play({ from: 31, to: 40, release: V100, node: 30.5, aug: 30.5 });
-    // A save at SF1's cap, then the next BN1.4 with no destroy sent.
-    play({ from: 41, to: 50, release: V100, node: 40.5, aug: 40.5, sf: 3 });
-    play({ from: 51, to: 55, release: V100, node: 50.5, aug: 50.5, sf: 3 });
-    // BN12's Source-File has no cap: at level 3 with no level gained, b1t_flum3 alone.
-    play({ from: 56, to: 60, release: V100, node: 55.5, aug: 55.5, bitNode: 12, sf: { 1: 3, 12: 3 } });
-    play({ from: 61, to: 62, release: V100, node: 60.5, aug: 60.5, bitNode: 12, sf: { 1: 3, 12: 3 } });
+    play({ from: 41, to: 50, release: V100, node: 40.5, aug: 40.5 });
+    // SF1 from none to 3: BN1.1 destroyed, and BN1.2 and BN1.3 played where the store didn't see them.
+    play({ from: 51, to: 60, release: V100, node: 50.5, aug: 50.5, sf: 3 });
+    // At the cap: a destroy sent early, then more play, then the next BN1.4 with none sent after the last look.
+    event(52, V100, "bitNodeDestroySent", {});
+    play({ from: 61, to: 65, release: V100, node: 60.5, aug: 60.5, sf: 3 });
     expect(
       bitNodeRows()
         .slice(1)
-        .map((row) => row.slice(0, 3)),
+        .map((row) => row.slice(0, 5)),
     ).toEqual([
-      ["BN1.1", at(-0.5), `destroyed ${at(10.5)}`],
-      ["BN1.3", at(10.5), `b1t_flum3 ${at(20.5)}`],
-      ["BN2.1", at(20.5), `a new game ${at(30.5)}`],
-      ["BN1.1 #2", at(30.5), `destroyed ${at(40.5)}`],
-      ["BN1.4", at(40.5), `b1t_flum3, or a destroy not sent by the brain at the cap, ${at(50.5)}`],
-      ["BN1.4 #2", at(50.5), `b1t_flum3, or a destroy not sent by the brain at the cap, ${at(55.5)}`],
-      ["BN12.4", at(55.5), `b1t_flum3 ${at(60.5)}`],
-      ["BN12.4 #2", at(60.5), "not yet"],
+      ["BN1.1", at(-0.5), `destroyed ${at(10.5)}`, "11 min", "11 min"],
+      ["BN1.2", at(10.5), `destroyed ${at(20.5)}`, "10 min", "10 min"],
+      ["BN1.3", at(20.5), `b1t_flum3 ${at(30.5)}`, "10 min so far", "10 min so far"],
+      ["BN2.1", at(30.5), `a new game ${at(40.5)}`, "10 min so far", "10 min so far"],
+      // To its last look: when it was destroyed, the store didn't see; the step to the next start isn't a gap of it.
+      ["BN1.1 #2", at(40.5), `destroyed, BitNodes unseen before ${at(50.5)}`, "9 min 30 s so far", "9 min 30 s so far"],
+      [
+        "BN1.4",
+        at(50.5),
+        `b1t_flum3, or a destroy not sent by the brain at the cap, ${at(60.5)}`,
+        "10 min so far",
+        "10 min so far",
+      ],
+      ["BN1.4 #2", at(60.5), "not yet", "4 min 30 s so far", "4 min 30 s so far"],
     ]);
+    expect(bitNodeRows()[5]?.[5]).toBe("none");
     expect(report()).toContain("  BN2.1: entered with SF1.2\n");
     expect(releaseRows().map((row) => row[5])).toEqual([
       "destroyed",
       "yes, a clear of its own: 11 min online, 11 min by the clock",
-      "no",
-      "no",
       "yes, a clear of its own: 10 min online, 10 min by the clock",
       "no",
       "no",
+      "yes, BitNodes unseen after it",
       "no",
       "no",
+    ]);
+  });
+
+  test("with no Source-File before it, another BitNode is a new game: b1t_flum3 needs one", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5 });
+    play({ from: 11, to: 15, release: V100, node: 10.5, aug: 10.5 });
+    expect(bitNodeRows()[1]?.[2]).toBe(`a new game ${at(10.5)}`);
+  });
+
+  test("BN12's Source-File has no cap: at level 3 with none gained and no destroy, b1t_flum3 alone", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 5, release: V100, node: -0.5, aug: -0.5, bitNode: 12, sf: { 12: 3 } });
+    play({ from: 6, to: 8, release: V100, node: 5.5, aug: 5.5, bitNode: 12, sf: { 12: 3 } });
+    expect(bitNodeRows()[1]?.slice(0, 3)).toEqual(["BN12.4", at(-0.5), `b1t_flum3 ${at(5.5)}`]);
+  });
+
+  test("another Source-File rising with the BitNode's own: destroyed, with BitNodes unseen between", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5, sf: 1 });
+    play({ from: 11, to: 15, release: V100, node: 10.5, aug: 10.5, sf: { 1: 2, 2: 1 } });
+    expect(bitNodeRows()[1]?.[2]).toBe(`destroyed, BitNodes unseen before ${at(10.5)}`);
+    // Another rising alone: not this one's destroy.
+    play({ from: 16, to: 20, release: V100, node: 15.5, aug: 15.5, sf: { 1: 2, 2: 2 } });
+    expect(bitNodeRows()[2]?.[2]).toBe(`BitNodes unseen before ${at(15.5)}`);
+  });
+
+  test("Source-File overrides: one overridden on either side isn't compared; the BitNode's own falls back on the destroy sent", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    // SF4 overridden to 0 in BN1.2 (ownedSF hides it), shown at its level in BN1.3: not another Source-File rising.
+    play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5, sf: 1, overrides: { 4: 0 } });
+    play({ from: 11, to: 20, release: V100, node: 10.5, aug: 10.5, sf: { 1: 2, 4: 1 } });
+    // SF1 overridden to 0 in the next two (ownedSF hides it): its level doesn't say; the brain's destroy sent does.
+    event(20.2, V100, "bitNodeDestroySent", {});
+    play({ from: 21, to: 30, release: V100, node: 20.5, aug: 20.5, sf: { 4: 1 }, overrides: { 1: 0 } });
+    event(30.2, V100, "bitNodeDestroySent", {});
+    play({ from: 31, to: 40, release: V100, node: 30.5, aug: 30.5, sf: { 4: 1 }, overrides: { 1: 0 } });
+    // No destroy sent: unknown.
+    play({ from: 41, to: 45, release: V100, node: 40.5, aug: 40.5, sf: { 1: 3, 4: 1 } });
+    const rows = bitNodeRows();
+    expect(rows.slice(1).map((row) => row[2])).toEqual([
+      `destroyed ${at(10.5)}`,
+      `destroyed ${at(20.5)} (its Source-File overridden; the destroy sent)`,
+      `destroyed ${at(30.5)} (its Source-File overridden; the destroy sent)`,
+      `unknown ${at(40.5)} (its Source-File overridden, no destroy sent)`,
+      "not yet",
+    ]);
+    expect(report()).toContain("  BN1.2: entered with SF1.1 (overridden: SF4 at 0)\n");
+  });
+
+  test("a save loaded in a BitNode stops a clear of its own", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5 });
+    installSent(10.3, V100);
+    play({ from: 11, to: 20, release: V100, node: -0.5, aug: 10.5, augs: EARLY });
+    play({ from: 21, to: 25, release: V100, node: -0.5, aug: -0.5 });
+    play({ from: 26, to: 27, release: V100, node: 25.5, aug: 25.5, sf: 1 });
+    expect(releaseRows()[1]?.[5]).toBe("yes, with a save loaded in it");
+  });
+
+  test("another release only at a BitNode's start, up to 5 min with no install, leaves the next a clear of its own", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 2, release: V100, node: -0.5, aug: -0.5 });
+    event(2.5, V101, "brainStarted", { release: "v1.0.1" });
+    play({ from: 3, to: 10, release: V101, node: -0.5, aug: -0.5 });
+    installSent(10.3, V101);
+    play({ from: 11, to: 20, release: V101, node: -0.5, aug: 10.5, augs: EARLY });
+    // BN1.2 the same, but its first release played 5 min 30 s: more than the allowance.
+    play({ from: 21, to: 26, release: V100, node: 20.5, aug: 20.5, sf: 1 });
+    play({ from: 27, to: 40, release: V101, node: 20.5, aug: 20.5, sf: 1 });
+    // BN1.3: its first release installed at the start.
+    play({ from: 41, to: 42, release: V100, node: 40.5, aug: 40.5, sf: 2 });
+    installSent(42.3, V100);
+    play({ from: 43, to: 50, release: V101, node: 40.5, aug: 42.5, sf: 2, augs: EARLY });
+    // BN1.4: the first release came back after the other's first look.
+    play({ from: 51, to: 51, release: V100, node: 50.5, aug: 50.5, sf: 3 });
+    play({ from: 52, to: 55, release: V101, node: 50.5, aug: 50.5, sf: 3 });
+    play({ from: 56, to: 56, release: V100, node: 50.5, aug: 50.5, sf: 3 });
+    play({ from: 57, to: 60, release: V101, node: 50.5, aug: 50.5, sf: 3 });
+    event(60.2, V101, "bitNodeDestroySent", {});
+    play({ from: 61, to: 62, release: V101, node: 60.5, aug: 60.5, sf: 3 });
+    // A new game, whose BN1.1 v1.0.0 clears alone: compared with v1.0.1's, its starter's share shown.
+    play({ from: 63, to: 70, release: V100, node: 62.5, aug: 62.5 });
+    play({ from: 71, to: 72, release: V100, node: 70.5, aug: 70.5, sf: 1 });
+    expect(report()).toContain(
+      "  BN1.1: v1.0.0 8 min online (8 min by the clock, 1 cycle, left out: none; no Source-File); v1.0.1 21 min online " +
+        "(21 min by the clock, 2 cycles, left out: none; no Source-File) (v1.0.0's first 2 min 30 s)",
+    );
+    expect(releaseRows().slice(1)).toEqual([
+      ["v1.0.0", "BN1.1", "2 min 30 s", "1", "0", "no"],
+      ["v1.0.0", "BN1.2", "5 min 30 s", "1", "0", "no"],
+      ["v1.0.0", "BN1.3", "1 min 30 s", "1", "1", "no"],
+      ["v1.0.0", "BN1.4", "1 min 30 s", "1", "0", "no"],
+      ["v1.0.0", "BN1.1 #2", "8 min", "1", "0", "yes, a clear of its own: 8 min online, 8 min by the clock"],
+      ["v1.0.0", "BN1.2 #2", "1 min 30 s", "1", "0", "no"],
+      [
+        "v1.0.1",
+        "BN1.1",
+        "18 min 30 s",
+        "2",
+        "1",
+        "yes, a clear of its own (v1.0.0's first 2 min 30 s): 21 min online, 21 min by the clock",
+      ],
+      ["v1.0.1", "BN1.2", "14 min 30 s", "1", "0", "yes, played with v1.0.0 too"],
+      ["v1.0.1", "BN1.3", "8 min 30 s", "1", "0", "yes, played with v1.0.0 too"],
+      ["v1.0.1", "BN1.4", "8 min 30 s", "1", "0", "yes, played with v1.0.0 too"],
+      ["v1.0.1", "BN1.4 #2", "2 min", "1", "0", "no"],
     ]);
   });
 

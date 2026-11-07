@@ -193,12 +193,13 @@ npm run campaign
 It prints:
 - **A row per BitNode** ("BN1.2": the number and level; "BN1.4 #2" for one played again): its start, how it ended, the time to its end by the clock and **online** (the game and the brain both up), the time **left out** of that (the game closed, or the brain or the Agent away for over 3 minutes: the game goes on offline, so this says how much of a clear wasn't watched), the cycles, the installs (and how many **by hand**: from your queue, the game's Install button or a Soft Reset, not the brain's own rule), the augmentations installed, the brain starts, and the releases. "≥" marks what's at least that: a BitNode begun before the store's first record or reached by loading a save, or whose first look showed an install already. Under it, each BitNode's Source-Files as entered, its time online by release, its augmentations by name, and any save loaded in it.
 - **How a BitNode ended:**
-  - **destroyed**: its Source-File went up a level, or at the Source-File's cap (level 3) the brain sent the destroy;
+  - **destroyed**: its Source-File went up a level, or at the Source-File's cap (level 3) the brain sent the destroy just before; with its Source-File overridden in the BitNode's options, the brain's destroy says it, else it's **unknown**;
+  - **destroyed, BitNodes unseen**: its Source-File went up more than a level, or another one rose too, so BitNodes were played that the store didn't see (never a clear of its own); **BitNodes unseen** where only another rose;
   - **a save loaded**: the next BitNode's start is before this one's last look, so a save was loaded, older or newer (never counted as a destroy);
-  - **a new game**: a Source-File was lost;
+  - **a new game**: a Source-File was lost, or there was none (b1t_flum3 needs one);
   - **b1t_flum3**: another BitNode with no Source-File gained (at the cap, it could also be a destroy you did by hand);
   - for the newest BitNode, **destroy sent**, the next BitNode not seen yet, or **not yet**.
-- **A row per release and BitNode it played:** its time online there, its cycles and installs, and whether it destroyed it. "A clear of its own" is a BitNode one release played alone, from its start to its destroy, with no install by hand and no save loaded into it: the fair comparison.
+- **A row per release and BitNode it played:** its time online there, its cycles and installs, and whether it destroyed it. "A clear of its own" is a BitNode one release played from its start to its destroy, with no install by hand and no save loaded in it ("yes, with a save loaded in it" otherwise): the fair comparison. Another release that played only its first 5 minutes or less, with no install (a brain upgraded just after a destroy), doesn't stop it; its share is printed beside the clear (proposed owner decision 61).
 - **Compared:** each BitNode two releases or more cleared on their own, the fastest online first, with each clear's time left out and the Source-Files it was entered with.
 
 A release is the brain's version (`git describe`, "v1.0.1"), whatever the Agent's build. Upgrading mid-BitNode splits its time between the two releases, so neither has a clear of its own there. Running the brain from an untagged or changed checkout makes every commit its own release ("v1.0.0-4-gabc1234"), so a clear to compare is a tagged release's.

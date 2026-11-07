@@ -14,6 +14,7 @@ import {
 import { type BitNodeSpan, ResetDetection } from "./cycle-report.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import { formatDuration, formatIsoTime, plural } from "./gap-report.ts";
+import { RELOAD_LEAD_MS } from "./run-report.ts";
 import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
 
@@ -30,6 +31,12 @@ export const CAMPAIGN_EVENT_KINDS = [
  */
 const SOURCE_FILE_CAP = 3;
 const UNCAPPED_BITNODE = 12;
+/**
+ * Another release's time at a BitNode's start that still leaves the release that went on a clear of its own (proposed
+ * owner decision 61, #290): within the BitNode's first cycle, with no install, before the other's first slow snapshot,
+ * and at most this long online. A brain upgraded just after a destroy, as run #3's BN1.3 was (2 min 3 s).
+ */
+export const STARTER_ALLOWANCE_MS = 5 * 60_000;
 
 /**
  * A stored release as the campaign compares it: the brain's (`git describe` of its checkout, `brainRelease`), the part
@@ -55,14 +62,30 @@ interface ReleaseShare {
   cycles: Set<number>;
   /** The installs that ended a cycle whose last slow snapshot was its. */
   installs: Install[];
+  /** Its first and last slow snapshots in the BitNode (the brain's clock). */
+  firstAtMs: number;
+  lastAtMs: number;
 }
 
 /** How the store came to a BitNode from the one before it. */
 type Entry = "first" | "save loaded" | "reset";
 
+/**
+ * How the Source-Files changed at a reset (`sourceFileChange`), over those `sourceFileOverrides` hides on neither side:
+ * - "gained": the BitNode's own went up one, nothing else changed: a destroy (`RedPill.tsx:62-63`);
+ * - "gained, unseen": up more than one, or another rose too: destroyed, and BitNodes played the store didn't see;
+ * - "unseen": another rose, its own didn't: BitNodes the store didn't see;
+ * - "lost": one fell: a new game;
+ * - "overridden": its own is overridden on either side, so its level doesn't say (`NetscriptFunctions.ts:1491-1495`);
+ * - "none": none changed.
+ */
+type SourceFileChange = "gained" | "gained, unseen" | "unseen" | "lost" | "overridden" | "none";
+
 /** A BitNode as the campaign keeps it. */
 interface CampaignBitNode extends BitNodeSpan {
   entry: Entry;
+  /** At a reset, how the Source-Files changed from the BitNode before; null otherwise. */
+  change: SourceFileChange | null;
   /** Its time online (`advanceOnlineClock` over the BitNode, keyed by its `lastNodeReset`), start and destroy in. */
   clock: OnlineClock;
   /** The game's time of its newest slow snapshot. */
@@ -84,10 +107,34 @@ interface CampaignBitNode extends BitNodeSpan {
   /** Its first and newest slow snapshots' `ownedSF`; its newest's `ownedAugs`, NeuroFlux Governor's levels counted. */
   firstOwnedSF: Record<string, number>;
   lastOwnedSF: Record<string, number>;
+  /** Its first and newest slow snapshots' `sourceFileOverrides` (BitNode options, `BitNodeUtils.ts:54-62`). */
+  firstOverrides: Record<string, number>;
+  lastOverrides: Record<string, number>;
   ownedAugs: Record<string, number> | null;
 }
 
 const sourceFilesOf = (data: SlowSnapshotData) => fieldsOf(data.resetInfo?.ownedSF) as Record<string, number>;
+/** The BitNode's Source-File overrides: `ownedSF` shows an overridden one at its override (`activeSourceFiles`). */
+const overridesOf = (data: SlowSnapshotData) =>
+  fieldsOf(fieldsOf(data.resetInfo?.bitNodeOptions).sourceFileOverrides) as Record<string, number>;
+
+/** How the Source-Files changed from `before`'s last look to `next`'s first (`SourceFileChange`). */
+function sourceFileChange(before: CampaignBitNode, next: CampaignBitNode): SourceFileChange {
+  const overridden = new Set([...Object.keys(before.lastOverrides), ...Object.keys(next.firstOverrides)]);
+  const level = (ownedSF: Record<string, number>, node: string) => (isFiniteNumber(ownedSF[node]) ? ownedSF[node] : 0);
+  const compared = [...new Set([...Object.keys(before.lastOwnedSF), ...Object.keys(next.firstOwnedSF)])].filter(
+    (node) => !overridden.has(node),
+  );
+  if (compared.some((node) => level(next.firstOwnedSF, node) < level(before.lastOwnedSF, node))) return "lost";
+  const own = String(before.currentNode);
+  const othersRose = compared.some(
+    (node) => node !== own && level(next.firstOwnedSF, node) > level(before.lastOwnedSF, node),
+  );
+  if (overridden.has(own)) return othersRose ? "unseen" : "overridden";
+  const gain = level(next.firstOwnedSF, own) - level(before.lastOwnedSF, own);
+  if (gain === 0) return othersRose ? "unseen" : "none";
+  return gain === 1 && !othersRose ? "gained" : "gained, unseen";
+}
 
 /** The fold over the store's slow snapshots, in order. */
 class CampaignFold {
@@ -95,6 +142,7 @@ class CampaignFold {
     newBitNode: (span) => ({
       ...span,
       entry: "first",
+      change: null,
       // The bars' clock keyed by the BitNode's `lastNodeReset` (its `lastAugReset` field holds it): one clock for the
       // whole BitNode, from its start, installs and all.
       clock: advanceOnlineClock(null, span.lastNodeReset, span.lastNodeReset).clock,
@@ -109,6 +157,8 @@ class CampaignFold {
       savesLoadedAtMs: [],
       firstOwnedSF: {},
       lastOwnedSF: {},
+      firstOverrides: {},
+      lastOverrides: {},
       ownedAugs: null,
     }),
   });
@@ -131,16 +181,23 @@ class CampaignFold {
     const isNew = bitNode !== before;
     if (isNew) {
       bitNode.firstOwnedSF = sourceFilesOf(data);
+      bitNode.firstOverrides = overridesOf(data);
       bitNode.cycles.add(cycle.lastAugReset);
       if (before !== undefined) {
         // A start before the last look is a save's, loaded (an older BitNode, or a newer one gone back to); a start
-        // after it, the game's: a destroy, b1t_flum3 or a new game (`viewOf` tells which), its edge online if near.
+        // after it, the game's: a destroy, b1t_flum3 or a new game (`endingOf` tells which), its edge online if near,
+        // unless BitNodes the store didn't see came between.
         bitNode.entry = bitNode.lastNodeReset < before.lastGameTimeMs ? "save loaded" : "reset";
-        if (bitNode.entry === "reset") this.#step(before, bitNode.lastNodeReset, before.lastRelease);
+        if (bitNode.entry === "reset") {
+          bitNode.change = sourceFileChange(before, bitNode);
+          const unseen = bitNode.change === "unseen" || bitNode.change === "gained, unseen";
+          if (!unseen) this.#step(before, bitNode.lastNodeReset, before.lastRelease);
+        }
       }
     } else if (cycle !== lastCycle) {
       // Another cycle in the same BitNode: an install, its `lastAugReset` new and after the last look (the game's time
-      // at the install, `PlayerObjectGeneralMethods.ts:126`), or a save loaded, older or newer.
+      // at the install, `PlayerObjectGeneralMethods.ts:126`), or a save loaded, older or newer. One edge: the PC's
+      // clock set back before an install makes its `lastAugReset` earlier than the last look: read as a save loaded.
       if (bitNode.augResets.has(cycle.lastAugReset) || cycle.lastAugReset < bitNode.lastGameTimeMs) {
         bitNode.savesLoadedAtMs.push(atMs);
       } else {
@@ -153,10 +210,14 @@ class CampaignFold {
     // The step to this slow snapshot is its release's, a step across a change of release the new one's.
     const leftOutMs = this.#step(bitNode, gameTimeMs, release);
     if (isNew) bitNode.startLeftOutMs = Math.max(0, leftOutMs);
-    if (bitNode.cycles.has(cycle.lastAugReset)) this.#shareOf(bitNode, release).cycles.add(cycle.lastAugReset);
+    const share = this.#shareOf(bitNode, release);
+    if (bitNode.cycles.has(cycle.lastAugReset)) share.cycles.add(cycle.lastAugReset);
+    share.firstAtMs = Math.min(share.firstAtMs, atMs);
+    share.lastAtMs = atMs;
     bitNode.augResets.add(cycle.lastAugReset);
     bitNode.lastRelease = release;
     bitNode.lastOwnedSF = sourceFilesOf(data);
+    bitNode.lastOverrides = overridesOf(data);
     const ownedAugs = data.resetInfo?.ownedAugs;
     bitNode.ownedAugs = typeof ownedAugs === "object" && ownedAugs !== null ? ownedAugs : null;
   }
@@ -180,17 +241,19 @@ class CampaignFold {
   #shareOf(bitNode: CampaignBitNode, release: string): ReleaseShare {
     let share = bitNode.releases.get(release);
     if (share === undefined) {
-      share = { onlineMs: 0, cycles: new Set(), installs: [] };
+      share = { onlineMs: 0, cycles: new Set(), installs: [], firstAtMs: Number.POSITIVE_INFINITY, lastAtMs: 0 };
       bitNode.releases.set(release, share);
     }
     return share;
   }
 }
 
-/** How a BitNode ended, and when (the brain's clock), if it was destroyed. */
+/** How a BitNode ended, and when (the brain's clock), if it was destroyed and the next BitNode was the one after. */
 interface Ending {
   text: string;
   destroyedAtMs: number | null;
+  /** Destroyed, with BitNodes the store didn't see before the next: its destroy's time unknown, never a clear. */
+  unseenAfter: boolean;
 }
 
 /** What the report says of one BitNode, worked out once. */
@@ -333,7 +396,8 @@ function viewOf(
     begunBefore,
     startSeen,
     ending: endingOf(bitNode, next, its),
-    wallMs: (next?.startMs ?? bitNode.lastSlowAtMs) - bitNode.startMs,
+    // To the next BitNode's start, or its last look where BitNodes the store didn't see came between.
+    wallMs: (unseenAfter(next) ? bitNode.lastSlowAtMs : (next?.startMs ?? bitNode.lastSlowAtMs)) - bitNode.startMs,
     // Its first cycle, from `lastNodeReset`, and one more for each install.
     cycles: installs + 1,
     installs,
@@ -343,37 +407,55 @@ function viewOf(
   };
 }
 
+const unseenAfter = (next: CampaignBitNode | undefined) =>
+  next?.entry === "reset" && (next.change === "unseen" || next.change === "gained, unseen");
+
 /**
  * How a BitNode ended, from the next one's start:
  * - before its last look: a save loaded (`CampaignFold.add`);
- * - its Source-File gained a level: destroyed (`RedPill.tsx:62-63`, `giveSourceFile`);
- * - at its Source-File's cap (`RedPill.tsx:28`, no level to gain) with a `bitNodeDestroySent` in it: destroyed;
- * - a Source-File lost: a new game (a new player's `lastNodeReset` is the time it began, `PlayerObject.ts:168`);
+ * - its Source-File gained a level: destroyed (`RedPill.tsx:62-63`, `giveSourceFile`); more than one, or another
+ *   Source-File rose too: destroyed, with BitNodes the store didn't see between; another rose alone: those BitNodes;
+ * - at its Source-File's cap (`RedPill.tsx:28`, no level to gain), or with its Source-File overridden (its level
+ *   doesn't say), the brain's `bitNodeDestroySent` after its last look: destroyed; overridden with none: unknown;
+ * - a Source-File lost, or none to lose (b1t_flum3 needs one: `Programs.ts:29-33`, `BitNodeUtils.ts:21-25`): a new
+ *   game (a new player's `lastNodeReset` is the time it began, `PlayerObject.ts:168`);
  * - otherwise b1t_flum3, which enters a BitNode with no Source-File (`RedPill.tsx:62`, its `isFlume`;
  *   `Programs.ts:306-322`, `Singularity.ts:1148`), or, at the cap, a destroy the brain didn't send.
+ * The destroy sent counts only as the last in the BitNode, and no more than `RELOAD_LEAD_MS` before its last look: one
+ * with slow snapshots of the BitNode after it didn't happen then.
  */
 function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, its: readonly StoredEvent[]): Ending {
-  const sent = its.findLast((event) => event.kind === BITNODE_DESTROY_SENT_EVENT_KIND);
+  const last = its.findLast((event) => event.kind === BITNODE_DESTROY_SENT_EVENT_KIND);
+  const sent = last !== undefined && last.atMs >= bitNode.lastSlowAtMs - RELOAD_LEAD_MS ? last : undefined;
+  const ended = (text: string, destroyedAtMs: number | null = null) => ({ text, destroyedAtMs, unseenAfter: false });
   if (next === undefined) {
-    return {
-      text: sent === undefined ? "not yet" : `destroy sent ${formatIsoTime(sent.atMs)}, the next BitNode not seen`,
-      destroyedAtMs: null,
-    };
+    return ended(
+      sent === undefined ? "not yet" : `destroy sent ${formatIsoTime(sent.atMs)}, the next BitNode not seen`,
+    );
   }
   const at = formatIsoTime(next.startMs);
-  if (next.entry === "save loaded")
-    return { text: `a save loaded ${formatIsoTime(next.firstSlowAtMs)}`, destroyedAtMs: null };
-  const node = String(bitNode.currentNode);
-  const levelBefore = bitNode.lastOwnedSF[node] ?? 0;
-  const lost = Object.entries(bitNode.lastOwnedSF).some(([each, level]) => (next.firstOwnedSF[each] ?? 0) < level);
-  if (lost) return { text: `a new game ${at}`, destroyedAtMs: null };
-  if ((next.firstOwnedSF[node] ?? 0) > levelBefore) return { text: `destroyed ${at}`, destroyedAtMs: next.startMs };
+  if (next.entry === "save loaded") return ended(`a save loaded ${formatIsoTime(next.firstSlowAtMs)}`);
+  switch (next.change) {
+    case "lost":
+      return ended(`a new game ${at}`);
+    case "gained":
+      return ended(`destroyed ${at}`, next.startMs);
+    case "gained, unseen":
+      return { text: `destroyed, BitNodes unseen before ${at}`, destroyedAtMs: null, unseenAfter: true };
+    case "unseen":
+      return ended(`BitNodes unseen before ${at}`);
+    case "overridden":
+      return sent === undefined
+        ? ended(`unknown ${at} (its Source-File overridden, no destroy sent)`)
+        : ended(`destroyed ${at} (its Source-File overridden; the destroy sent)`, next.startMs);
+  }
+  const levelBefore = bitNode.lastOwnedSF[String(bitNode.currentNode)] ?? 0;
   const atCap = levelBefore >= SOURCE_FILE_CAP && bitNode.currentNode !== UNCAPPED_BITNODE;
-  if (atCap && sent !== undefined) return { text: `destroyed ${at} (at the cap)`, destroyedAtMs: next.startMs };
-  return {
-    text: atCap ? `b1t_flum3, or a destroy not sent by the brain at the cap, ${at}` : `b1t_flum3 ${at}`,
-    destroyedAtMs: null,
-  };
+  if (atCap && sent !== undefined) return ended(`destroyed ${at} (at the cap)`, next.startMs);
+  const noSourceFile =
+    Object.keys(bitNode.lastOverrides).length === 0 && !Object.values(bitNode.lastOwnedSF).some((level) => level > 0);
+  if (noSourceFile) return ended(`a new game ${at}`);
+  return ended(atCap ? `b1t_flum3, or a destroy not sent by the brain at the cap, ${at}` : `b1t_flum3 ${at}`);
 }
 
 /** The BitNodes, a row each, then each one's releases, Source-Files and augmentations. */
@@ -419,7 +501,9 @@ function bitNodeSection(views: readonly BitNodeView[]): string[] {
   lines.push(...table([header, ...rows]), "", "Each BitNode:");
   for (const view of views) {
     const { bitNode } = view;
-    lines.push(`  ${view.name}: entered with ${describeSourceFiles(bitNode.firstOwnedSF)}`);
+    const overrides = Object.entries(bitNode.firstOverrides).map(([node, level]) => `SF${node} at ${level}`);
+    const overridden = overrides.length === 0 ? "" : ` (overridden: ${overrides.join(", ")})`;
+    lines.push(`  ${view.name}: entered with ${describeSourceFiles(bitNode.firstOwnedSF)}${overridden}`);
     const shares = [...bitNode.releases].map(([release, share]) => `${release} ${formatDuration(share.onlineMs)}`);
     lines.push(`    time online by release: ${shares.join(", ")}`);
     const installed = Object.entries(bitNode.ownedAugs ?? {}).flatMap(([name, level]) =>
@@ -439,21 +523,47 @@ function bitNodeSection(views: readonly BitNodeView[]): string[] {
 }
 
 /**
- * Whether a release cleared a BitNode on its own: it alone played it, the store seeing it from its start (and its first
- * cycle) to its destroy, every install the brain's.
+ * The other releases that played only at a BitNode's start (`STARTER_ALLOWANCE_MS`, proposed owner decision 61): no
+ * install, at most that long online, all before the release that went on (its last) first played it. Null where another
+ * release played more than that: no release cleared it on its own.
+ */
+function startersOf(bitNode: CampaignBitNode): [string, ReleaseShare][] | null {
+  const clearer = bitNode.releases.get(bitNode.lastRelease);
+  const others = [...bitNode.releases].filter(([release]) => release !== bitNode.lastRelease);
+  const starter = (share: ReleaseShare) =>
+    clearer !== undefined &&
+    share.installs.length === 0 &&
+    share.onlineMs <= STARTER_ALLOWANCE_MS &&
+    share.lastAtMs < clearer.firstAtMs;
+  return others.every(([, share]) => starter(share)) ? others : null;
+}
+
+/** "(v0.2.0-53-g7c741cc's first 2 min 3 s)", each release that played only at the start, or "". */
+function describeStarters(bitNode: CampaignBitNode): string {
+  const starters = startersOf(bitNode) ?? [];
+  if (starters.length === 0) return "";
+  return ` (${starters.map(([release, share]) => `${release}'s first ${formatDuration(share.onlineMs)}`).join(", ")})`;
+}
+
+/**
+ * Whether a release cleared a BitNode on its own: it played it, the store seeing it from its start (and its first
+ * cycle) to its destroy, with no save loaded in it and every install the brain's; another release only at its start
+ * (`startersOf`).
  */
 const clearedAlone = (view: BitNodeView) =>
   view.ending.destroyedAtMs !== null &&
   view.startSeen &&
   !view.bitNode.installedBeforeFirstLook &&
   view.byHand === 0 &&
-  view.bitNode.releases.size === 1;
+  view.bitNode.savesLoadedAtMs.length === 0 &&
+  startersOf(view.bitNode) !== null;
 
 /** A row per release and BitNode it played, the releases in the order first seen. */
 function releaseSection(views: readonly BitNodeView[], releases: readonly string[]): string[] {
   const lines = [
-    "By release, one row per release and BitNode it played (a clear of its own where it alone played the BitNode, " +
-      "from its start to its destroy, every install the brain's):",
+    "By release, one row per release and BitNode it played (a clear of its own where it played the BitNode from its " +
+      "start to its destroy, no save loaded in it, every install the brain's, and another release at most its first " +
+      `${formatDuration(STARTER_ALLOWANCE_MS)}, with no install):`,
   ];
   const header = ["release", "BitNode", "online", "cycles", "installs", "destroyed"];
   const rows: string[][] = [];
@@ -476,13 +586,16 @@ function releaseSection(views: readonly BitNodeView[], releases: readonly string
 }
 
 function destroyedBy(view: BitNodeView, release: string): string {
-  if (view.ending.destroyedAtMs === null || view.bitNode.lastRelease !== release) return "no";
+  if (view.bitNode.lastRelease !== release) return "no";
+  if (view.ending.unseenAfter) return "yes, BitNodes unseen after it";
+  if (view.ending.destroyedAtMs === null) return "no";
   const clear = `${formatDuration(view.bitNode.clock.onlineMs)} online, ${formatDuration(view.wallMs)} by the clock`;
-  if (clearedAlone(view)) return `yes, a clear of its own: ${clear}`;
+  if (clearedAlone(view)) return `yes, a clear of its own${describeStarters(view.bitNode)}: ${clear}`;
   if (view.bitNode.entry === "save loaded") return "yes, from a save loaded";
   if (view.begunBefore || view.bitNode.installedBeforeFirstLook)
     return "yes, the BitNode's start not seen in the store";
   if (view.byHand > 0) return `yes, with ${plural(view.byHand, "install", "installs")} by hand`;
+  if (view.bitNode.savesLoadedAtMs.length > 0) return "yes, with a save loaded in it";
   const others = [...view.bitNode.releases.keys()].filter((each) => each !== release);
   return `yes, played with ${others.join(", ")} too`;
 }
@@ -505,7 +618,8 @@ function comparedSection(views: readonly BitNodeView[]): string[] {
       (view) =>
         `${view.bitNode.lastRelease} ${formatDuration(view.bitNode.clock.onlineMs)} online ` +
         `(${formatDuration(view.wallMs)} by the clock, ${plural(view.cycles, "cycle", "cycles")}, left out: ` +
-        `${describeLeftOut(view.gapsMs)}; ${describeSourceFiles(view.bitNode.firstOwnedSF)})`,
+        `${describeLeftOut(view.gapsMs)}; ${describeSourceFiles(view.bitNode.firstOwnedSF)})` +
+        describeStarters(view.bitNode),
     );
     lines.push(`  ${label}: ${each.join("; ")}`);
   }
