@@ -34,6 +34,11 @@ export const DEFAULT_WALL_LIMIT_MS = 60 * 60_000;
 export const DEFAULT_MAX_HEAP_MB = 2048;
 
 export interface CliDeps {
+  /**
+   * Throws unless this is the repo's pinned Node major (`checkNodeVersion`, #282): the rows are only comparable on one
+   * Node. Checked before anything else.
+   */
+  checkNode: () => void;
   buildEngine: () => Promise<unknown>;
   runScenario: (
     scenario: Scenario,
@@ -53,14 +58,15 @@ export interface CliDeps {
 
 /**
  * Runs the CLI. Returns the exit code: 0 if every seed reached 12 virtual hours, 1 if any didn't, 2 if it couldn't run.
- * Everything that can refuse (arguments, the `--json` folder, the commit, the rig's name) is checked before the run,
- * and the JSON is written as soon as the run ends, so a run's results are never lost to a late error.
+ * Everything that can refuse (the Node version, arguments, the `--json` folder, the commit, the rig's name) is checked
+ * before the run, and the JSON is written as soon as the run ends, so a run's results are never lost to a late error.
  */
 export async function baselineCli(argv: string[], deps: CliDeps): Promise<number> {
   let meta: Parameters<typeof baselineRows>[1];
   let options: { seeds?: number[]; workers: number; wallLimitMs: number; maxHeapMb: number };
   let json: string | undefined;
   try {
+    deps.checkNode();
     const { values, positionals } = parseArgs({
       args: argv,
       allowPositionals: true,

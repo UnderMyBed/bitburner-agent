@@ -46,7 +46,7 @@ It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each se
 - the fork makes progress (money, hacking level) within a virtual hour
 - the script refuses bad arguments with exit 2
 
-`test/cli.test.ts`, the CLI with a stubbed run: exit 0 (every seed reached 12 hours) and 1 (a seed's wall limit stopped it), its defaults (one worker, an hour, 2 GB) and the flags that change them, progress lines on stderr, the rows' details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for bad arguments, a missing `--json` folder, a bad rig name or no commit.
+`test/cli.test.ts`, the CLI with a stubbed run: exit 0 (every seed reached 12 hours) and 1 (a seed's wall limit stopped it), its defaults (one worker, an hour, 2 GB) and the flags that change them, progress lines on stderr, the rows' details, `--json` written relative to where npm ran before anything prints, and exit 2 before any run for a Node other than the repo's (checked before the engine is built and before the arguments are read, [#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)), bad arguments, a missing `--json` folder, a bad rig name or no commit.
 
 `test/report.test.ts`: money and `--seeds` formatting, the heap table at each checkpoint, and the rows, one per checkpoint. The rows' data is chosen so that only the median gives each value, a wall-limited seed's checkpoint counts in Reached, and only the seeds that didn't fail count for speed and real time.
 

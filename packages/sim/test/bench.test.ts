@@ -8,6 +8,7 @@ import {
   formatRow,
   growthPerDay,
   parseRows,
+  previousRow,
   regressions,
   rigId,
   rowText,
@@ -142,6 +143,19 @@ describe("regressions", () => {
     // lean: 7999 is just over 20% slower than 10000; churn: 3200 is exactly 20%, which is allowed.
     const now = row({ speeds: { lean: 7999, batch: 9000, churn: 3200, copies: 7000 } });
     expect(regressions(now, earlier)).toEqual(["lean: 7999x is 20.0% slower than 2026-10-24 (last), at 10000x"]);
+  });
+
+  test("only rows on the same Node major are compared: majors differ in speed (#282)", () => {
+    const earlier = [
+      row({ commit: "node24", node: "v24.22.1", speeds: { lean: 10000, batch: 9000, churn: 4000, copies: 7000 } }),
+      row({ commit: "node26", node: "v26.13.0", speeds: { lean: 13000, batch: 9000, churn: 4000, copies: 7000 } }),
+    ];
+    const slow = { lean: 9000, batch: 9000, churn: 4000, copies: 7000 };
+    expect(regressions(row({ node: "v24.0.0", speeds: slow }), earlier)).toEqual([]);
+    expect(regressions(row({ node: "v26.1.0", speeds: slow }), earlier)).toEqual([
+      "lean: 9000x is 30.8% slower than 2026-10-24 (node26), at 13000x",
+    ]);
+    expect(previousRow(row({ node: "v22.1.0" }), earlier)).toBeUndefined();
   });
 
   test("a workload the last row doesn't have isn't compared", () => {
