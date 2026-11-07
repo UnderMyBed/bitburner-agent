@@ -1,5 +1,5 @@
 /**
- * The cycle model (the fast model, #13: slice 1, #260; slice 2, part 1, #263): BN1 stepped a minute at a time from the
+ * The cycle model (the fast model, #13: slice 1, #260; slice 2, #263): BN1 stepped a minute at a time from the
  * BitNode's start to its destroy, install to install, with the brain's own choices made by core's own functions on the
  * model's state, so it can't drift from the brain:
  * - A5's work (core's `factionWorkChoice`: the most hacking value per second of work, The Red Pill first, toward
@@ -12,9 +12,10 @@
  * - at each install, the favour (`favorAfterInstall`), the multipliers (`installGains`, SF1's bonus) and home's RAM.
  * What core can't say, the hacking level and the gross income over a cycle, is calibrated (./calibration.ts,
  * ./curves.ts). #263: the money in hand is the gross less the brain's purchases through the cycle (./money.ts); the
- * share bonus is the game's formula on a fitted share of the cycle's RAM; A6's countdown, holds and lookahead follow
- * the brain's, tested against it on the same inputs (packages/brain/test/augmentations.test.ts and
- * desired-state.test.ts); cycles past the curves' range are flagged and bounded.
+ * share bonus is the game's formula on the share threads, by core's `shareRound` for today's brain (#242) and a
+ * fitted share of the RAM for run #3's; A6's countdown, holds and lookahead follow the brain's, tested against it on
+ * the same inputs (packages/brain/test/augmentations.test.ts and desired-state.test.ts); cycles past the curves' range
+ * are flagged and bounded.
  * Not wired into the brain's choices (owner decision 46: phase B replaces a choice only where it measurably beats it).
  */
 import {
@@ -54,6 +55,7 @@ import {
   reputationToUnlockDonations,
   SHARE_RAM_GB,
   shareBonusOfPower,
+  shareRound,
   THE_RED_PILL,
   TIAN_DI_HUI,
   TIAN_DI_HUI_HACKING,
@@ -107,6 +109,12 @@ export interface CyclePolicy {
   /** #243's hold for Daedalus's count (owner decision 56): today's brain holds; run #3's (main 7c741cc) didn't. */
   daedalusCountHold: boolean;
   /**
+   * #242's share (PR #259): home's RAM shares beside the batches' hosts, less what it keeps for the Agent
+   * (`shareBonusOfState`). Absent, it does: today's brain. Run #3's brain and the simulator probe's (main 412d97b) came
+   * before it, and shared under one cap over every host, home included, which the batches' use filled.
+   */
+  homeShares?: boolean;
+  /**
    * A joined faction to work for toward the favour that unlocks its donations at the next install, in place of A5's
    * choice; null for A5's. Ignored for a faction not joined, or with that favour's reputation earned.
    */
@@ -119,9 +127,9 @@ export interface CyclePolicy {
 }
 
 /** Today's brain: every rule as on main. */
-export const TODAYS_POLICY: CyclePolicy = { name: "today's brain", daedalusCountHold: true };
-/** Run #3's brain (main 7c741cc, 2026-11-05): before #243's hold. The validation's. */
-export const RUN_3_POLICY: CyclePolicy = { name: "run #3's brain", daedalusCountHold: false };
+export const TODAYS_POLICY: CyclePolicy = { name: "today's brain", daedalusCountHold: true, homeShares: true };
+/** Run #3's brain (main 7c741cc, 2026-11-05): before #243's hold and #242's share. The fit's. */
+export const RUN_3_POLICY: CyclePolicy = { name: "run #3's brain", daedalusCountHold: false, homeShares: false };
 
 /** Why a cycle ended: A6's reason, or the policy's own install. */
 export type ModelInstallReason = InstallReason | "policy";
@@ -224,6 +232,8 @@ export interface ModelOptions {
     /** The gross income a second over the brain's 10-minute window, null till it's full. */
     income: number | null;
     shareBonus: number;
+    /** The rooted world servers' RAM, GB: the hack loop's hosts beside the cloud servers. */
+    worldRamGb: number;
     purse: Readonly<Purse>;
     clocks: Clocks;
   }) => void;
@@ -291,7 +301,9 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   for (let now = 0; now <= horizonMs; now += stepMs) {
     const onlineMs = now - cycleStartMs;
     const multipliers = multipliersOf(installed, sourceFile1Level);
-    if (onlineMs > 0) clocks = curves.advanceClocks(clocks, stepMs, multipliers, purse.homeRamGb);
+    if (onlineMs > 0) {
+      clocks = curves.advanceClocks(clocks, stepMs, multipliers, purse.homeRamGb, cloudRamOf(purse) === 0);
+    }
     const measured = options.measured?.[cycles.length];
     const reading = measured === undefined ? null : measuredAt(measured.points, onlineMs / MINUTE_MS);
     const hacking = reading?.hacking ?? curves.hackingLevelAt(clocks.exp, multipliers);
@@ -317,12 +329,15 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     // servers. The money in hand is what's left (#263); with `money: "gross"`, A6 and the joins see the gross instead.
     const ports = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
     purse = spendThroughCycle(purse, gross, income, onlineMs, holds, ROOTED_WORLD_RAM_GB_BY_PORTS[ports] as number);
+    // The ports after the step's purchases: the hosts the share sees.
+    const portsNow = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
     const cash = gross - purse.spent;
     const money = byCash ? cash : gross;
+    const worldRamGb = ROOTED_WORLD_RAM_GB_BY_PORTS[portsNow] as number;
     const shareBonus = byState
-      ? shareBonusOfState(purse, curves.calibration)
+      ? shareBonusOfState(purse, curves.calibration, policy.homeShares ?? true, worldRamGb, cycles.length)
       : shareBonusOf(curves.calibration, cycles.length);
-    options.onStep?.({ atMs: now, onlineMs, hacking, money, gross, income, shareBonus, purse, clocks });
+    options.onStep?.({ atMs: now, onlineMs, hacking, money, gross, income, shareBonus, worldRamGb, purse, clocks });
     if (Object.hasOwn(installed, THE_RED_PILL) && hacking >= WORLD_DAEMON_HACKING) {
       destroyedAtMs = now;
       events.push({ atMs: now, kind: "destroyed" });
@@ -642,13 +657,67 @@ export function holdsOf(
 }
 
 /**
- * The share bonus while working, from the cycle's RAM (#263; core's `shareBonusOfPower`, the game's
- * `calculateShareBonus`): `Calibration.shareRamShare` of home's and the cloud servers' RAM in share threads of
- * `SHARE_RAM_GB` each. The RAM, not the install index (#260's), so a policy that moves the installs gets its own.
+ * What home keeps free of share threads for the Agent's workers, GB: the brain's `SHARE_HOME_KEPT_GB`
+ * (packages/brain/src/share.ts, 4 × `HOME_KEPT_FOR_THE_AGENT_GB`), checked equal by the brain's tests.
  */
-export function shareBonusOfState(purse: Purse, calibration: Calibration): number {
-  const ram = purse.homeRamGb + cloudRamOf(purse);
-  return shareBonusOfPower(1 + (calibration.shareRamShare * ram) / SHARE_RAM_GB);
+export const SHARE_HOME_KEPT_GB = 32;
+/**
+ * Home's RAM in use beside the share, GB: what the Agent and its largest fresh-save worker take, the brain's
+ * `HOME_KEPT_FOR_THE_AGENT_GB` (packages/brain/src/batcher.ts), an equal constant (the brain's tests check it). That's
+ * what the brain reserves, not the game's `getServerUsedRam("home")`, which `shareRound` is given live and which
+ * holds whatever else runs on home. The batches never run on home.
+ */
+export const HOME_USED_BY_THE_AGENT_GB = 8;
+
+/**
+ * The RAM in share threads while working, GB (#263), the cycle's (`cycleIndex`, 0-based) by #242's rule (today's
+ * brain): core's `shareRound` itself, on two hosts. Home, which the batches never use, with the Agent's
+ * `HOME_USED_BY_THE_AGENT_GB` in use and `SHARE_HOME_KEPT_GB` kept; and the batches' hosts as one, the rooted world
+ * servers (`worldRamGb`) and the cloud servers, at `Calibration.batchesUseOfHosts` in use, which share only up to
+ * core's `SHARE_MOST_USE`. The batches' reserve for their next peak (`shareReserveGb`) is left out: the share is the
+ * most the RAM allows.
+ */
+export function shareRamGbOfState(purse: Purse, calibration: Calibration, worldRamGb = 0, cycleIndex = 0): number {
+  const uses = calibration.batchesUseOfHosts;
+  const use = uses[Math.min(cycleIndex, uses.length - 1)] ?? 0;
+  const batchesGb = worldRamGb + cloudRamOf(purse);
+  const { placed } = shareRound(
+    [
+      {
+        host: "home",
+        maxGb: purse.homeRamGb,
+        usedGb: Math.min(purse.homeRamGb, HOME_USED_BY_THE_AGENT_GB),
+        batches: false,
+      },
+      { host: "the batches' hosts", maxGb: batchesGb, usedGb: use * batchesGb },
+    ],
+    0,
+    SHARE_HOME_KEPT_GB,
+  );
+  return placed.reduce((sum, each) => sum + each.threads, 0) * SHARE_RAM_GB;
+}
+
+/**
+ * The share bonus while working, from the cycle's RAM (#263; core's `shareBonusOfPower`, the game's
+ * `calculateShareBonus`), in share threads of `SHARE_RAM_GB` each. The RAM, not the install index (#260's), so a
+ * policy that moves the installs gets its own.
+ * - `homeShares` (#242, today's brain; the default, as `CyclePolicy.homeShares`'): `shareRamGbOfState`'s threads.
+ * - Else (run #3's brain, before #242): one cap over every host, which the batches' use filled for long stretches, and
+ *   the share gapped between rounds (#242's table: ×1.0 in up to 69% of an hour's fast samples). Not the rule's to say:
+ *   `Calibration.shareRamShare` of home's and the cloud servers' RAM, fitted on run #3.
+ */
+export function shareBonusOfState(
+  purse: Purse,
+  calibration: Calibration,
+  homeShares = true,
+  worldRamGb = 0,
+  cycleIndex = 0,
+): number {
+  if (!homeShares) {
+    const ram = purse.homeRamGb + cloudRamOf(purse);
+    return shareBonusOfPower(1 + (calibration.shareRamShare * ram) / SHARE_RAM_GB);
+  }
+  return shareBonusOfPower(1 + shareRamGbOfState(purse, calibration, worldRamGb, cycleIndex) / SHARE_RAM_GB);
 }
 
 function isCountRule(reason: ModelInstallReason): boolean {

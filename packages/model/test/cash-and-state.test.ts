@@ -37,7 +37,9 @@ import {
   RUN_3_SHARE_BONUS,
   runModel,
   shareBonusOfState,
+  shareRamGbOfState,
   spendThroughCycle,
+  TODAYS_POLICY,
 } from "../src/index.ts";
 import { RUN_3_BN1_2 } from "./fixtures.ts";
 
@@ -362,12 +364,50 @@ describe("what the purchases leave alone (`holdsOf`)", () => {
 });
 
 describe("the share from the state (#263), not the install index", () => {
-  test("the game's bonus for the share of home's and the cloud servers' RAM in share threads", () => {
+  test("run #3's brain's (before #242): the game's bonus for a fitted share of home's and the cloud servers' RAM", () => {
     const purse = { ...freshPurse(1024), cloudServersRamGb: [2048, 2048] };
     const threads = (CALIBRATION.shareRamShare * (1024 + 4096)) / SHARE_RAM_GB;
     expect(cloudRamOf(purse)).toBe(4096);
-    expect(shareBonusOfState(purse, CALIBRATION)).toBe(shareBonusOfPower(1 + threads));
-    expect(shareBonusOfState(freshPurse(1024), CALIBRATION)).toBeLessThan(shareBonusOfState(purse, CALIBRATION));
+    expect(shareBonusOfState(purse, CALIBRATION, false)).toBe(shareBonusOfPower(1 + threads));
+    expect(shareBonusOfState(freshPurse(1024), CALIBRATION, false)).toBeLessThan(
+      shareBonusOfState(purse, CALIBRATION, false),
+    );
+  });
+
+  test("#242's (today's brain, the default): core's `shareRound` on home and the batches' hosts", () => {
+    const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
+    // Home less the Agent's 8 GB in use and the 32 kept: (8192 − 8 − 32) / 4 = 2038 threads. The batches' hosts at run
+    // #3's 82% use are past `SHARE_MOST_USE` (80%), so share nothing.
+    expect(shareRamGbOfState(purse, CALIBRATION, 3168.8)).toBe(2038 * SHARE_RAM_GB);
+    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
+    expect(shareBonusOfState(purse, CALIBRATION, undefined, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
+    // From the brain's constants alone: home 32 GB shares nothing, 64 GB 24, 512 GB 472. These are BN1.3's 1st cycle's
+    // readings at 15, 20 and 30 min, but seen before the Agent's RAM in use was modelled (#293's first review), so
+    // after the fact: not validation.
+    expect([32, 64, 512].map((home) => shareRamGbOfState(freshPurse(home), CALIBRATION, 100))).toEqual([0, 24, 472]);
+    expect(shareBonusOfState(freshPurse(32), CALIBRATION, true, 100)).toBe(1);
+  });
+
+  test("#242's: the batches' use by cycle, its last past the list; below 80%, their hosts share the room to it", () => {
+    const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
+    const byCycle = { ...CALIBRATION, batchesUseOfHosts: [0.82, 0.7] };
+    const hostsGb = 3168.8 + 2 ** 21;
+    // At 70%, a tenth of the world and cloud servers' RAM beside home's 2038 threads.
+    const tenth = Math.floor((0.1 * hostsGb) / SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, byCycle, 3168.8, 0)).toBe(2038 * SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, byCycle, 3168.8, 1)).toBe((2038 + tenth) * SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, byCycle, 3168.8, 7)).toBe((2038 + tenth) * SHARE_RAM_GB);
+  });
+
+  test("a policy without `homeShares` is today's brain, #242's share; run #3's says false", () => {
+    const today = runModel(RUN_3_BN1_2.start, { policy: TODAYS_POLICY, horizonMs: 2 * 60 * MINUTE_MS });
+    const absent = runModel(RUN_3_BN1_2.start, {
+      policy: { name: "absent", daedalusCountHold: true },
+      horizonMs: 2 * 60 * MINUTE_MS,
+    });
+    expect(absent.cycles).toEqual(today.cycles);
+    expect(RUN_3_POLICY.homeShares).toBe(false);
+    expect(TODAYS_POLICY.homeShares).toBe(true);
   });
 
   test("a cycle's share is its RAM's, so a policy that moves the installs gets its own; by index, run #3's", () => {
