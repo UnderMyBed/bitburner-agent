@@ -170,9 +170,10 @@ export interface RunReport {
   /** One line per failure; none is PASS, or WARN with warnings. */
   failures: string[];
   /**
-   * One line per warning (#241, owner decision 55): what went wrong for a reason outside the brain, and was put right
-   * by itself (a batcher out of step after a clock step or page stall, batching again, or not yet seen to). WARN with
-   * no failure; listed after FAIL's.
+   * One line per warning (owner decision 55): what went wrong but isn't yet a failure. Something outside the brain
+   * that was put right by itself (#241: a batcher out of step after a clock step or page stall, batching again, or not
+   * yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle (#275). WARN with no
+   * failure; listed after FAIL's.
    */
   warnings: string[];
 }
@@ -823,6 +824,8 @@ export function runReport(
       facts.factionWork.readings,
       facts.resetsMs,
       { incidents, weakenMs: (target, atMs) => facts.weakenTimes.weakenMs(target, atMs), warnings },
+      // A batcher stuck on a poor target (#275), by section 5's medium snapshots' incomes and 2b's cycles.
+      { incomes: facts.hacking.targetIncomes, cycleLabelAt: (atMs) => facts.cycles.cycleLabelAt(atMs) },
     ),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",

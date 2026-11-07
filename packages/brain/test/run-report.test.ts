@@ -3352,3 +3352,128 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     expect(output).toContain(`Verdict: WARN\n  warning: ${WARNING}`);
   });
 });
+
+describe("a batcher stuck on a poor target (#275)", () => {
+  // The BN1.3 exit run's shape (#274), synthetic: hacking 1,327; 25 cloud servers of 1 PB (26.2 PB, 21:30's) before
+  // the install and of 16 TB after (about 424 TB with the game's, 23:00's); the big targets at 3× their minimum
+  // security after the install, rho-construction prepared. BN1's figures
+  // (servers.ts, the money 25× moneyAvailable, the security a third of hackDifficulty), each range's middle.
+  const TARGETS = {
+    n00dles: { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 },
+    phantasy: { moneyMax: 600_000_000, minDifficulty: 7, requiredHackingSkill: 100, serverGrowth: 35 },
+    "rho-construction": { moneyMax: 15_000_000_000, minDifficulty: 17, requiredHackingSkill: 500, serverGrowth: 50 },
+    "b-and-a": { moneyMax: 562_500_000_000, minDifficulty: 27, requiredHackingSkill: 1_025, serverGrowth: 70 },
+    ecorp: { moneyMax: 1_250_000_000_000, minDifficulty: 33, requiredHackingSkill: 1_225, serverGrowth: 99 },
+  };
+  const CLOUD = Array.from({ length: 25 }, (_, index) => `pserv-${index}`);
+  const PLAYER = {
+    money: 1e12,
+    skills: { hacking: 1_327, intelligence: 0 },
+    mults: { hacking_chance: 1.6, hacking_speed: 1.8, hacking_money: 2.5, hacking_grow: 1.6 },
+  };
+  const servers: StaticSnapshotData = {
+    servers: [
+      { ...staticServer("home"), purchasedByPlayer: true, moneyMax: 0 },
+      ...Object.entries(TARGETS).map(([hostname, figures]) => staticServer(hostname, figures)),
+      ...CLOUD.map((hostname) => ({ ...staticServer(hostname), purchasedByPlayer: true, moneyMax: 0 })),
+    ],
+  };
+  const medium = (cloudRamGb: number): MediumSnapshotData => ({
+    player: PLAYER,
+    hasTorRouter: true,
+    programs: [],
+    servers: [
+      { hostname: "home", maxRam: 8_192, cpuCores: 8, hasAdminRights: true, moneyAvailable: 0, hackDifficulty: 1 },
+      ...Object.entries(TARGETS).map(([hostname, { moneyMax, minDifficulty }]) => ({
+        hostname,
+        maxRam: 64,
+        cpuCores: 1,
+        hasAdminRights: true,
+        // The big ones as an install leaves them; the rest prepared.
+        moneyAvailable: moneyMax > 1e11 ? moneyMax / 10 : moneyMax,
+        hackDifficulty: moneyMax > 1e11 ? 3 * minDifficulty : minDifficulty,
+      })),
+      ...CLOUD.map((hostname) => ({
+        hostname,
+        maxRam: cloudRamGb,
+        cpuCores: 1,
+        hasAdminRights: true,
+        moneyAvailable: 0,
+        hackDifficulty: 1,
+      })),
+    ],
+  });
+  const INSTALL_MS = 70 * MINUTE;
+  const END_MS = 200 * MINUTE;
+  const stuckWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + END_MS + 30 * SECOND } as const;
+
+  /**
+   * The cloud servers' RAM: 1 PB each before the install; after it, 32 GB (n00dles about 50× under the best: not
+   * poor), 1 TB from 5 minutes in, and 16 TB from 30 (the real run's 22:26 to 22:28, #277's review).
+   */
+  const cloudRamGb = (offsetMs: number) =>
+    offsetMs < INSTALL_MS
+      ? 1_048_576
+      : offsetMs < INSTALL_MS + 5 * MINUTE
+        ? 32
+        : offsetMs < INSTALL_MS + 30 * MINUTE
+          ? 1_024
+          : 16_384;
+
+  /** Phantasy batched until the install at 70 minutes, then `after` (n00dles, the trap) to 200 minutes. */
+  function stuckRun(after = "n00dles") {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("static", 10 * SECOND, servers);
+    for (let offsetMs = 10 * SECOND; offsetMs <= END_MS; offsetMs += 2 * SECOND) {
+      const [target, runName] = offsetMs < INSTALL_MS ? ["phantasy", "a"] : [after, "b"];
+      const batcher = { ...newBatcherHealth(target, runName, 0), state: "batching" as const };
+      snapshot("fast", offsetMs, fastData({ batcher }), offsetMs);
+    }
+    for (let offsetMs = 10 * SECOND; offsetMs <= END_MS; offsetMs += 10 * SECOND) {
+      snapshot("medium", offsetMs, medium(cloudRamGb(offsetMs)), offsetMs);
+    }
+    for (let offsetMs = 10 * SECOND; offsetMs <= END_MS; offsetMs += MINUTE) {
+      const slow = slowData(CLOUD);
+      const lastAugReset = offsetMs < INSTALL_MS ? RESET : T0 + INSTALL_MS - SECOND;
+      snapshot("slow", offsetMs, { ...slow, resetInfo: { ...slow.resetInfo, lastAugReset } }, offsetMs);
+    }
+  }
+
+  test("phantasy for an hour, then n00dles for over 2 after the install: a warning, then the cycle's failure", () => {
+    stuckRun();
+    const { text, failures, warnings } = runReport(store, stuckWindow);
+    const stuck = (lines: string[]) => lines.filter((line) => line.startsWith("batcher stuck on a poor target: "));
+    expect(stuck(warnings)).toEqual([expect.stringMatching(/^batcher stuck on a poor target: phantasy from /)]);
+    expect(stuck(failures)).toEqual([
+      expect.stringMatching(/^batcher stuck on a poor target: 2 h 5 min on poor targets in BN1\.\d+ 2 \(2 h or more /),
+    ]);
+    const [warning, failure] = [stuck(warnings)[0] as string, stuck(failures)[0] as string];
+    expect(warning).toContain(`phantasy from ${at(10 * SECOND)} to ${at(INSTALL_MS - 2 * SECOND)} (1 h 9 min on it)`);
+    expect(warning).toMatch(/ on it\), in BN1\.\d+ 1; /);
+    // n00dles poor only once the cloud servers came, 5 minutes after the install; the ratio climbing with their RAM.
+    expect(failure).toContain(
+      `in 1 stretch; the longest, n00dles from ${at(INSTALL_MS + 5 * MINUTE)} to ${at(END_MS)} (2 h 5 min on it); `,
+    );
+    // The best is b-and-a or ecorp, both hackable at 1,327; n00dles' money is what holds it to under $20m/s.
+    const range =
+      /the best rooted target ([\d,]+)× to ([\d,]+)× it \(at the most (b-and-a|ecorp), \$[\d,]+\/s against \$19,/;
+    const [, least, most] = (range.exec(failure) ?? []).map((each) => Number(each?.replaceAll(",", "")));
+    expect(least).toBeGreaterThanOrEqual(100);
+    expect(least).toBeLessThan(2_000);
+    expect(most).toBeGreaterThan(5 * (least as number));
+    expect(warning).toMatch(/; the best rooted target [\d,]+×( to [\d,]+×)? it \(at the most (b-and-a|ecorp), /);
+    for (const line of [warning, failure]) expect(line).toMatch(/, at hacking 1,327$/);
+    // In section 6, under its line.
+    expect(text).toContain(`\n    ${warning}\n    ${failure}\n`);
+    expect(text).toContain("\nVerdict: FAIL\n");
+  });
+
+  test("batching the best throughout: none", () => {
+    stuckRun("b-and-a");
+    const { text, failures, warnings } = runReport(store, stuckWindow);
+    // Phantasy's hour still warns; b-and-a's 2 hours don't.
+    expect(warnings.filter((line) => line.includes("stuck on a poor target"))).toHaveLength(1);
+    expect(failures.filter((line) => line.includes("stuck on a poor target"))).toEqual([]);
+    expect(text).not.toContain("stuck on a poor target: b-and-a");
+  });
+});

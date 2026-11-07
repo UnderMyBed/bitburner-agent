@@ -130,6 +130,7 @@ export {
   batchBounds,
   batchFits,
   batchHoldsMs,
+  batchIncomeMostPerSecond,
   batchOrders,
   batchPeakRamGb,
   batchPlan,

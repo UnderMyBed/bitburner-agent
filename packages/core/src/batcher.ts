@@ -441,6 +441,20 @@ export function batchPlan(target: HackingTarget, player: HackingPlayer, ramGb: n
 }
 
 /**
+ * The most `batchPlan` can earn a second on `target`, whatever the RAM (#275): a batch every `MIN_BATCH_SPACING_MS`,
+ * each taking the largest share a plan does (`MAX_BATCH_SHARE`, or one hack thread's where that's more: at most all),
+ * at the hack's chance. A target's money, not the RAM, bounds it: n00dles at hacking 1,300 earned $19.5m/s on 424 TB
+ * (#274), where A1's batcher ceiling, a GB times the RAM, says dozens of times that. 0 where nothing can be hacked.
+ */
+export function batchIncomeMostPerSecond(target: HackingTarget, player: HackingPlayer): number {
+  const perThread = hackSharePerThread(target, player);
+  const chance = hackChance(atMinimum(target), player);
+  if (!(perThread > 0) || !(chance > 0) || !(target.moneyMax > 0)) return 0;
+  const share = Math.max(MAX_BATCH_SHARE, perThread);
+  return (target.moneyMax * share * chance * 1000) / MIN_BATCH_SPACING_MS;
+}
+
+/**
  * The RAM batches can count on, on hosts of these sizes (or with this much free of anything else), GB (#232): each
  * one's less a thread of the largest operation script (`BATCH_WEAKEN_RAM_GB`, 1.8), on those with room for one. What
  * `batchPlan` is given, and what the batcher fits each batch to (`batchFits`). An operation's threads go whole on one

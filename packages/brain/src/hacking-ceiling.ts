@@ -2,9 +2,11 @@
 // earn at the player's hacking then (core's `batcherIncomePerGigabyteSecond` and `hackingIncomePerGigabyteSecond`,
 // from the game's formulas), and what hacking actually earned (the slow snapshot's `moneySources.hacking`). The score
 // is on the RAM the brain's hacking uses (the hack loop's hosts); the bound, which a run never passes, on all the RAM a
-// script could run on. The dashboard's rows and the run report's section 5. Upper bounds, not plans.
+// script could run on. The dashboard's rows and the run report's section 5. Upper bounds, not plans. And each target's
+// batcher income on the hosts' RAM, a medium snapshot at a time, for section 6's stuck target check (#275).
 import {
   batcherIncomePerGigabyteSecond,
+  batchIncomeMostPerSecond,
   type HackingPlayer,
   type HackingTarget,
   hackingIncomePerGigabyteSecond,
@@ -13,6 +15,7 @@ import {
   type StaticSnapshotData,
   usableRamGb,
 } from "@bitburner-agent/core";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "./backdoors.ts";
 import { formatIsoTime } from "./gap-report.ts";
 import { chooseHackHosts } from "./hack-loop.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
@@ -84,11 +87,14 @@ function ramOf(servers: (MediumServer | undefined)[]): { usableGb: number; ramGb
  *   times the best target's hacking ceiling. The owner's scripts, a terminal `hack` and A7 on home all count in what
  *   hacking earns, so all count here.
  * Each takes the best cores among its servers for all their RAM: loose where their cores differ. Unknown without both
- * snapshots or the player's skills and multipliers.
+ * snapshots or the player's skills and multipliers. Given `incomes`, it fills each target's batcher income on the
+ * hosts' RAM (#275): its batcher ceiling a GB times that RAM, at most what batches can take from its money (core's
+ * `batchIncomeMostPerSecond`), the run report's measure of a target against the best.
  */
 export function hackingCeiling(
   staticData: StaticSnapshotData | null | undefined,
   mediumData: MediumSnapshotData | null | undefined,
+  incomes?: Map<string, number>,
 ): HackingCeiling {
   if (!Array.isArray(staticData?.servers)) return { known: false, reason: "no static snapshot" };
   if (!Array.isArray(mediumData?.servers)) return { known: false, reason: "no medium snapshot" };
@@ -115,11 +121,16 @@ export function hackingCeiling(
       targets.push([hostname, { moneyMax, minDifficulty, requiredHackingSkill, serverGrowth }]);
     }
   }
-  /** The best target by `perGigabyteSecond` at `cores`, and its figure; 0 and null with none. */
-  const best = (perGigabyteSecond: typeof hackingIncomePerGigabyteSecond, cores: number) => {
+  /** The best target by `perGigabyteSecond` at `cores`, and its figure; 0 and null with none. `each` sees every one. */
+  const best = (
+    perGigabyteSecond: typeof hackingIncomePerGigabyteSecond,
+    cores: number,
+    each?: (hostname: string, target: HackingTarget, figure: number) => void,
+  ) => {
     let found: { target: string | null; perGigabyteSecond: number } = { target: null, perGigabyteSecond: 0 };
     for (const [hostname, target] of targets) {
       const figure = perGigabyteSecond(target, player, cores);
+      each?.(hostname, target, figure);
       if (figure > found.perGigabyteSecond) found = { target: hostname, perGigabyteSecond: figure };
     }
     return found;
@@ -130,7 +141,13 @@ export function hackingCeiling(
     (server) => server?.hasAdminRights === true && isNumber(server.maxRam) && server.maxRam > 0,
   );
   const rooted = ramOf(rootedServers);
-  const batcher = best(batcherIncomePerGigabyteSecond, hosts.cores);
+  const batcher = best(
+    batcherIncomePerGigabyteSecond,
+    hosts.cores,
+    incomes &&
+      ((hostname, target, figure) =>
+        incomes.set(hostname, Math.min(figure * hosts.usableGb, batchIncomeMostPerSecond(target, player)))),
+  );
   return {
     known: true,
     batcherIncomePerSecond: hosts.usableGb * batcher.perGigabyteSecond,
@@ -142,6 +159,84 @@ export function hackingCeiling(
     rootedCount: rootedServers.length,
     rootedRamGb: rooted.ramGb,
   };
+}
+
+/** A target and what a batcher could earn a second on it with the hosts' RAM (#275). */
+export interface TargetIncome {
+  target: string;
+  incomePerSecond: number;
+}
+
+/**
+ * Each target's batcher income on the hosts' RAM at one medium snapshot (#275), as `hackingCeiling` fills them, held
+ * by index into the fold's names (a 14-hour store's 5,000 medium snapshots, without a map each), and the best of them.
+ */
+export class TargetIncomesAt {
+  readonly #names: ReadonlyMap<string, number>;
+  readonly #incomes: Float64Array;
+  /** The player's hacking level then, or null where the snapshot doesn't say. */
+  readonly hacking: number | null;
+  /** The target the most, with it: null with none above 0 (nothing hackable rooted). */
+  readonly best: TargetIncome | null;
+
+  constructor(names: ReadonlyMap<string, number>, incomes: ReadonlyMap<string, number>, hacking: number | null) {
+    this.#names = names;
+    this.#incomes = new Float64Array(names.size).fill(Number.NaN);
+    let best: TargetIncome | null = null;
+    for (const [target, incomePerSecond] of incomes) {
+      this.#incomes[names.get(target) as number] = incomePerSecond;
+      if (incomePerSecond > (best?.incomePerSecond ?? 0)) best = { target, incomePerSecond };
+    }
+    this.hacking = hacking;
+    this.best = best;
+  }
+
+  /** A target's income then; null for one that wasn't a target (not rooted, the player's own, or no figures). */
+  incomeOf(target: string): number | null {
+    const index = this.#names.get(target);
+    const income = index === undefined ? undefined : this.#incomes[index];
+    return income === undefined || Number.isNaN(income) ? null : income;
+  }
+}
+
+/** Each medium snapshot's targets' batcher incomes on the hosts' RAM (#275), in time order, for the run report. */
+export class BatcherTargetIncomes {
+  readonly #names = new Map<string, number>();
+  readonly #points: { atMs: number; incomes: TargetIncomesAt | null }[] = [];
+
+  /** A medium snapshot's, at `atMs`; null `incomes` where its ceilings were unknown. */
+  add(atMs: number, incomes: ReadonlyMap<string, number> | null, hacking: number | null): void {
+    if (incomes === null) {
+      this.#points.push({ atMs, incomes: null });
+      return;
+    }
+    for (const target of incomes.keys()) if (!this.#names.has(target)) this.#names.set(target, this.#names.size);
+    this.#points.push({ atMs, incomes: new TargetIncomesAt(this.#names, incomes, hacking) });
+  }
+
+  /**
+   * The incomes in force at `atMs`: the latest medium snapshot's by then. Null (unknown) before the first, from one
+   * over `MEDIUM_SNAPSHOT_GAP_MS` old (a degraded medium tier: its RAM and root rights stale), or from before an
+   * install (`resetsMs`) that falls between it and `atMs`, which takes the cloud servers and the root rights away
+   * (#277's review); and where its ceilings were unknown.
+   */
+  at(atMs: number, resetsMs: readonly number[] = []): TargetIncomesAt | null {
+    const points = this.#points;
+    // The last at or before `atMs`, by halves.
+    let [low, high] = [0, points.length - 1];
+    let found = -1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if ((points[middle] as { atMs: number }).atMs <= atMs) {
+        found = middle;
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    const point = points[found];
+    if (point === undefined || atMs - point.atMs > MEDIUM_SNAPSHOT_GAP_MS) return null;
+    if (resetsMs.some((resetMs) => resetMs > point.atMs && resetMs <= atMs)) return null;
+    return point.incomes;
+  }
 }
 
 /** Hacking's money since the install, at one slow snapshot, and the install it counts from. */
@@ -280,6 +375,8 @@ export class HackingFold {
   /** Between breaks: the game's servers' money at the first medium snapshot and the last. */
   readonly #serversMoney = new Map<number, { first: Map<string, number>; last: Map<string, number> }>();
   readonly #ignored: ReadonlySet<string>;
+  /** Each medium snapshot's targets' batcher incomes on the hosts' RAM (#275): section 6's stuck target check. */
+  readonly targetIncomes = new BatcherTargetIncomes();
 
   /** `ignored`: the player's own servers, whose money isn't hacked. */
   constructor(ignored: ReadonlySet<string>) {
@@ -305,7 +402,11 @@ export class HackingFold {
 
   addMedium(atMs: number, data: MediumSnapshotData): void {
     const staticThen = this.#statics.filter((each) => each.atMs <= atMs).at(-1) ?? this.#statics[0];
-    this.#ceilings.push({ atMs, ceiling: hackingCeiling(staticThen?.data, data) });
+    const incomes = new Map<string, number>();
+    const ceiling = hackingCeiling(staticThen?.data, data, incomes);
+    this.#ceilings.push({ atMs, ceiling });
+    const hacking = (data.player as { skills?: { hacking?: unknown } } | undefined)?.skills?.hacking;
+    this.targetIncomes.add(atMs, ceiling.known ? incomes : null, isNumber(hacking) ? hacking : null);
     // A snapshot between the slow ones around a break may be either side of it: left out.
     if (this.#breaks.some((each) => each.fromMs < atMs && atMs <= each.toMs)) return;
     const stretch = this.#breaks.filter((each) => each.toMs < atMs).length;

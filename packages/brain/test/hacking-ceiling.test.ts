@@ -2,12 +2,15 @@
 // snapshots, and the run report's section, from snapshot data built here.
 import {
   batcherIncomePerGigabyteSecond,
+  batchIncomeMostPerSecond,
   hackingIncomePerGigabyteSecond,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,
+  usableRamGb,
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "../src/backdoors.ts";
 import {
   describeCeiling,
   HACKING_STRETCH_MS,
@@ -193,6 +196,117 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
     });
     expect(describeCeiling(hackingCeiling(null, null))).toBe("unknown: no static snapshot");
     expect(describeCeiling(null)).toBe("unknown: no medium snapshot");
+  });
+});
+
+describe("each target's batcher income on the hosts' RAM (#275)", () => {
+  /** What a batcher could earn on `hostname` with `usableGb` of the hosts' RAM: A1's a GB, at most its money's. */
+  const onRam = (hostname: string, hacking: number, usableGb: number) =>
+    Math.min(
+      batcherPerGigabyteSecond(hostname, hacking) * usableGb,
+      batchIncomeMostPerSecond(target(hostname), fullPlayer(hacking) as never),
+    );
+
+  test("each rooted target's: A1's batcher ceiling a GB times the hosts' RAM, at most what batches can take from it", () => {
+    const incomes = new Map<string, number>();
+    const rooted = { home: true, n00dles: true, foodnstuff: true, zer0: false, "pserv-0": true };
+    // n00dles' 1 PB: plenty for its money, and for foodnstuff's.
+    const data = medium(100, rooted, { ram: { n00dles: 1_048_576 } });
+    const ceiling = known(hackingCeiling(staticData(), data, incomes));
+    // Filling them changes nothing of the ceiling.
+    expect(ceiling).toEqual(hackingCeiling(staticData(), data));
+    // The game's rooted servers only: not zer0, not home or pserv-0.
+    expect([...incomes.keys()].sort()).toEqual(["foodnstuff", "n00dles"]);
+    const usableGb = usableRamGb(1_048_576) + 2 * USABLE_16;
+    for (const hostname of ["n00dles", "foodnstuff"]) {
+      expect(incomes.get(hostname), hostname).toBeCloseTo(onRam(hostname, 100, usableGb), 3);
+    }
+    // n00dles' money bounds it there, at a tenth of the RAM's.
+    expect(incomes.get("n00dles")).toBeCloseTo(
+      batchIncomeMostPerSecond(target("n00dles"), fullPlayer(100) as never),
+      3,
+    );
+    expect(batcherPerGigabyteSecond("n00dles", 100) * usableGb).toBeGreaterThan(5 * (incomes.get("n00dles") ?? 0));
+    // On 16 GB hosts, the RAM bounds it.
+    const small = new Map<string, number>();
+    hackingCeiling(staticData(), medium(100, { n00dles: true, foodnstuff: true }), small);
+    expect(small.get("n00dles")).toBeCloseTo(batcherPerGigabyteSecond("n00dles", 100) * 2 * USABLE_16, 6);
+    // One the player can't hack yet: 0.
+    const early = new Map<string, number>();
+    hackingCeiling(staticData(), medium(50, { n00dles: true, zer0: true }), early);
+    expect(early.get("zer0")).toBe(0);
+    expect(early.get("n00dles")).toBeGreaterThan(0);
+  });
+
+  test("the fold keeps them a medium snapshot at a time: the one in force at a time, the best, and the batched's", () => {
+    const fold = new HackingFold(new Set(["home"]));
+    fold.addStatic(0, staticData());
+    const rooted = { n00dles: true, foodnstuff: true, zer0: true };
+    fold.addMedium(10 * SECOND, medium(150, rooted));
+    fold.addMedium(20 * SECOND, medium(50, rooted, { ram: { n00dles: 1_048_576 } }));
+    // Unknown: no player figures.
+    fold.addMedium(30 * SECOND, mediumData(50, rooted));
+    const incomes = fold.targetIncomes;
+    const first = incomes.at(10 * SECOND);
+    expect(first?.hacking).toBe(150);
+    const firstMap = new Map<string, number>();
+    hackingCeiling(staticData(), medium(150, rooted), firstMap);
+    for (const [hostname, income] of firstMap) expect(first?.incomeOf(hostname), hostname).toBe(income);
+    const bestFirst = [...firstMap].sort(([, a], [, b]) => b - a)[0] as [string, number];
+    expect(first?.best).toEqual({ target: bestFirst[0], incomePerSecond: bestFirst[1] });
+    // Before the first, none (#277's review); between, the latest by then.
+    expect(incomes.at(0)).toBeNull();
+    expect(incomes.at(10 * SECOND - 1)).toBeNull();
+    expect(incomes.at(19 * SECOND)).toEqual(first);
+    const second = incomes.at(29 * SECOND);
+    expect(second?.hacking).toBe(50);
+    expect(second?.incomeOf("zer0")).toBe(0);
+    expect(second?.incomeOf("n00dles")).toBeCloseTo(
+      batchIncomeMostPerSecond(target("n00dles"), fullPlayer(50) as never),
+      3,
+    );
+    // Not one of its targets: none.
+    expect(second?.incomeOf("home")).toBeNull();
+    expect(second?.incomeOf("sigma-cosmetics")).toBeNull();
+    // With the ceilings unknown, none.
+    expect(incomes.at(30 * SECOND)).toBeNull();
+    expect(incomes.at(45 * SECOND)).toBeNull();
+    expect(new HackingFold(new Set()).targetIncomes.at(0)).toBeNull();
+  });
+
+  test("none from a medium snapshot over 30 s old, or from before an install between it and the look (#277's review)", () => {
+    const fold = new HackingFold(new Set(["home"]));
+    fold.addStatic(0, staticData());
+    fold.addMedium(10 * SECOND, medium(150, { n00dles: true }));
+    const incomes = fold.targetIncomes;
+    // MEDIUM_SNAPSHOT_GAP_MS: snapshots further apart than 30 s are a gap.
+    expect(incomes.at(10 * SECOND + MEDIUM_SNAPSHOT_GAP_MS)).not.toBeNull();
+    expect(incomes.at(10 * SECOND + MEDIUM_SNAPSHOT_GAP_MS + 1)).toBeNull();
+    // An install after the snapshot, by the look: its servers' RAM and root rights are gone.
+    expect(incomes.at(20 * SECOND, [15 * SECOND])).toBeNull();
+    expect(incomes.at(20 * SECOND, [20 * SECOND])).toBeNull();
+    // One at or before the snapshot, or after the look, doesn't.
+    expect(incomes.at(20 * SECOND, [10 * SECOND, 25 * SECOND])).not.toBeNull();
+    fold.addMedium(20 * SECOND, medium(150, { n00dles: true }));
+    expect(incomes.at(25 * SECOND, [15 * SECOND])).not.toBeNull();
+  });
+
+  test("a target new to a later snapshot is read there, not in the earlier ones", () => {
+    const fold = new HackingFold(new Set(["home"]));
+    fold.addStatic(0, staticData());
+    fold.addMedium(10 * SECOND, medium(150, { n00dles: true }));
+    fold.addMedium(20 * SECOND, medium(150, { n00dles: true, zer0: true }));
+    expect(fold.targetIncomes.at(10 * SECOND)?.incomeOf("zer0")).toBeNull();
+    expect(fold.targetIncomes.at(20 * SECOND)?.incomeOf("zer0")).toBeGreaterThan(0);
+    // One no longer rooted: none there.
+    fold.addMedium(30 * SECOND, medium(150, { n00dles: true, zer0: false }));
+    expect(fold.targetIncomes.at(30 * SECOND)?.incomeOf("zer0")).toBeNull();
+    expect(fold.targetIncomes.at(30 * SECOND)?.incomeOf("n00dles")).toBeGreaterThan(0);
+    // Nothing hackable rooted: no best.
+    const none = new HackingFold(new Set(["home"]));
+    none.addStatic(0, staticData());
+    none.addMedium(10 * SECOND, medium(50, { zer0: true }));
+    expect(none.targetIncomes.at(10 * SECOND)?.best).toBeNull();
   });
 });
 
