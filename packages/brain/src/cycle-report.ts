@@ -412,6 +412,11 @@ export class BitNodeCycles {
     return this.bitNodes.findLastIndex((bitNode) => bitNode.startMs <= atMs);
   }
 
+  /** Whether a slow snapshot by `atMs` showed the BitNode: with none, another can't be told from the first (#286). */
+  bitNodeKnownBy(atMs: number): boolean {
+    return this.bitNodes.some((bitNode) => bitNode.firstSlowAtMs <= atMs);
+  }
+
   /**
    * When the first slow snapshot after `afterMs`, up to `untilMs`, arrived showing another BitNode (`lastNodeReset`):
    * a destroy seen done, as section 2's BitNodes line sees one (#286: for section 3's destroy intents, never reported

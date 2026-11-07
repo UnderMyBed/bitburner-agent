@@ -373,6 +373,12 @@ function awayAround(events: readonly StoredEvent[], atMs: number) {
   return connect === undefined ? null : { disconnectedAtMs: disconnect.atMs, connectedAtMs: connect.atMs };
 }
 
+/**
+ * Section 4's words for an install sent before the window's first slow snapshot, and section 3's for an install or a
+ * destroy first seen then (#286 re-review): a reset after it can't be told from the window's first.
+ */
+export const BEFORE_FIRST_SLOW = "before the window's first slow snapshot: not judged";
+
 /** Augmentations over a run (#210), folded from the slow snapshots one at a time. */
 export class AugmentationTimeline {
   readonly installs: SeenInstall[] = [];
@@ -623,7 +629,7 @@ export class AugmentationTimeline {
     for (const sent of events.filter((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND)) {
       if (sent.atMs + withinMs > untilMs) continue;
       if (!this.resetKnownBy(sent.atMs)) {
-        lines.push(`    install sent at ${formatTime(sent.atMs)}, before the window's first slow snapshot: not judged`);
+        lines.push(`    install sent at ${formatTime(sent.atMs)}, ${BEFORE_FIRST_SLOW}`);
         continue;
       }
       if (this.resetSeenBetween(sent.atMs, sent.atMs + withinMs) !== null) continue;
