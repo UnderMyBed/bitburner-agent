@@ -18,6 +18,7 @@ import {
   batchBounds,
   batchFits,
   batchHoldsMs,
+  batchIncomeMostPerSecond,
   batchOrders,
   batchPeakRamGb,
   batchPlan,
@@ -378,6 +379,38 @@ describe("the plan", () => {
         }
       }
     }
+  });
+
+  test("batchIncomeMostPerSecond (#275): a plan never earns more on any RAM; on plenty, n00dles' plan reaches it", () => {
+    for (const target of [n00dles, joesguns, zer0]) {
+      for (const hacking of [30, 80, 150, 400, 1_000, 1_300]) {
+        const most = batchIncomeMostPerSecond(target, player(hacking));
+        for (const ramGb of [16, 1_000, 100_000, 10_000_000]) {
+          const plan = batchPlan(target, player(hacking), ramGb);
+          if (plan === null) continue;
+          expect(plan.incomePerSecond, `${target.moneyMax} at ${hacking} on ${ramGb} GB`).toBeLessThanOrEqual(
+            most * (1 + 1e-12),
+          );
+        }
+      }
+    }
+    // n00dles at hacking 1,300 on 424 TB, the BN1.3 run's 23:00 (#274): its money is the limit, not the RAM.
+    const at1300 = player(1_300);
+    const most = batchIncomeMostPerSecond(n00dles, at1300);
+    const chance = hackChance({ hackDifficulty: 1, requiredHackingSkill: 1 }, at1300);
+    expect(most).toBeCloseTo((n00dles.moneyMax * MAX_BATCH_SHARE * chance * 1000) / MIN_BATCH_SPACING_MS, 3);
+    const plan = batchPlan(n00dles, at1300, 424_000) as NonNullable<ReturnType<typeof batchPlan>>;
+    expect(plan.incomePerSecond / most).toBeGreaterThan(0.95);
+    // One thread taking more than `MAX_BATCH_SHARE` (or all of it): a batch takes that.
+    const greedy = player(1_000, { hacking_money: 400 });
+    expect(hackSharePerThread(n00dles, greedy)).toBeGreaterThan(MAX_BATCH_SHARE);
+    expect(batchIncomeMostPerSecond(n00dles, greedy)).toBeCloseTo(
+      (n00dles.moneyMax * 1 * hackChance({ hackDifficulty: 1, requiredHackingSkill: 1 }, greedy) * 1000) /
+        MIN_BATCH_SPACING_MS,
+      3,
+    );
+    expect(batchIncomeMostPerSecond(joesguns, player(5)), "below the hacking it needs").toBe(0);
+    expect(batchIncomeMostPerSecond({ ...joesguns, moneyMax: 0 }, player(50)), "no money").toBe(0);
   });
 
   test("on 100 GB to 1 TB, the plan reaches most of the ceiling: whole threads and the lead cost the rest", () => {

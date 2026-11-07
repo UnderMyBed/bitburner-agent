@@ -22,7 +22,8 @@ import {
   describeIncident,
   INCIDENT_ATTRIBUTION_WEAKENS,
 } from "./clock-incidents.ts";
-import { formatDuration, formatIsoTime } from "./gap-report.ts";
+import { DEFAULT_GAP_THRESHOLD_MS, formatDuration, formatIsoTime } from "./gap-report.ts";
+import type { BatcherTargetIncomes, TargetIncome } from "./hacking-ceiling.ts";
 import { sharingOf } from "./share.ts";
 import { type ReputationPoint, sharingLines } from "./share-report.ts";
 
@@ -341,6 +342,152 @@ function moveLines(moves: Move[], anyReporting: boolean, failures: string[]): st
   // The failures after the moves, as the section's others follow their lines.
   lines.push(...failed.map((line) => `  ${line}`));
   failures.push(...failed);
+  return lines;
+}
+
+/**
+ * How many times more the best rooted target must earn than the one batched for that one to be poor (#275), each on
+ * the hack loop's hosts' RAM (`TargetIncomesAt`): A1's batcher ceiling a GB times the RAM, at most what batches can take
+ * from its money. Both are upper bounds that a plan reaches only in part (preparation, whole threads, the RAM's fit),
+ * by up to a few times and differently by target, and the brain itself moves for `BATCHER_MOVE_GAIN` (1.25×) over
+ * the horizon: 100× is beyond any of that, so a batcher there isn't choosing between near-equals. #274's replay of the
+ * BN1.3 exit run had its plans 1,400× (phantasy against ecorp) to 46,000× (n00dles against b-and-a) apart.
+ */
+export const BATCHER_POOR_TARGET_RATIO = 100;
+/**
+ * How long on one poor target, seen (`BATCHER_POOR_TARGET_RATIO`), before the report names it (#275): preparing a
+ * target at 3× its minimum security, as one is after an install, takes one weaken there, 17 to 33 minutes at hacking
+ * 1,300 (#274), and the brain prepares the next beside the batches, so a batcher on its way off a poor target has moved
+ * within an hour. A warning: a release's run may WARN only with each warning explained (owner decision 55).
+ */
+export const BATCHER_STUCK_WARNS_AFTER_MS = 60 * 60_000;
+/**
+ * How long on poor targets in one cycle, its stretches of `BATCHER_STUCK_WARNS_AFTER_MS` or more added up, fails the
+ * run (#275, proposed for the owner to confirm): twice the warning's, past any preparation; the BN1.3 run's cycle 7
+ * spent 2 h 18 min on n00dles (#274). A failure blocks a release (decision 55's gate; owner decision 57, proposed).
+ */
+export const BATCHER_STUCK_FAILS_AFTER_MS = 2 * BATCHER_STUCK_WARNS_AFTER_MS;
+
+/** A stretch on one poor target (#275), and the least the best did against it, with its figures then. */
+interface StuckStretch {
+  target: string;
+  cycle: number;
+  fromMs: number;
+  toMs: number;
+  /** The time on it seen: between looks no more than the heartbeat's gap threshold apart, both on it and poor. */
+  onMs: number;
+  ratio: number;
+  best: TargetIncome;
+  batchedIncome: number;
+  hackingLeast: number | null;
+  hackingMost: number | null;
+}
+
+const formatPerSecond = (income: number) => `$${Math.round(income).toLocaleString("en-US")}/s`;
+const formatRatio = (ratio: number) =>
+  Number.isFinite(ratio) ? `${Math.round(ratio).toLocaleString("en-US")}×` : "∞×";
+const formatLevel = (level: number | null) => (level === null ? "unknown" : Math.round(level).toLocaleString("en-US"));
+
+/**
+ * Section 6's stuck target check (#275): each stretch of looks at the batcher (`points`, its health's target in the
+ * fast snapshots) on one target that the best rooted target would earn `BATCHER_POOR_TARGET_RATIO` times or more
+ * than, on the hack loop's hosts' RAM, by the medium snapshot in force (`incomes`). A look judged under it, another
+ * target, or an install (`resetsMs`) ends a stretch; a look with an income unknown neither ends nor adds to it, nor
+ * does a gap. Each stretch seen on for `BATCHER_STUCK_WARNS_AFTER_MS` or more is a warning; all of a cycle's are
+ * failures once they add up to `BATCHER_STUCK_FAILS_AFTER_MS`. Each says the target, the best, the least ratio over it
+ * and the hacking level, and the cycle (`cycleLabelAt`, 2b's) where known.
+ */
+export function stuckTargetLines(
+  points: readonly { atMs: number; target: string }[],
+  incomes: BatcherTargetIncomes,
+  resetsMs: readonly number[],
+  failures: string[],
+  warnings: string[],
+  cycleLabelAt?: (atMs: number) => string,
+): string[] {
+  const stretches: StuckStretch[] = [];
+  // Typed so, not narrowed to null: it's set within the loop.
+  let open = null as StuckStretch | null;
+  let cycle = 0;
+  let judged = false;
+  let previous: { atMs: number; poor: boolean } | null = null;
+  for (const { atMs, target } of points) {
+    const sinceMs = previous?.atMs;
+    if (sinceMs !== undefined && resetsMs.some((resetMs) => resetMs > sinceMs && resetMs <= atMs)) {
+      cycle += 1;
+      open = null;
+    }
+    const then = incomes.at(atMs);
+    const best = then?.best ?? null;
+    const batched = then?.incomeOf(target) ?? null;
+    const ratio = best === null || batched === null ? null : batched > 0 ? best.incomePerSecond / batched : Infinity;
+    if (ratio !== null) judged = true;
+    const poor = ratio !== null && ratio >= BATCHER_POOR_TARGET_RATIO;
+    if ((ratio !== null && !poor) || open?.target !== target) open = null;
+    if (poor && best !== null && batched !== null) {
+      const hacking = then?.hacking ?? null;
+      if (open === null) {
+        open = {
+          target,
+          cycle,
+          fromMs: atMs,
+          toMs: atMs,
+          onMs: 0,
+          ratio,
+          best,
+          batchedIncome: batched,
+          hackingLeast: hacking,
+          hackingMost: hacking,
+        };
+        stretches.push(open);
+      } else {
+        if (previous?.poor && atMs - previous.atMs <= DEFAULT_GAP_THRESHOLD_MS) open.onMs += atMs - previous.atMs;
+        open.toMs = atMs;
+        if (ratio < open.ratio) Object.assign(open, { ratio, best, batchedIncome: batched });
+        if (hacking !== null) {
+          open.hackingLeast = Math.min(open.hackingLeast ?? hacking, hacking);
+          open.hackingMost = Math.max(open.hackingMost ?? hacking, hacking);
+        }
+      }
+    }
+    previous = { atMs, poor };
+  }
+  const head = "  stuck on a poor target (#275)";
+  const what =
+    `an hour or more on a target the best rooted one earns ${BATCHER_POOR_TARGET_RATIO}× more than, on the hack ` +
+    "loop's hosts' RAM";
+  if (!judged) {
+    return [`${head}: not judged (no look at the batcher with its target's income and the best target's known)`];
+  }
+  const stuck = stretches.filter(({ onMs }) => onMs >= BATCHER_STUCK_WARNS_AFTER_MS);
+  if (stuck.length === 0) return [`${head}: none (${what})`];
+  const lines = [`${head}, ${what}:`];
+  const inCycle = new Map<number, number>();
+  for (const { cycle: each, onMs } of stuck) inCycle.set(each, (inCycle.get(each) ?? 0) + onMs);
+  for (const stretch of stuck) {
+    const { target, fromMs, toMs, onMs, ratio, best, batchedIncome, hackingLeast, hackingMost } = stretch;
+    const hacking =
+      hackingLeast === hackingMost
+        ? formatLevel(hackingLeast)
+        : `${formatLevel(hackingLeast)} to ${formatLevel(hackingMost)}`;
+    const cycleText = cycleLabelAt === undefined ? "" : `, in ${cycleLabelAt(fromMs)}`;
+    const line =
+      `batcher stuck on a poor target: ${target} from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)} ` +
+      `(${formatDuration(onMs)} on it)${cycleText}; the best rooted target ${formatRatio(ratio)} it at least ` +
+      `(${best.target}, ${formatPerSecond(best.incomePerSecond)} against ${formatPerSecond(batchedIncome)} on the ` +
+      `hosts' RAM), at hacking ${hacking}`;
+    const cycleMs = inCycle.get(stretch.cycle) ?? 0;
+    if (cycleMs >= BATCHER_STUCK_FAILS_AFTER_MS) {
+      const failed =
+        `${line}; ${formatDuration(cycleMs)} stuck in its cycle ` +
+        `(${BATCHER_STUCK_FAILS_AFTER_MS / 3_600_000} h or more fails)`;
+      lines.push(`    ${failed}`);
+      failures.push(failed);
+    } else {
+      lines.push(`    ${line}`);
+      warnings.push(line);
+    }
+  }
   return lines;
 }
 
@@ -689,7 +836,8 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
  * reputation (`readings`). Its moves (#236) are joined across a batcher's restart, but not across an install
  * (`resetsMs`, the game's `lastAugReset` times in the slow snapshots): a new cycle starts from nothing. Each
  * stretch out of step a clock step or page stall explains (`incidentContext`, #241), the batcher batching again by
- * itself, is a warning.
+ * itself, is a warning. With `stuck` (the medium snapshots' targets' incomes, and 2b's cycles), after the moves, a
+ * batcher stuck on a poor target (#275, `stuckTargetLines`), its warnings with `incidentContext`'s.
  */
 export function batcherSection(
   points: BatcherPoint[],
@@ -697,6 +845,7 @@ export function batcherSection(
   readings: readonly ReputationPoint[] = [],
   resetsMs: readonly number[] = [],
   incidentContext: IncidentContext = { incidents: [], weakenMs: () => null, warnings: [] },
+  stuck?: { incomes: BatcherTargetIncomes; cycleLabelAt?: (atMs: number) => string },
 ): string[] {
   const lines = ["6. The batcher (#205, #206)"];
   const notRunning = notRunningLines(points, failures);
@@ -880,6 +1029,11 @@ export function batcherSection(
   const afterGrows = moneyAfterGrows(anyLooking, total, runsBelowFull.size, leastMoneyBelowFull);
   lines.push(`  money after each batch's grow (#234): ${afterGrows}`);
   lines.push(...moveLines(moveFold.moves(resetsMs), moveFold.reporting, failures));
+  if (stuck !== undefined) {
+    const looks = healths.map(({ atMs, health }) => ({ atMs, target: health.target }));
+    const { incomes, cycleLabelAt } = stuck;
+    lines.push(...stuckTargetLines(looks, incomes, resetsMs, failures, incidentContext.warnings, cycleLabelAt));
+  }
   lines.push(problems.size === 0 ? "  problems: none" : "  problems:");
   for (const [problem, atMs] of problems) lines.push(`    from ${formatIsoTime(atMs)}: ${problem}`);
   lines.push(...notRunning);
