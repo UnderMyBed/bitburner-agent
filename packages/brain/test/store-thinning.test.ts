@@ -238,6 +238,33 @@ describe("what thinning keeps (#283)", () => {
     thin(DAY + 2 * MINUTE);
     expect(statSync(path.join(directory, `${STORE_FILE_NAME}-wal`)).size).toBe(0);
   });
+
+  test("a log it can't empty after the commit is said, not taken for a failed thinning (#297's re-review)", () => {
+    run(0, 3 * MINUTE);
+    run(DAY + 2 * MINUTE, DAY + 2 * MINUTE + 2 * SECOND);
+    const failing = new Proxy(store, {
+      get(target, property) {
+        if (property === "checkpoint") {
+          return () => {
+            throw new Error("database table is locked");
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const lines: string[] = [];
+    expect(
+      thinStoreAtStart(failing, { context, nowMs: T0 + DAY + 2 * MINUTE, keptWholeDays: 1, log: (l) => lines.push(l) }),
+    ).toBeNull();
+    expect(lines).toEqual([
+      expect.stringMatching(
+        /^store thinned before .*: 58 fast and 10 medium snapshots cut .*; its write-ahead log not emptied: database table is locked$/,
+      ),
+    ]);
+    expect(snapshotsOf("fast").filter((s) => isThinnedReading(s.data))).toHaveLength(58);
+    expect(thinnedEvents()).toHaveLength(1);
+  });
 });
 
 describe("a dry run (#283's review)", () => {
@@ -503,7 +530,7 @@ describe("the command: npm run thin (#283)", () => {
     }
   }
   /** A config whose dashboard port is `dashboardPort`, and the days kept if given. */
-  function configure(dashboardPort: number, keptWholeDays?: number) {
+  function configure(dashboardPort: number, keptWholeDays?: number | null) {
     const config = { ...defaultConfig(), dashboardPort, telemetryKeptWholeDays: keptWholeDays };
     writeFileSync(path.join(directory, CONFIG_FILE_NAME), JSON.stringify(config));
   }
@@ -525,6 +552,10 @@ describe("the command: npm run thin (#283)", () => {
     const iso = oldRuns();
     // No config.json: the default, 14 days, so minutes 0 to 2 are 2 days before the cutoff; and none is written.
     expect(DEFAULT_KEPT_WHOLE_DAYS).toBe(14);
+    // config.json's null (off at the start, #297's re-review) means 14 here too; then with no config.json at all.
+    configure(0, null);
+    expect(runThin(["--dry-run"]).output).toContain("would cut 87 fast and 15 medium");
+    rmSync(path.join(directory, CONFIG_FILE_NAME));
     const byDefault = runThin(["--no-backup"]);
     expect(byDefault).toEqual({
       exitCode: 0,
@@ -624,9 +655,11 @@ describe("the command: npm run thin (#283)", () => {
     reopen();
   });
 
-  test("--vacuum compacts the file after thinning, in the data directory, with sizes", () => {
+  test("--vacuum compacts the file after thinning, in the data directory, with sizes; a stale copy there doesn't stop it", () => {
     oldRuns(30);
     configure(0);
+    // A copy left by a run that was stopped mid-way (#297's re-review): removed first.
+    writeFileSync(path.join(directory, `${STORE_FILE_NAME}.compacted`), "half a file");
     const sizeBefore = statSync(path.join(directory, STORE_FILE_NAME)).size;
     const vacuumed = runThin(["--vacuum", "--no-backup"]);
     expect(vacuumed.exitCode).toBe(0);

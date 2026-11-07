@@ -1,9 +1,11 @@
-// The brain's lock file (#283's review): `brain.lock` in its data directory, written as it starts, before it opens the
-// store, and removed as it stops. It names the brain's process and, run by `npm run brain`, the runner's, which lives
-// on through a crash and the restart after it. `npm run thin` refuses while either is alive, as well as while the
+// The brain's lock file (#283's review): `brain.lock` in its data directory, claimed as it starts, before it opens the
+// store. It names the brain's process and, run by `npm run brain`, the runner's, which lives on through a crash and
+// the restart after it. The brain removes it only on a clean stop, so after a crash it stays, and the runner's process
+// keeps it counting until the runner stops. `npm run thin` refuses while either is alive, as well as while the
 // dashboard's port answers: the port alone misses a brain starting (the store open before it listens) and a crashed
-// one about to be restarted. A lock left by a killed brain names dead processes, so it doesn't count.
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+// one about to be restarted. A lock left by a killed brain with no runner names dead processes, so it doesn't count;
+// one naming a process id since reused by another program counts until that ends, and the refusal names the file.
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const BRAIN_LOCK_FILE_NAME = "brain.lock";
@@ -18,12 +20,45 @@ export interface BrainLock {
 
 const lockPath = (dataDirectory: string) => path.join(dataDirectory, BRAIN_LOCK_FILE_NAME);
 
-/** Writes the lock, over any left by a brain before. */
+/**
+ * Writes the lock, over any left before: to a file of its own, then renamed into place, so a reader never sees it half
+ * written (#297's re-review).
+ */
 export function writeBrainLock(dataDirectory: string, lock: BrainLock): void {
-  writeFileSync(lockPath(dataDirectory), `${JSON.stringify(lock)}\n`);
+  const temporaryPath = `${lockPath(dataDirectory)}.${lock.pid}.tmp`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(lock)}\n`);
+    renameSync(temporaryPath, lockPath(dataDirectory));
+  } catch (error) {
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
-/** Removes the lock if it's still `pid`'s. */
+/**
+ * The brain's start (main.ts): writes its lock, unless another brain's process holds it (two brains on one data
+ * directory: the second mustn't take the first's lock, and its failed start mustn't remove it). Never throws: a lock it
+ * can't write is logged, and `npm run thin` still has the dashboard's port to go on. True if it holds the lock.
+ */
+export function claimBrainLock(dataDirectory: string, lock: BrainLock, log: (message: string) => void): boolean {
+  try {
+    const held = readBrainLock(dataDirectory);
+    if (held !== null && held.pid !== lock.pid && isAlive(held.pid)) {
+      log(`brain lock: another brain's process ${held.pid} holds ${lockPath(dataDirectory)}: left as it is`);
+      return false;
+    }
+    writeBrainLock(dataDirectory, lock);
+    return true;
+  } catch (error) {
+    log(
+      `brain lock: couldn't write ${lockPath(dataDirectory)} (${error instanceof Error ? error.message : error}): ` +
+        "npm run thin can tell this brain runs by its dashboard's port alone",
+    );
+    return false;
+  }
+}
+
+/** Removes the lock if it's still `pid`'s: on the brain's clean stop. */
 export function removeBrainLock(dataDirectory: string, pid: number): void {
   if (readBrainLock(dataDirectory)?.pid === pid) rmSync(lockPath(dataDirectory), { force: true });
 }

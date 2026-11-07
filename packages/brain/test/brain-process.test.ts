@@ -2,15 +2,16 @@
 // serving, what the Agent says stored, and the gap report's exit codes.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { BRAIN_LOCK_FILE_NAME, runningBrain } from "../src/brain-lock.ts";
+import { BRAIN_LOCK_FILE_NAME, isAlive, runningBrain, writeBrainLock } from "../src/brain-lock.ts";
 import {
   type BrainConfig,
   CONFIG_FILE_NAME,
@@ -24,6 +25,7 @@ import { readSupervisionSwitch } from "../src/supervision.ts";
 import { isThinnedReading, TelemetryStore } from "../src/telemetry-store.ts";
 
 const BRAIN_MAIN = path.resolve(import.meta.dirname, "../src/main.ts");
+const BRAIN_START = path.resolve(import.meta.dirname, "../src/start.ts");
 const GAPS_CLI = path.resolve(import.meta.dirname, "../src/gaps-cli.ts");
 
 let dataDirectory: string;
@@ -95,7 +97,7 @@ test.each([
   [
     "no days kept whole",
     { telemetryKeptWholeDays: 0 },
-    /telemetryKeptWholeDays must be a whole number of days, at least 1, or absent for no thinning at the start/,
+    /telemetryKeptWholeDays must be a whole number of days, at least 1, or absent or null for no thinning at the start/,
   ],
   ["a fraction of a day kept whole", { telemetryKeptWholeDays: 1.5 }, /telemetryKeptWholeDays must be a whole number/],
   ["days kept whole as text", { telemetryKeptWholeDays: "14" }, /telemetryKeptWholeDays must be a whole number/],
@@ -384,9 +386,9 @@ function storeNow() {
   return { kinds, thinned };
 }
 
-test("the brain's start thins nothing unless config.json opts in (#283's review), and says so", async () => {
+test("the brain's start thins nothing unless config.json opts in (#283's review), and says so; null is off too", async () => {
   oldFastSnapshots();
-  const { output } = await startBrain();
+  const { output } = await startBrain({ telemetryKeptWholeDays: null });
   expect(output()).toContain(
     " brain: store thinning at start: off (telemetryKeptWholeDays isn't set in config.json; npm run thin thins by hand)",
   );
@@ -411,6 +413,61 @@ test("the brain holds its lock file while it runs (#283's review); stopped or ki
   await stopBrain();
   brain = undefined;
   expect(runningBrain(dataDirectory)).toBeNull();
+});
+
+test("a brain that crashes under npm run brain's runner leaves its lock, which the runner keeps counting (#297's re-review)", async () => {
+  // Its control port taken: the brain starts, claims its lock, fails to listen and exits 1; the runner waits 5 s.
+  const taken = createServer();
+  await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", resolve));
+  const config: BrainConfig = {
+    ...loadOrCreateConfig(dataDirectory),
+    environment: "E2",
+    controlPort: (taken.address() as { port: number }).port,
+    remoteFileApiPort: 0,
+    dashboardPort: 0,
+  };
+  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify(config));
+  const runner = spawn(process.execPath, [BRAIN_START, "--data-dir", dataDirectory], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    let output = "";
+    await new Promise<void>((resolve, reject) => {
+      runner.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+        if (/brain runner: the brain exited \(code 1\); restarting in 5 s/.test(output)) resolve();
+      });
+      runner.once("exit", (code) => reject(new Error(`runner exited ${code}: ${output}`)));
+    });
+    // Between the crash and the restart: the brain's process is gone, its runner's alive, and the lock still counts.
+    const lock = runningBrain(dataDirectory);
+    expect(lock).toMatchObject({ runnerPid: runner.pid, path: path.join(dataDirectory, BRAIN_LOCK_FILE_NAME) });
+    expect(isAlive(lock?.pid as number)).toBe(false);
+  } finally {
+    // Within the runner's 5 s wait, so no brain is left behind.
+    const exited = once(runner, "exit");
+    runner.kill();
+    await exited;
+    taken.close();
+  }
+});
+
+test("a lock the brain can't write doesn't stop it starting (#297's re-review): logged", async () => {
+  mkdirSync(path.join(dataDirectory, BRAIN_LOCK_FILE_NAME));
+  const { output } = await startBrain();
+  expect(output()).toMatch(
+    / brain: brain lock: couldn't write .*brain\.lock .*: npm run thin can tell this brain runs by its dashboard's port alone/,
+  );
+  // And a config.json with no telemetryKeptWholeDays at all (startBrain's): off.
+  expect(output()).toContain(" brain: store thinning at start: off ");
+});
+
+test("another brain's live lock is left as it is (#297's re-review): the second brain doesn't take it", async () => {
+  // This test's own process stands for a first brain, running.
+  writeBrainLock(dataDirectory, { pid: process.pid, runnerPid: null });
+  const { output } = await startBrain();
+  expect(output()).toContain(` brain: brain lock: another brain's process ${process.pid} holds `);
+  expect(runningBrain(dataDirectory)).toMatchObject({ pid: process.pid });
 });
 
 test("the gap report's command: 0 with no gaps, 1 with gaps, 2 when it can't run", () => {

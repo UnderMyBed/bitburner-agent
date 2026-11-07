@@ -10,7 +10,7 @@ import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, system
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
-import { BRAIN_RUNNER_PID_VARIABLE, removeBrainLock, writeBrainLock } from "./brain-lock.ts";
+import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
@@ -47,10 +47,17 @@ try {
   const dataDirectory = resolveDataDirectory(process.argv.slice(2), process.env);
   const config = loadOrCreateConfig(dataDirectory);
   // Before the store is opened, so `npm run thin` never thins under a brain starting, nor one about to be restarted
-  // (the runner's process is in it too); removed as the process exits.
+  // (the runner's process is in it too). Removed only on a clean stop: after a crash it stays, and the runner's process
+  // keeps it counting until the restart claims it again (#297's re-review). A lock it can't write is logged, not fatal.
   const runnerPid = Number(process.env[BRAIN_RUNNER_PID_VARIABLE]);
-  writeBrainLock(dataDirectory, { pid: process.pid, runnerPid: Number.isInteger(runnerPid) ? runnerPid : null });
-  process.on("exit", () => removeBrainLock(dataDirectory, process.pid));
+  const holdsLock = claimBrainLock(
+    dataDirectory,
+    { pid: process.pid, runnerPid: Number.isInteger(runnerPid) && runnerPid > 0 ? runnerPid : null },
+    log,
+  );
+  process.on("exit", (code) => {
+    if (code === 0 && holdsLock) removeBrainLock(dataDirectory, process.pid);
+  });
   const release = brainRelease();
   // Built from this checkout's sources on every start, so the brain always deploys the code it was started from.
   const buildDirectory = path.join(dataDirectory, INGAME_BUILD_DIRECTORY_NAME);
@@ -59,9 +66,10 @@ try {
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
   // Old data thinned (#283) before this run starts, never in its hot path, and only if config.json opts in: it can't be
   // undone. Logged; a failure doesn't stop the start, and is the dashboard's alert.
-  const keptWholeDays = config.telemetryKeptWholeDays;
+  // Absent or null: off (#297's re-review).
+  const keptWholeDays = config.telemetryKeptWholeDays ?? null;
   const storeThinningFailure =
-    keptWholeDays === undefined
+    keptWholeDays === null
       ? null
       : thinStoreAtStart(store, {
           context: { environment: config.environment, release },
@@ -69,7 +77,7 @@ try {
           keptWholeDays,
           log,
         });
-  if (keptWholeDays === undefined) {
+  if (keptWholeDays === null) {
     log("store thinning at start: off (telemetryKeptWholeDays isn't set in config.json; npm run thin thins by hand)");
   }
   // This run of the brain starts here, after the build: everything stored after this event is this run's, for the

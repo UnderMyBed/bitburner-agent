@@ -46,6 +46,11 @@ export interface StoreThinning {
   bytesAfter: number;
   /** How long it took. */
   tookMs: number;
+  /**
+   * Why the write-ahead log couldn't be emptied after the thinning committed (#297's re-review): the thinning stands,
+   * the log stays at its size until SQLite's next checkpoint. Absent when it was emptied, or there was nothing to.
+   */
+  logNotEmptied?: string;
 }
 
 /**
@@ -108,8 +113,19 @@ export function thinStore(
   };
   if (dryRun) return thin();
   const thinning = store.writeTransaction(thin);
-  if (cutAny(thinning)) store.checkpoint();
-  return { ...thinning, tookMs: performance.now() - startedMs };
+  let logNotEmptied: string | undefined;
+  if (cutAny(thinning)) {
+    try {
+      store.checkpoint();
+    } catch (error) {
+      logNotEmptied = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return {
+    ...thinning,
+    tookMs: performance.now() - startedMs,
+    ...(logNotEmptied === undefined ? {} : { logNotEmptied }),
+  };
 }
 
 /** Whether a thinning cut (or a dry run would cut) any snapshot. */
@@ -120,7 +136,8 @@ export const megabytes = (bytes: number) => `${(bytes / 1_000_000).toFixed(1)} M
 
 /** A thinning as a line: the brain's log, the command's output, the run report's section 1. */
 export function describeThinning(thinning: StoreThinning): string {
-  const { beforeMs, keptWholeDays, dryRun, skipped, thinned, bytesBefore, bytesAfter, tookMs } = thinning;
+  const { beforeMs, keptWholeDays, dryRun, skipped, thinned, bytesBefore, bytesAfter, tookMs, logNotEmptied } =
+    thinning;
   const name = dryRun ? "store thinning (a dry run, nothing changed)" : "store thinning";
   if (typeof skipped === "string") return `${name}: nothing thinned: ${skipped}`;
   if (beforeMs === null) return `${name}: no snapshots recorded yet`;
@@ -132,7 +149,8 @@ export function describeThinning(thinning: StoreThinning): string {
   const took = typeof tookMs === "number" ? `, in ${formatSeconds(tookMs)}` : "";
   return dryRun
     ? `${name}: would cut ${counts} before ${formatIsoTime(beforeMs)} to their times (${rule}), ${bytes}`
-    : `store thinned before ${formatIsoTime(beforeMs)} (${rule}): ${counts} cut to their times, ${bytes}${took}`;
+    : `store thinned before ${formatIsoTime(beforeMs)} (${rule}): ${counts} cut to their times, ${bytes}${took}` +
+        (typeof logNotEmptied === "string" ? `; its write-ahead log not emptied: ${logNotEmptied}` : "");
 }
 
 /**
