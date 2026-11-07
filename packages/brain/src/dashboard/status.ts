@@ -17,6 +17,7 @@ import { donationStatus } from "../augmentation-report.ts";
 import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
 import { type BatcherView, batcherNotRunning, batcherOutOfStep } from "../batcher.ts";
+import type { DataBackupProblem } from "../data-backup.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
@@ -192,6 +193,8 @@ export interface DashboardStatusOptions {
   share?: ShareView;
   /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
+  /** The newest data backup's problem (#284), for the `dataBackupFailed` alert; null or absent: none. */
+  dataBackupProblem?: DataBackupProblem | null;
   nowMs: number;
 }
 
@@ -225,6 +228,7 @@ export function buildDashboardStatus({
   worldDaemonStall = null,
   share,
   storeThinningFailure = null,
+  dataBackupProblem = null,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -366,6 +370,7 @@ export function buildDashboardStatus({
       installAwaitingRestart,
       worldDaemonStall,
       storeThinningFailure,
+      dataBackupProblem,
     }),
     events: store
       .recentEvents({ environment, limit: RECENT_EVENT_COUNT })

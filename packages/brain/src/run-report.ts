@@ -41,6 +41,12 @@ import {
   INTENT_STUCK_AFTER_TRIES,
 } from "./dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
+import {
+  DATA_BACKUP_EVENT_KIND,
+  DATA_BACKUP_EVENT_KINDS,
+  DATA_BACKUP_FAILED_EVENT_KIND,
+  describeDataBackup,
+} from "./data-backup.ts";
 import { FACTION_STATE_UNREAD_AFTER, factionStatusOf } from "./faction-state.ts";
 import {
   describeChoice,
@@ -635,7 +641,8 @@ interface RunFacts extends RunWindow {
   earlierBrainStartMs: number | null;
   /**
    * The store's thinnings, and those that failed, in the day before the window since its last brain start (#283's
-   * review): a brain start's comes just before its `brainStarted`, so before a default window.
+   * review): a brain start's comes just before its `brainStarted`, so before a default window. With them, the data
+   * backup a thinning at the start waited for (#284), or its failure: only those, never an earlier run's backups.
    */
   thinningsBefore: StoredEvent[];
   /** Hacking income against the ceiling (#196). */
@@ -809,7 +816,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const earlierStarts = dayBefore.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND);
     const lastStartBeforeMs = earlierStarts.at(-1)?.atMs ?? Number.NEGATIVE_INFINITY;
     const thinningsBefore = dayBefore.filter(
-      (event) => STORE_THINNING_EVENT_KINDS.includes(event.kind) && event.atMs >= lastStartBeforeMs,
+      (event) =>
+        (STORE_THINNING_EVENT_KINDS.includes(event.kind) ||
+          (DATA_BACKUP_EVENT_KINDS.includes(event.kind) && fieldsOf(event.detail).reason === "thinning")) &&
+        event.atMs >= lastStartBeforeMs,
     );
     const reloadsBefore = store
       .eventsInWindow({
@@ -1009,7 +1019,8 @@ function windowSection(facts: RunFacts): string[] {
   lines.push(
     `  brain starts: ${count(BRAIN_STARTED_EVENT_KIND)}; Agent connections: ${count("agentConnected")}, ` +
       `disconnections: ${count("agentDisconnected")}; relaunches: ${count(RELAUNCH_EVENT_KIND)}; ` +
-      `deploys: ${count("deployed")}; save backups: ${backups}`,
+      `deploys: ${count("deployed")}; save backups: ${backups}; data backups: ${count(DATA_BACKUP_EVENT_KIND)}` +
+      (count(DATA_BACKUP_FAILED_EVENT_KIND) > 0 ? `, ${count(DATA_BACKUP_FAILED_EVENT_KIND)} FAILED` : ""),
   );
   return lines;
 }
@@ -1073,6 +1084,9 @@ function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.N
         : `store thinned: ${JSON.stringify(detail)}`;
     case STORE_THINNING_FAILED_EVENT_KIND:
       return `store thinning FAILED, the store left as it was: ${displayValue(fields.failure)}`;
+    case DATA_BACKUP_EVENT_KIND:
+    case DATA_BACKUP_FAILED_EVENT_KIND:
+      return describeDataBackup(kind, detail);
     default:
       return `${kind}: ${JSON.stringify(detail)}`;
   }

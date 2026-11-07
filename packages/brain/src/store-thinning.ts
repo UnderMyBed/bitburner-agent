@@ -5,8 +5,8 @@
 // (`TelemetryStore.thinSnapshots`). The run report's time checks (the heartbeat's gaps, clock steps, page stalls)
 // read every row, so stay exact; its content checks read one snapshot a minute there. It can't be undone. By hand,
 // with `npm run thin` (a dry run, and a backup first, unless told not to); at the brain's start only if config.json's
-// `telemetryKeptWholeDays` opts in (owner's call, proposed in #283), never in a run's hot path. The save backups are
-// files beside the store: never touched.
+// `telemetryKeptWholeDays` opts in (owner's call, proposed in #283), and only once a data backup (#284) holds whole
+// what it cuts, never in a run's hot path. The save backups are files beside the store: never touched.
 import { formatIsoTime, formatSeconds } from "./gap-report.ts";
 import type { RecordContext, TelemetryStore } from "./telemetry-store.ts";
 
@@ -154,16 +154,29 @@ export function describeThinning(thinning: StoreThinning): string {
 }
 
 /**
- * The brain's start (main.ts), with `telemetryKeptWholeDays` in config.json: thins, and logs what it did. A failure
- * is logged and recorded, never thrown, and returned for the dashboard's `storeThinningFailed` alert: the brain starts
- * all the same.
+ * The brain's start (main.ts), with `telemetryKeptWholeDays` in config.json: thins, and logs what it did. A thinning
+ * that would cut anything waits for `backupFirst` (#284: a data backup that holds whole everything it cuts, taken now
+ * if none does yet), and with none, thins nothing. A failure is logged and recorded, never thrown, and returned for the
+ * dashboard's `storeThinningFailed` alert: the brain starts all the same.
  */
-export function thinStoreAtStart(
+export async function thinStoreAtStart(
   store: TelemetryStore,
-  options: { context: RecordContext; nowMs: number; keptWholeDays: number; log: (message: string) => void },
-): { atMs: number; failure: string } | null {
-  const { context, nowMs, log } = options;
+  options: {
+    context: RecordContext;
+    nowMs: number;
+    keptWholeDays: number;
+    log: (message: string) => void;
+    /** Given the thinning's cutoff: null once a backup holds what it cuts, else why none does. */
+    backupFirst: (beforeMs: number) => Promise<string | null>;
+  },
+): Promise<{ atMs: number; failure: string } | null> {
+  const { context, nowMs, log, backupFirst } = options;
   try {
+    const wouldCut = thinStore(store, { ...options, dryRun: true });
+    if (cutAny(wouldCut) && wouldCut.beforeMs !== null) {
+      const noBackup = await backupFirst(wouldCut.beforeMs);
+      if (noBackup !== null) throw new Error(`no data backup holds what it would cut (#284): ${noBackup}`);
+    }
     log(describeThinning(thinStore(store, options)));
     return null;
   } catch (error) {

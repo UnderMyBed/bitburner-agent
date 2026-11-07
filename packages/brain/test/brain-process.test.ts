@@ -2,7 +2,7 @@
 // serving, what the Agent says stored, and the gap report's exit codes.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -16,11 +16,13 @@ import {
   type BrainConfig,
   CONFIG_FILE_NAME,
   DEFAULT_DATA_DIRECTORY,
+  dataBackupSettings,
   loadOrCreateConfig,
   readConfig,
   resolveDataDirectory,
   STORE_FILE_NAME,
 } from "../src/config.ts";
+import { DATA_BACKUP_EVENT_KINDS } from "../src/data-backup.ts";
 import { readSupervisionSwitch } from "../src/supervision.ts";
 import { isThinnedReading, TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -64,8 +66,10 @@ test("the config and its token are created once, and kept", () => {
     steamAppId: 1812820,
     gameExecutable: "bitburner.exe",
   });
-  // Thinning at the start is the owner's to opt into (#283's review): never written, so off.
+  // Thinning at the start is the owner's to opt into (#283's review): never written, so off. The data backup's
+  // settings (#284) aren't written either: absent, they're the defaults.
   expect(first).not.toHaveProperty("telemetryKeptWholeDays");
+  expect(Object.keys(first).filter((key) => key.startsWith("dataBackup"))).toEqual([]);
   expect(loadOrCreateConfig(dataDirectory)).toEqual(first);
 });
 
@@ -101,10 +105,50 @@ test.each([
   ],
   ["a fraction of a day kept whole", { telemetryKeptWholeDays: 1.5 }, /telemetryKeptWholeDays must be a whole number/],
   ["days kept whole as text", { telemetryKeptWholeDays: "14" }, /telemetryKeptWholeDays must be a whole number/],
+  [
+    "data backups kept below 0",
+    { dataBackupsKept: -1 },
+    /dataBackupsKept must be a whole number, 0 for no data backups \(the default is 2\)/,
+  ],
+  ["a fraction of a data backup kept", { dataBackupsKept: 1.5 }, /dataBackupsKept must be a whole number/],
+  [
+    "a zero data backup interval",
+    { dataBackupIntervalHours: 0 },
+    /dataBackupIntervalHours must be a number of hours, at least 1 and at most 596 \(the default is 24\)/,
+  ],
+  ["a data backup interval a timer can't wait", { dataBackupIntervalHours: 597 }, /dataBackupIntervalHours must be/],
+  ["a data backup interval under an hour", { dataBackupIntervalHours: 0.5 }, /dataBackupIntervalHours must be/],
+  ["a data backup interval as text", { dataBackupIntervalHours: "24" }, /dataBackupIntervalHours must be/],
+  ["an empty data backup folder", { dataBackupDirectory: " " }, /dataBackupDirectory must be a folder/],
+  ["a data backup folder that isn't text", { dataBackupDirectory: 5 }, /dataBackupDirectory must be a folder/],
 ])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
   const config = loadOrCreateConfig(dataDirectory);
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...config, ...changes }));
   expect(() => loadOrCreateConfig(dataDirectory)).toThrow(expected);
+});
+
+test("the data backup's settings (#284): absent, 2 kept, every 24 h, in the data directory's backups/; 0 kept is off", () => {
+  const config = loadOrCreateConfig(dataDirectory);
+  expect(dataBackupSettings(config, dataDirectory)).toEqual({
+    backupsKept: 2,
+    intervalHours: 24,
+    directory: path.join(dataDirectory, "backups"),
+  });
+  const elsewhere = path.join(os.tmpdir(), "elsewhere");
+  for (const [dataBackupDirectory, directory] of [
+    ["kept", path.join(dataDirectory, "kept")],
+    [elsewhere, elsewhere],
+  ]) {
+    writeFileSync(
+      path.join(dataDirectory, CONFIG_FILE_NAME),
+      JSON.stringify({ ...config, dataBackupsKept: 0, dataBackupIntervalHours: 1.5, dataBackupDirectory }),
+    );
+    expect(dataBackupSettings(loadOrCreateConfig(dataDirectory), dataDirectory)).toEqual({
+      backupsKept: 0,
+      intervalHours: 1.5,
+      directory,
+    });
+  }
 });
 
 test("a config that isn't JSON, or isn't an object, is refused with its path", () => {
@@ -150,9 +194,14 @@ test("a flag without a value is an error, never taken from elsewhere", () => {
   );
 });
 
-/** The events after the brain's own `brainStarted` (E2: the test brain's environment). */
+/**
+ * The events after the brain's own `brainStarted` (E2: the test brain's environment), but its data backups (#284): the
+ * one at its start comes when its worker is done, at no set time.
+ */
 const eventsSinceStart = (store: TelemetryStore) =>
-  store.events({ environment: "E2" }).filter((event) => event.kind !== "brainStarted");
+  store
+    .events({ environment: "E2" })
+    .filter((event) => event.kind !== "brainStarted" && !DATA_BACKUP_EVENT_KINDS.includes(event.kind));
 
 interface StartedBrain {
   config: BrainConfig;
@@ -377,10 +426,16 @@ function oldFastSnapshots() {
   }
   store.close();
 }
-/** The kinds of the brain's events, and whether any fast snapshot is thinned. */
+/** The kinds of the brain's events (with its data backups' reasons), and whether any fast snapshot is thinned. */
 function storeNow() {
   const store = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
-  const kinds = store.events({ environment: "E2" }).map((event) => event.kind);
+  const kinds = store
+    .events({ environment: "E2" })
+    .map((event) =>
+      DATA_BACKUP_EVENT_KINDS.includes(event.kind)
+        ? `${event.kind} (${(event.detail as { reason: string }).reason})`
+        : event.kind,
+    );
   const thinned = store.snapshots({ environment: "E2" }).some((snapshot) => isThinnedReading(snapshot.data));
   store.close();
   return { kinds, thinned };
@@ -388,19 +443,86 @@ function storeNow() {
 
 test("the brain's start thins nothing unless config.json opts in (#283's review), and says so; null is off too", async () => {
   oldFastSnapshots();
-  const { output } = await startBrain({ telemetryKeptWholeDays: null });
+  const { output } = await startBrain({ telemetryKeptWholeDays: null, dataBackupsKept: 0 });
   expect(output()).toContain(
     " brain: store thinning at start: off (telemetryKeptWholeDays isn't set in config.json; npm run thin thins by hand)",
   );
   expect(storeNow()).toEqual({ kinds: ["brainStarted"], thinned: false });
 });
 
-test("opted in, the brain thins its store's old data as it starts (#283), logs it, and records it before its start", async () => {
+test("opted in, the brain thins its store's old data as it starts (#283), after a data backup (#284), before its start", async () => {
   // The cutoff is 14 days before the newest snapshot, 20 days ago: the two minutes 40 days ago are thinned.
   oldFastSnapshots();
   const { output } = await startBrain({ telemetryKeptWholeDays: 14 });
-  expect(output()).toMatch(/ brain: store thinned before .*: 58 fast and 0 medium snapshots cut to their times/);
-  expect(storeNow()).toEqual({ kinds: ["storeThinned", "brainStarted"], thinned: true });
+  expect(output()).toMatch(
+    / brain: data backup backups\/\S+ \(before the start's thinning\): [\s\S]* brain: store thinned before .*: 58 fast and 0 medium snapshots cut to their times/,
+  );
+  // That backup is enough: the start's own isn't due until a day after it.
+  expect(storeNow()).toEqual({ kinds: ["dataBackup (thinning)", "storeThinned", "brainStarted"], thinned: true });
+  const [backup] = readdirSync(path.join(dataDirectory, "backups"));
+  // The whole store, from before the thinning.
+  const copy = TelemetryStore.openReadOnly(path.join(dataDirectory, "backups", backup as string, STORE_FILE_NAME));
+  expect(copy.snapshots({ environment: "E2" }).some((snapshot) => isThinnedReading(snapshot.data))).toBe(false);
+  expect(copy.snapshots({ environment: "E2" })).toHaveLength(61);
+  copy.close();
+});
+
+test("opted in with data backups off, the brain's start thins nothing (#284): logged, recorded and the dashboard's alert", async () => {
+  oldFastSnapshots();
+  const { output, dashboardPort } = await startBrain({ telemetryKeptWholeDays: 14, dataBackupsKept: 0 });
+  expect(output()).toContain(
+    " brain: store thinning FAILED, the store left as it was: no data backup holds what it would cut (#284): data " +
+      "backups are off (config.json's dataBackupsKept is 0)",
+  );
+  expect(output()).toContain(" brain: data backups: off (config.json's dataBackupsKept is 0)");
+  expect(storeNow()).toEqual({ kinds: ["storeThinningFailed", "brainStarted"], thinned: false });
+  const status = JSON.parse((await askDashboard(dashboardPort, "GET", "/api/status")).body) as {
+    alerts: { name: string }[];
+  };
+  expect(status.alerts.map((alert) => alert.name)).toContain("storeThinningFailed");
+});
+
+test("the brain backs its data directory up at its start (#284): logged, recorded, and the copy opens", async () => {
+  const { output } = await startBrain();
+  expect(output()).toContain(
+    ` brain: data backups in ${path.join(dataDirectory, "backups")}, every 24 h from the newest, the newest 2 kept`,
+  );
+  for (let attempt = 0; attempt < 100 && !/ brain: data backup backups\//.test(output()); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(output()).toMatch(
+    / brain: data backup backups\/\S+ \(at the brain's start\): the store [\d.]+ MB, 0 save backups, in /,
+  );
+  const [backup, ...others] = readdirSync(path.join(dataDirectory, "backups"));
+  expect(others).toEqual([]);
+  expect(readdirSync(path.join(dataDirectory, "backups", backup as string)).sort()).toEqual([
+    "backup.json",
+    CONFIG_FILE_NAME,
+    STORE_FILE_NAME,
+  ]);
+  const copy = TelemetryStore.openReadOnly(path.join(dataDirectory, "backups", backup as string, STORE_FILE_NAME));
+  expect(copy.events({ environment: "E2" }).map((event) => event.kind)).toEqual(["brainStarted"]);
+  copy.close();
+  expect(storeNow().kinds).toEqual(["brainStarted", "dataBackup (start)"]);
+});
+
+test("a data backup that fails is logged, and the dashboard's dataBackupFailed alert; the brain plays on (#284)", async () => {
+  writeFileSync(path.join(dataDirectory, "not a folder"), "");
+  const { output, dashboardPort } = await startBrain({ dataBackupDirectory: "not a folder" });
+  for (let attempt = 0; attempt < 100 && !/data backup FAILED/.test(output()); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(output()).toMatch(/ brain: data backup FAILED \(at the brain's start\): .*not a folder/);
+  const status = JSON.parse((await askDashboard(dashboardPort, "GET", "/api/status")).body) as {
+    alerts: { name: string; detail: string }[];
+  };
+  expect(status.alerts).toContainEqual(
+    expect.objectContaining({
+      name: "dataBackupFailed",
+      detail: expect.stringContaining("the data directory's backup failed:"),
+    }),
+  );
+  expect(storeNow().kinds).toEqual(["brainStarted", "dataBackupFailed (start)"]);
 });
 
 test("the brain holds its lock file while it runs (#283's review); stopped or killed, it's running no more", async () => {

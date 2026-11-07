@@ -270,7 +270,8 @@ describe("the sections", () => {
       `  ${at(5 * SECOND)}  deployed dep-b, replacing dep-a`,
       `  ${at(6 * SECOND)}  save backup saves/E0/backup.json.gz (20 KB)`,
       `  ${at(9 * SECOND)}  Agent connected: session session-1, deployment dep-b, game 3.0.1 (Steam)`,
-      "  brain starts: 1; Agent connections: 1, disconnections: 0; relaunches: 0; deploys: 1; save backups: 1",
+      "  brain starts: 1; Agent connections: 1, disconnections: 0; relaunches: 0; deploys: 1; save backups: 1; data " +
+        "backups: 0\n",
     ]) {
       expect(text).toContain(line);
     }
@@ -3976,6 +3977,55 @@ describe("over a thinned store (#283)", () => {
         `  ${at(-2 * SECOND)}  store thinning FAILED, the store left as it was: disk I/O error (before the window)\n`,
     );
     expect(text).not.toContain("the last 9 days");
+    expect(failures).toEqual([]);
+  });
+
+  test("section 1 lists the data backups (#284), and those that failed, counted; the one before the start's thinning too", () => {
+    // Another run's, before an earlier brain start in the day before: not this one's.
+    event(-2 * 60 * MINUTE, "dataBackup", { reason: "thinning", directory: "backups/old", storeBytes: 1, saves: [] });
+    event(-60 * MINUTE, "brainStarted", { release: "r0" });
+    // That earlier run's own, at its start and interval, after its brainStarted: not the thinning's (#298's review).
+    event(-50 * MINUTE, "dataBackup", {
+      reason: "start",
+      directory: "backups/earlier-start",
+      storeBytes: 1,
+      saves: [],
+    });
+    event(-10 * MINUTE, "dataBackupFailed", { reason: "interval", failure: "earlier interval" });
+    // This start's thinning's backup failing, before the one that worked.
+    event(-5 * SECOND, "dataBackupFailed", { reason: "thinning", failure: "disk busy" });
+    // This start's, before its thinning, just before cleanRun's brainStarted at T0.
+    const backup = (reason: string, directory: string) => ({
+      reason,
+      directory,
+      storeBytes: 412_300_000,
+      saves: ["saves/E0/a.json.gz"],
+      tookMs: 1_700,
+      removed: [],
+    });
+    event(-4 * SECOND, "dataBackup", backup("thinning", "backups/before-thinning"));
+    cleanRun();
+    event(RUN_MS / 4, "dataBackup", backup("start", "backups/at-the-start"));
+    event(RUN_MS / 2, "dataBackup", backup("interval", "backups/at-the-interval"));
+    event(RUN_MS, "dataBackupFailed", { reason: "interval", failure: "not enough free space" });
+    const { text, failures } = report();
+    expect(text).toContain(
+      `  ${at(-4 * SECOND)}  data backup backups/before-thinning (before the start's thinning): the store 412.3 MB, 1 ` +
+        "save backup, in 1.7 s (before the window)\n",
+    );
+    expect(text).not.toContain("backups/old");
+    expect(text).not.toContain("backups/earlier-start");
+    expect(text).not.toContain("earlier interval");
+    expect(text).toContain(
+      `  ${at(-5 * SECOND)}  data backup FAILED (before the start's thinning): disk busy (before the window)\n`,
+    );
+    expect(text).toContain(
+      `  ${at(RUN_MS / 2)}  data backup backups/at-the-interval (at the interval): the store 412.3 MB, 1 save backup, ` +
+        "in 1.7 s\n",
+    );
+    expect(text).toContain(`  ${at(RUN_MS)}  data backup FAILED (at the interval): not enough free space\n`);
+    expect(text).toContain("; save backups: 1; data backups: 2, 1 FAILED\n");
+    // Play went on: not the run's failure.
     expect(failures).toEqual([]);
   });
 
