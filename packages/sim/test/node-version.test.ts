@@ -1,0 +1,112 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, test } from "vitest";
+import { sfc32 } from "../src/host/rng.ts";
+import { checkNodeVersion, nodeVersionError, parseNodeMajor, pinnedNodeMajor, REPO_ROOT } from "../src/node-version.ts";
+
+/**
+ * How V8's Array.prototype.sort treats a random comparator, `() => rnd() - rnd()` on [0, 1, …, n-1] with a fresh
+ * sfc32(n) per length, as the legacy fork's go.js sorts its moves (packages/legacy/fork/go.js:1352-1353): how many
+ * times it calls the comparator, and the order it leaves. The two V8s differ for 3 to 7 elements only (measured over
+ * 0 to 80, 100, 150, 200, 361, 500 and 1000), which is what made the BN1 baseline's seeded games differ (#282). Steam's
+ * Electron 41 is Chromium 146, whose V8 is 14.6: Node 26's, not Node 24's.
+ */
+const SORT_BY_NODE: Record<number, { v8: string; byLength: Record<number, { calls: number; order: string }> }> = {
+  24: {
+    v8: "13.6.",
+    byLength: {
+      2: { calls: 1, order: "10" },
+      3: { calls: 2, order: "210" },
+      4: { calls: 3, order: "0123" },
+      5: { calls: 4, order: "01234" },
+      6: { calls: 10, order: "501432" },
+      7: { calls: 9, order: "0123645" },
+      8: { calls: 16, order: "50163274" },
+    },
+  },
+  26: {
+    v8: "14.6.",
+    byLength: {
+      2: { calls: 1, order: "10" },
+      3: { calls: 3, order: "120" },
+      4: { calls: 4, order: "0132" },
+      5: { calls: 6, order: "01423" },
+      6: { calls: 10, order: "504312" },
+      7: { calls: 12, order: "0612543" },
+      8: { calls: 16, order: "50163274" },
+    },
+  },
+};
+
+function randomSorts(): Record<number, { calls: number; order: string }> {
+  const byLength: Record<number, { calls: number; order: string }> = {};
+  for (let n = 2; n <= 8; n++) {
+    const rnd = sfc32(n);
+    let calls = 0;
+    const sorted = Array.from({ length: n }, (_, i) => i).sort(() => {
+      calls++;
+      return rnd() - rnd();
+    });
+    byLength[n] = { calls, order: sorted.join("") };
+  }
+  return byLength;
+}
+
+describe("the repo's Node pin (#282)", () => {
+  test.each([
+    ["24", 24],
+    ["24\n", 24],
+    ["v24", 24],
+    ["24.22.1", 24],
+    ["v26.13.0", 26],
+  ])(".node-version %j is Node %i", (text, major) => {
+    expect(parseNodeMajor(text)).toBe(major);
+  });
+
+  test.each(["", "lts/*", "node", "24.x"])(".node-version %j is refused, naming what it read", (text) => {
+    expect(() => parseNodeMajor(text)).toThrow(/^\.node-version: expected a Node version/);
+  });
+
+  test("any version of the pinned major passes; another major is refused with what to do", () => {
+    expect(nodeVersionError(24, "24.0.0")).toBeNull();
+    expect(nodeVersionError(24, "v24.22.1")).toBeNull();
+    expect(nodeVersionError(24, "26.13.0")).toBe(
+      "Node v26.13.0 isn't the repo's Node 24 (.node-version). Seeded simulations differ between Node majors (#282), " +
+        "so baseline, benchmark and scenario results are only recorded on Node 24. With mise, run from the repo: its " +
+        "mise.toml selects Node 24 (docs/setup.md).",
+    );
+    expect(nodeVersionError(24, "22.1.0")).toMatch(/^Node v22\.1\.0 isn't the repo's Node 24/);
+  });
+
+  test("checkNodeVersion reads the major from the given repo's .node-version", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "node-pin-"));
+    writeFileSync(path.join(repo, ".node-version"), "26\n");
+    expect(() => checkNodeVersion(repo, "26.1.0")).not.toThrow();
+    expect(() => checkNodeVersion(repo, "24.22.1")).toThrow(/^Node v24\.22\.1 isn't the repo's Node 26/);
+  });
+
+  test("the repo's mise.toml selects the same Node major as .node-version, which mise doesn't read by default", () => {
+    const mise = readFileSync(path.join(REPO_ROOT, "mise.toml"), "utf8");
+    const node = /^\[tools\][^[]*^node = "([^"]+)"$/m.exec(mise);
+    expect(node?.[1]).toBeDefined();
+    expect(parseNodeMajor(node?.[1] ?? "")).toBe(pinnedNodeMajor());
+  });
+
+  test("the tests run on the pinned Node, as CI's setup-node takes it from .node-version", () => {
+    expect(nodeVersionError(pinnedNodeMajor())).toBeNull();
+  });
+
+  test("V8's sort calls a random comparator as the pinned Node's V8 does: why the pin matters", () => {
+    const expected = SORT_BY_NODE[pinnedNodeMajor()];
+    expect(expected, `no sort measurements for Node ${pinnedNodeMajor()}: add them to SORT_BY_NODE`).toBeDefined();
+    expect(process.versions.v8.startsWith(expected?.v8 ?? "")).toBe(true);
+    expect(randomSorts()).toEqual(expected?.byLength);
+  });
+
+  test("the two measured V8s differ for 3 to 7 elements and agree for 2 and 8", () => {
+    const [node24, node26] = [SORT_BY_NODE[24]?.byLength ?? {}, SORT_BY_NODE[26]?.byLength ?? {}];
+    for (const n of [2, 8]) expect(node24[n]).toEqual(node26[n]);
+    for (const n of [3, 4, 5, 6, 7]) expect(node24[n]).not.toEqual(node26[n]);
+  });
+});

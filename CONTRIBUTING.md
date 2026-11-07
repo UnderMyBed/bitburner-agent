@@ -83,7 +83,9 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
 
 ## Setup
 
-Requires Node 24 or later (CI runs 24, from `.node-version`) and git.
+Requires Node 24 and git. The repo pins Node 24 in `.node-version`, which CI's setup-node reads. mise doesn't read `.node-version` by default, so the repo's `mise.toml` selects the same major inside the clone, without touching your global mise config (it holds only `[tools]`, so mise needs no `mise trust`); `node-version.test.ts` checks the two agree. Run `node --version` in the clone to confirm. To try another Node on purpose, set `MISE_NODE_VERSION` for that shell.
+
+The pin matters for the simulator: a seeded game differs between Node majors, because V8's `Array.prototype.sort` calls a comparator differently on short arrays ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282), [parity](docs/sim/parity.md) 4.17). So `npm run sim`, `npm run baseline -w @bitburner-agent/legacy` and `npm run bench -w @bitburner-agent/sim` exit 2 on any other major, before building anything, and the test suite fails on one (`node-version.test.ts`). Moving the pin means changing `.node-version` and `mise.toml` together, adding the new V8's sort measurements to `node-version.test.ts`, and recording new baseline and benchmark rows on it.
 
 ```sh
 git clone https://github.com/UnderMyBed/bitburner-agent.git

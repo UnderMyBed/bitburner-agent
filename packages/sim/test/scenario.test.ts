@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
+import { checkNodeVersion, nodeVersionError, pinnedNodeMajor } from "../src/node-version.ts";
 import { scenarioCli } from "../src/scenario/cli.ts";
 import { formatRun } from "../src/scenario/report.ts";
 import {
@@ -395,6 +396,7 @@ describe("the CLI", () => {
         "512",
       ],
       {
+        checkNode: () => {},
         buildEngine: async () => undefined,
         runScenario: async (scenario, options) => {
           runs.push(options);
@@ -408,6 +410,25 @@ describe("the CLI", () => {
     expect(runs).toEqual([
       expect.objectContaining({ seeds: [2, 3], workers: 1, wallLimitMs: 90 * MINUTE, maxHeapMb: 512 }),
     ]);
+  });
+
+  test("refuses a Node other than the repo's with exit 2, before building the engine (#282)", async () => {
+    const other = `${pinnedNodeMajor() + 2}.1.0`;
+    const calls: string[] = [];
+    const errors: string[] = [];
+    const code = await scenarioCli(["packages/sim/scenarios/lean.json"], {
+      checkNode: () => checkNodeVersion(undefined, other),
+      buildEngine: async () => calls.push("build"),
+      runScenario: async (scenario) => {
+        calls.push("run");
+        return { scenario: scenario.name, results: [], aggregate: aggregate([]) };
+      },
+      log: () => {},
+      error: (text) => errors.push(text),
+    });
+    expect(code).toBe(2);
+    expect(calls).toEqual([]);
+    expect(errors).toEqual([nodeVersionError(pinnedNodeMajor(), other)]);
   });
 
   test("prints a progress line per seed per checkpoint on stderr, and accepts --wall-limit and --max-heap", async () => {

@@ -1,7 +1,15 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { aggregate, type GameSummary, type ScenarioRun, type SeedResult } from "@bitburner-agent/sim";
+import {
+  aggregate,
+  checkNodeVersion,
+  type GameSummary,
+  nodeVersionError,
+  pinnedNodeMajor,
+  type ScenarioRun,
+  type SeedResult,
+} from "@bitburner-agent/sim";
 import { describe, expect, test, vi } from "vitest";
 import { baselineCli, type CliDeps } from "../src/cli.ts";
 
@@ -37,6 +45,7 @@ function deps(results: SeedResult[], overrides: Partial<CliDeps> = {}) {
     async (): Promise<ScenarioRun> => ({ scenario: "legacy-bn1", results, aggregate: aggregate(results) }),
   );
   const all: CliDeps = {
+    checkNode: () => {},
     buildEngine: async () => undefined,
     runScenario,
     commit: () => "abc1234-dirty",
@@ -147,6 +156,19 @@ describe("the baseline CLI", () => {
     expect(await baselineCli(argv, all)).toBe(2);
     expect(runScenario).not.toHaveBeenCalled();
     expect(errors.join("\n")).toMatch(message);
+  });
+
+  test("refuses a Node other than the repo's with exit 2, before building the engine (#282)", async () => {
+    const buildEngine = vi.fn(async () => undefined);
+    const other = pinnedNodeMajor() + 2;
+    const { all, runScenario, errors } = deps([seed(1, true)], {
+      buildEngine,
+      checkNode: () => checkNodeVersion(undefined, `${other}.1.0`),
+    });
+    expect(await baselineCli([], all)).toBe(2);
+    expect(buildEngine).not.toHaveBeenCalled();
+    expect(runScenario).not.toHaveBeenCalled();
+    expect(errors).toEqual([nodeVersionError(pinnedNodeMajor(), `${other}.1.0`)]);
   });
 
   test("exits 2 if the run as a whole couldn't happen", async () => {
