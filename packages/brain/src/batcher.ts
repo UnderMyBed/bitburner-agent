@@ -216,8 +216,8 @@ export interface BatcherTargetWorth {
  *   batches: a move to it never stops the income while it's prepared, as it did in run #2.
  * - **The move:** of those, the worthiest; the one sent is kept unless another is worth `BATCHER_MOVE_GAIN` times it.
  * - **The next:** of the rest worth the move from the one chosen once prepared (its income over the horizon less a
- *   batch's weaken), and that a move from it could reach once prepared (a weaken at its minimum within
- *   `BATCHER_MOST_IDLE_MS` of the chosen one's; #274: before, a next past it was prepared, kept and never moved to
+ *   batch's weaken, against the chosen one's once batched, as the move to it will be: #278's re-review), and that a
+ *   move from it could reach once prepared (a weaken at its minimum within `BATCHER_MOST_IDLE_MS` of the chosen one's; #274: before, a next past it was prepared, kept and never moved to
  *   while that one earned), those earning within `BATCHER_NEXT_HORIZON_MS` on its RAM (#274: within
  *   `BATCHER_TARGET_HORIZON_MS` before, which no weaken at 3 times the minimum of BN1's richest met) whose gain over
  *   the chosen one after that, over the hour, is more than its batches lose meanwhile on four fifths of the RAM (#278's
@@ -288,35 +288,38 @@ export function chooseBatcher(
   const room = batcherRoomOf(mediumData, hosts, runOn);
   const ramGb = "why" in room ? 0 : room.ramGb;
   /**
-   * The steps (#274): the `BATCHER_TARGETS_PLANNED` best by the ceiling that might be the next from `from` (with none,
+   * The steps (#274): the first `BATCHER_TARGETS_PLANNED` by the ceiling that might be the next from `from` (with none,
    * a target chosen with nothing batched, which earns within BATCHER_MOST_IDLE_MS of none): a move reaches them (a
    * weaken at their minimum within BATCHER_MOST_IDLE_MS of its), they earn within BATCHER_NEXT_HORIZON_MS on `share`
-   * of the RAM (#278's review), and at twice A1's ceiling on the RAM (plans came to 17 to 94% of it) they'd be worth
-   * the move once prepared and gain more than the batches lose meanwhile. The best by the ceiling may be none of them.
+   * of the RAM (#278's review), and they're worth the move once prepared (against `from` batched, as the move to them
+   * will be: #278's re-review) and gain more than the batches lose meanwhile. Those two are checked first at twice
+   * A1's ceiling on the RAM, as no plan beats the ceiling, and then on the plan, made as each is met (#278's
+   * re-review), so one that fails on its plan takes no step's place.
    */
   const stepsFrom = (
-    from: { hostname: string; incomePerSecond: number; worth: number; lostPerSecond: number } | null,
+    from: { hostname: string; incomePerSecond: number; lostPerSecond: number } | null,
     share: number,
   ) => {
     const fromWeakenMs = from === null ? 0 : weakenOf(figuresOf(staticData, from.hostname) as HackingTarget);
-    return byCeiling
-      .filter(({ hostname, figures, ceiling }) => {
-        if (hostname === from?.hostname) return false;
-        const weakenMs = weakenOf(figures);
-        if (weakenMs - fromWeakenMs > BATCHER_MOST_IDLE_MS) return false;
-        const mostIncome = 2 * ceiling * ramGb;
-        if (from !== null) {
-          const mostWorth = mostIncome * Math.max(0, BATCHER_TARGET_HORIZON_MS - weakenMs);
-          if (mostWorth < from.worth * BATCHER_MOVE_GAIN) return false;
-        }
-        const untilMs = preparationTimeMs(figures, player, nowOf(hostname, figures), ramGb * share) + weakenMs;
-        if (!(untilMs < BATCHER_NEXT_HORIZON_MS)) return false;
-        if (from === null) return true;
-        const mostGain = (mostIncome - from.incomePerSecond) * (BATCHER_NEXT_HORIZON_MS - untilMs);
-        return mostGain > from.lostPerSecond * untilMs;
-      })
-      .slice(0, BATCHER_TARGETS_PLANNED)
-      .map(({ hostname }) => hostname);
+    const steps: string[] = [];
+    for (const { hostname, figures, ceiling } of byCeiling) {
+      if (steps.length >= BATCHER_TARGETS_PLANNED) break;
+      if (hostname === from?.hostname) continue;
+      const weakenMs = weakenOf(figures);
+      if (weakenMs - fromWeakenMs > BATCHER_MOST_IDLE_MS) continue;
+      const untilMs = preparationTimeMs(figures, player, nowOf(hostname, figures), ramGb * share) + weakenMs;
+      if (!(untilMs < BATCHER_NEXT_HORIZON_MS)) continue;
+      const worthy = (incomePerSecond: number) =>
+        from === null ||
+        (incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - weakenMs) >=
+          from.incomePerSecond * BATCHER_TARGET_HORIZON_MS * BATCHER_MOVE_GAIN &&
+          (incomePerSecond - from.incomePerSecond) * (BATCHER_NEXT_HORIZON_MS - untilMs) >
+            from.lostPerSecond * untilMs);
+      if (!worthy(2 * ceiling * ramGb)) continue;
+      const plan = planOf(hostname);
+      if (plan !== null && worthy(plan.incomePerSecond)) steps.push(hostname);
+    }
+    return steps;
   };
   // The one batched first: what its batches leave is the RAM a target is prepared on, and where the steps start.
   const batchedPlan = batching === null ? null : planOf(batching);
@@ -328,7 +331,6 @@ export function chooseBatcher(
           {
             hostname: batching,
             incomePerSecond: batchedPlan.incomePerSecond,
-            worth: batchedPlan.incomePerSecond * BATCHER_TARGET_HORIZON_MS,
             lostPerSecond: lostPerSecondOf(batching, batchedPlan.incomePerSecond),
           },
           Math.max(BATCHER_NEXT_RAM_SHARE, 1 - batchedPlan.peakRamGb / batchedPlan.ramGb),
@@ -402,9 +404,12 @@ export function chooseBatcher(
   const nextGb = (each: Weighed) => each.ramGb * nextShare;
   const chosenName = chosen.weighed.target;
   const lostPerSecond = lostPerSecondOf(chosenName, chosen.weighed.incomePerSecond);
+  // The chosen one's worth once batched (#278's re-review): what the move to the next is weighed against then, so on a
+  // move, or with nothing batched, a next the later move would refuse isn't sent. While it earns, its worth now.
+  const chosenBatchedWorth = chosen.weighed.incomePerSecond * BATCHER_TARGET_HORIZON_MS;
   // A move now, or none batched: the steps from the one chosen too (#278's review), as the next is reached from it.
   if (chosen !== earning) {
-    const from = { hostname: chosenName, ...chosen.weighed, lostPerSecond };
+    const from = { hostname: chosenName, incomePerSecond: chosen.weighed.incomePerSecond, lostPerSecond };
     weighAll(stepsFrom(from, nextShare));
   }
   const worths = byCeiling.flatMap(({ hostname }) => weighedOf.get(hostname)?.weighed ?? []);
@@ -415,21 +420,23 @@ export function chooseBatcher(
   // that, over the hour, is more than its batches lose on four fifths of the RAM meanwhile (#278's review); of them,
   // the worthiest over the hour. A gain above 0 is one within the hour: worth the move once prepared, it earns more
   // than the chosen one. The one sent is kept unless another is worth BATCHER_MOVE_GAIN times it (#236), even
-  // if it no longer earns within the hour or gains (#278's review: hosts lost), its waves out.
+  // if it no longer earns within the hour or gains (#278's review: hosts lost), its waves out, as long as the RAM
+  // will ever prepare it.
   const nextTargetCandidates = [...weighedOf.values()]
     .filter(
       (each) =>
         each !== chosen &&
-        each.preparedWorth >= chosen.weighed.worth * BATCHER_MOVE_GAIN &&
+        each.preparedWorth >= chosenBatchedWorth * BATCHER_MOVE_GAIN &&
         each.firstBatchMs - chosen.firstBatchMs <= BATCHER_MOST_IDLE_MS,
     )
     .map((each) => {
       const untilMs = untilNextEarnsMs(each);
       const afterMs = Math.max(0, BATCHER_NEXT_HORIZON_MS - untilMs);
       const gain = (each.weighed.incomePerSecond - chosen.weighed.incomePerSecond) * afterMs - lostPerSecond * untilMs;
-      return { each, worth: each.weighed.incomePerSecond * afterMs, gain };
+      return { each, untilMs, worth: each.weighed.incomePerSecond * afterMs, gain };
     })
-    .filter(({ each, gain }) => each.weighed.target === sentNext || gain > 0)
+    // The one sent, its waves out, while it will ever be prepared (#278's re-review); any other, on its gain.
+    .filter(({ each, untilMs, gain }) => (each.weighed.target === sentNext && Number.isFinite(untilMs)) || gain > 0)
     .sort((a, b) => b.worth - a.worth);
   const keptNext = nextTargetCandidates.find(({ each }) => each.weighed.target === sentNext);
   const worthiestNext = nextTargetCandidates[0];

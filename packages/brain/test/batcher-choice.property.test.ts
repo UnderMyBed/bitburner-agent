@@ -267,10 +267,10 @@ test("over random shapes from n00dles batched: a path to any target worth one, m
 });
 
 test("the shapes reach what it's for: a move or a next beyond the 5 best by the ceiling, chains, rests with a richer target left", () => {
-  // A fixed seed, so these floors can't miss on a random one. On seed 274's 150 shapes: 145 with a target worth a
-  // path from n00dles, 45 moving at once, 134 sending a next, 18 whose move or next is beyond the 5 best by the ceiling,
-  // 35 needing a chain of two moves or more, and 2 resting with a richer target and no chain to it. The floors are
-  // about half.
+  // A fixed seed, so these floors can't miss on a random one. On seed 274's 150 shapes (after #278's re-review): 145
+  // with a target worth a path from n00dles, 45 moving at once, 134 sending a next, 18 whose move or next is beyond
+  // the 5 best by the ceiling, 35 needing a chain of two moves or more, and 2 resting with a richer target and no chain
+  // to it. The floors are about half.
   const counts = { worth: 0, moved: 0, nextSent: 0, beyondTheBest: 0, chains: 0, richerLeft: 0 };
   fc.assert(
     fc.property(anyShape, (shape) => {
