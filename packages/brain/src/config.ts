@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_BACKUP_INTERVAL_MS } from "./save-backups.ts";
+import { DEFAULT_KEPT_WHOLE_DAYS } from "./store-thinning.ts";
 import { ENVIRONMENTS, type Environment } from "./telemetry-store.ts";
 
 export const DATA_DIRECTORY_VARIABLE = "BITBURNER_AGENT_DATA_DIR";
@@ -34,6 +35,11 @@ export interface BrainConfig {
   steamAppId: number;
   /** The game's executable name, as tasklist shows it. */
   gameExecutable: string;
+  /**
+   * The days of the brain's records the telemetry store keeps whole (#283); older ones are thinned at its start. Absent
+   * from a config made before #283: `DEFAULT_KEPT_WHOLE_DAYS`.
+   */
+  telemetryKeptWholeDays?: number;
 }
 
 /**
@@ -122,7 +128,18 @@ export function defaultConfig(): BrainConfig {
     // Verified on the reference rig: steamapps/appmanifest_1812820.acf names Bitburner (#94).
     steamAppId: 1812820,
     gameExecutable: "bitburner.exe",
+    telemetryKeptWholeDays: DEFAULT_KEPT_WHOLE_DAYS,
   };
+}
+
+/** `telemetryKeptWholeDays` (#283), or the default where a config made before it says nothing. */
+export function keptWholeDaysOf(config: BrainConfig): number {
+  return config.telemetryKeptWholeDays ?? DEFAULT_KEPT_WHOLE_DAYS;
+}
+
+/** Whether `days` can be the days a store keeps whole: a whole number, at least 1. */
+export function isKeptWholeDays(days: unknown): days is number {
+  return Number.isInteger(days) && (days as number) >= 1;
 }
 
 /** Reads `<dataDirectory>/config.json`, creating the directory and the file (with a new token) the first time. */
@@ -183,6 +200,9 @@ function configProblem(config: unknown): string | null {
   // A bare file name: it goes into tasklist's filter and taskkill's arguments.
   if (typeof fields.gameExecutable !== "string" || !/^[\w .-]+\.exe$/i.test(fields.gameExecutable)) {
     return "gameExecutable must be the game's .exe file name, with no folder (the default is bitburner.exe)";
+  }
+  if (fields.telemetryKeptWholeDays !== undefined && !isKeptWholeDays(fields.telemetryKeptWholeDays)) {
+    return `telemetryKeptWholeDays must be a whole number of days, at least 1 (the default is ${DEFAULT_KEPT_WHOLE_DAYS})`;
   }
   return null;
 }

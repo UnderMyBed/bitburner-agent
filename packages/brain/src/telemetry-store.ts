@@ -65,6 +65,42 @@ const SCHEMA = `
   );
 `;
 
+/**
+ * Thinning (#283): before a cutoff, the first fast and medium snapshot stored in each minute of the brain's clock stays
+ * whole, and each other keeps its row (its times, session and sequence number) with its data cut to a stub,
+ * `{"thinned":true}`, a fast one's with its `degradedTiers` and `pageHeapUsedBytes`: what the run report's time checks
+ * and the gap report read of every snapshot. The other tiers, the events and the settings are never thinned.
+ */
+export const THINNED_SNAPSHOT_TIERS = ["fast", "medium"] as const;
+/** One snapshot of each thinned tier a minute stays whole. */
+export const WHOLE_SNAPSHOT_EVERY_MS = 60_000;
+/** How a stub's JSON starts: `json_object` keeps its keys in order. */
+const THINNED_PREFIX = '{"thinned":';
+const THINNED_STUB = `CASE tier WHEN 'fast' THEN json_object('thinned', json('true'),
+    'degradedTiers', json_extract(data, '$.degradedTiers'),
+    'pageHeapUsedBytes', json_extract(data, '$.pageHeapUsedBytes'))
+  ELSE '{"thinned":true}' END`;
+/** The snapshots thinning would cut to a stub in a span: thinned tiers, not yet stubs, not their minute's first. */
+const THINNED_TIERS_SQL = THINNED_SNAPSHOT_TIERS.map((tier) => `'${tier}'`).join(", ");
+const THINNABLE = `environment = :environment AND tier IN (${THINNED_TIERS_SQL}) AND received_at_ms >= :fromMs
+  AND received_at_ms < :beforeMs AND substr(data, 1, ${THINNED_PREFIX.length}) <> '${THINNED_PREFIX}'
+  AND id NOT IN (SELECT MIN(id) FROM snapshots WHERE environment = :environment AND tier IN (${THINNED_TIERS_SQL})
+    AND received_at_ms >= :fromMs AND received_at_ms < :beforeMs
+    GROUP BY tier, CAST(received_at_ms / :everyMs AS INTEGER))`;
+
+/** Whether a snapshot's data is a thinned one's stub (#283): its times hold, what it said is gone. */
+export function isThinnedReading(data: unknown): boolean {
+  return data !== null && typeof data === "object" && (data as { thinned?: unknown }).thinned === true;
+}
+
+/** What one thinning did to a tier (#283): how many snapshots it cut to a stub, and their data's bytes then and now. */
+export interface ThinnedTier {
+  tier: string;
+  count: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}
+
 const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
   missed_before, data`;
 const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
@@ -420,6 +456,54 @@ export class TelemetryStore {
       )
       .get(environment, ...kinds, afterEventId, sinceMs) as { count: number };
     return row.count;
+  }
+
+  /** When the newest snapshot from an environment was received, or null with none (#283: thinning's cutoff). */
+  newestSnapshotMs({ environment }: { environment: Environment }): number | null {
+    const row = this.#database
+      .prepare("SELECT MAX(received_at_ms) AS newest FROM snapshots WHERE environment = ?")
+      .get(environment) as { newest: number | null };
+    return row.newest;
+  }
+
+  /**
+   * Thins the fast and medium snapshots received from `fromMs` up to `beforeMs` (#283, `THINNED_SNAPSHOT_TIERS`): each
+   * but the first stored in its minute is cut to a stub. Give both on a minute, so no minute is split between two
+   * thinnings. Returns, by tier, those it cut (none already a stub); call it in a write transaction.
+   */
+  thinSnapshots({
+    environment,
+    fromMs,
+    beforeMs,
+  }: {
+    environment: Environment;
+    fromMs: number;
+    beforeMs: number;
+  }): ThinnedTier[] {
+    const span = { environment, fromMs, beforeMs, everyMs: WHOLE_SNAPSHOT_EVERY_MS };
+    const tiers = this.#database
+      .prepare(
+        `SELECT tier, COUNT(*) AS count, SUM(length(CAST(data AS BLOB))) AS bytes_before,
+          SUM(length(CAST(${THINNED_STUB} AS BLOB))) AS bytes_after FROM snapshots WHERE ${THINNABLE}
+          GROUP BY tier ORDER BY tier`,
+      )
+      .all(span) as { tier: string; count: number; bytes_before: number; bytes_after: number }[];
+    this.#database.prepare(`UPDATE snapshots SET data = ${THINNED_STUB} WHERE ${THINNABLE}`).run(span);
+    return tiers.map((row) => ({
+      tier: row.tier,
+      count: row.count,
+      bytesBefore: row.bytes_before,
+      bytesAfter: row.bytes_after,
+    }));
+  }
+
+  /**
+   * Compacts the file (#283, `npm run thin -- --vacuum`): SQLite reuses the pages thinning frees, so the file stops
+   * growing, but only this gives them back. It rewrites the whole file, so only with nothing else writing to it.
+   */
+  vacuum(): void {
+    this.#database.exec("VACUUM");
+    this.#database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   }
 
   getSetting(key: string): string | null {

@@ -26,6 +26,7 @@ import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import {
   type ClockIncident,
+  type FastSnapshotTime,
   findClockIncidents,
   incidentLines,
   type SnapshotTime,
@@ -75,8 +76,14 @@ import {
   RESTART_FELL_BACK_EVENT_KIND,
   WORK_PROMOTION_EVENT_KIND,
 } from "./record-channel-events.ts";
+import {
+  describeThinning,
+  STORE_THINNED_EVENT_KIND,
+  STORE_THINNING_FAILED_EVENT_KIND,
+  type StoreThinning,
+} from "./store-thinning.ts";
 import { RELAUNCH_EVENT_KIND, SUPERVISION_GAVE_UP_EVENT_KIND } from "./supervision.ts";
-import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
+import { type Environment, isThinnedReading, type StoredEvent, type TelemetryStore } from "./telemetry-store.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
 import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
 
@@ -332,6 +339,8 @@ export function inferHackTargets(
 class BatcherTargets {
   readonly stretches: BatcherTarget[] = [];
   #last: SnapshotMoment | null = null;
+  /** Whether the last record named a target, or followed one that did: a thinned one goes on only after one. */
+  #lastNamed = false;
   readonly #resets: Resets;
 
   constructor(resets: Resets) {
@@ -340,6 +349,7 @@ class BatcherTargets {
 
   add(moment: SnapshotMoment, batcher: unknown): void {
     const target = isObject(batcher) ? fieldsOf(batcher).target : undefined;
+    this.#lastNamed = typeof target === "string";
     if (typeof target !== "string") return;
     const [current, last] = [this.stretches.at(-1), this.#last];
     this.#last = moment;
@@ -350,6 +360,21 @@ class BatcherTargets {
       !resetBetween(this.#resets, last, moment);
     if (goesOn) current.toMs = moment.atMs;
     else this.stretches.push({ target, fromMs: moment.atMs, toMs: moment.atMs });
+  }
+
+  /**
+   * A thinned fast snapshot (#283): the Agent reporting, what its health said unknown. A stretch goes on across it, as
+   * across a look naming its target, so thinned minutes aren't each a stretch; one never starts at it.
+   */
+  heard(moment: SnapshotMoment): void {
+    const last = this.#last;
+    const goesOn =
+      this.#lastNamed &&
+      last !== null &&
+      moment.atMs - last.atMs <= DEFAULT_GAP_THRESHOLD_MS &&
+      !resetBetween(this.#resets, last, moment);
+    this.#lastNamed = goesOn;
+    if (goesOn) this.#last = moment;
   }
 }
 
@@ -436,7 +461,18 @@ class FactionStateFolding {
 
 // --- Reading the store ------------------------------------------------------------------------------------------------
 
-/** What the report keeps of each fast snapshot: not the home processes, the bulk of it. */
+/**
+ * A fast snapshot's times, its degraded tiers and its page heap: every one's, a thinned one's too (#283), for the time
+ * checks (the heartbeat, clock steps and page stalls, the page heap, the run's end).
+ */
+interface FastTime extends FastSnapshotTime {
+  pageHeapUsedBytes: unknown;
+}
+
+/**
+ * What the report keeps of each whole fast snapshot: not the home processes, the bulk of it; never a thinned one's
+ * (#283), whose stub says none of it.
+ */
 interface FastPoint {
   atMs: number;
   /** The game's time it was taken (#241). */
@@ -544,10 +580,15 @@ interface RunFacts extends RunWindow {
   events: StoredEvent[];
   /** The reloads' events in the `RELOAD_LEAD_MS` before the window (#240): one can explain a gap at its start. */
   reloadsBefore: StoredEvent[];
+  /** Every fast snapshot's times, thinned or not (#283): the time checks. */
+  fastTimes: FastTime[];
+  /** The whole fast snapshots, each what it says: the content checks. */
   fast: FastPoint[];
+  /** The snapshots in the window thinned to their times (#283), by tier; the newest, or null with none. */
+  thinned: { fast: number; medium: number; lastMs: number | null };
   mediumFirst: MediumSnapshotData | undefined;
   mediumLast: MediumSnapshotData | undefined;
-  /** The medium snapshots' times (#241), for clock steps and page stalls. */
+  /** The medium snapshots' times (#241), for clock steps and page stalls: every one's, a thinned one's too (#283). */
   mediumTimes: SnapshotTime[];
   /** A weaken's time on a target over the window (#241), to put the batcher's desyncs down to an incident. */
   weakenTimes: WeakenTimes;
@@ -685,11 +726,18 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const cloudServerChanges = new CloudServerChanges(cloudServers);
     const worldDaemon = new WorldDaemonFold();
     const mediumTimes: SnapshotTime[] = [];
+    const thinned = { fast: 0, medium: 0, lastMs: null as number | null };
     for (const { atMs, gameTimeMs, data } of ofTier<MediumSnapshotData>("medium")) {
-      worldDaemon.addMedium(atMs, data);
       mediumTimes.push({ atMs, gameTimeMs });
-      weakenTimes.addMedium(atMs, data);
       snapshotCount++;
+      // A thinned one's time is all it says (#283): the rest read the whole ones, one a minute there.
+      if (isThinnedReading(data)) {
+        thinned.medium++;
+        thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
+        continue;
+      }
+      worldDaemon.addMedium(atMs, data);
+      weakenTimes.addMedium(atMs, data);
       mediumFirst ??= data;
       mediumLast = data;
       cycles.addMedium(atMs, data);
@@ -706,9 +754,20 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       augmentations.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
+    const fastTimes: FastTime[] = [];
     const batcherTargets = new BatcherTargets(resets);
     for (const { atMs, gameTimeMs, agentSessionId, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
+      const { degradedTiers, pageHeapUsedBytes } = data;
+      fastTimes.push({ atMs, gameTimeMs, degradedTiers, pageHeapUsedBytes });
+      if (isThinnedReading(data)) {
+        thinned.fast++;
+        thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
+        batcherTargets.heard({ atMs, gameTimeMs });
+        // The BitNode's last record: its time alone.
+        cycles.addFast(atMs, gameTimeMs, undefined);
+        continue;
+      }
       batcherTargets.add({ atMs, gameTimeMs }, data.batcher);
       cycles.addFast(atMs, gameTimeMs, data.batcher);
       const segment = segmentAt(cycles.bitNodeIndexAt(atMs));
@@ -741,7 +800,9 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       ...window,
       events,
       reloadsBefore,
+      fastTimes,
       fast,
+      thinned,
       mediumFirst,
       mediumLast,
       mediumTimes,
@@ -800,7 +861,7 @@ export function runReport(
   // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
   const incidents = findClockIncidents({
     medium: facts.mediumTimes,
-    fast: facts.fast,
+    fast: facts.fastTimes,
     restartsMs: facts.events.filter((event) => RESTART_EVENT_KINDS.includes(event.kind)).map(({ atMs }) => atMs),
   });
   const lines = [
@@ -889,6 +950,16 @@ function windowSection(facts: RunFacts): string[] {
         "restart, give --since",
     );
   }
+  const { thinned } = facts;
+  if (thinned.lastMs !== null) {
+    lines.push(
+      `  note: the store is thinned (#283) in this window, up to ${formatIsoTime(thinned.lastMs)}: ` +
+        `${thinned.fast} fast and ${thinned.medium} medium snapshots there keep only their times, one of each a ` +
+        "minute kept whole. The heartbeat's gaps, clock steps, page stalls and the page heap read every one; the " +
+        "rest read the whole ones, so their times there are within a minute, what came and went within one isn't " +
+        "seen, and a backdoor overdue and a batcher stuck on a poor target aren't judged there",
+    );
+  }
   // Section 3's: the actions, with the rules' events (#203, #210).
   const actions = [
     "gameDialog",
@@ -967,6 +1038,12 @@ function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.N
       return `the Agent REFUSED the brain's message (${displayValue(fields.count)} so far): ${displayValue(fields.reason)}`;
     case "connectionRejected":
       return `connection rejected (${displayValue(fields.reason)}): ${displayValue(fields.detail)}`;
+    case STORE_THINNED_EVENT_KIND:
+      return isObject(fields.thinned) && isNumber(fields.keptWholeDays)
+        ? describeThinning(detail as StoreThinning)
+        : `store thinned: ${JSON.stringify(detail)}`;
+    case STORE_THINNING_FAILED_EVENT_KIND:
+      return `store thinning FAILED, the store left as it was: ${displayValue(fields.failure)}`;
     default:
       return `${kind}: ${JSON.stringify(detail)}`;
   }
@@ -1800,7 +1877,7 @@ function healthSection(
   const lines = ["4. Health"];
   const heartbeat = heartbeatLines(facts, gapThresholdMs, failures);
   lines.push(...heartbeat.lines);
-  lines.push(`  ${describePageHeap(facts.fast.map((point) => point.pageHeapUsedBytes).filter(isNumber))}`);
+  lines.push(`  ${describePageHeap(facts.fastTimes.map((point) => point.pageHeapUsedBytes).filter(isNumber))}`);
   // Clock steps and page stalls (#241): each, and 3 or more in an hour a failure.
   lines.push(...incidentLines(incidents, failures));
   lines.push(...stallLines(facts, heartbeat.gaps, failures));
@@ -1957,7 +2034,7 @@ function stallLines(facts: RunFacts, gaps: Gap[], failures: string[]): string[] 
 /** The run's last record: its newest fast snapshot or event. Silence after it is the run having ended. */
 function runEndMs(facts: RunFacts): number | null {
   // Events are in the order stored, which isn't always the order of their times.
-  const times = [...facts.fast.slice(-1), ...facts.events].map(({ atMs }) => atMs);
+  const times = [...facts.fastTimes.slice(-1), ...facts.events].map(({ atMs }) => atMs);
   return times.length === 0 ? null : times.reduce((latest, time) => Math.max(latest, time));
 }
 
@@ -1992,7 +2069,8 @@ function resetIntentsHeld(facts: RunFacts, atMs: number): string[] {
  * (`notTheReloadAlone`).
  */
 function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: string[]): { lines: string[]; gaps: Gap[] } {
-  const times = facts.fast.map(({ atMs }) => atMs);
+  // Every fast snapshot's, a thinned one's too (#283): its time holds.
+  const times = facts.fastTimes.map(({ atMs }) => atMs);
   const first = times[0];
   const last = times.at(-1);
   const endMs = runEndMs(facts);

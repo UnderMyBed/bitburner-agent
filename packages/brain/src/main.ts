@@ -2,7 +2,8 @@
 // data in the repo's .data/ unless told otherwise. It runs the control channel and stores what the Agent reports,
 // serves the Remote File API, over which it deploys the in-game code and backs up the game's save, tells the Agent what
 // to run (the hack loop, #134, and the intents, #141: the hacking programs, #136, home's RAM, #138, and the owner's
-// manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself.
+// manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself. At start it thins the
+// store's old data (#283).
 import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
@@ -10,7 +11,7 @@ import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
-import { loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
+import { keptWholeDaysOf, loadOrCreateConfig, resolveDataDirectory, STORE_FILE_NAME } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { DesiredStateController } from "./desired-state.ts";
@@ -24,6 +25,7 @@ import { brainChannel, recordChannelEvents, recordEvents } from "./record-channe
 import { brainRelease } from "./release.ts";
 import { SAVE_BACKUPS_DIRECTORY_NAME, SaveBackups } from "./save-backups.ts";
 import { readShareEnabled } from "./share.ts";
+import { thinStoreAtStart } from "./store-thinning.ts";
 import { setSupervisionPaused } from "./supervision.ts";
 import { Supervisor, shouldSupervise } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
@@ -49,6 +51,13 @@ try {
   await buildInGameBundles({ outputDirectory: buildDirectory });
   const build = readInGameBuild(buildDirectory);
   const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  // Old data thinned (#283) before this run starts, never in its hot path; logged. A failure doesn't stop the start.
+  thinStoreAtStart(store, {
+    context: { environment: config.environment, release },
+    nowMs: systemClock.now(),
+    keptWholeDays: keptWholeDaysOf(config),
+    log,
+  });
   // This run of the brain starts here, after the build: everything stored after this event is this run's, for the
   // dashboard, and the Agent gets its 60 s to reconnect from now.
   const startedAtMs = systemClock.now();

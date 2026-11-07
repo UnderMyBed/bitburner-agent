@@ -14,6 +14,7 @@ import {
   type BrainConfig,
   CONFIG_FILE_NAME,
   DEFAULT_DATA_DIRECTORY,
+  keptWholeDaysOf,
   loadOrCreateConfig,
   resolveDataDirectory,
   STORE_FILE_NAME,
@@ -59,8 +60,18 @@ test("the config and its token are created once, and kept", () => {
     saveBackupsKept: 96,
     steamAppId: 1812820,
     gameExecutable: "bitburner.exe",
+    telemetryKeptWholeDays: 14,
   });
   expect(loadOrCreateConfig(dataDirectory)).toEqual(first);
+});
+
+test("a config from before #283, with no days kept whole, is read: the default, 14", () => {
+  const { telemetryKeptWholeDays: _, ...before } = loadOrCreateConfig(dataDirectory);
+  writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify(before));
+  const config = loadOrCreateConfig(dataDirectory);
+  expect(config.telemetryKeptWholeDays).toBeUndefined();
+  expect(keptWholeDaysOf(config)).toBe(14);
+  expect(keptWholeDaysOf({ ...config, telemetryKeptWholeDays: 3 })).toBe(3);
 });
 
 test.each([
@@ -78,6 +89,13 @@ test.each([
   ["a game executable that isn't an .exe", { gameExecutable: "bitburner" }, /gameExecutable must be/],
   ["no backups kept", { saveBackupsKept: 0 }, /saveBackupsKept must be a whole number, at least 1/],
   ["a fraction of a backup kept", { saveBackupsKept: 2.5 }, /saveBackupsKept must be a whole number, at least 1/],
+  [
+    "no days kept whole",
+    { telemetryKeptWholeDays: 0 },
+    /telemetryKeptWholeDays must be a whole number of days, at least 1 \(the default is 14\)/,
+  ],
+  ["a fraction of a day kept whole", { telemetryKeptWholeDays: 1.5 }, /telemetryKeptWholeDays must be a whole number/],
+  ["days kept whole as text", { telemetryKeptWholeDays: "14" }, /telemetryKeptWholeDays must be a whole number/],
 ])("a config with %s is refused, saying what's wrong", (_description, changes, expected) => {
   const config = loadOrCreateConfig(dataDirectory);
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify({ ...config, ...changes }));
@@ -136,6 +154,8 @@ interface StartedBrain {
   controlPort: number;
   remoteFileApiPort: number;
   dashboardPort: number;
+  /** What it has logged so far. */
+  output: () => string;
 }
 
 async function startBrain(): Promise<StartedBrain> {
@@ -149,7 +169,7 @@ async function startBrain(): Promise<StartedBrain> {
   writeFileSync(path.join(dataDirectory, CONFIG_FILE_NAME), JSON.stringify(config));
   brain = spawn(process.execPath, [BRAIN_MAIN, "--data-dir", dataDirectory], { stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
-  const ports = await new Promise<Omit<StartedBrain, "config">>((resolve, reject) => {
+  const ports = await new Promise<Omit<StartedBrain, "config" | "output">>((resolve, reject) => {
     brain?.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString();
       const control = /control channel on 127\.0\.0\.1:(\d+)/.exec(output);
@@ -165,7 +185,7 @@ async function startBrain(): Promise<StartedBrain> {
     });
     brain?.once("exit", (code) => reject(new Error(`brain exited ${code}: ${output}`)));
   });
-  return { config, ...ports };
+  return { config, ...ports, output: () => output };
 }
 
 async function stopBrain(): Promise<void> {
@@ -325,6 +345,38 @@ function runGaps(args: string[]): { exitCode: number; output: string } {
     return { exitCode: failed.status, output: failed.stdout + failed.stderr };
   }
 }
+
+test("the brain thins its store's old data as it starts (#283), logs it, and records it before its start", async () => {
+  const DAY = 24 * 60 * 60_000;
+  // E2's (the test brain's): two minutes 40 days ago, and the newest 20 days ago, so the cutoff is 34 days ago.
+  const oldMs = Math.floor((Date.now() - 40 * DAY) / 60_000) * 60_000;
+  const store = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  let sequenceNumber = 0;
+  for (const [offsetMs, tier] of [
+    ...Array.from({ length: 60 }, (_, index) => [index * 2_000, "fast"] as const),
+    [20 * DAY, "fast"] as const,
+  ]) {
+    store.recordSnapshot(
+      { environment: "E2", release: "r" },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: ++sequenceNumber,
+        gameTimeMs: 0,
+        receivedAtMs: oldMs + offsetMs,
+        missedBefore: 0,
+        data: { degradedTiers: [], pageHeapUsedBytes: null, game: { homeProcesses: [] } },
+      },
+    );
+  }
+  store.close();
+  const { output } = await startBrain();
+  expect(output()).toMatch(/ brain: store thinned before .*: 58 fast and 0 medium snapshots cut to their times/);
+  const after = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
+  const kinds = after.events({ environment: "E2" }).map((event) => event.kind);
+  after.close();
+  expect(kinds.slice(0, 2)).toEqual(["storeThinned", "brainStarted"]);
+});
 
 test("the gap report's command: 0 with no gaps, 1 with gaps, 2 when it can't run", () => {
   expect(runGaps(["--since", "2026-10-26T00:00:00Z"]).exitCode).toBe(2);
