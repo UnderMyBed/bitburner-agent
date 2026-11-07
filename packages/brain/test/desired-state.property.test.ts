@@ -15,9 +15,6 @@
 //   each intent in it sent.
 // Each rule's example tests are desired-state.test.ts's; the reset itself, in the simulator, install-restart.test.ts's
 // and destroy-restart.test.ts's.
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
@@ -36,7 +33,7 @@ import {
   WORLD_DAEMON,
 } from "@bitburner-agent/core";
 import fc from "fast-check";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { readManualIntents } from "../src/manual-intents.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
@@ -174,8 +171,6 @@ const stepsFor = (brainResets: boolean) =>
 const anyStep = stepsFor(false);
 type Step = typeof anyStep extends fc.Arbitrary<infer Each> ? Each : never;
 
-let directory: string;
-let storeCount = 0;
 /** Across the runs, so the property is seen to reach what it checks. */
 const reached = {
   resetsInTheSteps: 0,
@@ -188,12 +183,6 @@ const reached = {
   runsWithTheBrainsInstallOut: 0,
   runsWithTheBrainsDestroyOut: 0,
 };
-beforeAll(() => {
-  directory = mkdtempSync(path.join(os.tmpdir(), "desired-state-property-"));
-});
-afterAll(() => {
-  rmSync(directory, { recursive: true, force: true });
-});
 
 /**
  * A brain on a fresh store, an Agent connected to it, the steps played, then a stable game until the owner's queue
@@ -206,7 +195,9 @@ async function play(
   initialQueue: number[],
   steps: Step[],
 ): Promise<string[]> {
-  const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
+  // In memory (#279): a store on disk cost each run about 14 ms to create and each snapshot a write synced to disk, most
+  // of the runs' time. A brain started again in a run takes the same store object, as a restart reads the same file.
+  const store = TelemetryStore.open(":memory:");
   store.setSetting("hackLoop.enabled", "false");
   if (!rulesOn) for (const setting of RULE_SWITCHES) store.setSetting(setting, "false");
   /** The game's last resets, as its slow snapshot says. */
@@ -604,7 +595,6 @@ test("the pool has every action an intent can name, so a new action needs a plac
   expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(new Set(INTENT_ACTIONS));
 });
 
-/** A run: the rules off or on; the brain's own reset, if any (with the rules on, #210, #215); the queue; the steps. */
 /**
  * A run: the rules off or on; the brain's own reset, with them on (#210, #215), the rarest to get out so the most often
  * tried, from an empty queue (the owner's queue holds it back); the owner's queue to start with; the steps.
@@ -624,6 +614,11 @@ const anyRun = fc
       fc.array(stepsFor(brainsReset !== "none"), { maxLength: 50, size: "medium" }),
     ),
   );
+/**
+ * How long the random property may run, shrinking a failure included, before it stops and reports the smallest failing
+ * run found so far: two thirds of the test's 30 s timeout. A passing property takes under 1 s.
+ */
+const SHRINK_TIME_LIMIT_MS = 20_000;
 const playRun = async ([rulesOn, brainsReset, initialQueue, steps]: typeof anyRun extends fc.Arbitrary<infer Run>
   ? Run
   : never) => {
@@ -631,8 +626,9 @@ const playRun = async ([rulesOn, brainsReset, initialQueue, steps]: typeof anyRu
 };
 
 test("resets wait for what's ahead, what's after waits for them; the gate; nothing done again; it drains", async () => {
-  // A failure is reported as found: shrinking over fresh stores could run past the test's time limit.
-  await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 60, endOnFailure: true });
+  // A failure is shrunk (a run takes a few ms on a store in memory, #279), until `SHRINK_TIME_LIMIT_MS`: past it, the
+  // smallest found so far is reported, within the test's timeout.
+  await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 60, interruptAfterTimeLimit: SHRINK_TIME_LIMIT_MS });
 });
 
 test("the runs reach what the property is for: resets, the brain down and the clock back, failed backups, joins", async () => {

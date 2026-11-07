@@ -7,11 +7,7 @@
 // each of which puts an intent ahead of a rule's join already out (#269 review). In some runs the brain installs
 // (#210: CyberSec's five queued, no money left) or destroys the BitNode (#215: The Red Pill in, w0r1d_d43m0n rooted at
 // its level), so the owner's queuing goes ahead of the brain's own reset, out or not (#271). The gate's example tests
-// are
-// desired-state.test.ts's; the reset and done rules over the owner's queue, PR #268's property.
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// are desired-state.test.ts's; the reset and done rules over the owner's queue, PR #268's property.
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
@@ -28,7 +24,7 @@ import {
   WORLD_DAEMON,
 } from "@bitburner-agent/core";
 import fc from "fast-check";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { RELEASED_SNAPSHOTS } from "../src/irreversible-gate.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
@@ -124,8 +120,6 @@ const stepsFor = (brainResets: boolean) =>
 const anyStep = stepsFor(false);
 type Step = typeof anyStep extends fc.Arbitrary<infer Each> ? Each : never;
 
-let directory: string;
-let storeCount = 0;
 /** Across the runs, so the property is seen to reach what it's for. */
 const reached = {
   runsWithARuleJoinOut: 0,
@@ -135,16 +129,14 @@ const reached = {
   reversibleAheadOfTheBrainsInstallOut: 0,
   reversibleAheadOfTheBrainsDestroyOut: 0,
 };
-beforeAll(() => {
-  directory = mkdtempSync(path.join(os.tmpdir(), "irreversible-intents-property-"));
-});
-afterAll(() => {
-  rmSync(directory, { recursive: true, force: true });
-});
 
 /** A brain with every rule on, an Agent connected, the steps played: what each desired state sent breaks of R8. */
 async function play(brainsReset: "none" | "install" | "destroy", steps: Step[]): Promise<string[]> {
-  const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
+  // In memory (#279): a store on disk cost each run about 14 ms to create and each snapshot a write synced to disk, two
+  // thirds of the floor test's 15 s locally; it timed out at 30 s on a slow CI runner (run 42345801314), and the file
+  // took up to 27 s on others. Each run starts from an empty store either way, and nothing here reads one back after
+  // the run, so the runs and their counts are the same.
+  const store = TelemetryStore.open(":memory:");
   store.setSetting("hackLoop.enabled", "false");
   const channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
   channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
@@ -417,6 +409,12 @@ async function play(brainsReset: "none" | "install" | "destroy", steps: Step[]):
   }
 }
 
+/**
+ * How long a random property may run, shrinking a failure included, before it stops and reports the smallest failing
+ * run found so far: two thirds of the test's 30 s timeout. A passing property takes about 1 s.
+ */
+const SHRINK_TIME_LIMIT_MS = 20_000;
+
 /** A run: the brain's own reset in it, if any (#271), and the steps. */
 const anyRun = fc
   .oneof(
@@ -437,11 +435,13 @@ const anyRun = fc
   );
 
 test("every irreversible intent sent, the owner's or a rule's: past its guard, its own backup, and alone", async () => {
+  // A failure is shrunk (a run takes a few ms on a store in memory, #279), until `SHRINK_TIME_LIMIT_MS`: past it, the
+  // smallest found so far is reported, within the test's timeout.
   await fc.assert(
     fc.asyncProperty(anyRun, async ([brainsReset, steps]) => {
       expect(await play(brainsReset, steps)).toEqual([]);
     }),
-    { numRuns: 100, endOnFailure: true },
+    { numRuns: 100, interruptAfterTimeLimit: SHRINK_TIME_LIMIT_MS },
   );
 });
 
