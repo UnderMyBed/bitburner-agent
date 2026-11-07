@@ -595,7 +595,6 @@ test("the pool has every action an intent can name, so a new action needs a plac
   expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(new Set(INTENT_ACTIONS));
 });
 
-/** A run: the rules off or on; the brain's own reset, if any (with the rules on, #210, #215); the queue; the steps. */
 /**
  * A run: the rules off or on; the brain's own reset, with them on (#210, #215), the rarest to get out so the most often
  * tried, from an empty queue (the owner's queue holds it back); the owner's queue to start with; the steps.
@@ -615,6 +614,11 @@ const anyRun = fc
       fc.array(stepsFor(brainsReset !== "none"), { maxLength: 50, size: "medium" }),
     ),
   );
+/**
+ * How long the random property may run, shrinking a failure included, before it stops and reports the smallest failing
+ * run found so far: two thirds of the test's 30 s timeout. A passing property takes under 1 s.
+ */
+const SHRINK_TIME_LIMIT_MS = 20_000;
 const playRun = async ([rulesOn, brainsReset, initialQueue, steps]: typeof anyRun extends fc.Arbitrary<infer Run>
   ? Run
   : never) => {
@@ -622,8 +626,9 @@ const playRun = async ([rulesOn, brainsReset, initialQueue, steps]: typeof anyRu
 };
 
 test("resets wait for what's ahead, what's after waits for them; the gate; nothing done again; it drains", async () => {
-  // A failure is reported as found: shrinking over fresh stores could run past the test's time limit.
-  await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 60, endOnFailure: true });
+  // A failure is shrunk (a run takes a few ms on a store in memory, #279), until `SHRINK_TIME_LIMIT_MS`: past it, the
+  // smallest found so far is reported, within the test's timeout.
+  await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 60, interruptAfterTimeLimit: SHRINK_TIME_LIMIT_MS });
 });
 
 test("the runs reach what the property is for: resets, the brain down and the clock back, failed backups, joins", async () => {
