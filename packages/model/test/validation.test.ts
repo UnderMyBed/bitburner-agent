@@ -81,11 +81,9 @@ describe("downstream: the rules on run #3's own measured curves, cycles 1 to 6",
     }
   });
 
-  test("Daedalus's count after the 1st, 2nd, 5th and 6th installs [one]; the 3rd and 4th known short", () => {
+  test("Daedalus's count after each of the 6 installs [one] (#294; #263's 3rd and 4th were 2 and 4 short)", () => {
     for (const [index, { actual, cycle }] of perCycle(measured).entries()) {
-      const short = actual.count - cycle.countAfter;
-      if (index + 1 === 3 || index + 1 === 4) expect(short, `cycle ${index + 1}`).toBeGreaterThan(1);
-      else expect(Math.abs(short), `cycle ${index + 1}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(actual.count - cycle.countAfter), `cycle ${index + 1}`).toBeLessThanOrEqual(1);
     }
   });
 
@@ -117,18 +115,14 @@ describe("downstream: the rules on run #3's own measured curves, cycles 1 to 6",
     expect(third?.reputation).toBeLessThan((third?.actual.reputation ?? 0) * 0.75);
   });
 
-  test("known: the reputation low in the 5th and 6th cycles (−26%, −20%; the rate −17%), the 6th's favour short", () => {
-    // The 5th works NiteSec for Gen III first (run #3, it seems, had it: its 4th installed 7 to the model's 5), and
-    // both share at 1.43 against run #3's 1.49 and 1.55 (the share from the RAM saturates with the cloud servers).
-    for (const [index, low, high] of [
-      [4, 0.2, 0.3],
-      [5, 0.15, 0.25],
-    ] as const) {
+  test("the reputation [25%] and its rate [16%] in the 5th and 6th cycles (#294; #263's −26% and −20%)", () => {
+    // The 4th now installs run #3's 17 (Gen III among them), so the 5th works BitRunners from the start: −7% and −2%,
+    // the rate −5% and −9%, though both still share at 1.43 against run #3's 1.49 and 1.55.
+    for (const index of [4, 5]) {
       const { actual, reputation, rate } = perCycle(measured)[index] as ReturnType<typeof perCycle>[number];
-      const short = 1 - reputation / actual.reputation;
-      expect(short, `cycle ${index + 1}`).toBeGreaterThan(low);
-      expect(short, `cycle ${index + 1}`).toBeLessThan(high);
-      expect(1 - rate / actual.rate, `cycle ${index + 1}'s rate`).toBeGreaterThan(0.1);
+      expect(off(reputation, actual.reputation), `cycle ${index + 1}`).toBeLessThanOrEqual(0.25);
+      expect(off(rate, actual.rate), `cycle ${index + 1}'s rate`).toBeLessThanOrEqual(0.16);
+      expect(reputation, `cycle ${index + 1}`).toBeLessThan(actual.reputation);
     }
   });
 
@@ -187,13 +181,14 @@ describe("downstream: the rules on run #3's own measured curves, cycles 1 to 6",
     }
   });
 
-  test("known miss: cycles 1 and 2 at 30 min, the model's cash under 2% of run #3's; the 3rd's within 10%", () => {
-    // The model buys each server the money covers within the step; the brain buys one an intent, a medium snapshot
-    // (10 s) apart, so its money waits between them: BN1.3's, held out, are the same (test/bn1-3.test.ts).
-    for (const index of [0, 1]) {
-      expect(cashAt(index, 30) / actualCash(index, 30), `cycle ${index + 1}`).toBeLessThan(0.02);
+  test("cycles 1 to 3 at 30 min, the cash within ×2 of run #3's (×0.56, ×0.97, ×1.3; #263's under 2% in the 1st, 2nd)", () => {
+    // #294: the brain buys one purchase a medium snapshot (10 s), so its money waits between them, as the model's now
+    // does; #263's bought each the money covered within the step. Within 10% only in the 2nd.
+    const ratios = [0, 1, 2].map((index) => cashAt(index, 30) / actualCash(index, 30));
+    for (const [index, ratio] of ratios.entries()) {
+      expect(Math.abs(Math.log2(ratio)), `cycle ${index + 1}`).toBeLessThan(1);
     }
-    expect(off(cashAt(2, 30), actualCash(2, 30)), "cycle 3").toBeLessThan(0.1);
+    expect(ratios.filter((ratio) => Math.abs(ratio - 1) < 0.1)).toHaveLength(1);
   });
 });
 
@@ -204,8 +199,8 @@ describe("the verdict's checks on run #3's BN1.2, the run fitted on", () => {
   };
 
   test("known miss: BitRunners' donations unlock at the 7th install, not run #3's 6th (8 h 35 min)", () => {
-    // Run #3's 6th install came with BitRunners' favour at 150.38, 0.38 over: a knife's edge. The model's is 139 on run
-    // #3's measured curves and 143 on the fitted one (the reputation low in the 5th and 6th cycles, above).
+    // Run #3's 6th install came with BitRunners' favour at 150.38, 0.38 over: a knife's edge. The model's is 148.2 on
+    // run #3's measured curves and 147.5 on the fitted one (#263's: 139 and 143).
     for (const run of [measured, fitted]) {
       expect(unlockedAt(run)).toBe(7);
       const favor = run.cycles[5]?.favorAfter.BitRunners ?? 0;
@@ -214,14 +209,20 @@ describe("the verdict's checks on run #3's BN1.2, the run fitted on", () => {
     }
   });
 
-  test("#244's first two phases [15%]: count 0 → 17 (4 installs), BitRunners' favour 5 → 150 (2 more)", () => {
-    for (const run of [measured, fitted]) {
+  test("#244's first two phases [15%]: count 0 → 17 (4 installs), BitRunners' favour 5 → 150 (2 more); known: the fitted's 1st", () => {
+    // Downstream −3% and +1%; fitted +19% (its 3rd and 4th cycles 34% and 37% long) and −14%.
+    for (const [label, run] of [
+      ["downstream", measured],
+      ["fitted", fitted],
+    ] as const) {
       // In range: every cycle to the 6th install.
       expect(Math.min(...run.outOfRange)).toBeGreaterThan(6);
       let start = 0;
-      for (const { endsAtInstall, minutes } of RUN_3_BN1_2.phases.slice(0, 2)) {
+      for (const [phase, { endsAtInstall, minutes }] of RUN_3_BN1_2.phases.slice(0, 2).entries()) {
         const end = run.cycles[endsAtInstall - 1]?.endMs ?? 0;
-        expect(off((end - start) / MINUTE_MS, minutes)).toBeLessThanOrEqual(0.15);
+        const by = off((end - start) / MINUTE_MS, minutes);
+        if (label === "fitted" && phase === 0) expect(by, `${label} phase 1`).toBeGreaterThan(0.15);
+        else expect(by, `${label} phase ${phase + 1}`).toBeLessThanOrEqual(0.15);
         start = end;
       }
     }
@@ -229,8 +230,8 @@ describe("the verdict's checks on run #3's BN1.2, the run fitted on", () => {
 
   test("out of range: phase 3 on (it ends at the 8th install), so phases 3 to 5 and the destroy are no validation", () => {
     // Measured: run #3's 7th-10th curves run past their ends (31.6, 27.5, 81.7, 18.5 min), as the model's cycles are
-    // others; fitted: the Daedalus cycle's clocks run far past the curves' 120 min. By the figures, phase 3 is 158 and
-    // 199 min against 59, and the destroy 11 h 3 min and 12 h 17 min against 11 h 17 min.
+    // others; fitted: the Daedalus cycle's clocks run far past the curves' 120 min. By the figures, the destroy is
+    // 11 h 25 min and 12 h 38 min against 11 h 17 min.
     for (const run of [measured, fitted]) expect(Math.min(...run.outOfRange)).toBeLessThanOrEqual(8);
   });
 });

@@ -4,8 +4,10 @@ import { describe, expect, test } from "vitest";
 import {
   CALIBRATION,
   COMPARISON_GRID,
+  COMPARISON_STARTS,
   calibrationSteps,
   FAVOUR_FIRST_POLICY,
+  GRID_LATER_MS,
   type ModelRun,
   type ModelStart,
   milestonesOf,
@@ -119,29 +121,55 @@ describe("the paired comparison", () => {
       const [a, b] = [first.donationsUnlocked, second.donationsUnlocked];
       expect(difference.donationsUnlocked).toBe(a === null || b === null ? null : b - a);
     }
-    // The settings differ, so a pair run without its setting would be seen: the gross's first has no unlock in range.
+    // The settings differ, so a pair run without its setting would be seen: the gross's first unlocks at another time.
     expect(compared.settings[0]?.first.donationsUnlocked).not.toBeNull();
-    expect(compared.settings[1]?.first.donationsUnlocked).toBeNull();
+    expect(compared.settings[1]?.first.donationsUnlocked).not.toBe(compared.settings[0]?.first.donationsUnlocked);
   });
 
-  test("the grid: as fitted, the structural variants, every refit step (`calibrationSteps`), the batches' use", () => {
-    const options = COMPARISON_GRID.map((setting) => setting.options);
-    expect(options).toHaveLength(14);
+  test("a setting with a start of its own (#294) runs both policies from it, not from the comparison's", () => {
+    const fresh = { currentNode: 1, ownedSF: {} };
+    const grid = [{ name: "from SF1.2", options: { horizonMs: 10 * 60 * MINUTE_MS }, start: BN1_3.start }];
+    const compared = pairedComparison(fresh, TODAYS_POLICY, FAVOUR_FIRST_POLICY, grid);
+    const options = { horizonMs: 10 * 60 * MINUTE_MS };
+    expect(compared.settings[0]?.first).toEqual(
+      milestonesOf(runModel(BN1_3.start, { ...options, policy: TODAYS_POLICY }), 30),
+    );
+    expect(compared.settings[0]?.second).toEqual(
+      milestonesOf(runModel(BN1_3.start, { ...options, policy: FAVOUR_FIRST_POLICY }), 30),
+    );
+    expect(compared.settings[0]?.first).not.toEqual(
+      milestonesOf(runModel(fresh, { ...options, policy: TODAYS_POLICY }), 30),
+    );
+  });
+
+  test("the grid: as fitted, the structural variants, every refit step, the batches' use, the joins, the first cloud server, the starts", () => {
+    const options = COMPARISON_GRID.filter((setting) => setting.start === undefined).map((setting) => setting.options);
+    expect(COMPARISON_GRID).toHaveLength(20);
     expect(options).toContainEqual({});
     expect(options).toContainEqual({ money: "gross" });
     expect(options).toContainEqual({ share: "index" });
     for (const { name, calibration } of calibrationSteps(CALIBRATION)) {
       expect(options, name).toContainEqual({ calibration });
     }
-    expect(options).toContainEqual({ calibration: { batchesUseOfHosts: [0.7] } });
+    expect(options).toContainEqual({ calibration: { batchesUseFactor: 0.5 } });
+    // #294: the joins at once (slice 2's) and 5 min later than modelled; the first cloud server 5 min later.
+    expect(options).toContainEqual({ joinDelay: "instant" });
+    expect(options).toContainEqual({ joinDelay: GRID_LATER_MS });
+    expect(options).toContainEqual({ cloudDelayMs: GRID_LATER_MS });
+    expect(GRID_LATER_MS).toBe(5 * MINUTE_MS);
+    // The starts: a fresh BN1.1, run #3's SF1.1 and BN1.3's SF1.2.
+    const starts = COMPARISON_GRID.flatMap((setting) => (setting.start === undefined ? [] : [setting.start]));
+    expect(starts).toEqual(COMPARISON_STARTS.map((each) => each.start));
+    expect(starts.map((start) => start.ownedSF["1"] ?? 0)).toEqual([0, 1, 2]);
   });
 
   test("#247's comparison on the full grid, for the record (the model isn't fit for #247): the figures pinned", () => {
-    // Count first (today's brain) against favour first, minutes, the least and the most difference over the 14
-    // settings. From a fresh BN1.1: no answer on the donations (−53 to +2: the share by index flips it); count first
-    // reaches Daedalus's count sooner at every setting (5 to 62 min). From BN1.3's start: no answer on either, favour
-    // first later where paired, 3 of the 14 settings with no pair. Daedalus's join and the destroy are out of range
-    // everywhere. Each milestone: the verdict, the least and the most difference, and the settings with no pair.
+    // Count first (today's brain) against favour first, minutes, the least and the most difference over the 20
+    // settings, the three starts among them. From BN1.3's start: favour first unlocks the donations later at 14 of the
+    // 15 paired settings (19 to 94 min), sooner at #260's gross money (−65), and 5 settings have no pair; Daedalus's
+    // count likewise (−1 to 104). From a fresh BN1.1, 13 settings have no pair (the fresh runs go out of range before
+    // the donations). No answer on either; Daedalus's join and the destroy are out of range everywhere. Each
+    // milestone: the verdict, the least and the most difference, and the settings with no pair.
     const summary = (start: ModelStart) => {
       const { verdict, settings } = pairedComparison(start, TODAYS_POLICY, FAVOUR_FIRST_POLICY);
       const unpaired = (milestone: keyof typeof verdict) =>
@@ -159,16 +187,16 @@ describe("the paired comparison", () => {
       );
     };
     expect(summary({ currentNode: 1, ownedSF: {} })).toEqual({
-      donationsUnlocked: ["no answer", -53, 2, 0],
-      daedalusCount: ["first sooner", 5, 62, 0],
-      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 14],
-      destroyed: ["no answer", Number.NaN, Number.NaN, 14],
+      donationsUnlocked: ["no answer", -20, 94, 13],
+      daedalusCount: ["no answer", 40, 104, 13],
+      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 20],
+      destroyed: ["no answer", Number.NaN, Number.NaN, 20],
     });
     expect(summary(BN1_3.start)).toEqual({
-      donationsUnlocked: ["no answer", 9, 143, 3],
-      daedalusCount: ["no answer", 36, 163, 3],
-      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 14],
-      destroyed: ["no answer", Number.NaN, Number.NaN, 14],
+      donationsUnlocked: ["no answer", -65, 94, 5],
+      daedalusCount: ["no answer", -1, 104, 5],
+      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 20],
+      destroyed: ["no answer", Number.NaN, Number.NaN, 20],
     });
   }, 120_000);
 });

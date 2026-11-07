@@ -10,23 +10,40 @@ import { augmentationsSoldBy, DAEDALUS, isWorthInstalling, TIAN_DI_HUI } from "@
 import { CALIBRATION, calibrationSteps, HACKER_FACTION_JOINS } from "./calibration.ts";
 import { type CyclePolicy, type ModelOptions, type ModelRun, type ModelStart, runModel } from "./cycles.ts";
 
-/** A setting of the grid: the options both policies run at. */
+/** A setting of the grid: the options both policies run at, and the start, if not the comparison's own. */
 export interface ComparisonSetting {
   name: string;
   options: Omit<ModelOptions, "policy" | "onStep" | "onWork">;
+  start?: ModelStart;
 }
 
+/** The starts the grid runs from (#294): the sign of #263's comparison flipped between a fresh BN1.1 and BN1.3's. */
+export const COMPARISON_STARTS: readonly { name: string; start: ModelStart }[] = [
+  { name: "from a fresh BN1.1 (no Source-File, 8 GB home)", start: { currentNode: 1, ownedSF: {} } },
+  { name: "from SF1.1 (run #3's BN1.2)", start: { currentNode: 1, ownedSF: { "1": 1 } } },
+  { name: "from SF1.2 (BN1.3's)", start: { currentNode: 1, ownedSF: { "1": 2 } } },
+];
+
+/** How much later than modelled the grid's late variants put the joins and the first cloud server (#294): 5 min. */
+export const GRID_LATER_MS = 5 * 60_000;
+
 /**
- * The grid #247 compares on, 14 settings: the model as fitted, the structural variants, every fitted constant of the
- * curve a step either way (`calibrationSteps`, the refit's own), and the cloud servers sharing a tenth under #242's
- * share (the batches at 70%, not 82%).
+ * The grid #247 compares on, 20 settings: the model as fitted; the structural variants (#260's gross money and share
+ * by install index; #294's joins at once, as slice 2 had them); every fitted constant of the curve a step either way
+ * (`calibrationSteps`, the refit's own); the batches using half what core's plan gives (#294's share by the state, so
+ * the cloud shares more); the joins and the first cloud server 5 minutes later than modelled; and the three starts
+ * (`COMPARISON_STARTS`).
  */
 export const COMPARISON_GRID: readonly ComparisonSetting[] = [
   { name: "as fitted", options: {} },
   { name: "money: the gross (#260's)", options: { money: "gross" } },
   { name: "share: by install index (#260's)", options: { share: "index" } },
   ...calibrationSteps(CALIBRATION).map(({ name, calibration }) => ({ name, options: { calibration } })),
-  { name: "the batches' use 0.7 (the cloud shares a tenth)", options: { calibration: { batchesUseOfHosts: [0.7] } } },
+  { name: "the batches' use ×0.5 (the cloud shares more)", options: { calibration: { batchesUseFactor: 0.5 } } },
+  { name: "joins: at once (slice 2's)", options: { joinDelay: "instant" } },
+  { name: "joins: 5 min later than modelled", options: { joinDelay: GRID_LATER_MS } },
+  { name: "the first cloud server: 5 min later than modelled", options: { cloudDelayMs: GRID_LATER_MS } },
+  ...COMPARISON_STARTS.map(({ name, start }) => ({ name, options: {}, start })),
 ];
 
 /** #247's milestones. */
@@ -70,8 +87,8 @@ export interface PairedComparison {
 }
 
 /**
- * `first` and `second` from `start` at every setting of `grid`, paired. Daedalus's count is BN1's 30 unless `required`
- * says otherwise.
+ * `first` and `second` from `start` (or the setting's own) at every setting of `grid`, paired. Daedalus's count is
+ * BN1's 30 unless `required` says otherwise.
  */
 export function pairedComparison(
   start: ModelStart,
@@ -80,9 +97,9 @@ export function pairedComparison(
   grid: readonly ComparisonSetting[] = COMPARISON_GRID,
   required = 30,
 ): PairedComparison {
-  const settings = grid.map(({ name, options }) => {
-    const a = milestonesOf(runModel(start, { ...options, policy: first }), required);
-    const b = milestonesOf(runModel(start, { ...options, policy: second }), required);
+  const settings = grid.map(({ name, options, start: own }) => {
+    const a = milestonesOf(runModel(own ?? start, { ...options, policy: first }), required);
+    const b = milestonesOf(runModel(own ?? start, { ...options, policy: second }), required);
     const difference = Object.fromEntries(
       MILESTONES.map((milestone) => {
         const [x, y] = [a[milestone], b[milestone]];

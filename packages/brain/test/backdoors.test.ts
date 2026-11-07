@@ -1,7 +1,15 @@
 // The brain's backdoors for the hacker factions (#195): which server is due, why none is, and the rule's log.
-import type { MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import {
+  HACKER_FACTION_SERVERS,
+  hackTimeSeconds,
+  type MediumSnapshotData,
+  SNAPSHOT_TIER_PERIOD_MS,
+  type StaticSnapshotData,
+} from "@bitburner-agent/core";
+import { backdoorMs, HACKER_FACTION_JOINS, hackerFactionJoinMs, INVITATION_CHECK_MS } from "@bitburner-agent/model";
 import { describe, expect, test } from "vitest";
 import { BackdoorRule, backdoorIntent, chooseBackdoor } from "../src/backdoors.ts";
+import { chooseJoin } from "../src/factions.ts";
 import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 /** The four as a game might roll them (`Server/data/servers.ts`): CSEC at 54, and so on. */
@@ -291,5 +299,58 @@ describe("BackdoorRule: the controller's side, and the brain's log", () => {
     expect(rule.due()).toEqual([{ hostname: "avmnite-02h", sinceMs: at(3) }]);
     rule.intent({ ...inputs(medium(207), 5), mediumData: null, mediumAtMs: null });
     expect(rule.due()).toEqual([]);
+  });
+});
+
+describe("brain against the fast model (#294): a hacker faction's join, timed through the brain's own rules", () => {
+  // run4theh111z at 530 (`network`), the level reaching it at `termsAt`: 600 then, the hacking speed 1.8.
+  const REQUIRED = 530;
+  const HACKING = 600;
+  const SPEED = 1.8;
+  const { fast: ROUND_MS, medium: MEDIUM_MS, slow: SLOW_MS } = SNAPSHOT_TIER_PERIOD_MS;
+  /** The first tick of a `periodMs` clock (from 0) after `atMs`. */
+  const nextTick = (atMs: number, periodMs: number) => (Math.floor(atMs / periodMs) + 1) * periodMs;
+
+  test("the backdoor's time is the game's, a quarter of the hack time at security 1 (core's `hackTimeSeconds`)", () => {
+    const player = { skills: { hacking: HACKING, intelligence: 0 }, mults: { hacking_speed: SPEED } } as never;
+    const hackSeconds = hackTimeSeconds({ hackDifficulty: 1, requiredHackingSkill: REQUIRED }, player);
+    expect(backdoorMs(REQUIRED, HACKING, SPEED)).toBeCloseTo((hackSeconds / 4) * 1000, 6);
+    // The model's terms are the brain's servers and factions, in its order (core's `HACKER_FACTION_SERVERS`).
+    expect(HACKER_FACTION_JOINS.map((each) => each.faction)).toEqual(
+      HACKER_FACTION_SERVERS.map((each) => each.faction),
+    );
+  });
+
+  test("the mean over the snapshots' phases, from the terms met to the join in a slow snapshot, is `hackerFactionJoinMs`", () => {
+    // The brain's own `BackdoorRule` on the medium snapshots (every 10 s) and `chooseJoin` on the slow ones (60 s); the
+    // Agent's rounds (2 s), the game's backdoor and its invitation check (2 s) as their sources say (./joins.ts).
+    let total = 0;
+    let runs = 0;
+    for (let termsAt = 0; termsAt < SLOW_MS; termsAt += 500) {
+      const rule = new BackdoorRule();
+      const backdoored = ["CSEC", "avmnite-02h", "I.I.I.I"];
+      let askedAt: number | null = null;
+      for (let atMs = 0; askedAt === null; atMs += MEDIUM_MS) {
+        const intent = rule.intent({
+          staticData: network,
+          mediumData: medium(atMs >= termsAt ? HACKING : REQUIRED - 1, { backdoored }),
+          mediumAtMs: atMs,
+          resetAt: 1,
+          doneIds: new Set(),
+        });
+        if (intent?.id === backdoorIntent("run4theh111z").id) askedAt = atMs;
+      }
+      const doneAt = nextTick(askedAt, ROUND_MS) + backdoorMs(REQUIRED, HACKING, SPEED);
+      const answeredAt = nextTick(nextTick(doneAt, INVITATION_CHECK_MS), ROUND_MS);
+      const shownAt = nextTick(answeredAt, SLOW_MS);
+      expect(chooseJoin(["BitRunners"], []).next).toBe("BitRunners");
+      const joinedAt = nextTick(shownAt, ROUND_MS);
+      total += nextTick(joinedAt, SLOW_MS) - termsAt;
+      runs += 1;
+    }
+    const modelled = hackerFactionJoinMs(REQUIRED, HACKING, SPEED);
+    expect(Math.abs(total / runs - modelled)).toBeLessThan(2_500);
+    // About a minute and a half or more: the step the model joins at is at least two minutes after the terms.
+    expect(modelled).toBeGreaterThan(90_000);
   });
 });
