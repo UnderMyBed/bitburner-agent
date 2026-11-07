@@ -98,6 +98,10 @@ test("snapshots of a tier and events, by environment and window (both edges), in
   expect([...rows].map((snapshot) => snapshot.data)).toEqual([3_000, 5_000]);
   // Events in the order stored.
   expect(store.eventsInWindow(window).map((event) => event.detail)).toEqual([3_000, 1_000, 2_000, 5_000]);
+  // Of some kinds only (#290: the campaign report's).
+  expect(store.eventsInWindow({ ...window, kinds: ["fast"] }).map((event) => event.detail)).toEqual([2_000]);
+  expect(store.eventsInWindow({ ...window, kinds: ["fast", "medium"] })).toHaveLength(4);
+  expect(store.eventsInWindow({ ...window, kinds: [] })).toEqual([]);
 });
 
 test("fast snapshots' page heaps, by environment and window, in order of arrival, numbers only", () => {

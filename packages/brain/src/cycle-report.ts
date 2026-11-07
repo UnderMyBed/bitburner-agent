@@ -301,6 +301,107 @@ function bitNodeLabel(currentNode: number, ownedSF: Record<string, unknown>): st
   return `BN${currentNode}.${(isFiniteNumber(level) ? level : 0) + 1}`;
 }
 
+/** A BitNode as the slow snapshots show it (`lastNodeReset`, #244): where it starts, and its first and last look. */
+export interface BitNodeSpan {
+  lastNodeReset: number;
+  label: string;
+  currentNode: number;
+  /** Its start by the brain's clock: `lastNodeReset`, from the previous BitNode's last slow snapshot to its first. */
+  startMs: number;
+  /** Its first look's `lastAugReset` isn't its `lastNodeReset`: an install before then, its first cycle unseen. */
+  installedBeforeFirstLook: boolean;
+  firstSlowAtMs: number;
+  lastSlowAtMs: number;
+}
+
+/** An augmentation cycle as the slow snapshots show it (`lastAugReset`, #244), and its first look's `resetInfo`. */
+export interface CycleSpan {
+  lastAugReset: number;
+  /** Its BitNode's index in `ResetDetection.bitNodes`. */
+  bitNode: number;
+  /** Its start by the brain's clock: `lastAugReset`, from its BitNode's start or the last cycle's last look on. */
+  startMs: number;
+  firstSlowAtMs: number;
+  lastSlowAtMs: number;
+  ownedAugs: Record<string, number> | null;
+  ownedSF: Record<string, number>;
+  currentNode: number;
+}
+
+/**
+ * Where each BitNode and augmentation cycle starts (#244), from the slow snapshots' `resetInfo` in order: another
+ * `lastNodeReset` is another BitNode, another `lastAugReset` (or BitNode) another cycle. The run report's
+ * (`BitNodeCycles`) and the campaign report's (#290), each making its own record of a BitNode and a cycle from the span
+ * (`newBitNode`, `newCycle`), which this then keeps up to date.
+ */
+export class ResetDetection<B extends BitNodeSpan = BitNodeSpan, C extends CycleSpan = CycleSpan> {
+  readonly bitNodes: B[] = [];
+  readonly cycles: C[] = [];
+  readonly #newBitNode: (span: BitNodeSpan) => B;
+  readonly #newCycle: (span: CycleSpan) => C;
+
+  constructor({
+    newBitNode = (span) => span as B,
+    newCycle = (span) => span as C,
+  }: { newBitNode?: (span: BitNodeSpan) => B; newCycle?: (span: CycleSpan) => C } = {}) {
+    this.#newBitNode = newBitNode;
+    this.#newCycle = newCycle;
+  }
+
+  /** A reset's time by the brain's clock: the game's, moved by this snapshot's clocks' offset, within the bounds. */
+  static #startOf(resetMs: number, atMs: number, gameTimeMs: number, earliestMs: number): number {
+    const offset = atMs - gameTimeMs;
+    const moved = resetMs + (isFiniteNumber(offset) && Math.abs(offset) <= CLOCK_OFFSET_SANE_MS ? offset : 0);
+    return Math.max(earliestMs, Math.min(atMs, moved));
+  }
+
+  /** The BitNode and cycle a slow snapshot shows, new or not; null where its `resetInfo` doesn't say. */
+  add(atMs: number, gameTimeMs: number, data: SlowSnapshotData): { bitNode: B; cycle: C } | null {
+    const info = data.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
+    const { lastAugReset, lastNodeReset, currentNode } = info ?? {};
+    if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(lastNodeReset) || !Number.isInteger(currentNode)) return null;
+    const ownedSF = fieldsOf(info?.ownedSF) as Record<string, number>;
+    const ownedAugs = typeof info?.ownedAugs === "object" && info.ownedAugs !== null ? info.ownedAugs : null;
+    let bitNode = this.bitNodes.at(-1);
+    if (bitNode?.lastNodeReset !== lastNodeReset) {
+      bitNode = this.#newBitNode({
+        lastNodeReset,
+        label: bitNodeLabel(currentNode as number, ownedSF),
+        currentNode: currentNode as number,
+        startMs: ResetDetection.#startOf(
+          lastNodeReset,
+          atMs,
+          gameTimeMs,
+          bitNode?.lastSlowAtMs ?? Number.NEGATIVE_INFINITY,
+        ),
+        installedBeforeFirstLook: lastAugReset !== lastNodeReset,
+        firstSlowAtMs: atMs,
+        lastSlowAtMs: atMs,
+      });
+      this.bitNodes.push(bitNode);
+    }
+    bitNode.lastSlowAtMs = atMs;
+    const bitNodeIndex = this.bitNodes.length - 1;
+    let cycle = this.cycles.at(-1);
+    if (cycle?.lastAugReset !== lastAugReset || cycle.bitNode !== bitNodeIndex) {
+      const earliestMs = Math.max(bitNode.startMs, cycle?.lastSlowAtMs ?? Number.NEGATIVE_INFINITY);
+      cycle = this.#newCycle({
+        lastAugReset,
+        bitNode: bitNodeIndex,
+        startMs: ResetDetection.#startOf(lastAugReset, atMs, gameTimeMs, earliestMs),
+        firstSlowAtMs: atMs,
+        lastSlowAtMs: atMs,
+        ownedAugs: ownedAugs as Record<string, number> | null,
+        ownedSF,
+        currentNode: currentNode as number,
+      });
+      this.cycles.push(cycle);
+    }
+    cycle.lastSlowAtMs = atMs;
+    return { bitNode, cycle };
+  }
+}
+
 /** When a milestone was first seen: its time, or before the window; and the faction, for the first one joined. */
 interface Milestone {
   atMs: number;
@@ -309,16 +410,9 @@ interface Milestone {
 }
 
 /** A BitNode the window's slow snapshots show (`lastNodeReset`), with its milestones (#244). */
-interface BitNode {
-  lastNodeReset: number;
-  label: string;
-  currentNode: number;
-  /** Its start by the brain's clock: `lastNodeReset`, from the previous BitNode's last slow snapshot to its first. */
-  startMs: number;
+interface BitNode extends BitNodeSpan {
   /** Begun before the window, with an install in it before the window too: its first look's cycle isn't its first. */
   installedBeforeWindow: boolean;
-  firstSlowAtMs: number;
-  lastSlowAtMs: number;
   firstMediumAtMs: number | null;
   /** The newest record in it: a snapshot of any tier, or an event. */
   lastRecordMs: number;
@@ -349,18 +443,10 @@ interface Judgement {
 }
 
 /** An augmentation cycle the window's slow snapshots show (`lastAugReset`), and what the report keeps of it. */
-interface Cycle {
-  lastAugReset: number;
-  bitNode: number;
-  startMs: number;
-  firstSlowAtMs: number;
-  lastSlowAtMs: number;
+interface Cycle extends CycleSpan {
   clock: OnlineClock | null;
   /** The install the brain chose at or after its start and didn't call off (never with none): judged until then. */
   chosenAtMs: number;
-  ownedAugs: Record<string, number> | null;
-  ownedSF: Record<string, number>;
-  currentNode: number;
   /** Each faction's favour as first seen in it: an install leaves every faction, so one shows once joined again. */
   favorSeen: Map<string, number>;
   lastJoined: JoinedFaction[] | null;
@@ -390,8 +476,9 @@ interface CycleView {
  * buying. The slow snapshots come first, in order, then the medium and the fast ones, each in order.
  */
 export class BitNodeCycles {
-  readonly bitNodes: BitNode[] = [];
-  readonly #cycles: Cycle[] = [];
+  readonly bitNodes: BitNode[];
+  readonly #cycles: Cycle[];
+  readonly #resets: ResetDetection<BitNode, Cycle>;
   readonly #events: readonly StoredEvent[];
   readonly #decisions: readonly StoredEvent[];
   readonly #sinceMs: number;
@@ -402,6 +489,35 @@ export class BitNodeCycles {
       .filter((event) => INSTALL_DECISION_EVENT_KINDS.includes(event.kind))
       .sort((a, b) => a.atMs - b.atMs);
     this.#sinceMs = sinceMs;
+    this.#resets = new ResetDetection<BitNode, Cycle>({
+      newBitNode: (span) => ({
+        ...span,
+        installedBeforeWindow: span.startMs < sinceMs && span.installedBeforeFirstLook,
+        firstMediumAtMs: null,
+        lastRecordMs: span.firstSlowAtMs,
+        firstFaction: null,
+        donationsUnlocked: new Map(),
+        daedalusCount: null,
+        daedalusRequired: null,
+        daedalusJoined: null,
+        daedalusFirstFavor: null,
+        redPill: null,
+      }),
+      newCycle: (span) => ({
+        ...span,
+        clock: null,
+        chosenAtMs: this.#installChosenFrom(span.startMs),
+        favorSeen: new Map(),
+        lastJoined: null,
+        judgements: [],
+        medium: [],
+        shareSum: 0,
+        shareCount: 0,
+        targets: [],
+      }),
+    });
+    this.bitNodes = this.#resets.bitNodes;
+    this.#cycles = this.#resets.cycles;
   }
 
   /**
@@ -462,80 +578,13 @@ export class BitNodeCycles {
     return this.#cycles.map((cycle) => cycle.startMs);
   }
 
-  /** A reset's time by the brain's clock: the game's, moved by this snapshot's clocks' offset, within the bounds. */
-  static #startOf(resetMs: number, atMs: number, gameTimeMs: number, earliestMs: number): number {
-    const offset = atMs - gameTimeMs;
-    const moved = resetMs + (isFiniteNumber(offset) && Math.abs(offset) <= CLOCK_OFFSET_SANE_MS ? offset : 0);
-    return Math.max(earliestMs, Math.min(atMs, moved));
-  }
-
   addSlow(atMs: number, gameTimeMs: number, data: SlowSnapshotData): void {
-    const info = data.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
-    const { lastAugReset, lastNodeReset, currentNode } = info ?? {};
-    if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(lastNodeReset) || !Number.isInteger(currentNode)) return;
-    const ownedSF = fieldsOf(info?.ownedSF) as Record<string, number>;
-    const ownedAugs = typeof info?.ownedAugs === "object" && info.ownedAugs !== null ? info.ownedAugs : null;
-    let bitNode = this.bitNodes.at(-1);
-    if (bitNode?.lastNodeReset !== lastNodeReset) {
-      const startMs = BitNodeCycles.#startOf(
-        lastNodeReset,
-        atMs,
-        gameTimeMs,
-        bitNode?.lastSlowAtMs ?? Number.NEGATIVE_INFINITY,
-      );
-      bitNode = {
-        lastNodeReset,
-        label: bitNodeLabel(currentNode as number, ownedSF),
-        currentNode: currentNode as number,
-        startMs,
-        installedBeforeWindow: startMs < this.#sinceMs && lastAugReset !== lastNodeReset,
-        firstSlowAtMs: atMs,
-        lastSlowAtMs: atMs,
-        firstMediumAtMs: null,
-        lastRecordMs: atMs,
-        firstFaction: null,
-        donationsUnlocked: new Map(),
-        daedalusCount: null,
-        daedalusRequired: null,
-        daedalusJoined: null,
-        daedalusFirstFavor: null,
-        redPill: null,
-      };
-      this.bitNodes.push(bitNode);
-    }
-    bitNode.lastSlowAtMs = atMs;
+    const seen = this.#resets.add(atMs, gameTimeMs, data);
+    if (seen === null) return;
+    const { bitNode, cycle } = seen;
+    const { lastAugReset } = cycle;
+    const ownedSF = fieldsOf(data.resetInfo?.ownedSF) as Record<string, number>;
     bitNode.lastRecordMs = Math.max(bitNode.lastRecordMs, atMs);
-    const bitNodeIndex = this.bitNodes.length - 1;
-    let cycle = this.#cycles.at(-1);
-    if (cycle?.lastAugReset !== lastAugReset || cycle.bitNode !== bitNodeIndex) {
-      const startMs = BitNodeCycles.#startOf(
-        lastAugReset,
-        atMs,
-        gameTimeMs,
-        Math.max(bitNode.startMs, cycle?.lastSlowAtMs ?? Number.NEGATIVE_INFINITY),
-      );
-      cycle = {
-        lastAugReset,
-        bitNode: bitNodeIndex,
-        startMs,
-        firstSlowAtMs: atMs,
-        lastSlowAtMs: atMs,
-        clock: null,
-        chosenAtMs: this.#installChosenFrom(startMs),
-        ownedAugs: ownedAugs as Record<string, number> | null,
-        ownedSF,
-        currentNode: currentNode as number,
-        favorSeen: new Map(),
-        lastJoined: null,
-        judgements: [],
-        medium: [],
-        shareSum: 0,
-        shareCount: 0,
-        targets: [],
-      };
-      this.#cycles.push(cycle);
-    }
-    cycle.lastSlowAtMs = atMs;
     // The bars' clock, as the rule folds it (#222): the time online, gaps left out. Each step is the state before it's.
     const before = cycle.clock?.onlineMs ?? 0;
     cycle.clock = advanceOnlineClock(cycle.clock, gameTimeMs, lastAugReset).clock;
