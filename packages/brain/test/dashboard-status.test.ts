@@ -15,6 +15,7 @@ import type { BackdoorDue } from "../src/backdoors.ts";
 import type { BatcherView } from "../src/batcher.ts";
 import { BACKDOOR_OVERDUE_AFTER_MS, INCOME_STALLED_AFTER_MS, type IncomeFacts } from "../src/dashboard/alerts.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "../src/dashboard/status.ts";
+import { CampaignTimeline, type CampaignTimelineView } from "../src/dashboard/timeline.ts";
 import type { DataBackupProblem } from "../src/data-backup.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
@@ -86,6 +87,7 @@ const status = (
     installAwaitingRestart = null,
     storeThinningFailure = null,
     dataBackupProblem = null,
+    timeline,
   }: {
     income?: IncomeFacts | null;
     loop?: HackLoopView;
@@ -97,6 +99,7 @@ const status = (
     installAwaitingRestart?: { id: string; sinceMs: number } | null;
     storeThinningFailure?: { atMs: number; failure: string } | null;
     dataBackupProblem?: DataBackupProblem | null;
+    timeline?: CampaignTimelineView;
   } = {},
 ) =>
   buildDashboardStatus({
@@ -121,6 +124,7 @@ const status = (
     installAwaitingRestart,
     storeThinningFailure,
     dataBackupProblem,
+    timeline,
     nowMs,
   });
 
@@ -735,4 +739,21 @@ test("batcherOutOfStep (#206): a rise in the batcher run's desyncs, late or lost
       "target again and goes on, and the run report fails the run, unless a page stall (or, for a batcher before " +
       "#251, a clock step) explains it and the batcher recovered by itself (a warning, #241)",
   });
+});
+
+test("the timeline of BitNodes and installs (#285): its CampaignTimeline's view as given, or null from a brain without one", () => {
+  expect(status(STARTED_AT_MS + 120_000).timeline).toBeNull();
+  recordSnapshot("slow", STARTED_AT_MS + 60_000, {
+    resetInfo: {
+      lastAugReset: STARTED_AT_MS,
+      lastNodeReset: STARTED_AT_MS,
+      currentNode: 1,
+      ownedAugs: {},
+      ownedSF: {},
+    },
+    purchasedServers: [],
+  });
+  const timeline = new CampaignTimeline({ store, environment: "E0" }).read();
+  expect(timeline.bitNodes.map((bitNode) => bitNode.name)).toEqual(["BN1.1"]);
+  expect(status(STARTED_AT_MS + 120_000, { timeline }).timeline).toBe(timeline);
 });

@@ -18,6 +18,7 @@ import {
 import { JSDOM } from "jsdom";
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus, type DashboardStatus } from "../src/dashboard/status.ts";
+import { CampaignTimeline, type CampaignTimelineView, type TimelineBitNode } from "../src/dashboard/timeline.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { idleAugmentations, QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtures.ts";
@@ -25,6 +26,92 @@ import { idleAugmentations, QUIET_FACTIONS_VIEW } from "./helpers/snapshot-fixtu
 const PAGE = readFileSync(new URL("../src/dashboard/page.html", import.meta.url), "utf8");
 const NOW_MS = Date.UTC(2026, 9, 26, 12, 0, 0);
 const GAME = { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" };
+
+const MINUTE = 60_000;
+/** `minutes` from a campaign's start, a day before now. */
+const C = (minutes: number) => NOW_MS - 24 * 60 * MINUTE + minutes * MINUTE;
+/**
+ * The timeline (#285), fixed: BN1.1 begun before the store, an install before its first look and one by the brain, then
+ * destroyed; BN1.2 going on, an install by hand with its augmentations not recorded, a save loaded from a cycle never
+ * seen, an offline gap, two releases.
+ */
+const TIMELINE: CampaignTimelineView = {
+  version: 3,
+  reading: null,
+  slowSnapshots: 1_234,
+  unread: 2,
+  problem: null,
+  bitNodes: [
+    {
+      name: "BN1.1",
+      startMs: C(-600),
+      start: "before the store",
+      ending: "destroyed {at}",
+      endedAtMs: C(60.5),
+      destroyed: true,
+      wallMs: 660.5 * MINUTE,
+      onlineMs: 59.5 * MINUTE,
+      soFar: false,
+      wallAtLeast: false,
+      onlineAtLeast: true,
+      leftOutMs: 0,
+      gapCount: 0,
+      cycles: 3,
+      installs: 2,
+      byHand: 0,
+      countsAtLeast: true,
+      augmentations: 4,
+      releases: ["v1.0.0"],
+      cycleList: [
+        {
+          kind: "seen first",
+          startMs: C(-100),
+          onlineMs: 29.5 * MINUTE,
+          endedBy: [
+            {
+              atMs: C(30.5),
+              byHand: false,
+              augmentationCount: 3,
+              augmentations: "NeuroFlux Governor ×2, <b>Synaptic</b> Enhancement Implant",
+            },
+          ],
+        },
+        { kind: "install", startMs: C(30.5), onlineMs: 30 * MINUTE, endedBy: [] },
+      ],
+    },
+    {
+      name: "BN1.2",
+      startMs: C(60.5),
+      start: null,
+      ending: "not yet",
+      endedAtMs: null,
+      destroyed: false,
+      wallMs: 120 * MINUTE,
+      onlineMs: 99 * MINUTE,
+      soFar: true,
+      wallAtLeast: false,
+      onlineAtLeast: false,
+      leftOutMs: 21 * MINUTE,
+      gapCount: 1,
+      cycles: 2,
+      installs: 1,
+      byHand: 1,
+      countsAtLeast: false,
+      augmentations: null,
+      releases: ["v1.0.0", "v1.0.1"],
+      cycleList: [
+        {
+          kind: "start",
+          startMs: C(60.5),
+          onlineMs: 30 * MINUTE,
+          endedBy: [{ atMs: C(90.5), byHand: true, augmentationCount: null, augmentations: null }],
+        },
+        { kind: "save", startMs: C(100), onlineMs: 5 * MINUTE, endedBy: [] },
+        { kind: "install", startMs: C(90.5), onlineMs: 64 * MINUTE, endedBy: [] },
+      ],
+    },
+  ],
+};
 
 /** A status with something in every part: an alert, a gap, a tier with none yet, an event with HTML in it. */
 const BUSY_STATUS: DashboardStatus = {
@@ -167,14 +254,18 @@ const BUSY_STATUS: DashboardStatus = {
     ceilingText: "$40,000/s for a batcher on joesguns <b>(</b>$51,235/s for any hacker)",
     incomeText: "$2,049/s over the last 10 min: 5.1% of the batcher ceiling now, 4.0% of the ceiling",
   },
+  timeline: TIMELINE,
 };
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "dashboard-page-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 let storeCount = 0;
 
-/** The real builder's status over a store `fill` sets up after the brain's start. */
-function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0"; release: string }) => void) {
+/** The real builder's status over a store `fill` sets up after the brain's start, with its timeline if given (#285). */
+function builtStatus(
+  fill: (store: TelemetryStore, context: { environment: "E0"; release: string }) => void,
+  timeline?: (store: TelemetryStore) => CampaignTimelineView,
+) {
   const store = TelemetryStore.open(path.join(directory, `telemetry-${++storeCount}.sqlite`));
   const context = { environment: "E0" as const, release: "v0.2.0+abc123def456" };
   const brainStartedAtMs = NOW_MS - 30_000;
@@ -204,6 +295,7 @@ function builtStatus(fill: (store: TelemetryStore, context: { environment: "E0";
     factionWorkStall: null,
     augmentations: idleAugmentations,
     installAwaitingRestart: null,
+    ...(timeline ? { timeline: timeline(store) } : {}),
     nowMs: NOW_MS,
   });
   store.close();
@@ -1316,4 +1408,155 @@ test("a brain that doesn't give sharing (#224): said so, and its button does not
   (document.querySelector("#share button") as HTMLButtonElement).click();
   await settle();
   expect(requests.filter((request) => request.method === "POST")).toEqual([]);
+});
+
+describe("the timeline of BitNodes and installs (#285)", () => {
+  const time = (ms: number) => new Date(ms).toLocaleString();
+  const summaries = (document: Document) =>
+    [...document.querySelectorAll("#timeline summary")].map((each) => each.textContent);
+  const rowsOf = (details: Element | undefined) =>
+    [...(details?.querySelectorAll("tr") ?? [])].map((row) => [...row.children].map((cell) => cell.textContent));
+  /** Asks again: a switch's write is followed by a fresh status. */
+  const pollAgain = async (document: Document) => {
+    (document.querySelector("#supervision button") as HTMLButtonElement).click();
+    await settle();
+  };
+
+  test("each BitNode, the newest first and open: its start, how it ended, its times, its cycles and installs, as text", async () => {
+    const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
+    expectDataShown(document);
+    expect(document.querySelector("#timeline div > div")?.textContent).toBe(
+      "2 BitNodes, the newest first, from 1,234 slow snapshots; 2 slow snapshots with no resetInfo, left out. " +
+        "≥: at least (its start, or its first cycle, not seen in the store).",
+    );
+    expect(summaries(document)).toEqual([
+      `BN1.2: from ${time(C(60.5))}, not ended yet; 1 h 39 min online so far, 2 h 0 min by the clock so far; 2 cycles, ` +
+        "1 install (1 by hand)",
+      `BN1.1: from ${time(C(-600))} (before the store), destroyed ${time(C(60.5))}; ≥ 59 min 30 s online, ` +
+        "11 h 0 min by the clock; ≥ 3 cycles, ≥ 2 installs",
+    ]);
+    const [bn2, bn1] = [...document.querySelectorAll("#timeline details")] as HTMLDetailsElement[];
+    expect([bn2?.open, bn1?.open]).toEqual([true, false]);
+    expect(bn2?.querySelector("div")?.textContent).toBe(
+      "Left out of the time online: 21 min in 1 gap. Augmentations installed at its last look: not recorded. " +
+        "Releases: v1.0.0, v1.0.1.",
+    );
+    expect(rowsOf(bn2)).toEqual([
+      [
+        "cycle 1",
+        `from ${time(C(60.5))}, from the BitNode's start`,
+        "30 min online",
+        `installed ${time(C(90.5))} by hand: augmentations not recorded`,
+      ],
+      ["save", `from ${time(C(100))}, a save loaded (not an install)`, "5 min online", "no install seen"],
+      ["cycle 2", `from ${time(C(90.5))}`, "1 h 4 min online", "going on"],
+    ]);
+    expect(bn1?.querySelector("div")?.textContent).toBe(
+      "Left out of the time online: none. Augmentations installed at its last look: 4. Releases: v1.0.0.",
+    );
+    // An install before its first look: its cycles numbered from 2 at least. The brain's words as text, never HTML.
+    expect(rowsOf(bn1)).toEqual([
+      [
+        "cycle ≥ 2",
+        `from ${time(C(-100))}, its first look (an install before it not seen)`,
+        "29 min 30 s online",
+        `installed ${time(C(30.5))}: 3 augmentations (NeuroFlux Governor ×2, <b>Synaptic</b> Enhancement Implant)`,
+      ],
+      ["cycle ≥ 3", `from ${time(C(30.5))}`, "30 min online", "ended with the BitNode"],
+    ]);
+    expect(document.querySelector("#timeline b")).toBeNull();
+  });
+
+  test("drawn again only when it changes, so a BitNode opened stays open; reading, none, a problem, no timeline", async () => {
+    let current: DashboardStatus = BUSY_STATUS;
+    const { document } = await openPage((request) =>
+      request.method === "POST" ? { status: 200, body: { paused: true } } : { status: 200, body: current },
+    );
+    const details = () => [...document.querySelectorAll("#timeline details")] as HTMLDetailsElement[];
+    const bn1 = details()[1] as HTMLDetailsElement;
+    bn1.open = true;
+    // The same version: not drawn again, so the same elements, BN1.1 still open.
+    await pollAgain(document);
+    expect(details()[1]).toBe(bn1);
+    // A new version: drawn again, the BitNodes opened kept open, a new one closed.
+    const bn3 = { ...(TIMELINE.bitNodes[1] as TimelineBitNode), name: "BN1.3" };
+    current = { ...BUSY_STATUS, timeline: { ...TIMELINE, version: 4, bitNodes: [...TIMELINE.bitNodes, bn3] } };
+    await pollAgain(document);
+    expect(details()[2]).not.toBe(bn1);
+    expect(details().map((each) => [each.querySelector("summary")?.textContent?.split(":")[0], each.open])).toEqual([
+      ["BN1.3", false],
+      ["BN1.2", true],
+      ["BN1.1", true],
+    ]);
+    // A problem, with what was read before.
+    current = {
+      ...current,
+      timeline: { ...(current.timeline as CampaignTimelineView), problem: "database is not open" },
+    };
+    await pollAgain(document);
+    const problem = document.querySelector("#timeline div > div");
+    expect([problem?.textContent, problem?.className]).toEqual([
+      "Couldn't read the timeline: database is not open",
+      "bad",
+    ]);
+    expect(details()).toHaveLength(3);
+    // The first read under way: how far it's got, and no BitNode yet.
+    current = {
+      ...BUSY_STATUS,
+      timeline: { ...TIMELINE, version: 1, reading: { slowSnapshots: 40_000 }, bitNodes: [] },
+    };
+    await pollAgain(document);
+    expect(textOf(document, "#timeline div")).toBe("Reading the store: 40,000 slow snapshots so far.");
+    current = { ...BUSY_STATUS, timeline: { ...TIMELINE, version: 2, unread: 0, bitNodes: [] } };
+    await pollAgain(document);
+    expect(textOf(document, "#timeline div")).toBe("No BitNode in the store yet: no slow snapshot shows one.");
+    current = { ...BUSY_STATUS, timeline: null };
+    await pollAgain(document);
+    expect(textOf(document, "#timeline div")).toBe("Not given by this brain.");
+  });
+
+  test("from the real builder, over a store: a BitNode destroyed, then the next", async () => {
+    const status = builtStatus(
+      (store, context) => {
+        const resetInfo = (node: number, aug: number, sf: number, ownedAugs: Record<string, number>) => ({
+          resetInfo: {
+            lastAugReset: C(aug),
+            lastNodeReset: C(node),
+            currentNode: 1,
+            ownedAugs,
+            ownedSF: sf ? { "1": sf } : {},
+          },
+          purchasedServers: [],
+        });
+        const slow = (minute: number, data: unknown) =>
+          store.recordSnapshot(context, {
+            agentSessionId: "s",
+            tier: "slow",
+            sequenceNumber: minute,
+            gameTimeMs: C(minute),
+            receivedAtMs: C(minute),
+            missedBefore: 0,
+            data,
+          });
+        // The brain started before the BitNode: its start is seen.
+        store.recordEvent(context, { atMs: C(-1), kind: "brainStarted", detail: {} });
+        for (let minute = 1; minute <= 10; minute++) slow(minute, resetInfo(0, 0, 0, {}));
+        store.recordEvent(context, { atMs: C(10.3), kind: "augmentationInstallSent", detail: { source: "brain" } });
+        for (let minute = 11; minute <= 20; minute++) slow(minute, resetInfo(0, 10.5, 0, { BitWire: 1 }));
+        for (let minute = 21; minute <= 25; minute++) slow(minute, resetInfo(20.5, 20.5, 1, {}));
+      },
+      (store) => new CampaignTimeline({ store, environment: "E0" }).read(),
+    );
+    const { document } = await openPage(() => ({ status: 200, body: status }));
+    expectDataShown(document);
+    expect(summaries(document)).toEqual([
+      `BN1.2: from ${time(C(20.5))}, not ended yet; 4 min 30 s online so far, 4 min 30 s by the clock so far; 1 cycle, 0 installs`,
+      `BN1.1: from ${time(C(0))}, destroyed ${time(C(20.5))}; 20 min 30 s online, 20 min 30 s by the clock; 2 cycles, 1 install`,
+    ]);
+    const bn1 = [...document.querySelectorAll("#timeline details")][1];
+    expect(rowsOf(bn1).map((row) => row[3])).toEqual([
+      `installed ${time(C(10.5))}: 1 augmentation (BitWire)`,
+      "ended with the BitNode",
+    ]);
+  });
 });
