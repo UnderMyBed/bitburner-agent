@@ -2,7 +2,8 @@
 // earn at the player's hacking then (core's `batcherIncomePerGigabyteSecond` and `hackingIncomePerGigabyteSecond`,
 // from the game's formulas), and what hacking actually earned (the slow snapshot's `moneySources.hacking`). The score
 // is on the RAM the brain's hacking uses (the hack loop's hosts); the bound, which a run never passes, on all the RAM a
-// script could run on. The dashboard's rows and the run report's section 5. Upper bounds, not plans.
+// script could run on. The dashboard's rows and the run report's section 5. Upper bounds, not plans. And each target's
+// batcher income on the hosts' RAM, a medium snapshot at a time, for section 6's stuck target check (#275).
 import {
   batcherIncomePerGigabyteSecond,
   batchIncomeMostPerSecond,
@@ -14,6 +15,7 @@ import {
   type StaticSnapshotData,
   usableRamGb,
 } from "@bitburner-agent/core";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "./backdoors.ts";
 import { formatIsoTime } from "./gap-report.ts";
 import { chooseHackHosts } from "./hack-loop.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
@@ -212,12 +214,17 @@ export class BatcherTargetIncomes {
     this.#points.push({ atMs, incomes: new TargetIncomesAt(this.#names, incomes, hacking) });
   }
 
-  /** The incomes in force at `atMs`: the latest medium snapshot's by then (before the first, the first's); or null. */
-  at(atMs: number): TargetIncomesAt | null {
+  /**
+   * The incomes in force at `atMs`: the latest medium snapshot's by then. Null (unknown) before the first, from one
+   * over `MEDIUM_SNAPSHOT_GAP_MS` old (a degraded medium tier: its RAM and root rights stale), or from before an
+   * install (`resetsMs`) that falls between it and `atMs`, which takes the cloud servers and the root rights away
+   * (#277's review); and where its ceilings were unknown.
+   */
+  at(atMs: number, resetsMs: readonly number[] = []): TargetIncomesAt | null {
     const points = this.#points;
     // The last at or before `atMs`, by halves.
     let [low, high] = [0, points.length - 1];
-    let found = 0;
+    let found = -1;
     while (low <= high) {
       const middle = (low + high) >> 1;
       if ((points[middle] as { atMs: number }).atMs <= atMs) {
@@ -225,7 +232,10 @@ export class BatcherTargetIncomes {
         low = middle + 1;
       } else high = middle - 1;
     }
-    return points[found]?.incomes ?? null;
+    const point = points[found];
+    if (point === undefined || atMs - point.atMs > MEDIUM_SNAPSHOT_GAP_MS) return null;
+    if (resetsMs.some((resetMs) => resetMs > point.atMs && resetMs <= atMs)) return null;
+    return point.incomes;
   }
 }
 

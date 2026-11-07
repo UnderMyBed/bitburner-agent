@@ -3407,6 +3407,19 @@ describe("a batcher stuck on a poor target (#275)", () => {
   const END_MS = 200 * MINUTE;
   const stuckWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + END_MS + 30 * SECOND } as const;
 
+  /**
+   * The cloud servers' RAM: 1 PB each before the install; after it, 32 GB (n00dles about 50× under the best: not
+   * poor), 1 TB from 5 minutes in, and 16 TB from 30 (the real run's 22:26 to 22:28, #277's review).
+   */
+  const cloudRamGb = (offsetMs: number) =>
+    offsetMs < INSTALL_MS
+      ? 1_048_576
+      : offsetMs < INSTALL_MS + 5 * MINUTE
+        ? 32
+        : offsetMs < INSTALL_MS + 30 * MINUTE
+          ? 1_024
+          : 16_384;
+
   /** Phantasy batched until the install at 70 minutes, then `after` (n00dles, the trap) to 200 minutes. */
   function stuckRun(after = "n00dles") {
     event(0, "brainStarted", { release: "r" });
@@ -3417,7 +3430,7 @@ describe("a batcher stuck on a poor target (#275)", () => {
       snapshot("fast", offsetMs, fastData({ batcher }), offsetMs);
     }
     for (let offsetMs = 10 * SECOND; offsetMs <= END_MS; offsetMs += 10 * SECOND) {
-      snapshot("medium", offsetMs, medium(offsetMs < INSTALL_MS ? 1_048_576 : 16_384), offsetMs);
+      snapshot("medium", offsetMs, medium(cloudRamGb(offsetMs)), offsetMs);
     }
     for (let offsetMs = 10 * SECOND; offsetMs <= END_MS; offsetMs += MINUTE) {
       const slow = slowData(CLOUD);
@@ -3426,27 +3439,30 @@ describe("a batcher stuck on a poor target (#275)", () => {
     }
   }
 
-  test("phantasy for an hour, then n00dles for over 2 after the install: a warning, then a failure, each named", () => {
+  test("phantasy for an hour, then n00dles for over 2 after the install: a warning, then the cycle's failure", () => {
     stuckRun();
     const { text, failures, warnings } = runReport(store, stuckWindow);
     const stuck = (lines: string[]) => lines.filter((line) => line.startsWith("batcher stuck on a poor target: "));
     expect(stuck(warnings)).toEqual([expect.stringMatching(/^batcher stuck on a poor target: phantasy from /)]);
-    expect(stuck(failures)).toEqual([expect.stringMatching(/^batcher stuck on a poor target: n00dles from /)]);
+    expect(stuck(failures)).toEqual([
+      expect.stringMatching(/^batcher stuck on a poor target: 2 h 5 min on poor targets in BN1\.\d+ 2 \(2 h or more /),
+    ]);
     const [warning, failure] = [stuck(warnings)[0] as string, stuck(failures)[0] as string];
     expect(warning).toContain(`phantasy from ${at(10 * SECOND)} to ${at(INSTALL_MS - 2 * SECOND)} (1 h 9 min on it)`);
-    expect(failure).toContain(`n00dles from ${at(INSTALL_MS)} to ${at(END_MS)} (2 h 10 min on it)`);
-    // The best is b-and-a or ecorp, both hackable at 1,327; n00dles' money is what holds it to under $20m/s.
-    for (const line of [warning, failure]) {
-      expect(line).toMatch(/; the best rooted target [\d,]+× it at least \((b-and-a|ecorp), \$[\d,]+\/s against /);
-      expect(line).toMatch(/, at hacking 1,327$|, at hacking 1,327;/);
-    }
-    const ratioOf = (line: string) => Number(/target ([\d,]+)×/.exec(line)?.[1]?.replaceAll(",", ""));
-    expect(ratioOf(failure)).toBeGreaterThan(1_000);
-    expect(ratioOf(warning)).toBeGreaterThan(100);
-    expect(failure).toMatch(/; 2 h 10 min stuck in its cycle \(2 h or more fails\)$/);
-    // Each in its cycle, by 2b.
     expect(warning).toMatch(/ on it\), in BN1\.\d+ 1; /);
-    expect(failure).toMatch(/ on it\), in BN1\.\d+ 2; /);
+    // n00dles poor only once the cloud servers came, 5 minutes after the install; the ratio climbing with their RAM.
+    expect(failure).toContain(
+      `in 1 stretch; the longest, n00dles from ${at(INSTALL_MS + 5 * MINUTE)} to ${at(END_MS)} (2 h 5 min on it); `,
+    );
+    // The best is b-and-a or ecorp, both hackable at 1,327; n00dles' money is what holds it to under $20m/s.
+    const range =
+      /the best rooted target ([\d,]+)× to ([\d,]+)× it \(at the most (b-and-a|ecorp), \$[\d,]+\/s against \$19,/;
+    const [, least, most] = (range.exec(failure) ?? []).map((each) => Number(each?.replaceAll(",", "")));
+    expect(least).toBeGreaterThanOrEqual(100);
+    expect(least).toBeLessThan(2_000);
+    expect(most).toBeGreaterThan(5 * (least as number));
+    expect(warning).toMatch(/; the best rooted target [\d,]+×( to [\d,]+×)? it \(at the most (b-and-a|ecorp), /);
+    for (const line of [warning, failure]) expect(line).toMatch(/, at hacking 1,327$/);
     // In section 6, under its line.
     expect(text).toContain(`\n    ${warning}\n    ${failure}\n`);
     expect(text).toContain("\nVerdict: FAIL\n");

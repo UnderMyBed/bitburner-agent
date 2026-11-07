@@ -10,6 +10,7 @@ import {
   usableRamGb,
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "../src/backdoors.ts";
 import {
   describeCeiling,
   HACKING_STRETCH_MS,
@@ -253,8 +254,9 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
     for (const [hostname, income] of firstMap) expect(first?.incomeOf(hostname), hostname).toBe(income);
     const bestFirst = [...firstMap].sort(([, a], [, b]) => b - a)[0] as [string, number];
     expect(first?.best).toEqual({ target: bestFirst[0], incomePerSecond: bestFirst[1] });
-    // Before the first, the first; between, the latest by then.
-    expect(incomes.at(0)).toEqual(first);
+    // Before the first, none (#277's review); between, the latest by then.
+    expect(incomes.at(0)).toBeNull();
+    expect(incomes.at(10 * SECOND - 1)).toBeNull();
     expect(incomes.at(19 * SECOND)).toEqual(first);
     const second = incomes.at(29 * SECOND);
     expect(second?.hacking).toBe(50);
@@ -268,8 +270,25 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
     expect(second?.incomeOf("sigma-cosmetics")).toBeNull();
     // With the ceilings unknown, none.
     expect(incomes.at(30 * SECOND)).toBeNull();
-    expect(incomes.at(60 * SECOND)).toBeNull();
+    expect(incomes.at(45 * SECOND)).toBeNull();
     expect(new HackingFold(new Set()).targetIncomes.at(0)).toBeNull();
+  });
+
+  test("none from a medium snapshot over 30 s old, or from before an install between it and the look (#277's review)", () => {
+    const fold = new HackingFold(new Set(["home"]));
+    fold.addStatic(0, staticData());
+    fold.addMedium(10 * SECOND, medium(150, { n00dles: true }));
+    const incomes = fold.targetIncomes;
+    // MEDIUM_SNAPSHOT_GAP_MS: snapshots further apart than 30 s are a gap.
+    expect(incomes.at(10 * SECOND + MEDIUM_SNAPSHOT_GAP_MS)).not.toBeNull();
+    expect(incomes.at(10 * SECOND + MEDIUM_SNAPSHOT_GAP_MS + 1)).toBeNull();
+    // An install after the snapshot, by the look: its servers' RAM and root rights are gone.
+    expect(incomes.at(20 * SECOND, [15 * SECOND])).toBeNull();
+    expect(incomes.at(20 * SECOND, [20 * SECOND])).toBeNull();
+    // One at or before the snapshot, or after the look, doesn't.
+    expect(incomes.at(20 * SECOND, [10 * SECOND, 25 * SECOND])).not.toBeNull();
+    fold.addMedium(20 * SECOND, medium(150, { n00dles: true }));
+    expect(incomes.at(25 * SECOND, [15 * SECOND])).not.toBeNull();
   });
 
   test("a target new to a later snapshot is read there, not in the earlier ones", () => {

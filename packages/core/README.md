@@ -135,7 +135,7 @@ Built in #204 (M4 phase A slice A7a): the maths of a batch (hack, weaken, grow, 
 
 | `recordHackLanded` | #236: a hack landed, in the health: `lastHack { target, atMs }`; and the first on the target batched since it changed (the batcher says so, #237's review), `lastMove { from, to, idleMs, atMs }`, idle from the last hack before it, on another target or, after a detour through one never hacked, the same (the old target's batches still landing among the new one's make no move). |
 
-The operation scripts' RAM (1.75, 1.8, 1.8 GB) are constants the ingame RAM test checks against `ram-budget.json`. `test/batcher.test.ts` works these by hand and over seeded sweeps.
+The operation scripts' RAM (1.75, 1.8, 1.8 GB) are constants the ingame RAM test checks against `ram-budget.json`. `test/batcher.test.ts` works these by hand and over seeded sweeps, and checks that no `batchPlan` earns more than `batchIncomeMostPerSecond` on any RAM, from 16 GB to 10 PB, and that n00dles' plan at hacking 1,300 on 424 TB reaches over 95% of it (#275).
 
 ## Sharing spare RAM
 
