@@ -3866,6 +3866,27 @@ describe("over a thinned store (#283)", () => {
     );
   });
 
+  test("a window ending between whole snapshots: the BitNodes line the same (#296's ResetDetection), the last readings a minute's", () => {
+    cleanRun({ fast: busyFast });
+    // The window ends at 19:59, so its last fast and medium snapshots are stubs (the minute's whole ones at 19:00).
+    const before = { ...window, untilMs: T0 + RUN_MS - SECOND };
+    const whole = runReport(store, before).text;
+    thinBefore(RUN_MS + MINUTE);
+    const thinned = runReport(store, before);
+    const bitNodes =
+      `  BitNodes: BN1.1 from ${at(-60 * MINUTE)} (before the window), not destroyed, 1 h 19 min by the window's last ` +
+      "record\n";
+    expect(whole).toContain(bitNodes);
+    expect(thinned.text).toContain(bitNodes);
+    expect(thinned.failures).toEqual([]);
+    // Besides the note and the two within-a-minute lines, the window's last readings are 19:00's whole ones: the money
+    // (in section 2 and the World Daemon's), the batcher's target and its batches, a minute short.
+    const [onlyWhole, onlyThinned] = linesApart(whole, thinned.text);
+    expect([onlyWhole.length, onlyThinned.length]).toEqual([7, 8]);
+    expect(onlyThinned).toContain(`    n00dles: ${at(10 * SECOND)} to ${at(19 * MINUTE)}`);
+    expect(onlyThinned).toContain("    money: $11,000 → $1,141,000");
+  });
+
   test("thinned up to the window's middle: PASS, no gap or stall where the thinned part ends", () => {
     cleanRun({ fast: busyFast });
     const whole = report();

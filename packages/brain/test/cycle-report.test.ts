@@ -17,7 +17,7 @@ import {
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { STORE_FILE_NAME } from "../src/config.ts";
-import { BitNodeCycles, heldBackOf } from "../src/cycle-report.ts";
+import { BitNodeCycles, heldBackOf, ResetDetection } from "../src/cycle-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -686,6 +686,17 @@ describe("milestones re-reached after an install, the BitNode begun before the w
     expect(report(T0 + 60 * MINUTE)).toContain("      first faction joined: CyberSec, before the window\n");
   });
 
+  test("the first faction joined in the window, its BitNode begun before it with no install: since its start", () => {
+    for (let minute = 1; minute < 6; minute++) {
+      const data = slowData({ lastAugReset: T0 - 60 * MINUTE, lastNodeReset: T0 - 60 * MINUTE });
+      snapshot("slow", minute * MINUTE, data);
+      snapshot("medium", minute * MINUTE + 30 * SECOND, mediumData(1, 1, minute >= 3 ? ["CyberSec"] : []));
+    }
+    expect(report(T0, T0 + 6 * MINUTE)).toContain(
+      `      first faction joined: CyberSec, +1 h 3 min (${at(3 * MINUTE + 30 * SECOND)})\n`,
+    );
+  });
+
   test("Daedalus joined again with favour already: joined first before the window", () => {
     for (let minute = 1; minute < 6; minute++) {
       const joined = minute >= 3 ? [{ name: "Daedalus", reputation: 0, favor: 40 }] : [];
@@ -969,5 +980,39 @@ describe("section 5's hours and section 3's cycles, from the cycles (#245)", () 
     expect(cycles.cycleLabelAt(T0 + 20 * MINUTE)).toBe("BN1.1 2");
     expect(cycles.cycleLabelAt(T0 + 30 * MINUTE)).toBe("BN1.2 1");
     expect(cycles.resetsMs()).toEqual([T0 + 10 * MINUTE, T0 + 20 * MINUTE, T0 + 30 * MINUTE]);
+  });
+});
+
+describe("ResetDetection: where each BitNode and cycle starts, for the run report and the campaign report (#290)", () => {
+  const look = (lastNodeReset: number, lastAugReset: number) => slowData({ lastAugReset, lastNodeReset });
+
+  test("another lastNodeReset is another BitNode, and another cycle whatever its lastAugReset", () => {
+    const detection = new ResetDetection();
+    detection.add(T0, T0, look(T0 - MINUTE, T0 - MINUTE));
+    // A save whose BitNode is another, its lastAugReset the same as the cycle before (contrived): still another cycle.
+    const seen = detection.add(T0 + MINUTE, T0 + MINUTE, look(T0 - 2 * MINUTE, T0 - MINUTE));
+    expect(detection.bitNodes).toHaveLength(2);
+    expect(detection.cycles.map((cycle) => cycle.bitNode)).toEqual([0, 1]);
+    expect(seen?.cycle).toBe(detection.cycles[1]);
+    // Unreadable: no resetInfo.
+    expect(detection.add(T0 + 2 * MINUTE, T0 + 2 * MINUTE, { purchasedServers: [] } as never)).toBeNull();
+  });
+
+  test("a start never before the last look: an older save's cycle starts at the last cycle's last slow snapshot", () => {
+    const detection = new ResetDetection();
+    detection.add(T0, T0, look(T0 - MINUTE, T0 - MINUTE));
+    detection.add(T0 + 5 * MINUTE, T0 + 5 * MINUTE, look(T0 - MINUTE, T0 + 4 * MINUTE));
+    detection.add(T0 + 6 * MINUTE, T0 + 6 * MINUTE, look(T0 - MINUTE, T0 + 4 * MINUTE));
+    // A save from before the install loaded: its lastAugReset is the BitNode's, 8 minutes before.
+    detection.add(T0 + 7 * MINUTE, T0 + 7 * MINUTE, look(T0 - MINUTE, T0 - MINUTE));
+    expect(detection.cycles.map((cycle) => cycle.startMs)).toEqual([T0 - MINUTE, T0 + 4 * MINUTE, T0 + 6 * MINUTE]);
+    expect(detection.bitNodes[0]).toMatchObject({ startMs: T0 - MINUTE, installedBeforeFirstLook: false });
+    expect(detection.bitNodes[0]?.lastSlowAtMs).toBe(T0 + 7 * MINUTE);
+  });
+
+  test("an install before a BitNode's first look", () => {
+    const detection = new ResetDetection();
+    detection.add(T0, T0, look(T0 - 60 * MINUTE, T0 - 30 * MINUTE));
+    expect(detection.bitNodes[0]).toMatchObject({ label: "BN1.1", installedBeforeFirstLook: true });
   });
 });
