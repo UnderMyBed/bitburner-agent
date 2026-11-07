@@ -4,12 +4,21 @@
 // security after the install was past the 15-minute horizon), and the mid targets that could were never weighed. Over
 // random shapes (the player's level and speed, the targets' figures, money and security, the hosts' RAM), with
 // n00dles batched: whenever a target is worth a path from the one batched (a move's worth once prepared, one the move
-// can reach, and preparable within `BATCHER_NEXT_HORIZON_MS` on the next's RAM), the brain moves or sends a next; each
-// next is one it can move to; and following its choices (each next prepared, then moved to), it comes to rest within a
-// bounded number of choices where no target is worth a path. The example tests are batcher.test.ts's.
+// can reach, earning within `BATCHER_NEXT_HORIZON_MS` on the next's RAM, and gaining more after than the batches lose
+// meanwhile), the brain moves or sends a next; each move is to a target prepared and within `BATCHER_MOST_IDLE_MS`;
+// each next is one it can move to; and following its choices (each next prepared, then moved to), it comes to rest
+// within a bounded number of choices where no target is worth a path.
+//
+// The limit that remains: a richer target whose weaken is more than `BATCHER_MOST_IDLE_MS` past the batched one's is
+// reached only through a chain of steps, each worth a path from the last. Every chain starts with a step worth a path
+// from where the brain rests, and at rest there is none, so a richer target left there has no chain. The floor test
+// counts the shapes that needed a chain (two moves or more) and those that rest with a richer target and no chain. The
+// example tests are batcher.test.ts's.
 import {
+  batcherIncomePerGigabyteSecond,
   type HackingPlayer,
   type HackingTarget,
+  isTargetPrepared,
   type MediumSnapshotData,
   operationTimeMs,
   preparationTimeMs,
@@ -23,6 +32,7 @@ import {
   BATCHER_NEXT_HORIZON_MS,
   BATCHER_NEXT_RAM_SHARE,
   BATCHER_TARGET_HORIZON_MS,
+  BATCHER_TARGETS_PLANNED,
   chooseBatcher,
   planBatcher,
 } from "../src/batcher.ts";
@@ -135,13 +145,16 @@ const nowIn = (data: MediumSnapshotData, hostname: string) => {
 /**
  * The targets worth a path from the one batched, worked out here from core's formulas and `planBatcher` alone: worth
  * `BATCHER_MOVE_GAIN` times it once prepared (over `BATCHER_TARGET_HORIZON_MS`, less a weaken for its first batch); a
- * move to it leaves at most `BATCHER_MOST_IDLE_MS` without a hack (its weaken past the batched one's); and it earns
- * within `BATCHER_NEXT_HORIZON_MS` prepared on the RAM the batched one's batches leave, a fifth at least.
+ * move to it leaves at most `BATCHER_MOST_IDLE_MS` without a hack (its weaken past the batched one's); it earns within
+ * `BATCHER_NEXT_HORIZON_MS` prepared on the RAM the batched one's batches leave, a fifth at least; and what it earns
+ * more after that, over the hour, is more than the batched one's batches lose meanwhile on four fifths of the RAM.
  */
 function worthAPath(staticData: StaticSnapshotData, data: MediumSnapshotData, hosts: string[], batched: string) {
   const player = data.player as unknown as HackingPlayer;
   const from = planBatcher(staticData, data, batched, hosts);
+  const rest = planBatcher(staticData, data, batched, hosts, null, 1 - BATCHER_NEXT_RAM_SHARE);
   if (from.batcher === null) throw new Error(from.why);
+  const lostPerSecond = rest.batcher === null ? from.incomePerSecond : from.incomePerSecond - rest.incomePerSecond;
   const fromWeakenMs = operationTimeMs("weaken1", figuresIn(staticData, batched), player);
   const nextShare = Math.max(BATCHER_NEXT_RAM_SHARE, 1 - from.peakRamGb / from.ramGb);
   return staticData.servers
@@ -155,8 +168,10 @@ function worthAPath(staticData: StaticSnapshotData, data: MediumSnapshotData, ho
       const preparedWorth = plan.incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - weakenMs);
       if (preparedWorth < from.incomePerSecond * BATCHER_TARGET_HORIZON_MS * BATCHER_MOVE_GAIN) return false;
       if (weakenMs - fromWeakenMs > BATCHER_MOST_IDLE_MS) return false;
-      const preparingMs = preparationTimeMs(figures, player, nowIn(data, hostname), plan.ramGb * nextShare);
-      return preparingMs + weakenMs < BATCHER_NEXT_HORIZON_MS;
+      const untilMs = preparationTimeMs(figures, player, nowIn(data, hostname), plan.ramGb * nextShare) + weakenMs;
+      if (!(untilMs < BATCHER_NEXT_HORIZON_MS)) return false;
+      const gain = (plan.incomePerSecond - from.incomePerSecond) * (BATCHER_NEXT_HORIZON_MS - untilMs);
+      return gain - lostPerSecond * untilMs > 0;
     });
 }
 
@@ -170,76 +185,121 @@ function prepare(staticData: StaticSnapshotData, data: MediumSnapshotData, hostn
   );
 }
 
+interface Followed {
+  problems: string[];
+  /** The moves made before it rested. */
+  moves: number;
+  /** At rest, a target worth `BATCHER_MOVE_GAIN` times the one batched once prepared, with no chain to it. */
+  richerLeft: boolean;
+}
+
 /**
- * The brain's choices from n00dles batched, each next prepared before the next choice and a move made batched: the
- * problems found, none if it held. Each target worth a path gets a move or a next; each next sent is one a move can
- * reach and earns within the next's horizon; and it comes to rest (no move, no next) within a choice a target and two,
- * with none worth a path from where it rests.
+ * The brain's choices from n00dles batched, each next prepared before the next choice and a move made batched. Each
+ * target worth a path gets a move or a next; each move is to a target prepared, within `BATCHER_MOST_IDLE_MS` of the
+ * one batched (#236, #237's review); each next sent is one a move can reach and earns within the next's horizon; and
+ * it comes to rest (no move, no next) within as many choices as targets and two, with none worth a path from there.
  */
-function problemsFollowing(shape: Shape): string[] {
+function follow(shape: Shape): Followed {
   const { staticData, data } = snapshotsOf(shape);
   const hosts = hostsOf(shape);
   const player = shape.player;
+  const weakenOf = (hostname: string) => operationTimeMs("weaken1", figuresIn(staticData, hostname), player);
   let batching = "n00dles";
   let current = planBatcher(staticData, data, batching, hosts).batcher;
+  let moves = 0;
+  const failed = (problem: string): Followed => ({ problems: [problem], moves, richerLeft: false });
   const most = shape.targets.length + 2;
   for (let choice = 0; choice < most; choice++) {
     const chosen = chooseBatcher(staticData, data, hosts, current, batching);
-    if (chosen.batcher === null) return [`choice ${choice}: none: ${chosen.why}`];
+    if (chosen.batcher === null) return failed(`choice ${choice}: none: ${chosen.why}`);
     const target = chosen.batcher.config.target;
     const next = chosen.batcher.config.next;
     const worth = worthAPath(staticData, data, hosts, batching);
     if (target === batching && next === undefined) {
-      return worth.length === 0
-        ? []
-        : [`choice ${choice}: rests on ${batching}, with ${worth.join(", ")} worth a path`];
+      if (worth.length > 0)
+        return failed(`choice ${choice}: rests on ${batching}, with ${worth.join(", ")} worth a path`);
+      const restingWorth = (planBatcher(staticData, data, batching, hosts) as { incomePerSecond: number })
+        .incomePerSecond;
+      const richerLeft = staticData.servers.some(({ hostname }) => {
+        const plan = planBatcher(staticData, data, hostname, hosts);
+        const preparedWorth =
+          plan.batcher === null
+            ? 0
+            : plan.incomePerSecond * Math.max(0, BATCHER_TARGET_HORIZON_MS - weakenOf(hostname));
+        return preparedWorth >= restingWorth * BATCHER_TARGET_HORIZON_MS * BATCHER_MOVE_GAIN;
+      });
+      return { problems: [], moves, richerLeft };
+    }
+    if (target !== batching) {
+      if (!isTargetPrepared(figuresIn(staticData, target), nowIn(data, target))) {
+        return failed(`choice ${choice}: a move to ${target}, not prepared`);
+      }
+      if (weakenOf(target) - weakenOf(batching) > BATCHER_MOST_IDLE_MS) {
+        return failed(`choice ${choice}: a move from ${batching} to ${target}, idle past BATCHER_MOST_IDLE_MS`);
+      }
+      moves++;
     }
     if (next !== undefined) {
       const weakenMs = operationTimeMs("weaken1", next.figures, player);
-      const targetWeakenMs = operationTimeMs("weaken1", figuresIn(staticData, target), player);
-      if (weakenMs - targetWeakenMs > BATCHER_MOST_IDLE_MS) {
-        return [`choice ${choice}: ${next.target}, the next, can't be moved to from ${target}`];
+      if (weakenMs - weakenOf(target) > BATCHER_MOST_IDLE_MS) {
+        return failed(`choice ${choice}: ${next.target}, the next, can't be moved to from ${target}`);
       }
       const untilMs = preparationTimeMs(next.figures, player, nowIn(data, next.target), next.ramGb) + weakenMs;
       if (!(untilMs < BATCHER_NEXT_HORIZON_MS)) {
-        return [`choice ${choice}: ${next.target}, the next, earns only in ${(untilMs / 60_000).toFixed(1)} min`];
+        return failed(`choice ${choice}: ${next.target}, the next, earns only in ${(untilMs / 60_000).toFixed(1)} min`);
       }
       prepare(staticData, data, next.target);
     }
-    // While one earns, a move goes only to a target prepared (#236): it's batched at once.
     batching = target;
     current = chosen.batcher;
   }
-  return [`still choosing after ${most} choices, batching ${batching}`];
+  return failed(`still choosing after ${most} choices, batching ${batching}`);
 }
 
-test("over random shapes from n00dles batched: a path to any target worth one, each next reachable, at rest within a bound", () => {
+test("over random shapes from n00dles batched: a path to any target worth one, moves and nexts as the rules allow, at rest within a bound", () => {
   fc.assert(
     fc.property(anyShape, (shape) => {
-      expect(problemsFollowing(shape)).toEqual([]);
+      const followed = follow(shape);
+      expect(followed.problems).toEqual([]);
     }),
     { numRuns: 150, endOnFailure: true },
   );
 });
 
-test("the shapes reach what it's for: targets worth a path from n00dles, beyond the 5 best by ceiling, a move, a next", () => {
-  // A fixed seed, so these floors can't miss on a random one.
-  let worth = 0;
-  let moved = 0;
-  let nextSent = 0;
+test("the shapes reach what it's for: a move or a next beyond the 5 best by the ceiling, chains, rests with a richer target left", () => {
+  // A fixed seed, so these floors can't miss on a random one. On seed 274's 150 shapes: 145 with a target worth a
+  // path from n00dles, 45 moving at once, 134 sending a next, 18 whose move or next is beyond the 5 best by the ceiling,
+  // 35 needing a chain of two moves or more, and 2 resting with a richer target and no chain to it. The floors are
+  // about half.
+  const counts = { worth: 0, moved: 0, nextSent: 0, beyondTheBest: 0, chains: 0, richerLeft: 0 };
   fc.assert(
     fc.property(anyShape, (shape) => {
       const { staticData, data } = snapshotsOf(shape);
       const hosts = hostsOf(shape);
       const current = planBatcher(staticData, data, "n00dles", hosts).batcher;
-      if (worthAPath(staticData, data, hosts, "n00dles").length > 0) worth++;
+      if (worthAPath(staticData, data, hosts, "n00dles").length > 0) counts.worth++;
       const chosen = chooseBatcher(staticData, data, hosts, current, "n00dles");
-      if (chosen.batcher?.config.target !== "n00dles") moved++;
-      if (chosen.batcher?.config.next !== undefined) nextSent++;
+      const target = chosen.batcher?.config.target;
+      const next = chosen.batcher?.config.next?.target;
+      if (target !== "n00dles") counts.moved++;
+      if (next !== undefined) counts.nextSent++;
+      const ceilingOf = (hostname: string) =>
+        batcherIncomePerGigabyteSecond(figuresIn(staticData, hostname), shape.player, 1);
+      const best = staticData.servers
+        .map(({ hostname }) => hostname)
+        .sort((a, b) => ceilingOf(b) - ceilingOf(a))
+        .slice(0, BATCHER_TARGETS_PLANNED);
+      const beyond = (hostname: string | undefined) => hostname !== undefined && !best.includes(hostname);
+      if ((target !== "n00dles" && beyond(target)) || beyond(next)) counts.beyondTheBest++;
+      const followed = follow(shape);
+      if (followed.moves >= 2) counts.chains++;
+      if (followed.richerLeft) counts.richerLeft++;
     }),
     { numRuns: 150, seed: 274 },
   );
-  expect(worth).toBeGreaterThan(50);
-  expect(moved).toBeGreaterThan(10);
-  expect(nextSent).toBeGreaterThan(30);
+  expect(counts.worth).toBeGreaterThan(70);
+  expect(counts.moved).toBeGreaterThan(20);
+  expect(counts.nextSent).toBeGreaterThan(60);
+  expect(counts.beyondTheBest).toBeGreaterThan(8);
+  expect(counts.chains).toBeGreaterThan(16);
 });
