@@ -13,22 +13,30 @@ import {
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
 import {
+  afterPurchase,
+  BATCH_TARGETS,
+  batchesUseOf,
   CALIBRATION,
+  CLOUD_SERVER_INCOME_WINDOW_MS,
   CLOUD_SERVER_LIMIT,
-  CLOUD_SERVER_PAYBACK_LIMIT_MS,
   CLOUD_SERVER_PRICE_PER_GB,
   cloudRamOf,
   EXTRAPOLATION_BOUND_MIN,
+  FIRST_INCOME_SAMPLE_MS,
   freshPurse,
   type Holds,
   holdsOf,
   homeRamAtCommit,
+  type IncomeRate,
+  IncomeWindow,
   installClock,
   installDecision,
   MIN_CLOUD_SERVER_RAM,
+  multipliersOf,
   NO_HOLDS,
   nextPurchase,
   PROGRAM_PRICES,
+  PURCHASE_EVERY_MS,
   type Purse,
   portsOpen,
   ROOTED_WORLD_RAM_GB_BY_PORTS,
@@ -38,17 +46,42 @@ import {
   runModel,
   shareBonusOfState,
   shareRamGbOfState,
-  spendThroughCycle,
   TODAYS_POLICY,
 } from "../src/index.ts";
 import { RUN_3_BN1_2 } from "./fixtures.ts";
 
 const MINUTE_MS = 60_000;
+const BN1_3_START = { currentNode: 1, ownedSF: { "1": 2 } };
 const ONLINE = 30 * MINUTE_MS;
 /** n00dles and its like, rooted with no port: the hack loop's hosts before any cloud server. */
 const WORLD_RAM_GB = 100;
-const spend = (purse: Purse, gross: number, income: number | null, onlineMs: number, holds: Holds = NO_HOLDS) =>
-  spendThroughCycle(purse, gross, income, onlineMs, holds, WORLD_RAM_GB);
+/**
+ * The income `perSecond` as the brain would measure it with nothing bought in the window: over `hostsGb` (the world
+ * servers and `purse`'s cloud servers) a GB a second. Null: no full window yet.
+ */
+const rateOf = (perSecond: number | null, purse: Purse, worldRamGb = WORLD_RAM_GB): IncomeRate | null =>
+  perSecond === null ? null : { perSecond, perGbSecond: perSecond / (worldRamGb + cloudRamOf(purse)) };
+/** Every purchase `cash` covers, one after another (`nextPurchase`), the income measured as `rateOf` says. */
+const spend = (
+  purse: Purse,
+  cash: number,
+  perSecond: number | null,
+  holds: Holds = NO_HOLDS,
+  worldRamGb = WORLD_RAM_GB,
+) => {
+  let after = purse;
+  for (let bought = 0; bought < 1000; bought++) {
+    const purchase = nextPurchase(
+      after,
+      cash - (after.spent - purse.spent),
+      rateOf(perSecond, after, worldRamGb),
+      holds,
+    );
+    if (purchase === null) break;
+    after = afterPurchase(after, purchase);
+  }
+  return after;
+};
 /** Every program bought, home at the game's limit: only cloud servers left to buy. */
 const ONLY_CLOUD: Purse = { ...freshPurse(2 ** 30), programs: PROGRAM_PRICES.length };
 /** A decision with nothing to hold but what a test sets. */
@@ -61,9 +94,9 @@ const dummyDecision = {
 };
 
 describe("the money in hand: the brain's purchases through a cycle", () => {
-  test("a program or home's RAM, the cheaper first, each once the money covers it; no cloud server before 10 min", () => {
+  test("a program or home's RAM, the cheaper first, each once the money covers it; no cloud server without a full window", () => {
     // $2m at 8 GB: the TOR router ($200k), BruteSSH ($500k), then home's RAM ($1,009,744, cheaper than FTPCrack).
-    const purse = spend(freshPurse(8), 2e6, 1e6, 5 * MINUTE_MS);
+    const purse = spend(freshPurse(8), 2e6, null);
     expect(purse).toMatchObject({ programs: 2, homeRamGb: 16, cloudServersRamGb: [] });
     expect(purse.spent).toBeCloseTo(200e3 + 500e3 + homeRamUpgradePrice(8), 0);
     expect(portsOpen(purse)).toBe(1);
@@ -71,21 +104,25 @@ describe("the money in hand: the brain's purchases through a cycle", () => {
     // The TOR router and each of core's port openers.
     expect(PROGRAM_PRICES).toHaveLength(1 + PORT_OPENER_PROGRAMS.length);
     // Home's RAM first while it's the cheaper: $251m would cover SQLInject ($250m), but home's upgrades come first.
-    const sqlInject = spend({ ...freshPurse(8), programs: 5 }, 251e6, null, 5 * MINUTE_MS);
+    const sqlInject = spend({ ...freshPurse(8), programs: 5 }, 251e6, null);
     expect(sqlInject.programs).toBe(5);
     expect(sqlInject.homeRamGb).toBeGreaterThan(8);
     // The program first where it's the cheaper: BruteSSH ($500k) before home's 16 GB ($1,009,744).
     const bruteSsh = { ...freshPurse(8), programs: 1 };
-    expect(nextPurchase(bruteSsh, 1e9, null, ONLINE, { ...NO_HOLDS }, WORLD_RAM_GB)).toEqual({
-      kind: "program",
-      price: 500e3,
+    expect(nextPurchase(bruteSsh, 1e9, null, { ...NO_HOLDS })).toEqual({ kind: "program", price: 500e3 });
+    // One purchase at a time: the brain buys the next at the next medium snapshot.
+    expect(afterPurchase(bruteSsh, { kind: "program", price: 500e3 })).toEqual({
+      ...bruteSsh,
+      programs: 2,
+      spent: 500e3,
     });
+    expect(afterPurchase(bruteSsh, null)).toBe(bruteSsh);
   });
 
   test("in the countdown no program, and home's RAM only with the money above what's held", () => {
     const held: Holds = { fromHomeRam: 1e6, fromPrograms: 0, fromCloudServers: 1e6, countdownUnderWay: true };
-    expect(spend(freshPurse(8), 2e6, null, ONLINE, held)).toMatchObject({ programs: 0, homeRamGb: 8 });
-    expect(spend(freshPurse(8), 2.1e6, null, ONLINE, held)).toMatchObject({ programs: 0, homeRamGb: 16 });
+    expect(spend(freshPurse(8), 2e6, null, held)).toMatchObject({ programs: 0, homeRamGb: 8 });
+    expect(spend(freshPurse(8), 2.1e6, null, held)).toMatchObject({ programs: 0, homeRamGb: 16 });
   });
 
   test("Daedalus's $100b holds home's RAM, not programs; The Red Pill's donation holds both (the brain's)", () => {
@@ -105,29 +142,28 @@ describe("the money in hand: the brain's purchases through a cycle", () => {
     });
     // $1m in hand, BruteSSH ($500k) next and home's 16 GB: under Daedalus's hold the program goes, home's RAM doesn't.
     const purse = { ...freshPurse(8), programs: 1 };
-    expect(nextPurchase(purse, 1e6, null, ONLINE, daedalus, WORLD_RAM_GB)).toMatchObject({ kind: "program" });
-    expect(nextPurchase(purse, 1e6, null, ONLINE, redPill, WORLD_RAM_GB)).toBeNull();
-    expect(nextPurchase({ ...purse, programs: 6 }, 2e6, null, ONLINE, daedalus, WORLD_RAM_GB)).toBeNull();
+    expect(nextPurchase(purse, 1e6, null, daedalus)).toMatchObject({ kind: "program" });
+    expect(nextPurchase(purse, 1e6, null, redPill)).toBeNull();
+    expect(nextPurchase({ ...purse, programs: 6 }, 2e6, null, daedalus)).toBeNull();
   });
 
   test("a cloud server: the largest power of two the money covers, from 8 GB, 25 of them, then the smallest upgraded", () => {
-    // No income measured yet, or before the window: none.
-    expect(spend(ONLY_CLOUD, 1e9, null, ONLINE).cloudServersRamGb).toEqual([]);
-    expect(spend(ONLY_CLOUD, 1e9, 1e9, 9 * MINUTE_MS).cloudServersRamGb).toEqual([]);
+    // No full window of the brain's income measure yet: none.
+    expect(spend(ONLY_CLOUD, 1e9, null).cloudServersRamGb).toEqual([]);
+    // Held back by the comparison's variant (`cloud` false): none.
+    expect(nextPurchase(ONLY_CLOUD, 1e9, rateOf(1e9, ONLY_CLOUD), NO_HOLDS, false)).toBeNull();
     // $1m: 16 GB ($880k) but not 32; then nothing more fits.
-    expect(spend(ONLY_CLOUD, 1e6, 1e9, ONLINE).cloudServersRamGb).toEqual([16]);
+    expect(spend(ONLY_CLOUD, 1e6, 1e9).cloudServersRamGb).toEqual([16]);
     // $500k: 8 GB ($440k), the least a new server is bought with.
-    expect(spend(ONLY_CLOUD, 500e3, 1e9, ONLINE).cloudServersRamGb).toEqual([8]);
-    expect(
-      spend(ONLY_CLOUD, MIN_CLOUD_SERVER_RAM * CLOUD_SERVER_PRICE_PER_GB - 1, 1e9, ONLINE).cloudServersRamGb,
-    ).toEqual([]);
+    expect(spend(ONLY_CLOUD, 500e3, 1e9).cloudServersRamGb).toEqual([8]);
+    expect(spend(ONLY_CLOUD, MIN_CLOUD_SERVER_RAM * CLOUD_SERVER_PRICE_PER_GB - 1, 1e9).cloudServersRamGb).toEqual([]);
     // All 25 at the most (core's `CLOUD_SERVER_MAX_RAM`): $1.44t, and nothing more to buy.
-    const full = spend(ONLY_CLOUD, 1e15, 1e15, ONLINE);
+    const full = spend(ONLY_CLOUD, 1e15, 1e15);
     expect(full.cloudServersRamGb).toEqual(Array(CLOUD_SERVER_LIMIT).fill(CLOUD_SERVER_MAX_RAM));
     expect(full.spent).toBe(CLOUD_SERVER_LIMIT * CLOUD_SERVER_MAX_RAM * CLOUD_SERVER_PRICE_PER_GB);
     // At the limit, the smallest is upgraded, paying the difference.
     const limit = { ...ONLY_CLOUD, cloudServersRamGb: [64, ...Array(CLOUD_SERVER_LIMIT - 1).fill(128)] };
-    const upgraded = spend(limit, 64 * CLOUD_SERVER_PRICE_PER_GB, 1e9, ONLINE);
+    const upgraded = spend(limit, 64 * CLOUD_SERVER_PRICE_PER_GB, 1e12);
     expect(upgraded.cloudServersRamGb[0]).toBe(128);
     expect(upgraded.spent).toBe(64 * CLOUD_SERVER_PRICE_PER_GB);
   });
@@ -136,55 +172,88 @@ describe("the money in hand: the brain's purchases through a cycle", () => {
     const programs = { ...freshPurse(8), programs: PROGRAM_PRICES.length };
     const home = homeRamUpgradePrice(8);
     // Home's next short by $100k: within a minute at $2k/s, so held from cloud servers.
-    expect(spend(programs, home - 100e3, 2e3, ONLINE).cloudServersRamGb).toEqual([]);
+    expect(spend(programs, home - 100e3, 2e3).cloudServersRamGb).toEqual([]);
     // At $1k/s, 100 s off: not held; a server bought (on 10 GB of world servers, $100 a GB a second: paid back).
-    expect(spendThroughCycle(programs, home - 100e3, 1e3, ONLINE, NO_HOLDS, 10).cloudServersRamGb).not.toEqual([]);
+    expect(spend(programs, home - 100e3, 1e3, NO_HOLDS, 10).cloudServersRamGb).not.toEqual([]);
     // A cloud hold (the lookahead's) of all the money: none.
-    expect(spend(ONLY_CLOUD, 1e9, 1e9, ONLINE, { ...NO_HOLDS, fromCloudServers: 1e9 }).cloudServersRamGb).toEqual([]);
+    expect(spend(ONLY_CLOUD, 1e9, 1e9, { ...NO_HOLDS, fromCloudServers: 1e9 }).cloudServersRamGb).toEqual([]);
     // In the countdown the next program is still held from cloud servers (the brain's plan has its price).
     const countdown: Holds = { fromHomeRam: 0, fromPrograms: 0, fromCloudServers: 0, countdownUnderWay: true };
     const sqlInjectNext = { ...freshPurse(2 ** 30), programs: 5 };
-    expect(spend(sqlInjectNext, 249.99e6, 1e6, ONLINE, countdown).cloudServersRamGb).toEqual([]);
+    expect(spend(sqlInjectNext, 249.99e6, 1e6, countdown).cloudServersRamGb).toEqual([]);
   });
 
-  test("a server must pay for itself within 15 min at the income a GB of the hack loop's hosts, world and cloud", () => {
-    // From an empty cloud: at $2,500/s over 300 GB of world servers, $8.33 a GB a second, a GB pays back in 6,600 s:
-    // none (the brain's at cycle 1's 10 min, the #263 review). At $10k/s, 1,650 s: none. At $100k/s, 165 s: bought.
-    const start = { ...freshPurse(2 ** 30), programs: 2 };
-    const worldOf = (gross: number, income: number) =>
-      spendThroughCycle(start, gross, income, ONLINE, NO_HOLDS, 300).cloudServersRamGb;
-    expect(worldOf(1e9, 2_500)).toEqual([]);
-    expect(worldOf(1e9, 10e3)).toEqual([]);
-    expect(worldOf(1e9, 100e3).length).toBeGreaterThan(0);
-    const owned = { ...ONLY_CLOUD, cloudServersRamGb: [1024] };
-    // $1,124/s over 1 TB of cloud and 100 GB of world: $1 a GB a second, far over 15 min.
-    expect(spend(owned, 1e12, 1124, ONLINE).cloudServersRamGb).toEqual([1024]);
-    // At $100k a GB a second it does.
-    expect(spend(owned, 1e12, 1124 * 100e3, ONLINE).cloudServersRamGb.length).toBeGreaterThan(1);
+  test("a server must pay for itself within 15 min at the income a GB the brain measures", () => {
+    // $55,000 a GB pays back within 900 s at $61.11 a GB a second or more: $8.33 (6,600 s) and $33.33 (1,650 s) don't,
+    // $333.33 (165 s) does.
+    const start = ONLY_CLOUD;
+    const bought = (perGbSecond: number) =>
+      nextPurchase(start, 1e9, { perSecond: perGbSecond * 300, perGbSecond }, NO_HOLDS)?.kind ?? null;
+    expect(bought(2_500 / 300)).toBeNull();
+    expect(bought(10e3 / 300)).toBeNull();
+    expect(bought(55_000 / 900 - 0.01)).toBeNull();
+    expect(bought(55_000 / 900)).toBe("cloudServer");
+    expect(bought(100e3 / 300)).toBe("cloudServer");
   });
 
-  test("in a run, each cycle's first cloud server comes once it pays back over the world servers its ports root", () => {
-    const steps: { purse: Purse; income: number | null; onlineMs: number }[] = [];
+  test("the brain's income measure: the money's rises between medium snapshots over the hosts' RAM × time", () => {
+    const window = new IncomeWindow();
+    // Samples 10 s apart over 10 min, $1,000 more each on 100 GB, a purchase of $5,000 between the 30th and 31st.
+    for (let index = 0; index <= 60; index++) {
+      const money = 1_000 * index - (index > 30 ? 5_000 : 0);
+      window.add({ atMs: index * 10_000, money, hostsRam: index >= 31 ? 300 : 100 });
+      // None until the samples span the window.
+      if (index < 60) expect(window.rate()).toBeNull();
+    }
+    // 59 rises of $1,000, the 31st's lost to the purchase ($1,000 − $5,000 counts 0): $59,000 over 600 s; RAM × time:
+    // 31 stretches at 100 GB and 29 at 300, 10 s each.
+    expect(window.rate()).toEqual({ perSecond: 59_000 / 600, perGbSecond: 59_000 / ((31 * 100 + 29 * 300) * 10) });
+    // The window slides: the oldest goes once the next at or before its start is in.
+    window.add({ atMs: 610_000, money: 61_000 - 5_000, hostsRam: 300 });
+    expect(window.rate()?.perSecond).toBeCloseTo(59_000 / 600, 9);
+    expect(new IncomeWindow().rate()).toBeNull();
+  });
+
+  test("in a run, one purchase a medium snapshot, and each cycle's first cloud server at the brain's own time", () => {
+    const steps: { purse: Purse; cloudIncome: IncomeRate | null; onlineMs: number }[] = [];
     runModel(RUN_3_BN1_2.start, {
       policy: RUN_3_POLICY,
       horizonMs: 5 * 60 * MINUTE_MS,
-      onStep: ({ purse, income, onlineMs }) => steps.push({ purse, income, onlineMs }),
+      onStep: ({ purse, cloudIncome, onlineMs }) => steps.push({ purse, cloudIncome, onlineMs }),
     });
+    // Each purchase is a program, a doubling of home's RAM, or one cloud server's RAM: at least as many as these.
+    const purchasesBetween = (from: Purse, to: Purse) =>
+      to.programs -
+      from.programs +
+      Math.log2(to.homeRamGb / from.homeRamGb) +
+      to.cloudServersRamGb.filter((ramGb, index) => ramGb !== from.cloudServersRamGb[index]).length;
     let firsts = 0;
     for (const [index, step] of steps.entries()) {
       const before = steps[index - 1];
       if (before === undefined || step.onlineMs === 0 || before.onlineMs > step.onlineMs) continue;
+      // A step is 6 medium snapshots: at most 6 purchases since the last step's (its own, after it, included).
+      expect(purchasesBetween(before.purse, step.purse)).toBeLessThanOrEqual(MINUTE_MS / PURCHASE_EVERY_MS);
       if (before.purse.cloudServersRamGb.length > 0 || step.purse.cloudServersRamGb.length === 0) continue;
-      // The first cloud server of the cycle: bought at this step, over the world RAM of the ports open before it.
+      // The cycle's first cloud server, bought since the last step: not before a full window of the brain's measure,
+      // from its first medium snapshot after the Agent starts again.
       firsts += 1;
-      const worldRamGb = ROOTED_WORLD_RAM_GB_BY_PORTS[portsOpen(before.purse)] as number;
-      const paybackMs = (CLOUD_SERVER_PRICE_PER_GB / ((step.income ?? 0) / worldRamGb)) * 1000;
-      expect(paybackMs, `at ${step.onlineMs / MINUTE_MS} min`).toBeLessThanOrEqual(CLOUD_SERVER_PAYBACK_LIMIT_MS);
+      expect(step.onlineMs).toBeGreaterThan(FIRST_INCOME_SAMPLE_MS + CLOUD_SERVER_INCOME_WINDOW_MS);
     }
     expect(firsts).toBeGreaterThan(1);
-    // In the 1st cycle the payback over the world servers holds the first server back past the income window's end.
-    const first = steps.find((step) => step.purse.cloudServersRamGb.length > 0) as (typeof steps)[number];
-    expect(first.onlineMs).toBeGreaterThan(10 * MINUTE_MS);
+    // The measure's first full window: 10 min after its first sample, 20 s after the install.
+    const firstRate = steps.find((step) => step.cloudIncome !== null) as (typeof steps)[number];
+    expect(firstRate.onlineMs).toBe(11 * MINUTE_MS);
+    // At a step of a medium snapshot: the first sample at 20 s, the window full at 10 min 20 s.
+    const fine: (number | null)[] = [];
+    runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      stepMs: PURCHASE_EVERY_MS,
+      horizonMs: 12 * MINUTE_MS,
+      onStep: ({ onlineMs, cloudIncome }) => fine.push(cloudIncome === null ? null : onlineMs),
+    });
+    expect(fine.find((each) => each !== null)).toBe(FIRST_INCOME_SAMPLE_MS + CLOUD_SERVER_INCOME_WINDOW_MS);
+    expect(FIRST_INCOME_SAMPLE_MS).toBe(20_000);
+    expect(() => runModel(RUN_3_BN1_2.start, { stepMs: 15_000 })).toThrow(RangeError);
   });
 
   test("the world servers' RAM by the ports open is the game's (`servers.ts`), rooted by the ports alone", () => {
@@ -376,27 +445,161 @@ describe("the share from the state (#263), not the install index", () => {
 
   test("#242's (today's brain, the default): core's `shareRound` on home and the batches' hosts", () => {
     const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
-    // Home less the Agent's 8 GB in use and the 32 kept: (8192 − 8 − 32) / 4 = 2038 threads. The batches' hosts at run
-    // #3's 82% use are past `SHARE_MOST_USE` (80%), so share nothing.
-    expect(shareRamGbOfState(purse, CALIBRATION, 3168.8)).toBe(2038 * SHARE_RAM_GB);
-    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
+    // Home less the Agent's 8 GB in use and the 32 kept: (8192 − 8 − 32) / 4 = 2038 threads. The batches' hosts at
+    // 82% use are past `SHARE_MOST_USE` (80%), so share nothing; the default use, all of them, likewise.
+    expect(shareRamGbOfState(purse, 0.82, 3168.8)).toBe(2038 * SHARE_RAM_GB);
+    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8, 0.82)).toBe(shareBonusOfPower(1 + 2038));
     expect(shareBonusOfState(purse, CALIBRATION, undefined, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
     // From the brain's constants alone: home 32 GB shares nothing, 64 GB 24, 512 GB 472. These are BN1.3's 1st cycle's
     // readings at 15, 20 and 30 min, but seen before the Agent's RAM in use was modelled (#293's first review), so
     // after the fact: not validation.
-    expect([32, 64, 512].map((home) => shareRamGbOfState(freshPurse(home), CALIBRATION, 100))).toEqual([0, 24, 472]);
+    expect([32, 64, 512].map((home) => shareRamGbOfState(freshPurse(home), 1, 100))).toEqual([0, 24, 472]);
     expect(shareBonusOfState(freshPurse(32), CALIBRATION, true, 100)).toBe(1);
+    // Below 80%, the batches' hosts share the room to it: at 70%, a tenth of the world and cloud servers' RAM.
+    const tenth = Math.floor((0.1 * (3168.8 + 2 ** 21)) / SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, 0.7, 3168.8)).toBe((2038 + tenth) * SHARE_RAM_GB);
   });
 
-  test("#242's: the batches' use by cycle, its last past the list; below 80%, their hosts share the room to it", () => {
-    const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
-    const byCycle = { ...CALIBRATION, batchesUseOfHosts: [0.82, 0.7] };
-    const hostsGb = 3168.8 + 2 ** 21;
-    // At 70%, a tenth of the world and cloud servers' RAM beside home's 2038 threads.
-    const tenth = Math.floor((0.1 * hostsGb) / SHARE_RAM_GB);
-    expect(shareRamGbOfState(purse, byCycle, 3168.8, 0)).toBe(2038 * SHARE_RAM_GB);
-    expect(shareRamGbOfState(purse, byCycle, 3168.8, 1)).toBe((2038 + tenth) * SHARE_RAM_GB);
-    expect(shareRamGbOfState(purse, byCycle, 3168.8, 7)).toBe((2038 + tenth) * SHARE_RAM_GB);
+  test("#294: the batches' use from the state, core's batch maths on the game's best target, not the cycle's index", () => {
+    // The batches' hosts at their most: 25 cloud servers of 1 PB and the world servers five ports root.
+    const hostsGb = 25 * CLOUD_SERVER_MAX_RAM + (ROOTED_WORLD_RAM_GB_BY_PORTS[5] as number);
+    const mults = (multipliers: ReturnType<typeof multipliersOf>) => {
+      const { hacking_chance, hacking_speed, hacking_money, hacking_grow } = multipliers;
+      return { hacking_chance, hacking_speed, hacking_money, hacking_grow };
+    };
+    // Run #3's 4th cycle (its one reading: the batches held 82% of the cloud), at the multipliers the brain's rules
+    // install on its measured curves: core's plan fills 99% to 100% of the hosts at its level (878 to 1,061 from
+    // 30 min on). Past 80% both, so the hosts share nothing either way.
+    const downstream = runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      measured: RUN_3_CYCLES,
+      horizonMs: 6 * 60 * MINUTE_MS,
+    });
+    const run3Mults = mults(downstream.cycles[3]?.multipliers ?? multipliersOf({}, 1));
+    for (const hacking of [878, 1061]) {
+      expect(batchesUseOf({ hacking, mults: run3Mults, ports: 5, hostsGb }), `hacking ${hacking}`).toBeGreaterThan(
+        0.99,
+      );
+    }
+    // At hacking 4,000 to 5,000 and the multipliers of the model's own Daedalus cycle from BN1.3's start, 16% and
+    // 12%: the target's money bounds the batches, not the RAM. BN1.3's 9th shared about 90% of its cloud (#263's
+    // extract), so its batches used about 10%. Seen, not held out (#294).
+    const independent = runModel(BN1_3_START, { policy: TODAYS_POLICY });
+    const daedalusCycle = independent.cycles.find((cycle) => cycle.reason === "Daedalus donations");
+    const late = mults(daedalusCycle?.multipliers ?? multipliersOf({}, 1));
+    expect(late.hacking_money).toBeGreaterThan(5);
+    for (const hacking of [4000, 5000]) {
+      const use = batchesUseOf({ hacking, mults: late, ports: 5, hostsGb });
+      expect(use, `hacking ${hacking}`).toBeGreaterThan(0.05);
+      expect(use, `hacking ${hacking}`).toBeLessThan(0.2);
+    }
+    // Fewer hosts, the same batches: a larger share of them, all at most; nothing to hack, all of them (no share).
+    expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb: hostsGb / 4 })).toBeCloseTo(
+      4 * batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }),
+      9,
+    );
+    expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb: 1e3 })).toBe(1);
+    // `batchesUseFactor` scales it: half the batches' RAM, half the use, below all of it.
+    expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }, 0.5)).toBeCloseTo(
+      batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }) / 2,
+      12,
+    );
+    // The ports reach the targets: with none open, only the small no-port servers, whose batches need far less.
+    expect(batchesUseOf({ hacking: 4000, mults: late, ports: 0, hostsGb })).toBeLessThan(
+      batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb }) / 10,
+    );
+    expect(batchesUseOf({ hacking: 4000, mults: late, ports: 5, hostsGb: 0 })).toBe(1);
+  });
+
+  test("a cycle's first cloud server `cloudDelayMs` later than the brain's first full window (the grid's variant)", () => {
+    // At a step of a medium snapshot, the 2nd cycle (the 1st's first server waits on its payback past both): the first
+    // full window at 10 min 20 s; the first server just after it, or 5 min later.
+    const firstCloud = (cloudDelayMs: number) => {
+      const at = new Map<number, number>();
+      let cycle = 0;
+      let last = -1;
+      runModel(RUN_3_BN1_2.start, {
+        policy: RUN_3_POLICY,
+        stepMs: PURCHASE_EVERY_MS,
+        horizonMs: 70 * MINUTE_MS,
+        cloudDelayMs,
+        onStep: ({ onlineMs, purse }) => {
+          if (onlineMs < last) cycle += 1;
+          last = onlineMs;
+          if (!at.has(cycle) && purse.cloudServersRamGb.length > 0) at.set(cycle, onlineMs);
+        },
+      });
+      return at;
+    };
+    const window = FIRST_INCOME_SAMPLE_MS + CLOUD_SERVER_INCOME_WINDOW_MS;
+    const modelled = firstCloud(0);
+    const later = firstCloud(5 * MINUTE_MS);
+    expect(modelled.get(1)).toBeGreaterThan(window);
+    expect(modelled.get(1)).toBeLessThanOrEqual(window + MINUTE_MS);
+    expect(later.get(1)).toBeGreaterThan(window + 5 * MINUTE_MS);
+    expect(later.get(1)).toBeLessThanOrEqual(window + 6 * MINUTE_MS);
+  });
+
+  test("in a run, each step's batches' use is core's most over the hosts, times `batchesUseFactor`, at most all", () => {
+    for (const factor of [1, 0.5]) {
+      const steps: { cycle: number; hacking: number; purse: Purse; worldRamGb: number; batchesUse: number }[] = [];
+      let cycle = 0;
+      let last = -1;
+      const run = runModel(BN1_3_START, {
+        policy: TODAYS_POLICY,
+        calibration: { batchesUseFactor: factor },
+        onStep: ({ onlineMs, hacking, purse, worldRamGb, batchesUse }) => {
+          if (onlineMs < last) cycle += 1;
+          last = onlineMs;
+          steps.push({ cycle, hacking, purse, worldRamGb, batchesUse });
+        },
+      });
+      let below = 0;
+      for (const step of steps.filter((_, index) => index % 3 === 0)) {
+        const multipliers = run.cycles[step.cycle]?.multipliers;
+        if (multipliers === undefined) continue;
+        const { hacking_chance, hacking_speed, hacking_money, hacking_grow } = multipliers;
+        const state = {
+          hacking: step.hacking,
+          mults: { hacking_chance, hacking_speed, hacking_money, hacking_grow },
+          ports: Math.min(portsOpen(step.purse), 5),
+          hostsGb: step.worldRamGb + cloudRamOf(step.purse),
+        };
+        expect(step.batchesUse).toBe(batchesUseOf(state, factor));
+        if (step.batchesUse < 1) below += 1;
+      }
+      expect(below, `factor ${factor}`).toBeGreaterThan(0);
+    }
+  });
+
+  test("the batcher's targets are the game's (`servers.ts`): money 25 times the starting money, a range's mean", () => {
+    const text = readFileSync(
+      new URL("../../../vendor/bitburner-src/src/Server/data/servers.ts", import.meta.url),
+      "utf8",
+    );
+    const fieldOf = (block: string, key: string): number | null => {
+      const single = new RegExp(String.raw`${key}:\s*([\d.e]+)\s*,`).exec(block);
+      if (single !== null) return Number(single[1]);
+      const range = new RegExp(String.raw`${key}:\s*\{\s*max:\s*([\d.e]+),\s*min:\s*([\d.e]+)`).exec(block);
+      return range === null ? null : (Number(range[1]) + Number(range[2])) / 2;
+    };
+    const game = text
+      .split(/\n {2}\{\n/)
+      .slice(1)
+      .flatMap((block) => {
+        const money = fieldOf(block, "moneyAvailable");
+        if (money === null || !(money > 0)) return [];
+        const row = [
+          fieldOf(block, "numOpenPortsRequired"),
+          25 * money,
+          fieldOf(block, "hackDifficulty") ?? 1,
+          fieldOf(block, "requiredHackingSkill"),
+          fieldOf(block, "serverGrowth") ?? 1,
+        ];
+        return [row.join(",")];
+      })
+      .sort();
+    expect(BATCH_TARGETS.map(([, ...row]) => row.join(",")).sort()).toEqual(game);
   });
 
   test("a policy without `homeShares` is today's brain, #242's share; run #3's says false", () => {

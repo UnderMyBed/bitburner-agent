@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import { IncomeWindow } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   CLOUD_SERVER_INCOME_WINDOW_MS,
@@ -115,6 +116,33 @@ describe("HackLoopIncome: money's rises over the hosts' RAM × time, across the 
     income.add(10 * MINUTE, NETWORK, withOwners(96_000));
     // n00dles and pserv-0, 16 GB each, for 600 s.
     expect(income.rate()?.perGbSecond).toBe(96_000 / (32 * 600));
+  });
+
+  test("brain against the fast model (#294): the model's `IncomeWindow` gives the brain's rate from the same snapshots", () => {
+    // Medium snapshots every 10 s for 25 minutes: income in steps, a purchase now and then (the money falls), and the
+    // hosts' RAM growing as servers are bought. The model's measure, sample by sample, is the brain's.
+    const brains = new HackLoopIncome();
+    const models = new IncomeWindow();
+    let money = 0;
+    let ram = 16;
+    let seed = 294;
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    let rated = 0;
+    for (let atMs = 0; atMs <= 25 * MINUTE; atMs += 10_000) {
+      money += Math.floor(random() * 50_000);
+      if (random() < 0.2) {
+        money -= Math.floor(random() * money);
+        ram *= 2;
+      }
+      brains.add(atMs, NETWORK, medium(money, ram));
+      models.add({ atMs, money, hostsRam: ram });
+      expect(models.rate(), `at ${atMs / 1000} s`).toEqual(brains.rate());
+      if (brains.rate() !== null) rated += 1;
+    }
+    expect(rated).toBeGreaterThan(80);
   });
 });
 

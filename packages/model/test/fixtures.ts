@@ -129,7 +129,8 @@ export const SIMULATOR_SEED_1 = {
 
 /**
  * BN1.3, the exit run (#276; v1.0.0's tested build, main 614978a, today's brain with #242's share and #243's hold),
- * held out of every fit (#263's decision): the coordinator's read-only extract on #263,
+ * held out of every fit (#263's decision), and seen since #294 (planned from its figures; still fitted on by nothing):
+ * the coordinator's read-only extract on #263,
  * https://github.com/UnderMyBed/bitburner-agent/issues/263 ("BN1.3 per cycle: the held-out validation data").
  * Summarised here, never read from a store. SF1.2 owned, so home starts at 32 GB and the multipliers carry SF1's 24%.
  * In cycles 6 to 8 the batcher sat about 5 hours on poor targets (#274, fixed in #278): their hacking income, and the

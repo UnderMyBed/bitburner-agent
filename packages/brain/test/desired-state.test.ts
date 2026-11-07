@@ -1679,7 +1679,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         factionRep: 1,
         onlineMs: 0,
       });
-      return { decision, purchase: nextPurchase(ENDGAME_PURSE, money, null, 0, holdsOf(decision, false, null), 0) };
+      return { decision, purchase: nextPurchase(ENDGAME_PURSE, money, null, holdsOf(decision, false, null)) };
     };
     const purchasesSent = (connection: MemoryConnection) =>
       (desiredStates(connection).at(-1)?.intents ?? []).filter((each) => PURCHASE_ACTIONS.includes(each.action));
@@ -2576,11 +2576,11 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       expect(decision.reason).toBe("count reached");
       // Every program owned, home at 8 GB: the brain's purse.
       const purse: Purse = { spent: 0, programs: 1 + PORT_OPENER_PROGRAMS.length, cloudServersRamGb: [], homeRamGb: 8 };
-      const held = nextPurchase(purse, money, null, 0, holdsOf(decision, true, null), 4);
+      const held = nextPurchase(purse, money, null, holdsOf(decision, true, null));
       expect(held).toBeNull();
       expect(sentPurchases(connection)).toEqual([]);
       controller.setAugmentationsEnabled(false);
-      const free = nextPurchase(purse, money, null, 0, NO_HOLDS, 4) as Purchase;
+      const free = nextPurchase(purse, money, null, NO_HOLDS) as Purchase;
       expect(sentPurchases(connection)).toEqual([brainIntentOf(free, purse)]);
     });
 
@@ -2784,7 +2784,9 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
         homeRamGb: options.homeRam ?? HOME_RAM_LIMIT,
       };
       const cash = earned.endMoney ?? money + 10 * 60 * perSecond;
-      const models = nextPurchase(purse, cash, perSecond, 30 * MINUTE, NO_HOLDS, options.noodlesRam ?? 4);
+      // The brain measured `perSecond` over n00dles and the cloud servers alike, no purchase in the window (#294).
+      const hostsGb = (options.noodlesRam ?? 4) + purse.cloudServersRamGb.reduce((sum, each) => sum + each, 0);
+      const models = nextPurchase(purse, cash, { perSecond, perGbSecond: perSecond / hostsGb }, NO_HOLDS);
       expect(brains, label).toEqual(models === null ? [] : [brainIntentOf(models, purse)]);
       run.connection.dropFromGameSide();
     }

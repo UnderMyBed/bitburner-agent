@@ -1,7 +1,7 @@
 /**
- * The cycle model (the fast model, #13: slice 1, #260; slice 2, #263): BN1 stepped a minute at a time from the
- * BitNode's start to its destroy, install to install, with the brain's own choices made by core's own functions on the
- * model's state, so it can't drift from the brain:
+ * The cycle model (the fast model, #13: slice 1, #260; slice 2, #263; slice 3, #294): BN1 stepped a minute at a
+ * time from the BitNode's start to its destroy, install to install, with the brain's own choices made by core's own
+ * functions on the model's state, so it can't drift from the brain:
  * - A5's work (core's `factionWorkChoice`: the most hacking value per second of work, The Red Pill first, toward
  *   donations' favour, the count; `factionReputationPerSecond` at the modelled level, `faction_rep` and favour);
  * - the joins: the hacker factions by their servers (`HACKER_FACTION_JOINS`), Tian Di Hui, the city group (core's
@@ -15,7 +15,10 @@
  * share bonus is the game's formula on the share threads, by core's `shareRound` for today's brain (#242) and a
  * fitted share of the RAM for run #3's; A6's countdown, holds and lookahead follow the brain's, tested against it on
  * the same inputs (packages/brain/test/augmentations.test.ts and desired-state.test.ts); cycles past the curves' range
- * are flagged and bounded.
+ * are flagged and bounded. #294: the joins take the time the brain and the game take (./joins.ts); the brain buys one
+ * purchase a medium snapshot, cloud servers on its own income measure (./money.ts); the batches' use of their hosts,
+ * for the share, is core's batch maths on the state (./batches.ts); each tested against the brain's own functions
+ * (packages/brain/test/backdoors.test.ts and cloud-servers.test.ts).
  * Not wired into the brain's choices (owner decision 46: phase B replaces a choice only where it measurably beats it).
  */
 import {
@@ -64,17 +67,24 @@ import {
   type WorkConditions,
   type WorkingPerson,
 } from "@bitburner-agent/core";
+import { batchesPeakGbOf, batchesUseFromPeak } from "./batches.ts";
 import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS, ROOTED_WORLD_RAM_GB_BY_PORTS } from "./calibration.ts";
 import { type Clocks, Curves, homeRamAfter, measuredAt } from "./curves.ts";
+import { JoinPipeline } from "./joins.ts";
 import {
+  afterPurchase,
   cloudRamOf,
+  FIRST_INCOME_SAMPLE_MS,
   freshPurse,
   type Holds,
+  type IncomeRate,
+  IncomeWindow,
   NO_HOLDS,
+  nextPurchase,
   PROGRAM_PRICES,
+  PURCHASE_EVERY_MS,
   type Purse,
   portsOpen,
-  spendThroughCycle,
 } from "./money.ts";
 
 const MINUTE_MS = 60_000;
@@ -222,18 +232,36 @@ export interface ModelOptions {
    * variant.
    */
   share?: "state" | "index";
+  /**
+   * The joins' time after their terms are met (#294): "modelled", the brain's and the game's (./joins.ts); "instant",
+   * at the step the terms are met (slice 2's); or a number, the modelled time and that many ms more (the comparison's
+   * grid).
+   */
+  joinDelay?: "modelled" | "instant" | number;
+  /**
+   * How much later than the brain's rule a cycle's first cloud server may be bought, ms (#294, the comparison's grid):
+   * 0, the brain's own, from the first full window of its income measure.
+   */
+  cloudDelayMs?: number;
   /** Each step's figures, for a trace: `money` in hand, of `gross`, and the share bonus while working. */
   onStep?: (step: {
     atMs: number;
     onlineMs: number;
     hacking: number;
+    /** The money in hand at the step's medium snapshot, before its purchase (A6's, the joins'). */
     money: number;
     gross: number;
-    /** The gross income a second over the brain's 10-minute window, null till it's full. */
+    /** The gross income a second over the brain's 10-minute window, null till it's full (A6's). */
     income: number | null;
+    /** The hack loop's income as the brain's cloud purchases measure it (`IncomeWindow`), null till a full window. */
+    cloudIncome: IncomeRate | null;
     shareBonus: number;
+    /** #242's share's RAM, GB, and the batches' use of their hosts it's worked out with (`batchesPeakGbOf`). */
+    shareRamGb: number;
+    batchesUse: number;
     /** The rooted world servers' RAM, GB: the hack loop's hosts beside the cloud servers. */
     worldRamGb: number;
+    /** The purse at the step's medium snapshot, before its purchase. */
     purse: Readonly<Purse>;
     clocks: Clocks;
   }) => void;
@@ -283,6 +311,13 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   const events: ModelEvent[] = [];
   const byCash = (options.money ?? "cash") === "cash";
   const byState = (options.share ?? "state") === "state";
+  if (stepMs % PURCHASE_EVERY_MS !== 0)
+    throw new RangeError(`the step must be a whole number of ${PURCHASE_EVERY_MS} ms`);
+  const joinDelay = options.joinDelay ?? "modelled";
+  const laterMs = typeof joinDelay === "number" ? joinDelay : 0;
+  const cloudDelayMs = options.cloudDelayMs ?? 0;
+  // The batches' peak RAM by the level and the ports, within a cycle (its multipliers fixed): core's batch maths.
+  let peaks = new Map<string, number>();
   let purse = freshPurse(startHomeRamGb(sourceFile1Level));
   let destroyedAtMs: number | null = null;
   // The cycle's state.
@@ -296,15 +331,30 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   let holds: Holds = NO_HOLDS;
   // The game's count of income since the install, sampled each step: nothing at the install.
   let incomeSamples: { onlineMs: number; gross: number }[] = [{ onlineMs: 0, gross: 0 }];
+  // The brain's measure of the hack loop's income for cloud servers (#294), and when it first had a full window.
+  let cloudIncome = new IncomeWindow();
+  let firstRateAtMs: number | null = null;
+  // The joins under way (#294): each faction, and when the brain's slow snapshot shows it joined.
+  let pendingJoins = new Map<string, number>();
+  let joinPipeline = new JoinPipeline();
   let stats = freshStats();
 
   for (let now = 0; now <= horizonMs; now += stepMs) {
     const onlineMs = now - cycleStartMs;
     const multipliers = multipliersOf(installed, sourceFile1Level);
-    if (onlineMs > 0) {
-      clocks = curves.advanceClocks(clocks, stepMs, multipliers, purse.homeRamGb, cloudRamOf(purse) === 0);
-    }
     const measured = options.measured?.[cycles.length];
+    const grossAt = (atMs: number) =>
+      measured === undefined
+        ? curves.moneyAt(clocks.money, multipliers)
+        : measuredAt(measured.points, atMs / MINUTE_MS).money;
+    // The medium snapshots since the last step, every 10 s (#294): the clocks on, the brain's income measure, and one
+    // purchase each. The step's own is below, after A6's decision, whose holds it sees (the brain's one update).
+    if (onlineMs > 0) {
+      for (let tickMs = onlineMs - stepMs + PURCHASE_EVERY_MS; tickMs <= onlineMs; tickMs += PURCHASE_EVERY_MS) {
+        clocks = curves.advanceClocks(clocks, PURCHASE_EVERY_MS, multipliers, purse.homeRamGb, cloudRamOf(purse) === 0);
+        if (tickMs < onlineMs) purchaseAt(tickMs, grossAt(tickMs) - purse.spent);
+      }
+    }
     const reading = measured === undefined ? null : measuredAt(measured.points, onlineMs / MINUTE_MS);
     const hacking = reading?.hacking ?? curves.hackingLevelAt(clocks.exp, multipliers);
     const gross = reading?.money ?? curves.moneyAt(clocks.money, multipliers);
@@ -325,37 +375,71 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       onlineMs - oldest.onlineMs >= INCOME_WINDOW_MS
         ? (Math.max(0, gross - oldest.gross) / (onlineMs - oldest.onlineMs)) * 1000
         : null;
-    // What the brain spends through the cycle, the hack loop's hosts the world servers its ports root and the cloud
-    // servers. The money in hand is what's left (#263); with `money: "gross"`, A6 and the joins see the gross instead.
-    const ports = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
-    purse = spendThroughCycle(purse, gross, income, onlineMs, holds, ROOTED_WORLD_RAM_GB_BY_PORTS[ports] as number);
-    // The ports after the step's purchases: the hosts the share sees.
-    const portsNow = Math.min(portsOpen(purse), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
+    // The money in hand: the gross less what the brain has spent through the cycle (#263), at the step's medium
+    // snapshot, before its purchase; with `money: "gross"`, A6 and the joins see the gross instead.
     const cash = gross - purse.spent;
     const money = byCash ? cash : gross;
-    const worldRamGb = ROOTED_WORLD_RAM_GB_BY_PORTS[portsNow] as number;
-    const shareBonus = byState
-      ? shareBonusOfState(purse, curves.calibration, policy.homeShares ?? true, worldRamGb, cycles.length)
-      : shareBonusOf(curves.calibration, cycles.length);
-    options.onStep?.({ atMs: now, onlineMs, hacking, money, gross, income, shareBonus, worldRamGb, purse, clocks });
+    const cloudRate = onlineMs > 0 ? measureAt(onlineMs, cash) : null;
+    const worldRamGb = worldRamOf(purse);
+    const batchesUse = batchesUseAt(hacking, multipliers, purse);
+    const shareRamGb = shareRamGbOfState(purse, batchesUse, worldRamGb);
+    const shareBonus = !byState
+      ? shareBonusOf(curves.calibration, cycles.length)
+      : (policy.homeShares ?? true)
+        ? shareBonusOfPower(1 + shareRamGb / SHARE_RAM_GB)
+        : shareBonusOfState(purse, curves.calibration, false);
+    options.onStep?.({
+      atMs: now,
+      onlineMs,
+      hacking,
+      money,
+      gross,
+      income,
+      cloudIncome: cloudRate,
+      shareBonus,
+      shareRamGb,
+      batchesUse,
+      worldRamGb,
+      purse,
+      clocks,
+    });
     if (Object.hasOwn(installed, THE_RED_PILL) && hacking >= WORLD_DAEMON_HACKING) {
       destroyedAtMs = now;
       events.push({ atMs: now, kind: "destroyed" });
       break;
     }
 
-    // The joins.
+    // The joins: each from its terms met, as long as the brain and the game take to it (#294, ./joins.ts), one join a
+    // slow snapshot. The terms were met within the last step, half a step back on average; joined at the step nearest
+    // the slow snapshot that shows it, so within half a step of it, either way.
+    const termsAtMs = Math.max(cycleStartMs, now - stepMs / 2);
     const join = (name: string) => {
       if (joined.some((each) => each.name === name)) return;
       joined = [...joined, { name, reputation: 0, favor: favor.get(name) ?? 0 }];
       events.push({ atMs: now, kind: "joined", faction: name });
     };
+    const due = (name: string) => !pendingJoins.has(name) && !joined.some((each) => each.name === name);
+    const termsMet = (name: string, shownAtMs: number) => {
+      if (due(name)) pendingJoins.set(name, joinDelay === "instant" ? now : shownAtMs + laterMs);
+    };
+    const joinDue = () => {
+      for (const [name, atMs] of pendingJoins) {
+        if (atMs > now + stepMs / 2) continue;
+        pendingJoins.delete(name);
+        join(name);
+      }
+    };
     for (const { faction, hacking: level, ports } of HACKER_FACTION_JOINS) {
       // Its server's port openers bought (#263), the TOR router first.
-      if (hacking >= level && portsOpen(purse) >= ports) join(faction);
+      if (hacking >= level && portsOpen(purse) >= ports && due(faction)) {
+        termsMet(faction, joinPipeline.hackerFaction(termsAtMs, level, hacking, multipliers.hacking_speed));
+      }
     }
     // Tian Di Hui: hacking 50 and $1m held in one of its cities, a ticket away (`Faction/FactionInfo.tsx:680-692`).
-    if (hacking >= TIAN_DI_HUI_HACKING && money >= TIAN_DI_HUI_MONEY + TRAVEL_COST) join(TIAN_DI_HUI);
+    if (hacking >= TIAN_DI_HUI_HACKING && money >= TIAN_DI_HUI_MONEY + TRAVEL_COST && due(TIAN_DI_HUI)) {
+      termsMet(TIAN_DI_HUI, joinPipeline.tianDiHui(termsAtMs));
+    }
+    joinDue();
     const state = (): FactionState => ({ joined, invitations: [], queuedAugmentations: [] });
     const count = () => daedalusCountOf({ currentNode, ownedSF, installed, joined, invitations: [] });
     const group = chooseCityGroup(
@@ -374,12 +458,18 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     );
     if (group !== null) {
       cityGroup = group.group;
-      if (money >= group.money) for (const faction of group.factions) join(faction);
+      const newFactions = group.factions.filter(due);
+      if (money >= group.money && newFactions.length > 0) {
+        const shownAtMs = joinPipeline.cityGroup(termsAtMs, newFactions.length);
+        for (const [index, faction] of newFactions.entries()) termsMet(faction, shownAtMs[index] as number);
+      }
     }
     const daedalus = daedalusRequirements(currentNode, ownedSF);
-    if (count().installed >= daedalus.augmentations && hacking >= daedalus.hacking && money >= daedalus.money) {
-      join(DAEDALUS);
+    const daedalusTerms = hacking >= daedalus.hacking && money >= daedalus.money;
+    if (count().installed >= daedalus.augmentations && daedalusTerms && due(DAEDALUS)) {
+      termsMet(DAEDALUS, joinPipeline.daedalus(termsAtMs));
     }
+    joinDue();
 
     // A5: the work.
     const person: WorkingPerson = {
@@ -476,12 +566,63 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     // #243's hold's money from everything, and the lookahead's from cloud servers.
     holds = holdsOf(decision, countdown !== null, countHeld);
     if (clockStep.install && reason !== null) install(now, reason, decision, hacking, money, cash, gross, multipliers);
+    // The step's own purchase, under the holds A6 has just set; none at an install (the brain's commit).
+    else if (onlineMs > 0) purchaseAt(onlineMs, cash, cloudRate);
   }
   // The cycles out of the curves' range, the one under way at the horizon or the destroy too.
   const outOfRange = [...cycles.map((each) => each.extrapolatedMinutes), stats.extrapolatedMinutes].flatMap(
     (minutes, index) => (minutes > EXTRAPOLATION_BOUND_MIN ? [index + 1] : []),
   );
   return { policy: policy.name, cycles, events, destroyedAtMs, outOfRange };
+
+  /** The rooted world servers' RAM, GB, by the ports `held`'s programs open. */
+  function worldRamOf(held: Purse): number {
+    return ROOTED_WORLD_RAM_GB_BY_PORTS[Math.min(portsOpen(held), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1)] as number;
+  }
+
+  /**
+   * A medium snapshot `tickMs` into the cycle in the brain's income measure (the first a medium period after the Agent
+   * starts again, `FIRST_INCOME_SAMPLE_MS`), with `cash` in hand and the hack loop's hosts now; the rate after it.
+   */
+  function measureAt(tickMs: number, cash: number): IncomeRate | null {
+    if (tickMs >= FIRST_INCOME_SAMPLE_MS) {
+      cloudIncome.add({ atMs: tickMs, money: cash, hostsRam: worldRamOf(purse) + cloudRamOf(purse) });
+    }
+    const rate = cloudIncome.rate();
+    if (rate !== null) firstRateAtMs ??= tickMs;
+    return rate;
+  }
+
+  /**
+   * The brain's purchase at a medium snapshot `tickMs` into the cycle, with `cash` in hand (#294): one, under A6's
+   * holds, a cloud server only from the first full window of its income measure (`cloudDelayMs` later in the
+   * comparison's variant).
+   */
+  function purchaseAt(tickMs: number, cash: number, rate = measureAt(tickMs, cash)): void {
+    const cloud = firstRateAtMs !== null && tickMs >= firstRateAtMs + cloudDelayMs;
+    purse = afterPurchase(purse, nextPurchase(purse, cash, rate, holds, cloud));
+  }
+
+  /**
+   * The batches' use of their hosts at the step (#294's item 5, ./batches.ts): core's batch maths at the level, the
+   * cycle's multipliers and the ports open, over the hosts' RAM, times `Calibration.batchesUseFactor`, at most all.
+   */
+  function batchesUseAt(hacking: number, multipliers: Multipliers, held: Purse): number {
+    const ports = Math.min(portsOpen(held), ROOTED_WORLD_RAM_GB_BY_PORTS.length - 1);
+    const key = `${hacking}|${ports}`;
+    let peakGb = peaks.get(key);
+    if (peakGb === undefined) {
+      const { hacking_chance, hacking_speed, hacking_money, hacking_grow } = multipliers;
+      peakGb = batchesPeakGbOf({
+        hacking,
+        mults: { hacking_chance, hacking_speed, hacking_money, hacking_grow },
+        ports,
+      });
+      peaks.set(key, peakGb);
+    }
+    const hostsGb = worldRamOf(held) + cloudRamOf(held);
+    return batchesUseFromPeak(peakGb, hostsGb, curves.calibration.batchesUseFactor);
+  }
 
   function work(choice: FactionWorkChoice): void {
     joined = joined.map((each) =>
@@ -556,6 +697,12 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     // Programs and cloud servers are lost at an install; home's RAM is kept (`Prestige.ts`).
     purse = freshPurse(homeRamGb);
     incomeSamples = [{ onlineMs: 0, gross: 0 }];
+    // A new Agent after the reset: the brain measures the cloud servers' income afresh (#194); nothing is joined.
+    cloudIncome = new IncomeWindow();
+    firstRateAtMs = null;
+    pendingJoins = new Map();
+    joinPipeline = new JoinPipeline();
+    peaks = new Map();
     stats = freshStats();
   }
 }
@@ -670,16 +817,15 @@ export const SHARE_HOME_KEPT_GB = 32;
 export const HOME_USED_BY_THE_AGENT_GB = 8;
 
 /**
- * The RAM in share threads while working, GB (#263), the cycle's (`cycleIndex`, 0-based) by #242's rule (today's
- * brain): core's `shareRound` itself, on two hosts. Home, which the batches never use, with the Agent's
- * `HOME_USED_BY_THE_AGENT_GB` in use and `SHARE_HOME_KEPT_GB` kept; and the batches' hosts as one, the rooted world
- * servers (`worldRamGb`) and the cloud servers, at `Calibration.batchesUseOfHosts` in use, which share only up to
- * core's `SHARE_MOST_USE`. The batches' reserve for their next peak (`shareReserveGb`) is left out: the share is the
- * most the RAM allows.
+ * The RAM in share threads while working, GB (#263), by #242's rule (today's brain): core's `shareRound` itself, on two
+ * hosts. Home, which the batches never use, with the Agent's `HOME_USED_BY_THE_AGENT_GB` in use and
+ * `SHARE_HOME_KEPT_GB` kept; and the batches' hosts as one, the rooted world servers (`worldRamGb`) and the cloud
+ * servers, at `batchesUse` in use (#294: from the state, `batchesUseOf`; the cycle's index until then), which share
+ * only up to core's `SHARE_MOST_USE`. The batches' reserve for their next peak (`shareReserveGb`) is left out: the
+ * share is the most the RAM allows.
  */
-export function shareRamGbOfState(purse: Purse, calibration: Calibration, worldRamGb = 0, cycleIndex = 0): number {
-  const uses = calibration.batchesUseOfHosts;
-  const use = uses[Math.min(cycleIndex, uses.length - 1)] ?? 0;
+export function shareRamGbOfState(purse: Purse, batchesUse: number, worldRamGb = 0): number {
+  const use = batchesUse;
   const batchesGb = worldRamGb + cloudRamOf(purse);
   const { placed } = shareRound(
     [
@@ -701,7 +847,8 @@ export function shareRamGbOfState(purse: Purse, calibration: Calibration, worldR
  * The share bonus while working, from the cycle's RAM (#263; core's `shareBonusOfPower`, the game's
  * `calculateShareBonus`), in share threads of `SHARE_RAM_GB` each. The RAM, not the install index (#260's), so a
  * policy that moves the installs gets its own.
- * - `homeShares` (#242, today's brain; the default, as `CyclePolicy.homeShares`'): `shareRamGbOfState`'s threads.
+ * - `homeShares` (#242, today's brain; the default, as `CyclePolicy.homeShares`'): `shareRamGbOfState`'s threads, the
+ *   batches using `batchesUse` of their hosts.
  * - Else (run #3's brain, before #242): one cap over every host, which the batches' use filled for long stretches, and
  *   the share gapped between rounds (#242's table: ×1.0 in up to 69% of an hour's fast samples). Not the rule's to say:
  *   `Calibration.shareRamShare` of home's and the cloud servers' RAM, fitted on run #3.
@@ -711,13 +858,13 @@ export function shareBonusOfState(
   calibration: Calibration,
   homeShares = true,
   worldRamGb = 0,
-  cycleIndex = 0,
+  batchesUse = 1,
 ): number {
   if (!homeShares) {
     const ram = purse.homeRamGb + cloudRamOf(purse);
     return shareBonusOfPower(1 + (calibration.shareRamShare * ram) / SHARE_RAM_GB);
   }
-  return shareBonusOfPower(1 + shareRamGbOfState(purse, calibration, worldRamGb, cycleIndex) / SHARE_RAM_GB);
+  return shareBonusOfPower(1 + shareRamGbOfState(purse, batchesUse, worldRamGb) / SHARE_RAM_GB);
 }
 
 function isCountRule(reason: ModelInstallReason): boolean {

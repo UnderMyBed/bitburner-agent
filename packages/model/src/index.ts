@@ -1,3 +1,4 @@
+export { BATCH_TARGETS, type BatchesState, batchesPeakGbOf, batchesUseFromPeak, batchesUseOf } from "./batches.ts";
 export {
   CALIBRATION,
   type Calibration,
@@ -10,13 +11,19 @@ export {
 } from "./calibration.ts";
 export {
   COMPARISON_GRID,
+  COMPARISON_MARGIN_MS,
+  COMPARISON_STARTS,
   type ComparisonSetting,
+  comparisonByStart,
   FAVOUR_FIRST_POLICY,
+  GRID_LATER_MS,
   MILESTONES,
   type Milestone,
+  type MilestoneCycle,
   milestonesOf,
   type PairedComparison,
   pairedComparison,
+  startInRange,
   verdictOf,
 } from "./compare.ts";
 export {
@@ -65,20 +72,32 @@ export {
   WORLD_DAEMON_HACKING,
 } from "./cycles.ts";
 export {
+  backdoorMs,
+  GATE_MEDIUM_SNAPSHOTS,
+  INVITATION_CHECK_MS,
+  JoinPipeline,
+  ROUNDS_BETWEEN_TRIES,
+} from "./joins.ts";
+export {
+  afterPurchase,
   CLOUD_SERVER_INCOME_WINDOW_MS,
   CLOUD_SERVER_LIMIT,
   CLOUD_SERVER_PAYBACK_LIMIT_MS,
   CLOUD_SERVER_PRICE_PER_GB,
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   cloudRamOf,
+  FIRST_INCOME_SAMPLE_MS,
   freshPurse,
   type Holds,
+  type IncomeRate,
+  type IncomeSample,
+  IncomeWindow,
   MIN_CLOUD_SERVER_RAM,
   NO_HOLDS,
   nextPurchase,
   PROGRAM_PRICES,
+  PURCHASE_EVERY_MS,
   type Purchase,
   type Purse,
   portsOpen,
-  spendThroughCycle,
 } from "./money.ts";

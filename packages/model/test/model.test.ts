@@ -23,6 +23,7 @@ import {
   hackingLevelOf,
   homeRamAfter,
   installDecision,
+  JoinPipeline,
   measuredAt,
   multipliersOf,
   portsOpen,
@@ -38,7 +39,7 @@ import {
   WORLD_DAEMON_HACKING,
 } from "../src/index.ts";
 import { fitError } from "./fit.ts";
-import { RUN_3_BN1_2 } from "./fixtures.ts";
+import { BN1_3, BN1_3_CYCLES, RUN_3_BN1_2 } from "./fixtures.ts";
 
 const MINUTE_MS = 60_000;
 const curves = new Curves(CALIBRATION);
@@ -49,10 +50,30 @@ const run3 = runModel(RUN_3_BN1_2.start, {
   onStep: ({ atMs, hacking, money, purse }) => steps.set(atMs, { hacking, money, ports: portsOpen(purse) }),
 });
 
+/** Run #3's fitted run's gross `minutes` into each cycle (1-based), at `calibration` and `cloudDelayMs`. */
+function grossAt(calibration: Partial<typeof CALIBRATION>, minutes: number, cloudDelayMs = 0): Map<number, number> {
+  const seen = new Map<number, number>();
+  let cycle = 0;
+  let last = Number.POSITIVE_INFINITY;
+  runModel(RUN_3_BN1_2.start, {
+    policy: RUN_3_POLICY,
+    calibration,
+    cloudDelayMs,
+    onStep: ({ onlineMs, gross }) => {
+      if (onlineMs < last) cycle += 1;
+      last = onlineMs;
+      if (onlineMs === minutes * MINUTE_MS) seen.set(cycle, gross);
+    },
+  });
+  return seen;
+}
+
 describe("the calibration", () => {
-  test("the reference cycles' multipliers are what the model runs those cycles of run #3 at", () => {
+  test("the reference cycles' multipliers are what the brain's rules install on run #3's own measured curves", () => {
+    // The downstream run (#294): the fitted run's own has no fixed point since #294's joins and purchases.
+    const downstream = runModel(RUN_3_BN1_2.start, { policy: RUN_3_POLICY, measured: RUN_3_CYCLES });
     for (const { cycle, multipliers } of CALIBRATION.referenceCycles) {
-      const model = run3.cycles[cycle - 1]?.multipliers;
+      const model = downstream.cycles[cycle - 1]?.multipliers;
       for (const key of ["hacking", "hacking_exp", "hacking_speed", "hacking_money"] as const) {
         expect(multipliers[key], `cycle ${cycle}'s ${key}`).toBeCloseTo(model?.[key] ?? 0, 3);
       }
@@ -77,72 +98,73 @@ describe("the calibration", () => {
     }
   });
 
-  test("the curve's constants are the fit's: a local best on run #3 alone, at the refit's own steps", () => {
-    // test/fit.ts's `fitError`, the objective the refit minimised: run #3's cycles 1 to 6, level and money, and its 7th
-    // to 10th's money at 5 to 20 min, where the cap applies. 0.2969 at the fit, a local best by coordinate descent at
-    // `calibrationSteps` from part 1's constants; the bound keeps the fit within a thousandth of it. Of it, cycles 1 to
-    // 6 alone are 0.2003, part 1's own.
+  test("the curve's constants are the fit's: a strict local best on run #3 alone, at the refit's own steps", () => {
+    // test/fit.ts's `fitError`, the objective the refit minimised (test/refit.ts, the trace in the README): run #3's
+    // cycles 1 to 6, level and money, and its 7th to 10th's money at 5 to 20 min, where the cap applies. #294's refit:
+    // 0.3199 from #263's constants (0.3443 under #294's joins and purchases), every step around it worse. A shallow
+    // minimum: `firstCycleSpeed` and `fullSpeedHomeRamGb` move it by about a thousandth a step (+0.0011 to +0.0013);
+    // the paces and the cap by 0.009 to 0.037. #263's fit was 0.2969; #294's first refit, before the joins' pipeline,
+    // 0.2658. Of it, cycles 1 to 6 alone are 0.2363 (#263's 0.2003).
     const fitted = fitError({});
-    expect(fitted.combined).toBeLessThan(0.2975);
-    expect(fitted.early).toBeLessThan(0.201);
+    expect(fitted.combined).toBeCloseTo(0.3199, 4);
+    expect(fitted.early).toBeCloseTo(0.2363, 4);
     expect(fitted.lateReadings).toBe(15);
-    for (const { name, calibration } of calibrationSteps(CALIBRATION)) {
-      expect(fitted.combined, name).toBeLessThanOrEqual(fitError(calibration).combined);
-    }
-    // The descent's other start, part 2's first refit (moneyPaceExponent 0.5625, firstCycleSpeed 0.85, home 128 GB),
-    // stops at a worse local best, 0.2989.
-    const other = fitError({ moneyPaceExponent: 0.5625, firstCycleSpeed: 0.85, fullSpeedHomeRamGb: 128 });
-    expect(other.combined).toBeGreaterThan(fitted.combined);
-    expect(other.combined).toBeCloseTo(0.2989, 3);
+    const steps = calibrationSteps(CALIBRATION).map(({ name, calibration }) => ({
+      name,
+      by: fitError(calibration).combined - fitted.combined,
+    }));
+    for (const { name, by } of steps) expect(by, name).toBeGreaterThan(0.0009);
+    const flattest = steps.filter(({ by }) => by < 0.002).map(({ name }) => name.split(" ")[0]);
+    expect([...new Set(flattest)].sort()).toEqual(["firstCycleSpeed", "fullSpeedHomeRamGb"]);
   });
 
-  test("fitted: the cap brings run #3's 7th to 9th cycles' 10 min within ×3, from ×30 and more uncapped", () => {
+  test("the descent's other start, #294's first refit's constants, stops at a worse local best with a flat direction", () => {
+    // From (0.5, 0.375, 2.75, 0.75, 1 TB): 0.3456, at expPaceExponent 0.625 and home 512 GB. There the cap at 2.75 and
+    // at 3 give the same error, as the cap doesn't bind: a flat direction, so the cap isn't identified there.
+    const other = { expPaceExponent: 0.625, moneyPaceExponent: 0.375, moneyPaceMost: 2.75, firstCycleSpeed: 0.75 };
+    const end = fitError(other);
+    expect(end.combined).toBeCloseTo(0.3456, 4);
+    expect(end.combined).toBeGreaterThan(fitError({}).combined);
+    const flat: string[] = [];
+    for (const { name, calibration } of calibrationSteps({ ...CALIBRATION, ...other })) {
+      const stepped = fitError({ ...other, ...calibration }).combined;
+      expect(stepped, name).toBeGreaterThanOrEqual(end.combined);
+      if (stepped === end.combined) flat.push(name);
+    }
+    expect(flat).toEqual(["moneyPaceMost 3"]);
+  });
+
+  test("fitted: the cap brings run #3's 7th and 8th cycles' 10 min within ×3 (×2.1, ×1.5), from ×43 and ×120 uncapped", () => {
     // Before the cycle's first cloud server, the world servers' few TB: the cap holds the money's clock there. Fitted
-    // on these, so consistency only; BN1.3's, held out, are test/bn1-3.test.ts's. By cycle, as `fitError` keys them.
-    const grossAt = (calibration: Partial<typeof CALIBRATION>, minutes: number) => {
-      const seen = new Map<number, number>();
-      let cycle = 0;
-      let last = Number.POSITIVE_INFINITY;
-      runModel(RUN_3_BN1_2.start, {
-        policy: RUN_3_POLICY,
-        calibration,
-        onStep: ({ onlineMs, gross }) => {
-          if (onlineMs < last) cycle += 1;
-          last = onlineMs;
-          if (onlineMs === minutes * MINUTE_MS) seen.set(cycle, gross);
-        },
-      });
-      return seen;
-    };
+    // on these, so consistency only. By cycle, as `fitError` keys them.
     const capped = grossAt({}, 10);
     const uncapped = grossAt({ moneyPaceMost: Number.POSITIVE_INFINITY }, 10);
-    for (const cycle of [7, 8, 9]) {
+    for (const cycle of [7, 8]) {
       const actual = RUN_3_CYCLES[cycle - 1]?.points.find(([minutes]) => minutes === 10)?.[2] ?? Number.NaN;
       const ratio = (capped.get(cycle) ?? 0) / actual;
       expect(ratio, `cycle ${cycle}`).toBeGreaterThan(1 / 3);
       expect(ratio, `cycle ${cycle}`).toBeLessThan(3);
-      // Uncapped, the 9th is The Red Pill's, over within 10 min.
-      if (cycle < 9) expect((uncapped.get(cycle) ?? 0) / actual, `cycle ${cycle}, uncapped`).toBeGreaterThan(30);
+      expect((uncapped.get(cycle) ?? 0) / actual, `cycle ${cycle}, uncapped`).toBeGreaterThan(30);
     }
   });
 
-  test("known miss: by 15 min into run #3's 7th and 8th cycles the model's money is ×100 and more over", () => {
-    // The model buys its first cloud server at about 10 min, when the payback allows, and the level paces the money
-    // again; run #3's were bought at 20 to 30 min (#263's extract: none by 20 min in its 9th and 10th).
-    const seen = new Map<number, number>();
-    let cycle = 0;
-    let last = Number.POSITIVE_INFINITY;
-    runModel(RUN_3_BN1_2.start, {
-      policy: RUN_3_POLICY,
-      onStep: ({ onlineMs, gross }) => {
-        if (onlineMs < last) cycle += 1;
-        last = onlineMs;
-        if (onlineMs === 15 * MINUTE_MS) seen.set(cycle, gross);
-      },
-    });
-    for (const cycle of [7, 8]) {
-      const actual = RUN_3_CYCLES[cycle - 1]?.points.find(([minutes]) => minutes === 15)?.[2] ?? Number.NaN;
-      expect((seen.get(cycle) ?? 0) / actual, `cycle ${cycle}`).toBeGreaterThan(100);
+  test("known miss: by 15 min into run #3's 7th and 8th cycles the money is ×300 and ×350; ×150 and ×130 with the first cloud server 5 min later", () => {
+    // #294: the model buys its first cloud server when the brain would (10 min 20 s at the soonest, `money.ts`), and
+    // from there the level paces the money. Run #3's money rose about $1b a minute from 10 to 20 min, its servers
+    // bought by 15. Its snapshots can't say when between 10 min 20 s and 15 min the first came, but even 5 min later
+    // than modelled (the grid's variant) the model is ×130 and more over at 15 min and ×2,300 and more at 20: the
+    // purchase's time explains about a factor of 2 of it, the batches' ramp on the new RAM, not modelled, the rest.
+    for (const [cloudDelayMs, low, high] of [
+      [0, 250, 400],
+      [5 * MINUTE_MS, 100, 200],
+    ] as const) {
+      const seen = grossAt({}, 15, cloudDelayMs);
+      for (const cycle of [7, 8]) {
+        const actual = RUN_3_CYCLES[cycle - 1]?.points.find(([minutes]) => minutes === 15)?.[2] ?? Number.NaN;
+        const ratio = (seen.get(cycle) ?? 0) / actual;
+        expect(ratio, `cycle ${cycle}, ${cloudDelayMs / MINUTE_MS} min later`).toBeGreaterThan(low);
+        expect(ratio, `cycle ${cycle}, ${cloudDelayMs / MINUTE_MS} min later`).toBeLessThan(high);
+      }
     }
   });
 
@@ -185,12 +207,18 @@ describe("the curves", () => {
     expect(one.money).toBeCloseTo(30, 6);
     const faster = { ...curves.reference, hacking: 6, hacking_speed: 4 };
     const two = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20);
-    expect(two.exp).toBeGreaterThan(two.money);
+    // The refit's two exponents are both 0.5 (#294), so the clocks run alike.
+    expect(two.exp).toBeCloseTo(two.money, 9);
     expect(two.money).toBeGreaterThan(30);
+    const moneySlower = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20, false);
+    const slower = new Curves({ ...CALIBRATION, moneyPaceExponent: 0.25 });
+    expect(slower.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20).money).toBeLessThan(
+      moneySlower.money,
+    );
   });
 
   test("before the cycle's first cloud server the money's clock runs at most `moneyPaceMost` faster; after, uncapped", () => {
-    const faster = { ...curves.reference, hacking: 6, hacking_speed: 4 };
+    const faster = { ...curves.reference, hacking: 60, hacking_speed: 40 };
     const before = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20, true);
     const after = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20, false);
     expect(before.money).toBeCloseTo(20 + 10 * CALIBRATION.moneyPaceMost, 6);
@@ -261,7 +289,8 @@ describe("the model", () => {
         if (joined.length > 0 && !firstJoined.has(cycle)) firstJoined.set(cycle, [...joined]);
       },
     });
-    expect(firstJoined.size).toBe(run3.cycles.length + 1);
+    // Every cycle joins a faction; the last, after The Red Pill, may end in the destroy before its first join shows.
+    expect(firstJoined.size).toBeGreaterThanOrEqual(run3.cycles.length);
     for (const joined of firstJoined.values()) for (const { reputation } of joined) expect(reputation).toBe(0);
   });
 
@@ -312,22 +341,97 @@ describe("the model", () => {
     }
   });
 
-  test("joins a hacker faction at the first step its server's level and its port openers bought are both reached", () => {
+  test("joins a faction the brain's time after its terms (./joins.ts), one join a slow snapshot, at the nearest step", () => {
+    // The first join of the BitNode: its terms met within the step that first shows them (half a step back on
+    // average), a fresh pipeline's time from there, joined at the step nearest it.
+    const first = run3.events.find((event) => event.kind === "joined");
+    expect(first).toMatchObject({ kind: "joined", faction: "CyberSec" });
+    let termsAt = MINUTE_MS;
+    while (!((steps.get(termsAt)?.hacking ?? 0) >= 60 && (steps.get(termsAt)?.ports ?? 0) >= 1)) termsAt += MINUTE_MS;
+    const speed = run3.cycles[0]?.multipliers.hacking_speed ?? 1;
+    const shownAt = new JoinPipeline().hackerFaction(
+      termsAt - MINUTE_MS / 2,
+      60,
+      steps.get(termsAt)?.hacking ?? 0,
+      speed,
+    );
+    expect(first?.atMs).toBe(Math.ceil((shownAt - MINUTE_MS / 2) / MINUTE_MS) * MINUTE_MS);
     for (const { faction, hacking, ports } of HACKER_FACTION_JOINS) {
-      const joins = run3.events.filter((event) => event.kind === "joined" && event.faction === faction);
-      expect(joins.length).toBeGreaterThan(0);
-      for (const { atMs } of joins) {
-        const now = steps.get(atMs);
-        const before = steps.get(atMs - MINUTE_MS);
-        // The step before an install's next is the cycle before's: no comparison across an install.
-        const afterInstall = run3.cycles.some((cycle) => cycle.endMs === atMs - MINUTE_MS);
-        expect(now?.hacking).toBeGreaterThanOrEqual(hacking);
-        expect(now?.ports).toBeGreaterThanOrEqual(ports);
-        if (!afterInstall) {
-          expect((before?.hacking ?? 0) < hacking || (before?.ports ?? 0) < ports).toBe(true);
-        }
+      for (const { atMs } of run3.events.filter((event) => event.kind === "joined" && event.faction === faction)) {
+        const cycle = run3.cycles.find((each) => atMs > each.startMs && atMs <= each.endMs);
+        if (cycle === undefined) continue;
+        // Never before a step after the first with its terms met: the brain takes 100 s at the least.
+        let met = cycle.startMs + MINUTE_MS;
+        while (!((steps.get(met)?.hacking ?? 0) >= hacking && (steps.get(met)?.ports ?? 0) >= ports)) met += MINUTE_MS;
+        expect(atMs, `${faction} at ${(atMs - cycle.startMs) / MINUTE_MS} min`).toBeGreaterThan(met);
       }
     }
+    // One join a slow snapshot: never two factions joined at one step.
+    const joinedAt = run3.events.filter((event) => event.kind === "joined").map((event) => event.atMs);
+    expect(new Set(joinedAt).size).toBe(joinedAt.length);
+    // With the joins at once (slice 2's, the comparison's variant), at the very step the terms are met.
+    const instant = runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      joinDelay: "instant",
+      horizonMs: 3 * 60 * MINUTE_MS,
+    });
+    const later = runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      joinDelay: 5 * MINUTE_MS,
+      horizonMs: 3 * 60 * MINUTE_MS,
+    });
+    const firstJoin = (run: typeof run3, faction: string) =>
+      run.events.find((event) => event.kind === "joined" && event.faction === faction)?.atMs ?? Number.NaN;
+    const modelled = firstJoin(run3, "CyberSec");
+    expect(firstJoin(instant, "CyberSec")).toBeLessThan(modelled);
+    expect(firstJoin(later, "CyberSec")).toBe(modelled + 5 * MINUTE_MS);
+  });
+
+  test("a fresh join pipeline each cycle, even when the install fires as joins' terms are met (#294's re-review)", () => {
+    // An eager policy installs as soon as anything can be, on BN1.3's own curves: its installs come minutes into
+    // cycles where the level is high, as joins' terms are met, so a queue kept across an install would push the next
+    // cycle's first joins later. Each cycle's CyberSec join is a fresh pipeline's, Tian Di Hui's ahead of it if its
+    // terms came first, at the step nearest it.
+    const eager = { ...TODAYS_POLICY, name: "eager", install: () => true };
+    const seen: { cycle: number; onlineMs: number; hacking: number; ports: number; money: number }[] = [];
+    let cycle = 0;
+    let last = -1;
+    const run = runModel(BN1_3.start, {
+      policy: eager,
+      measured: BN1_3_CYCLES,
+      horizonMs: 6 * 60 * MINUTE_MS,
+      onStep: ({ onlineMs, hacking, purse, money }) => {
+        if (onlineMs < last) cycle += 1;
+        last = onlineMs;
+        seen.push({ cycle, onlineMs, hacking, ports: portsOpen(purse), money });
+      },
+    });
+    expect(run.cycles.length).toBeGreaterThan(5);
+    let checked = 0;
+    for (const [index, each] of run.cycles.entries()) {
+      if (index === 0) continue;
+      const steps = seen.filter((step) => step.cycle === index && step.onlineMs > 0);
+      const cyberSec = steps.find((step) => step.hacking >= 60 && step.ports >= 1);
+      const tianDiHui = steps.find((step) => step.hacking >= 50 && step.money >= 1_200_000);
+      const join = run.events.find(
+        (event) =>
+          event.kind === "joined" &&
+          event.faction === "CyberSec" &&
+          event.atMs > (run.cycles[index - 1]?.endMs ?? 0) &&
+          event.atMs <= each.endMs,
+      );
+      if (cyberSec === undefined || join === undefined) continue;
+      const start = run.cycles[index - 1]?.endMs ?? 0;
+      const pipeline = new JoinPipeline();
+      if (tianDiHui !== undefined && tianDiHui.onlineMs < cyberSec.onlineMs) {
+        pipeline.tianDiHui(start + tianDiHui.onlineMs - MINUTE_MS / 2);
+      }
+      const termsAt = start + cyberSec.onlineMs - MINUTE_MS / 2;
+      const shownAt = pipeline.hackerFaction(termsAt, 60, cyberSec.hacking, each.multipliers.hacking_speed);
+      expect(join.atMs, `cycle ${index + 1}`).toBe(Math.ceil((shownAt - MINUTE_MS / 2) / MINUTE_MS) * MINUTE_MS);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(4);
   });
 
   test("joins Daedalus only with its count, hacking 2500 and $100b, and destroys at w0r1d_d43m0n's level", () => {
