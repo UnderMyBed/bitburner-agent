@@ -15,7 +15,12 @@ import {
   type StaticSnapshotData,
   type WorkOutcome,
 } from "@bitburner-agent/core";
-import { AUGMENTATION_EVENT_KINDS, AugmentationTimeline, donationStatus } from "./augmentation-report.ts";
+import {
+  AUGMENTATION_EVENT_KINDS,
+  AugmentationTimeline,
+  BEFORE_FIRST_SLOW,
+  donationStatus,
+} from "./augmentation-report.ts";
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
@@ -436,6 +441,8 @@ interface FastPoint {
   atMs: number;
   /** The game's time it was taken (#241). */
   gameTimeMs: number;
+  /** The Agent that sent it (#286): a new one, after a reset say, holds a new intent list. */
+  agentSessionId: string;
   /** The tiers it says failed last round (#241: a medium snapshot retried is no page stall). */
   degradedTiers: unknown;
   pageHeapUsedBytes: unknown;
@@ -587,10 +594,13 @@ const isObject = (data: unknown): data is object => data !== null && typeof data
 
 function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
   return store.readTransaction(() => {
-    function* ofTier<Data>(tier: string): Generator<{ atMs: number; gameTimeMs: number; data: Data }> {
+    function* ofTier<Data>(
+      tier: string,
+    ): Generator<{ atMs: number; gameTimeMs: number; agentSessionId: string; data: Data }> {
       for (const snapshot of store.iterateSnapshotsInWindow({ ...window, tier })) {
         if (isObject(snapshot.data)) {
-          yield { atMs: snapshot.receivedAtMs, gameTimeMs: snapshot.gameTimeMs, data: snapshot.data as Data };
+          const { receivedAtMs: atMs, gameTimeMs, agentSessionId } = snapshot;
+          yield { atMs, gameTimeMs, agentSessionId, data: snapshot.data as Data };
         }
       }
     }
@@ -697,7 +707,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     }
     const fast: FastPoint[] = [];
     const batcherTargets = new BatcherTargets(resets);
-    for (const { atMs, gameTimeMs, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
+    for (const { atMs, gameTimeMs, agentSessionId, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
       batcherTargets.add({ atMs, gameTimeMs }, data.batcher);
       cycles.addFast(atMs, gameTimeMs, data.batcher);
@@ -708,6 +718,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       fast.push({
         atMs,
         gameTimeMs,
+        agentSessionId,
         degradedTiers: data.degradedTiers,
         pageHeapUsedBytes: data.pageHeapUsedBytes,
         homeRamUsed: data.game?.homeRamUsed,
@@ -1146,32 +1157,124 @@ interface IntentEpisode {
   id: string;
   outcome: IntentOutcome;
   firstSeenMs: number;
+  lastSeenMs: number;
+  /** When it was seen done: its done record, or the slow snapshot that showed the reset that followed it (#286). */
   doneAtMs: number | null;
   /** The problems it reported while not done, each once (#245: why it was tried again). */
   problemsBeforeDone: string[];
+  /** Done by the reset that followed it, with no done record (#286). */
+  resetFollowed: boolean;
+  /**
+   * An install or a destroy not done, first seen before the window's first slow snapshot: whether its reset came can't
+   * be told (`resetKnownBefore`), as section 4 doesn't judge an install sent then (#286 re-review).
+   */
+  notJudged: boolean;
+}
+
+/**
+ * How long after a reset intent's last record the reset may be seen and still count as its (#286): an install's own
+ * allowance in section 4 (`INSTALL_NOT_RESTARTED_AFTER_MS`, 5 minutes); a destroy's reload is under a minute
+ * (`RELOAD_GAP_BOUND_MS`). Later, something else reset the game.
+ */
+const RESET_FOLLOWED_WITHIN_MS = INSTALL_NOT_RESTARTED_AFTER_MS;
+
+/**
+ * When a reset intent's own reset was seen after it (#286), or null: an install's, another `lastAugReset` (as section
+ * 4's installs sent are seen done); a destroy's, another BitNode (as section 2's BitNodes line). After its first
+ * record, up to `RESET_FOLLOWED_WITHIN_MS` after its last, and before the same id's next episode (`nextMs`): a reset
+ * seen after that is the next one's. The next can't come before the reset's slow snapshot: the brain sends a reset
+ * intent only once the connected Agent's slow snapshot has shown the last reset (`#resetTimeAwaited`,
+ * `desired-state.ts:1103-1107`). An install a destroy followed counts too: a destroy resets the cycle as an install
+ * does (`PlayerObjectGeneralMethods.ts:145`, `:126`), as section 4 has it. Null for any other intent.
+ */
+function resetFollowing(
+  facts: RunFacts,
+  { id, firstSeenMs, lastSeenMs }: IntentEpisode,
+  nextMs: number = Number.POSITIVE_INFINITY,
+): number | null {
+  const untilMs = Math.min(lastSeenMs + RESET_FOLLOWED_WITHIN_MS, nextMs);
+  if (id.startsWith("installAugmentations(")) return facts.augmentations.resetSeenBetween(firstSeenMs, untilMs);
+  if (id.startsWith("destroyBitNode(")) return facts.cycles.bitNodeSeenBetween(firstSeenMs, untilMs);
+  return null;
+}
+
+/**
+ * Whether a slow snapshot by a reset intent's first record showed the game's last reset (#286 re-review): an install's
+ * `lastAugReset`, a destroy's BitNode. With none, a reset after it can't be told from the window's first. True for any
+ * other intent.
+ */
+function resetKnownBefore(facts: RunFacts, { id, firstSeenMs }: IntentEpisode): boolean {
+  if (id.startsWith("installAugmentations(")) return facts.augmentations.resetKnownBy(firstSeenMs);
+  if (id.startsWith("destroyBitNode(")) return facts.cycles.bitNodeKnownBy(firstSeenMs);
+  return true;
 }
 
 /**
  * Each intent episode in the window, in the order first seen, with its latest outcome. The same id starts a new episode
- * when it's seen not done after being done, or with fewer tries (given again, after a reset say).
+ * as the Agent starts a new intent (#286): when it's seen not done after being done, with fewer tries (given again),
+ * back after leaving the list (`ingame/src/agent/intent-runner.ts:7`: "one that leaves the list and comes back is
+ * new"), or from another Agent (a new one holds a new list, :3; a reset starts one). `installAugmentations()` has one
+ * id, so each install is its own episode.
+ * An install or a destroy not done that its reset followed is done (#286): the reset kills its worker before it
+ * reports, so an install's try is never counted (`intent-runner.ts:48-51`), and a destroy's worker never reports done
+ * (`ingame/src/page/destroy-page.ts:110`); what it last reported is a problem before done. One first seen before the
+ * window's first slow snapshot isn't judged (`notJudged`).
  */
 function intentEpisodes(facts: RunFacts): IntentEpisode[] {
   const episodes: IntentEpisode[] = [];
   const current = new Map<string, IntentEpisode>();
-  for (const { atMs, intents } of facts.fast) {
+  let previous: FastPoint | undefined;
+  for (const point of facts.fast) {
+    const { atMs, intents } = point;
+    const left = (id: string) =>
+      previous !== undefined &&
+      (previous.agentSessionId !== point.agentSessionId || !previous.intents.some((outcome) => outcome.id === id));
     for (const outcome of intents) {
       let episode = current.get(outcome.id);
-      if (episode === undefined || (episode.outcome.done && !outcome.done) || outcome.tries < episode.outcome.tries) {
-        episode = { id: outcome.id, outcome, firstSeenMs: atMs, doneAtMs: null, problemsBeforeDone: [] };
+      if (
+        episode === undefined ||
+        (episode.outcome.done && !outcome.done) ||
+        outcome.tries < episode.outcome.tries ||
+        left(outcome.id)
+      ) {
+        episode = {
+          id: outcome.id,
+          outcome,
+          firstSeenMs: atMs,
+          lastSeenMs: atMs,
+          doneAtMs: null,
+          problemsBeforeDone: [],
+          resetFollowed: false,
+          notJudged: false,
+        };
         episodes.push(episode);
         current.set(outcome.id, episode);
       }
       episode.outcome = outcome;
+      episode.lastSeenMs = atMs;
       if (outcome.done) episode.doneAtMs ??= atMs;
       else if (outcome.problem !== null && !episode.problemsBeforeDone.includes(outcome.problem)) {
         episode.problemsBeforeDone.push(outcome.problem);
       }
     }
+    previous = point;
+  }
+  // Backwards, each id's next episode's start in hand.
+  const nextStartMs = new Map<string, number>();
+  for (let index = episodes.length - 1; index >= 0; index--) {
+    const episode = episodes[index] as IntentEpisode;
+    const nextMs = nextStartMs.get(episode.id);
+    nextStartMs.set(episode.id, episode.firstSeenMs);
+    if (episode.outcome.done) continue;
+    if (!resetKnownBefore(facts, episode)) {
+      episode.notJudged = true;
+      continue;
+    }
+    const seenMs = resetFollowing(facts, episode, nextMs);
+    if (seenMs === null) continue;
+    episode.outcome = { ...episode.outcome, done: true, problem: null };
+    episode.doneAtMs = seenMs;
+    episode.resetFollowed = true;
   }
   return episodes;
 }
@@ -1196,17 +1299,27 @@ const triedAgainWhileAtIt = ({ outcome, problemsBeforeDone }: IntentEpisode) =>
   problemsBeforeDone.length > 0 &&
   problemsBeforeDone.every((problem) => STILL_AT_IT.test(problem));
 
+/** "2 tries (ui)". */
+function describeTries({ tries, backend }: IntentOutcome): string {
+  return `${tries} ${tries === 1 ? "try" : "tries"}${backend === null ? "" : ` (${backend})`}`;
+}
+
 function describeIntent(outcome: IntentOutcome): string {
-  const backend = outcome.backend === null ? "" : ` (${outcome.backend})`;
-  const tries = `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${backend}`;
+  const tries = describeTries(outcome);
   const problem = outcome.problem === null ? "" : `: ${outcome.problem}`;
   return outcome.done ? `done after ${tries}${problem}` : `not done, ${tries}${problem}`;
 }
 
-/** An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …". */
-function describeEpisode({ id, outcome, firstSeenMs, doneAtMs }: IntentEpisode): string {
+/**
+ * An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …", or for one its reset followed
+ * (#286) "    destroyBitNode(1): done: the reset followed, 1 try (ui); the reset seen by …".
+ */
+function describeEpisode({ id, outcome, firstSeenMs, doneAtMs, resetFollowed, notJudged }: IntentEpisode): string {
+  if (resetFollowed && doneAtMs !== null) {
+    return `    ${id}: done: the reset followed, ${describeTries(outcome)}; the reset seen by ${formatIsoTime(doneAtMs)}`;
+  }
   const when = doneAtMs === null ? `first seen ${formatIsoTime(firstSeenMs)}` : `done by ${formatIsoTime(doneAtMs)}`;
-  return `    ${id}: ${describeIntent(outcome)}; ${when}`;
+  return `    ${id}: ${describeIntent(outcome)}; ${when}${notJudged ? `; ${BEFORE_FIRST_SLOW}` : ""}`;
 }
 
 /** One action's intents (the id's name before its arguments), counted by outcome. */
@@ -1214,13 +1327,17 @@ interface ActionCounts {
   done: number;
   doneWithProblem: number;
   triedAgainWhileAtIt: number;
+  /** Done by the reset that followed it, with no done record (#286). */
+  resetFollowed: number;
   notDone: number;
+  /** Not done, seen before the window's first slow snapshot: not judged (#286 re-review). */
+  notJudged: number;
 }
 
 /**
  * The intents (#245): with `verbose`, each episode; else counts by action (the id's name before its arguments) and
  * outcome, the most first, then each episode not done, done with a problem, or tried again for something besides its
- * worker still at it (`triedAgainWhileAtIt`).
+ * worker still at it (`triedAgainWhileAtIt`). An install or a destroy its reset followed is done, and says so (#286).
  */
 function intentLines(facts: RunFacts, verbose: boolean): string[] {
   const episodes = intentEpisodes(facts);
@@ -1229,12 +1346,21 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
   const byAction = new Map<string, ActionCounts>();
   for (const episode of episodes) {
     const action = episode.id.split("(")[0] ?? episode.id;
-    const counts = byAction.get(action) ?? { done: 0, doneWithProblem: 0, triedAgainWhileAtIt: 0, notDone: 0 };
+    const counts = byAction.get(action) ?? {
+      done: 0,
+      doneWithProblem: 0,
+      triedAgainWhileAtIt: 0,
+      resetFollowed: 0,
+      notDone: 0,
+      notJudged: 0,
+    };
     byAction.set(action, counts);
     if (episode.outcome.done) counts.done += 1;
     else counts.notDone += 1;
     if (episode.outcome.done && episode.outcome.problem !== null) counts.doneWithProblem += 1;
     if (triedAgainWhileAtIt(episode)) counts.triedAgainWhileAtIt += 1;
+    if (episode.resetFollowed) counts.resetFollowed += 1;
+    if (episode.notJudged) counts.notJudged += 1;
   }
   const total = ({ done, notDone }: ActionCounts) => done + notDone;
   const ranked = [...byAction].sort(
@@ -1246,10 +1372,13 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
     const notes = [
       ...(counts.doneWithProblem > 0 ? [`${counts.doneWithProblem} with a problem`] : []),
       ...(counts.triedAgainWhileAtIt > 0 ? [`${counts.triedAgainWhileAtIt} tried again while still at it`] : []),
+      ...(counts.resetFollowed > 0 ? [`${counts.resetFollowed} by the reset that followed, with no done record`] : []),
     ];
     const outcomes = [
       ...(counts.done > 0 ? [`${counts.done} done${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`] : []),
-      ...(counts.notDone > 0 ? [`${counts.notDone} not done`] : []),
+      ...(counts.notDone > 0
+        ? [`${counts.notDone} not done${counts.notJudged > 0 ? ` (${counts.notJudged} ${BEFORE_FIRST_SLOW})` : ""}`]
+        : []),
     ];
     lines.push(`    ${action}: ${outcomes.join(", ")}`);
   }

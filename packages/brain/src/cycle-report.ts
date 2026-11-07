@@ -412,6 +412,23 @@ export class BitNodeCycles {
     return this.bitNodes.findLastIndex((bitNode) => bitNode.startMs <= atMs);
   }
 
+  /** Whether a slow snapshot by `atMs` showed the BitNode: with none, another can't be told from the first (#286). */
+  bitNodeKnownBy(atMs: number): boolean {
+    return this.bitNodes.some((bitNode) => bitNode.firstSlowAtMs <= atMs);
+  }
+
+  /**
+   * When the first slow snapshot after `afterMs`, up to `untilMs`, arrived showing another BitNode (`lastNodeReset`):
+   * a destroy seen done, as section 2's BitNodes line sees one (#286: for section 3's destroy intents, never reported
+   * done, `ingame/src/page/destroy-page.ts:110`). Null for none. The window's first BitNode is no change.
+   */
+  bitNodeSeenBetween(afterMs: number, untilMs: number): number | null {
+    const seen = this.bitNodes.find(
+      (bitNode, index) => index > 0 && bitNode.firstSlowAtMs > afterMs && bitNode.firstSlowAtMs <= untilMs,
+    );
+    return seen?.firstSlowAtMs ?? null;
+  }
+
   /** The cycle `atMs` falls in, or none before the first's start. */
   #cycleAt(atMs: number): Cycle | undefined {
     return this.#cycles.findLast((cycle) => cycle.startMs <= atMs);

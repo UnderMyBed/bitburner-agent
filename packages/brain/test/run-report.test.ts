@@ -17,8 +17,10 @@ import {
   type WorkOutcome,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { AugmentationTimeline } from "../src/augmentation-report.ts";
 import { writeAugmentationsEnabled } from "../src/augmentations.ts";
 import { STORE_FILE_NAME } from "../src/config.ts";
+import { BitNodeCycles } from "../src/cycle-report.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
 import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
@@ -50,9 +52,9 @@ afterEach(() => {
 });
 
 let sequenceNumber = 0;
-function snapshot(tier: string, offsetMs: number, data: unknown, gameTimeMs = 0) {
+function snapshot(tier: string, offsetMs: number, data: unknown, gameTimeMs = 0, agentSessionId = "session-1") {
   pending.push({
-    agentSessionId: "session-1",
+    agentSessionId,
     tier,
     sequenceNumber: ++sequenceNumber,
     gameTimeMs,
@@ -3475,5 +3477,285 @@ describe("a batcher stuck on a poor target (#275)", () => {
     expect(warnings.filter((line) => line.includes("stuck on a poor target"))).toHaveLength(1);
     expect(failures.filter((line) => line.includes("stuck on a poor target"))).toEqual([]);
     expect(text).not.toContain("stuck on a poor target: b-and-a");
+  });
+});
+
+describe("an install or a destroy the reset followed, with no done record (#286)", () => {
+  const INSTALL = "installAugmentations()";
+  const DESTROY = "destroyBitNode(1)";
+  /** The ui destroy's first try, its worker still at it when the BitVerse kills it (`destroy-page.ts:144`). */
+  const ENTERING = "backdooring w0r1d_d43m0n: about 1 s left, then entering BitNode 1 from the BitVerse";
+  /**
+   * An intent the Agent held for 4 s from `atMs` (3 fast snapshots). Then, as a reset does, the Agent away 8 s
+   * (unless `away` is false) and a new Agent (another session, unless `newAgent` is false).
+   */
+  interface Held {
+    id: string;
+    atMs: number;
+    tries?: number;
+    problem?: string;
+    away?: boolean;
+    newAgent?: boolean;
+  }
+  /** An install the reset killed before its try counted (`intent-runner.ts:48-51`): 0 tries, as the exit run's. */
+  const install = (atMs: number, changes: Partial<Held> = {}): Held => ({ id: INSTALL, atMs, ...changes });
+  /** A ui destroy after its first try (a destroy is never reported done, `destroy-page.ts:110`). */
+  const destroy = (atMs: number, changes: Partial<Held> = {}): Held => ({
+    id: DESTROY,
+    atMs,
+    tries: 1,
+    problem: ENTERING,
+    ...changes,
+  });
+  /** A reset at `atMs`: an install's (another `lastAugReset`), or a destroy's (another BitNode, and `lastAugReset`). */
+  type Reset = { kind: "install" | "destroy"; atMs: number };
+  /**
+   * The BN1.3 exit run's shape (#276): the `held` intents, and the slow snapshots, `slowEveryMs` apart from
+   * `slowFromMs`, each showing the `resets` by then (a destroy into BN1 an SF1 level more).
+   */
+  function resetRun({
+    held,
+    resets = [],
+    slowFromMs = 30 * SECOND,
+    slowEveryMs = MINUTE,
+  }: {
+    held: Held[];
+    resets?: Reset[];
+    slowFromMs?: number;
+    slowEveryMs?: number;
+  }) {
+    event(0, "brainStarted", { release: "r" });
+    const isAway = (offsetMs: number) =>
+      held.some(
+        (each) => each.away !== false && offsetMs > each.atMs + 4 * SECOND && offsetMs < each.atMs + 14 * SECOND,
+      );
+    /** The Agent at `offsetMs`: a new one after each held intent's last record, unless its `newAgent` is false. */
+    const sessionAt = (offsetMs: number) =>
+      `session-${1 + held.filter((each) => each.newAgent !== false && offsetMs > each.atMs + 4 * SECOND).length}`;
+    for (const offsetMs of fastOffsets(isAway)) {
+      const intents = held
+        .filter((each) => offsetMs >= each.atMs && offsetMs <= each.atMs + 4 * SECOND)
+        .map(({ id, tries = 0, problem = null }) => intent(id, { tries, problem, backend: tries === 0 ? null : "ui" }));
+      snapshot("fast", offsetMs, fastData({ intents }), 0, sessionAt(offsetMs));
+    }
+    for (const { atMs } of held.filter((each) => each.away !== false)) {
+      event(atMs + 5 * SECOND, "agentDisconnected", { agentSessionId: sessionAt(atMs + 4 * SECOND) });
+      event(atMs + 13 * SECOND, "agentConnected", { agentSessionId: sessionAt(atMs + 14 * SECOND) });
+    }
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      snapshot("medium", offsetMs, mediumData({ money: offsetMs }));
+    }
+    for (let offsetMs = slowFromMs; offsetMs <= RUN_MS; offsetMs += slowEveryMs) {
+      const by = resets.filter((reset) => reset.atMs <= offsetMs);
+      const destroys = by.filter((reset) => reset.kind === "destroy");
+      const data = slowData([], {}, destroys.length === 0 ? {} : { 1: destroys.length });
+      if (by.length > 0) data.resetInfo.lastAugReset = T0 + Math.max(...by.map((reset) => reset.atMs));
+      if (destroys.length > 0) data.resetInfo.lastNodeReset = T0 + Math.max(...destroys.map((reset) => reset.atMs));
+      snapshot("slow", offsetMs, data);
+    }
+  }
+  const INSTALL_MS = 4 * MINUTE;
+  const DESTROY_MS = 12 * MINUTE;
+  /** The exit run's two: an install at 4 min and a destroy at 12. */
+  const EXIT_RUN = [install(INSTALL_MS), destroy(DESTROY_MS)];
+  const resetsAt = (installMs: number, destroyMs: number): Reset[] => [
+    { kind: "install", atMs: installMs },
+    { kind: "destroy", atMs: destroyMs },
+  ];
+  const NOTABLE =
+    "  intents not done, done with a problem, or tried again for something besides their worker still at it:\n";
+  const BY_THE_RESET = "by the reset that followed, with no done record";
+  const BOTH_DONE = `    destroyBitNode: 1 done (1 ${BY_THE_RESET})\n    installAugmentations: 1 done (1 ${BY_THE_RESET})\n`;
+  const BOTH_NOT_DONE = "    destroyBitNode: 1 not done\n    installAugmentations: 1 not done\n";
+
+  test("each counts as done, the reset seen in the next slow snapshot; the summary says how", () => {
+    resetRun({ held: EXIT_RUN, resets: resetsAt(INSTALL_MS + 5 * SECOND, DESTROY_MS + 5 * SECOND) });
+    expect(report().text).toContain(
+      `  intents: 2, by action and outcome (--verbose lists each):\n${BOTH_DONE}${NOTABLE}    none\n`,
+    );
+    expect(report({ verbose: true }).text).toContain(
+      "  intents:\n" +
+        `    ${INSTALL}: done: the reset followed, 0 tries; the reset seen by ${at(INSTALL_MS + 30 * SECOND)}\n` +
+        `    ${DESTROY}: done: the reset followed, 1 try (ui); the reset seen by ${at(DESTROY_MS + 30 * SECOND)}\n`,
+    );
+  });
+
+  test("the exit run's 11 installs, each followed by its reset: 11 done, each its own episode", () => {
+    // An install every 90 s from 1 min, each reset 5 s on; a slow snapshot every 30 s.
+    const starts = Array.from({ length: 11 }, (_, index) => MINUTE + index * 90 * SECOND);
+    resetRun({
+      held: starts.map((atMs) => install(atMs)),
+      resets: starts.map((atMs) => ({ kind: "install", atMs: atMs + 5 * SECOND })),
+      slowFromMs: 15 * SECOND,
+      slowEveryMs: 30 * SECOND,
+    });
+    expect(report().text).toContain(`    installAugmentations: 11 done (11 ${BY_THE_RESET})\n${NOTABLE}    none\n`);
+  });
+
+  test("two installs, only the first followed by a reset: the second not done, and stuck at 5 tries", () => {
+    resetRun({
+      held: [install(INSTALL_MS), install(DESTROY_MS, { tries: 5 })],
+      resets: [{ kind: "install", atMs: INSTALL_MS + 5 * SECOND }],
+    });
+    const { text, failures } = report();
+    expect(text).toContain(`    installAugmentations: 1 done (1 ${BY_THE_RESET}), 1 not done\n`);
+    expect(failures).toContain(`intent stuck: ${INSTALL}, not done, 5 tries (ui)`);
+  });
+
+  test("two destroys, only the first followed by a reset: the second not done", () => {
+    resetRun({
+      held: [destroy(INSTALL_MS), destroy(DESTROY_MS)],
+      resets: [{ kind: "destroy", atMs: INSTALL_MS + 5 * SECOND }],
+    });
+    expect(report().text).toContain(`    destroyBitNode: 1 done (1 ${BY_THE_RESET}), 1 not done\n`);
+  });
+
+  test("an install the same Agent gives again after it left the list is another: the reset after is the second's", () => {
+    // Held 4:00 to 4:04, gone at 4:06 and 4:08, back from 4:10 (`intent-runner.ts:7`); the reset at 4:15.
+    const same = { away: false, newAgent: false };
+    resetRun({
+      held: [install(INSTALL_MS, same), install(INSTALL_MS + 10 * SECOND, same)],
+      resets: [{ kind: "install", atMs: INSTALL_MS + 15 * SECOND }],
+    });
+    expect(report().text).toContain(`    installAugmentations: 1 done (1 ${BY_THE_RESET}), 1 not done\n`);
+    expect(report({ verbose: true }).text).toContain(
+      `    ${INSTALL}: not done, 0 tries; first seen ${at(INSTALL_MS)}\n` +
+        `    ${INSTALL}: done: the reset followed, 0 tries; the reset seen by ${at(INSTALL_MS + 30 * SECOND)}\n`,
+    );
+  });
+
+  test("an install a new Agent holds is another, with no snapshot between them without it", () => {
+    // 4:00 to 4:04 from one Agent, 4:06 to 4:10 from the next.
+    resetRun({ held: [install(INSTALL_MS, { away: false }), install(INSTALL_MS + 6 * SECOND, { away: false })] });
+    expect(report().text).toContain("    installAugmentations: 2 not done\n");
+  });
+
+  test("a destroy tried 5 times the reset followed isn't stuck", () => {
+    resetRun({
+      held: [install(INSTALL_MS), destroy(DESTROY_MS, { tries: 5 })],
+      resets: resetsAt(INSTALL_MS + 5 * SECOND, DESTROY_MS + 5 * SECOND),
+    });
+    const { text, failures } = report();
+    expect(failures.filter((failure) => failure.startsWith("intent stuck"))).toEqual([]);
+    expect(text).toContain("  stuck intents (5 tries or more, not done at the last look):\n    none\n");
+  });
+
+  test("with no reset after: each not done, as its last record says", () => {
+    resetRun({ held: EXIT_RUN });
+    const { text } = report();
+    expect(text).toContain(BOTH_NOT_DONE);
+    expect(text).toContain(
+      `${NOTABLE}    ${INSTALL}: not done, 0 tries; first seen ${at(INSTALL_MS)}\n` +
+        `    ${DESTROY}: not done, 1 try (ui): ${ENTERING}; first seen ${at(DESTROY_MS)}\n`,
+    );
+  });
+
+  test("a reset before the intent isn't one that followed it", () => {
+    resetRun({ held: EXIT_RUN, resets: resetsAt(MINUTE, 2 * MINUTE) });
+    expect(report().text).toContain(BOTH_NOT_DONE);
+  });
+
+  test("a reset seen 5 minutes after the intent's last record is its", () => {
+    // The intents last seen at 4:04 and 12:04. A slow snapshot a minute from 0:04: the resets seen at 9:04 and 17:04.
+    resetRun({ held: EXIT_RUN, resets: resetsAt(9 * MINUTE, 17 * MINUTE), slowFromMs: 4 * SECOND });
+    expect(report().text).toContain(BOTH_DONE);
+  });
+
+  test("a reset seen over 5 minutes after the intent's last record isn't its", () => {
+    // The first slow snapshots showing the resets at 9:30 and 17:30.
+    resetRun({ held: EXIT_RUN, resets: resetsAt(9 * MINUTE + 5 * SECOND, 17 * MINUTE + 5 * SECOND) });
+    expect(report().text).toContain(BOTH_NOT_DONE);
+  });
+
+  test("an install's reset isn't a destroy's: a destroy is seen by the BitNode changing", () => {
+    // Only a new `lastAugReset` just after the destroy was held (the install's 8 min before: too long ago).
+    resetRun({ held: EXIT_RUN, resets: [{ kind: "install", atMs: DESTROY_MS + 5 * SECOND }] });
+    expect(report().text).toContain(BOTH_NOT_DONE);
+  });
+
+  test("a destroy's reset is an install's too: it resets the cycle (`PlayerObjectGeneralMethods.ts:145`)", () => {
+    resetRun({ held: [install(INSTALL_MS)], resets: [{ kind: "destroy", atMs: INSTALL_MS + 5 * SECOND }] });
+    expect(report().text).toContain(`    installAugmentations: 1 done (1 ${BY_THE_RESET})\n`);
+  });
+
+  const NOT_JUDGED = "before the window's first slow snapshot: not judged";
+
+  test("a destroy before the window's first slow snapshot isn't judged: that BitNode is no change from one before", () => {
+    // No slow snapshot until 12:30, after the destroy was held; it shows the destroy's BitNode.
+    resetRun({
+      held: [destroy(DESTROY_MS)],
+      resets: [{ kind: "destroy", atMs: DESTROY_MS + 5 * SECOND }],
+      slowFromMs: DESTROY_MS + 30 * SECOND,
+    });
+    expect(report().text).toContain(`    destroyBitNode: 1 not done (1 ${NOT_JUDGED})\n`);
+    expect(report({ verbose: true }).text).toContain(
+      `    ${DESTROY}: not done, 1 try (ui): ${ENTERING}; first seen ${at(DESTROY_MS)}; ${NOT_JUDGED}\n`,
+    );
+  });
+
+  test("nor an install, in the same words as section 4's for an install sent then", () => {
+    // No slow snapshot until 4:30, after the install was held and sent; it shows the install's `lastAugReset`.
+    resetRun({
+      held: [install(INSTALL_MS)],
+      resets: [{ kind: "install", atMs: INSTALL_MS + 5 * SECOND }],
+      slowFromMs: INSTALL_MS + 30 * SECOND,
+    });
+    event(INSTALL_MS, "augmentationInstallSent", { source: "brain", queued: ["BitWire"] });
+    const { text, failures } = report();
+    expect(text).toContain(`    installAugmentations: 1 not done (1 ${NOT_JUDGED})\n`);
+    expect(text).toContain(`    ${INSTALL}: not done, 0 tries; first seen ${at(INSTALL_MS)}; ${NOT_JUDGED}\n`);
+    expect(text).toContain(`    install sent at ${at(INSTALL_MS)}, ${NOT_JUDGED}\n`);
+    expect(failures.filter((failure) => failure.startsWith("install not seen done"))).toEqual([]);
+  });
+
+  test("each side's method on its own: with no slow snapshot by then, the first one after is no reset", () => {
+    // A caller that doesn't ask `resetKnownBy` or `bitNodeKnownBy` first: the first slow snapshot shows a destroy.
+    const augmentations = new AugmentationTimeline();
+    const cycles = new BitNodeCycles([], { sinceMs: T0 });
+    const destroyed = slowData([], {}, { 1: 1 });
+    destroyed.resetInfo.lastAugReset = T0 + MINUTE;
+    destroyed.resetInfo.lastNodeReset = T0 + MINUTE;
+    augmentations.addSlow(T0 + 2 * MINUTE, destroyed, 0);
+    cycles.addSlow(T0 + 2 * MINUTE, 0, destroyed);
+    expect([augmentations.resetKnownBy(T0), cycles.bitNodeKnownBy(T0)]).toEqual([false, false]);
+    const later = T0 + 2 * MINUTE;
+    expect([augmentations.resetKnownBy(later), cycles.bitNodeKnownBy(later)]).toEqual([true, true]);
+    expect(augmentations.resetSeenBetween(T0, T0 + 10 * MINUTE)).toBeNull();
+    expect(cycles.bitNodeSeenBetween(T0, T0 + 10 * MINUTE)).toBeNull();
+  });
+
+  describe("an ordinary intent splits only where the Agent's own tries start again", () => {
+    const NO_MONEY = "no money";
+    const travel = (tries: number) => intent("travel(Aevum)", { tries, problem: NO_MONEY, backend: "ui" });
+    const stuck = (failures: string[]) => failures.filter((failure) => failure.startsWith("intent stuck"));
+
+    test("a gap in the fast snapshots, tries 3 then 5: one episode, stuck once", () => {
+      // No fast snapshot from 4:50 to 5:10 (the heartbeat's gap): the same list either side.
+      cleanRun({
+        fast: (offsetMs) => fastData({ intents: [travel(offsetMs < 5 * MINUTE ? 3 : 5)] }),
+        skipFast: (offsetMs) => offsetMs > 5 * MINUTE - 10 * SECOND && offsetMs < 5 * MINUTE + 10 * SECOND,
+      });
+      const { text, failures } = report();
+      expect(text).toContain("    travel: 1 not done\n");
+      expect(stuck(failures)).toEqual([`intent stuck: travel(Aevum), not done, 5 tries (ui): ${NO_MONEY}`]);
+    });
+
+    test("a snapshot without it, then tries 0 to 5: two episodes, the second stuck", () => {
+      // At 3 tries until 5 min, gone at 5:00 (the list empty), then given again: 0 tries, 5 from 6 min.
+      cleanRun({
+        fast: (offsetMs) =>
+          fastData({
+            intents:
+              offsetMs < 5 * MINUTE
+                ? [travel(3)]
+                : offsetMs === 5 * MINUTE
+                  ? []
+                  : [travel(offsetMs < 6 * MINUTE ? 0 : 5)],
+          }),
+      });
+      const { text, failures } = report();
+      expect(text).toContain("    travel: 2 not done\n");
+      expect(stuck(failures)).toEqual([`intent stuck: travel(Aevum), not done, 5 tries (ui): ${NO_MONEY}`]);
+    });
   });
 });
