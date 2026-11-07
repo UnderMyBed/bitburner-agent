@@ -5,8 +5,9 @@
 // while the brain writes, compacted, and off the event loop, which a 426 MB store's copy on the brain's own thread
 // would block for its whole length (about 0.9 s on an SSD, more on a slower or colder disk; in the worker, a 486 MB
 // store's copy, written every millisecond meanwhile, delayed the loop 65 ms at most, #284). Each copy is opened and
-// checked before it counts. Each backup names its store (`backup.json`, the store's id): only this store's are counted,
-// rotated or trusted, so two data directories sharing a backup folder never touch each other's. Taken at the brain's
+// checked before it counts. Each backup names its store (`backup.json`: its id and its path): only this store's are
+// counted, rotated or trusted, so two data directories sharing a backup folder, a copy of one included, never touch
+// each other's. Taken at the brain's
 // start and then each interval, whenever the newest is older than the interval (so a crash loop doesn't rotate the good
 // ones out), and before a thinning at the start that no backup holds yet (`backupBeforeThinning`). A failure is logged,
 // recorded and the dashboard's `dataBackupFailed` alert, and never stops play: it's tried again within the hour.
@@ -133,15 +134,26 @@ function backupTimeMs(name: string): number | null {
   return Date.parse(`${date}T${time.slice(0, 2)}:${time.slice(3, 5)}:${time.slice(6)}`);
 }
 
-/** The store a backup's folder names in its marker, or null with none. */
-function markedStoreId(folder: string): string | null {
+/** Two paths to one file: Windows' are the same whatever their letters' case. */
+const samePath = (a: string, b: string) =>
+  process.platform === "win32"
+    ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+    : path.resolve(a) === path.resolve(b);
+
+/**
+ * Whether a backup's folder (or a partial one) is this store's: its marker names the store's id and its path. The id
+ * goes with a copy of the store (a restore keeps it, and its path); the path tells a copied data directory's store,
+ * which has the same id, from this one (#298's re-review). No marker, or one that can't be read: not this store's.
+ */
+function isMarkedAs(folder: string, storeId: string, storePath: string): boolean {
   try {
     const marker = JSON.parse(readFileSync(path.join(folder, BACKUP_MARKER_FILE_NAME), "utf8")) as {
       storeId?: unknown;
+      store?: unknown;
     };
-    return typeof marker.storeId === "string" ? marker.storeId : null;
+    return marker.storeId === storeId && typeof marker.store === "string" && samePath(marker.store, storePath);
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -192,10 +204,12 @@ export class DataBackups {
 
   /** This store's backups' folder names (its marker), whole ones only: others' and partial ones aren't. */
   #ownBackups(names: string[]): string[] {
-    const { backupDirectory, storeId } = this.#options;
-    return names.filter(
-      (name) => BACKUP_NAME.test(name) && markedStoreId(path.join(backupDirectory, name)) === storeId,
-    );
+    const { backupDirectory } = this.#options;
+    return names.filter((name) => BACKUP_NAME.test(name) && this.#isOwn(path.join(backupDirectory, name)));
+  }
+
+  #isOwn(folder: string): boolean {
+    return isMarkedAs(folder, this.#options.storeId, this.#options.storePath);
   }
 
   /**
@@ -277,12 +291,15 @@ export class DataBackups {
     const partial = path.join(backupDirectory, `${name}.${storeId}${PARTIAL_SUFFIX}`);
     let event: DataBackupEvent;
     try {
-      const { storeBytes, saves, cleared } = await this.#write(partial);
+      const { storeBytes, saves, cleared, notCleared } = await this.#write(partial);
       const final = path.join(backupDirectory, name);
       // Two in the same millisecond: the second replaces the first, if it's this store's.
-      if (markedStoreId(final) === storeId) await removeFolder(final);
+      if (this.#isOwn(final)) await removeFolder(final);
       await renameRetrying(partial, final);
-      const { removed, failure } = await this.#rotate(name);
+      const rotated = await this.#rotate(name);
+      const removed = rotated.removed;
+      const failures = [...notCleared, ...(rotated.failure === null ? [] : [rotated.failure])];
+      const failure = failures.length === 0 ? null : failures.join("; ");
       event = {
         type: DATA_BACKUP_EVENT_KIND,
         atMs,
@@ -310,11 +327,24 @@ export class DataBackups {
    * space checked (#298's review: a partial one left on a tight disk would fail every try), the marker written, and the
    * store's copy checked.
    */
-  async #write(partial: string): Promise<{ storeBytes: number; saves: string[]; cleared: string[] }> {
+  async #write(
+    partial: string,
+  ): Promise<{ storeBytes: number; saves: string[]; cleared: string[]; notCleared: string[] }> {
     const { storePath, storeId, configPath, backupDirectory } = this.#options;
     await mkdir(backupDirectory, { recursive: true });
-    const cleared = (await readdir(backupDirectory)).filter((name) => name.endsWith(`.${storeId}${PARTIAL_SUFFIX}`));
-    for (const name of cleared) await removeFolder(path.join(backupDirectory, name));
+    // Best effort (#298's re-review): one that can't be removed (Windows, a worker stopped mid-copy) is said, and the
+    // free space it takes is counted as it stands.
+    const cleared: string[] = [];
+    const notCleared: string[] = [];
+    for (const name of await readdir(backupDirectory)) {
+      if (!name.endsWith(`.${storeId}${PARTIAL_SUFFIX}`) || !this.#isOwn(path.join(backupDirectory, name))) continue;
+      try {
+        await removeFolder(path.join(backupDirectory, name));
+        cleared.push(name);
+      } catch (error) {
+        notCleared.push(`couldn't remove the partial backup ${name}: ${message(error)}`);
+      }
+    }
     const saves = await this.#newestSaves();
     const sizeOf = async (file: string) => (await stat(file).catch(() => null))?.size ?? 0;
     // The copy is at most the store and its log; usually less, compacted.
@@ -324,7 +354,8 @@ export class DataBackups {
     if (freeBytes - neededBytes < MIN_FREE_BYTES_AFTER_BACKUP) {
       throw new Error(
         `not enough free space in ${backupDirectory}: a backup needs up to ${megabytes(neededBytes)} and leaves ` +
-          `at least ${megabytes(MIN_FREE_BYTES_AFTER_BACKUP)} free, and ${megabytes(freeBytes)} is free`,
+          `at least ${megabytes(MIN_FREE_BYTES_AFTER_BACKUP)} free, and ${megabytes(freeBytes)} is free` +
+          notCleared.map((each) => `; ${each}`).join(""),
       );
     }
     await mkdir(partial);
@@ -341,6 +372,7 @@ export class DataBackups {
       storeBytes: await sizeOf(storeCopy),
       saves: saves.map((save) => save.relative.split(path.sep).join("/")),
       cleared,
+      notCleared,
     };
   }
 
@@ -367,7 +399,8 @@ export class DataBackups {
   /**
    * Keeps this store's newest `backupsKept`. Only folders named as backups with this store's marker count: nothing
    * else in the folder is touched, another store's backups included. One named after now (a clock was wrong) counts as
-   * the oldest. The backup just written is never removed, even if the clock went back and its name sorts first. One
+   * the oldest: after a clock set forward and then corrected, those it named are the first to go, deliberately (the real
+   * ones are newer). The backup just written is never removed, even if the clock went back and its name sorts first. One
    * that can't be removed is reported, and the rest are still tried.
    */
   async #rotate(justWritten: string): Promise<{ removed: string[]; failure: string | null }> {
@@ -410,7 +443,9 @@ export class DataBackups {
 
 /**
  * The store copied to `copyPath` and checked, in a worker thread (data-backup-worker.ts). A worker that doesn't reply
- * within `timeoutMs` is a failure, and is told to stop (#298's review); one stuck in SQLite ends with the process.
+ * within `timeoutMs` is a failure, and is told to stop (#298's review). A `VACUUM INTO` already running in SQLite isn't
+ * stopped by that (#298's re-review): it runs on, its read snapshot open and the store's write-ahead log growing until
+ * it ends or the process does; its partial folder is removed by the next backup.
  */
 function copyStore(
   storePath: string,

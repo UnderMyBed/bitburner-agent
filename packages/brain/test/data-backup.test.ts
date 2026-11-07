@@ -60,11 +60,15 @@ afterEach(async () => {
 const storePath = () => path.join(dataDirectory, "telemetry.sqlite");
 /** This store's id, in its backups' markers. */
 const STORE_ID = "this-store";
+/** Marks a backup's folder (or a partial one) as the store's at `store` with `storeId`. */
+function mark(folder: string, storeId: string, store = storePath()) {
+  writeFileSync(path.join(folder, BACKUP_MARKER_FILE_NAME), JSON.stringify({ storeId, store }));
+}
 /** A folder named as a backup at `atMs`, marked as `storeId`'s (none: no marker). */
 function backupFolder(atMs: number, storeId: string | null, directory = backupDirectory()) {
   const folder = path.join(directory, backupName(atMs));
   mkdirSync(folder, { recursive: true });
-  if (storeId !== null) writeFileSync(path.join(folder, BACKUP_MARKER_FILE_NAME), JSON.stringify({ storeId }));
+  if (storeId !== null) mark(folder, storeId);
   return path.basename(folder);
 }
 const backupDirectory = () => path.join(dataDirectory, DATA_BACKUPS_DIRECTORY_NAME);
@@ -77,13 +81,14 @@ function startBackups(
     freeBytes?: (directory: string) => Promise<number>;
     backupDirectory?: string;
     storeId?: string;
+    storePath?: string;
     worker?: URL;
     copyTimeoutMs?: number;
   } = {},
 ) {
   const backups = new DataBackups({
     dataDirectory,
-    storePath: storePath(),
+    storePath: options.storePath ?? storePath(),
     storeId: options.storeId ?? STORE_ID,
     ...(options.worker ? { worker: options.worker } : {}),
     ...(options.copyTimeoutMs ? { copyTimeoutMs: options.copyTimeoutMs } : {}),
@@ -207,7 +212,9 @@ test("two asked for at once are taken one after the other, both whole", async ()
 
 test("the newest N are kept: older and partial backups go, anything else in the folder stays", async () => {
   const { backups } = startBackups({ backupsKept: 2 });
-  mkdirSync(path.join(backupDirectory(), `2026-11-01T00-00-00.000Z.${STORE_ID}.partial`), { recursive: true });
+  const partial = path.join(backupDirectory(), `2026-11-01T00-00-00.000Z.${STORE_ID}.partial`);
+  mkdirSync(partial, { recursive: true });
+  mark(partial, STORE_ID);
   mkdirSync(path.join(backupDirectory(), "the owner's own folder"));
   writeFileSync(path.join(backupDirectory(), "notes.txt"), "kept");
   const names: string[] = [];
@@ -364,6 +371,43 @@ describe("a backup folder shared, a clock gone wrong, a partial left, a worker s
     expect(backupsOnDisk()).toEqual([unmarked, theirs, theirPartial, backupName(START_MS + DAY_MS)].sort());
   });
 
+  test("a copied data directory's store, with this one's id, sharing the folder: neither rotates, clears or trusts the other's (#298's re-review)", async () => {
+    writePairs(1, 10);
+    // The copy: the same id (its settings came with it), at another path.
+    const copiedStore = path.join(dataDirectory, "copy", "telemetry.sqlite");
+    mkdirSync(path.dirname(copiedStore));
+    TelemetryStore.open(copiedStore).close();
+    const copy = startBackups({ storePath: copiedStore, backupsKept: 1 }).backups;
+    const theirs = await copy.backupNow("start");
+    expect(theirs).toMatchObject({ type: "dataBackup" });
+    const theirPartial = path.join(backupDirectory(), `${backupName(START_MS - HOUR_MS)}.${STORE_ID}.partial`);
+    mkdirSync(theirPartial);
+    mark(theirPartial, STORE_ID, copiedStore);
+    clock.advance(60_000);
+    const { backups } = startBackups({ backupsKept: 1 });
+    // Not this store's newest, nor one its thinning can trust: it takes its own.
+    expect(backups.newestBackupAtMs()).toBeNull();
+    expect(
+      await backupBeforeThinning(backups, { beforeMs: START_MS - DAY_MS, nowMs: clock.now(), intervalMs: DAY_MS }),
+    ).toBeNull();
+    const ours = backupName(START_MS + 60_000);
+    // Each rotates only its own; this store leaves the copy's partial one.
+    clock.advance(DAY_MS);
+    expect(await backups.backupNow("interval")).toMatchObject({ removed: [ours] });
+    // In the same millisecond, the copy's would fail rather than replace this store's: a minute on.
+    clock.advance(60_000);
+    // The copy's own partial one is the copy's to clear, and it does.
+    expect(await copy.backupNow("interval")).toMatchObject({
+      removed: [path.basename(theirPartial), backupName(START_MS)],
+    });
+    expect(copy.newestBackupAtMs()).toBe(START_MS + 2 * 60_000 + DAY_MS);
+    expect(backups.newestBackupAtMs()).toBe(START_MS + 60_000 + DAY_MS);
+    expect(backupsOnDisk()).toEqual([
+      backupName(START_MS + 60_000 + DAY_MS),
+      backupName(START_MS + 2 * 60_000 + DAY_MS),
+    ]);
+  });
+
   test("a backup named after now counts as the oldest: rotated out first, never the newest", async () => {
     const future = backupFolder(START_MS + 30 * DAY_MS, STORE_ID);
     const older = backupFolder(START_MS - DAY_MS, STORE_ID);
@@ -377,6 +421,7 @@ describe("a backup folder shared, a clock gone wrong, a partial left, a worker s
     writePairs(1, 10);
     const leftover = path.join(backupDirectory(), `${backupName(START_MS - HOUR_MS)}.${STORE_ID}.partial`);
     mkdirSync(leftover, { recursive: true });
+    mark(leftover, STORE_ID);
     writeFileSync(path.join(leftover, "telemetry.sqlite"), "half a copy");
     // A tight disk: enough only once the leftover is gone.
     const { backups } = startBackups({
@@ -388,15 +433,25 @@ describe("a backup folder shared, a clock gone wrong, a partial left, a worker s
   });
 
   test("a worker that never replies is stopped after its time, a failure; the next backup goes on", async () => {
+    writePairs(1, 10);
+    // The first worker hangs; the next runs the real one.
     const hanging = path.join(dataDirectory, "hanging-worker.mjs");
-    writeFileSync(hanging, "setInterval(() => {}, 1000);\n");
-    const { backups } = startBackups({ worker: pathToFileURL(hanging), copyTimeoutMs: 300 });
-    const event = await backups.backupNow("thinning");
+    const flag = path.join(dataDirectory, "hung-once");
+    const realWorker = new URL("../src/data-backup-worker.ts", import.meta.url).href;
+    writeFileSync(
+      hanging,
+      `import { existsSync, writeFileSync } from "node:fs";\n` +
+        `if (existsSync(${JSON.stringify(flag)})) await import(${JSON.stringify(realWorker)});\n` +
+        `else { writeFileSync(${JSON.stringify(flag)}, ""); setInterval(() => {}, 1000); }\n`,
+    );
+    const { backups } = startBackups({ worker: pathToFileURL(hanging), copyTimeoutMs: 2_000 });
+    const [event, next] = await Promise.all([backups.backupNow("thinning"), backups.backupNow("interval")]);
     expect(event).toMatchObject({ type: "dataBackupFailed", reason: "thinning" });
-    expect(event.type === "dataBackupFailed" && event.failure).toBe("the store's copy took longer than 0.3 s: stopped");
-    expect(backupsOnDisk()).toEqual([]);
-    expect(backups.problem()).toMatchObject({ kind: "failed" });
-  });
+    expect(event.type === "dataBackupFailed" && event.failure).toBe("the store's copy took longer than 2.0 s: stopped");
+    expect(next).toMatchObject({ type: "dataBackup", reason: "interval" });
+    expect(backupsOnDisk()).toEqual([backupName(START_MS)]);
+    expect(backups.problem()).toBeNull();
+  }, 15_000);
 
   test("a worker that exits without replying is a failure", async () => {
     const exiting = path.join(dataDirectory, "exiting-worker.mjs");
@@ -539,7 +594,7 @@ describe("before a thinning at the start (#283)", () => {
   });
 });
 
-test("the store's id is made once, kept in its settings, and so goes with a copy of the store", () => {
+test("the store's id is made once and kept in its settings: a restored store keeps it (a copy at another path is told apart by its path)", () => {
   const id = dataBackupStoreId(store);
   expect(id).toMatch(/^[0-9a-f]{16}$/);
   expect(dataBackupStoreId(store)).toBe(id);
