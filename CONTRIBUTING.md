@@ -83,7 +83,7 @@ This section is the canonical procedure. [ADR 0008](docs/decisions/0008-work-tra
 
 ## Setup
 
-Requires Node 24 (see `.node-version`) and git.
+Requires Node 24 or later (CI runs 24, from `.node-version`) and git.
 
 ```sh
 git clone https://github.com/UnderMyBed/bitburner-agent.git

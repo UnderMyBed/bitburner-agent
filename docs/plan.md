@@ -11,7 +11,7 @@
 ## Working model
 - **The owner** designs the system and uses it: plays the Steam campaign with each release and brings back feedback and iteration requests.
 - **The build process** (Claude) builds, tests, documents and releases. It works autonomously behind the merge gate in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
-- Each milestone ends in a tagged release, with notes on what changed, what to try, and known issues; fixes in between get patch releases ([releasing.md](releasing.md)).
+- Each milestone ends in a tagged release (M4's phase A too, in 1.0.0), with notes on what changed, what to try, and known issues; fixes in between get patch releases ([releasing.md](releasing.md)).
 
 ## Phases
 | Phase | Content | Status |
@@ -20,7 +20,7 @@
 | 1 | First-principles mechanics reference ([`mechanics/`](mechanics/)) and [`synthesis.md`](synthesis.md) | ✅ |
 | 1b | Community research ([`research/`](research/)) | ✅ |
 | — | Architecture ([`architecture.md`](architecture.md)) and decision records ([`decisions/`](decisions/)) | ✅ draft |
-| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); M2 done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)); M3 done ([v0.3.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.3.0); closing live run waived by the owner, 2026-10-28); M4 phase A, a playable BN1, started (owner decision 46); phase B's fast model begun (#260, #263, `packages/model`; not yet fit for #247) |
+| S1, M1–M6 | Simulator spike, then build milestones; see architecture §13 | S1 passed; M1 done ([v0.1.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.1.0)); M2 done ([v0.2.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.2.0)); M3 done ([v0.3.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v0.3.0); closing live run waived by the owner, 2026-10-28); M4 phase A, a playable BN1, done ([v1.0.0](https://github.com/UnderMyBed/bitburner-agent/releases/tag/v1.0.0); owner decisions 46 and 57: run #3 destroyed BN1.1 and BN1.2, and the exit run BN1.3, #276); M4 phase B in progress, ending in 1.1.0: the fast model begun (#260, #263, `packages/model`; not yet fit for #247) |
 
 ## Tracking
 - **Work:** [GitHub milestones](https://github.com/UnderMyBed/bitburner-agent/milestones) → epics → task issues. Each task carries its own design, implementation plan and acceptance criteria ([ADR 0008](decisions/0008-work-tracking-and-reviews.md)).
