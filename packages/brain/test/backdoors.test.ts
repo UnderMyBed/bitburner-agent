@@ -401,12 +401,14 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
   }
 
   /** The mean of `joinsAfter` over the terms' place in a slow snapshot's minute and the check's phase (midpoints). */
-  function meanJoins(backdoored: string[], hacking = HACKING, speed = SPEED): Record<string, number> {
+  function meanJoins(backdoored: string[], hacking = HACKING, speed = SPEED, checks = 8): Record<string, number> {
     const sums: Record<string, number> = {};
     let runs = 0;
+    const checkStep = INVITATION_CHECK_MS / checks;
     for (let terms = 0; terms < 240; terms++) {
-      for (let check = 0; check < 8; check++) {
-        const shown = joinsAfter(SLOW_MS + (terms + 0.5) * 250, (check + 0.5) * 250, backdoored, hacking, speed);
+      for (let check = 0; check < checks; check++) {
+        const checkAt = (check + 0.5) * checkStep;
+        const shown = joinsAfter(SLOW_MS + (terms + 0.5) * 250, checkAt, backdoored, hacking, speed);
         for (const [faction, ms] of Object.entries(shown)) sums[faction] = (sums[faction] ?? 0) + ms;
         runs += 1;
       }
@@ -437,6 +439,37 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
     const modelled = new JoinPipeline().hackerFaction(0, 54, 54, 0.8);
     expect(Math.abs(simulated - modelled)).toBeLessThan(300);
     expect(modelled).toBe(110_000);
+  });
+
+  test("an 8.5 s backdoor (CyberSec at hacking 54, speed 0.9): past the next medium snapshot by the round [0.3 s]", () => {
+    // The round (2 s) and 8.5 s of backdoor leave the invitation past the medium snapshot whatever the check's phase:
+    // 110 s. Without the round it would straddle the snapshot, about 103 s: the case that sees the round.
+    const simulated = meanJoins(["avmnite-02h", "I.I.I.I", "run4theh111z"], 54, 0.9).CyberSec as number;
+    const modelled = new JoinPipeline().hackerFaction(0, 54, 54, 0.9);
+    expect(backdoorMs(54, 54, 0.9)).toBeCloseTo(8_480, -1);
+    expect(Math.abs(simulated - modelled)).toBeLessThan(300);
+    expect(modelled).toBe(110_000);
+  });
+
+  test("at the edge (CyberSec at hacking 55, speed 1: 7.56 s), the check's spread straddles the snapshot: 107.8 s [0.3 s]", () => {
+    const simulated = meanJoins(["avmnite-02h", "I.I.I.I", "run4theh111z"], 55, 1, 40).CyberSec as number;
+    const modelled = new JoinPipeline().hackerFaction(0, 54, 55, 1);
+    expect(Math.abs(simulated - modelled)).toBeLessThan(300);
+    expect(modelled).toBeCloseTo(107_798, -1);
+  });
+
+  test("a backdoor over the tries' 30 s (speed 0.03): CyberSec's at the 3rd try, NiteSec asked for 70 s on [0.3 s]", () => {
+    // CyberSec's 40.7 s and NiteSec's 65.2 s each take more than one 30-s try: the multi-try branch.
+    const simulated = meanJoins(["I.I.I.I", "run4theh111z"], HACKING, 0.03);
+    const pipeline = new JoinPipeline();
+    const cyberSec = pipeline.hackerFaction(0, 54, HACKING, 0.03);
+    const asked = pipeline.backdoorFreeAtMs;
+    const niteSec = pipeline.hackerFaction(0, 207, HACKING, 0.03);
+    expect(backdoorMs(54, HACKING, 0.03)).toBeGreaterThan(30_000);
+    expect(Math.abs((simulated.CyberSec as number) - cyberSec)).toBeLessThan(300);
+    expect(Math.abs((simulated.NiteSec as number) - niteSec)).toBeLessThan(300);
+    expect(Math.abs((simulated["asked avmnite-02h"] as number) - asked)).toBeLessThan(300);
+    expect(asked - (simulated["asked CSEC"] as number)).toBeCloseTo(70_000, -2);
   });
 
   test("all four due at once: the backdoors one at a time in `chooseBackdoor`'s order, one join a slow snapshot [0.3 s]", () => {

@@ -20,11 +20,22 @@ import {
   startHomeRamGb,
 } from "./cycles.ts";
 
-/** A setting of the grid: the options both policies run at. */
+/**
+ * A setting of the grid: the options both policies run at, and `countShift`, installs that many more or fewer to
+ * Daedalus's count (the model's count after an install is off by up to 2 on run #3 and BN1.3, #294).
+ */
 export interface ComparisonSetting {
   name: string;
   options: Omit<ModelOptions, "policy" | "onStep" | "onWork">;
+  countShift?: number;
 }
+
+/**
+ * The least difference that counts, ms: two steps. Each milestone is a step's time, up to a step late (an install at
+ * the first step past its countdown), and a join within half a step; so a difference of two steps or less is within
+ * the model's resolution, a tie (#294's re-review).
+ */
+export const COMPARISON_MARGIN_MS = 2 * 60_000;
 
 /** The starts compared from, each over the whole grid (#294): #263's sign flipped between a fresh BN1.1 and SF1.2. */
 export const COMPARISON_STARTS: readonly { name: string; start: ModelStart }[] = [
@@ -37,10 +48,12 @@ export const COMPARISON_STARTS: readonly { name: string; start: ModelStart }[] =
 export const GRID_LATER_MS = 5 * 60_000;
 
 /**
- * The grid #247 compares on, 17 settings: the model as fitted; the structural variants (#260's gross money and share
+ * The grid #247 compares on, 21 settings: the model as fitted; the structural variants (#260's gross money and share
  * by install index; #294's joins at once, as slice 2 had them); every fitted constant of the curve a step either way
- * (`calibrationSteps`, the refit's own); the batches using half what core's plan gives (#294's share by the state, so
- * the cloud shares more); the joins and the first cloud server 5 minutes later than modelled.
+ * (`calibrationSteps`, the refit's own); `firstCycleSpeed` further, 0.5 and #263's 0.8, as no run measures it; the
+ * batches using half what core's plan gives (#294's share by the state, so the cloud shares more); the joins and the
+ * first cloud server 5 minutes later than modelled; and Daedalus's count reached at 2 installed more or fewer, the
+ * model's count's miss.
  */
 export const COMPARISON_GRID: readonly ComparisonSetting[] = [
   { name: "as fitted", options: {} },
@@ -51,6 +64,10 @@ export const COMPARISON_GRID: readonly ComparisonSetting[] = [
   { name: "joins: at once (slice 2's)", options: { joinDelay: "instant" } },
   { name: "joins: 5 min later than modelled", options: { joinDelay: GRID_LATER_MS } },
   { name: "the first cloud server: 5 min later than modelled", options: { cloudDelayMs: GRID_LATER_MS } },
+  { name: "firstCycleSpeed 0.5 (wide)", options: { calibration: { firstCycleSpeed: 0.5 } } },
+  { name: "firstCycleSpeed 0.8 (#263's)", options: { calibration: { firstCycleSpeed: 0.8 } } },
+  { name: "Daedalus's count at 2 more installed", options: {}, countShift: 2 },
+  { name: "Daedalus's count at 2 fewer installed", options: {}, countShift: -2 },
 ];
 
 /**
@@ -59,6 +76,12 @@ export const COMPARISON_GRID: readonly ComparisonSetting[] = [
  */
 export function startInRange(start: ModelStart): boolean {
   return startHomeRamGb(start.ownedSF["1"] ?? 0) >= 32;
+}
+
+/** The cycle (1-based) a milestone falls in, and the minutes that cycle ran past the curves (`extrapolatedMinutes`). */
+export interface MilestoneCycle {
+  cycle: number;
+  extrapolatedMinutes: number;
 }
 
 /** #247's milestones. */
@@ -89,16 +112,21 @@ export function milestonesOf(run: ModelRun, required: number): Record<Milestone,
 export interface PairedComparison {
   /** Whether the start is in the curves' measured range (`startInRange`): if not, every verdict is no answer. */
   startInRange: boolean;
-  /** By setting: each milestone's time under each policy, and `second` less `first`, ms (null for no pair). */
+  /**
+   * By setting: each milestone's time under each policy, and `second` less `first`, ms (null for no pair); and, by
+   * milestone, the cycle it falls in under each policy and the minutes that cycle ran past the curves (null: none).
+   */
   settings: {
     name: string;
     first: Record<Milestone, number | null>;
     second: Record<Milestone, number | null>;
     difference: Record<Milestone, number | null>;
+    cycles: Record<Milestone, { first: MilestoneCycle | null; second: MilestoneCycle | null }>;
   }[];
   /**
-   * By milestone: "second sooner" or "first sooner" when every setting's difference has that sign, else "no answer"
-   * (a sign that changes, a tie, or a setting with no pair); and the least and the most difference, ms.
+   * By milestone: "second sooner" or "first sooner" when every setting's difference has that sign by more than
+   * `COMPARISON_MARGIN_MS`, else "no answer" (a sign that changes, a tie, or a setting with no pair); and the least and
+   * the most difference, ms.
    */
   verdict: Record<Milestone, { answer: "second sooner" | "first sooner" | "no answer"; least: number; most: number }>;
 }
@@ -115,16 +143,30 @@ export function pairedComparison(
   required = 30,
 ): PairedComparison {
   const inRange = startInRange(start);
-  const settings = grid.map(({ name, options }) => {
-    const a = milestonesOf(runModel(start, { ...options, policy: first }), required);
-    const b = milestonesOf(runModel(start, { ...options, policy: second }), required);
+  const settings = grid.map(({ name, options, countShift = 0 }) => {
+    const firstRun = runModel(start, { ...options, policy: first });
+    const secondRun = runModel(start, { ...options, policy: second });
+    const a = milestonesOf(firstRun, required + countShift);
+    const b = milestonesOf(secondRun, required + countShift);
+    const cycleOf = (run: ModelRun, atMs: number | null): MilestoneCycle | null => {
+      if (atMs === null) return null;
+      const index = run.cycles.findIndex((cycle) => atMs <= cycle.endMs);
+      const cycle = index === -1 ? run.cycles.length + 1 : index + 1;
+      return { cycle, extrapolatedMinutes: run.cycles[cycle - 1]?.extrapolatedMinutes ?? Number.NaN };
+    };
+    const cycles = Object.fromEntries(
+      MILESTONES.map((milestone) => [
+        milestone,
+        { first: cycleOf(firstRun, a[milestone]), second: cycleOf(secondRun, b[milestone]) },
+      ]),
+    ) as PairedComparison["settings"][number]["cycles"];
     const difference = Object.fromEntries(
       MILESTONES.map((milestone) => {
         const [x, y] = [a[milestone], b[milestone]];
         return [milestone, x === null || y === null ? null : y - x];
       }),
     ) as Record<Milestone, number | null>;
-    return { name, first: a, second: b, difference };
+    return { name, first: a, second: b, difference, cycles };
   });
   const verdict = Object.fromEntries(
     MILESTONES.map((milestone) => {
@@ -152,14 +194,24 @@ export function comparisonByStart(
 
 /**
  * The verdict on one milestone from each setting's difference (the second policy's time less the first's, null for no
- * pair): a sooner policy only if every setting has a pair and every difference has its sign; else no answer.
+ * pair): a sooner policy only if every setting has a pair and every difference has its sign by more than
+ * `marginMs`; else no answer.
  */
-export function verdictOf(differences: readonly (number | null)[]): PairedComparison["verdict"][Milestone] {
+export function verdictOf(
+  differences: readonly (number | null)[],
+  marginMs = COMPARISON_MARGIN_MS,
+): PairedComparison["verdict"][Milestone] {
   const paired = differences.filter((each): each is number => each !== null);
   const least = paired.length === 0 ? Number.NaN : Math.min(...paired);
   const most = paired.length === 0 ? Number.NaN : Math.max(...paired);
   const complete = paired.length === differences.length && paired.length > 0;
-  const answer = !complete ? "no answer" : most < 0 ? "second sooner" : least > 0 ? "first sooner" : "no answer";
+  const answer = !complete
+    ? "no answer"
+    : most < -marginMs
+      ? "second sooner"
+      : least > marginMs
+        ? "first sooner"
+        : "no answer";
   return { answer, least, most };
 }
 

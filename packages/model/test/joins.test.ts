@@ -15,11 +15,10 @@ describe("one join, a fresh pipeline", () => {
     expect(new JoinPipeline().hackerFaction(0, 530, 600, 1.8)).toBe(MEDIUM_MS / 2 + MEDIUM_MS + 25_000 + SLOW_MS);
     // A backdoor of 9.5 s pushes the invitation past the next medium snapshot: 10 s more.
     expect(new JoinPipeline().hackerFaction(0, 54, 54, 0.8)).toBe(110_000);
-    // At the edge: the round (2 s), 7.56 s of backdoor and the check's 1 s on average make 10.56 s, past the next
-    // medium snapshot; without the round or the check's second, short of it. (The spread of the check straddles the
-    // snapshot here, so the true mean lies between 100 and 110 s: the parity test keeps clear of the edge.)
+    // At the edge: the round (2 s) and 7.56 s of backdoor make 9.56 s, and the check (up to 2 s) takes 78% of its
+    // phases past the next medium snapshot: 100 s + 0.78 × 10 s.
     expect(backdoorMs(54, 55, 1)).toBeCloseTo(7_559.5, 0);
-    expect(new JoinPipeline().hackerFaction(0, 54, 55, 1)).toBe(110_000);
+    expect(new JoinPipeline().hackerFaction(0, 54, 55, 1)).toBeCloseTo(107_797.6, 0);
     // From another time, the same wait.
     expect(new JoinPipeline().hackerFaction(1_234, 530, 600, 1.8)).toBe(101_234);
   });

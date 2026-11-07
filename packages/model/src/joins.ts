@@ -27,6 +27,8 @@
  * - **Daedalus:** the game's check on its terms, then the slow snapshot.
  * Left out: the hack loop's root (every 30 s, packages/ingame/src/agent/hack-loop.ts), as the level, not the port
  * opener, comes last in the model's runs; a slow snapshot that waits a round or more for time to read the factions.
+ * Untestable by design: the join's own round and a city faction's gate both fall inside the minute to the next slow
+ * snapshot, so they never move a join's time, and no parity case can see them.
  */
 import { SNAPSHOT_TIER_PERIOD_MS } from "@bitburner-agent/core";
 
@@ -47,11 +49,16 @@ export function backdoorMs(requiredHacking: number, hacking: number, hackingSpee
 }
 
 /**
- * From a medium snapshot to the first slow snapshot after an invitation `afterMs` later, its mean over the medium
- * snapshot's place among the six of a slow snapshot's minute: the medium snapshot after the invitation, then half the
- * rest of the minute. Exact where `afterMs`'s own spread (the game's check) doesn't cross a medium snapshot.
+ * From a medium snapshot to the first slow snapshot after an invitation, its mean: the invitation `beforeCheckMs`
+ * after the medium snapshot and then at the game's next check, uniform over `INVITATION_CHECK_MS` on its own clock;
+ * the medium snapshot after the invitation (the later one, for the share of the check's spread past a snapshot);
+ * then half the rest of a slow snapshot's minute, the medium snapshot's place among its six uniform. Exact.
  */
-const toSlowAfterMedium = (afterMs: number) => MEDIUM_MS * Math.ceil(afterMs / MEDIUM_MS) + (SLOW_MS - MEDIUM_MS) / 2;
+function toSlowAfterMedium(beforeCheckMs: number): number {
+  const next = MEDIUM_MS * Math.ceil(beforeCheckMs / MEDIUM_MS);
+  const pastShare = Math.max(0, beforeCheckMs + INVITATION_CHECK_MS - next) / INVITATION_CHECK_MS;
+  return next + pastShare * MEDIUM_MS + (SLOW_MS - MEDIUM_MS) / 2;
+}
 
 /**
  * The joins of a cycle, in the order their terms are met, each at the time the brain's slow snapshot shows it joined:
@@ -85,12 +92,12 @@ export class JoinPipeline {
     const triesMs = ROUNDS_BETWEEN_TRIES * ROUND_MS;
     const doneAfterMs = ROUND_MS + triesMs * Math.max(1, Math.ceil(takesMs / triesMs));
     this.#backdoorFreeAtMs = askedAtMs + MEDIUM_MS * Math.ceil((doneAfterMs + ROUND_MS) / MEDIUM_MS);
-    return this.#join(askedAtMs + toSlowAfterMedium(ROUND_MS + takesMs + INVITATION_CHECK_MS / 2));
+    return this.#join(askedAtMs + toSlowAfterMedium(ROUND_MS + takesMs));
   }
 
   /** Tian Di Hui, with hacking 50 and the money in hand at `termsAtMs`: the travel, then the game's check. */
   tianDiHui(termsAtMs: number): number {
-    return this.#join(termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS + INVITATION_CHECK_MS / 2));
+    return this.#join(termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS));
   }
 
   /** Daedalus, its terms met at `termsAtMs`: the game's check, then the next slow snapshot. */
@@ -106,7 +113,7 @@ export class JoinPipeline {
    */
   cityGroup(termsAtMs: number, factions: number): number[] {
     if (GATE_MEDIUM_SNAPSHOTS * MEDIUM_MS + ROUND_MS >= SLOW_MS) throw new RangeError("the gate outlasts a minute");
-    const firstSeenAtMs = termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS + INVITATION_CHECK_MS / 2);
+    const firstSeenAtMs = termsAtMs + MEDIUM_MS / 2 + toSlowAfterMedium(ROUND_MS);
     return Array.from({ length: factions }, () => this.#join(firstSeenAtMs));
   }
 }

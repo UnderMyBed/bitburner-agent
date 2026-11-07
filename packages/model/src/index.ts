@@ -11,6 +11,7 @@ export {
 } from "./calibration.ts";
 export {
   COMPARISON_GRID,
+  COMPARISON_MARGIN_MS,
   COMPARISON_STARTS,
   type ComparisonSetting,
   comparisonByStart,
@@ -18,6 +19,7 @@ export {
   GRID_LATER_MS,
   MILESTONES,
   type Milestone,
+  type MilestoneCycle,
   milestonesOf,
   type PairedComparison,
   pairedComparison,

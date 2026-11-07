@@ -39,7 +39,7 @@ import {
   WORLD_DAEMON_HACKING,
 } from "../src/index.ts";
 import { fitError } from "./fit.ts";
-import { RUN_3_BN1_2 } from "./fixtures.ts";
+import { BN1_3, BN1_3_CYCLES, RUN_3_BN1_2 } from "./fixtures.ts";
 
 const MINUTE_MS = 60_000;
 const curves = new Curves(CALIBRATION);
@@ -385,6 +385,53 @@ describe("the model", () => {
     const modelled = firstJoin(run3, "CyberSec");
     expect(firstJoin(instant, "CyberSec")).toBeLessThan(modelled);
     expect(firstJoin(later, "CyberSec")).toBe(modelled + 5 * MINUTE_MS);
+  });
+
+  test("a fresh join pipeline each cycle, even when the install fires as joins' terms are met (#294's re-review)", () => {
+    // An eager policy installs as soon as anything can be, on BN1.3's own curves: its installs come minutes into
+    // cycles where the level is high, as joins' terms are met, so a queue kept across an install would push the next
+    // cycle's first joins later. Each cycle's CyberSec join is a fresh pipeline's, Tian Di Hui's ahead of it if its
+    // terms came first, at the step nearest it.
+    const eager = { ...TODAYS_POLICY, name: "eager", install: () => true };
+    const seen: { cycle: number; onlineMs: number; hacking: number; ports: number; money: number }[] = [];
+    let cycle = 0;
+    let last = -1;
+    const run = runModel(BN1_3.start, {
+      policy: eager,
+      measured: BN1_3_CYCLES,
+      horizonMs: 6 * 60 * MINUTE_MS,
+      onStep: ({ onlineMs, hacking, purse, money }) => {
+        if (onlineMs < last) cycle += 1;
+        last = onlineMs;
+        seen.push({ cycle, onlineMs, hacking, ports: portsOpen(purse), money });
+      },
+    });
+    expect(run.cycles.length).toBeGreaterThan(5);
+    let checked = 0;
+    for (const [index, each] of run.cycles.entries()) {
+      if (index === 0) continue;
+      const steps = seen.filter((step) => step.cycle === index && step.onlineMs > 0);
+      const cyberSec = steps.find((step) => step.hacking >= 60 && step.ports >= 1);
+      const tianDiHui = steps.find((step) => step.hacking >= 50 && step.money >= 1_200_000);
+      const join = run.events.find(
+        (event) =>
+          event.kind === "joined" &&
+          event.faction === "CyberSec" &&
+          event.atMs > (run.cycles[index - 1]?.endMs ?? 0) &&
+          event.atMs <= each.endMs,
+      );
+      if (cyberSec === undefined || join === undefined) continue;
+      const start = run.cycles[index - 1]?.endMs ?? 0;
+      const pipeline = new JoinPipeline();
+      if (tianDiHui !== undefined && tianDiHui.onlineMs < cyberSec.onlineMs) {
+        pipeline.tianDiHui(start + tianDiHui.onlineMs - MINUTE_MS / 2);
+      }
+      const termsAt = start + cyberSec.onlineMs - MINUTE_MS / 2;
+      const shownAt = pipeline.hackerFaction(termsAt, 60, cyberSec.hacking, each.multipliers.hacking_speed);
+      expect(join.atMs, `cycle ${index + 1}`).toBe(Math.ceil((shownAt - MINUTE_MS / 2) / MINUTE_MS) * MINUTE_MS);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(4);
   });
 
   test("joins Daedalus only with its count, hacking 2500 and $100b, and destroys at w0r1d_d43m0n's level", () => {
