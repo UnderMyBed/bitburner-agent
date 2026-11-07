@@ -2,9 +2,12 @@
 // policy, and the grid's structural variants.
 import { describe, expect, test } from "vitest";
 import {
+  CALIBRATION,
   COMPARISON_GRID,
+  calibrationSteps,
   FAVOUR_FIRST_POLICY,
   type ModelRun,
+  type ModelStart,
   milestonesOf,
   type PolicyView,
   pairedComparison,
@@ -93,41 +96,71 @@ describe("favour first (#247)", () => {
 
 describe("the paired comparison", () => {
   test("a policy against itself: every difference 0, so no answer", () => {
-    const grid = [{ name: "as fitted", options: { horizonMs: 8 * 60 * MINUTE_MS } }];
+    const grid = [{ name: "as fitted", options: { horizonMs: 10 * 60 * MINUTE_MS } }];
     const same = pairedComparison(BN1_3.start, TODAYS_POLICY, { ...TODAYS_POLICY, name: "again" }, grid);
+    expect(same.settings[0]?.first.donationsUnlocked).not.toBeNull();
     expect(same.settings[0]?.difference.donationsUnlocked).toBe(0);
     expect(same.verdict.donationsUnlocked.answer).toBe("no answer");
     // Never reached within the horizon: no pair.
-    expect(same.verdict.destroyed).toMatchObject({ answer: "no answer" });
     expect(same.settings[0]?.first.destroyed).toBeNull();
+    expect(same.verdict.destroyed).toMatchObject({ answer: "no answer" });
   });
 
-  test("each setting's difference is the second policy's time less the first's, the pair run at that setting", () => {
+  test("each setting's pair is both policies run at that setting; its difference the second's time less the first's", () => {
     const grid = [
       { name: "as fitted", options: { horizonMs: 10 * 60 * MINUTE_MS } },
       { name: "gross", options: { horizonMs: 10 * 60 * MINUTE_MS, money: "gross" as const } },
     ];
     const compared = pairedComparison(BN1_3.start, TODAYS_POLICY, FAVOUR_FIRST_POLICY, grid);
     for (const [index, { first, second, difference }] of compared.settings.entries()) {
-      const run = runModel(BN1_3.start, { ...grid[index]?.options, policy: TODAYS_POLICY });
-      expect(first).toEqual(milestonesOf(run, 30));
+      const options = grid[index]?.options;
+      expect(first).toEqual(milestonesOf(runModel(BN1_3.start, { ...options, policy: TODAYS_POLICY }), 30));
+      expect(second).toEqual(milestonesOf(runModel(BN1_3.start, { ...options, policy: FAVOUR_FIRST_POLICY }), 30));
       const [a, b] = [first.donationsUnlocked, second.donationsUnlocked];
       expect(difference.donationsUnlocked).toBe(a === null || b === null ? null : b - a);
     }
-    // From BN1.3's start, favour first unlocks BitRunners' donations 54 min later as fitted (8 h 54 min, against 8 h).
-    expect(compared.settings[0]?.difference.donationsUnlocked).toBe(54 * MINUTE_MS);
+    // The settings differ, so a pair run without its setting would be seen: the gross's first has no unlock in range.
+    expect(compared.settings[0]?.first.donationsUnlocked).not.toBeNull();
+    expect(compared.settings[1]?.first.donationsUnlocked).toBeNull();
   });
 
-  test("the grid holds the structural variants (#260's gross money, the share by index) and each constant's step", () => {
+  test("the grid: as fitted, the structural variants, every refit step (`calibrationSteps`), the batches' use", () => {
     const options = COMPARISON_GRID.map((setting) => setting.options);
+    expect(options).toHaveLength(14);
+    expect(options).toContainEqual({});
     expect(options).toContainEqual({ money: "gross" });
     expect(options).toContainEqual({ share: "index" });
-    expect(options).toContainEqual({});
-    for (const key of ["expPaceExponent", "moneyPaceMost", "batchesUseOfHosts"]) {
-      expect(
-        options.some((each) => each.calibration !== undefined && key in each.calibration),
-        key,
-      ).toBe(true);
+    for (const { name, calibration } of calibrationSteps(CALIBRATION)) {
+      expect(options, name).toContainEqual({ calibration });
     }
+    expect(options).toContainEqual({ calibration: { batchesUseOfHosts: [0.7] } });
   });
+
+  test("#247's comparison on the full grid, for the record (the model isn't fit for #247): the figures pinned", () => {
+    // Count first (today's brain) against favour first, minutes, the least and the most difference over the 14
+    // settings. From a fresh BN1.1: no answer on the donations (−53 to +2: the share by index flips it); count first
+    // reaches Daedalus's count sooner at every setting (5 to 62 min). From BN1.3's start: no answer, 3 settings with no
+    // pair. Daedalus's join and the destroy are out of range everywhere.
+    const summary = (start: ModelStart) => {
+      const { verdict } = pairedComparison(start, TODAYS_POLICY, FAVOUR_FIRST_POLICY);
+      return Object.fromEntries(
+        Object.entries(verdict).map(([milestone, { answer, least, most }]) => [
+          milestone,
+          [answer, Math.round(least / MINUTE_MS), Math.round(most / MINUTE_MS)],
+        ]),
+      );
+    };
+    expect(summary({ currentNode: 1, ownedSF: {} })).toEqual({
+      donationsUnlocked: ["no answer", -53, 2],
+      daedalusCount: ["first sooner", 5, 62],
+      daedalusJoined: ["no answer", Number.NaN, Number.NaN],
+      destroyed: ["no answer", Number.NaN, Number.NaN],
+    });
+    expect(summary(BN1_3.start)).toEqual({
+      donationsUnlocked: ["no answer", 9, 143],
+      daedalusCount: ["no answer", 36, 163],
+      daedalusJoined: ["no answer", Number.NaN, Number.NaN],
+      destroyed: ["no answer", Number.NaN, Number.NaN],
+    });
+  }, 120_000);
 });

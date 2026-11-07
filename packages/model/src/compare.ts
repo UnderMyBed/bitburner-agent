@@ -3,11 +3,11 @@
  * the calibration's sensitivities and the structural variants (#260's gross money, the share by install index), and
  * compared setting by setting. A difference counts only if it has the same sign at every setting, each run's milestone
  * inside the curves' range (`ModelRun.outOfRange`): a spread that crosses zero, or a milestone out of range or never
- * reached, is no answer. #260's rule compared unpaired ranges, with one parameter varied at a time, and missed
- * errors in the model's structure.
+ * reached, is no answer. #247's first rule (a difference only beyond the grid's spread) compared unpaired ranges, with
+ * one parameter varied at a time, and missed errors in the model's structure (#262's review).
  */
 import { augmentationsSoldBy, DAEDALUS, isWorthInstalling, TIAN_DI_HUI } from "@bitburner-agent/core";
-import { HACKER_FACTION_JOINS } from "./calibration.ts";
+import { CALIBRATION, calibrationSteps, HACKER_FACTION_JOINS } from "./calibration.ts";
 import { type CyclePolicy, type ModelOptions, type ModelRun, type ModelStart, runModel } from "./cycles.ts";
 
 /** A setting of the grid: the options both policies run at. */
@@ -17,18 +17,16 @@ export interface ComparisonSetting {
 }
 
 /**
- * The grid #247 compares on: the model as fitted, the structural variants, and each fitted constant a step either way
- * (the refit's steps, `test/model.test.ts`), with the cloud servers sharing a tenth more under #242's share.
+ * The grid #247 compares on, 14 settings: the model as fitted, the structural variants, every fitted constant of the
+ * curve a step either way (`calibrationSteps`, the refit's own), and the cloud servers sharing a tenth under #242's
+ * share (the batches at 70%, not 82%).
  */
 export const COMPARISON_GRID: readonly ComparisonSetting[] = [
   { name: "as fitted", options: {} },
   { name: "money: the gross (#260's)", options: { money: "gross" } },
   { name: "share: by install index (#260's)", options: { share: "index" } },
-  { name: "expPaceExponent −0.0625", options: { calibration: { expPaceExponent: 0.5625 } } },
-  { name: "expPaceExponent +0.0625", options: { calibration: { expPaceExponent: 0.6875 } } },
-  { name: "moneyPaceMost 0.75", options: { calibration: { moneyPaceMost: 0.75 } } },
-  { name: "moneyPaceMost 1.25", options: { calibration: { moneyPaceMost: 1.25 } } },
-  { name: "the batches' use 0.7 (the cloud shares a tenth)", options: { calibration: { batchesUseOfHosts: 0.7 } } },
+  ...calibrationSteps(CALIBRATION).map(({ name, calibration }) => ({ name, options: { calibration } })),
+  { name: "the batches' use 0.7 (the cloud shares a tenth)", options: { calibration: { batchesUseOfHosts: [0.7] } } },
 ];
 
 /** #247's milestones. */

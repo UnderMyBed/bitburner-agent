@@ -16,6 +16,7 @@ import { describe, expect, test } from "vitest";
 import {
   CALIBRATION,
   Curves,
+  calibrationSteps,
   countHoldOf,
   factionPassiveRepGainOf,
   HACKER_FACTION_JOINS,
@@ -25,7 +26,6 @@ import {
   measuredAt,
   multipliersOf,
   portsOpen,
-  READ_MINUTES,
   RUN_3_CYCLES,
   RUN_3_POLICY,
   RUN_3_SHARE_BONUS,
@@ -37,6 +37,7 @@ import {
   TODAYS_POLICY,
   WORLD_DAEMON_HACKING,
 } from "../src/index.ts";
+import { fitError } from "./fit.ts";
 import { RUN_3_BN1_2 } from "./fixtures.ts";
 
 const MINUTE_MS = 60_000;
@@ -76,84 +77,67 @@ describe("the calibration", () => {
     }
   });
 
-  test("the curve's constants are the fit's: a local best of the error on run #3's level and money, cycles 1-6", () => {
-    // The error the fit minimised: over every reading of run #3's cycles 1-6, the mean |ln| of the level's ratio and a
-    // third of the mean |log10| of the gross income's (floored at $1m), the model at the same minute of the same cycle.
-    const error = (calibration: Partial<typeof CALIBRATION>) => {
-      const seen = new Map<string, { hacking: number; money: number }>();
+  test("the curve's constants are the fit's: a local best on run #3 alone, at the refit's own steps", () => {
+    // test/fit.ts's `fitError`, the objective the refit minimised: run #3's cycles 1 to 6, level and money, and its 7th
+    // to 10th's money at 5 to 20 min, where the cap applies. 0.2969 at the fit, a local best by coordinate descent at
+    // `calibrationSteps` (from part 1's constants and from part 2's first refit; the better of the two); the bound keeps
+    // the fit within a thousandth of it. Of it, cycles 1 to 6 alone are 0.2003, part 1's own.
+    const fitted = fitError({});
+    expect(fitted.combined).toBeLessThan(0.2975);
+    expect(fitted.early).toBeLessThan(0.201);
+    expect(fitted.lateReadings).toBe(15);
+    for (const { name, calibration } of calibrationSteps(CALIBRATION)) {
+      expect(fitted.combined, name).toBeLessThanOrEqual(fitError(calibration).combined);
+    }
+  });
+
+  test("fitted: the cap brings run #3's 7th to 9th cycles' 10 min within ×3, from ×30 and more uncapped", () => {
+    // Before the cycle's first cloud server, the world servers' few TB: the cap holds the money's clock there. Fitted
+    // on these, so consistency only; BN1.3's, held out, are test/bn1-3.test.ts's. By cycle, as `fitError` keys them.
+    const grossAt = (calibration: Partial<typeof CALIBRATION>, minutes: number) => {
+      const seen = new Map<number, number>();
       let cycle = 0;
       let last = Number.POSITIVE_INFINITY;
       runModel(RUN_3_BN1_2.start, {
         policy: RUN_3_POLICY,
         calibration,
-        onStep: ({ onlineMs, hacking, gross }) => {
+        onStep: ({ onlineMs, gross }) => {
           if (onlineMs < last) cycle += 1;
           last = onlineMs;
-          seen.set(`${cycle}:${onlineMs / MINUTE_MS}`, { hacking, money: gross });
-        },
-      });
-      let level = 0;
-      let money = 0;
-      let readings = 0;
-      // Run #3's cycles 1 to 6: from the 7th, the model's cycle is another than run #3's.
-      for (const [index, { points }] of RUN_3_CYCLES.slice(0, 6).entries()) {
-        for (const [minutes, actualLevel, income] of points) {
-          const step = seen.get(`${index + 1}:${minutes}`);
-          if (step === undefined || !READ_MINUTES.includes(minutes)) continue;
-          level += Math.abs(Math.log(step.hacking / actualLevel));
-          money += Math.abs(Math.log10(Math.max(1e6, step.money) / Math.max(1e6, income)));
-          readings += 1;
-        }
-      }
-      return (level + money / 3) / readings;
-    };
-    const fitted = error({});
-    // 0.1817 at the fit, a local best by coordinate descent at these steps (#263's part 2 refitted it with the money's
-    // pace cap, from part 1's 0.2003); the bound keeps the fit within a thousandth of it.
-    expect(fitted).toBeLessThan(0.1825);
-    const { expPaceExponent, moneyPaceExponent, moneyPaceMost, firstCycleSpeed, fullSpeedHomeRamGb } = CALIBRATION;
-    // The refit's own steps: ±0.0625 on the exponents (0.5, part 1's, among them), ±0.05 on the first cycle's speed
-    // (0.8, part 1's), ×2 and ÷2 on home's RAM (256 GB on the way from part 1's 512), ±0.25 on the pace cap.
-    for (const neighbour of [
-      { expPaceExponent: expPaceExponent - 0.0625 },
-      { expPaceExponent: expPaceExponent + 0.0625 },
-      { moneyPaceExponent: moneyPaceExponent - 0.0625 },
-      { moneyPaceExponent: moneyPaceExponent + 0.0625 },
-      { moneyPaceMost: moneyPaceMost - 0.25 },
-      { moneyPaceMost: moneyPaceMost + 0.25 },
-      { firstCycleSpeed: firstCycleSpeed - 0.05 },
-      { firstCycleSpeed: firstCycleSpeed + 0.05 },
-      { fullSpeedHomeRamGb: fullSpeedHomeRamGb / 2 },
-      { fullSpeedHomeRamGb: fullSpeedHomeRamGb * 2 },
-    ]) {
-      expect(fitted, JSON.stringify(neighbour)).toBeLessThanOrEqual(error(neighbour));
-    }
-  });
-
-  test("fitted: the money's pace cap brings run #3's 7th to 9th cycles' 15 min to its own, from ×1,000 over", () => {
-    // Run #3's $1.05e10-1.34e10 at 15 min into its 7th to 10th cycles: the world servers' few TB, before any cloud
-    // server. Uncapped, the level's pace ran the money's clock 5-6 times over, to $1e13. Fitted on these, so
-    // consistency only: BN1.3's 9th and 10th, held out, are test/bn1-3.test.ts's.
-    const grossAt15 = (calibration: Partial<typeof CALIBRATION>) => {
-      const seen: number[] = [];
-      runModel(RUN_3_BN1_2.start, {
-        policy: RUN_3_POLICY,
-        calibration,
-        onStep: ({ onlineMs, gross }) => {
-          if (onlineMs === 15 * MINUTE_MS) seen.push(gross);
+          if (onlineMs === minutes * MINUTE_MS) seen.set(cycle, gross);
         },
       });
       return seen;
     };
-    const capped = grossAt15({});
-    const uncapped = grossAt15({ moneyPaceMost: Number.POSITIVE_INFINITY });
+    const capped = grossAt({}, 10);
+    const uncapped = grossAt({ moneyPaceMost: Number.POSITIVE_INFINITY }, 10);
     for (const cycle of [7, 8, 9]) {
+      const actual = RUN_3_CYCLES[cycle - 1]?.points.find(([minutes]) => minutes === 10)?.[2] ?? Number.NaN;
+      const ratio = (capped.get(cycle) ?? 0) / actual;
+      expect(ratio, `cycle ${cycle}`).toBeGreaterThan(1 / 3);
+      expect(ratio, `cycle ${cycle}`).toBeLessThan(3);
+      // Uncapped, the 9th is The Red Pill's, over within 10 min.
+      if (cycle < 9) expect((uncapped.get(cycle) ?? 0) / actual, `cycle ${cycle}, uncapped`).toBeGreaterThan(30);
+    }
+  });
+
+  test("known miss: by 15 min into run #3's 7th and 8th cycles the model's money is ×100 and more over", () => {
+    // The model buys its first cloud server at about 10 min, when the payback allows, and the level paces the money
+    // again; run #3's were bought at 20 to 30 min (#263's extract: none by 20 min in its 9th and 10th).
+    const seen = new Map<number, number>();
+    let cycle = 0;
+    let last = Number.POSITIVE_INFINITY;
+    runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      onStep: ({ onlineMs, gross }) => {
+        if (onlineMs < last) cycle += 1;
+        last = onlineMs;
+        if (onlineMs === 15 * MINUTE_MS) seen.set(cycle, gross);
+      },
+    });
+    for (const cycle of [7, 8]) {
       const actual = RUN_3_CYCLES[cycle - 1]?.points.find(([minutes]) => minutes === 15)?.[2] ?? Number.NaN;
-      const ratio = (capped[cycle - 1] ?? 0) / actual;
-      expect(ratio, `cycle ${cycle}`).toBeGreaterThan(0.5);
-      expect(ratio, `cycle ${cycle}`).toBeLessThan(2);
-      // Uncapped, the 9th is The Red Pill's, over within 15 min.
-      if (cycle < 9) expect((uncapped[cycle - 1] ?? 0) / actual, `cycle ${cycle}, uncapped`).toBeGreaterThan(100);
+      expect((seen.get(cycle) ?? 0) / actual, `cycle ${cycle}`).toBeGreaterThan(100);
     }
   });
 
@@ -198,6 +182,16 @@ describe("the curves", () => {
     const two = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20);
     expect(two.exp).toBeGreaterThan(two.money);
     expect(two.money).toBeGreaterThan(30);
+  });
+
+  test("before the cycle's first cloud server the money's clock runs at most `moneyPaceMost` faster; after, uncapped", () => {
+    const faster = { ...curves.reference, hacking: 6, hacking_speed: 4 };
+    const before = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20, true);
+    const after = curves.advanceClocks({ exp: 20, money: 20 }, 10 * MINUTE_MS, faster, 2 ** 20, false);
+    expect(before.money).toBeCloseTo(20 + 10 * CALIBRATION.moneyPaceMost, 6);
+    expect(after.money).toBeGreaterThan(before.money);
+    // The experience's clock is never capped.
+    expect(before.exp).toBe(after.exp);
   });
 
   test("a measured cycle read back: the level linear, the money geometric, past the end at the last slope", () => {

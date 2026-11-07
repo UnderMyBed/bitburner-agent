@@ -177,10 +177,10 @@ export interface Calibration {
   referenceCycles: readonly { cycle: number; multipliers: CycleMultipliers }[];
   /**
    * How fast a cycle's economy runs with home's RAM at 8 GB, against one with `fullSpeedHomeRamGb` or more. Fitted,
-   * with `fullSpeedHomeRamGb` and the paces, on run #3's cycles 1 to 6 (the model's 7th on is another cycle than run
-   * #3's), refitted by #263 once home's RAM came from the cash: the mean error at each reading, 12% on the level and
-   * ×1.8 on the gross income (which spans 12 orders of magnitude). BN1.2's home starts at 32 GB, so 8 GB is out of its
-   * range.
+   * with `fullSpeedHomeRamGb`, the paces and the money's cap, on run #3 alone (test/fit.ts's `fitError`, a local best
+   * at `calibrationSteps`): 0.2003 on its cycles 1 to 6 (a mean error of 12% on the level and ×1.8 on the gross
+   * income, which spans 12 orders of magnitude), 0.2969 with its 7th to 10th's first 20 min. BN1.2's home starts at
+   * 32 GB, as BN1.3's does, so 8 GB is out of every run's range.
    */
   firstCycleSpeed: number;
   /** Home's RAM from which a cycle runs at the reference cycles' pace (`firstCycleSpeed`'s other end). */
@@ -195,31 +195,34 @@ export interface Calibration {
   expPaceExponent: number;
   moneyPaceExponent: number;
   /**
-   * The most the money's clock may run faster than the reference's (#263, part 2). At high multipliers the level's pace
-   * ran the money's early minutes 5-6 times over, to $1e13 by 15 min into a 7th cycle, against run #3's $1.05e10 to
-   * $1.34e10 in its 7th to 10th. Those minutes are bound by the RAM, not the level: an install loses the cloud servers,
-   * the batches never run on home, and no server is bought before the income window (10 min) and a 15-minute payback,
-   * so the batches have only the world servers' few TB. Fitted on run #3 alone (its cycles 1 to 6, and its 7th to 10th
-   * up to 20 min, `test/model.test.ts`).
+   * The most the money's clock may run faster than the reference's before the cycle's first cloud server (#263, part
+   * 2; `Curves.advanceClocks`), and only then. At high multipliers the level's pace ran the money's early minutes 5-6
+   * times over, to $1e13 by 15 min into a 7th cycle, against run #3's $1.05e10 to $1.34e10 in its 7th to 10th. Those
+   * minutes are bound by the RAM, not the level: an install loses the cloud servers, the batches never run on home, and
+   * no server is bought before the income window (10 min) and a 15-minute payback, so the batches have only the world
+   * servers' few TB. Once a cloud server is bought, the RAM grows with the money and the level paces it again. Fitted on
+   * run #3 alone, with the rest (test/fit.ts: its cycles 1 to 6, and its 7th to 10th at 5 to 20 min).
    */
   moneyPaceMost: number;
   /** The share bonus while working, by cycle (`RUN_3_SHARE_BONUS`); past the list, its last: `share: "index"` only. */
   shareBonusByCycle: readonly number[];
   /**
-   * The share of home's and the cloud servers' RAM in share threads while working (`shareBonusOfState`, #263): the
-   * game's formula on this constant. The real share is what the batches leave (at most 80% of their hosts' use, core's
-   * `shareRound`), which rises late in a cycle as the batches need less, so a constant reads low in cycles 5 and 6 (an
-   * average of 1.43 against run #3's 1.49 and 1.55). Fitted on run #3's share a cycle, cycles 1 to 6: 6% mean error
-   * (3% without the 4th, whose 1.16 its brain's share before #242 made, not its RAM).
+   * Run #3's brain's share (before #242): this share of home's and the cloud servers' RAM in share threads while
+   * working (`shareBonusOfState`), the game's formula on it. That brain's share had one cap over every host, home
+   * included, which the batches' use filled for long stretches, and gaps between rounds (#242's table): not a rule of
+   * the RAM's, so a fitted constant. Fitted on run #3's share a cycle, cycles 1 to 6: 6% mean error (3% without the
+   * 4th, 1.16, when its batches held 82% of the cloud servers).
    */
   shareRamShare: number;
   /**
-   * The batches' use of their hosts' RAM (the rooted world servers and the cloud servers), for #242's share
-   * (`CyclePolicy.homeShares`): a round may take their use to core's `SHARE_MOST_USE` (0.8), so above it the batches'
-   * hosts share nothing and home alone does. Run #3's 4th cycle's, from its store: "its batches held 82% of the cloud
-   * servers" (#242). Measured on run #3, not fitted.
+   * The batches' use of their hosts' RAM (the rooted world servers and the cloud servers) by cycle, for #242's share
+   * (`CyclePolicy.homeShares`), past the list its last: a round may take their use to core's `SHARE_MOST_USE` (0.8),
+   * so at more the batches' hosts share nothing and home alone does. It isn't constant: BN1.3's 9th cycle, at hacking
+   * 4,000 and more, shared 24-52m GB with home's 4-34m (#263's extract), its batches needing far less of the cloud.
+   * The one reading run #3 has is its 4th cycle's, "its batches held 82% of the cloud servers" (#242), so it's taken
+   * for every cycle: measured on run #3, not fitted, and low on the share where the level is high.
    */
-  batchesUseOfHosts: number;
+  batchesUseOfHosts: readonly number[];
 }
 
 export const CALIBRATION: Calibration = {
@@ -229,14 +232,14 @@ export const CALIBRATION: Calibration = {
     { cycle: 5, multipliers: { hacking: 2.2613, hacking_exp: 3.1379, hacking_speed: 1.7787, hacking_money: 1.6434 } },
     { cycle: 6, multipliers: { hacking: 2.8541, hacking_exp: 3.7007, hacking_speed: 2.0035, hacking_money: 2.5329 } },
   ],
-  firstCycleSpeed: 0.85,
-  fullSpeedHomeRamGb: 128,
+  firstCycleSpeed: 0.8,
+  fullSpeedHomeRamGb: 512,
   expPaceExponent: 0.625,
-  moneyPaceExponent: 0.5625,
-  moneyPaceMost: 1,
+  moneyPaceExponent: 0.5,
+  moneyPaceMost: 1.5,
   shareBonusByCycle: RUN_3_SHARE_BONUS,
   shareRamShare: 0.01,
-  batchesUseOfHosts: 0.82,
+  batchesUseOfHosts: [0.82],
 };
 
 /**
@@ -261,3 +264,22 @@ export const HACKER_FACTION_JOINS: readonly { faction: string; hacking: number; 
   { faction: "The Black Hand", hacking: 365, ports: 3 },
   { faction: "BitRunners", hacking: 550, ports: 4 },
 ];
+
+/**
+ * The refit's steps (#263): each fitted constant of the curve a step either way from `calibration`'s, ±0.0625 on the
+ * paces' exponents, ±0.25 on the money's cap, ±0.05 on the first cycle's speed, ÷2 and ×2 on home's RAM. The fit is a
+ * local best among them (test/model.test.ts), and the paired comparison's grid varies each (`COMPARISON_GRID`).
+ */
+export function calibrationSteps(calibration: Calibration): { name: string; calibration: Partial<Calibration> }[] {
+  const { expPaceExponent, moneyPaceExponent, moneyPaceMost, firstCycleSpeed, fullSpeedHomeRamGb } = calibration;
+  const steps: [keyof Calibration, number, number][] = [
+    ["expPaceExponent", expPaceExponent - 0.0625, expPaceExponent + 0.0625],
+    ["moneyPaceExponent", moneyPaceExponent - 0.0625, moneyPaceExponent + 0.0625],
+    ["moneyPaceMost", moneyPaceMost - 0.25, moneyPaceMost + 0.25],
+    ["firstCycleSpeed", firstCycleSpeed - 0.05, firstCycleSpeed + 0.05],
+    ["fullSpeedHomeRamGb", fullSpeedHomeRamGb / 2, fullSpeedHomeRamGb * 2],
+  ];
+  return steps.flatMap(([key, lower, upper]) =>
+    [lower, upper].map((value) => ({ name: `${key} ${value}`, calibration: { [key]: value } })),
+  );
+}

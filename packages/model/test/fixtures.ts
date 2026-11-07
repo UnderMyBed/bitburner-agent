@@ -133,8 +133,8 @@ export const SIMULATOR_SEED_1 = {
  * https://github.com/UnderMyBed/bitburner-agent/issues/263 ("BN1.3 per cycle: the held-out validation data").
  * Summarised here, never read from a store. SF1.2 owned, so home starts at 32 GB and the multipliers carry SF1's 24%.
  * In cycles 6 to 8 the batcher sat about 5 hours on poor targets (#274, fixed in #278): their hacking income, and the
- * level and the reputation that follow from it, are far under what a cycle at those multipliers makes. They are run
- * on their own measured curves (`BN1_3_CYCLES`) or left out: `STUCK_BATCHER_CYCLES`.
+ * level and the reputation that follow from it, are far under what a cycle at those multipliers makes. The downstream
+ * run has them in its measured curves (`BN1_3_CYCLES`); the independent run's checks on them are confounded.
  */
 export const BN1_3 = {
   start: { currentNode: 1, ownedSF: { "1": 2 } },
@@ -144,9 +144,6 @@ export const BN1_3 = {
   /** The install after which each faction's donations unlocked (its favour after it ≥ 150), 1-based. */
   donationsUnlockedAtInstall: { BitRunners: 7, Daedalus: 9 },
 };
-
-/** BN1.3's cycles 6 to 8 (1-based): the batcher stuck on poor targets (#274). */
-export const STUCK_BATCHER_CYCLES: readonly number[] = [6, 7, 8];
 
 /**
  * BN1.3 per cycle, as `RUN_3_PER_CYCLE`: Daedalus's count after the install (the kinds, NeuroFlux Governor once), the
@@ -364,4 +361,78 @@ export const BN1_3_CASH: readonly { cycle: number; minutes: number; cash: number
   { cycle: 4, minutes: 30, cash: 8.74e12 },
   { cycle: 4, minutes: 45, cash: 56.71e12 },
   { cycle: 4, minutes: 60, cash: 188.61e12 },
+];
+
+/**
+ * BN1.3's RAM in share threads (the fast snapshots' `batcher.sharing`), GB, [minutes, GB], at the readings it shared
+ * at (working for a faction): cycles 1 to 5, the batcher healthy, and the 9th, healthy again at hacking 3,600 to 4,700.
+ * The extract rounds to three figures.
+ */
+export const BN1_3_SHARE_RAM: readonly { cycle: number; points: readonly (readonly [number, number])[] }[] = [
+  {
+    cycle: 1,
+    points: [
+      [15, 0],
+      [20, 24],
+      [30, 472],
+      [36.3, 8.2e3],
+    ],
+  },
+  {
+    cycle: 2,
+    points: [
+      [10, 8.2e3],
+      [15, 8.2e3],
+      [20, 8.2e3],
+      [30, 32.7e3],
+      [45, 131e3],
+      [50.7, 262.1e3],
+    ],
+  },
+  {
+    cycle: 3,
+    points: [
+      [10, 262.1e3],
+      [15, 262.1e3],
+      [20, 262.1e3],
+      [30, 262.1e3],
+      [45, 524.2e3],
+      [60, 524.2e3],
+      [70.8, 1.05e6],
+    ],
+  },
+  {
+    cycle: 4,
+    points: [
+      [10, 1.05e6],
+      [15, 1.05e6],
+      [20, 1.05e6],
+      [30, 1.05e6],
+      [45, 1.05e6],
+      [60, 524.3e3],
+      [75, 2.1e6],
+      [90, 2.1e6],
+      [105, 2.1e6],
+      [120, 2.1e6],
+      [135, 2.1e6],
+    ],
+  },
+  {
+    cycle: 5,
+    points: [
+      [10, 2.1e6],
+      [15, 2.1e6],
+      [18.5, 2.1e6],
+    ],
+  },
+  {
+    cycle: 9,
+    points: [
+      [20, 2.1e6],
+      [30, 24.25e6],
+      [45, 35.22e6],
+      [60, 35.38e6],
+      [75, 51.83e6],
+    ],
+  },
 ];

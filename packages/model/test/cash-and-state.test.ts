@@ -37,6 +37,7 @@ import {
   RUN_3_SHARE_BONUS,
   runModel,
   shareBonusOfState,
+  shareRamGbOfState,
   spendThroughCycle,
   TODAYS_POLICY,
 } from "../src/index.ts";
@@ -363,27 +364,38 @@ describe("what the purchases leave alone (`holdsOf`)", () => {
 });
 
 describe("the share from the state (#263), not the install index", () => {
-  test("the game's bonus for the share of home's and the cloud servers' RAM in share threads", () => {
+  test("run #3's brain's (before #242): the game's bonus for a fitted share of home's and the cloud servers' RAM", () => {
     const purse = { ...freshPurse(1024), cloudServersRamGb: [2048, 2048] };
     const threads = (CALIBRATION.shareRamShare * (1024 + 4096)) / SHARE_RAM_GB;
     expect(cloudRamOf(purse)).toBe(4096);
-    expect(shareBonusOfState(purse, CALIBRATION)).toBe(shareBonusOfPower(1 + threads));
-    expect(shareBonusOfState(freshPurse(1024), CALIBRATION)).toBeLessThan(shareBonusOfState(purse, CALIBRATION));
+    expect(shareBonusOfState(purse, CALIBRATION, false)).toBe(shareBonusOfPower(1 + threads));
+    expect(shareBonusOfState(freshPurse(1024), CALIBRATION, false)).toBeLessThan(
+      shareBonusOfState(purse, CALIBRATION, false),
+    );
   });
 
-  test("#242's (today's brain): home's RAM less what it keeps, in threads; the batches' hosts past 80% use, none", () => {
+  test("#242's (today's brain, the default): core's `shareRound` on home and the batches' hosts", () => {
     const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
-    // BN1.3's 2nd cycle shared 8.2k GB of home's 8.2k at ×1.30 (#263's extract): (8192 − 32) / 4 = 2040 threads.
-    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBe(shareBonusOfPower(1 + 2040));
-    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBeCloseTo(1.3, 2);
-    // At run #3's 82% the cloud servers share nothing; at 70%, a tenth of the batches' hosts, world and cloud.
-    const lessUse = { ...CALIBRATION, batchesUseOfHosts: 0.7 };
-    const tenth = Math.floor((8160 + 0.1 * (3168.8 + 2 ** 21)) / SHARE_RAM_GB);
-    expect(shareBonusOfState(purse, lessUse, true, 3168.8)).toBeCloseTo(shareBonusOfPower(1 + tenth), 12);
-    // A home within what it keeps shares nothing: ×1 (BN1.3's 1st cycle at 15 min, home 32 GB).
+    // Home less the Agent's 8 GB in use and the 32 kept: (8192 − 8 − 32) / 4 = 2038 threads. The batches' hosts at run
+    // #3's 82% use are past `SHARE_MOST_USE` (80%), so share nothing.
+    expect(shareRamGbOfState(purse, CALIBRATION, 3168.8)).toBe(2038 * SHARE_RAM_GB);
+    expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
+    expect(shareBonusOfState(purse, CALIBRATION, undefined, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
+    // BN1.3's 1st cycle, from the brain's constants alone: home 32 GB shares nothing, 64 GB 24, 512 GB 472 (the
+    // extract's readings at 15, 20 and 30 min).
+    expect([32, 64, 512].map((home) => shareRamGbOfState(freshPurse(home), CALIBRATION, 100))).toEqual([0, 24, 472]);
     expect(shareBonusOfState(freshPurse(32), CALIBRATION, true, 100)).toBe(1);
-    // Run #3's brain (before #242): the fitted share of all the RAM.
-    expect(shareBonusOfState(purse, CALIBRATION, false, 3168.8)).toBe(shareBonusOfState(purse, CALIBRATION));
+  });
+
+  test("#242's: the batches' use by cycle, its last past the list; below 80%, their hosts share the room to it", () => {
+    const purse = { ...freshPurse(8192), cloudServersRamGb: [2 ** 20, 2 ** 20] };
+    const byCycle = { ...CALIBRATION, batchesUseOfHosts: [0.82, 0.7] };
+    const hostsGb = 3168.8 + 2 ** 21;
+    // At 70%, a tenth of the world and cloud servers' RAM beside home's 2038 threads.
+    const tenth = Math.floor((0.1 * hostsGb) / SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, byCycle, 3168.8, 0)).toBe(2038 * SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, byCycle, 3168.8, 1)).toBe((2038 + tenth) * SHARE_RAM_GB);
+    expect(shareRamGbOfState(purse, byCycle, 3168.8, 7)).toBe((2038 + tenth) * SHARE_RAM_GB);
   });
 
   test("a policy without `homeShares` is today's brain, #242's share; run #3's says false", () => {

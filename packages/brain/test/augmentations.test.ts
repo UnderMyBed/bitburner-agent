@@ -45,6 +45,7 @@ import {
   readCountHold,
   readOnlineClock,
 } from "../src/augmentations.ts";
+import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import * as cloud from "../src/cloud-servers.ts";
 import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions.ts";
 import { PURCHASE_PRICES } from "../src/programs.ts";
@@ -2711,5 +2712,7 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
     expect(model.PROGRAM_PRICES).toEqual([TOR_ROUTER, ...PORT_OPENER_PROGRAMS].map((item) => PURCHASE_PRICES[item]));
     // What home keeps free of #242's share (the model's `shareBonusOfState`).
     expect(model.SHARE_HOME_KEPT_GB).toBe(SHARE_HOME_KEPT_GB);
+    // Home's RAM in use beside the share: the Agent's and its largest fresh-save worker's.
+    expect(model.HOME_USED_BY_THE_AGENT_GB).toBe(HOME_KEPT_FOR_THE_AGENT_GB);
   });
 });
