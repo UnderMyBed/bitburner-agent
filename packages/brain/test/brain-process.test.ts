@@ -114,9 +114,10 @@ test.each([
   [
     "a zero data backup interval",
     { dataBackupIntervalHours: 0 },
-    /dataBackupIntervalHours must be a number of hours above 0 and at most 596 \(the default is 24\)/,
+    /dataBackupIntervalHours must be a number of hours, at least 1 and at most 596 \(the default is 24\)/,
   ],
   ["a data backup interval a timer can't wait", { dataBackupIntervalHours: 597 }, /dataBackupIntervalHours must be/],
+  ["a data backup interval under an hour", { dataBackupIntervalHours: 0.5 }, /dataBackupIntervalHours must be/],
   ["a data backup interval as text", { dataBackupIntervalHours: "24" }, /dataBackupIntervalHours must be/],
   ["an empty data backup folder", { dataBackupDirectory: " " }, /dataBackupDirectory must be a folder/],
   ["a data backup folder that isn't text", { dataBackupDirectory: 5 }, /dataBackupDirectory must be a folder/],
@@ -140,11 +141,11 @@ test("the data backup's settings (#284): absent, 2 kept, every 24 h, in the data
   ]) {
     writeFileSync(
       path.join(dataDirectory, CONFIG_FILE_NAME),
-      JSON.stringify({ ...config, dataBackupsKept: 0, dataBackupIntervalHours: 0.5, dataBackupDirectory }),
+      JSON.stringify({ ...config, dataBackupsKept: 0, dataBackupIntervalHours: 1.5, dataBackupDirectory }),
     );
     expect(dataBackupSettings(loadOrCreateConfig(dataDirectory), dataDirectory)).toEqual({
       backupsKept: 0,
-      intervalHours: 0.5,
+      intervalHours: 1.5,
       directory,
     });
   }
@@ -495,6 +496,7 @@ test("the brain backs its data directory up at its start (#284): logged, recorde
   const [backup, ...others] = readdirSync(path.join(dataDirectory, "backups"));
   expect(others).toEqual([]);
   expect(readdirSync(path.join(dataDirectory, "backups", backup as string)).sort()).toEqual([
+    "backup.json",
     CONFIG_FILE_NAME,
     STORE_FILE_NAME,
   ]);

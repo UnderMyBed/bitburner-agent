@@ -14,17 +14,21 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { ManualClock } from "@bitburner-agent/bridge/test-helpers";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
+  BACKUP_MARKER_FILE_NAME,
   backupBeforeThinning,
   backupName,
   DATA_BACKUPS_DIRECTORY_NAME,
   type DataBackupEvent,
   DataBackups,
+  dataBackupStoreId,
   describeDataBackup,
   MIN_FREE_BYTES_AFTER_BACKUP,
   RETRY_AFTER_FAILURE_MS,
+  STORE_ID_SETTING,
 } from "../src/data-backup.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 
@@ -54,6 +58,15 @@ afterEach(async () => {
 });
 
 const storePath = () => path.join(dataDirectory, "telemetry.sqlite");
+/** This store's id, in its backups' markers. */
+const STORE_ID = "this-store";
+/** A folder named as a backup at `atMs`, marked as `storeId`'s (none: no marker). */
+function backupFolder(atMs: number, storeId: string | null, directory = backupDirectory()) {
+  const folder = path.join(directory, backupName(atMs));
+  mkdirSync(folder, { recursive: true });
+  if (storeId !== null) writeFileSync(path.join(folder, BACKUP_MARKER_FILE_NAME), JSON.stringify({ storeId }));
+  return path.basename(folder);
+}
 const backupDirectory = () => path.join(dataDirectory, DATA_BACKUPS_DIRECTORY_NAME);
 const backupsOnDisk = () => (existsSync(backupDirectory()) ? readdirSync(backupDirectory()).sort() : []);
 
@@ -63,11 +76,17 @@ function startBackups(
     backupIntervalMs?: number;
     freeBytes?: (directory: string) => Promise<number>;
     backupDirectory?: string;
+    storeId?: string;
+    worker?: URL;
+    copyTimeoutMs?: number;
   } = {},
 ) {
   const backups = new DataBackups({
     dataDirectory,
     storePath: storePath(),
+    storeId: options.storeId ?? STORE_ID,
+    ...(options.worker ? { worker: options.worker } : {}),
+    ...(options.copyTimeoutMs ? { copyTimeoutMs: options.copyTimeoutMs } : {}),
     configPath: path.join(dataDirectory, "config.json"),
     savesDirectory: path.join(dataDirectory, "saves"),
     backupDirectory: options.backupDirectory ?? backupDirectory(),
@@ -125,7 +144,12 @@ test("a backup holds the store, config.json and the newest save backup of each e
   const name = "2026-11-07T12-00-00.000Z";
   expect(backupsOnDisk()).toEqual([name]);
   const folder = path.join(backupDirectory(), name);
-  expect(readdirSync(folder).sort()).toEqual(["config.json", "saves", "telemetry.sqlite"]);
+  expect(readdirSync(folder).sort()).toEqual(["backup.json", "config.json", "saves", "telemetry.sqlite"]);
+  // Its marker: the store it's of (#298's review).
+  expect(JSON.parse(readFileSync(path.join(folder, "backup.json"), "utf8"))).toEqual({
+    storeId: STORE_ID,
+    store: storePath(),
+  });
   expect(readFileSync(path.join(folder, "config.json"), "utf8")).toBe('{"environment":"E0"}');
   expect(readFileSync(path.join(folder, "saves/E0/2026-11-07T11-30-00.000Z.json.gz"), "utf8")).toBe("newest E0");
   expect(readFileSync(path.join(folder, "saves/E2/2026-11-06T09-00-00.000Z.json.gz"), "utf8")).toBe("newest E2");
@@ -153,7 +177,10 @@ test("a backup holds the store, config.json and the newest save backup of each e
 test("with no config.json and no save backups yet, a backup is the store alone", async () => {
   const { backups } = startBackups();
   expect(await backups.backupNow("start")).toMatchObject({ type: "dataBackup", saves: [] });
-  expect(readdirSync(path.join(backupDirectory(), backupName(START_MS)))).toEqual(["telemetry.sqlite"]);
+  expect(readdirSync(path.join(backupDirectory(), backupName(START_MS))).sort()).toEqual([
+    "backup.json",
+    "telemetry.sqlite",
+  ]);
 });
 
 test("a folder the owner names outside the data directory: the backup goes there, named in full", async () => {
@@ -180,7 +207,7 @@ test("two asked for at once are taken one after the other, both whole", async ()
 
 test("the newest N are kept: older and partial backups go, anything else in the folder stays", async () => {
   const { backups } = startBackups({ backupsKept: 2 });
-  mkdirSync(path.join(backupDirectory(), "2026-11-01T00-00-00.000Z.partial"), { recursive: true });
+  mkdirSync(path.join(backupDirectory(), `2026-11-01T00-00-00.000Z.${STORE_ID}.partial`), { recursive: true });
   mkdirSync(path.join(backupDirectory(), "the owner's own folder"));
   writeFileSync(path.join(backupDirectory(), "notes.txt"), "kept");
   const names: string[] = [];
@@ -193,7 +220,7 @@ test("the newest N are kept: older and partial backups go, anything else in the 
     clock.advance(DAY_MS);
   }
   expect(backupsOnDisk()).toEqual([names[2], names[3], "notes.txt", "the owner's own folder"]);
-  expect(removed).toEqual([["2026-11-01T00-00-00.000Z.partial"], [], [names[0]], [names[1]]]);
+  expect(removed).toEqual([[`2026-11-01T00-00-00.000Z.${STORE_ID}.partial`], [], [names[0]], [names[1]]]);
 });
 
 test("the backup just written is kept even if the clock went back and its name sorts first", async () => {
@@ -315,6 +342,74 @@ test("a backup folder that can't be made is a failure, not a crash", async () =>
 /** Lets a finished backup's promise settle: its next check is scheduled once it has. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
+describe("a backup folder shared, a clock gone wrong, a partial left, a worker stuck (#298's review)", () => {
+  test("another store's backups, whole or partial, are never counted, rotated or trusted", async () => {
+    writePairs(1, 10);
+    const theirs = backupFolder(START_MS - HOUR_MS, "another-store");
+    const unmarked = backupFolder(START_MS - 2 * HOUR_MS, null);
+    const theirPartial = `${backupName(START_MS - 3 * HOUR_MS)}.another-store.partial`;
+    mkdirSync(path.join(backupDirectory(), theirPartial));
+    const { backups } = startBackups({ backupsKept: 1 });
+    // Another store's newer backup isn't this store's newest, nor one a thinning can trust.
+    expect(backups.newestBackupAtMs()).toBeNull();
+    const event = await backupBeforeThinning(backups, {
+      beforeMs: START_MS - DAY_MS,
+      nowMs: START_MS,
+      intervalMs: DAY_MS,
+    });
+    expect(event).toBeNull();
+    expect(backups.newestBackupAtMs()).toBe(START_MS);
+    clock.advance(DAY_MS);
+    expect(await backups.backupNow("interval")).toMatchObject({ removed: [backupName(START_MS)] });
+    expect(backupsOnDisk()).toEqual([unmarked, theirs, theirPartial, backupName(START_MS + DAY_MS)].sort());
+  });
+
+  test("a backup named after now counts as the oldest: rotated out first, never the newest", async () => {
+    const future = backupFolder(START_MS + 30 * DAY_MS, STORE_ID);
+    const older = backupFolder(START_MS - DAY_MS, STORE_ID);
+    const { backups } = startBackups({ backupsKept: 2 });
+    expect(backups.newestBackupAtMs()).toBe(START_MS - DAY_MS);
+    expect(await backups.backupNow("interval")).toMatchObject({ removed: [future] });
+    expect(backupsOnDisk()).toEqual([older, backupName(START_MS)]);
+  });
+
+  test("a partial backup left by a kill is removed before the free space is measured", async () => {
+    writePairs(1, 10);
+    const leftover = path.join(backupDirectory(), `${backupName(START_MS - HOUR_MS)}.${STORE_ID}.partial`);
+    mkdirSync(leftover, { recursive: true });
+    writeFileSync(path.join(leftover, "telemetry.sqlite"), "half a copy");
+    // A tight disk: enough only once the leftover is gone.
+    const { backups } = startBackups({
+      freeBytes: async () => (existsSync(leftover) ? 0 : 10 * MIN_FREE_BYTES_AFTER_BACKUP),
+    });
+    const event = await backups.backupNow("interval");
+    expect(event).toMatchObject({ type: "dataBackup", removed: [path.basename(leftover)] });
+    expect(backupsOnDisk()).toEqual([backupName(START_MS)]);
+  });
+
+  test("a worker that never replies is stopped after its time, a failure; the next backup goes on", async () => {
+    const hanging = path.join(dataDirectory, "hanging-worker.mjs");
+    writeFileSync(hanging, "setInterval(() => {}, 1000);\n");
+    const { backups } = startBackups({ worker: pathToFileURL(hanging), copyTimeoutMs: 300 });
+    const event = await backups.backupNow("thinning");
+    expect(event).toMatchObject({ type: "dataBackupFailed", reason: "thinning" });
+    expect(event.type === "dataBackupFailed" && event.failure).toBe("the store's copy took longer than 0.3 s: stopped");
+    expect(backupsOnDisk()).toEqual([]);
+    expect(backups.problem()).toMatchObject({ kind: "failed" });
+  });
+
+  test("a worker that exits without replying is a failure", async () => {
+    const exiting = path.join(dataDirectory, "exiting-worker.mjs");
+    writeFileSync(exiting, "process.exit(3);\n");
+    const { backups } = startBackups({ worker: pathToFileURL(exiting) });
+    const event = await backups.backupNow("start");
+    expect(event.type === "dataBackupFailed" && event.failure).toBe(
+      "the store's copy stopped (exit code 3) before it was done",
+    );
+    expect(backupsOnDisk()).toEqual([]);
+  });
+});
+
 describe("its schedule", () => {
   test("at the start a backup is taken when none is, then one each interval", async () => {
     const { backups, events, nextEvent } = startBackups({ backupIntervalMs: 6 * HOUR_MS });
@@ -346,7 +441,7 @@ describe("its schedule", () => {
   });
 
   test("a newest backup after now (the clock was wrong) makes one due at once", async () => {
-    mkdirSync(path.join(backupDirectory(), backupName(START_MS + 30 * DAY_MS)), { recursive: true });
+    backupFolder(START_MS + 30 * DAY_MS, STORE_ID);
     const { backups, nextEvent } = startBackups();
     const next = nextEvent();
     backups.start();
@@ -391,6 +486,7 @@ describe("its schedule", () => {
     const options = {
       dataDirectory,
       storePath: storePath(),
+      storeId: STORE_ID,
       configPath: "",
       savesDirectory: "",
       backupDirectory: backupDirectory(),
@@ -441,6 +537,13 @@ describe("before a thinning at the start (#283)", () => {
       /^the backup before it failed: not enough free space/,
     );
   });
+});
+
+test("the store's id is made once, kept in its settings, and so goes with a copy of the store", () => {
+  const id = dataBackupStoreId(store);
+  expect(id).toMatch(/^[0-9a-f]{16}$/);
+  expect(dataBackupStoreId(store)).toBe(id);
+  expect(store.getSetting(STORE_ID_SETTING)).toBe(id);
 });
 
 test("its lines: the brain's log and the run report's section 1", () => {

@@ -153,7 +153,8 @@ export interface IncomeFacts {
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
  * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then one augmentationDonationFailed per
- * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then storeThinningFailed, then dataBackupFailed.
+ * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then storeThinningFailed, then
+ * dataBackupFailed.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];

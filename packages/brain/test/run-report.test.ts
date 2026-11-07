@@ -3982,8 +3982,18 @@ describe("over a thinned store (#283)", () => {
 
   test("section 1 lists the data backups (#284), and those that failed, counted; the one before the start's thinning too", () => {
     // Another run's, before an earlier brain start in the day before: not this one's.
-    event(-2 * 60 * MINUTE, "dataBackup", { reason: "interval", directory: "backups/old", storeBytes: 1, saves: [] });
+    event(-2 * 60 * MINUTE, "dataBackup", { reason: "thinning", directory: "backups/old", storeBytes: 1, saves: [] });
     event(-60 * MINUTE, "brainStarted", { release: "r0" });
+    // That earlier run's own, at its start and interval, after its brainStarted: not the thinning's (#298's review).
+    event(-50 * MINUTE, "dataBackup", {
+      reason: "start",
+      directory: "backups/earlier-start",
+      storeBytes: 1,
+      saves: [],
+    });
+    event(-10 * MINUTE, "dataBackupFailed", { reason: "interval", failure: "earlier interval" });
+    // This start's thinning's backup failing, before the one that worked.
+    event(-5 * SECOND, "dataBackupFailed", { reason: "thinning", failure: "disk busy" });
     // This start's, before its thinning, just before cleanRun's brainStarted at T0.
     const backup = (reason: string, directory: string) => ({
       reason,
@@ -4004,6 +4014,11 @@ describe("over a thinned store (#283)", () => {
         "save backup, in 1.7 s (before the window)\n",
     );
     expect(text).not.toContain("backups/old");
+    expect(text).not.toContain("backups/earlier-start");
+    expect(text).not.toContain("earlier interval");
+    expect(text).toContain(
+      `  ${at(-5 * SECOND)}  data backup FAILED (before the start's thinning): disk busy (before the window)\n`,
+    );
     expect(text).toContain(
       `  ${at(RUN_MS / 2)}  data backup backups/at-the-interval (at the interval): the store 412.3 MB, 1 save backup, ` +
         "in 1.7 s\n",

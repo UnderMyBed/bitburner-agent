@@ -9,6 +9,7 @@ import {
   DEFAULT_DATA_BACKUP_INTERVAL_HOURS,
   DEFAULT_DATA_BACKUPS_KEPT,
   MAX_DATA_BACKUP_INTERVAL_HOURS,
+  MIN_DATA_BACKUP_INTERVAL_HOURS,
 } from "./data-backup.ts";
 import { MAX_BACKUP_INTERVAL_MS } from "./save-backups.ts";
 import { ENVIRONMENTS, type Environment } from "./telemetry-store.ts";
@@ -51,7 +52,7 @@ export interface BrainConfig {
    * default, never written): 2.
    */
   dataBackupsKept?: number;
-  /** Hours between data backups, from the newest. Absent: 24. */
+  /** Hours between data backups, from the newest: at least 1. Absent: 24. */
   dataBackupIntervalHours?: number;
   /**
    * Where the data backups go: a folder, relative to the data directory unless absolute. Absent: `backups` in the data
@@ -250,11 +251,11 @@ function configProblem(config: unknown): string | null {
     dataBackupIntervalHours !== undefined &&
     !(
       typeof dataBackupIntervalHours === "number" &&
-      dataBackupIntervalHours > 0 &&
+      dataBackupIntervalHours >= MIN_DATA_BACKUP_INTERVAL_HOURS &&
       dataBackupIntervalHours <= MAX_DATA_BACKUP_INTERVAL_HOURS
     )
   ) {
-    return `dataBackupIntervalHours must be a number of hours above 0 and at most ${MAX_DATA_BACKUP_INTERVAL_HOURS} (the default is ${DEFAULT_DATA_BACKUP_INTERVAL_HOURS})`;
+    return `dataBackupIntervalHours must be a number of hours, at least ${MIN_DATA_BACKUP_INTERVAL_HOURS} and at most ${MAX_DATA_BACKUP_INTERVAL_HOURS} (the default is ${DEFAULT_DATA_BACKUP_INTERVAL_HOURS})`;
   }
   if (
     dataBackupDirectory !== undefined &&

@@ -22,7 +22,7 @@ import {
 } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
-import { backupBeforeThinning, DataBackups, describeDataBackup } from "./data-backup.ts";
+import { backupBeforeThinning, DataBackups, dataBackupStoreId, describeDataBackup } from "./data-backup.ts";
 import { DesiredStateController } from "./desired-state.ts";
 import { readFactionWorkEnabled } from "./factions.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
@@ -84,6 +84,7 @@ try {
       : new DataBackups({
           dataDirectory,
           storePath,
+          storeId: dataBackupStoreId(store),
           configPath: path.join(dataDirectory, CONFIG_FILE_NAME),
           savesDirectory: path.join(dataDirectory, SAVE_BACKUPS_DIRECTORY_NAME),
           backupDirectory: backupSettings.directory,

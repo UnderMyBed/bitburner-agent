@@ -642,7 +642,7 @@ interface RunFacts extends RunWindow {
   /**
    * The store's thinnings, and those that failed, in the day before the window since its last brain start (#283's
    * review): a brain start's comes just before its `brainStarted`, so before a default window. With them, the data
-   * backups there (#284): the one a thinning at the start waits for.
+   * backup a thinning at the start waited for (#284), or its failure: only those, never an earlier run's backups.
    */
   thinningsBefore: StoredEvent[];
   /** Hacking income against the ceiling (#196). */
@@ -817,7 +817,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const lastStartBeforeMs = earlierStarts.at(-1)?.atMs ?? Number.NEGATIVE_INFINITY;
     const thinningsBefore = dayBefore.filter(
       (event) =>
-        (STORE_THINNING_EVENT_KINDS.includes(event.kind) || DATA_BACKUP_EVENT_KINDS.includes(event.kind)) &&
+        (STORE_THINNING_EVENT_KINDS.includes(event.kind) ||
+          (DATA_BACKUP_EVENT_KINDS.includes(event.kind) && fieldsOf(event.detail).reason === "thinning")) &&
         event.atMs >= lastStartBeforeMs,
     );
     const reloadsBefore = store
