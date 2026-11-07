@@ -80,8 +80,8 @@ describe("the calibration", () => {
   test("the curve's constants are the fit's: a local best on run #3 alone, at the refit's own steps", () => {
     // test/fit.ts's `fitError`, the objective the refit minimised: run #3's cycles 1 to 6, level and money, and its 7th
     // to 10th's money at 5 to 20 min, where the cap applies. 0.2969 at the fit, a local best by coordinate descent at
-    // `calibrationSteps` (from part 1's constants and from part 2's first refit; the better of the two); the bound keeps
-    // the fit within a thousandth of it. Of it, cycles 1 to 6 alone are 0.2003, part 1's own.
+    // `calibrationSteps` from part 1's constants; the bound keeps the fit within a thousandth of it. Of it, cycles 1 to
+    // 6 alone are 0.2003, part 1's own.
     const fitted = fitError({});
     expect(fitted.combined).toBeLessThan(0.2975);
     expect(fitted.early).toBeLessThan(0.201);
@@ -89,6 +89,11 @@ describe("the calibration", () => {
     for (const { name, calibration } of calibrationSteps(CALIBRATION)) {
       expect(fitted.combined, name).toBeLessThanOrEqual(fitError(calibration).combined);
     }
+    // The descent's other start, part 2's first refit (moneyPaceExponent 0.5625, firstCycleSpeed 0.85, home 128 GB),
+    // stops at a worse local best, 0.2989.
+    const other = fitError({ moneyPaceExponent: 0.5625, firstCycleSpeed: 0.85, fullSpeedHomeRamGb: 128 });
+    expect(other.combined).toBeGreaterThan(fitted.combined);
+    expect(other.combined).toBeCloseTo(0.2989, 3);
   });
 
   test("fitted: the cap brings run #3's 7th to 9th cycles' 10 min within ×3, from ×30 and more uncapped", () => {

@@ -14,8 +14,9 @@ export const CAP_FIT_MINUTES: readonly number[] = [5, 10, 15, 20];
  *   another than run #3's (another set installed), but those minutes are bound by the world servers' RAM alike;
  * - `combined`: the readings of both, the late weighted as the early's money (a third), what the refit minimised.
  * A late reading past the end of the model's cycle reads its money at that end (the cycle ended because the money was
- *   already there, which is the error the cap is about), so a fit can't win by ending cycles early; a cycle the model
- *   never had (the BitNode destroyed first) has none. `lateReadings` counts them.
+ *   already there, which is the error the cap is about), so the cap's fit can't win by ending those cycles early; a
+ *   cycle the model never had (the BitNode destroyed first) has none. `lateReadings` counts them. The early readings
+ *   keep part 1's rule, a reading past the end left out: the cap barely moves cycles 1 to 6's ends.
  */
 export function fitError(calibration: Partial<Calibration>) {
   const seen = new Map<string, { hacking: number; money: number }>();

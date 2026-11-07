@@ -139,28 +139,36 @@ describe("the paired comparison", () => {
   test("#247's comparison on the full grid, for the record (the model isn't fit for #247): the figures pinned", () => {
     // Count first (today's brain) against favour first, minutes, the least and the most difference over the 14
     // settings. From a fresh BN1.1: no answer on the donations (−53 to +2: the share by index flips it); count first
-    // reaches Daedalus's count sooner at every setting (5 to 62 min). From BN1.3's start: no answer, 3 settings with no
-    // pair. Daedalus's join and the destroy are out of range everywhere.
+    // reaches Daedalus's count sooner at every setting (5 to 62 min). From BN1.3's start: no answer on either, favour
+    // first later where paired, 3 of the 14 settings with no pair. Daedalus's join and the destroy are out of range
+    // everywhere. Each milestone: the verdict, the least and the most difference, and the settings with no pair.
     const summary = (start: ModelStart) => {
-      const { verdict } = pairedComparison(start, TODAYS_POLICY, FAVOUR_FIRST_POLICY);
+      const { verdict, settings } = pairedComparison(start, TODAYS_POLICY, FAVOUR_FIRST_POLICY);
+      const unpaired = (milestone: keyof typeof verdict) =>
+        settings.filter((setting) => setting.difference[milestone] === null).length;
       return Object.fromEntries(
         Object.entries(verdict).map(([milestone, { answer, least, most }]) => [
           milestone,
-          [answer, Math.round(least / MINUTE_MS), Math.round(most / MINUTE_MS)],
+          [
+            answer,
+            Math.round(least / MINUTE_MS),
+            Math.round(most / MINUTE_MS),
+            unpaired(milestone as keyof typeof verdict),
+          ],
         ]),
       );
     };
     expect(summary({ currentNode: 1, ownedSF: {} })).toEqual({
-      donationsUnlocked: ["no answer", -53, 2],
-      daedalusCount: ["first sooner", 5, 62],
-      daedalusJoined: ["no answer", Number.NaN, Number.NaN],
-      destroyed: ["no answer", Number.NaN, Number.NaN],
+      donationsUnlocked: ["no answer", -53, 2, 0],
+      daedalusCount: ["first sooner", 5, 62, 0],
+      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 14],
+      destroyed: ["no answer", Number.NaN, Number.NaN, 14],
     });
     expect(summary(BN1_3.start)).toEqual({
-      donationsUnlocked: ["no answer", 9, 143],
-      daedalusCount: ["no answer", 36, 163],
-      daedalusJoined: ["no answer", Number.NaN, Number.NaN],
-      destroyed: ["no answer", Number.NaN, Number.NaN],
+      donationsUnlocked: ["no answer", 9, 143, 3],
+      daedalusCount: ["no answer", 36, 163, 3],
+      daedalusJoined: ["no answer", Number.NaN, Number.NaN, 14],
+      destroyed: ["no answer", Number.NaN, Number.NaN, 14],
     });
   }, 120_000);
 });

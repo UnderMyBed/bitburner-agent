@@ -275,6 +275,20 @@ describe("downstream: today's rules on BN1.3's own measured curves", () => {
     expect(offs[2]).toBeLessThan(-0.1);
   });
 
+  test("known miss, out of range: the share's RAM at a high level, BN1.3's 9th at 30-75 min, ×0.17 to ×0.65 BN1.3's", () => {
+    // At run #3's 82% the batches' hosts share nothing, so the model's is home's alone; BN1.3's healthy 9th, at hacking
+    // 4,000 and more, left most of the cloud to the share. `batchesUseOfHosts` isn't constant.
+    expect(model.inRange(9)).toBe(false);
+    const ratios = (BN1_3_SHARE_RAM.find(({ cycle }) => cycle === 9)?.points ?? [])
+      .filter(([minutes]) => minutes >= 30)
+      .map(([minutes, gb]) => (model.shareRamAt(9, minutes) ?? Number.NaN) / gb);
+    expect(ratios).toHaveLength(4);
+    for (const ratio of ratios) {
+      expect(ratio).toBeGreaterThan(0.15);
+      expect(ratio).toBeLessThan(0.7);
+    }
+  });
+
   test("known miss: the cash where spending is most of the income, cycles 1 to 3 at 20 min, under 2% of BN1.3's", () => {
     // The model buys every purchase the minute's money covers; the brain one an intent, a medium snapshot apart, and
     // BN1.3's purchases show its money waiting between them. Part 1's miss on run #3 (validation.test.ts), held out.

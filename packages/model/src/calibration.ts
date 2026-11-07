@@ -220,7 +220,8 @@ export interface Calibration {
    * so at more the batches' hosts share nothing and home alone does. It isn't constant: BN1.3's 9th cycle, at hacking
    * 4,000 and more, shared 24-52m GB with home's 4-34m (#263's extract), its batches needing far less of the cloud.
    * The one reading run #3 has is its 4th cycle's, "its batches held 82% of the cloud servers" (#242), so it's taken
-   * for every cycle: measured on run #3, not fitted, and low on the share where the level is high.
+   * for every cycle: measured on run #3, not fitted, and low on the share where the level is high. Keyed by the
+   * cycle's index, the flaw #260's share by index had: the level would key it better (#263's next part).
    */
   batchesUseOfHosts: readonly number[];
 }

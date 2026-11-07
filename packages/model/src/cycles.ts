@@ -663,8 +663,9 @@ export function holdsOf(
 export const SHARE_HOME_KEPT_GB = 32;
 /**
  * Home's RAM in use beside the share, GB: what the Agent and its largest fresh-save worker take, the brain's
- * `HOME_KEPT_FOR_THE_AGENT_GB` (packages/brain/src/batcher.ts), checked equal by the brain's tests. The batches never
- * run on home.
+ * `HOME_KEPT_FOR_THE_AGENT_GB` (packages/brain/src/batcher.ts), an equal constant (the brain's tests check it). That's
+ * what the brain reserves, not the game's `getServerUsedRam("home")`, which `shareRound` is given live and which
+ * holds whatever else runs on home. The batches never run on home.
  */
 export const HOME_USED_BY_THE_AGENT_GB = 8;
 

@@ -381,8 +381,9 @@ describe("the share from the state (#263), not the install index", () => {
     expect(shareRamGbOfState(purse, CALIBRATION, 3168.8)).toBe(2038 * SHARE_RAM_GB);
     expect(shareBonusOfState(purse, CALIBRATION, true, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
     expect(shareBonusOfState(purse, CALIBRATION, undefined, 3168.8)).toBe(shareBonusOfPower(1 + 2038));
-    // BN1.3's 1st cycle, from the brain's constants alone: home 32 GB shares nothing, 64 GB 24, 512 GB 472 (the
-    // extract's readings at 15, 20 and 30 min).
+    // From the brain's constants alone: home 32 GB shares nothing, 64 GB 24, 512 GB 472. These are BN1.3's 1st cycle's
+    // readings at 15, 20 and 30 min, but seen before the Agent's RAM in use was modelled (#293's first review), so
+    // after the fact: not validation.
     expect([32, 64, 512].map((home) => shareRamGbOfState(freshPurse(home), CALIBRATION, 100))).toEqual([0, 24, 472]);
     expect(shareBonusOfState(freshPurse(32), CALIBRATION, true, 100)).toBe(1);
   });
