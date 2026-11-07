@@ -443,6 +443,20 @@ export class AugmentationTimeline {
   }
 
   /**
+   * When the first slow snapshot after `afterMs`, up to `untilMs`, arrived showing another `lastAugReset` than the last
+   * one by `afterMs` (any, with none by then): an install seen done, or a destroy (it resets `lastAugReset` too,
+   * `PlayerObjectGeneralMethods.ts:145`, `:126`). Null for none. Section 4's installs sent, and section 3's install
+   * intents with no done record (#286: the reset kills the worker before it reports).
+   */
+  resetSeenBetween(afterMs: number, untilMs: number): number | null {
+    const before = this.#resets.filter((reset) => reset.atMs <= afterMs).at(-1);
+    const seen = this.#resets.find(
+      (reset) => reset.atMs > afterMs && reset.atMs <= untilMs && reset.lastAugReset !== before?.lastAugReset,
+    );
+    return seen?.atMs ?? null;
+  }
+
+  /**
    * Section 3's lines with --verbose (#245; `summaryLines` by default): each decision, purchase, install sent, install
    * seen and cycle called off, in time order.
    */
@@ -599,12 +613,7 @@ export class AugmentationTimeline {
     let notSeen = 0;
     for (const sent of events.filter((event) => event.kind === AUGMENTATION_INSTALL_SENT_EVENT_KIND)) {
       if (sent.atMs + withinMs > untilMs) continue;
-      const before = this.#resets.filter((reset) => reset.atMs <= sent.atMs).at(-1);
-      const seen = this.#resets.some(
-        (reset) =>
-          reset.atMs > sent.atMs && reset.atMs <= sent.atMs + withinMs && reset.lastAugReset !== before?.lastAugReset,
-      );
-      if (seen) continue;
+      if (this.resetSeenBetween(sent.atMs, sent.atMs + withinMs) !== null) continue;
       const reportedDone = notReset.find((event) => event.atMs >= sent.atMs && event.atMs <= sent.atMs + withinMs);
       if (reportedDone !== undefined) {
         lines.push(

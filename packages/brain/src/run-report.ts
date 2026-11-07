@@ -1146,14 +1146,39 @@ interface IntentEpisode {
   id: string;
   outcome: IntentOutcome;
   firstSeenMs: number;
+  lastSeenMs: number;
+  /** When it was seen done: its done record, or the slow snapshot that showed the reset that followed it (#286). */
   doneAtMs: number | null;
   /** The problems it reported while not done, each once (#245: why it was tried again). */
   problemsBeforeDone: string[];
+  /** Done by the reset that followed it, with no done record (#286). */
+  resetFollowed: boolean;
+}
+
+/**
+ * How long after a reset intent's last record the reset may be seen and still count as its (#286): an install's own
+ * allowance in section 4 (`INSTALL_NOT_RESTARTED_AFTER_MS`, 5 minutes); a destroy's reload is under a minute
+ * (`RELOAD_GAP_BOUND_MS`). Later, something else reset the game.
+ */
+const RESET_FOLLOWED_WITHIN_MS = INSTALL_NOT_RESTARTED_AFTER_MS;
+
+/**
+ * When a reset intent's own reset was seen after it (#286), or null: an install's, another `lastAugReset` (as section
+ * 4's installs sent are seen done); a destroy's, another BitNode (as section 2's BitNodes line). After its first
+ * record, up to `RESET_FOLLOWED_WITHIN_MS` after its last. Null for any other intent.
+ */
+function resetFollowing(facts: RunFacts, { id, firstSeenMs, lastSeenMs }: IntentEpisode): number | null {
+  const untilMs = lastSeenMs + RESET_FOLLOWED_WITHIN_MS;
+  if (id.startsWith("installAugmentations(")) return facts.augmentations.resetSeenBetween(firstSeenMs, untilMs);
+  if (id.startsWith("destroyBitNode(")) return facts.cycles.bitNodeSeenBetween(firstSeenMs, untilMs);
+  return null;
 }
 
 /**
  * Each intent episode in the window, in the order first seen, with its latest outcome. The same id starts a new episode
- * when it's seen not done after being done, or with fewer tries (given again, after a reset say).
+ * when it's seen not done after being done, or with fewer tries (given again, after a reset say). An install or a
+ * destroy not done that its reset followed is done (#286): the reset reloads the game before its worker reports, and a
+ * destroy's never does (`ingame/src/page/destroy-page.ts:110`); what it last reported is a problem before done.
  */
 function intentEpisodes(facts: RunFacts): IntentEpisode[] {
   const episodes: IntentEpisode[] = [];
@@ -1162,16 +1187,33 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
     for (const outcome of intents) {
       let episode = current.get(outcome.id);
       if (episode === undefined || (episode.outcome.done && !outcome.done) || outcome.tries < episode.outcome.tries) {
-        episode = { id: outcome.id, outcome, firstSeenMs: atMs, doneAtMs: null, problemsBeforeDone: [] };
+        episode = {
+          id: outcome.id,
+          outcome,
+          firstSeenMs: atMs,
+          lastSeenMs: atMs,
+          doneAtMs: null,
+          problemsBeforeDone: [],
+          resetFollowed: false,
+        };
         episodes.push(episode);
         current.set(outcome.id, episode);
       }
       episode.outcome = outcome;
+      episode.lastSeenMs = atMs;
       if (outcome.done) episode.doneAtMs ??= atMs;
       else if (outcome.problem !== null && !episode.problemsBeforeDone.includes(outcome.problem)) {
         episode.problemsBeforeDone.push(outcome.problem);
       }
     }
+  }
+  for (const episode of episodes) {
+    if (episode.outcome.done) continue;
+    const seenMs = resetFollowing(facts, episode);
+    if (seenMs === null) continue;
+    episode.outcome = { ...episode.outcome, done: true, problem: null };
+    episode.doneAtMs = seenMs;
+    episode.resetFollowed = true;
   }
   return episodes;
 }
@@ -1196,15 +1238,25 @@ const triedAgainWhileAtIt = ({ outcome, problemsBeforeDone }: IntentEpisode) =>
   problemsBeforeDone.length > 0 &&
   problemsBeforeDone.every((problem) => STILL_AT_IT.test(problem));
 
+/** "2 tries (ui)". */
+function describeTries({ tries, backend }: IntentOutcome): string {
+  return `${tries} ${tries === 1 ? "try" : "tries"}${backend === null ? "" : ` (${backend})`}`;
+}
+
 function describeIntent(outcome: IntentOutcome): string {
-  const backend = outcome.backend === null ? "" : ` (${outcome.backend})`;
-  const tries = `${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}${backend}`;
+  const tries = describeTries(outcome);
   const problem = outcome.problem === null ? "" : `: ${outcome.problem}`;
   return outcome.done ? `done after ${tries}${problem}` : `not done, ${tries}${problem}`;
 }
 
-/** An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …". */
-function describeEpisode({ id, outcome, firstSeenMs, doneAtMs }: IntentEpisode): string {
+/**
+ * An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …", or for one its reset followed
+ * (#286) "    destroyBitNode(1): done: the reset followed, 1 try (ui); the reset seen by …".
+ */
+function describeEpisode({ id, outcome, firstSeenMs, doneAtMs, resetFollowed }: IntentEpisode): string {
+  if (resetFollowed && doneAtMs !== null) {
+    return `    ${id}: done: the reset followed, ${describeTries(outcome)}; the reset seen by ${formatIsoTime(doneAtMs)}`;
+  }
   const when = doneAtMs === null ? `first seen ${formatIsoTime(firstSeenMs)}` : `done by ${formatIsoTime(doneAtMs)}`;
   return `    ${id}: ${describeIntent(outcome)}; ${when}`;
 }
@@ -1214,13 +1266,15 @@ interface ActionCounts {
   done: number;
   doneWithProblem: number;
   triedAgainWhileAtIt: number;
+  /** Done by the reset that followed it, with no done record (#286). */
+  resetFollowed: number;
   notDone: number;
 }
 
 /**
  * The intents (#245): with `verbose`, each episode; else counts by action (the id's name before its arguments) and
  * outcome, the most first, then each episode not done, done with a problem, or tried again for something besides its
- * worker still at it (`triedAgainWhileAtIt`).
+ * worker still at it (`triedAgainWhileAtIt`). An install or a destroy its reset followed is done, and says so (#286).
  */
 function intentLines(facts: RunFacts, verbose: boolean): string[] {
   const episodes = intentEpisodes(facts);
@@ -1229,12 +1283,19 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
   const byAction = new Map<string, ActionCounts>();
   for (const episode of episodes) {
     const action = episode.id.split("(")[0] ?? episode.id;
-    const counts = byAction.get(action) ?? { done: 0, doneWithProblem: 0, triedAgainWhileAtIt: 0, notDone: 0 };
+    const counts = byAction.get(action) ?? {
+      done: 0,
+      doneWithProblem: 0,
+      triedAgainWhileAtIt: 0,
+      resetFollowed: 0,
+      notDone: 0,
+    };
     byAction.set(action, counts);
     if (episode.outcome.done) counts.done += 1;
     else counts.notDone += 1;
     if (episode.outcome.done && episode.outcome.problem !== null) counts.doneWithProblem += 1;
     if (triedAgainWhileAtIt(episode)) counts.triedAgainWhileAtIt += 1;
+    if (episode.resetFollowed) counts.resetFollowed += 1;
   }
   const total = ({ done, notDone }: ActionCounts) => done + notDone;
   const ranked = [...byAction].sort(
@@ -1246,6 +1307,7 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
     const notes = [
       ...(counts.doneWithProblem > 0 ? [`${counts.doneWithProblem} with a problem`] : []),
       ...(counts.triedAgainWhileAtIt > 0 ? [`${counts.triedAgainWhileAtIt} tried again while still at it`] : []),
+      ...(counts.resetFollowed > 0 ? [`${counts.resetFollowed} by the reset that followed, with no done record`] : []),
     ];
     const outcomes = [
       ...(counts.done > 0 ? [`${counts.done} done${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`] : []),
