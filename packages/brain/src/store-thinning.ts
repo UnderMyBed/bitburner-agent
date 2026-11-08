@@ -5,7 +5,7 @@
 // (`TelemetryStore.thinSnapshots`). The run report's time checks (the heartbeat's gaps, clock steps, page stalls)
 // read every row, so stay exact; its content checks read one snapshot a minute there. It can't be undone. By hand,
 // with `npm run thin` (a dry run, and a backup first, unless told not to); at the brain's start only if config.json's
-// `telemetryKeptWholeDays` opts in (owner's call, proposed in #283), and only once a data backup (#284) holds whole
+// `telemetryKeptWholeDays` opts in (owner decision 60, #283), and only once a data backup (#284) holds whole
 // what it cuts, never in a run's hot path. The save backups are files beside the store: never touched.
 import { formatIsoTime, formatSeconds } from "./gap-report.ts";
 import type { RecordContext, TelemetryStore } from "./telemetry-store.ts";
@@ -21,8 +21,8 @@ export const STORE_THINNING_EVENT_KINDS: readonly string[] = [
 ];
 /**
  * The days `npm run thin` keeps whole unless config.json or `--kept-whole-days` says. The brain's start thins only
- * when config.json says (`telemetryKeptWholeDays`). The owner's call, proposed conservatively: two weeks keeps any run
- * read back, and any calibration taken, whole; 24/7 runs make that several GB.
+ * when config.json says (`telemetryKeptWholeDays`). Two weeks (owner decision 60) keeps any run read back, and any
+ * calibration taken, whole; 24/7 runs make that several GB.
  */
 export const DEFAULT_KEPT_WHOLE_DAYS = 14;
 const DAY_MS = 24 * 60 * 60_000;
