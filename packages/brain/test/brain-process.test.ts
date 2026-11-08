@@ -108,7 +108,7 @@ test.each([
   [
     "data backups kept below 0",
     { dataBackupsKept: -1 },
-    /dataBackupsKept must be a whole number, 0 for no data backups \(the default is 2\)/,
+    /dataBackupsKept must be a whole number, 0 for no data backups \(the default is 3\)/,
   ],
   ["a fraction of a data backup kept", { dataBackupsKept: 1.5 }, /dataBackupsKept must be a whole number/],
   [
@@ -127,10 +127,10 @@ test.each([
   expect(() => loadOrCreateConfig(dataDirectory)).toThrow(expected);
 });
 
-test("the data backup's settings (#284): absent, 2 kept, every 24 h, in the data directory's backups/; 0 kept is off", () => {
+test("the data backup's settings (#284): absent, 3 kept, every 24 h, in the data directory's backups/; 0 kept is off", () => {
   const config = loadOrCreateConfig(dataDirectory);
   expect(dataBackupSettings(config, dataDirectory)).toEqual({
-    backupsKept: 2,
+    backupsKept: 3,
     intervalHours: 24,
     directory: path.join(dataDirectory, "backups"),
   });
@@ -487,7 +487,7 @@ test("opted in with data backups off, the brain's start thins nothing (#284): lo
 test("the brain backs its data directory up at its start (#284): logged, recorded, and the copy opens", async () => {
   const { output } = await startBrain();
   expect(output()).toContain(
-    ` brain: data backups in ${path.join(dataDirectory, "backups")}, every 24 h from the newest, the newest 2 kept`,
+    ` brain: data backups in ${path.join(dataDirectory, "backups")}, every 24 h from the newest, the newest 3 kept`,
   );
   for (let attempt = 0; attempt < 100 && !/ brain: data backup backups\//.test(output()); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 50));

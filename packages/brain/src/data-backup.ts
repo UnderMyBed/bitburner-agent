@@ -29,11 +29,11 @@ export const DATA_BACKUP_EVENT_KIND = "dataBackup";
 export const DATA_BACKUP_FAILED_EVENT_KIND = "dataBackupFailed";
 export const DATA_BACKUP_EVENT_KINDS: readonly string[] = [DATA_BACKUP_EVENT_KIND, DATA_BACKUP_FAILED_EVENT_KIND];
 /**
- * The owner's call, proposed conservatively (owner decision 62): two kept, one a day. Each is about the store's size
- * once compacted (a 12-hour run adds about 200 MB), so they take about twice the store, three times while a new one is
- * written before the oldest goes.
+ * Three kept, one a day (owner decision 62): 2 to 3 days to catch a problem `quick_check` can't see (bad rows). Each
+ * is about the store's size once compacted (a 12-hour run adds about 200 MB), so they take about three times the store,
+ * four times while a new one is written before the oldest goes.
  */
-export const DEFAULT_DATA_BACKUPS_KEPT = 2;
+export const DEFAULT_DATA_BACKUPS_KEPT = 3;
 export const DEFAULT_DATA_BACKUP_INTERVAL_HOURS = 24;
 /** The shortest interval config.json takes (#298's review): a copy of a large store every few minutes would be waste. */
 export const MIN_DATA_BACKUP_INTERVAL_HOURS = 1;
@@ -482,7 +482,7 @@ function copyStore(
  * everything it cuts: the newest, if it's within the interval and was taken at or after the thinning's cutoff (the
  * snapshots it cuts were all stored before it, and none thinned yet); else one taken now. Null when one does, else why
  * not. That backup is rotated out with the rest: a start's thinning can be undone from it for between `backupsKept`
- * less one and `backupsKept` intervals (1 to 2 days by default), as it can be up to an interval old.
+ * less one and `backupsKept` intervals (2 to 3 days by default), as it can be up to an interval old.
  */
 export async function backupBeforeThinning(
   dataBackups: DataBackups | null,
