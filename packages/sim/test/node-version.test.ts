@@ -162,7 +162,7 @@ describe("the repo's Node pin (#282)", () => {
     expect(SORT_BY_NODE[pinnedNodeMajor()]?.v8).toBe("14.6.");
   });
 
-  // Documents the measurements recorded above, which the test before this one checks live on the pinned Node.
+  // Documents the measurements recorded above, which the live sort test above checks on the pinned Node.
   test("the measurements recorded here: the two V8s differ for 3 to 7 elements and agree for 2 and 8", () => {
     const [node24, node26] = [SORT_BY_NODE[24]?.byLength ?? {}, SORT_BY_NODE[26]?.byLength ?? {}];
     for (const n of [2, 8]) expect(node24[n]).toEqual(node26[n]);
