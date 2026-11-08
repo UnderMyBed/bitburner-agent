@@ -104,6 +104,76 @@ test("snapshots of a tier and events, by environment and window (both edges), in
   expect(store.eventsInWindow({ ...window, kinds: [] })).toEqual([]);
 });
 
+test("the slow snapshots' resetInfo alone (#285): by arrival, after a place, to a row, a batch; then by row", () => {
+  const resetInfo = (lastAugReset: number) => ({ lastAugReset, lastNodeReset: 0, currentNode: 1, ownedAugs: {} });
+  // Stored out of order of arrival, with a medium snapshot and another environment's slow one between.
+  for (const [receivedAtMs, tier, environment, data] of [
+    [3_000, "slow", "E1", { resetInfo: resetInfo(3), factions: { joined: ["CyberSec"] } }],
+    [1_000, "slow", "E1", { resetInfo: resetInfo(1) }],
+    [2_000, "medium", "E1", { resetInfo: resetInfo(99) }],
+    [2_000, "slow", "E0", { resetInfo: resetInfo(98) }],
+    [3_000, "slow", "E1", null],
+    [4_000, "slow", "E1", { resetInfo: 5 }],
+    [5_000, "slow", "E1", { purchasedServers: [] }],
+  ] as const) {
+    store.recordSnapshot(
+      { environment, release: `r${receivedAtMs}` },
+      {
+        agentSessionId: "s",
+        tier,
+        sequenceNumber: 1,
+        gameTimeMs: receivedAtMs - 500,
+        receivedAtMs,
+        missedBefore: 0,
+        data,
+      },
+    );
+  }
+  const all = [...store.iterateSlowResetInfo({ environment: "E1" })];
+  expect(all).toEqual([
+    { id: 2, release: "r1000", gameTimeMs: 500, receivedAtMs: 1_000, resetInfo: resetInfo(1) },
+    // Only its resetInfo: the rest of the payload isn't read.
+    { id: 1, release: "r3000", gameTimeMs: 2_500, receivedAtMs: 3_000, resetInfo: resetInfo(3) },
+    // No resetInfo, or one that isn't an object: null.
+    { id: 5, release: "r3000", gameTimeMs: 2_500, receivedAtMs: 3_000, resetInfo: null },
+    { id: 6, release: "r4000", gameTimeMs: 3_500, receivedAtMs: 4_000, resetInfo: null },
+    { id: 7, release: "r5000", gameTimeMs: 4_500, receivedAtMs: 5_000, resetInfo: null },
+  ]);
+  const ids = (rows: Iterable<{ id: number }>) => [...rows].map((row) => row.id);
+  // After a place in that order (a tie on the time goes on by row), to a row, at most a batch.
+  expect(ids(store.iterateSlowResetInfo({ environment: "E1", after: { receivedAtMs: 3_000, id: 1 } }))).toEqual([
+    5, 6, 7,
+  ]);
+  expect(
+    ids(store.iterateSlowResetInfo({ environment: "E1", after: { receivedAtMs: 1_000, id: 2 }, limit: 2 })),
+  ).toEqual([1, 5]);
+  expect(ids(store.iterateSlowResetInfo({ environment: "E1", throughId: 5 }))).toEqual([2, 1, 5]);
+  // By row, after a row: the slow ones of the environment only.
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 2 }))).toEqual([5, 6, 7]);
+  // At most a batch; and by the tier index (the page closed for days): the same rows.
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 2, limit: 2 }))).toEqual([5, 6]);
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 2, byTierIndex: true }))).toEqual([5, 6, 7]);
+  expect(ids(store.slowResetInfoAfterId({ environment: "E1", afterId: 0, limit: 3, byTierIndex: true }))).toEqual([
+    1, 2, 5,
+  ]);
+  expect(store.slowResetInfoAfterId({ environment: "E1", afterId: 7 })).toEqual([]);
+  expect(store.lastSnapshotId()).toBe(7);
+});
+
+test("events of some kinds after an event, each with its id (#285)", () => {
+  for (const kind of ["a", "b", "a", "c"]) store.recordEvent(context, { atMs: 1, kind, detail: { kind } });
+  store.recordEvent({ ...context, environment: "E0" }, { atMs: 1, kind: "a", detail: {} });
+  expect(store.eventsAfterId({ environment: "E1", kinds: ["a", "c"], afterEventId: 1 })).toEqual([
+    { id: 3, atMs: 1, kind: "a", detail: { kind: "a" } },
+    { id: 4, atMs: 1, kind: "c", detail: { kind: "c" } },
+  ]);
+  expect(store.eventsAfterId({ environment: "E1", kinds: ["a"], afterEventId: 3 })).toEqual([]);
+});
+
+test("an empty store's last snapshot id is 0", () => {
+  expect(store.lastSnapshotId()).toBe(0);
+});
+
 test("fast snapshots' page heaps, by environment and window, in order of arrival, numbers only", () => {
   for (const [receivedAtMs, tier, environment, data] of [
     [3_000, "fast", "E0", { pageHeapUsedBytes: 30 }],

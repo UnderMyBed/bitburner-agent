@@ -288,6 +288,8 @@ test("the brain serves the dashboard; the pause switch is stored and survives a 
   };
   // An E2 brain (as every test runs) never supervises: it must never touch the owner's Steam game.
   expect(status).toMatchObject({ environment: "E2", supervision: { state: "off", paused: false } });
+  // The timeline of BitNodes and installs (#285), read: no slow snapshot yet, so no BitNode.
+  expect(status).toMatchObject({ timeline: { reading: null, problem: null, slowSnapshots: 0, bitNodes: [] } });
   // The brain recorded its start, which the dashboard counts "this run" from.
   const startedStore = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
   expect(startedStore.events({ environment: "E2" }).map((event) => event.kind)).toContain("brainStarted");

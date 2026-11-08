@@ -129,6 +129,36 @@ function snapshotOfRow(row: Record<string, string | number>): RecordContext & St
   };
 }
 
+/**
+ * A slow snapshot as the campaign reads it (#290, #285): its row, release and clocks, and its `resetInfo` (an object's,
+ * else null), taken out in the query, so the rest of its payload (the faction state, the money's sources) is never
+ * parsed: about 525,000 slow snapshots a year at one a minute.
+ */
+export interface SlowResetInfo {
+  id: number;
+  release: string;
+  gameTimeMs: number;
+  receivedAtMs: number;
+  resetInfo: Record<string, unknown> | null;
+}
+
+// Two failures these reads don't recover from, neither seen in practice (#285's re-review): a slow snapshot's `data`
+// SQLite can't parse as JSON fails the query, so every timeline poll fails at that row (shown on the dashboard) and
+// `npm run campaign` too, but the brain writes only `JSON.stringify`'s output; and `slowResetInfoAfterId`'s
+// `INDEXED BY` fails with no such index, which `TelemetryStore.open` creates on every start.
+const RESET_INFO_COLUMNS = `id, release, game_time_ms, received_at_ms,
+  CASE json_type(data, '$.resetInfo') WHEN 'object' THEN json_extract(data, '$.resetInfo') END AS reset_info`;
+
+function slowResetInfoOfRow(row: Record<string, string | number | null>): SlowResetInfo {
+  return {
+    id: row.id as number,
+    release: row.release as string,
+    gameTimeMs: row.game_time_ms as number,
+    receivedAtMs: row.received_at_ms as number,
+    resetInfo: row.reset_info === null ? null : (JSON.parse(row.reset_info as string) as Record<string, unknown>),
+  };
+}
+
 function eventOfRow(row: Record<string, string | number>): RecordContext & StoredEvent {
   return {
     environment: row.environment as Environment,
@@ -345,6 +375,67 @@ export class TelemetryStore {
   }
 
   /**
+   * The slow snapshots' `resetInfo` in order of arrival (`ORDER BY received_at_ms, id`), after the place `after` in
+   * that order if given, of the rows up to `throughId` if given, at most `limit`, one row at a time: the campaign's read
+   * (#290, #285).
+   */
+  *iterateSlowResetInfo({
+    environment,
+    after = { receivedAtMs: Number.MIN_SAFE_INTEGER, id: 0 },
+    throughId = Number.MAX_SAFE_INTEGER,
+    limit = -1,
+  }: {
+    environment: Environment;
+    after?: { receivedAtMs: number; id: number };
+    throughId?: number;
+    limit?: number;
+  }): Generator<SlowResetInfo> {
+    const rows = this.#database
+      .prepare(
+        `SELECT ${RESET_INFO_COLUMNS} FROM snapshots WHERE environment = ? AND tier = 'slow'
+          AND received_at_ms >= ? AND (received_at_ms > ? OR id > ?) AND id <= ? ORDER BY received_at_ms, id LIMIT ?`,
+      )
+      .iterate(environment, after.receivedAtMs, after.receivedAtMs, after.id, throughId, limit);
+    for (const row of rows) yield slowResetInfoOfRow(row as Record<string, string | number | null>);
+  }
+
+  /**
+   * The slow snapshots stored after the row `afterId`, in the order stored, at most `limit`, with their `resetInfo`
+   * (the dashboard's timeline, #285, once it has read the rest). By the row id's range alone (the `+` keeps SQLite off
+   * the tier index), reading every tier's rows since: few, with the page open (a minute holds about 37). Or
+   * `byTierIndex`, by the slow tier's index (its entries scanned and sorted by id), so the rows of every other tier
+   * aren't read: the page closed for days (`RECENT_ROWS`, the timeline's choice).
+   */
+  slowResetInfoAfterId({
+    environment,
+    afterId,
+    limit = -1,
+    byTierIndex = false,
+  }: {
+    environment: Environment;
+    afterId: number;
+    limit?: number;
+    byTierIndex?: boolean;
+  }): SlowResetInfo[] {
+    const sql = !byTierIndex
+      ? `SELECT ${RESET_INFO_COLUMNS} FROM snapshots WHERE id > ? AND +environment = ? AND +tier = 'slow'
+            ORDER BY id LIMIT ?`
+      : `SELECT ${RESET_INFO_COLUMNS} FROM snapshots INDEXED BY snapshots_by_tier_and_time
+            WHERE id > ? AND environment = ? AND tier = 'slow' ORDER BY id LIMIT ?`;
+    const rows = this.#database.prepare(sql).all(afterId, environment, limit) as Record<
+      string,
+      string | number | null
+    >[];
+    return rows.map(slowResetInfoOfRow);
+  }
+
+  /** The newest snapshot's row id, any environment's and tier's, or 0 (#285: where the timeline's first read ends). */
+  lastSnapshotId(): number {
+    const row = this.#database.prepare("SELECT MAX(id) AS id FROM snapshots").get() as { id: number | null };
+    return row.id ?? 0;
+  }
+
+  /**
    * Runs `read` in one read transaction (the run report): every query in it sees the store as it was at its first read,
    * whatever the brain writes meanwhile.
    */
@@ -395,6 +486,28 @@ export class TelemetryStore {
       )
       .all(environment, sinceMs, untilMs, ...(kinds ?? [])) as Record<string, string | number>[];
     return rows.map(eventOfRow);
+  }
+
+  /** The events of `kinds` stored after the event `afterEventId`, in the order stored, each with its id (#285). */
+  eventsAfterId({
+    environment,
+    kinds,
+    afterEventId,
+  }: {
+    environment: Environment;
+    kinds: string[];
+    afterEventId: number;
+  }): (StoredEvent & { id: number })[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, ${EVENT_COLUMNS} FROM events WHERE environment = ? AND kind IN (${kinds.map(() => "?").join(", ")})
+          AND id > ? ORDER BY id`,
+      )
+      .all(environment, ...kinds, afterEventId) as Record<string, string | number>[];
+    return rows.map((row) => {
+      const { atMs, kind, detail } = eventOfRow(row);
+      return { id: row.id as number, atMs, kind, detail };
+    });
   }
 
   /** Every event from an environment, in the order stored. */

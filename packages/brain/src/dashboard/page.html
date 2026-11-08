@@ -19,6 +19,9 @@
   td, th { text-align: left; padding: 2px 12px 2px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   #problem { padding: 10px; border: 2px solid var(--bad); color: var(--bad); font-weight: 600; }
   code { font-size: 12px; overflow-wrap: anywhere; }
+  #timeline details { margin: 4px 0; }
+  #timeline summary { cursor: pointer; }
+  #timeline details > div, #timeline details > table { margin-left: 18px; }
 </style>
 </head>
 <body>
@@ -118,6 +121,7 @@
     <div class="bad" id="faction-work-problem" hidden></div>
     <div id="faction-state"></div><table></table>
   </section>
+  <section id="timeline"><h2>BitNodes and installs</h2><div></div></section>
   <section id="events"><h2>Recent events</h2><table></table></section>
 </main>
 <script>
@@ -175,6 +179,131 @@ function showProblem(message) {
   problem.textContent = message ?? "";
   problem.hidden = message === null;
   document.querySelector("main").hidden = message !== null;
+}
+
+/** "1 h 40 min", "29 min 30 s", "45 s": the campaign report's durations (gap-report.ts's `formatDuration`). */
+function duration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secondsLeft = totalSeconds % 60;
+  if (hours > 0) return `${hours} h ${minutes} min`;
+  if (minutes > 0) return secondsLeft === 0 ? `${minutes} min` : `${minutes} min ${secondsLeft} s`;
+  return `${secondsLeft} s`;
+}
+const plural = (count, one, many) => `${count.toLocaleString()} ${count === 1 ? one : many}`;
+/** The timeline as last drawn (#285): drawn again only when it changes, so a BitNode opened stays open. */
+let timelineDrawn = null;
+/** The BitNodes open (their index), kept across drawings, the "Reading…" ones in between included. */
+const timelineOpen = new Set();
+/** Whether the newest BitNode has been opened, at the first drawing that lists any. */
+let timelineFirstOpened = false;
+const TIMELINE_CYCLE_KINDS = {
+  start: "from the BitNode's start",
+  "seen first": "its first look (an install before it not seen)",
+  install: "",
+  save: "a save loaded from a cycle not seen (not an install)",
+};
+
+/** Each BitNode played, newest first, its cycles inside (#285): the campaign report's model, kept up to date. */
+function renderTimeline(timeline, brainStartedAtMs) {
+  const box = document.querySelector("#timeline div");
+  const drawn = timeline === null ? "none" : `${brainStartedAtMs} ${timeline.version} ${timeline.problem}`;
+  if (drawn === timelineDrawn) return;
+  timelineDrawn = drawn;
+  for (const each of box.querySelectorAll("details")) {
+    if (each.open) timelineOpen.add(each.dataset.key);
+    else timelineOpen.delete(each.dataset.key);
+  }
+  if (timeline === null) {
+    box.replaceChildren(element("div", "Not given by this brain.", "muted"));
+    return;
+  }
+  if (!timelineFirstOpened && timeline.bitNodes.length > 0) {
+    timelineOpen.add(String(timeline.bitNodes.length - 1));
+    timelineFirstOpened = true;
+  }
+  const lines = [];
+  if (timeline.problem !== null) lines.push(element("div", `Couldn't read the timeline: ${timeline.problem}`, "bad"));
+  if (timeline.failed !== null) {
+    lines.push(element("div", `${plural(timeline.failed.count, "slow snapshot", "slow snapshots")} couldn't be folded, left out or partly applied, so the timeline may be off from there (the first: ${timeline.failed.first}; npm run campaign fails on it).`, "bad"));
+  }
+  const unread = timeline.unread > 0 ? `; ${plural(timeline.unread, "slow snapshot", "slow snapshots")} with no resetInfo, left out` : "";
+  if (timeline.reading !== null) {
+    lines.push(element("div", `Reading the store: ${plural(timeline.reading.slowSnapshots, "slow snapshot", "slow snapshots")} so far.`, "muted"));
+  } else if (timeline.bitNodes.length > 0) {
+    lines.push(element("div", `${plural(timeline.bitNodes.length, "BitNode", "BitNodes")}, the newest first, from ${plural(timeline.slowSnapshots, "slow snapshot", "slow snapshots")}${unread}. ≥: at least (its start, or its first cycle, not seen in the store).`, "muted"));
+  } else if (timeline.problem === null) {
+    // With a problem, nothing is known of the store yet: it may well have BitNodes.
+    lines.push(element("div", `No BitNode in the store yet: no slow snapshot shows one${unread}.`, "muted"));
+  }
+  const atLeast = (text, isLowerBound) => (isLowerBound ? `≥ ${text}` : text);
+  const bitNodes = timeline.bitNodes.map((bitNode, index) => {
+    const details = element("details");
+    details.dataset.key = String(index);
+    details.open = timelineOpen.has(String(index));
+    const soFar = bitNode.soFar ? " so far" : "";
+    // Only "not yet" has no time: every other ending's words, "destroy sent …, the next BitNode not seen" among them.
+    const ending = bitNode.endedAtMs === null ? "not ended yet" : bitNode.ending.replace("{at}", time(bitNode.endedAtMs));
+    const augmentations = bitNode.augmentations === null
+      ? "not recorded"
+      : plural(bitNode.augmentations.kinds, "kind", "kinds") +
+        (bitNode.augmentations.neuroFluxLevel > 0 ? `, NeuroFlux Governor at level ${bitNode.augmentations.neuroFluxLevel}` : "");
+    details.append(
+      element(
+        "summary",
+        `${bitNode.name}: from ${time(bitNode.startMs)}${bitNode.start ? ` (${bitNode.start})` : ""}, ${ending}; ` +
+          `${atLeast(duration(bitNode.onlineMs), bitNode.onlineAtLeast)} online${soFar}, ` +
+          `${atLeast(duration(bitNode.wallMs), bitNode.wallAtLeast)} by the clock${soFar}; ` +
+          `${atLeast(plural(bitNode.cycles, "cycle", "cycles"), bitNode.countsAtLeast)}, ` +
+          `${atLeast(plural(bitNode.installs, "install", "installs"), bitNode.countsAtLeast)}` +
+          (bitNode.byHand > 0 ? ` (${bitNode.byHand} by hand)` : ""),
+      ),
+      element(
+        "div",
+        `Left out of the time online: ${bitNode.gapCount === 0 ? "none" : `${duration(bitNode.leftOutMs)} in ${plural(bitNode.gapCount, "gap", "gaps")}`}. ` +
+          `Augmentations installed at its last look: ${augmentations}. ` +
+          (bitNode.savesLoaded > 0 ? `Saves loaded in it: ${bitNode.savesLoaded}. ` : "") +
+          `Releases: ${bitNode.releases.join(", ")}.`,
+        "muted",
+      ),
+    );
+    const cycles = element("table");
+    // Numbered from its start: from 2 at least where an install came before its first look.
+    let count = bitNode.countsAtLeast ? 1 : 0;
+    cycles.replaceChildren(
+      ...bitNode.cycleList.map((cycle) => {
+        const row = element("tr");
+        const label = cycle.kind === "save" ? "save" : `cycle ${atLeast(String(++count), bitNode.countsAtLeast)}`;
+        const ends = [
+          ...cycle.endedBy.map((install) => ({
+            atMs: install.atMs,
+            text:
+              `installed ${time(install.atMs)}${install.byHand ? " by hand" : ""}: ` +
+              (install.augmentationCount === null
+                ? "augmentations not recorded"
+                : `${plural(install.augmentationCount, "augmentation", "augmentations")} (${install.augmentations})`),
+          })),
+          ...cycle.leftForSaveAtMs.map((atMs) => ({ atMs, text: `left for a save loaded ${time(atMs)}` })),
+        ]
+          .sort((a, b) => a.atMs - b.atMs)
+          .map((end) => end.text);
+        if (cycle.current) {
+          ends.push(bitNode.ended ? "ended with the BitNode" : bitNode.endedAtMs === null ? "going on" : "going on, the destroy sent");
+        }
+        row.append(
+          element("th", label),
+          element("td", `from ${time(cycle.startMs)}${TIMELINE_CYCLE_KINDS[cycle.kind] ? `, ${TIMELINE_CYCLE_KINDS[cycle.kind]}` : ""}`),
+          element("td", `${atLeast(duration(cycle.onlineMs), cycle.onlineAtLeast)} online`),
+          element("td", ends.length === 0 ? "no install seen" : ends.join("; ")),
+        );
+        return row;
+      }),
+    );
+    details.append(cycles);
+    return details;
+  });
+  box.replaceChildren(...lines, ...bitNodes.reverse());
 }
 
 function render(status) {
@@ -634,6 +763,8 @@ function render(status) {
           return row;
         })),
   );
+
+  renderTimeline(status.timeline ?? null, status.brainStartedAtMs);
 
   const events = document.querySelector("#events table");
   events.replaceChildren(

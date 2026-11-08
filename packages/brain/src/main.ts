@@ -22,6 +22,7 @@ import {
 } from "./config.ts";
 import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
+import { CampaignTimeline } from "./dashboard/timeline.ts";
 import { backupBeforeThinning, DataBackups, dataBackupStoreId, describeDataBackup } from "./data-backup.ts";
 import { DesiredStateController } from "./desired-state.ts";
 import { readFactionWorkEnabled } from "./factions.ts";
@@ -203,6 +204,13 @@ try {
           log(`supervisor: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
       })
     : null;
+  // The timeline of BitNodes and installs (#285): kept up to date as the page asks, each slow snapshot folded once.
+  const campaignTimeline = new CampaignTimeline({
+    store,
+    environment: config.environment,
+    onError: (error) =>
+      log(`dashboard timeline: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
+  });
   const dashboardServer = await startDashboardServer({
     port: config.dashboardPort,
     status: () =>
@@ -231,6 +239,7 @@ try {
         share: desiredState.shareView(),
         storeThinningFailure,
         dataBackupProblem: dataBackups?.problem() ?? null,
+        timeline: campaignTimeline.read(),
         nowMs: systemClock.now(),
       }),
     setSupervisionPaused: (paused) => {

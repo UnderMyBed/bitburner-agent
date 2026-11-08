@@ -1,5 +1,6 @@
 // The dashboard's status (#93): everything the page shows, read from the store whenever it's asked for. The alerts are
-// rules over the same reads (alerts.ts), so nothing here keeps state.
+// rules over the same reads (alerts.ts), so nothing here keeps state; the timeline of BitNodes and installs (#285) is
+// kept up to date by its own `CampaignTimeline` (timeline.ts), as the controllers keep their views.
 import {
   type EffectorBackend,
   type FactionState,
@@ -30,6 +31,7 @@ import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
 import type { WorldDaemonStall, WorldDaemonView } from "../world-daemon.ts";
 import { type Alert, activeAlerts, type IncomeFacts } from "./alerts.ts";
+import type { CampaignTimelineView } from "./timeline.ts";
 
 /**
  * How far back the batcher's not-running streak (#211) and its out-of-step rise (#206) are read: fast snapshots, 2 s
@@ -150,6 +152,8 @@ export interface DashboardStatus {
   factionWork: FactionsView;
   /** The hacking ceiling now, and what hacking earned over the last 10 minutes (#196). */
   hacking: HackingView;
+  /** The timeline of BitNodes and installs (#285): every BitNode played, its cycles; null from a brain without one. */
+  timeline: CampaignTimelineView | null;
 }
 
 export interface DashboardStatusOptions {
@@ -195,6 +199,8 @@ export interface DashboardStatusOptions {
   storeThinningFailure?: { atMs: number; failure: string } | null;
   /** The newest data backup's problem (#284), for the `dataBackupFailed` alert; null or absent: none. */
   dataBackupProblem?: DataBackupProblem | null;
+  /** The timeline of BitNodes and installs (#285), its `CampaignTimeline`'s `read()`; absent: none. */
+  timeline?: CampaignTimelineView;
   nowMs: number;
 }
 
@@ -229,6 +235,7 @@ export function buildDashboardStatus({
   share,
   storeThinningFailure = null,
   dataBackupProblem = null,
+  timeline,
   nowMs,
 }: DashboardStatusOptions): DashboardStatus {
   const sinceStart = { environment, afterEventId: brainStartedEventId };
@@ -424,5 +431,6 @@ export function buildDashboardStatus({
       staticData: latestOfTier.static?.data as StaticSnapshotData | undefined,
       mediumData: medium,
     }),
+    timeline: timeline ?? null,
   };
 }

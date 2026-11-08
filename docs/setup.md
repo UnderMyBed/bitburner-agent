@@ -223,6 +223,8 @@ A release is the brain's version (`git describe`, "v1.0.1"), whatever the Agent'
 
 It exits 0 with the report, and 2 when it couldn't run: no store, or no BitNode in it.
 
+**The dashboard's "BitNodes and installs"** (#285) shows the same campaign while the brain runs: each BitNode, the newest first, with its start, how it ended, its time online and by the clock, and its cycles and installs; open one for its cycles, each with its time online, the augmentations its install put in, and any save loaded in it ("left for a save loaded …"), the one it goes on in marked "going on". After each brain start it first reads the store a batch at a time (under a minute for a year's), saying how far it's got, then keeps up as snapshots arrive ([packages/brain](../packages/brain/README.md#the-dashboard)).
+
 ## When something's wrong
 
 - **The dashboard says "Brain unreachable", or doesn't load:** the brain isn't running. If its terminal shows `brain runner:` restart lines, it's crashing at start: the lines before them say why. If the terminal was closed, start it again.
