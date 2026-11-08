@@ -51,6 +51,13 @@ import {
   readBatcherEnabled,
 } from "./batcher.ts";
 import {
+  type BitNodeEndEvent,
+  BitNodeEndWatch,
+  bitNodeReadingOf,
+  readStopAtBitNodeEnd,
+  writeStopAtBitNodeEnd,
+} from "./bitnode-end.ts";
+import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
   type CloudServer,
@@ -211,8 +218,13 @@ export interface CloudServersView {
   problem: string | null;
 }
 
-/** The rules' events, for the store (#203, #210, #215, #228). */
-export type RuleEvent = FactionWorkEvent | AugmentationEvent | WorldDaemonEvent | InvitationEvent;
+/** The rules' events, for the store (#203, #210, #215, #228), and the stop at the BitNode's end (#303). */
+export type RuleEvent = FactionWorkEvent | AugmentationEvent | WorldDaemonEvent | InvitationEvent | BitNodeEndEvent;
+
+/** What the dashboard shows of the stop at the BitNode's end (#303). */
+export interface StopAtBitNodeEndView {
+  enabled: boolean;
+}
 
 /** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
 export interface IntentView {
@@ -365,6 +377,8 @@ export class DesiredStateController {
   /** The World Daemon (#215): the rule, and whether it asks for the destroy. */
   readonly #worldDaemon: WorldDaemonRule;
   #worldDaemonDestroy = false;
+  /** The stop at the BitNode's end (#303): it asks main.ts, through its event, to shut the brain down. */
+  readonly #bitNodeEnd: BitNodeEndWatch;
   /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
   #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
@@ -391,6 +405,7 @@ export class DesiredStateController {
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
     this.#invitations = new InvitationRule({ log, emit: (event) => this.#emit(event) });
+    this.#bitNodeEnd = new BitNodeEndWatch({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
     // A restarted brain with its destroy out (#215 review): held, and its note kept, until the BitNode's reset shows.
     if (this.#resetSent?.field === "lastNodeReset" && this.#resetSent.id === WORLD_DAEMON_DESTROY_INTENT.id) {
@@ -453,6 +468,15 @@ export class DesiredStateController {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
         this.#slowGameTimeMs = event.snapshot.gameTimeMs;
         this.#slowAtMs = event.atMs;
+        // The stop at the BitNode's end (#303): a destroy's note read before the reset it shows drops it.
+        const reading = bitNodeReadingOf(this.#slowData, event.snapshot.gameTimeMs);
+        if (reading !== null) {
+          this.#bitNodeEnd.slowSnapshot(reading, {
+            enabled: readStopAtBitNodeEnd(this.#store),
+            destroySentAt: this.#resetSent?.field === "lastNodeReset" ? this.#resetSent.resetAt : null,
+            atMs: event.atMs,
+          });
+        }
         this.#dropResetIntentOnceReset();
       } else {
         return;
@@ -554,6 +578,17 @@ export class DesiredStateController {
   setWorldDaemonEnabled(enabled: boolean): void {
     writeWorldDaemonEnabled(this.#store, enabled);
     this.#update();
+  }
+
+  /** The stop at the BitNode's end's switch (#303), likewise: on, a BitNode already at its end stops the brain now. */
+  setStopAtBitNodeEnd(enabled: boolean): void {
+    writeStopAtBitNodeEnd(this.#store, enabled);
+    this.#update();
+  }
+
+  /** What the dashboard shows of the stop at the BitNode's end (#303). */
+  stopAtBitNodeEndView(): StopAtBitNodeEndView {
+    return { enabled: readStopAtBitNodeEnd(this.#store) };
   }
 
   /** What the dashboard shows of the path to the World Daemon (#215). */
@@ -1300,6 +1335,12 @@ export class DesiredStateController {
       // A6's commit's facts while short (#238): an install that added none to the count is judged on them.
       countFacts: this.#augmentations.countFacts(),
       augmentationsInstalling: this.#augmentations.installAskedFor(),
+    });
+    // The stop at the BitNode's end (#303): a destroy ready but refused, after its `nextBitNode` stall.
+    this.#bitNodeEnd.worldDaemonUpdated({
+      enabled: readStopAtBitNodeEnd(this.#store),
+      nothingMoreToGain: this.#worldDaemon.nothingMoreToGainNow(),
+      atMs: this.#lastEventAtMs ?? 0,
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

@@ -135,9 +135,14 @@ const SOURCE_FILE_1_TOP_LEVEL = 3;
  * gives nothing more, so the next BitNode is the owner's (phase B's to choose). Logged and alerted (`nextBitNode`).
  */
 export function nextBitNodeProblem(ownedSF: Readonly<Record<string, number>>): string | null {
+  const nothing = nothingMoreToGain(ownedSF);
+  return nothing === null ? null : `${nothing}: the next BitNode is yours (turn the switch off and queue destroyBitNode)`;
+}
+
+/** Why BitNode 1 gives nothing more (#303: the brain's stop at the BitNode's end says it), or null. */
+export function nothingMoreToGain(ownedSF: Readonly<Record<string, number>>): string | null {
   return (ownedSF["1"] ?? 0) >= SOURCE_FILE_1_TOP_LEVEL
-    ? `Source-File 1 is at level ${SOURCE_FILE_1_TOP_LEVEL}, so BitNode 1 gives nothing more: the next BitNode is ` +
-        "yours (turn the switch off and queue destroyBitNode)"
+    ? `Source-File 1 is at level ${SOURCE_FILE_1_TOP_LEVEL}, so BitNode 1 gives nothing more`
     : null;
 }
 
@@ -499,6 +504,8 @@ export class WorldDaemonRule {
   readonly #expRate = new HackingExpRate();
   #path: WorldDaemonPath | null = null;
   #enabled = true;
+  /** Why a destroy that could go now gains nothing (#303), as of the last update, or null: the stop's. */
+  #nothingMoreToGain: string | null = null;
   /** The destroy asked for, and the BitNode's `lastNodeReset` then: held until a slow snapshot shows another. */
   #asked: { lastNodeReset: number } | null = null;
   /** Each step's start, while it could be done; the stall once stored, so it's stored once. */
@@ -548,6 +555,14 @@ export class WorldDaemonRule {
     };
   }
 
+  /**
+   * Why the destroy, on and ready to go (w0r1d_d43m0n rooted at its level), is refused as it gains nothing (#303), or
+   * null: the brain's stop at the BitNode's end. Set after the `nextBitNode` stall's line and event, in the same update.
+   */
+  nothingMoreToGainNow(): string | null {
+    return this.#nothingMoreToGain;
+  }
+
   /** The step stalled longest, or null: `worldDaemonStalled`'s. */
   stall(): WorldDaemonStall | null {
     let worst: WorldDaemonStall | null = null;
@@ -573,6 +588,7 @@ export class WorldDaemonRule {
     augmentationsInstalling = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
+    this.#nothingMoreToGain = null;
     const hacking = hackingOf(mediumData);
     if (hacking !== null && hacking.exp !== null && mediumGameTimeMs !== null)
       this.#expRate.add(mediumGameTimeMs, hacking.exp);
@@ -613,6 +629,9 @@ export class WorldDaemonRule {
     // Refused, it's logged and alerted once, at once, as the `nextBitNode` stall.
     this.#watch(path, nowMs ?? 0, enabled, blocked);
     const ready = path.daemon !== null && path.daemon.problem === null && blocked === null;
+    if (enabled && path.daemon !== null && path.daemon.problem === null && blocked !== null) {
+      this.#nothingMoreToGain = nothingMoreToGain(slowData.resetInfo?.ownedSF ?? {});
+    }
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       this.#asked = { lastNodeReset };
       this.#log(

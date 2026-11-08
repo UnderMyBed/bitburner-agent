@@ -1,8 +1,10 @@
 // The World Daemon in the run report (#215): the path as the window's last snapshots show it (Daedalus, The Red Pill,
 // w0r1d_d43m0n's hacking requirement and the ETA at the window's experience rate), the destroys sent, and each stall
 // the rule stored, a failure; an install while short of Daedalus's count that added none with nothing that counts
-// passed over (#238), information.
+// passed over (#238), information. The `nextBitNode` stall the brain's stop at the BitNode's end answered (#303) is
+// expected: the owner's switch asked for that end.
 import type { MediumSnapshotData, SlowSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
 import { CITY_GROUP_CHOSEN_EVENT_KIND } from "./invitations.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import {
@@ -23,6 +25,9 @@ export const WORLD_DAEMON_EVENT_KINDS = [
 
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
+
+/** How soon after a `nextBitNode` stall the brain's stop for nothing more to gain answers it (#303): the same update. */
+export const STOP_ANSWERS_WITHIN_MS = 60_000;
 
 /** The window's hacking experience rate, folded from its medium snapshots, for the path's ETA. */
 export class WorldDaemonFold {
@@ -92,6 +97,10 @@ export class WorldDaemonFold {
         "short of Daedalus's count that added none to it, passing over one that counts, #228, #238):",
     ];
     const stalls = events.filter((event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND);
+    const stops = events.filter(
+      (event) =>
+        event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND && fieldsOf(event.detail).reason === "nothingMoreToGain",
+    );
     for (const { atMs, detail } of stalls) {
       const fields = fieldsOf(detail);
       // "Daedalus count stuck" (#228) says what it is, and when: the install it saw; every other step is a stall.
@@ -100,6 +109,17 @@ export class WorldDaemonFold {
           ? `${String(fields.detail)}, seen at ${formatTime(atMs)}`
           : `world daemon stalled: ${String(fields.detail)}, from ${formatTime(Number(fields.sinceMs))} to at least ` +
             formatTime(atMs);
+      const answered =
+        fields.step === "nextBitNode"
+          ? stops.find((stop) => stop.atMs >= atMs && stop.atMs - atMs <= STOP_ANSWERS_WITHIN_MS)
+          : undefined;
+      if (answered !== undefined) {
+        lines.push(
+          `    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatTime(answered.atMs)}, the ` +
+            "switch on)",
+        );
+        continue;
+      }
       lines.push(`    ${line}`);
       failures.push(line);
     }

@@ -24,6 +24,7 @@ import {
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
+import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
 import {
   type ClockIncident,
   type FastSnapshotTime,
@@ -1022,6 +1023,15 @@ function windowSection(facts: RunFacts): string[] {
       `deploys: ${count("deployed")}; save backups: ${backups}; data backups: ${count(DATA_BACKUP_EVENT_KIND)}` +
       (count(DATA_BACKUP_FAILED_EVENT_KIND) > 0 ? `, ${count(DATA_BACKUP_FAILED_EVENT_KIND)} FAILED` : ""),
   );
+  // The brain's stop at the BitNode's end (#303), the last: the run's expected end, never a failure.
+  const stop = timeline.findLast((event) => event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND);
+  if (stop !== undefined) {
+    lines.push(
+      `  the run's end: the brain stopped itself at ${formatIsoTime(stop.atMs)}, at the BitNode's end (the switch ` +
+        `on): ${displayValue(fieldsOf(stop.detail).detail)}. Expected, not a failure: the game and its scripts went ` +
+        "on without it, and the quiet after it is no gap",
+    );
+  }
   return lines;
 }
 
@@ -1034,6 +1044,8 @@ function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.N
   switch (kind) {
     case BRAIN_STARTED_EVENT_KIND:
       return `brain started, release ${displayValue(fields.release)}`;
+    case BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND:
+      return `brain stopped itself at the BitNode's end (the switch on): ${displayValue(fields.detail)}`;
     case RELAUNCH_EVENT_KIND:
       return `game relaunched by the supervisor (${displayValue(fields.cause)})`;
     case "agentConnected": {
@@ -2149,6 +2161,12 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
     const line =
       `gap: ${formatIsoTime(gap.fromMs)} to ${formatIsoTime(gap.toMs)} (${formatSeconds(gap.lengthMs)})` +
       explainSilence(facts, gap.fromMs, gap.toMs);
+    // The brain's stop at the BitNode's end (#303) as the gap starts: the brain away until someone started it again.
+    const stop = stopAtBitNodeEndBefore(facts, gap.fromMs);
+    if (stop !== null) {
+      lines.push(`    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatIsoTime(stop.atMs)})`);
+      continue;
+    }
     const reload = reloadBeforeGap(facts, gap, reloadsUsed);
     if (reload === null) {
       lines.push(`    ${line}`);
@@ -2167,6 +2185,22 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
   }
   if (report.gaps.length === 0) lines.push("    no gaps");
   return { lines, gaps: report.gaps };
+}
+
+/**
+ * The brain's stop at the BitNode's end (#303) that a silence from `fromMs` (a gap's, a disconnect's) follows, or null:
+ * from `RELOAD_LEAD_MS` before it (the brain shuts down a second after the stop, its last snapshots stored meanwhile) to
+ * `RELOAD_LAG_MS` into it.
+ */
+function stopAtBitNodeEndBefore(facts: RunFacts, fromMs: number): StoredEvent | null {
+  return (
+    facts.events.findLast(
+      (event) =>
+        event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND &&
+        event.atMs >= fromMs - RELOAD_LEAD_MS &&
+        event.atMs <= fromMs + RELOAD_LAG_MS,
+    ) ?? null
+  );
 }
 
 /** A reload a gap follows (#240): "the game reloading after …", and its event (null for a reset intent held). */
@@ -2235,8 +2269,9 @@ function notTheReloadAlone(facts: RunFacts, gap: Gap, gapThresholdMs: number): s
 
 /**
  * Each Agent disconnect with no reconnect within `RECONNECT_WITHIN_MS`. Not a failure where the window ends before
- * that much time has passed, or where the run ended there (nothing recorded after it). A reload in the
- * `RELOAD_LEAD_MS` before it is named (#240): the disconnect was expected, not its length.
+ * that much time has passed, or where the run ended there (nothing recorded after it), or as the brain stopped itself
+ * at the BitNode's end (#303). A reload in the `RELOAD_LEAD_MS` before it is named (#240): the disconnect was expected,
+ * not its length.
  */
 function disconnectLines(facts: RunFacts, failures: string[]): string[] {
   const lines = [`  Agent disconnects with no reconnect within ${formatDuration(RECONNECT_WITHIN_MS)}:`];
@@ -2249,6 +2284,7 @@ function disconnectLines(facts: RunFacts, failures: string[]): string[] {
       (event) => event.kind === "agentConnected" && event.atMs >= disconnect.atMs && event.atMs <= deadlineMs,
     );
     if (reconnect || deadlineMs > facts.untilMs || endMs <= disconnect.atMs) continue;
+    if (stopAtBitNodeEndBefore(facts, disconnect.atMs) !== null) continue;
     count++;
     const next = facts.events.find((event) => event.kind === "agentConnected" && event.atMs > deadlineMs);
     const reload = [...facts.reloadsBefore, ...facts.events]

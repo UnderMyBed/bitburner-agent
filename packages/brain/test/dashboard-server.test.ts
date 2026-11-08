@@ -23,6 +23,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const augmentationsCalls: boolean[] = [];
   const worldDaemonCalls: boolean[] = [];
   const shareCalls: boolean[] = [];
+  const stopAtBitNodeEndCalls: boolean[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
   const workRequests: unknown[] = [];
@@ -40,6 +41,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setAugmentationsEnabled: (enabled) => augmentationsCalls.push(enabled),
     setWorldDaemonEnabled: (enabled) => worldDaemonCalls.push(enabled),
     setShareEnabled: (enabled) => shareCalls.push(enabled),
+    setStopAtBitNodeEnd: (enabled) => stopAtBitNodeEndCalls.push(enabled),
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
       intentRequests.push(request);
@@ -72,6 +74,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     augmentationsCalls,
     worldDaemonCalls,
     shareCalls,
+    stopAtBitNodeEndCalls,
     intentRequests,
     cancelledIds,
     workRequests,
@@ -209,6 +212,7 @@ const SWITCHES = [
   ["augmentations (#210)", "/api/augmentations", "augmentationsCalls"],
   ["destroying the BitNode (#215)", "/api/world-daemon", "worldDaemonCalls"],
   ["sharing spare RAM (#224)", "/api/share", "shareCalls"],
+  ["stopping at the BitNode's end (#303)", "/api/stop-at-bitnode-end", "stopAtBitNodeEndCalls"],
 ] as const;
 
 test.each(SWITCHES)("POST sets the switch for %s, from the dashboard's own page", async (_name, switchPath, own) => {

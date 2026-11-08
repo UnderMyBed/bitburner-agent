@@ -238,6 +238,7 @@ const BUSY_STATUS: DashboardStatus = {
     stall: null,
   },
   share: { enabled: true, asked: true, why: null, sharing: null },
+  stopAtBitNodeEnd: { enabled: false },
   intents: [
     {
       id: "travel(Aevum)",
@@ -777,6 +778,7 @@ test.each([
   ["augmentations", "#augmentations button", "#augmentations-problem"],
   ["destroying the BitNode", "#world-daemon button", "#world-daemon-problem"],
   ["sharing spare RAM", "#share button", "#share-problem"],
+  ["stopping at the BitNode's end", "#stop-at-end button", "#stop-at-end-problem"],
 ])("a %s switch the brain refuses says so under its button, and the data stays", async (_name, button, problem) => {
   const { document } = await openPage((request) =>
     request.method === "POST" ? { status: 403, body: null } : { status: 200, body: BUSY_STATUS },
@@ -1441,6 +1443,42 @@ test("a brain that doesn't give sharing (#224): said so, and its button does not
   expect(textOf(document, "#share")).toContain("Sharing spare RAM: not given by this brain");
   expect((document.querySelector("#share button") as HTMLButtonElement).disabled).toBe(true);
   (document.querySelector("#share button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST")).toEqual([]);
+});
+
+test("the stop at the BitNode's end (#303): off by default, its button turns it on, and on, it says what happens", async () => {
+  let current = BUSY_STATUS;
+  const { document, requests } = await openPage((request) => {
+    if (request.method === "POST") {
+      const { enabled } = JSON.parse(request.body as string) as { enabled: boolean };
+      current = { ...BUSY_STATUS, stopAtBitNodeEnd: { enabled } };
+      return { status: 200, body: { enabled } };
+    }
+    return { status: 200, body: current };
+  });
+  expect(textOf(document, "#stop-at-end")).toContain("Stopping at the BitNode's end: off: the brain plays on");
+  expect(textOf(document, "#stop-at-end button")).toBe("Stop the brain at the BitNode's end");
+  (document.querySelector("#stop-at-end button") as HTMLButtonElement).click();
+  await settle();
+  expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
+    [["/api/stop-at-bitnode-end", '{"enabled":true}']],
+  );
+  expect(textOf(document, "#stop-at-end")).toContain(
+    "Stopping at the BitNode's end: on: the brain shuts down once a destroy shows the next BitNode, or once the " +
+      "destroy would gain nothing; the game and its scripts go on",
+  );
+  expect(textOf(document, "#stop-at-end button")).toBe("Keep the brain playing past the BitNode's end");
+});
+
+test("a brain that doesn't give the stop at the BitNode's end (#303): said so, and its button does nothing", async () => {
+  const { document, requests } = await openPage(() => ({
+    status: 200,
+    body: { ...BUSY_STATUS, stopAtBitNodeEnd: null },
+  }));
+  expect(textOf(document, "#stop-at-end")).toContain("Stopping at the BitNode's end: not given by this brain");
+  expect((document.querySelector("#stop-at-end button") as HTMLButtonElement).disabled).toBe(true);
+  (document.querySelector("#stop-at-end button") as HTMLButtonElement).click();
   await settle();
   expect(requests.filter((request) => request.method === "POST")).toEqual([]);
 });

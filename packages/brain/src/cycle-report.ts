@@ -296,7 +296,7 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
 }
 
 /** "BN1.2": the BitNode and its level, one more than its Source-File's (the game's own count). */
-function bitNodeLabel(currentNode: number, ownedSF: Record<string, unknown>): string {
+export function bitNodeLabel(currentNode: number, ownedSF: Readonly<Record<string, unknown>>): string {
   const level = ownedSF[String(currentNode)];
   return `BN${currentNode}.${(isFiniteNumber(level) ? level : 0) + 1}`;
 }

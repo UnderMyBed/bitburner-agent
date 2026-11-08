@@ -3156,6 +3156,112 @@ describe("the World Daemon (#215)", () => {
   });
 });
 
+describe("the stop at the BitNode's end (#303)", () => {
+  const DESTROYED = {
+    reason: "destroyed",
+    bitNode: "BN1.3",
+    nextBitNode: "BN1.4",
+    detail: "BN1.3 destroyed, BN1.4 seen",
+  };
+  const MAXED = "Source-File 1 is at level 3, so BitNode 1 gives nothing more";
+  const NOTHING_MORE = {
+    reason: "nothingMoreToGain",
+    bitNode: "BN1.4",
+    nextBitNode: null,
+    detail: `BN1.4's w0r1d_d43m0n is ready, but ${MAXED}: the next BitNode is yours`,
+  };
+  /** The `nextBitNode` stall the World Daemon stores as it refuses the destroy, at `offsetMs`. */
+  const refused = (offsetMs: number) =>
+    event(offsetMs, "worldDaemonStalled", {
+      step: "nextBitNode",
+      sinceMs: T0 + offsetMs,
+      detail: `the BitNode not destroyed: ${MAXED}: the next BitNode is yours (turn the switch off and queue destroyBitNode)`,
+    });
+
+  test("the run's expected end, with its reason, in section 1; the hours of quiet after it are no gap or stall", () => {
+    cleanRun();
+    event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", DESTROYED);
+    event(RUN_MS + 2 * SECOND, "agentDisconnected", { agentSessionId: "session-1" });
+    const { text, failures } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 3 * 60 * MINUTE });
+    expect(failures).toEqual([]);
+    expect(text.split("\n").at(-1)).toBe("Verdict: PASS");
+    expect(text).toContain(
+      `  ${at(RUN_MS + SECOND)}  brain stopped itself at the BitNode's end (the switch on): BN1.3 destroyed, BN1.4 seen`,
+    );
+    expect(text).toContain(
+      `  the run's end: the brain stopped itself at ${at(RUN_MS + SECOND)}, at the BitNode's end (the switch on): ` +
+        "BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game and its scripts went on without it, and the " +
+        "quiet after it is no gap\n\n2. Progress",
+    );
+  });
+
+  test("the nextBitNode stall the stop answered (nothing more to gain, within a minute): expected, not a failure", () => {
+    cleanRun();
+    refused(RUN_MS);
+    event(RUN_MS, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      `    world daemon stalled: the BitNode not destroyed: ${MAXED}: the next BitNode is yours (turn the switch off and ` +
+        `queue destroyBitNode), from ${at(RUN_MS)} to at least ${at(RUN_MS)} (expected: the brain stopped itself ` +
+        `at the BitNode's end at ${at(RUN_MS)}, the switch on)`,
+    );
+    expect(text).toContain(`the run's end: the brain stopped itself at ${at(RUN_MS)}, at the BitNode's end`);
+  });
+
+  test("unanswered, or answered over a minute on, or by another reason, the stall is still a failure", () => {
+    cleanRun();
+    refused(MINUTE);
+    event(2 * MINUTE + SECOND, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
+    refused(5 * MINUTE);
+    event(5 * MINUTE, "brainStoppedAtBitNodeEnd", DESTROYED);
+    refused(10 * MINUTE);
+    event(10 * MINUTE - SECOND, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
+    const stalls = report().failures.filter((failure) => failure.startsWith("world daemon stalled"));
+    expect(stalls).toHaveLength(3);
+  });
+
+  test("a window across the stop and a later start: the silence between is expected, the disconnect too", () => {
+    cleanRun();
+    event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", DESTROYED);
+    event(RUN_MS + 2 * SECOND, "agentDisconnected", { agentSessionId: "session-1" });
+    // Started again 2 hours on: the Agent reconnects and reports.
+    const againMs = RUN_MS + 2 * 60 * MINUTE;
+    event(againMs, "brainStarted", { release: "r" });
+    event(againMs + SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
+      snapshot("fast", offsetMs, fastData(), 0, "session-2");
+    }
+    const { text, failures } = runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE });
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      `    gap: ${at(RUN_MS)} to ${at(againMs + 2 * SECOND)} (7202.0 s); during it: agentDisconnected at ` +
+        `${at(RUN_MS + 2 * SECOND)}, brainStarted at ${at(againMs)}, ` +
+        `agentConnected at ${at(againMs + SECOND)} (expected: the brain stopped itself at the BitNode's end at ` +
+        `${at(RUN_MS + SECOND)})`,
+    );
+    expect(text).toContain("  Agent disconnects with no reconnect within 1 min:\n    none");
+  });
+
+  test("the same silence and disconnect with no stop before them are failures", () => {
+    cleanRun();
+    event(RUN_MS + 2 * SECOND, "agentDisconnected", { agentSessionId: "session-1" });
+    const againMs = RUN_MS + 2 * 60 * MINUTE;
+    event(againMs, "brainStarted", { release: "r" });
+    event(againMs + SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
+      snapshot("fast", offsetMs, fastData(), 0, "session-2");
+    }
+    const { failures } = runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE });
+    expect(failures.filter((failure) => /^gap: |^Agent disconnected at /.test(failure))).toHaveLength(2);
+  });
+
+  test("a run with no stop says nothing of one", () => {
+    cleanRun();
+    expect(report().text).not.toContain("the run's end");
+  });
+});
+
 describe("section 6's moves across a batcher's restart (#237's review)", () => {
   /**
    * A run whose batcher hacks phantasy until 5 minutes in, then restarts on n00dles, which it first hacks 17 minutes in:
