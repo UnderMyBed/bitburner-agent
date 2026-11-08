@@ -250,8 +250,12 @@ async function backupWhileWriting(megabytes: number) {
   for (let from = 1; from <= pairs; from += 2_000) writePairs(from, Math.min(2_000, pairs - from + 1), padding);
   let next = pairs + 1;
   let writesDuring = 0;
+  // Small rows during the copy (#304). With 5 KB ones every millisecond, megabytes piled into the WAL behind the copy's
+  // read, and the first commit after the read checkpointed them on the event loop: about 450 ms on CI's disk, which
+  // has nothing to do with where the copy runs. The brain writes far less than that.
+  const writePadding = "x".repeat(200);
   const writer = setInterval(() => {
-    writePairs(next, 5, padding);
+    writePairs(next, 5, writePadding);
     next += 5;
     writesDuring++;
   }, 1);
