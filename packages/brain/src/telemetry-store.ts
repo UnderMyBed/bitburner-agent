@@ -142,6 +142,10 @@ export interface SlowResetInfo {
   resetInfo: Record<string, unknown> | null;
 }
 
+// Two failures these reads don't recover from, neither seen in practice (#285's re-review): a slow snapshot's `data`
+// SQLite can't parse as JSON fails the query, so every timeline poll fails at that row (shown on the dashboard) and
+// `npm run campaign` too, but the brain writes only `JSON.stringify`'s output; and `slowResetInfoAfterId`'s
+// `INDEXED BY` fails with no such index, which `TelemetryStore.open` creates on every start.
 const RESET_INFO_COLUMNS = `id, release, game_time_ms, received_at_ms,
   CASE json_type(data, '$.resetInfo') WHEN 'object' THEN json_extract(data, '$.resetInfo') END AS reset_info`;
 

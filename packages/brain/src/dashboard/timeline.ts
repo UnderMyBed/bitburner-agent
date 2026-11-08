@@ -63,7 +63,10 @@ export interface TimelineBitNode {
   /** How it ended, `{at}` where its time `endedAtMs` goes (`describeEnding`): "destroyed {at} (at the cap)". */
   ending: string;
   endedAtMs: number | null;
-  /** False while no end is seen ("not yet"): it goes on. */
+  /**
+   * An end seen: false while it goes on, both "not yet" (`endedAtMs` null) and "destroy sent {at}, the next BitNode not
+   * seen" (its time the destroy sent's): the times run "so far" in either.
+   */
   ended: boolean;
   destroyed: boolean;
   /** Its wall clock and time online, to its end or so far (not destroyed); at least these where its start's unseen. */
@@ -96,7 +99,10 @@ export interface CampaignTimelineView {
   /** Slow snapshots folded, and those with no `resetInfo` to read (left out). */
   slowSnapshots: number;
   unread: number;
-  /** Slow snapshots the fold failed on, skipped (each a failure in the model: logged), and the first one's why. */
+  /**
+   * Slow snapshots the fold failed on (each a failure in the model: the first logged), skipped, or partly applied where
+   * it failed part way, and the first one's row and why.
+   */
   failed: { count: number; first: string } | null;
   /** Why it couldn't be read just now (the brain logs it), or null. */
   problem: string | null;
@@ -207,7 +213,8 @@ export class CampaignTimeline {
         this.#dirty = true;
       }
     } else {
-      const byTierIndex = this.#store.lastSnapshotId() - this.#lastId > this.#recentRows;
+      const newestId = this.#store.lastSnapshotId();
+      const byTierIndex = newestId - this.#lastId > this.#recentRows;
       if (byTierIndex) this.tierIndexReads += 1;
       const stored = this.#store.slowResetInfoAfterId({
         environment,
@@ -219,6 +226,10 @@ export class CampaignTimeline {
         this.#fold1(snapshot);
         this.#lastId = snapshot.id;
       }
+      // Not a full batch: every slow snapshot to the newest row as the read began is folded, so it reads on from that
+      // row, not the last slow one: with slow snapshots stopped, or another environment writing, the rows since stay
+      // few (and off the tier index).
+      if (stored.length < this.#batch) this.#lastId = Math.max(this.#lastId, newestId);
       this.slowSnapshotsRead += stored.length;
     }
     const events = this.#store.eventsAfterId({
@@ -233,7 +244,11 @@ export class CampaignTimeline {
     }
   }
 
-  /** Folds one slow snapshot; one the fold fails on is skipped and counted (the first logged), never read again. */
+  /**
+   * Folds one slow snapshot; one the fold fails on is skipped and counted (the first logged), never read again. A fold
+   * failing part way may have kept part of the row (the BitNode or cycle `ResetDetection` registered, not the fold's
+   * own records), so the panel says the timeline may be off from that row (`npm run campaign` fails on it).
+   */
   #fold1(snapshot: SlowResetInfo): void {
     this.#dirty = true;
     try {

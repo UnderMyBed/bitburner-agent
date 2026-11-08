@@ -413,6 +413,41 @@ describe("the timeline of BitNodes and installs (#285)", () => {
     expect(timeline().read()).toMatchObject({ slowSnapshots: 3, unread: 1 });
   });
 
+  test("slow snapshots stopped: the next read goes on from the newest row, not the last slow one (#285 re-review)", () => {
+    play(1, 10, { node: 0, aug: 0 });
+    const kept = new CampaignTimeline({ store, environment: "E0", recentRows: 100 });
+    kept.read();
+    const fastOnly = (from: number, count: number) =>
+      store.writeTransaction(() => {
+        for (let index = 0; index < count; index++) snapshot("fast", m(from) + index * 2_000, { degradedTiers: [] });
+      });
+    // 150 rows of another tier since: by the tier index once, then on from the newest row.
+    fastOnly(11, 150);
+    kept.read();
+    expect(kept.tierIndexReads).toBe(1);
+    fastOnly(20, 50);
+    kept.read();
+    kept.read();
+    expect(kept.tierIndexReads).toBe(1);
+    // And a slow snapshot after them is still read.
+    play(30, 30, { node: 0, aug: 0 });
+    expect(kept.read().slowSnapshots).toBe(11);
+  });
+
+  test("a destroy sent with the next BitNode not seen: no end seen yet, its times so far (#285 re-review)", () => {
+    play(1, 10, { node: 0, aug: 0, sf: 3 });
+    event(10.3, "bitNodeDestroySent");
+    const [bitNode] = timeline().read().bitNodes;
+    expect(bitNode).toMatchObject({
+      ending: "destroy sent {at}, the next BitNode not seen",
+      endedAtMs: m(10.3),
+      ended: false,
+      destroyed: false,
+      soFar: true,
+    });
+    expect(bitNode?.cycleList.map((cycle) => cycle.current)).toEqual([true]);
+  });
+
   test("a BitNode that goes on, or ends, in a cycle a save went back to: that cycle the current one (#285 review)", () => {
     // The brain started before the BitNode: its start is seen.
     event(-1, "brainStarted");

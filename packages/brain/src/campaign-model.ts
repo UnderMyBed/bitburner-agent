@@ -346,7 +346,7 @@ export class CampaignFold {
 export interface Ending {
   text: string;
   atMs: number | null;
-  /** False only for the newest BitNode with no end seen ("not yet"): it goes on. */
+  /** False for the newest BitNode with no end seen: "not yet", or a destroy sent with the next BitNode not seen. */
   ended: boolean;
   destroyedAtMs: number | null;
   /** Destroyed, with BitNodes the store didn't see before the next: its destroy's time unknown, never a clear. */
@@ -486,9 +486,9 @@ function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, i
     unseenAfter: false,
   });
   if (next === undefined) {
-    return sent === undefined
-      ? { ...ended("not yet", null), ended: false }
-      : ended("destroy sent {at}, the next BitNode not seen", sent.atMs);
+    const goesOn =
+      sent === undefined ? ended("not yet", null) : ended("destroy sent {at}, the next BitNode not seen", sent.atMs);
+    return { ...goesOn, ended: false };
   }
   const at = next.startMs;
   if (next.entry === "save loaded") return ended("a save loaded {at}", next.firstSlowAtMs);

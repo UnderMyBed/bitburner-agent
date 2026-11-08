@@ -1547,7 +1547,8 @@ describe("the timeline of BitNodes and installs (#285)", () => {
       "bad",
     ]);
     expect([failed?.textContent, failed?.className]).toEqual([
-      "2 slow snapshots couldn't be folded, left out (the first: row 11: a resetInfo the fold can't read).",
+      "2 slow snapshots couldn't be folded, left out or partly applied, so the timeline may be off from there (the " +
+        "first: row 11: a resetInfo the fold can't read; npm run campaign fails on it).",
       "bad",
     ]);
     expect(details()).toHaveLength(3);
@@ -1568,6 +1569,39 @@ describe("the timeline of BitNodes and installs (#285)", () => {
     current = { ...BUSY_STATUS, timeline: null };
     await pollAgain(document);
     expect(textOf(document, "#timeline div")).toBe("Not given by this brain.");
+  });
+
+  test("a destroy sent with the next BitNode not seen goes on; a cycle's ends in time order (#285 re-review)", async () => {
+    const bn2 = TIMELINE.bitNodes[1] as TimelineBitNode;
+    const [first, second, save] = bn2.cycleList;
+    const sent: TimelineBitNode = {
+      ...bn2,
+      ending: "destroy sent {at}, the next BitNode not seen",
+      endedAtMs: C(175),
+      ended: false,
+      // Its second cycle installed from at 170, after the save that left it at 155: listed by time, not by kind.
+      cycleList: [
+        first,
+        {
+          ...second,
+          endedBy: [{ atMs: C(170), byHand: false, augmentationCount: 1, augmentations: "BitWire" }],
+        },
+        save,
+      ] as TimelineBitNode["cycleList"],
+    };
+    const status = {
+      ...BUSY_STATUS,
+      timeline: { ...TIMELINE, bitNodes: [TIMELINE.bitNodes[0] as TimelineBitNode, sent] },
+    };
+    const { document } = await openPage(() => ({ status: 200, body: status }));
+    expect(summaries(document)[0]).toBe(
+      `BN1.2: from ${time(C(60.5))}, destroy sent ${time(C(175))}, the next BitNode not seen; 1 h 39 min online so far, ` +
+        "2 h 0 min by the clock so far; 2 cycles, 1 install (1 by hand)",
+    );
+    const rows = rowsOf(document.querySelector("#timeline details") ?? undefined);
+    expect(rows[1]?.[3]).toBe(
+      `left for a save loaded ${time(C(155))}; installed ${time(C(170))}: 1 augmentation (BitWire); going on, the destroy sent`,
+    );
   });
 
   test("the newest opens at the first drawing with BitNodes, after reading; those opened stay open across a restart", async () => {

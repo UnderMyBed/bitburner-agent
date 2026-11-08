@@ -226,7 +226,7 @@ function renderTimeline(timeline, brainStartedAtMs) {
   const lines = [];
   if (timeline.problem !== null) lines.push(element("div", `Couldn't read the timeline: ${timeline.problem}`, "bad"));
   if (timeline.failed !== null) {
-    lines.push(element("div", `${plural(timeline.failed.count, "slow snapshot", "slow snapshots")} couldn't be folded, left out (the first: ${timeline.failed.first}).`, "bad"));
+    lines.push(element("div", `${plural(timeline.failed.count, "slow snapshot", "slow snapshots")} couldn't be folded, left out or partly applied, so the timeline may be off from there (the first: ${timeline.failed.first}; npm run campaign fails on it).`, "bad"));
   }
   const unread = timeline.unread > 0 ? `; ${plural(timeline.unread, "slow snapshot", "slow snapshots")} with no resetInfo, left out` : "";
   if (timeline.reading !== null) {
@@ -243,9 +243,8 @@ function renderTimeline(timeline, brainStartedAtMs) {
     details.dataset.key = String(index);
     details.open = timelineOpen.has(String(index));
     const soFar = bitNode.soFar ? " so far" : "";
-    const ending = !bitNode.ended
-      ? "not ended yet"
-      : bitNode.endedAtMs === null ? bitNode.ending : bitNode.ending.replace("{at}", time(bitNode.endedAtMs));
+    // Only "not yet" has no time: every other ending's words, "destroy sent …, the next BitNode not seen" among them.
+    const ending = bitNode.endedAtMs === null ? "not ended yet" : bitNode.ending.replace("{at}", time(bitNode.endedAtMs));
     const augmentations = bitNode.augmentations === null
       ? "not recorded"
       : plural(bitNode.augmentations.kinds, "kind", "kinds") +
@@ -277,15 +276,21 @@ function renderTimeline(timeline, brainStartedAtMs) {
         const row = element("tr");
         const label = cycle.kind === "save" ? "save" : `cycle ${atLeast(String(++count), bitNode.countsAtLeast)}`;
         const ends = [
-          ...cycle.endedBy.map((install) =>
-            `installed ${time(install.atMs)}${install.byHand ? " by hand" : ""}: ` +
-            (install.augmentationCount === null
-              ? "augmentations not recorded"
-              : `${plural(install.augmentationCount, "augmentation", "augmentations")} (${install.augmentations})`),
-          ),
-          ...cycle.leftForSaveAtMs.map((atMs) => `left for a save loaded ${time(atMs)}`),
-          ...(cycle.current ? [bitNode.ended ? "ended with the BitNode" : "going on"] : []),
-        ];
+          ...cycle.endedBy.map((install) => ({
+            atMs: install.atMs,
+            text:
+              `installed ${time(install.atMs)}${install.byHand ? " by hand" : ""}: ` +
+              (install.augmentationCount === null
+                ? "augmentations not recorded"
+                : `${plural(install.augmentationCount, "augmentation", "augmentations")} (${install.augmentations})`),
+          })),
+          ...cycle.leftForSaveAtMs.map((atMs) => ({ atMs, text: `left for a save loaded ${time(atMs)}` })),
+        ]
+          .sort((a, b) => a.atMs - b.atMs)
+          .map((end) => end.text);
+        if (cycle.current) {
+          ends.push(bitNode.ended ? "ended with the BitNode" : bitNode.endedAtMs === null ? "going on" : "going on, the destroy sent");
+        }
         row.append(
           element("th", label),
           element("td", `from ${time(cycle.startMs)}${TIMELINE_CYCLE_KINDS[cycle.kind] ? `, ${TIMELINE_CYCLE_KINDS[cycle.kind]}` : ""}`),
