@@ -113,6 +113,11 @@ Reading the seventh row (614978a, the 1.0.0 release, the reference rig, [#276](h
 - **It ran on Node 26.13.0; the earlier rows ran on 24.22.1.** The Node bump probably accounts for much of the change, so this row wasn't a like-for-like comparison with the rows above. The machine ran Node 26 because its global mise config overrode the repo's `.node-version`, and on Node 26 the BN1 baseline's game differed too ([baselines](baselines.md), the sixth run). At the time, a later run on Node 24 would have read about 21% slower than this row on lean, past the 20% [regression](#regressions) threshold, without anything having regressed. [#282](https://github.com/UnderMyBed/bitburner-agent/issues/282) settled both: the reference rig runs the pinned Node 24 (the repo's `mise.toml` selects it in the clone, and the bench refuses another major), and a row is compared only with rows on its own Node major. So the next run on Node 24 compares with 7990834's row, not this one. This row stays as the record of what Node 26 gave.
 - **The heap still doesn't grow.**
 
+Reading the eighth row (ba724e3, the pin's move to Node 26, the reference rig, [#301](https://github.com/UnderMyBed/bitburner-agent/issues/301)):
+- **The first row on the new pin.** The owner moved the repo's pinned Node from 24 to 26 (2026-11-07): Node 26's V8, 14.6, should be the one in Steam's Electron 41 ([parity](parity.md) 4.17). So from this row on, rows are on Node 26, and each compares with the last Node 26 row from its rig: this one with the seventh row (614978a, Node 26.13.0), not with 7990834's Node 24 row, which stays as the record of the old pin.
+- Every workload is within 5% of the seventh row (lean −4.8%, batch −1.4%, churn −1.0%, copies −0.4%), and the benchmark found no regression. Nothing the workloads run changed between the two commits: the simulator's changes since 614978a are the Node check the scripts run first and the bench's comparison by Node major ([#282](https://github.com/UnderMyBed/bitburner-agent/issues/282)), so the small drops are noise.
+- **The heap still doesn't grow.** It starts 0.1 MB lower and ends the same as the seventh row's.
+
 Rows are appended at the end of this file, so keep the results table last. When a workload is added or removed, the next run starts a new table with the new columns, and older rows still compare on the workloads they share.
 
 | Date | Commit | Rig | Node | lean | batch | churn | copies | Heap start | Heap end | Heap growth per day |
@@ -124,3 +129,4 @@ Rows are appended at the end of this file, so keep the results table last. When 
 | 2026-10-28 | fa9c5dc | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26799x | 9945x | 475x | 12245x | 106.5 MB | 96.4 MB | +0.0 MB |
 | 2026-10-28 | 7990834 | amd-ryzen-7-9800x3d-16c-62g | v24.22.1 | 26245x | 10042x | 442x | 12081x | 106.4 MB | 96.3 MB | +0.0 MB |
 | 2026-11-07 | 614978a | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 33180x | 11650x | 510x | 14008x | 75.8 MB | 65.5 MB | +0.0 MB |
+| 2026-11-08 | ba724e3 | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 31579x | 11483x | 505x | 13953x | 75.7 MB | 65.5 MB | +0.0 MB |
