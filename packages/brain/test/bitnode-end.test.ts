@@ -575,6 +575,13 @@ describe("closing the game too (the switch's third setting)", () => {
     expect(called.backupNow).not.toHaveBeenCalled();
   });
 
+  test("set to stop the brain alone while the close is awaited: not called off (only Play on is)", () => {
+    const { controller, events } = destroyedWith("brainAndGame");
+    controller.setStopAtBitNodeEnd("brain");
+    expect(events.filter((event) => event.type === "gameCloseCalledOff")).toEqual([]);
+    expect(closeView(controller)).toMatchObject({ source: "bitNodeEnd" });
+  });
+
   test("set back to play on after the close went out: too late, nothing called off", async () => {
     const { controller, send, events, settleBackup, sentIds } = destroyedWith("brainAndGame");
     send("medium", medium());
