@@ -24,7 +24,13 @@ import {
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
-import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
+import {
+  BITNODE_END_EVENT_KINDS,
+  BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND,
+  GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND,
+  GAME_CLOSE_SENT_EVENT_KIND,
+  GAME_CLOSED_EVENT_KIND,
+} from "./bitnode-end.ts";
 import {
   type ClockIncident,
   type FastSnapshotTime,
@@ -892,6 +898,12 @@ export function runReport(
   }
   const failures: string[] = [];
   const warnings: string[] = [];
+  // The game's close at the BitNode's end not confirmed (#303): the brain stopped as asked, the game maybe not.
+  for (const { atMs, detail } of facts.events.filter((event) => event.kind === GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND)) {
+    warnings.push(
+      `game close not confirmed at ${formatIsoTime(atMs)}: ${displayValue(fieldsOf(detail).reason)} (the brain stopped)`,
+    );
+  }
   // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
   const incidents = findClockIncidents({
     medium: facts.mediumTimes,
@@ -1026,10 +1038,23 @@ function windowSection(facts: RunFacts): string[] {
   // The brain's stop at the BitNode's end (#303), the last: the run's expected end, never a failure.
   const stop = timeline.findLast((event) => event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND);
   if (stop !== undefined) {
+    // The game closed too (the switch's third setting), or not confirmed: section 4's warning.
+    const after = timeline.filter((event) => event.atMs >= stop.atMs);
+    const closed = after.find((event) => event.kind === GAME_CLOSED_EVENT_KIND);
+    const notConfirmed = after.find((event) => event.kind === GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND);
+    const game =
+      closed !== undefined
+        ? `: the game saved and closed at ${formatIsoTime(closed.atMs)}, then the brain stopped`
+        : notConfirmed !== undefined
+          ? `: the game's close NOT CONFIRMED (${displayValue(fieldsOf(notConfirmed.detail).reason)}), so it may still ` +
+            "be running"
+          : fieldsOf(stop.detail).closeGame === true
+            ? ": the game to close first, its close not seen in the window"
+            : ": the game and its scripts went on without it";
     lines.push(
       `  the run's end: the brain stopped itself at ${formatIsoTime(stop.atMs)}, at the BitNode's end (the switch ` +
-        `on): ${displayValue(fieldsOf(stop.detail).detail)}. Expected, not a failure: the game and its scripts went ` +
-        "on without it, and the quiet after it is no gap",
+        `on): ${displayValue(fieldsOf(stop.detail).detail)}. Expected, not a failure${game}; the quiet after it is no ` +
+        "gap",
     );
   }
   return lines;
@@ -1045,7 +1070,16 @@ function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.N
     case BRAIN_STARTED_EVENT_KIND:
       return `brain started, release ${displayValue(fields.release)}`;
     case BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND:
-      return `brain stopped itself at the BitNode's end (the switch on): ${displayValue(fields.detail)}`;
+      return (
+        `brain stopped itself at the BitNode's end (the switch on${fields.closeGame === true ? ", the game to close first" : ""}): ` +
+        displayValue(fields.detail)
+      );
+    case GAME_CLOSE_SENT_EVENT_KIND:
+      return "the game's close sent: its own Save Game, then its window closed";
+    case GAME_CLOSED_EVENT_KIND:
+      return `game closed: its Agent's connection dropped ${formatSeconds(Number(fields.afterMs))} after the close`;
+    case GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND:
+      return `game close NOT CONFIRMED: ${displayValue(fields.reason)}`;
     case RELAUNCH_EVENT_KIND:
       return `game relaunched by the supervisor (${displayValue(fields.cause)})`;
     case "agentConnected": {
@@ -2196,7 +2230,7 @@ function stopAtBitNodeEndBefore(facts: RunFacts, fromMs: number): StoredEvent | 
   return (
     facts.events.findLast(
       (event) =>
-        event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND &&
+        BITNODE_END_EVENT_KINDS.includes(event.kind) &&
         event.atMs >= fromMs - RELOAD_LEAD_MS &&
         event.atMs <= fromMs + RELOAD_LAG_MS,
     ) ?? null

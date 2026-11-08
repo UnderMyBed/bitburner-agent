@@ -53,8 +53,11 @@ export interface DashboardServerOptions {
   setWorldDaemonEnabled(enabled: boolean): void;
   /** Sharing spare RAM's switch (#224). */
   setShareEnabled(enabled: boolean): void;
-  /** The stop at the BitNode's end's switch (#303). */
-  setStopAtBitNodeEnd(enabled: boolean): void;
+  /**
+   * The stop at the BitNode's end's switch (#303): `"off"`, `"brain"` or `"brainAndGame"`, the body's `setting`; false
+   * for anything else, which is refused.
+   */
+  setStopAtBitNodeEnd(setting: unknown): boolean;
   /** The manual intents queue (#141): adds `{ action, args }`. */
   addIntent(request: unknown): AddedIntent;
   /** Takes an intent off the manual queue by id; false if it isn't there. */
@@ -138,8 +141,15 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         return handleSwitch(request, response, origin, "enabled", options.setWorldDaemonEnabled);
       case "POST /api/share":
         return handleSwitch(request, response, origin, "enabled", options.setShareEnabled);
-      case "POST /api/stop-at-bitnode-end":
-        return handleSwitch(request, response, origin, "enabled", options.setStopAtBitNodeEnd);
+      case "POST /api/stop-at-bitnode-end": {
+        // Its own body, as the switch has three settings, exactly: `{"setting": …}`.
+        const body = (await readJsonWrite(request, origin)) as Record<string, unknown> | null;
+        const fields = typeof body === "object" && body !== null ? Object.keys(body).join() : "";
+        if (fields !== "setting" || !options.setStopAtBitNodeEnd((body as { setting: unknown }).setting)) {
+          throw new RequestError(400, 'the body must be {"setting": "off"}, {"setting": "brain"} or {"setting": "brainAndGame"}');
+        }
+        return reply(response, 200, "application/json", JSON.stringify({ setting: (body as { setting: unknown }).setting }));
+      }
       case "POST /api/intents": {
         const added = options.addIntent(await readJsonWrite(request, origin));
         if (!added.ok) throw new RequestError(400, added.reason);

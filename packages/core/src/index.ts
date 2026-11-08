@@ -193,6 +193,7 @@ export {
   type WorldDaemonStanding,
   worldDaemonProblem,
 } from "./bitnodes.ts";
+export { CLOSE_GAME_WINDOW_STAYED_OPEN, CLOSE_GAME_WORKER_NAME } from "./close-game.ts";
 export {
   type CityGroupChoice,
   type CityGroupValue,

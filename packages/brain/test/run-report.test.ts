@@ -3190,7 +3190,7 @@ describe("the stop at the BitNode's end (#303)", () => {
     );
     expect(text).toContain(
       `  the run's end: the brain stopped itself at ${at(RUN_MS + SECOND)}, at the BitNode's end (the switch on): ` +
-        "BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game and its scripts went on without it, and the " +
+        "BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game and its scripts went on without it; the " +
         "quiet after it is no gap\n\n2. Progress",
     );
   });
@@ -3259,6 +3259,44 @@ describe("the stop at the BitNode's end (#303)", () => {
   test("a run with no stop says nothing of one", () => {
     cleanRun();
     expect(report().text).not.toContain("the run's end");
+  });
+
+  /** The stop that closes the game too, a minute before the run's end, and its close going out at the end. */
+  function closingRun() {
+    cleanRun();
+    event(RUN_MS - MINUTE, "brainStoppedAtBitNodeEnd", { ...DESTROYED, closeGame: true });
+    event(RUN_MS, "gameCloseSent", {});
+  }
+
+  test("the game closed too: its close, the drop, and the end said; PASS, the disconnect expected", () => {
+    closingRun();
+    event(RUN_MS + 400, "agentDisconnected", { agentSessionId: "session-1" });
+    event(RUN_MS + 400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
+    const { text, failures, warnings } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
+    expect([failures, warnings]).toEqual([[], []]);
+    for (const line of [
+      `  ${at(RUN_MS - MINUTE)}  brain stopped itself at the BitNode's end (the switch on, the game to close first): ` +
+        "BN1.3 destroyed, BN1.4 seen",
+      `  ${at(RUN_MS)}  the game's close sent: its own Save Game, then its window closed`,
+      `  ${at(RUN_MS + 400)}  game closed: its Agent's connection dropped 0.4 s after the close`,
+      `  the run's end: the brain stopped itself at ${at(RUN_MS - MINUTE)}, at the BitNode's end (the switch on): ` +
+        `BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game saved and closed at ${at(RUN_MS + 400)}, ` +
+        "then the brain stopped; the quiet after it is no gap",
+    ]) {
+      expect(text).toContain(line);
+    }
+  });
+
+  test("the game's close not confirmed: a warning (WARN), the end saying the game may still be running", () => {
+    closingRun();
+    const reason = "the Agent's connection didn't drop within 60 s of the close: the game may still be running";
+    event(RUN_MS + MINUTE, "gameCloseNotConfirmed", { reason, closeSentAtMs: T0 + RUN_MS });
+    const { text, failures, warnings } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
+    expect(failures).toEqual([]);
+    expect(warnings).toEqual([`game close not confirmed at ${at(RUN_MS + MINUTE)}: ${reason} (the brain stopped)`]);
+    expect(text.split("\n").at(-2)).toBe("Verdict: WARN");
+    expect(text).toContain(`  ${at(RUN_MS + MINUTE)}  game close NOT CONFIRMED: ${reason}`);
+    expect(text).toContain(`Expected, not a failure: the game's close NOT CONFIRMED (${reason}), so it may still be running`);
   });
 });
 

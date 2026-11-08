@@ -7,21 +7,30 @@ import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  CLOSE_GAME_WINDOW_STAYED_OPEN,
   CONTROL_PROTOCOL_VERSION,
   encodeControlMessage,
   type SlowSnapshotData,
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   type BitNodeReading,
+  BitNodeEndShutdown,
   bitNodeReadingOf,
+  CLOSE_GAME_INTENT,
   destroyedBetween,
+  describeStopAtBitNodeEnd,
+  GAME_CLOSE_CONFIRMED_WITHIN_MS,
+  GAME_CLOSE_SENT_WITHIN_MS,
+  parseStopAtBitNodeEnd,
   readStopAtBitNodeEnd,
+  STOP_AFTER_MS,
   STOP_AT_BITNODE_END_SETTING,
   writeStopAtBitNodeEnd,
 } from "../src/bitnode-end.ts";
+import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { DesiredStateController, type RuleEvent } from "../src/desired-state.ts";
 import { writeManualIntents, writeResetSentNote } from "../src/manual-intents.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -48,27 +57,39 @@ afterEach(() => {
 });
 
 describe("the switch", () => {
-  test("off unless turned on; kept in the store as true or false, so it survives a restart", () => {
-    expect(readStopAtBitNodeEnd(store)).toBe(false);
-    writeStopAtBitNodeEnd(store, true);
-    expect(store.getSetting(STOP_AT_BITNODE_END_SETTING)).toBe("true");
-    expect(STOP_AT_BITNODE_END_SETTING).toBe("stopAtBitNodeEnd.enabled");
-    expect(readStopAtBitNodeEnd(store)).toBe(true);
-    writeStopAtBitNodeEnd(store, false);
-    expect(readStopAtBitNodeEnd(store)).toBe(false);
+  test("off unless set; its three settings kept in the store as they are, so they survive a restart", () => {
+    expect(readStopAtBitNodeEnd(store)).toBe("off");
+    expect(STOP_AT_BITNODE_END_SETTING).toBe("stopAtBitNodeEnd");
+    for (const setting of ["brain", "brainAndGame", "off"] as const) {
+      writeStopAtBitNodeEnd(store, setting);
+      expect(store.getSetting(STOP_AT_BITNODE_END_SETTING)).toBe(setting);
+      expect(readStopAtBitNodeEnd(store)).toBe(setting);
+    }
   });
 
-  test("a value it didn't write fails, rather than guess", () => {
-    store.setSetting(STOP_AT_BITNODE_END_SETTING, "yes");
-    expect(() => readStopAtBitNodeEnd(store)).toThrow(/stopAtBitNodeEnd\.enabled setting is "yes"/);
+  test("a value it didn't write fails, rather than guess; the dashboard's request is checked the same", () => {
+    store.setSetting(STOP_AT_BITNODE_END_SETTING, "true");
+    expect(() => readStopAtBitNodeEnd(store)).toThrow(
+      /stopAtBitNodeEnd setting is "true", not off, brain, brainAndGame/,
+    );
+    expect(parseStopAtBitNodeEnd("brainAndGame")).toBe("brainAndGame");
+    for (const value of ["on", true, null, "Brain"]) expect(parseStopAtBitNodeEnd(value)).toBeNull();
+  });
+
+  test("in words, for the log", () => {
+    expect(["off", "brain", "brainAndGame"].map((each) => describeStopAtBitNodeEnd(each as never))).toEqual([
+      "off",
+      "stop the brain",
+      "stop the brain and close the game",
+    ]);
   });
 
   test("the controller's: written, and its view says it", () => {
     const controller = new DesiredStateController({ channel, store });
-    expect(controller.stopAtBitNodeEndView()).toEqual({ enabled: false });
-    controller.setStopAtBitNodeEnd(true);
-    expect(store.getSetting(STOP_AT_BITNODE_END_SETTING)).toBe("true");
-    expect(controller.stopAtBitNodeEndView()).toEqual({ enabled: true });
+    expect(controller.stopAtBitNodeEndView()).toEqual({ setting: "off" });
+    controller.setStopAtBitNodeEnd("brainAndGame");
+    expect(store.getSetting(STOP_AT_BITNODE_END_SETTING)).toBe("brainAndGame");
+    expect(controller.stopAtBitNodeEndView()).toEqual({ setting: "brainAndGame" });
   });
 });
 
@@ -140,14 +161,19 @@ describe("the next BitNode after a destroy (destroyedBetween)", () => {
 
 // --- The controller ----------------------------------------------------------------------------------------------------
 
-function slowSnapshot({
-  lastNodeReset = 1_000,
-  lastAugReset = lastNodeReset,
-  currentNode = 1,
-  ownedSF = { 1: 2 } as Record<string, number>,
-  ownedAugs = {} as Record<string, number>,
-  queued = [] as string[],
-} = {}): SlowSnapshotData {
+/** A slow snapshot: BN1.3 (SF1 at 2) begun at 1,000, its last install then too, unless said. */
+function slowSnapshot(
+  fields: {
+    lastNodeReset?: number;
+    lastAugReset?: number;
+    currentNode?: number;
+    ownedSF?: Record<string, number>;
+    ownedAugs?: Record<string, number>;
+    queued?: string[];
+  } = {},
+): SlowSnapshotData {
+  const { lastNodeReset = 1_000, currentNode = 1, ownedSF = { 1: 2 }, ownedAugs = {}, queued = [] } = fields;
+  const lastAugReset = fields.lastAugReset ?? lastNodeReset;
   return {
     resetInfo: { lastAugReset, lastNodeReset, currentNode, ownedAugs, ownedSF, bitNodeOptions: {} },
     purchasedServers: [],
@@ -168,7 +194,19 @@ function brain() {
   store.setSetting("hackLoop.enabled", "false");
   const lines: string[] = [];
   const events: RuleEvent[] = [];
-  const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+  // Stand-in save backups (the irreversible gate's), each settled by the test.
+  const pendingBackups: ((event: SaveBackupEvent) => void)[] = [];
+  const backupNow = vi.fn(() => new Promise<SaveBackupEvent>((resolve) => pendingBackups.push(resolve)));
+  const settleBackup = async () => {
+    pendingBackups.shift()?.({ type: "saveBackup", atMs: 1, file: "saves/E2/x.json.gz", sizeBytes: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const controller = new DesiredStateController({
+    channel,
+    store,
+    saveBackups: { backupNow },
+    log: (line) => lines.push(line),
+  });
   controller.subscribe((event) => events.push(event));
   let connection = connect("session-1");
   let session = "session-1";
@@ -191,7 +229,12 @@ function brain() {
     connection = connect(agentSessionId);
   };
   const stops = () => events.filter((event) => event.type === "brainStoppedAtBitNodeEnd");
-  return { controller, lines, events, send, reconnect, stops };
+  /** The intents in the last desired state sent. */
+  const sentIds = () =>
+    (connection.sentMessages().filter((message) => message.type === "desiredState").at(-1) as
+      | { intents: { id: string }[] }
+      | undefined)?.intents.map((each) => each.id) ?? [];
+  return { controller, lines, events, send, reconnect, stops, backupNow, settleBackup, sentIds };
 }
 
 function connect(agentSessionId: string): MemoryConnection {
@@ -214,7 +257,7 @@ const DESTROY_NOTE = { id: "destroyBitNode(1)", field: "lastNodeReset", resetAt:
 
 describe("destroyed: the brain stops on the next BitNode's first slow snapshot", () => {
   test("its destroy out: logged, stored once, with the BitNodes; the destroy's note dropped as before", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     writeResetSentNote(store, DESTROY_NOTE);
     const { send, reconnect, stops, lines, controller } = brain();
     send("slow", slowSnapshot(), 2_000);
@@ -229,6 +272,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
         reason: "destroyed",
         bitNode: "BN1.3",
         nextBitNode: "BN1.4",
+        closeGame: false,
         detail,
       },
     ]);
@@ -240,7 +284,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
   });
 
   test("the owner's queued destroy, into another BitNode: the same", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     writeManualIntents(store, [{ id: "destroyBitNode(2)", action: "destroyBitNode", args: { nextBitNode: 2 } }]);
     writeResetSentNote(store, { ...DESTROY_NOTE, id: "destroyBitNode(2)" });
     const { send, stops } = brain();
@@ -250,7 +294,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
   });
 
   test("a restarted brain with its destroy out: the first slow snapshot of the next BitNode, the last unseen", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     writeResetSentNote(store, DESTROY_NOTE);
     const { send, stops, lines } = brain();
     send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
@@ -260,7 +304,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
   });
 
   test("a destroy by hand in the game, below the cap: the Source-File's level gained says it", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     const { send, stops } = brain();
     send("slow", slowSnapshot(), 2_000);
     send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
@@ -272,7 +316,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
     const { send, stops, controller } = brain();
     send("slow", slowSnapshot(), 2_000);
     send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
-    controller.setStopAtBitNodeEnd(true);
+    controller.setStopAtBitNodeEnd("brain");
     send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 10_000);
     expect(stops()).toEqual([]);
   });
@@ -280,7 +324,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
 
 describe("not on the wrong signals", () => {
   test("an install, and a soft reset (nothing queued): lastAugReset moves, lastNodeReset doesn't", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     const { send, stops } = brain();
     send("slow", slowSnapshot({ queued: ["CashRoot Starter Kit"] }), 2_000);
     send("slow", slowSnapshot({ lastAugReset: 5_000, ownedAugs: { "CashRoot Starter Kit": 1 } }), 5_500);
@@ -289,7 +333,7 @@ describe("not on the wrong signals", () => {
   });
 
   test("an install with a destroy's note out (an older brain's, say): not the destroy", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     writeResetSentNote(store, DESTROY_NOTE);
     const { send, stops } = brain();
     send("slow", slowSnapshot(), 2_000);
@@ -298,7 +342,7 @@ describe("not on the wrong signals", () => {
   });
 
   test("a save loaded: an older BitNode's (its start before the last look), or one from this BitNode", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     writeResetSentNote(store, DESTROY_NOTE);
     const { send, stops } = brain();
     send("slow", slowSnapshot({ lastNodeReset: 1_000 }), 50_000);
@@ -307,7 +351,7 @@ describe("not on the wrong signals", () => {
   });
 
   test("b1t_flum3 or a new game: another BitNode with no note and no level gained", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     const { send, stops } = brain();
     send("slow", slowSnapshot(), 2_000);
     send("slow", slowSnapshot({ currentNode: 2, lastNodeReset: 9_000 }), 9_500);
@@ -316,7 +360,7 @@ describe("not on the wrong signals", () => {
   });
 
   test("a brain restarted mid-BitNode, with no destroy out: its first slow snapshot is no change", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     const { send, stops } = brain();
     send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
     send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 10_000);
@@ -335,7 +379,7 @@ describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-
   }
 
   test("after the nextBitNode stall's line and event, in the same update: logged, stored, once", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     const { send, events, lines, stops } = inBlockedBitNode();
     const detail =
       "BN1.4's w0r1d_d43m0n is ready, but Source-File 1 is at level 3, so BitNode 1 gives nothing more: the next " +
@@ -347,6 +391,7 @@ describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-
         reason: "nothingMoreToGain",
         bitNode: "BN1.4",
         nextBitNode: null,
+        closeGame: false,
         detail,
       },
     ]);
@@ -362,22 +407,22 @@ describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-
   });
 
   test("not before w0r1d_d43m0n is ready: short of its level, or not rooted", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     expect(inBlockedBitNode({ hacking: 2999 }).stops()).toEqual([]);
   });
 
   test("not rooted: none", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     expect(inBlockedBitNode({ rooted: false }).stops()).toEqual([]);
   });
 
   test("below the cap the destroy goes, so the brain plays on to it", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     expect(inBlockedBitNode({ ownedSF: { 1: 2 } }).stops()).toEqual([]);
   });
 
   test("the World Daemon's switch off (your own destroy planned): none, the destroy awaited instead", () => {
-    writeStopAtBitNodeEnd(store, true);
+    writeStopAtBitNodeEnd(store, "brain");
     writeWorldDaemonEnabled(store, false);
     expect(inBlockedBitNode().stops()).toEqual([]);
   });
@@ -385,7 +430,171 @@ describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-
   test("the switch off: none; turned on mid-run, at once, without a restart", () => {
     const { controller, stops } = inBlockedBitNode();
     expect(stops()).toEqual([]);
-    controller.setStopAtBitNodeEnd(true);
+    controller.setStopAtBitNodeEnd("brain");
     expect(stops()).toMatchObject([{ reason: "nothingMoreToGain", bitNode: "BN1.4" }]);
+  });
+});
+
+describe("closing the game too (the switch's third setting)", () => {
+  /** A destroy by hand seen (BN1.3 to BN1.4) with the switch at `setting`: the stop, then the static snapshot. */
+  function destroyedWith(setting: "brain" | "brainAndGame") {
+    writeStopAtBitNodeEnd(store, setting);
+    const started = brain();
+    started.send("slow", slowSnapshot(), 2_000);
+    started.send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    started.send("static", network);
+    return started;
+  }
+  const medium = () => mediumData(1, {});
+  const closeView = (controller: DesiredStateController) =>
+    controller.intentsView().find((view) => view.id === CLOSE_GAME_INTENT.id);
+  /** The Agent's fast snapshot with the close's outcome. */
+  const tried = (tries: number, problem: string) => ({
+    degradedTiers: [],
+    pageHeapUsedBytes: null,
+    game: null,
+    intents: [{ id: CLOSE_GAME_INTENT.id, done: false, tries, problem, backend: "ui" }],
+  });
+  const UNSAVED = 'the game\'s save not confirmed ("Game Saved!" not shown in time), so not closed';
+
+  test("the stop asks for the close: past the gate's two medium snapshots and a save backup, stored as it goes out", async () => {
+    const { controller, send, stops, events, lines, backupNow, settleBackup, sentIds } = destroyedWith("brainAndGame");
+    expect(stops()).toMatchObject([{ reason: "destroyed", closeGame: true }]);
+    expect(lines).toContain(
+      "stopping at the BitNode's end (the switch is on, the game to close first): BN1.3 destroyed, BN1.4 seen",
+    );
+    expect(closeView(controller)).toMatchObject({ source: "bitNodeEnd", outcome: null });
+    expect(controller.closeGameWaitingFor()).toMatch(/^waiting for the guard to hold on 2 consecutive medium/);
+    send("medium", medium());
+    send("medium", medium());
+    expect(backupNow).toHaveBeenCalledTimes(1);
+    expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+    expect(events.filter((event) => event.type === "gameCloseSent")).toEqual([]);
+    await settleBackup();
+    expect(sentIds()).toContain(CLOSE_GAME_INTENT.id);
+    expect(events.filter((event) => event.type === "gameCloseSent")).toEqual([
+      { type: "gameCloseSent", atMs: expect.any(Number) },
+    ]);
+    expect(lines).toContain("closing the game: its own Save Game, then its window closed (a save backup taken first)");
+    expect(controller.closeGameWaitingFor()).toBeNull();
+    // Stored once.
+    send("medium", medium());
+    expect(events.filter((event) => event.type === "gameCloseSent")).toHaveLength(1);
+  });
+
+  test("stopping the brain alone: no close asked for", () => {
+    const { controller, stops } = destroyedWith("brain");
+    expect(stops()).toMatchObject([{ closeGame: false }]);
+    expect(closeView(controller)).toBeUndefined();
+    expect(controller.closeGameWaitingFor()).toBe("not asked for");
+  });
+
+  test("tried, not done: asked again up to 3 tries, then withdrawn, logged; never again", async () => {
+    const { controller, send, lines, settleBackup, sentIds } = destroyedWith("brainAndGame");
+    send("medium", medium());
+    send("medium", medium());
+    await settleBackup();
+    send("fast", tried(2, UNSAVED));
+    expect(sentIds()).toContain(CLOSE_GAME_INTENT.id);
+    send("fast", tried(3, UNSAVED));
+    expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+    expect(closeView(controller)).toBeUndefined();
+    expect(lines).toContain(`closing the game: withdrawn after 3 tries: ${UNSAVED}`);
+    send("medium", medium());
+    send("medium", medium());
+    expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+  });
+
+  test("the window stayed open (a browser's): withdrawn at once, not closed again", async () => {
+    const { send, lines, settleBackup, sentIds } = destroyedWith("brainAndGame");
+    send("medium", medium());
+    send("medium", medium());
+    await settleBackup();
+    send("fast", tried(1, CLOSE_GAME_WINDOW_STAYED_OPEN));
+    expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+    expect(lines).toContain(`closing the game: withdrawn after 1 try: ${CLOSE_GAME_WINDOW_STAYED_OPEN}`);
+  });
+});
+
+describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () => {
+  afterEach(() => vi.useRealTimers());
+  const STOP = { type: "brainStoppedAtBitNodeEnd", atMs: 1_000 };
+  function shutdownWith(waitingFor: string | null = "waiting for a save backup") {
+    vi.useFakeTimers();
+    const shutDown = vi.fn();
+    const recorded: [string, Record<string, unknown>][] = [];
+    const lines: string[] = [];
+    const watch = new BitNodeEndShutdown({
+      shutDown,
+      record: (kind, detail) => recorded.push([kind, detail]),
+      log: (line) => lines.push(line),
+      closeWaitingFor: () => waitingFor,
+    });
+    return { watch, shutDown, recorded, lines };
+  }
+
+  test("the brain alone: a second on, as on Ctrl+C, nothing more stored", () => {
+    const { watch, shutDown, recorded } = shutdownWith();
+    watch.ruleEvent({ ...STOP, closeGame: false });
+    vi.advanceTimersByTime(STOP_AFTER_MS - 1);
+    expect(shutDown).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+    expect(recorded).toEqual([]);
+  });
+
+  test("closing the game: once the Agent's connection drops after the close went out, gameClosed, then the stop", () => {
+    const { watch, shutDown, recorded, lines } = shutdownWith();
+    watch.ruleEvent({ ...STOP, closeGame: true });
+    // A disconnect before the close went out (the destroy's own reload, say) isn't the close.
+    watch.agentDisconnected(2_000);
+    expect(shutDown).not.toHaveBeenCalled();
+    watch.ruleEvent({ type: "gameCloseSent", atMs: 30_000 });
+    watch.agentDisconnected(30_400);
+    expect(recorded).toEqual([["gameClosed", { closeSentAtMs: 30_000, afterMs: 400 }]]);
+    expect(lines).toEqual(["the game closed: its Agent's connection dropped 0.4 s after the close went out"]);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+    // Once, and no timer left to fire.
+    watch.agentDisconnected(31_000);
+    vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+    expect(recorded).toHaveLength(1);
+  });
+
+  test("the connection not dropped within a minute of the close: gameCloseNotConfirmed, logged, then the stop anyway", () => {
+    const { watch, shutDown, recorded, lines } = shutdownWith();
+    watch.ruleEvent({ ...STOP, closeGame: true });
+    watch.ruleEvent({ type: "gameCloseSent", atMs: 30_000 });
+    vi.advanceTimersByTime(GAME_CLOSE_CONFIRMED_WITHIN_MS - 1);
+    expect(shutDown).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    const reason = "the Agent's connection didn't drop within 60 s of the close: the game may still be running";
+    expect(recorded).toEqual([["gameCloseNotConfirmed", { reason, closeSentAtMs: 30_000 }]]);
+    expect(lines).toEqual([`game close NOT CONFIRMED: ${reason}; stopping the brain anyway`]);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+  });
+
+  test("the close never out within 5 minutes of the stop: not confirmed, saying what it waits for, then the stop", () => {
+    const { watch, shutDown, recorded } = shutdownWith("waiting for a save backup");
+    watch.ruleEvent({ ...STOP, closeGame: true });
+    vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS - 1);
+    expect(shutDown).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(recorded).toEqual([
+      [
+        "gameCloseNotConfirmed",
+        { reason: "the close didn't go out within 5 min of the stop (waiting for a save backup)", closeSentAtMs: null },
+      ],
+    ]);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+  });
+
+  test("before any stop, nothing: a disconnect or a stray close event shuts nothing down", () => {
+    const { watch, shutDown } = shutdownWith();
+    watch.agentDisconnected(5);
+    watch.ruleEvent({ type: "gameCloseSent", atMs: 6 });
+    watch.agentDisconnected(7);
+    vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS * 2);
+    expect(shutDown).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,12 @@ import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, system
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
-import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND, readStopAtBitNodeEnd } from "./bitnode-end.ts";
+import {
+  BitNodeEndShutdown,
+  describeStopAtBitNodeEnd,
+  parseStopAtBitNodeEnd,
+  readStopAtBitNodeEnd,
+} from "./bitnode-end.ts";
 import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import {
@@ -46,8 +51,6 @@ import { readWorldDaemonEnabled } from "./world-daemon.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
 const MAX_LOG_LINE_LENGTH = 500;
-/** How long after its stop at the BitNode's end is asked for the brain shuts down (#303). */
-const STOP_AT_BITNODE_END_AFTER_MS = 1_000;
 /** Where the brain builds the in-game code it deploys, inside its data directory. */
 const INGAME_BUILD_DIRECTORY_NAME = "ingame-build";
 
@@ -182,13 +185,22 @@ try {
   // its first connection is handled.
   const stopRecordingRules = recordEvents(desiredState, store, deployerReleaseContext);
   // The stop at the BitNode's end (#303): asked once the controller has logged it and the line above has stored its
-  // event, it shuts the brain down as Ctrl+C does, once `shutDown` is defined below (an Agent may report before then).
-  let stopAtBitNodeEnd: (() => void) | null = null;
-  let stopAskedFor = false;
-  desiredState.subscribe((event) => {
-    if (event.type !== BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND) return;
-    stopAskedFor = true;
-    stopAtBitNodeEnd?.();
+  // event, it shuts the brain down as Ctrl+C does (a second on, or once the game it closes is gone), through
+  // `shutDown`, defined below (an Agent may report before then: the stop then waits for it).
+  let shutDownNow: (() => void) | null = null;
+  let shutDownAskedFor = false;
+  const bitNodeEnd = new BitNodeEndShutdown({
+    shutDown: () => {
+      shutDownAskedFor = true;
+      shutDownNow?.();
+    },
+    record: (kind, detail) => store.recordEvent(deployerReleaseContext, { atMs: systemClock.now(), kind, detail }),
+    log,
+    closeWaitingFor: () => desiredState.closeGameWaitingFor(),
+  });
+  desiredState.subscribe((event) => bitNodeEnd.ruleEvent(event));
+  channel.subscribe((event) => {
+    if (event.type === "agentDisconnected") bitNodeEnd.agentDisconnected(event.atMs);
   });
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
@@ -285,10 +297,13 @@ try {
       desiredState.setShareEnabled(enabled);
       log(`sharing spare RAM turned ${enabled ? "on" : "off"} from the dashboard`);
     },
-    setStopAtBitNodeEnd: (enabled) => {
+    setStopAtBitNodeEnd: (request) => {
+      const setting = parseStopAtBitNodeEnd(request);
+      if (setting === null) return false;
       // Logged first: on in a BitNode already at its end, the brain's stop line follows at once.
-      log(`stopping at the BitNode's end turned ${enabled ? "on" : "off"} from the dashboard`);
-      desiredState.setStopAtBitNodeEnd(enabled);
+      log(`at the BitNode's end: ${describeStopAtBitNodeEnd(setting)}, set from the dashboard`);
+      desiredState.setStopAtBitNodeEnd(setting);
+      return true;
     },
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
@@ -341,7 +356,7 @@ try {
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
       `${readWorldDaemonEnabled(store) ? "on" : "off"}, sharing spare RAM ${readShareEnabled(store) ? "on" : "off"}, ` +
-      `stopping at the BitNode's end ${readStopAtBitNodeEnd(store) ? "on" : "off"} (the dashboard's switches)`,
+      `at the BitNode's end: ${describeStopAtBitNodeEnd(readStopAtBitNodeEnd(store))} (the dashboard's switches)`,
   );
   log(
     supervising
@@ -373,11 +388,9 @@ try {
   };
   // SIGBREAK is Ctrl+Break on Windows; SIGHUP its console closing. The store is safe either way (WAL).
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) process.on(signal, shutDown);
-  // The stop at the BitNode's end (#303): the same clean stop, exit 0, so `npm run brain`'s runner ends too. A second
-  // on, so the dashboard's reply to the switch that asked for it (on in a BitNode already at its end) gets out first:
-  // the dashboard's close ends every connection.
-  stopAtBitNodeEnd = () => setTimeout(() => void shutDown(), STOP_AT_BITNODE_END_AFTER_MS);
-  if (stopAskedFor) stopAtBitNodeEnd();
+  // The stop at the BitNode's end (#303): the same clean stop, exit 0, so `npm run brain`'s runner ends too.
+  shutDownNow = () => void shutDown();
+  if (shutDownAskedFor) shutDownNow();
 } catch (error) {
   console.error(`brain: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

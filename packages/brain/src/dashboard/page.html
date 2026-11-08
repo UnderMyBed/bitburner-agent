@@ -71,7 +71,10 @@
     <div class="bad" id="world-daemon-problem" hidden></div>
   </section>
   <section id="stop-at-end">
-    <h2>The BitNode's end</h2><div></div><button type="button">Stop the brain at the BitNode's end</button>
+    <h2>The BitNode's end</h2><div></div>
+    <button type="button" data-setting="off">Play on</button>
+    <button type="button" data-setting="brain">Stop the brain</button>
+    <button type="button" data-setting="brainAndGame">Stop the brain and close the game</button>
     <div class="bad" id="stop-at-end-problem" hidden></div>
   </section>
   <section id="intents">
@@ -79,7 +82,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option><option>closeGame</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -155,8 +158,6 @@ let enableAugmentationsNext = false;
 let enableWorldDaemonNext = null;
 /** What sharing spare RAM's switch sends next (#224), likewise; null when the brain doesn't say. */
 let enableShareNext = null;
-/** What the stop at the BitNode's end's switch sends next (#303), likewise; null when the brain doesn't say. */
-let enableStopAtEndNext = null;
 
 const element = (tag, text, className) => {
   const created = document.createElement(tag);
@@ -621,28 +622,26 @@ function render(status) {
   worldDaemonButton.disabled = worldDaemon === null;
   worldDaemonButton.textContent =
     worldDaemon === null || worldDaemon.enabled ? "Stop destroying the BitNode" : "Start destroying the BitNode";
-  // The stop at the BitNode's end (#303): its switch, off by default.
+  // The stop at the BitNode's end (#303): its switch's three settings, off by default; the one set has no button.
   const stopAtEnd = status.stopAtBitNodeEnd ?? null;
-  enableStopAtEndNext = stopAtEnd === null ? null : !stopAtEnd.enabled;
+  const atTheEnd = {
+    off: "off: the brain plays on",
+    brain:
+      "stop the brain: it shuts down once a destroy shows the next BitNode, or once the destroy would gain nothing; " +
+      "the game and its scripts go on",
+    brainAndGame:
+      "stop the brain and close the game: at that end, the game saves and closes, then the brain shuts down",
+  };
   document.querySelector("#stop-at-end div").replaceChildren(
     element(
       "div",
-      `Stopping at the BitNode's end: ${
-        stopAtEnd === null
-          ? "not given by this brain"
-          : stopAtEnd.enabled
-            ? "on: the brain shuts down once a destroy shows the next BitNode, or once the destroy would gain " +
-              "nothing; the game and its scripts go on"
-            : "off: the brain plays on"
-      }`,
-      stopAtEnd?.enabled ? "ok" : "muted",
+      `At the BitNode's end: ${stopAtEnd === null ? "not given by this brain" : (atTheEnd[stopAtEnd.setting] ?? stopAtEnd.setting)}`,
+      stopAtEnd !== null && stopAtEnd.setting !== "off" ? "ok" : "muted",
     ),
   );
-  const stopAtEndButton = document.querySelector("#stop-at-end button");
-  stopAtEndButton.disabled = stopAtEnd === null;
-  stopAtEndButton.textContent = stopAtEnd?.enabled
-    ? "Keep the brain playing past the BitNode's end"
-    : "Stop the brain at the BitNode's end";
+  for (const button of document.querySelectorAll("#stop-at-end button")) {
+    button.disabled = stopAtEnd === null || stopAtEnd.setting === button.dataset.setting;
+  }
 
   // With the backend of the last try (#145), unless an older Agent didn't say.
   const via = (outcome) => (outcome.backend === null || outcome.backend === undefined ? "" : ` via ${outcome.backend}`);
@@ -878,11 +877,13 @@ document.querySelector("#world-daemon button").addEventListener("click", () => {
     sendSwitch("/api/world-daemon", { enabled: enableWorldDaemonNext }, "#world-daemon-problem");
   }
 });
-document.querySelector("#stop-at-end button").addEventListener("click", () => {
-  if (enableStopAtEndNext !== null) {
-    sendSwitch("/api/stop-at-bitnode-end", { enabled: enableStopAtEndNext }, "#stop-at-end-problem");
-  }
-});
+for (const button of document.querySelectorAll("#stop-at-end button")) {
+  button.addEventListener("click", () => {
+    if (!button.disabled) {
+      sendSwitch("/api/stop-at-bitnode-end", { setting: button.dataset.setting }, "#stop-at-end-problem");
+    }
+  });
+}
 document.querySelector("#intents form").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;

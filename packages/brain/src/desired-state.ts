@@ -54,7 +54,11 @@ import {
   type BitNodeEndEvent,
   BitNodeEndWatch,
   bitNodeReadingOf,
+  CLOSE_GAME_INTENT,
+  closeGameTriedEnough,
+  GAME_CLOSE_SENT_EVENT_KIND,
   readStopAtBitNodeEnd,
+  type StopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
 import {
@@ -223,7 +227,7 @@ export type RuleEvent = FactionWorkEvent | AugmentationEvent | WorldDaemonEvent 
 
 /** What the dashboard shows of the stop at the BitNode's end (#303). */
 export interface StopAtBitNodeEndView {
-  enabled: boolean;
+  setting: StopAtBitNodeEnd;
 }
 
 /** What the dashboard shows of each intent sent: where it came from, and how it went in the game. */
@@ -234,7 +238,7 @@ export interface IntentView {
    * invitation (#228: Tian Di Hui's or its city group's), or its augmentations' purchases and install (#210), or its
    * destroy (#215).
    */
-  source: "manual" | "purchase" | "backdoor" | "join" | "travel" | "augmentation" | "worldDaemon";
+  source: "manual" | "purchase" | "backdoor" | "join" | "travel" | "augmentation" | "worldDaemon" | "bitNodeEnd";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -379,6 +383,9 @@ export class DesiredStateController {
   #worldDaemonDestroy = false;
   /** The stop at the BitNode's end (#303): it asks main.ts, through its event, to shut the brain down. */
   readonly #bitNodeEnd: BitNodeEndWatch;
+  /** The close of the game at the BitNode's end (#303): when it went out, and whether it's withdrawn, tried enough. */
+  #closeGameSentAtMs: number | null = null;
+  #closeGameWithdrawn = false;
   /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
   #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
@@ -455,7 +462,8 @@ export class DesiredStateController {
         }
         const problemNoted = this.#noteCloudServerProblem();
         const dropped = this.#dropDoneManualIntents();
-        if (!dropped && !problemNoted && !this.#augmentations.askedDone(this.#doneIds())) return;
+        const closeWithdrawn = this.#withdrawCloseGameTriedEnough();
+        if (!dropped && !problemNoted && !closeWithdrawn && !this.#augmentations.askedDone(this.#doneIds())) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "medium") {
@@ -472,7 +480,7 @@ export class DesiredStateController {
         const reading = bitNodeReadingOf(this.#slowData, event.snapshot.gameTimeMs);
         if (reading !== null) {
           this.#bitNodeEnd.slowSnapshot(reading, {
-            enabled: readStopAtBitNodeEnd(this.#store),
+            setting: readStopAtBitNodeEnd(this.#store),
             destroySentAt: this.#resetSent?.field === "lastNodeReset" ? this.#resetSent.resetAt : null,
             atMs: event.atMs,
           });
@@ -581,14 +589,21 @@ export class DesiredStateController {
   }
 
   /** The stop at the BitNode's end's switch (#303), likewise: on, a BitNode already at its end stops the brain now. */
-  setStopAtBitNodeEnd(enabled: boolean): void {
-    writeStopAtBitNodeEnd(this.#store, enabled);
+  setStopAtBitNodeEnd(setting: StopAtBitNodeEnd): void {
+    writeStopAtBitNodeEnd(this.#store, setting);
     this.#update();
   }
 
   /** What the dashboard shows of the stop at the BitNode's end (#303). */
   stopAtBitNodeEndView(): StopAtBitNodeEndView {
-    return { enabled: readStopAtBitNodeEnd(this.#store) };
+    return { setting: readStopAtBitNodeEnd(this.#store) };
+  }
+
+  /** Why the close of the game at the BitNode's end (#303) hasn't gone out, or null: its gate's, or not asked for. */
+  closeGameWaitingFor(): string | null {
+    if (!this.#bitNodeEnd.closeGameAsked()) return "not asked for";
+    if (this.#closeGameSentAtMs !== null) return null;
+    return this.intentsView().find((view) => view.id === CLOSE_GAME_INTENT.id)?.waitingFor ?? "not sent yet";
   }
 
   /** What the dashboard shows of the path to the World Daemon (#215). */
@@ -728,7 +743,12 @@ export class DesiredStateController {
       ...manual.map((intent) => ({ intent, source: "manual" as const })),
       ...brainsResets.map((intent) => ({
         intent,
-        source: intent.action === "destroyBitNode" ? ("worldDaemon" as const) : ("augmentation" as const),
+        source:
+          intent.action === "destroyBitNode"
+            ? ("worldDaemon" as const)
+            : intent.action === "closeGame"
+              ? ("bitNodeEnd" as const)
+              : ("augmentation" as const),
       })),
       ...fromRule(this.#purchase).map((intent) => ({ intent, source: "purchase" as const })),
       ...fromRule(this.#augmentationIntent).map((intent) => ({ intent, source: "augmentation" as const })),
@@ -757,6 +777,14 @@ export class DesiredStateController {
   #queueWithBrainsResets(): Intent[] {
     const manual = readManualIntents(this.#store);
     const queue = [...manual];
+    // The close of the game at the BitNode's end (#303), before the brain's resets: none goes after it.
+    if (
+      this.#bitNodeEnd.closeGameAsked() &&
+      !this.#closeGameWithdrawn &&
+      !manual.some((each) => each.id === CLOSE_GAME_INTENT.id)
+    ) {
+      queue.push(CLOSE_GAME_INTENT);
+    }
     // The rule holds its ask until a slow snapshot shows the BitNode reset, so its reset note stays too.
     if (this.#worldDaemonDestroy && !manual.some((each) => each.action === "destroyBitNode")) {
       queue.push(WORLD_DAEMON_DESTROY_INTENT);
@@ -1169,6 +1197,19 @@ export class DesiredStateController {
     }
   }
 
+  /**
+   * The close of the game (#303) withdrawn once the Agent reports it tried enough (`closeGameTriedEnough`): never a
+   * loop of saves and closes. Whether it was withdrawn now.
+   */
+  #withdrawCloseGameTriedEnough(): boolean {
+    if (this.#closeGameWithdrawn || !this.#bitNodeEnd.closeGameAsked()) return false;
+    const outcome = this.#reportedOutcomes().find((each) => each.id === CLOSE_GAME_INTENT.id);
+    if (outcome === undefined || !closeGameTriedEnough(outcome)) return false;
+    this.#closeGameWithdrawn = true;
+    this.#log(`closing the game: withdrawn after ${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}: ${outcome.problem}`);
+    return true;
+  }
+
   /** Takes off the manual queue what the connected Agent reports done; whether it took any. */
   #dropDoneManualIntents(): boolean {
     const doneIds = new Set(
@@ -1338,7 +1379,7 @@ export class DesiredStateController {
     });
     // The stop at the BitNode's end (#303): a destroy ready but refused, after its `nextBitNode` stall.
     this.#bitNodeEnd.worldDaemonUpdated({
-      enabled: readStopAtBitNodeEnd(this.#store),
+      setting: readStopAtBitNodeEnd(this.#store),
       nothingMoreToGain: this.#worldDaemon.nothingMoreToGainNow(),
       atMs: this.#lastEventAtMs ?? 0,
     });
@@ -1408,6 +1449,16 @@ export class DesiredStateController {
     // A queue stored under an old limit (99 before #195, 98 before #203) would make the state too long, and the Agent
     // would refuse it whole: the rules' intents wait for room, the last first.
     const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
+    // The close of the game going out (#303), past its gate: stored, for main.ts's wait for the Agent to go.
+    if (
+      this.#closeGameSentAtMs === null &&
+      this.#bitNodeEnd.closeGameAsked() &&
+      intents.some((each) => each.id === CLOSE_GAME_INTENT.id)
+    ) {
+      this.#closeGameSentAtMs = this.#lastEventAtMs ?? 0;
+      this.#log("closing the game: its own Save Game, then its window closed (a save backup taken first)");
+      this.#emit({ type: GAME_CLOSE_SENT_EVENT_KIND, atMs: this.#closeGameSentAtMs });
+    }
     if (leftOut.join() !== this.#leftOut) {
       this.#leftOut = leftOut.join();
       if (leftOut.length > 0) {
