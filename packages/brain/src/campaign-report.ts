@@ -20,8 +20,8 @@ import { formatDuration, formatIsoTime, plural } from "./gap-report.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
 /**
- * Another release's time at a BitNode's start that still leaves the release that went on a clear of its own (proposed
- * owner decision 61, #290): within the BitNode's first cycle, with no install, before the other's first slow snapshot,
+ * Another release's time at a BitNode's start that still leaves the release that went on a clear of its own (owner
+ * decision 61, #290): within the BitNode's first cycle, with no install, before the other's first slow snapshot,
  * and at most this long online. A brain upgraded just after a destroy, as run #3's BN1.3 was (2 min 3 s).
  */
 export const STARTER_ALLOWANCE_MS = 5 * 60_000;
@@ -168,7 +168,7 @@ function bitNodeSection(views: readonly BitNodeView[]): string[] {
 }
 
 /**
- * The other releases that played only at a BitNode's start (`STARTER_ALLOWANCE_MS`, proposed owner decision 61): no
+ * The other releases that played only at a BitNode's start (`STARTER_ALLOWANCE_MS`, owner decision 61): no
  * install, at most that long online, all before the release that went on (its last) first played it. Null where another
  * release played more than that: no release cleared it on its own.
  */
