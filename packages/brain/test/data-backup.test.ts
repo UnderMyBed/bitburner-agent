@@ -246,6 +246,8 @@ test("the backup just written is kept even if the clock went back and its name s
  * and the longest commit (`longestCommitMs`). A copy on the event loop keeps the loop away for the copy's length. A
  * commit can be slow for its own reasons: the first after the copy's read checkpoints what piled up in the WAL behind
  * it, and each syncs the WAL to a disk the copy is busy writing (#304: CI's runner showed pauses of about 450 ms).
+ * Leaving commits out also leaves out a copy that locked the writer out, which would show as one long commit. The
+ * worker's connection is read-only (data-backup-worker.ts:14), so it can't take the write lock.
  */
 async function backupWhileWriting(megabytes: number) {
   const padding = "x".repeat(5_000);
@@ -304,15 +306,17 @@ test("a backup taken while the store is being written is the store at one moment
   expect(snapshotNumbers).toEqual(Array.from({ length: snapshotNumbers.length }, (_, index) => index + 1));
   expect(snapshotNumbers.length).toBeGreaterThanOrEqual(pairs);
   // A copy on the event loop would keep the loop from the writer for the copy itself, most of `tookMs`; in the worker,
-  // the loop comes back every millisecond or so. A slow commit isn't counted (#304), only shown if this fails.
+  // the loop comes back every few milliseconds (timer ticks are about 16 ms on Windows, hence the floor). A slow commit
+  // isn't counted (#304), only shown if this fails.
   expect(
     longestAwayMs,
     `the loop away ${longestAwayMs.toFixed(0)} ms at most; the longest commit ${longestCommitMs.toFixed(0)} ms`,
-  ).toBeLessThan(event.tookMs / 4);
+  ).toBeLessThan(Math.max(event.tookMs / 4, 50));
 });
 
 // The measurement behind #284's numbers, by hand: DATA_BACKUP_LARGE_STORE_MB=450 (a store of that size, built in the
-// test's own temporary folder). Prints the copy's time and the event loop's longest delay.
+// test's own temporary folder). Prints the copy's time, the event loop's longest delay (#284's measure, kept so its
+// numbers stay comparable) and the time away from the writer, which it asserts as the test above does (#304).
 test.runIf(process.env.DATA_BACKUP_LARGE_STORE_MB)(
   "a large store's backup, measured",
   async () => {
@@ -322,11 +326,11 @@ test.runIf(process.env.DATA_BACKUP_LARGE_STORE_MB)(
     const storeBytes = statSync(storePath()).size;
     console.log(
       `the store ${(storeBytes / 1e6).toFixed(0)} MB: copied (${(event.storeBytes / 1e6).toFixed(0)} MB) and checked in ` +
-        `${event.tookMs.toFixed(0)} ms; the event loop's longest delay ${longestDelayMs.toFixed(0)} ms, away from the writer ` +
-        `${longestAwayMs.toFixed(0)} ms, the longest commit ${longestCommitMs.toFixed(0)} ms; ${writesDuring} writes ` +
-        "during it",
+        `${event.tookMs.toFixed(0)} ms; the event loop's longest delay ${longestDelayMs.toFixed(0)} ms, ` +
+        `away from the writer ${longestAwayMs.toFixed(0)} ms, the longest commit ${longestCommitMs.toFixed(0)} ms; ` +
+        `${writesDuring} writes during it`,
     );
-    expect(longestDelayMs).toBeLessThan(event.tookMs / 2);
+    expect(longestAwayMs).toBeLessThan(Math.max(event.tookMs / 4, 50));
   },
   300_000,
 );
