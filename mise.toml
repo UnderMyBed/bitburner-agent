@@ -1,5 +1,6 @@
 # The repo's Node for mise, which doesn't read .node-version by default (#282). Keep it the same major as
 # .node-version, which CI follows: packages/sim/test/node-version.test.ts checks they agree. Tools only: on the
 # reference machine mise used it without `mise trust`; if mise asks, run `mise trust` here. docs/setup.md has more.
+# Node 26 since 2026-11-07 (it was 24): its V8, 14.6, should be Steam's Electron 41's (docs/sim/parity.md 4.17).
 [tools]
-node = "24"
+node = "26"

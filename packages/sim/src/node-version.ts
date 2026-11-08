@@ -4,17 +4,18 @@
 // (Node 24) than in 14.6 (Node 26), so a script sorting with a random comparator, as the legacy fork's go.js does
 // (`sort(() => Math.random() - Math.random())`, packages/legacy/fork/go.js:1352-1353), draws Math.random a different
 // number of times and the whole seeded game diverges. The baseline, benchmark and scenario scripts refuse any other
-// major, so a row is never recorded on a Node it can't be compared with.
+// major, so a row is never recorded on a Node it can't be compared with. The pin is Node 26 (it was 24 until
+// 2026-11-07): Steam's Electron 41.4.0 is Chromium 146, whose V8 should be 14.6, Node 26's (inferred, parity 4.17).
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 /** The repository root: .node-version is there. */
 export const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 
-/** The major in a .node-version text: "24", "v24", "24.22.1" and "v24.22.1" are all 24. */
+/** The major in a .node-version text: "26", "v26", "26.13.0" and "v26.13.0" are all 26. */
 export function parseNodeMajor(text: string): number {
   const match = /^v?(\d+)(?:\.\d+){0,2}$/.exec(text.trim());
-  if (!match) throw new Error(`.node-version: expected a Node version such as 24 or 24.22.1, got "${text.trim()}"`);
+  if (!match) throw new Error(`.node-version: expected a Node version such as 26 or 26.13.0, got "${text.trim()}"`);
   return Number(match[1]);
 }
 
