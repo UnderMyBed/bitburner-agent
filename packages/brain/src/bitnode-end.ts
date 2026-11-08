@@ -9,15 +9,20 @@
 //   `giveSourceFile`, `RedPill.tsx:16-52`). b1t_flum3 gives none (`RedPill.tsx:62-63`), and at the cap a destroy gives
 //   none either, so with no note those two can't be told apart: neither stops the brain.
 // - **Nothing more to gain:** the World Daemon's destroy on and ready (w0r1d_d43m0n rooted at its level), refused as
-//   Source-File 1 is at its top level (`nextBitNodeProblem`), after that refusal's `nextBitNode` stall, in the same
-//   update. A brain started with the switch on in such a BitNode stops as soon as it sees it.
+//   it enters BitNode 1 and Source-File 1 is at its top level, so BitNode 1 gives nothing more (`nextBitNodeProblem`;
+//   in any BitNode), after that refusal's `nextBitNode` stall, in the same update. A brain started with the switch on
+//   in such a BitNode stops as soon as it sees it.
+// - **Once:** the switch is set back to "play on" as the brain shuts down (logged; the event says so), so it stops
+//   this BitNode's end: a brain started again to look around plays on. Set it again for the next. While the close is
+//   awaited it stays set, so "Play on" calls the close off.
 // Either is logged in a line, stored as `brainStoppedAtBitNodeEnd`, and asked of main.ts once. Stopping the brain
 // alone, main.ts shuts it down a second on (`shutDown`, as on Ctrl+C, exit 0, so `npm run brain`'s runner ends too);
 // the game goes on without it, the Agent in safe mode (architecture §5.4). Closing the game too, the controller queues
-// `closeGame` (the game's own Save Game, then its window closed, through the irreversible gate's two medium snapshots
-// and a save backup), stored as `gameCloseSent` as it goes out; the brain shuts down once the Agent's connection drops
-// after it (`gameClosed`), or, if it hasn't within a minute, or the close hasn't gone out within 5 minutes, anyway,
-// logged and stored as `gameCloseNotConfirmed` (`BitNodeEndShutdown`). The close is tried at most 3 times.
+// `closeGame` (the game's own Save Game, then its window closed, through the irreversible gate: after what was queued
+// before it, two medium snapshots and a save backup), stored as `gameCloseSent` as it goes out, and each try the Agent
+// reports as `gameCloseTried`; it's tried at most 3 times, 30 s apart, never after the Agent went. The brain shuts
+// down once the Agent's connection drops after it and no Agent comes back (`gameClosed`), or anyway, logged and stored
+// as `gameCloseNotConfirmed` (`BitNodeEndShutdown`). Only the switch closes the game: the owner's queue refuses it.
 import { CLOSE_GAME_WINDOW_STAYED_OPEN, type Intent, intentId, type SlowSnapshotData } from "@bitburner-agent/core";
 import { bitNodeLabel } from "./cycle-report.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -51,16 +56,20 @@ export function parseStopAtBitNodeEnd(value: unknown): StopAtBitNodeEnd | null {
   return isStopAtBitNodeEnd(value) ? value : null;
 }
 
-/** The setting in words, for the log: "off", "stop the brain", "stop the brain and close the game". */
+/** The setting in words, as the dashboard's buttons say it: "play on", "stop the brain", or "… and close the game". */
 export function describeStopAtBitNodeEnd(setting: StopAtBitNodeEnd): string {
-  return setting === "off" ? "off" : setting === "brain" ? "stop the brain" : "stop the brain and close the game";
+  return setting === "off" ? "play on" : setting === "brain" ? "stop the brain" : "stop the brain and close the game";
 }
 
 /** Stored as the brain asks to stop (#303), for the run report: the run's expected end. */
 export const BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND = "brainStoppedAtBitNodeEnd";
 /** Stored by the controller as the close goes out to the Agent, past its gate. */
 export const GAME_CLOSE_SENT_EVENT_KIND = "gameCloseSent";
-/** Stored by main.ts as the Agent's connection drops after the close: the game closed. */
+/** Stored by the controller as the Agent reports a try of the close: not closed then (the save, or the window). */
+export const GAME_CLOSE_TRIED_EVENT_KIND = "gameCloseTried";
+/** Stored by the controller as the owner sets the switch back to "play on" before the close went out. */
+export const GAME_CLOSE_CALLED_OFF_EVENT_KIND = "gameCloseCalledOff";
+/** Stored by main.ts once the Agent's connection drops after the close and no Agent comes back: the game closed. */
 export const GAME_CLOSED_EVENT_KIND = "gameClosed";
 /** Stored by main.ts as it shuts down with the close not confirmed: the run report's warning. */
 export const GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND = "gameCloseNotConfirmed";
@@ -68,6 +77,8 @@ export const GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND = "gameCloseNotConfirmed";
 export const BITNODE_END_EVENT_KINDS = [
   BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND,
   GAME_CLOSE_SENT_EVENT_KIND,
+  GAME_CLOSE_TRIED_EVENT_KIND,
+  GAME_CLOSE_CALLED_OFF_EVENT_KIND,
   GAME_CLOSED_EVENT_KIND,
   GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND,
 ];
@@ -76,8 +87,14 @@ export const BITNODE_END_EVENT_KINDS = [
 export const CLOSE_GAME_INTENT: Intent = { id: intentId("closeGame", {}), action: "closeGame", args: {} };
 /** Tries of the close, at most: each its own save; the Agent's round may end before the save's toast shows. */
 export const CLOSE_GAME_MOST_TRIES = 3;
-/** How long after the close goes out the Agent's connection must drop: Steam's window goes within 200 ms. */
+/**
+ * How long after the close goes out, or after its last try reported, the Agent's connection must drop: Steam's window
+ * goes within 200 ms of a try that closes it, and the next try is `INTENT_RETRY_ROUNDS` rounds (30 s) after one that
+ * didn't, so twice that covers the next try and its worker.
+ */
 export const GAME_CLOSE_CONFIRMED_WITHIN_MS = 60_000;
+/** How long after the connection drops no Agent may connect, for the game to count as closed: a reload's is seconds. */
+export const GAME_CLOSE_QUIET_MS = 15_000;
 /** How long after the stop the close must go out: its gate's two medium snapshots and a save backup take a minute. */
 export const GAME_CLOSE_SENT_WITHIN_MS = 5 * 60_000;
 /** How long after the stop alone the brain shuts down: the dashboard's reply to the switch that asked goes first. */
@@ -94,10 +111,14 @@ export type BitNodeEndEvent =
       nextBitNode: string | null;
       /** The game to close first (the switch's "stop the brain and close the game"). */
       closeGame: boolean;
+      /** The switch, set back to "play on" as the brain shuts down: once, for this BitNode's end. */
+      settingAfter: "off";
       /** The log line's words, after its "stopping at the BitNode's end (…): ". */
       detail: string;
     }
-  | { type: typeof GAME_CLOSE_SENT_EVENT_KIND; atMs: number };
+  | { type: typeof GAME_CLOSE_SENT_EVENT_KIND; atMs: number }
+  | { type: typeof GAME_CLOSE_TRIED_EVENT_KIND; atMs: number; tries: number; problem: string | null }
+  | { type: typeof GAME_CLOSE_CALLED_OFF_EVENT_KIND; atMs: number };
 
 /** What tells one BitNode from the next, as a slow snapshot shows it, and the game's time then. */
 export interface BitNodeReading {
@@ -138,7 +159,8 @@ export function destroyedBetween(
     return destroySentAt !== null && after.lastNodeReset > destroySentAt;
   }
   // Begun before the last look: the same BitNode (an install, a soft reset, this BitNode's save loaded), or an older
-  // BitNode's save loaded. A BitNode begun after it is the next one.
+  // BitNode's save loaded. A BitNode begun after it is the next one. The PC's clock set back between the two can put
+  // the next BitNode's start before the last look: no stop then, the safe way (the brain plays on).
   if (after.lastNodeReset < before.gameTimeMs) return false;
   if (destroySentAt !== null) return true;
   const node = String(before.currentNode);
@@ -147,7 +169,10 @@ export function destroyedBetween(
 
 const labelOf = (reading: BitNodeReading) => bitNodeLabel(reading.currentNode, reading.ownedSF);
 
-type StopEnd = Omit<Extract<BitNodeEndEvent, { type: "brainStoppedAtBitNodeEnd" }>, "type" | "closeGame">;
+type StopEnd = Omit<
+  Extract<BitNodeEndEvent, { type: "brainStoppedAtBitNodeEnd" }>,
+  "type" | "closeGame" | "settingAfter"
+>;
 
 /** The rule (#303), as the controller runs it: it emits `brainStoppedAtBitNodeEnd` once, and logs its line. */
 export class BitNodeEndWatch {
@@ -211,7 +236,9 @@ export class BitNodeEndWatch {
       reason: "nothingMoreToGain",
       bitNode,
       nextBitNode: null,
-      detail: `${bitNode ?? "the BitNode"}'s w0r1d_d43m0n is ready, but ${nothingMoreToGain}: the next BitNode is yours`,
+      detail:
+        `${bitNode ?? "the BitNode"}'s w0r1d_d43m0n is ready, but its destroy would enter BitNode 1, and ` +
+        `${nothingMoreToGain}: the next BitNode is yours`,
     });
   }
 
@@ -221,7 +248,7 @@ export class BitNodeEndWatch {
     this.#log(
       `stopping at the BitNode's end (the switch is on${closeGame ? ", the game to close first" : ""}): ${end.detail}`,
     );
-    this.#emit({ type: BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND, ...end, closeGame });
+    this.#emit({ type: BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND, ...end, closeGame, settingAfter: "off" });
   }
 }
 
@@ -240,9 +267,15 @@ const realTimer: StartTimer = (callback, ms) => {
 
 /**
  * main.ts's side of the stop (#303): when to call `shutDown`, once. Stopping the brain alone, `STOP_AFTER_MS` on.
- * Closing the game too, once the Agent's connection drops after the close went out (`gameClosed`), or, unconfirmed,
- * `GAME_CLOSE_CONFIRMED_WITHIN_MS` after it went out, or `GAME_CLOSE_SENT_WITHIN_MS` after the stop if it never did
- * (`gameCloseNotConfirmed`, logged): never a second close, and never a brain left running.
+ * Closing the game too, supervision stops as the close goes out, then:
+ * - the Agent's connection drops after it, and no Agent connects within `GAME_CLOSE_QUIET_MS`: the game closed
+ *   (`gameClosed`). One that connects again means the window stayed open (a reload, the Agent restarted): not
+ *   confirmed;
+ * - no drop within `GAME_CLOSE_CONFIRMED_WITHIN_MS` of the close going out or of its last try reported (the Agent
+ *   tries again every 30 s, up to 3 times), or the close not out within `GAME_CLOSE_SENT_WITHIN_MS` of the stop: not
+ *   confirmed (`gameCloseNotConfirmed`, logged);
+ * - the close called off from the dashboard before it went out: the stop alone.
+ * Never a second close, and never a brain left running. As it shuts down, the switch is set back to "play on": once.
  */
 export class BitNodeEndShutdown {
   readonly #shutDown: () => void;
@@ -250,9 +283,13 @@ export class BitNodeEndShutdown {
   readonly #log: (line: string) => void;
   readonly #startTimer: StartTimer;
   readonly #closeWaitingFor: () => string | null;
+  readonly #stopSupervising: () => void;
+  readonly #turnOff: () => void;
   #cancelTimer: (() => void) | null = null;
   #closeAskedAtMs: number | null = null;
   #closeSentAtMs: number | null = null;
+  /** When the Agent's connection dropped after the close went out, while no Agent has connected since. */
+  #droppedAtMs: number | null = null;
   #done = false;
 
   constructor({
@@ -260,6 +297,8 @@ export class BitNodeEndShutdown {
     record,
     log,
     closeWaitingFor,
+    stopSupervising,
+    turnOff,
     startTimer = realTimer,
   }: {
     shutDown: () => void;
@@ -268,16 +307,22 @@ export class BitNodeEndShutdown {
     log: (line: string) => void;
     /** Why the close hasn't gone out, or null: the controller's intents view. */
     closeWaitingFor: () => string | null;
+    /** Stops the supervisor, so the game closed isn't relaunched. */
+    stopSupervising: () => void;
+    /** Sets the switch back to "play on". */
+    turnOff: () => void;
     startTimer?: StartTimer;
   }) {
     this.#shutDown = shutDown;
     this.#record = record;
     this.#log = log;
     this.#closeWaitingFor = closeWaitingFor;
+    this.#stopSupervising = stopSupervising;
+    this.#turnOff = turnOff;
     this.#startTimer = startTimer;
   }
 
-  /** The controller's events: the stop, and the close going out. */
+  /** The controller's events: the stop, the close going out, each try reported, and the close called off. */
   ruleEvent(event: { type: string; atMs: number; closeGame?: boolean }): void {
     if (this.#done) return;
     if (event.type === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND) {
@@ -292,26 +337,57 @@ export class BitNodeEndShutdown {
             `${((why) => (why === null ? "" : ` (${why})`))(this.#closeWaitingFor())}`,
         ),
       );
-    } else if (event.type === GAME_CLOSE_SENT_EVENT_KIND && this.#closeAskedAtMs !== null) {
+      return;
+    }
+    if (this.#closeAskedAtMs === null) return;
+    if (event.type === GAME_CLOSE_CALLED_OFF_EVENT_KIND && this.#closeSentAtMs === null) {
+      this.#timer(STOP_AFTER_MS, () => this.#finish());
+    } else if (event.type === GAME_CLOSE_SENT_EVENT_KIND && this.#closeSentAtMs === null) {
       this.#closeSentAtMs = event.atMs;
-      this.#timer(GAME_CLOSE_CONFIRMED_WITHIN_MS, () =>
-        this.#notConfirmed(
-          `the Agent's connection didn't drop within ${GAME_CLOSE_CONFIRMED_WITHIN_MS / 1000} s of the close: the ` +
-            "game may still be running",
-        ),
-      );
+      this.#stopSupervising();
+      this.#awaitDrop("the close");
+    } else if (
+      event.type === GAME_CLOSE_TRIED_EVENT_KIND &&
+      this.#closeSentAtMs !== null &&
+      this.#droppedAtMs === null
+    ) {
+      // Tried and reported, so the game didn't close then: the next try is 30 s on, and its wait starts afresh.
+      this.#awaitDrop("the close's last try");
     }
   }
 
-  /** The channel's `agentDisconnected`: after the close went out, the game closed. */
+  /** The channel's `agentDisconnected`: after the close went out, the game closed, unless an Agent comes back. */
   agentDisconnected(atMs: number): void {
-    if (this.#done || this.#closeSentAtMs === null) return;
-    const afterMs = atMs - this.#closeSentAtMs;
-    this.#record(GAME_CLOSED_EVENT_KIND, { closeSentAtMs: this.#closeSentAtMs, afterMs });
-    this.#log(
-      `the game closed: its Agent's connection dropped ${(afterMs / 1000).toFixed(1)} s after the close went out`,
+    if (this.#done || this.#closeSentAtMs === null || this.#droppedAtMs !== null) return;
+    this.#droppedAtMs = atMs;
+    const sentAtMs = this.#closeSentAtMs;
+    this.#timer(GAME_CLOSE_QUIET_MS, () => {
+      const afterMs = atMs - sentAtMs;
+      this.#record(GAME_CLOSED_EVENT_KIND, { closeSentAtMs: sentAtMs, afterMs });
+      this.#log(
+        `the game closed: its Agent's connection dropped ${(afterMs / 1000).toFixed(1)} s after the close went out, ` +
+          `and no Agent came back within ${GAME_CLOSE_QUIET_MS / 1000} s`,
+      );
+      this.#finish();
+    });
+  }
+
+  /** The channel's `agentConnected`: an Agent back after the drop means the window stayed open. */
+  agentConnected(atMs: number): void {
+    if (this.#done || this.#droppedAtMs === null) return;
+    this.#notConfirmed(
+      `an Agent connected ${((atMs - this.#droppedAtMs) / 1000).toFixed(1)} s after the connection dropped: the game's ` +
+        "window stayed open (a reload, or the Agent restarted)",
     );
-    this.#finish();
+  }
+
+  #awaitDrop(after: string): void {
+    this.#timer(GAME_CLOSE_CONFIRMED_WITHIN_MS, () =>
+      this.#notConfirmed(
+        `the Agent's connection didn't drop within ${GAME_CLOSE_CONFIRMED_WITHIN_MS / 1000} s of ${after}: the game ` +
+          "may still be running",
+      ),
+    );
   }
 
   #notConfirmed(reason: string): void {
@@ -329,6 +405,8 @@ export class BitNodeEndShutdown {
     if (this.#done) return;
     this.#done = true;
     this.#cancelTimer?.();
+    this.#turnOff();
+    this.#log("the stop at the BitNode's end set back to play on: set it again for the next BitNode's end");
     this.#shutDown();
   }
 }

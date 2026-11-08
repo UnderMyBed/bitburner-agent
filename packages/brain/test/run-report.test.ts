@@ -24,7 +24,13 @@ import { BitNodeCycles } from "../src/cycle-report.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
 import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
-import { findIncomeStalls, inferHackTargets, runReport as reportOf } from "../src/run-report.ts";
+import {
+  findIncomeStalls,
+  inferHackTargets,
+  RELOAD_LAG_MS,
+  RELOAD_LEAD_MS,
+  runReport as reportOf,
+} from "../src/run-report.ts";
 import { thinStore } from "../src/store-thinning.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -3298,6 +3304,66 @@ describe("the stop at the BitNode's end (#303)", () => {
     expect(text).toContain(`  ${at(RUN_MS + MINUTE)}  game close NOT CONFIRMED: ${reason}`);
     expect(text).toContain(
       `Expected, not a failure: the game's close NOT CONFIRMED (${reason}), so it may still be running`,
+    );
+  });
+
+  /** The run, a stop at `stopOffsetMs`, and a brain started again 2 hours on: the gap's and disconnect's failures. */
+  function acrossRestart(stopOffsetMs: number, kind = "brainStoppedAtBitNodeEnd") {
+    cleanRun();
+    event(stopOffsetMs, kind, kind === "brainStoppedAtBitNodeEnd" ? DESTROYED : {});
+    const againMs = RUN_MS + 2 * 60 * MINUTE;
+    event(againMs, "brainStarted", { release: "r" });
+    event(againMs + SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
+      snapshot("fast", offsetMs, fastData(), 0, "session-2");
+    }
+    return runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE }).failures.filter((failure) =>
+      failure.startsWith("gap: "),
+    );
+  }
+
+  // The gap starts at the run's last fast snapshot, RUN_MS.
+  test("the silence follows a stop from RELOAD_LEAD_MS before the gap's start", () => {
+    expect(acrossRestart(RUN_MS - RELOAD_LEAD_MS)).toEqual([]);
+  });
+
+  test("…not a stop earlier than that: the gap fails", () => {
+    expect(acrossRestart(RUN_MS - RELOAD_LEAD_MS - 1)).toHaveLength(1);
+  });
+
+  test("…and no later than RELOAD_LAG_MS into the gap", () => {
+    expect(acrossRestart(RUN_MS + RELOAD_LAG_MS)).toEqual([]);
+  });
+
+  test("…a stop later than that in the gap is another brain's business: the gap fails", () => {
+    expect(acrossRestart(RUN_MS + RELOAD_LAG_MS + 1)).toHaveLength(1);
+  });
+
+  test("the close's events count as the stop's for the silence after them (#303 review)", () => {
+    expect(acrossRestart(RUN_MS, "gameCloseNotConfirmed")).toEqual([]);
+  });
+
+  test("each try of the close is listed", () => {
+    closingRun();
+    event(RUN_MS + 2 * SECOND, "gameCloseTried", { tries: 1, problem: "the game's save not confirmed" });
+    const { text } = report();
+    expect(text).toContain(
+      `  ${at(RUN_MS + 2 * SECOND)}  the game's close tried, not closed (try 1): the game's save not confirmed`,
+    );
+  });
+
+  test("called off from the dashboard before it went out: the end says the game went on", () => {
+    cleanRun();
+    event(RUN_MS - MINUTE, "brainStoppedAtBitNodeEnd", { ...DESTROYED, closeGame: true });
+    event(RUN_MS - 30 * SECOND, "gameCloseCalledOff", {});
+    const { text, failures, warnings } = report();
+    expect([failures, warnings]).toEqual([[], []]);
+    expect(text).toContain(
+      `  ${at(RUN_MS - 30 * SECOND)}  the game's close called off from the dashboard before it went out`,
+    );
+    expect(text).toContain(
+      `Expected, not a failure: the game's close called off from the dashboard at ${at(RUN_MS - 30 * SECOND)}, so the ` +
+        "game and its scripts went on without it",
     );
   });
 });

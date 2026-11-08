@@ -559,8 +559,9 @@ export class WorldDaemonRule {
   }
 
   /**
-   * Why the destroy, on and ready to go (w0r1d_d43m0n rooted at its level), is refused as it gains nothing (#303), or
-   * null: the brain's stop at the BitNode's end. Set after the `nextBitNode` stall's line and event, in the same update.
+   * Why the destroy, on and ready to go (w0r1d_d43m0n rooted at its level), is refused as its next BitNode, BitNode 1,
+   * gives nothing more (#303), or null: the brain's stop at the BitNode's end. Set after the `nextBitNode` stall's line
+   * and event, in the same update.
    */
   nothingMoreToGainNow(): string | null {
     return this.#nothingMoreToGain;

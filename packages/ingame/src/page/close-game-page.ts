@@ -5,11 +5,14 @@
 //   (`pushGameSaved`), and only then shows "Game Saved!" (`SaveObject.ts:235-262`): that toast, one not showing before
 //   the click, confirms it. A save that fails shows a dialog instead, and no toast. With no toast in time, the window
 //   is left open: a close never goes without its save.
-// - The close: `window.close()`. On Steam, Electron's window `close` handler flushes its pending disk and Steam Cloud
-//   saves, loads exit.html and destroys the window within 200 ms, and the last window closed quits the app
-//   (`electron/main.js:43-78`, `:16-20`), as the X does. The page's "Your work will be lost" prompt is off on
-//   `file://` (`index.tsx:53-57`), Steam's case. A browser closes only a window its scripts opened, so in one (E2) the
-//   window stays, and the worker says so: alive after the close, it wasn't closed.
+// - The close: `window.close()`, the page's only way out (the preload exposes only the save and export channels). On
+//   Steam, not yet run live: Chromium's own close of the window, which probably skips BrowserWindow's `close` handler
+//   (`electron/main.js:43-78`, which flushes the save-folder and Steam Cloud copies, written on 5- and 15-minute
+//   debounces, `:135-164`), while the last window closed still quits the app (`:16-20`). The game's own save, in its
+//   IndexedDB before the toast shows (`db.ts:122-125`), is fresh either way: the next launch on this PC loads it.
+//   Electron's log tells whether the handler ran ("Saving to Disk", "Destroying the window"). The page's "Your work
+//   will be lost" prompt is off on `file://` (`index.tsx:53-57`), Steam's case. A browser closes only a window its
+//   scripts opened (or with one history entry), so in one (E2) the window stays, and the worker says so.
 import { CLOSE_GAME_WINDOW_STAYED_OPEN } from "@bitburner-agent/core";
 import { type GamePage, hasClass, pageDocument } from "./game-page.ts";
 

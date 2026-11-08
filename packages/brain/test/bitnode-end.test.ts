@@ -10,7 +10,9 @@ import {
   CLOSE_GAME_WINDOW_STAYED_OPEN,
   CONTROL_PROTOCOL_VERSION,
   encodeControlMessage,
+  INTENT_RETRY_ROUNDS,
   type SlowSnapshotData,
+  SNAPSHOT_TIER_PERIOD_MS,
   type SnapshotTier,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
@@ -23,6 +25,7 @@ import {
   describeStopAtBitNodeEnd,
   destroyedBetween,
   GAME_CLOSE_CONFIRMED_WITHIN_MS,
+  GAME_CLOSE_QUIET_MS,
   GAME_CLOSE_SENT_WITHIN_MS,
   parseStopAtBitNodeEnd,
   readStopAtBitNodeEnd,
@@ -78,7 +81,7 @@ describe("the switch", () => {
 
   test("in words, for the log", () => {
     expect(["off", "brain", "brainAndGame"].map((each) => describeStopAtBitNodeEnd(each as never))).toEqual([
-      "off",
+      "play on",
       "stop the brain",
       "stop the brain and close the game",
     ]);
@@ -154,12 +157,18 @@ describe("the next BitNode after a destroy (destroyedBetween)", () => {
     const slow = slowSnapshot({ lastNodeReset: 7, ownedSF: { 1: 2 } });
     expect(bitNodeReadingOf(slow, 99)).toEqual({ currentNode: 1, lastNodeReset: 7, ownedSF: { 1: 2 }, gameTimeMs: 99 });
     expect(bitNodeReadingOf({ ...slow, resetInfo: undefined } as unknown as SlowSnapshotData, 99)).toBeNull();
-    const noReset = { ...slow, resetInfo: { ...slow.resetInfo, lastNodeReset: "x" } } as unknown as SlowSnapshotData;
-    expect(bitNodeReadingOf(noReset, 99)).toBeNull();
+    const changed = (fields: Record<string, unknown>) =>
+      ({ ...slow, resetInfo: { ...slow.resetInfo, ...fields } }) as unknown as SlowSnapshotData;
+    expect(bitNodeReadingOf(changed({ lastNodeReset: "x" }), 99)).toBeNull();
+    expect(bitNodeReadingOf(changed({ lastNodeReset: Number.NaN }), 99)).toBeNull();
+    expect(bitNodeReadingOf(changed({ currentNode: 1.5 }), 99)).toBeNull();
+    expect(bitNodeReadingOf(changed({ currentNode: "1" }), 99)).toBeNull();
+    expect(bitNodeReadingOf(changed({ ownedSF: null }), 99)).toBeNull();
+    expect(bitNodeReadingOf(changed({ ownedSF: 3 }), 99)).toBeNull();
   });
 });
 
-// --- The controller ----------------------------------------------------------------------------------------------------
+// --- The controller --------------------------------------------------------------------------------------------------
 
 /** A slow snapshot: BN1.3 (SF1 at 2) begun at 1,000, its last install then too, unless said. */
 function slowSnapshot(
@@ -276,6 +285,7 @@ describe("destroyed: the brain stops on the next BitNode's first slow snapshot",
         bitNode: "BN1.3",
         nextBitNode: "BN1.4",
         closeGame: false,
+        settingAfter: "off",
         detail,
       },
     ]);
@@ -385,8 +395,8 @@ describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-
     writeStopAtBitNodeEnd(store, "brain");
     const { send, events, lines, stops } = inBlockedBitNode();
     const detail =
-      "BN1.4's w0r1d_d43m0n is ready, but Source-File 1 is at level 3, so BitNode 1 gives nothing more: the next " +
-      "BitNode is yours";
+      "BN1.4's w0r1d_d43m0n is ready, but its destroy would enter BitNode 1, and Source-File 1 is at level 3, so " +
+      "BitNode 1 gives nothing more: the next BitNode is yours";
     expect(stops()).toEqual([
       {
         type: "brainStoppedAtBitNodeEnd",
@@ -395,6 +405,7 @@ describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-
         bitNode: "BN1.4",
         nextBitNode: null,
         closeGame: false,
+        settingAfter: "off",
         detail,
       },
     ]);
@@ -501,16 +512,23 @@ describe("closing the game too (the switch's third setting)", () => {
     expect(controller.closeGameWaitingFor()).toBe("not asked for");
   });
 
-  test("tried, not done: asked again up to 3 tries, then withdrawn, logged; never again", async () => {
-    const { controller, send, lines, settleBackup, sentIds } = destroyedWith("brainAndGame");
+  test("tried, not done: each try stored, asked again up to 3 tries, then withdrawn, logged; never again", async () => {
+    const { controller, send, lines, events, settleBackup, sentIds } = destroyedWith("brainAndGame");
     send("medium", medium());
     send("medium", medium());
     await settleBackup();
+    send("fast", tried(1, UNSAVED));
+    // The same try reported again is one try.
+    send("fast", tried(1, UNSAVED));
     send("fast", tried(2, UNSAVED));
     expect(sentIds()).toContain(CLOSE_GAME_INTENT.id);
     send("fast", tried(3, UNSAVED));
     expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
     expect(closeView(controller)).toBeUndefined();
+    expect(events.filter((event) => event.type === "gameCloseTried")).toEqual(
+      [1, 2, 3].map((tries) => ({ type: "gameCloseTried", atMs: expect.any(Number), tries, problem: UNSAVED })),
+    );
+    expect(lines).toContain(`closing the game: try 2 of 3 reported: ${UNSAVED}`);
     expect(lines).toContain(`closing the game: withdrawn after 3 tries: ${UNSAVED}`);
     send("medium", medium());
     send("medium", medium());
@@ -526,22 +544,93 @@ describe("closing the game too (the switch's third setting)", () => {
     expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
     expect(lines).toContain(`closing the game: withdrawn after 1 try: ${CLOSE_GAME_WINDOW_STAYED_OPEN}`);
   });
+
+  test("the Agent gone after the close went out (a reload too): never sent again, to it or the next", async () => {
+    const { send, reconnect, lines, settleBackup, sentIds } = destroyedWith("brainAndGame");
+    send("medium", medium());
+    send("medium", medium());
+    await settleBackup();
+    expect(sentIds()).toContain(CLOSE_GAME_INTENT.id);
+    reconnect("session-2");
+    expect(lines).toContain("closing the game: the Agent went after it went out; not sent again");
+    send("static", network);
+    send("medium", medium());
+    send("medium", medium());
+    await settleBackup();
+    expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+  });
+
+  test("set back to play on before the close went out: called off, stored, the brain stops alone; after, nothing", async () => {
+    const called = destroyedWith("brainAndGame");
+    called.controller.setStopAtBitNodeEnd("off");
+    expect(closeView(called.controller)).toBeUndefined();
+    expect(called.events.filter((event) => event.type === "gameCloseCalledOff")).toEqual([
+      { type: "gameCloseCalledOff", atMs: expect.any(Number) },
+    ]);
+    expect(called.lines).toContain(
+      "closing the game: called off from the dashboard before it went out; the brain stops alone",
+    );
+    called.send("medium", medium());
+    called.send("medium", medium());
+    expect(called.backupNow).not.toHaveBeenCalled();
+  });
+
+  test("set back to play on after the close went out: too late, nothing called off", async () => {
+    const { controller, send, events, settleBackup, sentIds } = destroyedWith("brainAndGame");
+    send("medium", medium());
+    send("medium", medium());
+    await settleBackup();
+    controller.setStopAtBitNodeEnd("off");
+    expect(events.filter((event) => event.type === "gameCloseCalledOff")).toEqual([]);
+    expect(sentIds()).toContain(CLOSE_GAME_INTENT.id);
+  });
 });
 
-test("your own close queued on the dashboard: off the queue once tried enough, never a loop of saves", () => {
-  const { controller, send } = brain();
-  expect(controller.addManualIntent({ action: "closeGame", args: {} })).toMatchObject({ ok: true });
-  const fast = (tries: number, problem: string) =>
-    send("fast", {
-      degradedTiers: [],
-      pageHeapUsedBytes: null,
-      game: null,
-      intents: [{ id: CLOSE_GAME_INTENT.id, done: false, tries, problem, backend: "ui" }],
+describe("the owner's queue refuses closeGame: only the switch closes the game (#303 review)", () => {
+  test("queued from the dashboard: refused, naming the switch", () => {
+    const { controller } = brain();
+    expect(controller.addManualIntent({ action: "closeGame", args: {} })).toEqual({
+      ok: false,
+      reason:
+        "closeGame isn't queued by hand: set the dashboard's \"The BitNode's end\" to \"Stop the brain and close the " +
+        'game", which closes it once, then stops the brain',
     });
-  fast(1, "the game's save not confirmed");
-  expect(readManualIntents(store).map((each) => each.id)).toEqual([CLOSE_GAME_INTENT.id]);
-  fast(1, CLOSE_GAME_WINDOW_STAYED_OPEN);
-  expect(readManualIntents(store)).toEqual([]);
+    expect(readManualIntents(store)).toEqual([]);
+  });
+
+  test("one in a store written before: off the queue once the Agent goes after it went out, never sent again", async () => {
+    writeManualIntents(store, [CLOSE_GAME_INTENT]);
+    const { send, reconnect, settleBackup, sentIds } = brain();
+    send("static", network);
+    send("medium", mediumData(1, {}));
+    send("medium", mediumData(1, {}));
+    await settleBackup();
+    expect(sentIds()).toContain(CLOSE_GAME_INTENT.id);
+    // The game closed (or reloaded): the Agent's gone before it could report the close.
+    reconnect("session-2");
+    expect(readManualIntents(store)).toEqual([]);
+    send("static", network);
+    send("medium", mediumData(1, {}));
+    send("medium", mediumData(1, {}));
+    await settleBackup();
+    expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+  });
+
+  test("one in a store written before: off the queue once tried enough, never a loop of saves", () => {
+    writeManualIntents(store, [CLOSE_GAME_INTENT]);
+    const { send } = brain();
+    const fast = (tries: number, problem: string) =>
+      send("fast", {
+        degradedTiers: [],
+        pageHeapUsedBytes: null,
+        game: null,
+        intents: [{ id: CLOSE_GAME_INTENT.id, done: false, tries, problem, backend: "ui" }],
+      });
+    fast(1, "the game's save not confirmed");
+    expect(readManualIntents(store).map((each) => each.id)).toEqual([CLOSE_GAME_INTENT.id]);
+    fast(1, CLOSE_GAME_WINDOW_STAYED_OPEN);
+    expect(readManualIntents(store)).toEqual([]);
+  });
 });
 
 describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () => {
@@ -550,6 +639,8 @@ describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () =>
   function shutdownWith(waitingFor: string | null = "waiting for a save backup") {
     vi.useFakeTimers();
     const shutDown = vi.fn();
+    const stopSupervising = vi.fn();
+    const turnOff = vi.fn();
     const recorded: [string, Record<string, unknown>][] = [];
     const lines: string[] = [];
     const watch = new BitNodeEndShutdown({
@@ -557,48 +648,133 @@ describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () =>
       record: (kind, detail) => recorded.push([kind, detail]),
       log: (line) => lines.push(line),
       closeWaitingFor: () => waitingFor,
+      stopSupervising,
+      turnOff,
     });
-    return { watch, shutDown, recorded, lines };
+    return { watch, shutDown, stopSupervising, turnOff, recorded, lines };
+  }
+  /** The stop that closes the game, and the close going out at 30 s. */
+  function closeSent() {
+    const started = shutdownWith();
+    started.watch.ruleEvent({ ...STOP, closeGame: true });
+    expect(started.stopSupervising).not.toHaveBeenCalled();
+    started.watch.ruleEvent({ type: "gameCloseSent", atMs: 30_000 });
+    return started;
   }
 
-  test("the brain alone: a second on, as on Ctrl+C, nothing more stored", () => {
-    const { watch, shutDown, recorded } = shutdownWith();
+  test("the brain alone: a second on, as on Ctrl+C, nothing more stored; once, the switch set back to play on", () => {
+    const { watch, shutDown, recorded, stopSupervising, turnOff, lines } = shutdownWith();
     watch.ruleEvent({ ...STOP, closeGame: false });
     vi.advanceTimersByTime(STOP_AFTER_MS - 1);
     expect(shutDown).not.toHaveBeenCalled();
+    expect(turnOff).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(shutDown).toHaveBeenCalledTimes(1);
-    expect(recorded).toEqual([]);
+    expect(turnOff).toHaveBeenCalledTimes(1);
+    expect(lines).toEqual([
+      "the stop at the BitNode's end set back to play on: set it again for the next BitNode's end",
+    ]);
+    expect([recorded, stopSupervising.mock.calls]).toEqual([[], []]);
   });
 
-  test("closing the game: once the Agent's connection drops after the close went out, gameClosed, then the stop", () => {
+  test("the close going out stops supervision, so the game closed isn't relaunched", () => {
+    const { stopSupervising } = closeSent();
+    expect(stopSupervising).toHaveBeenCalledTimes(1);
+  });
+
+  test("closed: the Agent's connection drops after the close, and no Agent comes back within 15 s; then the stop", () => {
     const { watch, shutDown, recorded, lines } = shutdownWith();
     watch.ruleEvent({ ...STOP, closeGame: true });
     // A disconnect before the close went out (the destroy's own reload, say) isn't the close.
     watch.agentDisconnected(2_000);
-    expect(shutDown).not.toHaveBeenCalled();
+    watch.agentConnected(3_000);
+    expect([shutDown.mock.calls, recorded]).toEqual([[], []]);
     watch.ruleEvent({ type: "gameCloseSent", atMs: 30_000 });
     watch.agentDisconnected(30_400);
+    vi.advanceTimersByTime(GAME_CLOSE_QUIET_MS - 1);
+    expect(shutDown).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
     expect(recorded).toEqual([["gameClosed", { closeSentAtMs: 30_000, afterMs: 400 }]]);
-    expect(lines).toEqual(["the game closed: its Agent's connection dropped 0.4 s after the close went out"]);
+    expect(lines).toEqual([
+      "the game closed: its Agent's connection dropped 0.4 s after the close went out, and no Agent came back within " +
+        "15 s",
+      "the stop at the BitNode's end set back to play on: set it again for the next BitNode's end",
+    ]);
     expect(shutDown).toHaveBeenCalledTimes(1);
     // Once, and no timer left to fire.
-    watch.agentDisconnected(31_000);
+    watch.agentConnected(50_000);
     vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS);
     expect(shutDown).toHaveBeenCalledTimes(1);
     expect(recorded).toHaveLength(1);
   });
 
+  test("an Agent back after the drop (a reload, the Agent restarted): the window stayed open, not confirmed, the stop", () => {
+    const { watch, shutDown, recorded, lines } = closeSent();
+    watch.agentDisconnected(30_400);
+    watch.agentConnected(33_400);
+    const reason =
+      "an Agent connected 3.0 s after the connection dropped: the game's window stayed open (a reload, or the Agent " +
+      "restarted)";
+    expect(recorded).toEqual([["gameCloseNotConfirmed", { reason, closeSentAtMs: 30_000 }]]);
+    expect(lines).toEqual([
+      `game close NOT CONFIRMED: ${reason}; stopping the brain anyway`,
+      "the stop at the BitNode's end set back to play on: set it again for the next BitNode's end",
+    ]);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+  });
+
   test("the connection not dropped within a minute of the close: gameCloseNotConfirmed, logged, then the stop anyway", () => {
-    const { watch, shutDown, recorded, lines } = shutdownWith();
-    watch.ruleEvent({ ...STOP, closeGame: true });
-    watch.ruleEvent({ type: "gameCloseSent", atMs: 30_000 });
+    const { shutDown, recorded, lines } = closeSent();
     vi.advanceTimersByTime(GAME_CLOSE_CONFIRMED_WITHIN_MS - 1);
     expect(shutDown).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     const reason = "the Agent's connection didn't drop within 60 s of the close: the game may still be running";
     expect(recorded).toEqual([["gameCloseNotConfirmed", { reason, closeSentAtMs: 30_000 }]]);
-    expect(lines).toEqual([`game close NOT CONFIRMED: ${reason}; stopping the brain anyway`]);
+    expect(lines).toEqual([
+      `game close NOT CONFIRMED: ${reason}; stopping the brain anyway`,
+      "the stop at the BitNode's end set back to play on: set it again for the next BitNode's end",
+    ]);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+  });
+
+  test("at the Agent's real cadence (a try at once, then every 30 s): each try waits afresh, so try 3 is waited for", () => {
+    const { watch, shutDown, recorded } = closeSent();
+    const retryMs = INTENT_RETRY_ROUNDS * SNAPSHOT_TIER_PERIOD_MS.fast;
+    // The confirm window holds the next try and its worker's round.
+    expect(GAME_CLOSE_CONFIRMED_WITHIN_MS).toBeGreaterThan(retryMs + 2 * SNAPSHOT_TIER_PERIOD_MS.fast);
+    // Tries reported 2 s after the close went out, then 30 s apart: none of them closed the window.
+    for (const [index, atMs] of [2_000, 2_000 + retryMs, 2_000 + 2 * retryMs].entries()) {
+      vi.advanceTimersByTime(index === 0 ? 2_000 : retryMs);
+      expect(shutDown).not.toHaveBeenCalled();
+      watch.ruleEvent({ type: "gameCloseTried", atMs: 30_000 + atMs });
+    }
+    // The third try's wait, then not confirmed, of the last try.
+    vi.advanceTimersByTime(GAME_CLOSE_CONFIRMED_WITHIN_MS - 1);
+    expect(shutDown).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(recorded).toEqual([
+      [
+        "gameCloseNotConfirmed",
+        {
+          reason:
+            "the Agent's connection didn't drop within 60 s of the close's last try: the game may still be running",
+          closeSentAtMs: 30_000,
+        },
+      ],
+    ]);
+  });
+
+  test("a try that closes the window: no report, the drop, then closed", () => {
+    const { watch, shutDown, recorded } = closeSent();
+    watch.ruleEvent({ type: "gameCloseTried", atMs: 32_000 });
+    vi.advanceTimersByTime(30_000);
+    watch.agentDisconnected(62_100);
+    // A try reported while the drop is awaited changes nothing (a stale fast snapshot).
+    watch.ruleEvent({ type: "gameCloseTried", atMs: 62_200 });
+    vi.advanceTimersByTime(GAME_CLOSE_QUIET_MS);
+    expect(recorded).toEqual([["gameClosed", { closeSentAtMs: 30_000, afterMs: 32_100 }]]);
     expect(shutDown).toHaveBeenCalledTimes(1);
   });
 
@@ -617,12 +793,24 @@ describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () =>
     expect(shutDown).toHaveBeenCalledTimes(1);
   });
 
+  test("the close called off before it went out: the stop alone, a second on, nothing more stored", () => {
+    const { watch, shutDown, recorded, stopSupervising } = shutdownWith();
+    watch.ruleEvent({ ...STOP, closeGame: true });
+    watch.ruleEvent({ type: "gameCloseCalledOff", atMs: 5_000 });
+    vi.advanceTimersByTime(STOP_AFTER_MS);
+    expect(shutDown).toHaveBeenCalledTimes(1);
+    expect([recorded, stopSupervising.mock.calls]).toEqual([[], []]);
+  });
+
   test("before any stop, nothing: a disconnect or a stray close event shuts nothing down", () => {
-    const { watch, shutDown } = shutdownWith();
+    const { watch, shutDown, stopSupervising } = shutdownWith();
     watch.agentDisconnected(5);
     watch.ruleEvent({ type: "gameCloseSent", atMs: 6 });
+    watch.ruleEvent({ type: "gameCloseCalledOff", atMs: 6 });
     watch.agentDisconnected(7);
+    watch.agentConnected(8);
     vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS * 2);
     expect(shutDown).not.toHaveBeenCalled();
+    expect(stopSupervising).not.toHaveBeenCalled();
   });
 });

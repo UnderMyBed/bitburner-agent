@@ -412,6 +412,7 @@ export {
   type EffectorBackend,
   type EffectorReport,
   INTENT_ACTIONS,
+  INTENT_RETRY_ROUNDS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,

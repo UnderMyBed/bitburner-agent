@@ -80,9 +80,9 @@ const newGate = (): Gate => ({
  * - Joining a faction: none of its enemies is joined (the game refuses a banned faction then:
  *   `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`).
  * - An intent that resets the game, installing augmentations (#164) or destroying the BitNode (#175), or closing the
- *   game (#303): nothing queued before it is still undone. What was queued before it (a purchase, say) was for this game, and goes first. The
- *   augmentations queued can't be an install's guard: no NS call shows them without Singularity. Done intents leave
- *   the queue, so the first one left is the one undone.
+ *   game (#303): nothing queued before it is still undone. What was queued before it (a purchase, say) was for this
+ *   game, and goes first. The augmentations queued can't be an install's guard: no NS call shows them without
+ *   Singularity. Done intents leave the queue, so the first one left is the one undone.
  * - Destroying the BitNode, then: w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`), so it's held before any
  *   backup. Reachable: among the medium snapshot's servers, which `scan` finds from home only once The Red Pill is
  *   installed. Root, there too, and the hacking level against its required level, from the static snapshot: 3000 times

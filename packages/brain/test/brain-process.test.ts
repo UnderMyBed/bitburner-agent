@@ -11,6 +11,7 @@ import { gzipSync } from "node:zlib";
 import { CONTROL_PROTOCOL_VERSION, encodeControlMessage } from "@bitburner-agent/core";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { readStopAtBitNodeEnd } from "../src/bitnode-end.ts";
 import { BRAIN_LOCK_FILE_NAME, isAlive, runningBrain, writeBrainLock } from "../src/brain-lock.ts";
 import {
   type BrainConfig,
@@ -729,7 +730,7 @@ test("the brain stores its faction work's choice (#203): main.ts records the con
 });
 
 /** A stand-in Agent on the brain's control channel: hello, welcomed, then `snapshot` sends one at the game's time. */
-async function standInAgent(config: BrainConfig, controlPort: number) {
+async function standInAgent(config: BrainConfig, controlPort: number, agentSessionId = "session-1") {
   const agent = new WebSocket(`ws://127.0.0.1:${controlPort}`, { origin: "file://" });
   await once(agent, "open");
   let sequenceNumber = 0;
@@ -739,12 +740,12 @@ async function standInAgent(config: BrainConfig, controlPort: number) {
     type: "hello",
     token: config.token,
     deploymentId: "deployment-a",
-    agentSessionId: "session-1",
+    agentSessionId,
     game: { version: "3.0.1", versionNumber: 51, commit: "1da7316ff", platform: "Steam" },
   });
   await once(agent, "message");
   const snapshot = (tier: string, data: unknown, gameTimeMs = 1_000) =>
-    send({ type: "snapshot", agentSessionId: "session-1", tier, sequenceNumber: ++sequenceNumber, gameTimeMs, data });
+    send({ type: "snapshot", agentSessionId, tier, sequenceNumber: ++sequenceNumber, gameTimeMs, data });
   return { agent, snapshot };
 }
 
@@ -791,7 +792,7 @@ test("the stop at the BitNode's end (#303) under npm run brain's runner: set mid
     }
     const controlPort = Number(/control channel on 127\.0\.0\.1:(\d+)/.exec(output)?.[1]);
     const dashboardPort = Number(/dashboard on http:\/\/127\.0\.0\.1:(\d+)\//.exec(output)?.[1]);
-    expect(output).toContain(", at the BitNode's end: off (the dashboard's switches)");
+    expect(output).toContain(", at the BitNode's end: play on (the dashboard's switches)");
     await setStopAtBitNodeEnd(dashboardPort, "brain");
     expect(output).toContain(" brain: at the BitNode's end: stop the brain, set from the dashboard");
     const { snapshot } = await standInAgent(config, controlPort);
@@ -814,8 +815,10 @@ test("the stop at the BitNode's end (#303) under npm run brain's runner: set mid
   expect(runningBrain(dataDirectory)).toBeNull();
   const store = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
   expect(eventsSinceStart(store).filter((event) => event.kind === "brainStoppedAtBitNodeEnd")).toMatchObject([
-    { detail: { reason: "destroyed", bitNode: "BN1.3", nextBitNode: "BN1.4", closeGame: false } },
+    { detail: { reason: "destroyed", bitNode: "BN1.3", nextBitNode: "BN1.4", closeGame: false, settingAfter: "off" } },
   ]);
+  // Once (#303 review): back to play on.
+  expect(readStopAtBitNodeEnd(store)).toBe("off");
   expect(store.snapshots({ environment: "E2" }).filter((row) => row.tier === "slow")).toHaveLength(2);
   store.close();
 });
@@ -837,8 +840,12 @@ test("set in a BitNode already at its end (#303): the dashboard answers, then th
   const [code] = (await exited) as [number | null];
   expect(code).toBe(0);
   expect(output()).toContain(
-    " brain: stopping at the BitNode's end (the switch is on): BN1.4's w0r1d_d43m0n is ready, but Source-File 1 is at " +
-      "level 3, so BitNode 1 gives nothing more: the next BitNode is yours",
+    " brain: stopping at the BitNode's end (the switch is on): BN1.4's w0r1d_d43m0n is ready, but its destroy would " +
+      "enter BitNode 1, and Source-File 1 is at level 3, so BitNode 1 gives nothing more: the next BitNode is yours",
+  );
+  // Once (#303 review): set back to play on as it stopped, so a brain started again to look around plays on.
+  expect(output()).toContain(
+    " brain: the stop at the BitNode's end set back to play on: set it again for the next BitNode's end",
   );
   const store = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
   const kinds = eventsSinceStart(store).map((event) => event.kind);
@@ -846,5 +853,27 @@ test("set in a BitNode already at its end (#303): the dashboard answers, then th
     "worldDaemonStalled",
     "brainStoppedAtBitNodeEnd",
   ]);
+  expect(readStopAtBitNodeEnd(store)).toBe("off");
   store.close();
+  brain = undefined;
+  const again = await startBrain();
+  for (let attempt = 0; attempt < 40 && !again.output().includes("(the dashboard's switches)"); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(again.output()).toContain(", at the BitNode's end: play on (the dashboard's switches)");
+  const next = await standInAgent(again.config, again.controlPort, "session-2");
+  next.snapshot("static", { servers: [{ hostname: "w0r1d_d43m0n", requiredHackingSkill: 3000 }] });
+  next.snapshot("slow", bitNode1(0, 3, { "The Red Pill": 1 }));
+  next.snapshot("medium", {
+    player: { skills: { hacking: 3000 }, money: 0, city: "Sector-12", factions: [] },
+    hasTorRouter: true,
+    programs: [],
+    servers: [{ hostname: "w0r1d_d43m0n", maxRam: 0, cpuCores: 1, hasAdminRights: true }],
+  });
+  for (let attempt = 0; attempt < 40 && !again.output().includes("world daemon: STALLED"); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(again.output()).toContain("world daemon: STALLED");
+  expect(again.output()).not.toContain("stopping at the BitNode's end");
+  expect((brain as ChildProcess | undefined)?.exitCode).toBeNull();
 });

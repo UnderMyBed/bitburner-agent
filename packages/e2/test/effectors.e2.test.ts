@@ -37,7 +37,7 @@ import {
   typeCommand,
   waitForTerminal,
 } from "../src/game.ts";
-import { freeBrainPorts, type RunningBrain, readStore, startBrain } from "./helpers/brain.ts";
+import { freeBrainPorts, type RunningBrain, readStore, startBrain, writeStoreSetting } from "./helpers/brain.ts";
 import { useE2 } from "./helpers/environment.ts";
 import { simulatorSave, withCity, withGameSettings, withHomeScript, withMoney } from "./helpers/saves.ts";
 
@@ -1707,8 +1707,19 @@ test("closing the game (#303): past a save backup, the game's own Save Game, the
   // A browser closes by script only a window a script opened, or one with a single history entry: this one has more.
   expect(await page.evaluate(() => window.history.length)).toBeGreaterThan(1);
   const closeOutcome = () => latestFast(dataDirectory)?.intents?.find((each) => each.id === "closeGame()") ?? null;
+  // The owner's queue refuses it (#303 review: only the switch closes the game) ...
+  const origin = `http://127.0.0.1:${ports.dashboardPort}`;
+  const refused = await fetch(`${origin}/api/intents`, {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "closeGame", args: {} }),
+  });
+  expect(refused.status).toBe(400);
+  expect(await refused.text()).toMatch(/^closeGame isn't queued by hand: set the dashboard's "The BitNode's end"/);
+  // ... so, as a harness step, it's written into the queue in the store, as a store from before could hold it: the
+  // brain reads its queue from the store at each update. The worker's steps on the page are the switch's close's.
   const queuedAtMs = Date.now();
-  await queueIntent(ports.dashboardPort, { action: "closeGame", args: {} });
+  writeStoreSetting(dataDirectory, "intents.manual", JSON.stringify([{ action: "closeGame", args: {} }]));
   await advanceUntil(page, async () => page.isClosed() || (closeOutcome()?.tries ?? 0) > 0, {
     realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 60_000,

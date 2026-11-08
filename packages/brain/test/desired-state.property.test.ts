@@ -69,7 +69,6 @@ const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "installAugmentations", args: {} }),
   intentOf({ action: "destroyBitNode", args: { nextBitNode: 2 } }),
   intentOf({ action: "destroyBitNode", args: { nextBitNode: 3 } }),
-  intentOf({ action: "closeGame", args: {} }),
 ];
 const OWNER_INTENTS_BY_ID = new Map(OWNER_INTENTS.map((each) => [each.id, each]));
 /** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */
@@ -592,8 +591,10 @@ async function play(
   }
 }
 
-test("the pool has every action an intent can name, so a new action needs a place here", () => {
-  expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(new Set(INTENT_ACTIONS));
+test("the pool has every action the owner can queue, so a new action needs a place here (closeGame is the switch's, #303)", () => {
+  expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(
+    new Set(INTENT_ACTIONS.filter((action) => action !== "closeGame")),
+  );
 });
 
 /**

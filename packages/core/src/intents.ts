@@ -80,6 +80,9 @@ export type ActionName = IntentRequest["action"];
 /** The most intents a desired state carries. */
 export const MAX_INTENTS = 100;
 
+/** The Agent's rounds (2 s each) between one try of an intent not done and the next: 30 s (the close's wait, #303). */
+export const INTENT_RETRY_ROUNDS = 15;
+
 /** What an effector reports to the Agent, for an intent or the work: done (converged), and why not. */
 export interface EffectorReport {
   /** Done afterwards, by the game's own state: now, or already. */

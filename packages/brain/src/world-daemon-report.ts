@@ -26,7 +26,7 @@ export const WORLD_DAEMON_EVENT_KINDS = [
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
 
-/** How soon after a `nextBitNode` stall the brain's stop for nothing more to gain answers it (#303): the same update. */
+/** How soon after a `nextBitNode` stall the brain's stop for nothing more to gain answers it (#303): one update. */
 export const STOP_ANSWERS_WITHIN_MS = 60_000;
 
 /** The window's hacking experience rate, folded from its medium snapshots, for the path's ETA. */

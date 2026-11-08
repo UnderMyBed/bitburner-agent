@@ -82,7 +82,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option><option>closeGame</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -625,12 +625,13 @@ function render(status) {
   // The stop at the BitNode's end (#303): its switch's three settings, off by default; the one set has no button.
   const stopAtEnd = status.stopAtBitNodeEnd ?? null;
   const atTheEnd = {
-    off: "off: the brain plays on",
+    off: "play on: the brain goes on past it",
     brain:
       "stop the brain: it shuts down once a destroy shows the next BitNode, or once the destroy would gain nothing; " +
-      "the game and its scripts go on",
+      "the game and its scripts go on. Once: then back to play on",
     brainAndGame:
-      "stop the brain and close the game: at that end, the game saves and closes, then the brain shuts down",
+      "stop the brain and close the game: at that end, the game saves and closes, then the brain shuts down. Once: " +
+      "then back to play on",
   };
   document.querySelector("#stop-at-end div").replaceChildren(
     element(

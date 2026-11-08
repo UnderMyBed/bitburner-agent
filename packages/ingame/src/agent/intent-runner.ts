@@ -11,7 +11,7 @@
 // - What happened to each is in the fast snapshot (`outcomes`), for the brain and the dashboard.
 // - Each try picks its backend (#145) and runs the effector through ./effector-runner.ts. A Singularity worker that
 //   can't start for now (home full) or doesn't report is tried again, as any worker is.
-import type { Intent, IntentOutcome } from "@bitburner-agent/core";
+import { INTENT_RETRY_ROUNDS, type Intent, type IntentOutcome } from "@bitburner-agent/core";
 import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { createChangeLog, createRoundSchedule } from "./activity.ts";
@@ -19,8 +19,8 @@ import type { EffectorRunner } from "./effector-runner.ts";
 import { effectorFor } from "./effectors.ts";
 import { SNAPSHOT_ROUND_MS } from "./snapshotter.ts";
 
-/** Rounds between one try and the next while an intent isn't done: 30 s. */
-const ROUNDS_BETWEEN_TRIES = 15;
+/** Rounds between one try and the next while an intent isn't done: 30 s (core's, as the brain's close waits on it). */
+const ROUNDS_BETWEEN_TRIES = INTENT_RETRY_ROUNDS;
 /** The least of the round worth starting a worker with: the page takes a few renders. Less waits a round. */
 const MIN_WORKER_TIME_MS = 1_000;
 

@@ -15,9 +15,9 @@ import { readBatcherEnabled } from "./batcher.ts";
 import {
   BitNodeEndShutdown,
   describeStopAtBitNodeEnd,
-  GAME_CLOSE_SENT_EVENT_KIND,
   parseStopAtBitNodeEnd,
   readStopAtBitNodeEnd,
+  writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
 import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
@@ -190,6 +190,8 @@ try {
   // `shutDown`, defined below (an Agent may report before then: the stop then waits for it).
   let shutDownNow: (() => void) | null = null;
   let shutDownAskedFor = false;
+  // The game's close going out stops supervision, so it isn't relaunched (the supervisor is made below).
+  let stopSupervising = () => {};
   const bitNodeEnd = new BitNodeEndShutdown({
     shutDown: () => {
       shutDownAskedFor = true;
@@ -198,15 +200,14 @@ try {
     record: (kind, detail) => store.recordEvent(deployerReleaseContext, { atMs: systemClock.now(), kind, detail }),
     log,
     closeWaitingFor: () => desiredState.closeGameWaitingFor(),
+    stopSupervising: () => stopSupervising(),
+    // Once (#303 review): set back to "play on" as the brain stops.
+    turnOff: () => writeStopAtBitNodeEnd(store, "off"),
   });
-  // The game's close going out: no relaunch of it from here on (the supervisor is made below).
-  let stopSupervising = () => {};
-  desiredState.subscribe((event) => {
-    if (event.type === GAME_CLOSE_SENT_EVENT_KIND) stopSupervising();
-    bitNodeEnd.ruleEvent(event);
-  });
+  desiredState.subscribe((event) => bitNodeEnd.ruleEvent(event));
   channel.subscribe((event) => {
     if (event.type === "agentDisconnected") bitNodeEnd.agentDisconnected(event.atMs);
+    if (event.type === "agentConnected") bitNodeEnd.agentConnected(event.atMs);
   });
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),

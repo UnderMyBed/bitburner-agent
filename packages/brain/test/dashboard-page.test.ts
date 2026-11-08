@@ -1164,12 +1164,12 @@ describe("the intents (#141)", () => {
     expect(textOf(document, "#intents td:nth-child(3)")).toBe("not sent: held: Sector-12's enemy Chongqing is joined");
   });
 
-  test("the queue form offers every action an intent can name (#147)", async () => {
+  test("the queue form offers every action an intent can name (#147), but closeGame, the switch's alone (#303)", async () => {
     const { document } = await openPage(() => ({ status: 200, body: BUSY_STATUS }));
     const options = [...document.querySelectorAll("#intents select[name=action] option")].map(
       (option) => option.textContent,
     );
-    expect([...options].sort()).toEqual([...INTENT_ACTIONS].sort());
+    expect([...options].sort()).toEqual(INTENT_ACTIONS.filter((action) => action !== "closeGame").sort());
   });
 
   test("none sent says so", async () => {
@@ -1460,7 +1460,7 @@ test("the stop at the BitNode's end (#303): three settings, the one set without 
   const button = (setting: string) =>
     document.querySelector(`#stop-at-end button[data-setting='${setting}']`) as HTMLButtonElement;
   const disabled = () => ["off", "brain", "brainAndGame"].filter((setting) => button(setting).disabled);
-  expect(textOf(document, "#stop-at-end")).toContain("At the BitNode's end: off: the brain plays on");
+  expect(textOf(document, "#stop-at-end")).toContain("At the BitNode's end: play on: the brain goes on past it");
   expect([button("off"), button("brain"), button("brainAndGame")].map((each) => each.textContent)).toEqual([
     "Play on",
     "Stop the brain",
@@ -1471,14 +1471,14 @@ test("the stop at the BitNode's end (#303): three settings, the one set without 
   await settle();
   expect(textOf(document, "#stop-at-end")).toContain(
     "At the BitNode's end: stop the brain: it shuts down once a destroy shows the next BitNode, or once the destroy " +
-      "would gain nothing; the game and its scripts go on",
+      "would gain nothing; the game and its scripts go on. Once: then back to play on",
   );
   expect(disabled()).toEqual(["brain"]);
   button("brainAndGame").click();
   await settle();
   expect(textOf(document, "#stop-at-end")).toContain(
     "At the BitNode's end: stop the brain and close the game: at that end, the game saves and closes, then the " +
-      "brain shuts down",
+      "brain shuts down. Once: then back to play on",
   );
   expect(disabled()).toEqual(["brainAndGame"]);
   // The one set does nothing.

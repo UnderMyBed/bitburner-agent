@@ -27,8 +27,10 @@ import { batcherSection, whoHacked } from "./batcher-report.ts";
 import {
   BITNODE_END_EVENT_KINDS,
   BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND,
+  GAME_CLOSE_CALLED_OFF_EVENT_KIND,
   GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND,
   GAME_CLOSE_SENT_EVENT_KIND,
+  GAME_CLOSE_TRIED_EVENT_KIND,
   GAME_CLOSED_EVENT_KIND,
 } from "./bitnode-end.ts";
 import {
@@ -1042,15 +1044,19 @@ function windowSection(facts: RunFacts): string[] {
     const after = timeline.filter((event) => event.atMs >= stop.atMs);
     const closed = after.find((event) => event.kind === GAME_CLOSED_EVENT_KIND);
     const notConfirmed = after.find((event) => event.kind === GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND);
+    const calledOff = after.find((event) => event.kind === GAME_CLOSE_CALLED_OFF_EVENT_KIND);
     const game =
       closed !== undefined
         ? `: the game saved and closed at ${formatIsoTime(closed.atMs)}, then the brain stopped`
-        : notConfirmed !== undefined
-          ? `: the game's close NOT CONFIRMED (${displayValue(fieldsOf(notConfirmed.detail).reason)}), so it may still ` +
-            "be running"
-          : fieldsOf(stop.detail).closeGame === true
-            ? ": the game to close first, its close not seen in the window"
-            : ": the game and its scripts went on without it";
+        : calledOff !== undefined
+          ? `: the game's close called off from the dashboard at ${formatIsoTime(calledOff.atMs)}, so the game and ` +
+            "its scripts went on without it"
+          : notConfirmed !== undefined
+            ? `: the game's close NOT CONFIRMED (${displayValue(fieldsOf(notConfirmed.detail).reason)}), so it may still ` +
+              "be running"
+            : fieldsOf(stop.detail).closeGame === true
+              ? ": the game to close first, its close not seen in the window"
+              : ": the game and its scripts went on without it";
     lines.push(
       `  the run's end: the brain stopped itself at ${formatIsoTime(stop.atMs)}, at the BitNode's end (the switch ` +
         `on): ${displayValue(fieldsOf(stop.detail).detail)}. Expected, not a failure${game}; the quiet after it is no ` +
@@ -1076,6 +1082,10 @@ function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.N
       );
     case GAME_CLOSE_SENT_EVENT_KIND:
       return "the game's close sent: its own Save Game, then its window closed";
+    case GAME_CLOSE_TRIED_EVENT_KIND:
+      return `the game's close tried, not closed (try ${displayValue(fields.tries)}): ${displayValue(fields.problem)}`;
+    case GAME_CLOSE_CALLED_OFF_EVENT_KIND:
+      return "the game's close called off from the dashboard before it went out";
     case GAME_CLOSED_EVENT_KIND:
       return `game closed: its Agent's connection dropped ${formatSeconds(Number(fields.afterMs))} after the close`;
     case GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND:
@@ -2224,9 +2234,9 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
 }
 
 /**
- * The brain's stop at the BitNode's end (#303) that a silence from `fromMs` (a gap's, a disconnect's) follows, or null:
- * from `RELOAD_LEAD_MS` before it (the brain shuts down a second after the stop, its last snapshots stored meanwhile) to
- * `RELOAD_LAG_MS` into it.
+ * The brain's stop at the BitNode's end (#303), or an event of its close, that a silence from `fromMs` (a gap's, a
+ * disconnect's) follows, or null: from `RELOAD_LEAD_MS` before it (the brain shuts down a second after the stop, its
+ * last snapshots stored meanwhile) to `RELOAD_LAG_MS` into it.
  */
 function stopAtBitNodeEndBefore(facts: RunFacts, fromMs: number): StoredEvent | null {
   return (

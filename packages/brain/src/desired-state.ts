@@ -55,8 +55,11 @@ import {
   BitNodeEndWatch,
   bitNodeReadingOf,
   CLOSE_GAME_INTENT,
+  CLOSE_GAME_MOST_TRIES,
   closeGameTriedEnough,
+  GAME_CLOSE_CALLED_OFF_EVENT_KIND,
   GAME_CLOSE_SENT_EVENT_KIND,
+  GAME_CLOSE_TRIED_EVENT_KIND,
   readStopAtBitNodeEnd,
   type StopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
@@ -386,6 +389,8 @@ export class DesiredStateController {
   /** The close of the game at the BitNode's end (#303): when it went out, and whether it's withdrawn, tried enough. */
   #closeGameSentAtMs: number | null = null;
   #closeGameWithdrawn = false;
+  /** The tries of the close the Agent has reported (#303 review), each stored as `gameCloseTried`. */
+  #closeGameTries = 0;
   /** When the Agent disconnected with an install out (its reset note written), until a slow snapshot shows a reset. */
   #installDisconnectedAtMs: number | null = null;
   readonly #log: (line: string) => void;
@@ -426,6 +431,8 @@ export class DesiredStateController {
     channel.subscribe((event) => {
       this.#lastEventAtMs = event.atMs;
       if (event.type === "agentConnected" || event.type === "agentDisconnected") {
+        // A close sent to the Agent that went (#303 review): never sent again, the brain's or one in the queue.
+        if (event.type === "agentDisconnected") this.#dropCloseGameSent();
         this.#staticData = null;
         this.#mediumData = null;
         this.#mediumAtMs = null;
@@ -462,7 +469,7 @@ export class DesiredStateController {
         }
         const problemNoted = this.#noteCloudServerProblem();
         const dropped = this.#dropDoneManualIntents();
-        const closeWithdrawn = this.#withdrawCloseGameTriedEnough();
+        const closeWithdrawn = this.#noteCloseGameTries();
         if (!dropped && !problemNoted && !closeWithdrawn && !this.#augmentations.askedDone(this.#doneIds())) return;
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "static") {
         this.#staticData = event.snapshot.data as StaticSnapshotData;
@@ -591,6 +598,17 @@ export class DesiredStateController {
   /** The stop at the BitNode's end's switch (#303), likewise: on, a BitNode already at its end stops the brain now. */
   setStopAtBitNodeEnd(setting: StopAtBitNodeEnd): void {
     writeStopAtBitNodeEnd(this.#store, setting);
+    // Back to "play on" with the close asked for and not yet out (#303 review): called off, the brain stops alone.
+    if (
+      setting === "off" &&
+      this.#bitNodeEnd.closeGameAsked() &&
+      this.#closeGameSentAtMs === null &&
+      !this.#closeGameWithdrawn
+    ) {
+      this.#closeGameWithdrawn = true;
+      this.#log("closing the game: called off from the dashboard before it went out; the brain stops alone");
+      this.#emit({ type: GAME_CLOSE_CALLED_OFF_EVENT_KIND, atMs: this.#lastEventAtMs ?? 0 });
+    }
     this.#update();
   }
 
@@ -667,6 +685,15 @@ export class DesiredStateController {
   addManualIntent(request: unknown): AddedIntent {
     const parsed = parseIntentRequest(request);
     if (!parsed.ok) return parsed;
+    // Only the switch closes the game (#303 review): queued, the Agent goes before reporting it done, so it stayed.
+    if (parsed.message.action === "closeGame") {
+      return {
+        ok: false,
+        reason:
+          "closeGame isn't queued by hand: set the dashboard's \"The BitNode's end\" to \"Stop the brain and close the " +
+          'game", which closes it once, then stops the brain',
+      };
+    }
     const queue = readManualIntents(this.#store);
     // Room for the purchase, the backdoor and the augmentation's (#210): a desired state over the protocol's limit
     // would be refused by the Agent.
@@ -1201,15 +1228,41 @@ export class DesiredStateController {
    * The close of the game (#303) withdrawn once the Agent reports it tried enough (`closeGameTriedEnough`): never a
    * loop of saves and closes. Whether it was withdrawn now.
    */
-  #withdrawCloseGameTriedEnough(): boolean {
+  #noteCloseGameTries(): boolean {
     if (this.#closeGameWithdrawn || !this.#bitNodeEnd.closeGameAsked()) return false;
     const outcome = this.#reportedOutcomes().find((each) => each.id === CLOSE_GAME_INTENT.id);
-    if (outcome === undefined || !closeGameTriedEnough(outcome)) return false;
+    if (outcome === undefined || outcome.tries <= this.#closeGameTries) return false;
+    // A try reported: the game didn't close then. Stored, so main.ts waits afresh for the next.
+    this.#closeGameTries = outcome.tries;
+    this.#log(`closing the game: try ${outcome.tries} of ${CLOSE_GAME_MOST_TRIES} reported: ${outcome.problem}`);
+    this.#emit({
+      type: GAME_CLOSE_TRIED_EVENT_KIND,
+      atMs: this.#lastEventAtMs ?? 0,
+      tries: outcome.tries,
+      problem: outcome.problem,
+    });
+    if (!closeGameTriedEnough(outcome)) return false;
     this.#closeGameWithdrawn = true;
     this.#log(
       `closing the game: withdrawn after ${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}: ${outcome.problem}`,
     );
     return true;
+  }
+
+  /**
+   * A close in the desired state sent when the Agent went (#303 review): the brain's withdrawn, and one in the manual
+   * queue (the queue refuses it, but a store written before may hold one) dropped, so a game closed is never closed
+   * again as it starts.
+   */
+  #dropCloseGameSent(): void {
+    if (!this.#desired?.intents.some((each) => each.id === CLOSE_GAME_INTENT.id)) return;
+    if (this.#bitNodeEnd.closeGameAsked() && !this.#closeGameWithdrawn) {
+      this.#closeGameWithdrawn = true;
+      this.#log("closing the game: the Agent went after it went out; not sent again");
+    }
+    const queue = readManualIntents(this.#store);
+    const kept = queue.filter((each) => each.id !== CLOSE_GAME_INTENT.id);
+    if (kept.length !== queue.length) writeManualIntents(this.#store, kept);
   }
 
   /** Takes off the manual queue what the connected Agent reports done (a close tried enough); whether it took any. */
