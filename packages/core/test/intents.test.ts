@@ -45,6 +45,7 @@ describe("parseIntentRequest", () => {
     ["destroyBitNode", { nextBitNode: 1 }],
     ["destroyBitNode", { nextBitNode: 12 }],
     ["destroyBitNode", { nextBitNode: 15 }],
+    ["closeGame", {}],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -209,6 +210,12 @@ describe("isIrreversibleIntent", () => {
     for (const nextBitNode of [1, 2, 12]) {
       expect(isIrreversibleIntent(intent({ action: "destroyBitNode", args: { nextBitNode } }))).toBe(true);
     }
+  });
+
+  test("closing the game is irreversible, after a save backup, and resets nothing (#303)", () => {
+    expect(isIrreversibleIntent(intent({ action: "closeGame", args: {} }))).toBe(true);
+    expect(resetsTheGame(intent({ action: "closeGame", args: {} }))).toBe(false);
+    expect(intentId("closeGame", {})).toBe("closeGame()");
   });
 
   test("an install and a destroy reset the game; nothing else does (#164, #175)", () => {

@@ -25,6 +25,15 @@ import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "
 import { BackdoorTimeline } from "./backdoors.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import {
+  BITNODE_END_EVENT_KINDS,
+  BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND,
+  GAME_CLOSE_CALLED_OFF_EVENT_KIND,
+  GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND,
+  GAME_CLOSE_SENT_EVENT_KIND,
+  GAME_CLOSE_TRIED_EVENT_KIND,
+  GAME_CLOSED_EVENT_KIND,
+} from "./bitnode-end.ts";
+import {
   type ClockIncident,
   type FastSnapshotTime,
   findClockIncidents,
@@ -891,6 +900,12 @@ export function runReport(
   }
   const failures: string[] = [];
   const warnings: string[] = [];
+  // The game's close at the BitNode's end not confirmed (#303): the brain stopped as asked, the game maybe not.
+  for (const { atMs, detail } of facts.events.filter((event) => event.kind === GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND)) {
+    warnings.push(
+      `game close not confirmed at ${formatIsoTime(atMs)}: ${displayValue(fieldsOf(detail).reason)} (the brain stopped)`,
+    );
+  }
   // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
   const incidents = findClockIncidents({
     medium: facts.mediumTimes,
@@ -1022,6 +1037,32 @@ function windowSection(facts: RunFacts): string[] {
       `deploys: ${count("deployed")}; save backups: ${backups}; data backups: ${count(DATA_BACKUP_EVENT_KIND)}` +
       (count(DATA_BACKUP_FAILED_EVENT_KIND) > 0 ? `, ${count(DATA_BACKUP_FAILED_EVENT_KIND)} FAILED` : ""),
   );
+  // The brain's stop at the BitNode's end (#303), the last: the run's expected end, never a failure.
+  const stop = timeline.findLast((event) => event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND);
+  if (stop !== undefined) {
+    // The game closed too (the switch's third setting), or not confirmed: section 4's warning.
+    const after = timeline.filter((event) => event.atMs >= stop.atMs);
+    const closed = after.find((event) => event.kind === GAME_CLOSED_EVENT_KIND);
+    const notConfirmed = after.find((event) => event.kind === GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND);
+    const calledOff = after.find((event) => event.kind === GAME_CLOSE_CALLED_OFF_EVENT_KIND);
+    const game =
+      closed !== undefined
+        ? `: the game saved and closed at ${formatIsoTime(droppedAtMs(closed))}, then the brain stopped`
+        : calledOff !== undefined
+          ? `: the game's close called off from the dashboard at ${formatIsoTime(calledOff.atMs)}, so the game and ` +
+            "its scripts went on without it"
+          : notConfirmed !== undefined
+            ? `: the game's close NOT CONFIRMED (${displayValue(fieldsOf(notConfirmed.detail).reason)}), so it may still ` +
+              "be running"
+            : fieldsOf(stop.detail).closeGame === true
+              ? ": the game to close first, its close not seen in the window"
+              : ": the game and its scripts went on without it";
+    lines.push(
+      `  the run's end: the brain stopped itself at ${formatIsoTime(stop.atMs)}, at the BitNode's end (the switch ` +
+        `on): ${displayValue(fieldsOf(stop.detail).detail)}. Expected, not a failure${game}; the quiet after it is no ` +
+        "gap",
+    );
+  }
   return lines;
 }
 
@@ -1034,6 +1075,21 @@ function describeEvent({ kind, detail }: StoredEvent, sinceMs: number = Number.N
   switch (kind) {
     case BRAIN_STARTED_EVENT_KIND:
       return `brain started, release ${displayValue(fields.release)}`;
+    case BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND:
+      return (
+        `brain stopped itself at the BitNode's end (the switch on${fields.closeGame === true ? ", the game to close first" : ""}): ` +
+        displayValue(fields.detail)
+      );
+    case GAME_CLOSE_SENT_EVENT_KIND:
+      return "the game's close sent: its own Save Game, then its window closed";
+    case GAME_CLOSE_TRIED_EVENT_KIND:
+      return `the game's close tried, not closed (try ${displayValue(fields.tries)}): ${displayValue(fields.problem)}`;
+    case GAME_CLOSE_CALLED_OFF_EVENT_KIND:
+      return "the game's close called off from the dashboard before it went out";
+    case GAME_CLOSED_EVENT_KIND:
+      return `game closed: its Agent's connection dropped ${formatSeconds(Number(fields.afterMs))} after the close`;
+    case GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND:
+      return `game close NOT CONFIRMED: ${displayValue(fields.reason)}`;
     case RELAUNCH_EVENT_KIND:
       return `game relaunched by the supervisor (${displayValue(fields.cause)})`;
     case "agentConnected": {
@@ -2149,6 +2205,14 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
     const line =
       `gap: ${formatIsoTime(gap.fromMs)} to ${formatIsoTime(gap.toMs)} (${formatSeconds(gap.lengthMs)})` +
       explainSilence(facts, gap.fromMs, gap.toMs);
+    // The brain's stop at the BitNode's end (#303) as the gap starts: the brain away until someone started it again.
+    const stop = stopAtBitNodeEndBefore(facts, gap.fromMs);
+    if (stop !== null) {
+      lines.push(
+        `    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatIsoTime(stopTimeOf(facts, stop))})`,
+      );
+      continue;
+    }
     const reload = reloadBeforeGap(facts, gap, reloadsUsed);
     if (reload === null) {
       lines.push(`    ${line}`);
@@ -2167,6 +2231,39 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
   }
   if (report.gaps.length === 0) lines.push("    no gaps");
   return { lines, gaps: report.gaps };
+}
+
+/**
+ * The brain's stop at the BitNode's end (#303), or an event of its close, that a silence from `fromMs` (a gap's, a
+ * disconnect's) follows, or null: from `RELOAD_LEAD_MS` before it (the brain shuts down a second after the stop, its
+ * last snapshots stored meanwhile) to `RELOAD_LAG_MS` into it.
+ */
+function stopAtBitNodeEndBefore(facts: RunFacts, fromMs: number): StoredEvent | null {
+  return (
+    facts.events.findLast((event) => {
+      if (!BITNODE_END_EVENT_KINDS.includes(event.kind)) return false;
+      const atMs = event.kind === GAME_CLOSED_EVENT_KIND ? droppedAtMs(event) : event.atMs;
+      return atMs >= fromMs - RELOAD_LEAD_MS && atMs <= fromMs + RELOAD_LAG_MS;
+    }) ?? null
+  );
+}
+
+/**
+ * When the Agent's connection dropped, for a `gameClosed` (#303 review): stored `GAME_CLOSE_QUIET_MS` after the drop,
+ * it says when the close went out and how long after it the drop came. Its own time, without them.
+ */
+/** When the brain stopped, for an event of the stop or its close: the stop's own time, or the event's without one. */
+function stopTimeOf(facts: RunFacts, event: StoredEvent): number {
+  if (event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND) return event.atMs;
+  const stop = facts.events.findLast(
+    (each) => each.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND && each.atMs <= event.atMs,
+  );
+  return stop?.atMs ?? (event.kind === GAME_CLOSED_EVENT_KIND ? droppedAtMs(event) : event.atMs);
+}
+
+function droppedAtMs(event: StoredEvent): number {
+  const { closeSentAtMs, afterMs } = fieldsOf(event.detail);
+  return isNumber(closeSentAtMs) && isNumber(afterMs) ? closeSentAtMs + afterMs : event.atMs;
 }
 
 /** A reload a gap follows (#240): "the game reloading after …", and its event (null for a reset intent held). */
@@ -2235,8 +2332,9 @@ function notTheReloadAlone(facts: RunFacts, gap: Gap, gapThresholdMs: number): s
 
 /**
  * Each Agent disconnect with no reconnect within `RECONNECT_WITHIN_MS`. Not a failure where the window ends before
- * that much time has passed, or where the run ended there (nothing recorded after it). A reload in the
- * `RELOAD_LEAD_MS` before it is named (#240): the disconnect was expected, not its length.
+ * that much time has passed, or where the run ended there (nothing recorded after it), or as the brain stopped itself
+ * at the BitNode's end (#303). A reload in the `RELOAD_LEAD_MS` before it is named (#240): the disconnect was expected,
+ * not its length.
  */
 function disconnectLines(facts: RunFacts, failures: string[]): string[] {
   const lines = [`  Agent disconnects with no reconnect within ${formatDuration(RECONNECT_WITHIN_MS)}:`];
@@ -2249,6 +2347,7 @@ function disconnectLines(facts: RunFacts, failures: string[]): string[] {
       (event) => event.kind === "agentConnected" && event.atMs >= disconnect.atMs && event.atMs <= deadlineMs,
     );
     if (reconnect || deadlineMs > facts.untilMs || endMs <= disconnect.atMs) continue;
+    if (stopAtBitNodeEndBefore(facts, disconnect.atMs) !== null) continue;
     count++;
     const next = facts.events.find((event) => event.kind === "agentConnected" && event.atMs > deadlineMs);
     const reload = [...facts.reloadsBefore, ...facts.events]

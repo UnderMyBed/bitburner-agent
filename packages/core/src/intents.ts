@@ -47,7 +47,12 @@ export type IntentRequest =
    * Destroys the BitNode through w0r1d_d43m0n, then enters `nextBitNode` (#175): irreversible. The game can't show one
    * done (another can follow), so the brain's reset check takes it off its queue.
    */
-  | { action: "destroyBitNode"; args: { nextBitNode: number } };
+  | { action: "destroyBitNode"; args: { nextBitNode: number } }
+  /**
+   * Saves the game with its own Save Game, then closes its window (#303): irreversible, as nothing runs after it until
+   * the owner starts the game again. Never done by the game's word (the game is gone): the brain sees its Agent go.
+   */
+  | { action: "closeGame"; args: Record<string, never> };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -63,6 +68,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   backdoor: true,
   installAugmentations: true,
   destroyBitNode: true,
+  closeGame: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -73,6 +79,9 @@ export type ActionName = IntentRequest["action"];
 
 /** The most intents a desired state carries. */
 export const MAX_INTENTS = 100;
+
+/** The Agent's rounds (2 s each) between one try of an intent not done and the next: 30 s (the close's wait, #303). */
+export const INTENT_RETRY_ROUNDS = 15;
 
 /** What an effector reports to the Agent, for an intent or the work: done (converged), and why not. */
 export interface EffectorReport {
@@ -225,6 +234,8 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         return { ok: false, reason: `destroyBitNode's nextBitNode isn't a whole number from 1 to ${BITNODE_COUNT}` };
       }
       return { ok: true, message: { action, args: { nextBitNode: args.nextBitNode } } };
+    case "closeGame":
+      return { ok: true, message: { action, args: {} } };
     default:
       return null;
   }
@@ -256,10 +267,10 @@ export function parseIntentRequest(value: unknown): Parsed<Intent> {
 /**
  * Whether doing `intent` can't be undone (R2, R8; #147): the brain then sends it only once its guard has held on two
  * consecutive snapshots and a save backup has been taken: joining a faction with enemies, which bans them, and the
- * intents that reset the game (`resetsTheGame`).
+ * intents that reset the game (`resetsTheGame`), and closing the game (#303), so a save backup comes first.
  */
 export function isIrreversibleIntent(intent: Intent): boolean {
-  if (resetsTheGame(intent)) return true;
+  if (resetsTheGame(intent) || intent.action === "closeGame") return true;
   return intent.action === "joinFaction" && FACTION_ENEMIES[intent.args.faction] !== undefined;
 }
 

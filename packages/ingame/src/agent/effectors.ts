@@ -17,6 +17,7 @@ import {
   BUY_PROGRAM_WORKER_NAME,
   BUY_SERVER_WORKER_NAME,
   CLASS_WORK_WORKER_NAME,
+  CLOSE_GAME_WORKER_NAME,
   COMPANY_WORK_WORKER_NAME,
   CRIME_WORK_WORKER_NAME,
   classLabel,
@@ -200,6 +201,15 @@ export function effectorFor(intent: Intent): Effector {
         sim: (effectors) => effectors.destroyWorldDaemon(nextBitNode, BOOT_SCRIPT),
       };
     }
+    // Saving the game, then closing its window (#303): through the page alone, as Singularity can do neither. The
+    // simulator renders no window, so there it's never done, and says why.
+    case "closeGame":
+      return {
+        description: "save the game and close it",
+        ui: { workerName: CLOSE_GAME_WORKER_NAME, workerArguments: [] },
+        singularity: null,
+        sim: () => ({ done: false, problem: "the simulator has no game window to close" }),
+      };
   }
 }
 

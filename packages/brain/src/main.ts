@@ -4,13 +4,21 @@
 // to run (the hack loop, #134, and the intents, #141: the hacking programs, #136, home's RAM, #138, and the owner's
 // manual queue), serves the dashboard, and (for Steam, on Windows) supervises the game itself. It holds a lock file
 // in its data directory while it runs (#283's review), backs the data directory up at its start and each day (#284),
-// and at start thins the store's old data if config.json opts in, once a backup holds it.
+// and at start thins the store's old data if config.json opts in, once a backup holds it. With the dashboard's switch
+// on, it stops itself at the BitNode's end (#303), as cleanly as on Ctrl+C.
 import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
+import {
+  BitNodeEndShutdown,
+  describeStopAtBitNodeEnd,
+  parseStopAtBitNodeEnd,
+  readStopAtBitNodeEnd,
+  writeStopAtBitNodeEnd,
+} from "./bitnode-end.ts";
 import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import {
@@ -177,6 +185,30 @@ try {
   // None comes before an Agent's snapshots, and none of those before this: the control server's listen resolves before
   // its first connection is handled.
   const stopRecordingRules = recordEvents(desiredState, store, deployerReleaseContext);
+  // The stop at the BitNode's end (#303): asked once the controller has logged it and the line above has stored its
+  // event, it shuts the brain down as Ctrl+C does (a second on, or once the game it closes is gone), through
+  // `shutDown`, defined below (an Agent may report before then: the stop then waits for it).
+  let shutDownNow: (() => void) | null = null;
+  let shutDownAskedFor = false;
+  // The game's close going out stops supervision, so it isn't relaunched (the supervisor is made below).
+  let stopSupervising = () => {};
+  const bitNodeEnd = new BitNodeEndShutdown({
+    shutDown: () => {
+      shutDownAskedFor = true;
+      shutDownNow?.();
+    },
+    record: (kind, detail) => store.recordEvent(deployerReleaseContext, { atMs: systemClock.now(), kind, detail }),
+    log,
+    closeWaitingFor: () => desiredState.closeGameWaitingFor(),
+    stopSupervising: () => stopSupervising(),
+    // Once (#303 review): set back to "play on" as the brain stops.
+    turnOff: () => writeStopAtBitNodeEnd(store, "off"),
+  });
+  desiredState.subscribe((event) => bitNodeEnd.ruleEvent(event));
+  channel.subscribe((event) => {
+    if (event.type === "agentDisconnected") bitNodeEnd.agentDisconnected(event.atMs);
+    if (event.type === "agentConnected") bitNodeEnd.agentConnected(event.atMs);
+  });
   const stopLoggingBackups = saveBackups.subscribe((event) =>
     log(`${event.type} ${JSON.stringify({ ...event, type: undefined })}`),
   );
@@ -204,6 +236,11 @@ try {
           log(`supervisor: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
       })
     : null;
+  stopSupervising = () => {
+    if (supervisor === null) return;
+    supervisor.stop();
+    log("supervision stopped: the game is being closed at the BitNode's end");
+  };
   // The timeline of BitNodes and installs (#285): kept up to date as the page asks, each slow snapshot folded once.
   const campaignTimeline = new CampaignTimeline({
     store,
@@ -237,6 +274,7 @@ try {
         worldDaemon: desiredState.worldDaemonView(),
         worldDaemonStall: desiredState.worldDaemonStall(),
         share: desiredState.shareView(),
+        stopAtBitNodeEnd: desiredState.stopAtBitNodeEndView(),
         storeThinningFailure,
         dataBackupProblem: dataBackups?.problem() ?? null,
         timeline: campaignTimeline.read(),
@@ -270,6 +308,14 @@ try {
     setShareEnabled: (enabled) => {
       desiredState.setShareEnabled(enabled);
       log(`sharing spare RAM turned ${enabled ? "on" : "off"} from the dashboard`);
+    },
+    setStopAtBitNodeEnd: (request) => {
+      const setting = parseStopAtBitNodeEnd(request);
+      if (setting === null) return false;
+      // Logged first: on in a BitNode already at its end, the brain's stop line follows at once.
+      log(`at the BitNode's end: ${describeStopAtBitNodeEnd(setting)}, set from the dashboard`);
+      desiredState.setStopAtBitNodeEnd(setting);
+      return true;
     },
     setHomeRamEnabled: (enabled) => {
       desiredState.setHomeRamEnabled(enabled);
@@ -321,8 +367,8 @@ try {
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
-      `${readWorldDaemonEnabled(store) ? "on" : "off"}, sharing spare RAM ${readShareEnabled(store) ? "on" : "off"} ` +
-      "(the dashboard's switches)",
+      `${readWorldDaemonEnabled(store) ? "on" : "off"}, sharing spare RAM ${readShareEnabled(store) ? "on" : "off"}, ` +
+      `at the BitNode's end: ${describeStopAtBitNodeEnd(readStopAtBitNodeEnd(store))} (the dashboard's switches)`,
   );
   log(
     supervising
@@ -353,7 +399,16 @@ try {
     process.exit(0);
   };
   // SIGBREAK is Ctrl+Break on Windows; SIGHUP its console closing. The store is safe either way (WAL).
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) process.on(signal, shutDown);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {
+    process.on(signal, () => {
+      // Stopped by hand mid-stop at the BitNode's end (#303 review): the switch back to play on all the same.
+      bitNodeEnd.interrupted(desiredState.stoppedAtBitNodeEnd());
+      void shutDown();
+    });
+  }
+  // The stop at the BitNode's end (#303): the same clean stop, exit 0, so `npm run brain`'s runner ends too.
+  shutDownNow = () => void shutDown();
+  if (shutDownAskedFor) shutDownNow();
 } catch (error) {
   console.error(`brain: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

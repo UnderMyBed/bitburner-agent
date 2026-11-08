@@ -162,6 +162,16 @@ function waitForLine(child: ChildProcess, log: string[], pattern: RegExp, timeou
  * Reads the brain's store, read-only, while it runs: the snapshots and events it has stored for E2, and the owner's
  * manual intents queue (#141), as `{ action, args }`.
  */
+/** Writes one setting into a running brain's store (its own reads it afresh at each update): a harness step. */
+export function writeStoreSetting(dataDirectory: string, key: string, value: string): void {
+  const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
+  try {
+    store.setSetting(key, value);
+  } finally {
+    store.close();
+  }
+}
+
 export function readStore(dataDirectory: string) {
   const store = TelemetryStore.openReadOnly(path.join(dataDirectory, "telemetry.sqlite"));
   try {

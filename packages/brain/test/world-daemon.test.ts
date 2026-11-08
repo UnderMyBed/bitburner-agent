@@ -379,6 +379,22 @@ describe("stalls", () => {
     update({ ...atThree, enabled: false });
     expect(rule.stall()).toBeNull();
   });
+  test("nothing more to gain (#303): said while the destroy is on, ready and refused, and only then", () => {
+    const atThree = slow({ ownedSF: { 1: 3 } });
+    const said = "Source-File 1 is at level 3, so BitNode 1 gives nothing more";
+    update({ slowData: atThree });
+    expect(rule.nothingMoreToGainNow()).toBe(said);
+    update({ slowData: atThree, mediumData: medium({ daemon: "unrooted" }) });
+    expect(rule.nothingMoreToGainNow()).toBeNull();
+    update({ slowData: atThree });
+    update({ staticData: null, mediumData: null, slowData: null });
+    expect(rule.nothingMoreToGainNow()).toBeNull();
+    update({ slowData: atThree });
+    update({ slowData: atThree, enabled: false });
+    expect(rule.nothingMoreToGainNow()).toBeNull();
+    update({ slowData: slow({ ownedSF: { 1: 2 } }) });
+    expect(rule.nothingMoreToGainNow()).toBeNull();
+  });
 });
 
 describe("a restarted brain", () => {

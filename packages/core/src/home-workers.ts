@@ -3,16 +3,17 @@
  * #162): the snapshot tiers', the hack loop's (#134), the program buyer's (#136), the home RAM upgrader's (#138), the
  * traveller's (#141), the Singularity backend's (#145), the faction joiner's (#147), the augmentation buyer's (#149),
  * the donor's (#225), the faction, company, crime and class workers' (#151, #153, #156, #158), the cloud server buyer's
- * (#159) and upgrader's (#194), the backdoor's (#162), the installer's (#164), the destroyer's (#175), and the faction
- * state's reader (#197). A fresh save's home must hold the Agent plus the largest of those it can run
- * (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2 suites read these lists. Functions,
- * not constants, so in-game bundles that don't use them leave them out.
+ * (#159) and upgrader's (#194), the backdoor's (#162), the installer's (#164), the destroyer's (#175), the faction
+ * state's reader (#197), and the game's closer (#303). A fresh save's home must hold the Agent plus the largest of
+ * those it can run (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2 suites read these
+ * lists. Functions, not constants, so in-game bundles that don't use them leave them out.
  */
 import { BUY_AUGMENTATION_WORKER_NAME, INSTALL_AUGMENTATIONS_WORKER_NAME } from "./augmentations.ts";
 import { BACKDOOR_WORKER_NAME } from "./backdoors.ts";
 import { singularityWorkerFileNames } from "./backends.ts";
 import { BATCHER_DEPLOY_WORKER_NAME } from "./batcher.ts";
 import { DESTROY_BITNODE_WORKER_NAME } from "./bitnodes.ts";
+import { CLOSE_GAME_WORKER_NAME } from "./close-game.ts";
 import { BUY_SERVER_WORKER_NAME, UPGRADE_SERVER_WORKER_NAME } from "./cloud-servers.ts";
 import { SNAPSHOT_TIERS } from "./control-protocol.ts";
 import { DONATE_TO_FACTION_WORKER_NAME } from "./donations.ts";
@@ -51,6 +52,7 @@ export function homeWorkerFileNames(): string[] {
     BACKDOOR_WORKER_NAME,
     INSTALL_AUGMENTATIONS_WORKER_NAME,
     DESTROY_BITNODE_WORKER_NAME,
+    CLOSE_GAME_WORKER_NAME,
     FACTION_STATE_WORKER_NAME,
     ...singularityWorkerFileNames(),
   ];

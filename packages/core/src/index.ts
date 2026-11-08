@@ -219,6 +219,7 @@ export {
   classLabel,
   classStartProblem,
 } from "./classes.ts";
+export { CLOSE_GAME_WINDOW_STAYED_OPEN, CLOSE_GAME_WORKER_NAME } from "./close-game.ts";
 export {
   BUY_SERVER_WORKER_NAME,
   CLOUD_SERVER_MAX_RAM,
@@ -411,6 +412,7 @@ export {
   type EffectorBackend,
   type EffectorReport,
   INTENT_ACTIONS,
+  INTENT_RETRY_ROUNDS,
   type Intent,
   type IntentOutcome,
   type IntentRequest,

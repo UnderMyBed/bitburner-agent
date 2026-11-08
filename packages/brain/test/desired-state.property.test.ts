@@ -591,8 +591,10 @@ async function play(
   }
 }
 
-test("the pool has every action an intent can name, so a new action needs a place here", () => {
-  expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(new Set(INTENT_ACTIONS));
+test("the pool has every action the owner can queue, so a new action needs a place here (closeGame is the switch's, #303)", () => {
+  expect(new Set(OWNER_INTENTS.map((each) => each.action))).toEqual(
+    new Set(INTENT_ACTIONS.filter((action) => action !== "closeGame")),
+  );
 });
 
 /**

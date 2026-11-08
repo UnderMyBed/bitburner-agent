@@ -27,6 +27,7 @@ const PSERV_0_TO_64 = intent({ action: "upgradeServer", args: { hostname: "pserv
 const BACKDOOR_CSEC = intent({ action: "backdoor", args: { hostname: "CSEC" } });
 const INSTALL = intent({ action: "installAugmentations", args: {} });
 const DESTROY_INTO_2 = intent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+const CLOSE_GAME = intent({ action: "closeGame", args: {} });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -90,8 +91,9 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     BACKDOOR_CSEC,
     INSTALL,
     DESTROY_INTO_2,
+    CLOSE_GAME,
   ]);
-  await round(12 * ROUND_MS);
+  await round(13 * ROUND_MS);
   const calls = runWorker.mock.calls as unknown as [string, unknown[], number][];
   expect(calls.map(([workerFile, workerArguments]) => [workerFile, workerArguments.slice(0, -1)])).toEqual([
     ["agent/abcdef123456/buy-program.js", ["TOR router", "Alpha Enterprises"]],
@@ -106,6 +108,7 @@ test("each action's worker, with its arguments and a deadline 200 ms before the 
     ["agent/abcdef123456/backdoor.js", ["CSEC"]],
     ["agent/abcdef123456/install-augmentations.js", ["agent/boot.js"]],
     ["agent/abcdef123456/destroy-bitnode.js", [2, "agent/boot.js"]],
+    ["agent/abcdef123456/close-game.js", []],
   ]);
   for (const [, workerArguments, deadlineMs] of calls)
     expect(deadlineMs - (workerArguments.at(-1) as number)).toBe(200);
@@ -424,6 +427,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     BACKDOOR_CSEC,
     INSTALL,
     DESTROY_INTO_2,
+    CLOSE_GAME,
   ];
   /**
    * Each pool intent's `ui` worker run, its worker and arguments without the deadline, written out here rather than
@@ -443,6 +447,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     ["backdoor.js", "CSEC"],
     ["install-augmentations.js", "agent/boot.js"],
     ["destroy-bitnode.js", 2, "agent/boot.js"],
+    ["close-game.js"],
   ];
   /** What a stand-in worker does on one run: reports done or not done, is still running, can't start, or is silent. */
   const ANSWERS = ["done", "notDone", "busy", "cantStart", "silent"] as const;

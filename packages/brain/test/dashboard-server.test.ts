@@ -23,6 +23,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
   const augmentationsCalls: boolean[] = [];
   const worldDaemonCalls: boolean[] = [];
   const shareCalls: boolean[] = [];
+  const stopAtBitNodeEndCalls: unknown[] = [];
   const intentRequests: unknown[] = [];
   const cancelledIds: string[] = [];
   const workRequests: unknown[] = [];
@@ -40,6 +41,11 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     setAugmentationsEnabled: (enabled) => augmentationsCalls.push(enabled),
     setWorldDaemonEnabled: (enabled) => worldDaemonCalls.push(enabled),
     setShareEnabled: (enabled) => shareCalls.push(enabled),
+    // A stand-in for the controller: the three settings are valid, anything else isn't.
+    setStopAtBitNodeEnd: (setting) => {
+      stopAtBitNodeEndCalls.push(setting);
+      return ["off", "brain", "brainAndGame"].includes(setting as string);
+    },
     // A stand-in for the controller: travel to Aevum is valid, anything else isn't; only that one can be cancelled.
     addIntent: (request) => {
       intentRequests.push(request);
@@ -72,6 +78,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
     augmentationsCalls,
     worldDaemonCalls,
     shareCalls,
+    stopAtBitNodeEndCalls,
     intentRequests,
     cancelledIds,
     workRequests,
@@ -242,6 +249,38 @@ describe.each(SWITCHES)("the switch for %s", (_name, switchPath, own) => {
     const reply = await send(started.port, { method: "POST", path: switchPath, headers, body });
     expect(reply.status).toBe(expected);
     expect(started[own]).toEqual([]);
+  });
+});
+
+describe("the stop at the BitNode's end (#303): three settings", () => {
+  const post = (port: number, body: string, headers: Record<string, string> = sameOrigin(port)) =>
+    send(port, { method: "POST", path: "/api/stop-at-bitnode-end", headers, body });
+
+  test("each setting from the dashboard's own page, answered with it; no other switch moves", async () => {
+    const started = await start();
+    for (const setting of ["brainAndGame", "brain", "off"]) {
+      const reply = await post(started.port, JSON.stringify({ setting }));
+      expect(reply.status).toBe(200);
+      expect(JSON.parse(reply.body)).toEqual({ setting });
+    }
+    expect(started.stopAtBitNodeEndCalls).toEqual(["brainAndGame", "brain", "off"]);
+    for (const [, , other] of SWITCHES) expect(started[other]).toEqual([]);
+  });
+
+  test.each([
+    ["another origin", { origin: "https://attacker.example" }, '{"setting":"brain"}', 403, []],
+    ["no origin", { origin: "" }, '{"setting":"brain"}', 403, []],
+    ["not JSON", {}, "brain", 400, []],
+    ["a switch's body", {}, '{"enabled":true}', 400, []],
+    ["another field too", {}, '{"setting":"brain","other":1}', 400, []],
+    ["a setting it doesn't know (the controller says)", {}, '{"setting":"on"}', 400, ["on"]],
+  ])("from %s is refused", async (_description, override, body, expected, calls) => {
+    const started = await start();
+    const headers: Record<string, string> = { ...sameOrigin(started.port), ...override };
+    if (headers.origin === "") delete headers.origin;
+    const reply = await post(started.port, body, headers);
+    expect(reply.status).toBe(expected);
+    expect(started.stopAtBitNodeEndCalls).toEqual(calls);
   });
 });
 

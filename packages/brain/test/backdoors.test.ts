@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   HACKER_FACTION_SERVERS,
   hackTimeSeconds,
+  INTENT_RETRY_ROUNDS,
   type MediumSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   type StaticSnapshotData,
@@ -492,7 +493,9 @@ describe("brain against the fast model (#294): a hacker faction's join, the brai
 
   test("the model's copies of the Agent's, the game's and the gate's constants are theirs", () => {
     const runner = readFileSync(new URL("../../ingame/src/agent/intent-runner.ts", import.meta.url), "utf8");
-    expect(runner).toContain(`const ROUNDS_BETWEEN_TRIES = ${ROUNDS_BETWEEN_TRIES};`);
+    // The Agent retries every `INTENT_RETRY_ROUNDS` (core, since #303), which the model copies.
+    expect(runner).toContain("const ROUNDS_BETWEEN_TRIES = INTENT_RETRY_ROUNDS;");
+    expect(ROUNDS_BETWEEN_TRIES).toBe(INTENT_RETRY_ROUNDS);
     const engine = readFileSync(new URL("../../../vendor/bitburner-src/src/engine.tsx", import.meta.url), "utf8");
     expect(engine).toContain(`Engine.Counters.checkFactionInvitations = ${INVITATION_CHECK_MS / 200};`);
     expect(GATE_MEDIUM_SNAPSHOTS).toBe(GUARD_SNAPSHOTS);

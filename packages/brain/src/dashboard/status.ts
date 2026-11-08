@@ -19,7 +19,14 @@ import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations
 import type { BackdoorDue } from "../backdoors.ts";
 import { type BatcherView, batcherNotRunning, batcherOutOfStep } from "../batcher.ts";
 import type { DataBackupProblem } from "../data-backup.ts";
-import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../desired-state.ts";
+import type {
+  CloudServersView,
+  HackLoopView,
+  HomeRamView,
+  IntentView,
+  ProgramsView,
+  StopAtBitNodeEndView,
+} from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
@@ -127,6 +134,8 @@ export interface DashboardStatus {
   worldDaemon: WorldDaemonView | null;
   /** Sharing spare RAM (#224): its switch, whether the batcher is asked or why not, and its last report; null before. */
   share: ShareView | null;
+  /** The stop at the BitNode's end (#303): its switch, off by default; null from a brain that doesn't give it. */
+  stopAtBitNodeEnd: StopAtBitNodeEndView | null;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -195,6 +204,8 @@ export interface DashboardStatusOptions {
   worldDaemonStall?: WorldDaemonStall | null;
   /** Sharing's view (#224), the controller's. */
   share?: ShareView;
+  /** The stop at the BitNode's end's view (#303), the controller's. */
+  stopAtBitNodeEnd?: StopAtBitNodeEndView;
   /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
   /** The newest data backup's problem (#284), for the `dataBackupFailed` alert; null or absent: none. */
@@ -233,6 +244,7 @@ export function buildDashboardStatus({
   worldDaemon,
   worldDaemonStall = null,
   share,
+  stopAtBitNodeEnd,
   storeThinningFailure = null,
   dataBackupProblem = null,
   timeline,
@@ -404,6 +416,7 @@ export function buildDashboardStatus({
     augmentations,
     worldDaemon: worldDaemon ?? null,
     share: share ?? null,
+    stopAtBitNodeEnd: stopAtBitNodeEnd ?? null,
     intents,
     work,
     factions: slow

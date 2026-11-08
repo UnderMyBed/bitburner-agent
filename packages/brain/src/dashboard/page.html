@@ -70,6 +70,13 @@
     <h2>World Daemon</h2><div></div><button type="button">Stop destroying the BitNode</button>
     <div class="bad" id="world-daemon-problem" hidden></div>
   </section>
+  <section id="stop-at-end">
+    <h2>The BitNode's end</h2><div></div>
+    <button type="button" data-setting="off">Play on</button>
+    <button type="button" data-setting="brain">Stop the brain</button>
+    <button type="button" data-setting="brainAndGame">Stop the brain and close the game</button>
+    <div class="bad" id="stop-at-end-problem" hidden></div>
+  </section>
   <section id="intents">
     <h2>Intents</h2><table></table>
     <form>
@@ -615,6 +622,27 @@ function render(status) {
   worldDaemonButton.disabled = worldDaemon === null;
   worldDaemonButton.textContent =
     worldDaemon === null || worldDaemon.enabled ? "Stop destroying the BitNode" : "Start destroying the BitNode";
+  // The stop at the BitNode's end (#303): its switch's three settings, off by default; the one set has no button.
+  const stopAtEnd = status.stopAtBitNodeEnd ?? null;
+  const atTheEnd = {
+    off: "play on: the brain goes on past it",
+    brain:
+      "stop the brain: it shuts down once a destroy shows the next BitNode, or once the destroy would gain nothing; " +
+      "the game and its scripts go on. Once: then back to play on",
+    brainAndGame:
+      "stop the brain and close the game: at that end, the game saves and closes, then the brain shuts down (the " +
+      "close on Steam not yet run live). Once: then back to play on",
+  };
+  document.querySelector("#stop-at-end div").replaceChildren(
+    element(
+      "div",
+      `At the BitNode's end: ${stopAtEnd === null ? "not given by this brain" : (atTheEnd[stopAtEnd.setting] ?? stopAtEnd.setting)}`,
+      stopAtEnd !== null && stopAtEnd.setting !== "off" ? "ok" : "muted",
+    ),
+  );
+  for (const button of document.querySelectorAll("#stop-at-end button")) {
+    button.disabled = stopAtEnd === null || stopAtEnd.setting === button.dataset.setting;
+  }
 
   // With the backend of the last try (#145), unless an older Agent didn't say.
   const via = (outcome) => (outcome.backend === null || outcome.backend === undefined ? "" : ` via ${outcome.backend}`);
@@ -850,6 +878,13 @@ document.querySelector("#world-daemon button").addEventListener("click", () => {
     sendSwitch("/api/world-daemon", { enabled: enableWorldDaemonNext }, "#world-daemon-problem");
   }
 });
+for (const button of document.querySelectorAll("#stop-at-end button")) {
+  button.addEventListener("click", () => {
+    if (!button.disabled) {
+      sendSwitch("/api/stop-at-bitnode-end", { setting: button.dataset.setting }, "#stop-at-end-problem");
+    }
+  });
+}
 document.querySelector("#intents form").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
