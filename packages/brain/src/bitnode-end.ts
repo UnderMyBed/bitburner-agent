@@ -11,9 +11,9 @@
 // - **Nothing more to gain:** the World Daemon's destroy on and ready (w0r1d_d43m0n rooted at its level), refused as
 //   Source-File 1 is at its top level (`nextBitNodeProblem`), after that refusal's `nextBitNode` stall, in the same
 //   update. A brain started with the switch on in such a BitNode stops as soon as it sees it.
-// Either is logged in a line, stored as `brainStoppedAtBitNodeEnd`, and asked of main.ts once. Stopping the brain alone,
-// main.ts shuts it down a second on (`shutDown`, as on Ctrl+C, exit 0, so `npm run brain`'s runner ends too); the game
-// goes on without it, the Agent in safe mode (architecture §5.4). Closing the game too, the controller queues
+// Either is logged in a line, stored as `brainStoppedAtBitNodeEnd`, and asked of main.ts once. Stopping the brain
+// alone, main.ts shuts it down a second on (`shutDown`, as on Ctrl+C, exit 0, so `npm run brain`'s runner ends too);
+// the game goes on without it, the Agent in safe mode (architecture §5.4). Closing the game too, the controller queues
 // `closeGame` (the game's own Save Game, then its window closed, through the irreversible gate's two medium snapshots
 // and a save backup), stored as `gameCloseSent` as it goes out; the brain shuts down once the Agent's connection drops
 // after it (`gameClosed`), or, if it hasn't within a minute, or the close hasn't gone out within 5 minutes, anyway,
@@ -80,7 +80,7 @@ export const CLOSE_GAME_MOST_TRIES = 3;
 export const GAME_CLOSE_CONFIRMED_WITHIN_MS = 60_000;
 /** How long after the stop the close must go out: its gate's two medium snapshots and a save backup take a minute. */
 export const GAME_CLOSE_SENT_WITHIN_MS = 5 * 60_000;
-/** How long after the stop alone the brain shuts down: the dashboard's reply to the switch that asked gets out first. */
+/** How long after the stop alone the brain shuts down: the dashboard's reply to the switch that asked goes first. */
 export const STOP_AFTER_MS = 1_000;
 
 export type BitNodeEndEvent =
@@ -88,7 +88,7 @@ export type BitNodeEndEvent =
       type: typeof BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND;
       atMs: number;
       reason: "destroyed" | "nothingMoreToGain";
-      /** The BitNode that ended ("BN1.3"); null for a destroy whose BitNode this brain never saw (sent before a restart). */
+      /** The BitNode that ended ("BN1.3"); null for a destroy whose BitNode this brain never saw (before a restart). */
       bitNode: string | null;
       /** The next BitNode seen, after a destroy; null for nothing more to gain. */
       nextBitNode: string | null;
@@ -173,9 +173,9 @@ export class BitNodeEndWatch {
   }
 
   /**
-   * Each slow snapshot's reading, in order, before the controller drops a destroy's note it shows done: `destroySentAt`
-   * the note's `lastNodeReset`, or null. With the switch off, a destroy seen is forgotten: on later, it's this BitNode's
-   * end that stops the brain.
+   * Each slow snapshot's reading, in order, before the controller drops a destroy's note it shows done:
+   * `destroySentAt` the note's `lastNodeReset`, or null. With the switch off, a destroy seen is forgotten: on later,
+   * it's this BitNode's end that stops the brain.
    */
   slowSnapshot(
     reading: BitNodeReading,
@@ -308,7 +308,9 @@ export class BitNodeEndShutdown {
     if (this.#done || this.#closeSentAtMs === null) return;
     const afterMs = atMs - this.#closeSentAtMs;
     this.#record(GAME_CLOSED_EVENT_KIND, { closeSentAtMs: this.#closeSentAtMs, afterMs });
-    this.#log(`the game closed: its Agent's connection dropped ${(afterMs / 1000).toFixed(1)} s after the close went out`);
+    this.#log(
+      `the game closed: its Agent's connection dropped ${(afterMs / 1000).toFixed(1)} s after the close went out`,
+    );
     this.#finish();
   }
 

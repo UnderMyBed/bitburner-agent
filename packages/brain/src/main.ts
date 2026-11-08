@@ -15,6 +15,7 @@ import { readBatcherEnabled } from "./batcher.ts";
 import {
   BitNodeEndShutdown,
   describeStopAtBitNodeEnd,
+  GAME_CLOSE_SENT_EVENT_KIND,
   parseStopAtBitNodeEnd,
   readStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
@@ -198,7 +199,12 @@ try {
     log,
     closeWaitingFor: () => desiredState.closeGameWaitingFor(),
   });
-  desiredState.subscribe((event) => bitNodeEnd.ruleEvent(event));
+  // The game's close going out: no relaunch of it from here on (the supervisor is made below).
+  let stopSupervising = () => {};
+  desiredState.subscribe((event) => {
+    if (event.type === GAME_CLOSE_SENT_EVENT_KIND) stopSupervising();
+    bitNodeEnd.ruleEvent(event);
+  });
   channel.subscribe((event) => {
     if (event.type === "agentDisconnected") bitNodeEnd.agentDisconnected(event.atMs);
   });
@@ -229,6 +235,11 @@ try {
           log(`supervisor: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
       })
     : null;
+  stopSupervising = () => {
+    if (supervisor === null) return;
+    supervisor.stop();
+    log("supervision stopped: the game is being closed at the BitNode's end");
+  };
   // The timeline of BitNodes and installs (#285): kept up to date as the page asks, each slow snapshot folded once.
   const campaignTimeline = new CampaignTimeline({
     store,

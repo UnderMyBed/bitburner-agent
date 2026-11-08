@@ -2198,7 +2198,9 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
     // The brain's stop at the BitNode's end (#303) as the gap starts: the brain away until someone started it again.
     const stop = stopAtBitNodeEndBefore(facts, gap.fromMs);
     if (stop !== null) {
-      lines.push(`    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatIsoTime(stop.atMs)})`);
+      lines.push(
+        `    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatIsoTime(stop.atMs)})`,
+      );
       continue;
     }
     const reload = reloadBeforeGap(facts, gap, reloadsUsed);

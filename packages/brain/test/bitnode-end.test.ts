@@ -16,12 +16,12 @@ import {
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
-  type BitNodeReading,
   BitNodeEndShutdown,
+  type BitNodeReading,
   bitNodeReadingOf,
   CLOSE_GAME_INTENT,
-  destroyedBetween,
   describeStopAtBitNodeEnd,
+  destroyedBetween,
   GAME_CLOSE_CONFIRMED_WITHIN_MS,
   GAME_CLOSE_SENT_WITHIN_MS,
   parseStopAtBitNodeEnd,
@@ -30,9 +30,9 @@ import {
   STOP_AT_BITNODE_END_SETTING,
   writeStopAtBitNodeEnd,
 } from "../src/bitnode-end.ts";
-import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { DesiredStateController, type RuleEvent } from "../src/desired-state.ts";
 import { readManualIntents, writeManualIntents, writeResetSentNote } from "../src/manual-intents.ts";
+import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { writeWorldDaemonEnabled } from "../src/world-daemon.ts";
 import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -231,9 +231,12 @@ function brain() {
   const stops = () => events.filter((event) => event.type === "brainStoppedAtBitNodeEnd");
   /** The intents in the last desired state sent. */
   const sentIds = () =>
-    (connection.sentMessages().filter((message) => message.type === "desiredState").at(-1) as
-      | { intents: { id: string }[] }
-      | undefined)?.intents.map((each) => each.id) ?? [];
+    (
+      connection
+        .sentMessages()
+        .filter((message) => message.type === "desiredState")
+        .at(-1) as { intents: { id: string }[] } | undefined
+    )?.intents.map((each) => each.id) ?? [];
   return { controller, lines, events, send, reconnect, stops, backupNow, settleBackup, sentIds };
 }
 

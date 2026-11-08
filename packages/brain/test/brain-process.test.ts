@@ -750,7 +750,14 @@ async function standInAgent(config: BrainConfig, controlPort: number) {
 
 /** A slow snapshot of BN1 with Source-File 1 at `sf1`, begun at `lastNodeReset`, with `ownedAugs`. */
 const bitNode1 = (lastNodeReset: number, sf1: number, ownedAugs: Record<string, number> = {}) => ({
-  resetInfo: { lastAugReset: lastNodeReset, lastNodeReset, currentNode: 1, ownedAugs, ownedSF: { 1: sf1 }, bitNodeOptions: {} },
+  resetInfo: {
+    lastAugReset: lastNodeReset,
+    lastNodeReset,
+    currentNode: 1,
+    ownedAugs,
+    ownedSF: { 1: sf1 },
+    bitNodeOptions: {},
+  },
   purchasedServers: [],
   factions: { backend: "ui", state: { joined: [], invitations: [], queuedAugmentations: [] }, problem: null },
 });

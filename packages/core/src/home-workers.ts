@@ -4,9 +4,9 @@
  * traveller's (#141), the Singularity backend's (#145), the faction joiner's (#147), the augmentation buyer's (#149),
  * the donor's (#225), the faction, company, crime and class workers' (#151, #153, #156, #158), the cloud server buyer's
  * (#159) and upgrader's (#194), the backdoor's (#162), the installer's (#164), the destroyer's (#175), the faction
- * state's reader (#197), and the game's closer (#303). A fresh save's home must hold the Agent plus the largest of those it can run
- * (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2 suites read these lists. Functions,
- * not constants, so in-game bundles that don't use them leave them out.
+ * state's reader (#197), and the game's closer (#303). A fresh save's home must hold the Agent plus the largest of
+ * those it can run (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2 suites read these
+ * lists. Functions, not constants, so in-game bundles that don't use them leave them out.
  */
 import { BUY_AUGMENTATION_WORKER_NAME, INSTALL_AUGMENTATIONS_WORKER_NAME } from "./augmentations.ts";
 import { BACKDOOR_WORKER_NAME } from "./backdoors.ts";

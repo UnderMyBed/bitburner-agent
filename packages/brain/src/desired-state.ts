@@ -1206,7 +1206,9 @@ export class DesiredStateController {
     const outcome = this.#reportedOutcomes().find((each) => each.id === CLOSE_GAME_INTENT.id);
     if (outcome === undefined || !closeGameTriedEnough(outcome)) return false;
     this.#closeGameWithdrawn = true;
-    this.#log(`closing the game: withdrawn after ${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}: ${outcome.problem}`);
+    this.#log(
+      `closing the game: withdrawn after ${outcome.tries} ${outcome.tries === 1 ? "try" : "tries"}: ${outcome.problem}`,
+    );
     return true;
   }
 

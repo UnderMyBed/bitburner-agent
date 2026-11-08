@@ -17,6 +17,7 @@ import path from "node:path";
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   BOOT_SCRIPT,
+  CLOSE_GAME_WINDOW_STAYED_OPEN,
   type FastSnapshotData,
   factionReadingOf,
   type MediumSnapshotData,
@@ -1677,6 +1678,66 @@ test("travel (#141): queued on the dashboard, the Agent flies to Aevum, confirmi
     realTimeoutMs: STEP_REAL_TIMEOUT_MS,
     gameTimeoutMs: 20_000,
   });
+});
+
+test("closing the game (#303): past a save backup, the game's own Save Game, then window.close(), which Chromium refuses here", async () => {
+  // Purchases off, so the save and the close are all the page does.
+  const { dataDirectory, page, ports } = await moneyedGameWithAgent({
+    money: 1_000_000,
+    brainSettings: { "programs.enabled": "false", "homeRam.enabled": "false" },
+  });
+  // Each "Game Saved!" the game shows from now, reported out of the page as it renders (on Steam the page goes after).
+  const saves: number[] = [];
+  await page.exposeFunction("e2GameSaved", () => saves.push(Date.now()));
+  await page.evaluate(() => {
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          for (const message of (node as Element).querySelectorAll?.(".MuiAlert-message") ?? []) {
+            if (message.textContent?.trim() === "Game Saved!") {
+              (window as unknown as { e2GameSaved(): void }).e2GameSaved();
+            }
+          }
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  const consoleLines: string[] = [];
+  page.on("console", (message) => consoleLines.push(message.text()));
+  // A browser closes by script only a window a script opened, or one with a single history entry: this one has more.
+  expect(await page.evaluate(() => window.history.length)).toBeGreaterThan(1);
+  const closeOutcome = () => latestFast(dataDirectory)?.intents?.find((each) => each.id === "closeGame()") ?? null;
+  const queuedAtMs = Date.now();
+  await queueIntent(ports.dashboardPort, { action: "closeGame", args: {} });
+  await advanceUntil(page, async () => page.isClosed() || (closeOutcome()?.tries ?? 0) > 0, {
+    realTimeoutMs: 2 * STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 60_000,
+  });
+  // What Chromium does: the save went first, then window.close(), which left the window open and said why.
+  expect(page.isClosed()).toBe(false);
+  expect(saves.filter((atMs) => atMs >= queuedAtMs)).toHaveLength(1);
+  expect(closeOutcome()).toMatchObject({
+    done: false,
+    tries: 1,
+    problem: CLOSE_GAME_WINDOW_STAYED_OPEN,
+    backend: "ui",
+  });
+  expect(
+    consoleLines.some((line) => line.includes("Scripts may close only the windows that were opened by them")),
+  ).toBe(true);
+  // Past the gate: a save backup before it.
+  const events = readStore(dataDirectory).events.filter((event) => event.atMs >= queuedAtMs);
+  expect(events.some((event) => event.kind === "saveBackup")).toBe(true);
+  // Tried enough (the window stayed open), so the brain took it off the queue: no second save or close.
+  await advanceUntil(page, async () => readStore(dataDirectory).manualIntents.length === 0, {
+    realTimeoutMs: STEP_REAL_TIMEOUT_MS,
+    gameTimeoutMs: 20_000,
+  });
+  await advanceGameTime(page, 10_000);
+  expect(saves.filter((atMs) => atMs >= queuedAtMs)).toHaveLength(1);
+  // The page left as found: the Terminal, no dialog.
+  await expect(page.locator(TERMINAL_INPUT).count()).resolves.toBe(1);
+  await expect(page.locator(OPEN_DIALOG).count()).resolves.toBe(0);
 });
 
 test("travel with ASCII art off and the confirmation turned off in Options: the city's button, and no dialog", async () => {

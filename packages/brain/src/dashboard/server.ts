@@ -146,9 +146,17 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
         const body = (await readJsonWrite(request, origin)) as Record<string, unknown> | null;
         const fields = typeof body === "object" && body !== null ? Object.keys(body).join() : "";
         if (fields !== "setting" || !options.setStopAtBitNodeEnd((body as { setting: unknown }).setting)) {
-          throw new RequestError(400, 'the body must be {"setting": "off"}, {"setting": "brain"} or {"setting": "brainAndGame"}');
+          throw new RequestError(
+            400,
+            'the body must be {"setting": "off"}, {"setting": "brain"} or {"setting": "brainAndGame"}',
+          );
         }
-        return reply(response, 200, "application/json", JSON.stringify({ setting: (body as { setting: unknown }).setting }));
+        return reply(
+          response,
+          200,
+          "application/json",
+          JSON.stringify({ setting: (body as { setting: unknown }).setting }),
+        );
       }
       case "POST /api/intents": {
         const added = options.addIntent(await readJsonWrite(request, origin));

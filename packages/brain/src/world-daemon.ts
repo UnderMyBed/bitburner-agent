@@ -13,7 +13,8 @@
 //   backup). Asked for, it's held until a slow snapshot shows another `lastNodeReset`, as the install's is.
 // - The dashboard's switch ("Stop destroying the BitNode", `worldDaemon.enabled`), on by default, into BitNode 1
 //   (owner decision 50): phase A's exit is a live run that destroys BN1.1 on its own. Another BitNode is the owner's:
-//   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3, BN1 gives nothing: none, loudly.
+//   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3, BN1 gives nothing: none, loudly (and
+//   the brain stops there if the owner set the stop at the BitNode's end, ./bitnode-end.ts, #303).
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
@@ -136,7 +137,9 @@ const SOURCE_FILE_1_TOP_LEVEL = 3;
  */
 export function nextBitNodeProblem(ownedSF: Readonly<Record<string, number>>): string | null {
   const nothing = nothingMoreToGain(ownedSF);
-  return nothing === null ? null : `${nothing}: the next BitNode is yours (turn the switch off and queue destroyBitNode)`;
+  return nothing === null
+    ? null
+    : `${nothing}: the next BitNode is yours (turn the switch off and queue destroyBitNode)`;
 }
 
 /** Why BitNode 1 gives nothing more (#303: the brain's stop at the BitNode's end says it), or null. */

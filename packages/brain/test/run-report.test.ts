@@ -3296,7 +3296,9 @@ describe("the stop at the BitNode's end (#303)", () => {
     expect(warnings).toEqual([`game close not confirmed at ${at(RUN_MS + MINUTE)}: ${reason} (the brain stopped)`]);
     expect(text.split("\n").at(-2)).toBe("Verdict: WARN");
     expect(text).toContain(`  ${at(RUN_MS + MINUTE)}  game close NOT CONFIRMED: ${reason}`);
-    expect(text).toContain(`Expected, not a failure: the game's close NOT CONFIRMED (${reason}), so it may still be running`);
+    expect(text).toContain(
+      `Expected, not a failure: the game's close NOT CONFIRMED (${reason}), so it may still be running`,
+    );
   });
 });
 
