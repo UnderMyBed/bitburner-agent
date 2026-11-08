@@ -137,8 +137,8 @@ export function destroyedBetween(
     // A restarted brain: only the destroy it sent tells, and an older save loaded starts before it.
     return destroySentAt !== null && after.lastNodeReset > destroySentAt;
   }
-  if (after.lastNodeReset === before.lastNodeReset) return false;
-  // Started before the last look: a save loaded, an older BitNode's.
+  // Begun before the last look: the same BitNode (an install, a soft reset, this BitNode's save loaded), or an older
+  // BitNode's save loaded. A BitNode begun after it is the next one.
   if (after.lastNodeReset < before.gameTimeMs) return false;
   if (destroySentAt !== null) return true;
   const node = String(before.currentNode);
