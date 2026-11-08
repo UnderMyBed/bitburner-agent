@@ -13,7 +13,8 @@ import { checkNodeVersion, nodeVersionError, parseNodeMajor, pinnedNodeMajor, RE
  * times it calls the comparator, and the order it leaves. The two V8s differ for 3 to 7 elements only (measured over
  * 0 to 80, 100, 150, 200, 361, 500 and 1000), which is what made the BN1 baseline's seeded games differ (#282). Steam's
  * Electron 41.4.0 is Chromium 146, so its V8 should be 14.6, Node 26's: inferred from the versions, not measured on
- * Steam's build.
+ * Steam's build. So the pin moved from Node 24 to 26 (the owner's call, 2026-11-07). Node 24's entry stays as the
+ * record of the old pin. Node 26's was measured on 26.13.0 (V8 14.6.202.34), and measured again there for the move.
  */
 const SORT_BY_NODE: Record<number, { v8: string; byLength: Record<number, { calls: number; order: string }> }> = {
   24: {
@@ -42,7 +43,7 @@ const SORT_BY_NODE: Record<number, { v8: string; byLength: Record<number, { call
   },
 };
 
-/** The Node version in a mise.toml's `[tools]` table: `node = "24"` or `node = '24'`, comments and spacing aside. */
+/** The Node version in a mise.toml's `[tools]` table: `node = "26"` or `node = '26'`, comments and spacing aside. */
 function miseNode(toml: string): string | undefined {
   let inTools = false;
   for (const raw of toml.split(/\r?\n/)) {
@@ -82,35 +83,39 @@ function randomSorts(): Record<number, { calls: number; order: string }> {
 
 describe("the repo's Node pin (#282)", () => {
   test.each([
-    ["24", 24],
-    ["24\n", 24],
-    ["v24", 24],
-    ["24.22.1", 24],
-    ["v26.13.0", 26],
+    ["26", 26],
+    ["26\n", 26],
+    ["v26", 26],
+    ["26.13.0", 26],
+    ["v24.22.1", 24],
   ])(".node-version %j is Node %i", (text, major) => {
     expect(parseNodeMajor(text)).toBe(major);
   });
 
-  test.each(["", "lts/*", "node", "24.x"])(".node-version %j is refused, naming what it read", (text) => {
+  test.each(["", "lts/*", "node", "26.x"])(".node-version %j is refused, naming what it read", (text) => {
     expect(() => parseNodeMajor(text)).toThrow(/^\.node-version: expected a Node version/);
   });
 
   test("any version of the pinned major passes; another major is refused with what to do", () => {
-    expect(nodeVersionError(24, "24.0.0")).toBeNull();
-    expect(nodeVersionError(24, "v24.22.1")).toBeNull();
-    expect(nodeVersionError(24, "26.13.0")).toBe(
-      "Node v26.13.0 isn't the repo's Node 24 (.node-version). Seeded simulations differ between Node majors (#282), " +
-        "so baseline, benchmark and scenario results are only recorded on Node 24. With mise, run from the repo: its " +
-        "mise.toml selects Node 24 (docs/setup.md).",
+    expect(nodeVersionError(26, "26.0.0")).toBeNull();
+    expect(nodeVersionError(26, "v26.13.0")).toBeNull();
+    expect(nodeVersionError(26, "24.22.1")).toBe(
+      "Node v24.22.1 isn't the repo's Node 26 (.node-version). Seeded simulations differ between Node majors (#282), " +
+        "so baseline, benchmark and scenario results are only recorded on Node 26. With mise, run from the repo: its " +
+        "mise.toml selects Node 26 (docs/setup.md).",
     );
-    expect(nodeVersionError(24, "22.1.0")).toMatch(/^Node v22\.1\.0 isn't the repo's Node 24/);
+    expect(nodeVersionError(26, "28.1.0")).toMatch(/^Node v28\.1\.0 isn't the repo's Node 26/);
   });
 
+  // The temporary repo pins a major other than the repo's, so this shows the given repo is read, not REPO_ROOT.
   test("checkNodeVersion reads the major from the given repo's .node-version", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "node-pin-"));
-    writeFileSync(path.join(repo, ".node-version"), "26\n");
-    expect(() => checkNodeVersion(repo, "26.1.0")).not.toThrow();
-    expect(() => checkNodeVersion(repo, "24.22.1")).toThrow(/^Node v24\.22\.1 isn't the repo's Node 26/);
+    const other = pinnedNodeMajor() - 2;
+    writeFileSync(path.join(repo, ".node-version"), `${other}\n`);
+    expect(() => checkNodeVersion(repo, `${other}.1.0`)).not.toThrow();
+    expect(() => checkNodeVersion(repo, `${pinnedNodeMajor()}.1.0`)).toThrow(
+      `Node v${pinnedNodeMajor()}.1.0 isn't the repo's Node ${other} (.node-version).`,
+    );
   });
 
   test("the repo's mise.toml selects the same Node major as .node-version, which mise doesn't read by default", () => {
@@ -120,11 +125,11 @@ describe("the repo's Node pin (#282)", () => {
   });
 
   test.each([
-    ['[tools]\nnode = "24"', "24"],
-    ["# a comment\n[tools]\nnode='24.22.1' # pinned\n", "24.22.1"],
-    ['[env]\nX = "1"\n[tools]\npython = "3"\n"node" = "26"', "26"],
-    ['[tools]\npython = "3"\n[env]\nnode = "24"', undefined],
-    ['node = "24"', undefined],
+    ['[tools]\nnode = "26"', "26"],
+    ["# a comment\n[tools]\nnode='26.13.0' # pinned\n", "26.13.0"],
+    ['[env]\nX = "1"\n[tools]\npython = "3"\n"node" = "24"', "24"],
+    ['[tools]\npython = "3"\n[env]\nnode = "26"', undefined],
+    ['node = "26"', undefined],
   ])("mise.toml %j gives node %j", (toml, node) => {
     expect(miseNode(toml)).toBe(node);
   });
@@ -151,7 +156,13 @@ describe("the repo's Node pin (#282)", () => {
     expect(randomSorts()).toEqual(expected?.byLength);
   });
 
-  // Documents the measurements recorded above, which the test before this one checks live on the pinned Node.
+  // Steam's Electron 41.4.0 is Chromium 146, whose V8 should be 14.6: inferred from the versions, not measured on
+  // Steam's build (parity 4.17). If Steam's Electron moves to another V8, this is where the pin's choice is revisited.
+  test("the pinned Node's V8 is the one Steam's Electron should have, so seeded games sort as Steam's do", () => {
+    expect(SORT_BY_NODE[pinnedNodeMajor()]?.v8).toBe("14.6.");
+  });
+
+  // Documents the measurements recorded above, which the live sort test above checks on the pinned Node.
   test("the measurements recorded here: the two V8s differ for 3 to 7 elements and agree for 2 and 8", () => {
     const [node24, node26] = [SORT_BY_NODE[24]?.byLength ?? {}, SORT_BY_NODE[26]?.byLength ?? {}];
     for (const n of [2, 8]) expect(node24[n]).toEqual(node26[n]);
