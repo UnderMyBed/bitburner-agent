@@ -79,8 +79,8 @@ const newGate = (): Gate => ({
  * fails it: the Agent's word, so never assumed.
  * - Joining a faction: none of its enemies is joined (the game refuses a banned faction then:
  *   `Faction/ui/FactionsRoot.tsx:89`, Singularity's `joinFaction`).
- * - An intent that resets the game, installing augmentations (#164) or destroying the BitNode (#175): nothing queued
- *   before it is still undone. What was queued before it (a purchase, say) was for this game, and goes first. The
+ * - An intent that resets the game, installing augmentations (#164) or destroying the BitNode (#175), or closing the
+ *   game (#303): nothing queued before it is still undone. What was queued before it (a purchase, say) was for this game, and goes first. The
  *   augmentations queued can't be an install's guard: no NS call shows them without Singularity. Done intents leave
  *   the queue, so the first one left is the one undone.
  * - Destroying the BitNode, then: w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`), so it's held before any
@@ -120,7 +120,8 @@ export function snapshotGuardFailure(
  * snapshots, so they wait for the next.
  */
 export function queueGuardFailure(intent: Intent, queue: Intent[]): string | null {
-  if (!resetsTheGame(intent)) return null;
+  // Closing the game (#303) too: what was queued before it was for this game, and goes first.
+  if (!resetsTheGame(intent) && intent.action !== "closeGame") return null;
   const first = queue[0];
   return first !== undefined && first.id !== intent.id ? `${first.id}, queued before it, isn't done` : null;
 }

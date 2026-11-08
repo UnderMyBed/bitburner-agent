@@ -485,6 +485,15 @@ describe("closing the game too (the switch's third setting)", () => {
     expect(events.filter((event) => event.type === "gameCloseSent")).toHaveLength(1);
   });
 
+  test("your queue first: the close waits for what was queued before it, as a reset does", () => {
+    writeStopAtBitNodeEnd(store, "brainAndGame");
+    const started = brain();
+    started.controller.addManualIntent({ action: "travel", args: { city: "Aevum" } });
+    started.send("slow", slowSnapshot(), 2_000);
+    started.send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    expect(started.controller.closeGameWaitingFor()).toBe("held: travel(Aevum), queued before it, isn't done");
+  });
+
   test("stopping the brain alone: no close asked for", () => {
     const { controller, stops } = destroyedWith("brain");
     expect(stops()).toMatchObject([{ closeGame: false }]);
