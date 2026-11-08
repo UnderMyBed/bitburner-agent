@@ -21,9 +21,9 @@
 // `closeGame` (the game's own Save Game, then its window closed, through the irreversible gate: after what was queued
 // before it, two medium snapshots and a save backup), stored as `gameCloseSent` as it goes out, and each try the Agent
 // reports as `gameCloseTried`; it's tried at most 3 times (30 s apart, or 2 s after a worker that couldn't start, so
-// all 3 can go in seconds), never after the Agent went. The brain shuts
-// down once the Agent's connection drops after it and no Agent comes back (`gameClosed`), or anyway, logged and stored
-// as `gameCloseNotConfirmed` (`BitNodeEndShutdown`). Only the switch closes the game: the owner's queue refuses it.
+// all 3 can go in seconds), never after the Agent went. The brain shuts down once the Agent's connection drops after
+// it and no Agent comes back (`gameClosed`), or anyway, logged and stored as `gameCloseNotConfirmed`
+// (`BitNodeEndShutdown`). Only the switch closes the game: the owner's queue refuses it.
 import { CLOSE_GAME_WINDOW_STAYED_OPEN, type Intent, intentId, type SlowSnapshotData } from "@bitburner-agent/core";
 import { bitNodeLabel } from "./cycle-report.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -273,8 +273,8 @@ const realTimer: StartTimer = (callback, ms) => {
  *   (`gameClosed`). One that connects again means the window stayed open (a reload, the Agent restarted): not
  *   confirmed;
  * - no drop within `GAME_CLOSE_CONFIRMED_WITHIN_MS` of the close going out or of its last try reported (the Agent
- *   tries again every 30 s, or 2 s on after a worker that couldn't start, up to 3 times), or the close not out within `GAME_CLOSE_SENT_WITHIN_MS` of the stop: not
- *   confirmed (`gameCloseNotConfirmed`, logged);
+ *   tries again every 30 s, or 2 s on after a worker that couldn't start, up to 3 times), or the close not out within
+ *   `GAME_CLOSE_SENT_WITHIN_MS` of the stop: not confirmed (`gameCloseNotConfirmed`, logged);
  * - the close called off from the dashboard before it went out: the stop alone.
  * Never a second close, and never a brain left running. As it shuts down, the switch is set back to "play on": once.
  */

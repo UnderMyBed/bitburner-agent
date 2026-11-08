@@ -1047,7 +1047,7 @@ function windowSection(facts: RunFacts): string[] {
     const calledOff = after.find((event) => event.kind === GAME_CLOSE_CALLED_OFF_EVENT_KIND);
     const game =
       closed !== undefined
-        ? `: the game saved and closed at ${formatIsoTime(closed.atMs)}, then the brain stopped`
+        ? `: the game saved and closed at ${formatIsoTime(droppedAtMs(closed))}, then the brain stopped`
         : calledOff !== undefined
           ? `: the game's close called off from the dashboard at ${formatIsoTime(calledOff.atMs)}, so the game and ` +
             "its scripts went on without it"
@@ -2209,7 +2209,7 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
     const stop = stopAtBitNodeEndBefore(facts, gap.fromMs);
     if (stop !== null) {
       lines.push(
-        `    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatIsoTime(stop.atMs)})`,
+        `    ${line} (expected: the brain stopped itself at the BitNode's end at ${formatIsoTime(stopTimeOf(facts, stop))})`,
       );
       continue;
     }
@@ -2249,9 +2249,18 @@ function stopAtBitNodeEndBefore(facts: RunFacts, fromMs: number): StoredEvent | 
 }
 
 /**
- * When the Agent's connection dropped, for a `gameClosed` (#303 review): stored `GAME_CLOSE_QUIET_MS` after the drop, it
- * says when the close went out and how long after it the drop came. Its own time, without them.
+ * When the Agent's connection dropped, for a `gameClosed` (#303 review): stored `GAME_CLOSE_QUIET_MS` after the drop,
+ * it says when the close went out and how long after it the drop came. Its own time, without them.
  */
+/** When the brain stopped, for an event of the stop or its close: the stop's own time, or the event's without one. */
+function stopTimeOf(facts: RunFacts, event: StoredEvent): number {
+  if (event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND) return event.atMs;
+  const stop = facts.events.findLast(
+    (each) => each.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND && each.atMs <= event.atMs,
+  );
+  return stop?.atMs ?? (event.kind === GAME_CLOSED_EVENT_KIND ? droppedAtMs(event) : event.atMs);
+}
+
 function droppedAtMs(event: StoredEvent): number {
   const { closeSentAtMs, afterMs } = fieldsOf(event.detail);
   return isNumber(closeSentAtMs) && isNumber(afterMs) ? closeSentAtMs + afterMs : event.atMs;

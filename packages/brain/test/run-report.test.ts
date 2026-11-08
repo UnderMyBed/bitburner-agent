@@ -3287,7 +3287,7 @@ describe("the stop at the BitNode's end (#303)", () => {
       `  ${at(RUN_MS)}  the game's close sent: its own Save Game, then its window closed`,
       `  ${at(RUN_MS + 15_400)}  game closed: its Agent's connection dropped 0.4 s after the close`,
       `  the run's end: the brain stopped itself at ${at(RUN_MS - MINUTE)}, at the BitNode's end (the switch on): ` +
-        `BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game saved and closed at ${at(RUN_MS + 15_400)}, ` +
+        `BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game saved and closed at ${at(RUN_MS + 400)}, ` +
         "then the brain stopped; the quiet after it is no gap",
     ]) {
       expect(text).toContain(line);
@@ -3321,8 +3321,38 @@ describe("the stop at the BitNode's end (#303)", () => {
     for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
       snapshot("fast", offsetMs, fastData(), 0, "session-2");
     }
-    const { failures, warnings } = runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE });
+    const { text, failures, warnings } = runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE });
     expect([failures, warnings]).toEqual([[], []]);
+    // The stop's own time, not the close's events'.
+    expect(text).toContain(`(expected: the brain stopped itself at the BitNode's end at ${at(RUN_MS - 2 * MINUTE)})`);
+  });
+
+  /** A close, its stop 5 minutes before the run's end, then `gameClosed` stored with `detail`, and a restart. */
+  function gapAfterClosed(storedAtOffsetMs: number, detail: Record<string, unknown>) {
+    cleanRun();
+    event(RUN_MS - 5 * MINUTE, "brainStoppedAtBitNodeEnd", { ...DESTROYED, closeGame: true });
+    event(RUN_MS - 5 * MINUTE, "gameCloseSent", {});
+    event(storedAtOffsetMs, "gameClosed", detail);
+    const againMs = RUN_MS + 2 * 60 * MINUTE;
+    event(againMs, "brainStarted", { release: "r" });
+    event(againMs + SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
+      snapshot("fast", offsetMs, fastData(), 0, "session-2");
+    }
+    return runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE }).failures.filter((failure) =>
+      failure.startsWith("gap: "),
+    );
+  }
+
+  test("a gameClosed whose drop falls outside the silence's window doesn't excuse it, though stored inside", () => {
+    // Stored a second into the gap, but its drop was nearly 5 minutes before it.
+    expect(gapAfterClosed(RUN_MS + SECOND, { closeSentAtMs: T0 + RUN_MS - 5 * MINUTE, afterMs: SECOND })).toHaveLength(
+      1,
+    );
+  });
+
+  test("a gameClosed without the close's time or the drop's delay counts at its own time", () => {
+    expect(gapAfterClosed(RUN_MS + SECOND, {})).toEqual([]);
   });
 
   test("the game's close not confirmed: a warning (WARN), the end saying the game may still be running", () => {

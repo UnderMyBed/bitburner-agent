@@ -9,11 +9,13 @@
 //   Steam, not yet run live: Chromium's own close of the window, which probably skips BrowserWindow's `close` handler
 //   (`electron/main.js:43-78`), while the last window closed still quits the app (`:16-20`). That handler flushes the
 //   save-folder and Steam Cloud copies, which are possibly stale, perhaps since the session began: their debounces
-//   (`:135-164`, trailing, no `maxWait`) write them only once saves pause, and the game saves every 60 s
+//   (`:135-164`, leading and trailing, no `maxWait`) write the session's first save at once, then only once saves
+//   pause, and the game saves every 60 s
 //   (`Settings/Settings.ts:17`, `engine.tsx:233`). The game's own save, in its IndexedDB before the toast shows
 //   (`db.ts:122-125`), is fresh either way, and the next launch on this PC keeps it over an older copy
-//   (`electron/storage.js:481-496`). Electron's log tells whether the handler ran ("Saving to Disk", "Destroying the
-//   window") only at its debug level (`log.debug`; the file log is at info by default, `electron/utils.js:136-138`).
+//   (`electron/storage.js:481-496`). Electron's log tells whether the handler ran ("Destroying the window"; "Saving to
+//   Disk" comes with every debounced write too) only at its debug level (`log.debug`; the file log is at info by
+//   default, `electron/utils.js:136-138`).
 //   The page's "Your work will be lost" prompt is off on `file://` (`index.tsx:53-57`), Steam's case. A browser
 //   closes only a window its scripts opened (or with one history entry), so in one (E2) the window stays, and the
 //   worker says so.
