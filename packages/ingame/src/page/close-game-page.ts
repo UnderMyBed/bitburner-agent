@@ -7,12 +7,16 @@
 //   is left open: a close never goes without its save.
 // - The close: `window.close()`, the page's only way out (the preload exposes only the save and export channels). On
 //   Steam, not yet run live: Chromium's own close of the window, which probably skips BrowserWindow's `close` handler
-//   (`electron/main.js:43-78`, which flushes the save-folder and Steam Cloud copies, written on 5- and 15-minute
-//   debounces, `:135-164`), while the last window closed still quits the app (`:16-20`). The game's own save, in its
-//   IndexedDB before the toast shows (`db.ts:122-125`), is fresh either way: the next launch on this PC loads it.
-//   Electron's log tells whether the handler ran ("Saving to Disk", "Destroying the window"). The page's "Your work
-//   will be lost" prompt is off on `file://` (`index.tsx:53-57`), Steam's case. A browser closes only a window its
-//   scripts opened (or with one history entry), so in one (E2) the window stays, and the worker says so.
+//   (`electron/main.js:43-78`), while the last window closed still quits the app (`:16-20`). That handler flushes the
+//   save-folder and Steam Cloud copies, which are possibly stale, perhaps since the session began: their debounces
+//   (`:135-164`, trailing, no `maxWait`) write them only once saves pause, and the game saves every 60 s
+//   (`Settings/Settings.ts:17`, `engine.tsx:233`). The game's own save, in its IndexedDB before the toast shows
+//   (`db.ts:122-125`), is fresh either way, and the next launch on this PC keeps it over an older copy
+//   (`electron/storage.js:481-496`). Electron's log tells whether the handler ran ("Saving to Disk", "Destroying the
+//   window") only at its debug level (`log.debug`; the file log is at info by default, `electron/utils.js:136-138`).
+//   The page's "Your work will be lost" prompt is off on `file://` (`index.tsx:53-57`), Steam's case. A browser
+//   closes only a window its scripts opened (or with one history entry), so in one (E2) the window stays, and the
+//   worker says so.
 import { CLOSE_GAME_WINDOW_STAYED_OPEN } from "@bitburner-agent/core";
 import { type GamePage, hasClass, pageDocument } from "./game-page.ts";
 
@@ -45,7 +49,8 @@ export async function closeGameOnPage(gamePage: GamePage, closeWindow: () => voi
     await gamePage.waitARender();
   }
   closeWindow();
-  // Steam's window is gone within 200 ms (`electron/main.js:69-77`), and the worker with it.
+  // Steam's window is gone at once, or within 200 ms if Electron's handler runs (`electron/main.js:69-77`), and the
+  // worker with it.
   while (!gamePage.stepsTimeUp()) await gamePage.waitARender();
   return WINDOW_STAYED_OPEN;
 }

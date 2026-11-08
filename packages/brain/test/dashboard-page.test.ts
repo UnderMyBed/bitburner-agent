@@ -1478,7 +1478,7 @@ test("the stop at the BitNode's end (#303): three settings, the one set without 
   await settle();
   expect(textOf(document, "#stop-at-end")).toContain(
     "At the BitNode's end: stop the brain and close the game: at that end, the game saves and closes, then the " +
-      "brain shuts down. Once: then back to play on",
+      "brain shuts down (the close on Steam not yet run live). Once: then back to play on",
   );
   expect(disabled()).toEqual(["brainAndGame"]);
   // The one set does nothing.

@@ -20,7 +20,8 @@
 // the game goes on without it, the Agent in safe mode (architecture §5.4). Closing the game too, the controller queues
 // `closeGame` (the game's own Save Game, then its window closed, through the irreversible gate: after what was queued
 // before it, two medium snapshots and a save backup), stored as `gameCloseSent` as it goes out, and each try the Agent
-// reports as `gameCloseTried`; it's tried at most 3 times, 30 s apart, never after the Agent went. The brain shuts
+// reports as `gameCloseTried`; it's tried at most 3 times (30 s apart, or 2 s after a worker that couldn't start, so
+// all 3 can go in seconds), never after the Agent went. The brain shuts
 // down once the Agent's connection drops after it and no Agent comes back (`gameClosed`), or anyway, logged and stored
 // as `gameCloseNotConfirmed` (`BitNodeEndShutdown`). Only the switch closes the game: the owner's queue refuses it.
 import { CLOSE_GAME_WINDOW_STAYED_OPEN, type Intent, intentId, type SlowSnapshotData } from "@bitburner-agent/core";
@@ -89,8 +90,8 @@ export const CLOSE_GAME_INTENT: Intent = { id: intentId("closeGame", {}), action
 export const CLOSE_GAME_MOST_TRIES = 3;
 /**
  * How long after the close goes out, or after its last try reported, the Agent's connection must drop: Steam's window
- * goes within 200 ms of a try that closes it, and the next try is `INTENT_RETRY_ROUNDS` rounds (30 s) after one that
- * didn't, so twice that covers the next try and its worker.
+ * goes at once (or within 200 ms if Electron's own close handler runs) on a try that closes it, and the next try is
+ * `INTENT_RETRY_ROUNDS` rounds (30 s) after one that didn't, so twice that covers the next try and its worker.
  */
 export const GAME_CLOSE_CONFIRMED_WITHIN_MS = 60_000;
 /** How long after the connection drops no Agent may connect, for the game to count as closed: a reload's is seconds. */
@@ -272,7 +273,7 @@ const realTimer: StartTimer = (callback, ms) => {
  *   (`gameClosed`). One that connects again means the window stayed open (a reload, the Agent restarted): not
  *   confirmed;
  * - no drop within `GAME_CLOSE_CONFIRMED_WITHIN_MS` of the close going out or of its last try reported (the Agent
- *   tries again every 30 s, up to 3 times), or the close not out within `GAME_CLOSE_SENT_WITHIN_MS` of the stop: not
+ *   tries again every 30 s, or 2 s on after a worker that couldn't start, up to 3 times), or the close not out within `GAME_CLOSE_SENT_WITHIN_MS` of the stop: not
  *   confirmed (`gameCloseNotConfirmed`, logged);
  * - the close called off from the dashboard before it went out: the stop alone.
  * Never a second close, and never a brain left running. As it shuts down, the switch is set back to "play on": once.
@@ -354,6 +355,19 @@ export class BitNodeEndShutdown {
       // Tried and reported, so the game didn't close then: the next try is 30 s on, and its wait starts afresh.
       this.#awaitDrop("the close's last try");
     }
+  }
+
+  /**
+   * The brain stopped by hand (Ctrl+C, a signal) while a stop at the BitNode's end is under way (`stopped`: the
+   * controller's): the switch set back to "play on" all the same, so a restart doesn't close the game again. A crash
+   * can't do this: then the switch stays set, and a brain started again at the same end stops (and closes) again.
+   */
+  interrupted(stopped: boolean): void {
+    if (this.#done || !stopped) return;
+    this.#done = true;
+    this.#cancelTimer?.();
+    this.#turnOff();
+    this.#log("the stop at the BitNode's end set back to play on (stopped by hand): set it again for the next end");
   }
 
   /** The channel's `agentDisconnected`: after the close went out, the game closed, unless an Agent comes back. */

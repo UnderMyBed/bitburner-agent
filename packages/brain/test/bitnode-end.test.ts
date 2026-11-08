@@ -199,8 +199,8 @@ const network: StaticSnapshotData = {
 };
 
 /** A brain's controller with the hack loop off, its log and its events, and an Agent connected that sends `send`. */
-function brain() {
-  store.setSetting("hackLoop.enabled", "false");
+function brain({ hackLoop = false } = {}) {
+  store.setSetting("hackLoop.enabled", String(hackLoop));
   const lines: string[] = [];
   const events: RuleEvent[] = [];
   // Stand-in save backups (the irreversible gate's), each settled by the test.
@@ -505,6 +505,29 @@ describe("closing the game too (the switch's third setting)", () => {
     expect(started.controller.closeGameWaitingFor()).toBe("held: travel(Aevum), queued before it, isn't done");
   });
 
+  test("the close stored as sent only once a desired state carrying it goes out (#303 review)", async () => {
+    // The hack loop on: no desired state goes before the Agent's static snapshot.
+    writeStopAtBitNodeEnd(store, "brainAndGame");
+    const started = brain({ hackLoop: true });
+    started.send("slow", slowSnapshot(), 2_000);
+    started.send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    started.send("medium", medium());
+    started.send("medium", medium());
+    await started.settleBackup();
+    expect(started.events.filter((event) => event.type === "gameCloseSent")).toEqual([]);
+    expect(started.sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
+    started.send("static", network);
+    expect(started.sentIds()).toContain(CLOSE_GAME_INTENT.id);
+    expect(started.events.filter((event) => event.type === "gameCloseSent")).toHaveLength(1);
+  });
+
+  test("whether the brain has stopped at the BitNode's end: for main.ts's Ctrl+C", () => {
+    const { controller, stops } = destroyedWith("brain");
+    expect(stops()).toHaveLength(1);
+    expect(controller.stoppedAtBitNodeEnd()).toBe(true);
+    expect(new DesiredStateController({ channel, store }).stoppedAtBitNodeEnd()).toBe(false);
+  });
+
   test("stopping the brain alone: no close asked for", () => {
     const { controller, stops } = destroyedWith("brain");
     expect(stops()).toMatchObject([{ closeGame: false }]);
@@ -807,6 +830,27 @@ describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () =>
     vi.advanceTimersByTime(STOP_AFTER_MS);
     expect(shutDown).toHaveBeenCalledTimes(1);
     expect([recorded, stopSupervising.mock.calls]).toEqual([[], []]);
+  });
+
+  test("stopped by hand (Ctrl+C) mid-stop: the switch set back to play on, once, and nothing after", () => {
+    const { watch, shutDown, turnOff, lines, recorded } = shutdownWith();
+    watch.ruleEvent({ ...STOP, closeGame: true });
+    watch.interrupted(true);
+    expect(turnOff).toHaveBeenCalledTimes(1);
+    expect(lines).toEqual([
+      "the stop at the BitNode's end set back to play on (stopped by hand): set it again for the next end",
+    ]);
+    // main.ts shuts down itself; nothing the watch would do follows.
+    watch.ruleEvent({ type: "gameCloseSent", atMs: 30_000 });
+    vi.advanceTimersByTime(GAME_CLOSE_SENT_WITHIN_MS * 2);
+    expect([shutDown.mock.calls, recorded]).toEqual([[], []]);
+    expect(turnOff).toHaveBeenCalledTimes(1);
+  });
+
+  test("stopped by hand with no stop under way: the switch left as it is", () => {
+    const { watch, turnOff } = shutdownWith();
+    watch.interrupted(false);
+    expect(turnOff).not.toHaveBeenCalled();
   });
 
   test("before any stop, nothing: a disconnect or a stray close event shuts nothing down", () => {

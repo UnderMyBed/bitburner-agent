@@ -3277,20 +3277,52 @@ describe("the stop at the BitNode's end (#303)", () => {
   test("the game closed too: its close, the drop, and the end said; PASS, the disconnect expected", () => {
     closingRun();
     event(RUN_MS + 400, "agentDisconnected", { agentSessionId: "session-1" });
-    event(RUN_MS + 400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
+    // Stored once no Agent came back within 15 s of the drop.
+    event(RUN_MS + 15_400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
     const { text, failures, warnings } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
     expect([failures, warnings]).toEqual([[], []]);
     for (const line of [
       `  ${at(RUN_MS - MINUTE)}  brain stopped itself at the BitNode's end (the switch on, the game to close first): ` +
         "BN1.3 destroyed, BN1.4 seen",
       `  ${at(RUN_MS)}  the game's close sent: its own Save Game, then its window closed`,
-      `  ${at(RUN_MS + 400)}  game closed: its Agent's connection dropped 0.4 s after the close`,
+      `  ${at(RUN_MS + 15_400)}  game closed: its Agent's connection dropped 0.4 s after the close`,
       `  the run's end: the brain stopped itself at ${at(RUN_MS - MINUTE)}, at the BitNode's end (the switch on): ` +
-        `BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game saved and closed at ${at(RUN_MS + 400)}, ` +
+        `BN1.3 destroyed, BN1.4 seen. Expected, not a failure: the game saved and closed at ${at(RUN_MS + 15_400)}, ` +
         "then the brain stopped; the quiet after it is no gap",
     ]) {
       expect(text).toContain(line);
     }
+  });
+
+  /**
+   * The close a try 2 closes (#303 review): out at RUN_MS - 32 s, try 1 not saved 2 s on, try 2 30 s after that closes
+   * the window at RUN_MS, the drop 0.4 s on, and `gameClosed` stored 15 s after the drop.
+   */
+  function closedAtTry2() {
+    cleanRun();
+    event(RUN_MS - 2 * MINUTE, "brainStoppedAtBitNodeEnd", { ...DESTROYED, closeGame: true });
+    event(RUN_MS - 32 * SECOND, "gameCloseSent", {});
+    event(RUN_MS - 30 * SECOND, "gameCloseTried", { tries: 1, problem: "the game's save not confirmed" });
+    event(RUN_MS + 400, "agentDisconnected", { agentSessionId: "session-1" });
+    event(RUN_MS + 15_400, "gameClosed", { closeSentAtMs: T0 + RUN_MS - 32 * SECOND, afterMs: 32_400 });
+  }
+
+  test("closed at try 2: the drop and the 15 s before gameClosed are expected; PASS", () => {
+    closedAtTry2();
+    const { failures, warnings } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
+    expect([failures, warnings]).toEqual([[], []]);
+  });
+
+  test("closed at try 2, then the brain started again hours on: the silence from the drop is expected; PASS", () => {
+    closedAtTry2();
+    const againMs = RUN_MS + 2 * 60 * MINUTE;
+    event(againMs, "brainStarted", { release: "r" });
+    event(againMs + SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+    for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
+      snapshot("fast", offsetMs, fastData(), 0, "session-2");
+    }
+    const { failures, warnings } = runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE });
+    expect([failures, warnings]).toEqual([[], []]);
   });
 
   test("the game's close not confirmed: a warning (WARN), the end saying the game may still be running", () => {

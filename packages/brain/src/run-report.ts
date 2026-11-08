@@ -2240,13 +2240,21 @@ function heartbeatLines(facts: RunFacts, gapThresholdMs: number, failures: strin
  */
 function stopAtBitNodeEndBefore(facts: RunFacts, fromMs: number): StoredEvent | null {
   return (
-    facts.events.findLast(
-      (event) =>
-        BITNODE_END_EVENT_KINDS.includes(event.kind) &&
-        event.atMs >= fromMs - RELOAD_LEAD_MS &&
-        event.atMs <= fromMs + RELOAD_LAG_MS,
-    ) ?? null
+    facts.events.findLast((event) => {
+      if (!BITNODE_END_EVENT_KINDS.includes(event.kind)) return false;
+      const atMs = event.kind === GAME_CLOSED_EVENT_KIND ? droppedAtMs(event) : event.atMs;
+      return atMs >= fromMs - RELOAD_LEAD_MS && atMs <= fromMs + RELOAD_LAG_MS;
+    }) ?? null
   );
+}
+
+/**
+ * When the Agent's connection dropped, for a `gameClosed` (#303 review): stored `GAME_CLOSE_QUIET_MS` after the drop, it
+ * says when the close went out and how long after it the drop came. Its own time, without them.
+ */
+function droppedAtMs(event: StoredEvent): number {
+  const { closeSentAtMs, afterMs } = fieldsOf(event.detail);
+  return isNumber(closeSentAtMs) && isNumber(afterMs) ? closeSentAtMs + afterMs : event.atMs;
 }
 
 /** A reload a gap follows (#240): "the game reloading after …", and its event (null for a reset intent held). */

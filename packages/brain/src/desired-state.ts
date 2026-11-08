@@ -617,6 +617,11 @@ export class DesiredStateController {
     return { setting: readStopAtBitNodeEnd(this.#store) };
   }
 
+  /** Whether the brain has stopped at the BitNode's end (#303): main.ts's Ctrl+C then sets the switch back too. */
+  stoppedAtBitNodeEnd(): boolean {
+    return this.#bitNodeEnd.stopped();
+  }
+
   /** Why the close of the game at the BitNode's end (#303) hasn't gone out, or null: its gate's, or not asked for. */
   closeGameWaitingFor(): string | null {
     if (!this.#bitNodeEnd.closeGameAsked()) return "not asked for";
@@ -1505,16 +1510,6 @@ export class DesiredStateController {
     // A queue stored under an old limit (99 before #195, 98 before #203) would make the state too long, and the Agent
     // would refuse it whole: the rules' intents wait for room, the last first.
     const leftOut = intents.splice(MAX_INTENTS).map((each) => each.id);
-    // The close of the game going out (#303), past its gate: stored, for main.ts's wait for the Agent to go.
-    if (
-      this.#closeGameSentAtMs === null &&
-      this.#bitNodeEnd.closeGameAsked() &&
-      intents.some((each) => each.id === CLOSE_GAME_INTENT.id)
-    ) {
-      this.#closeGameSentAtMs = this.#lastEventAtMs ?? 0;
-      this.#log("closing the game: its own Save Game, then its window closed (a save backup taken first)");
-      this.#emit({ type: GAME_CLOSE_SENT_EVENT_KIND, atMs: this.#closeGameSentAtMs });
-    }
     if (leftOut.join() !== this.#leftOut) {
       this.#leftOut = leftOut.join();
       if (leftOut.length > 0) {
@@ -1553,6 +1548,17 @@ export class DesiredStateController {
       this.#desired = { ...this.#withBatcher({ enabled: true, ...hackLoop }, factionWorking), intents, ...workAndTtl };
     }
     this.#channel.setDesiredState(this.#desired);
+    // The close of the game going out (#303), past its gate, in a desired state sent (none goes before the Agent's
+    // snapshots with the hack loop on): stored, for main.ts's wait for the Agent to go.
+    if (
+      this.#closeGameSentAtMs === null &&
+      this.#bitNodeEnd.closeGameAsked() &&
+      this.#desired?.intents.some((each) => each.id === CLOSE_GAME_INTENT.id) === true
+    ) {
+      this.#closeGameSentAtMs = this.#lastEventAtMs ?? 0;
+      this.#log("closing the game: its own Save Game, then its window closed (a save backup taken first)");
+      this.#emit({ type: GAME_CLOSE_SENT_EVENT_KIND, atMs: this.#closeGameSentAtMs });
+    }
     // The done check of the first intent that resets the game: the reset as of its sending, noted once (#164, #175).
     // Only the first can be out: what's after it waits.
     const reset = queueWithBrainsResets.find(resetsTheGame);

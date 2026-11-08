@@ -399,7 +399,13 @@ try {
     process.exit(0);
   };
   // SIGBREAK is Ctrl+Break on Windows; SIGHUP its console closing. The store is safe either way (WAL).
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) process.on(signal, shutDown);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {
+    process.on(signal, () => {
+      // Stopped by hand mid-stop at the BitNode's end (#303 review): the switch back to play on all the same.
+      bitNodeEnd.interrupted(desiredState.stoppedAtBitNodeEnd());
+      void shutDown();
+    });
+  }
   // The stop at the BitNode's end (#303): the same clean stop, exit 0, so `npm run brain`'s runner ends too.
   shutDownNow = () => void shutDown();
   if (shutDownAskedFor) shutDownNow();
