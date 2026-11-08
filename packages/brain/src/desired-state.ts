@@ -1210,11 +1210,12 @@ export class DesiredStateController {
     return true;
   }
 
-  /** Takes off the manual queue what the connected Agent reports done; whether it took any. */
+  /** Takes off the manual queue what the connected Agent reports done (a close tried enough); whether it took any. */
   #dropDoneManualIntents(): boolean {
+    // Your close of the game (#303) too, once tried enough: never done by the game's word, and never a loop of saves.
     const doneIds = new Set(
       this.#reportedOutcomes()
-        .filter((outcome) => outcome.done)
+        .filter((outcome) => outcome.done || (outcome.id === CLOSE_GAME_INTENT.id && closeGameTriedEnough(outcome)))
         .map((outcome) => outcome.id),
     );
     const queue = readManualIntents(this.#store);

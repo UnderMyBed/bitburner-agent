@@ -32,7 +32,7 @@ import {
 } from "../src/bitnode-end.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { DesiredStateController, type RuleEvent } from "../src/desired-state.ts";
-import { writeManualIntents, writeResetSentNote } from "../src/manual-intents.ts";
+import { readManualIntents, writeManualIntents, writeResetSentNote } from "../src/manual-intents.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { writeWorldDaemonEnabled } from "../src/world-daemon.ts";
 import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -514,6 +514,22 @@ describe("closing the game too (the switch's third setting)", () => {
     expect(sentIds()).not.toContain(CLOSE_GAME_INTENT.id);
     expect(lines).toContain(`closing the game: withdrawn after 1 try: ${CLOSE_GAME_WINDOW_STAYED_OPEN}`);
   });
+});
+
+test("your own close queued on the dashboard: off the queue once tried enough, never a loop of saves", () => {
+  const { controller, send } = brain();
+  expect(controller.addManualIntent({ action: "closeGame", args: {} })).toMatchObject({ ok: true });
+  const fast = (tries: number, problem: string) =>
+    send("fast", {
+      degradedTiers: [],
+      pageHeapUsedBytes: null,
+      game: null,
+      intents: [{ id: CLOSE_GAME_INTENT.id, done: false, tries, problem, backend: "ui" }],
+    });
+  fast(1, "the game's save not confirmed");
+  expect(readManualIntents(store).map((each) => each.id)).toEqual([CLOSE_GAME_INTENT.id]);
+  fast(1, CLOSE_GAME_WINDOW_STAYED_OPEN);
+  expect(readManualIntents(store)).toEqual([]);
 });
 
 describe("main.ts's side: when the brain shuts down (BitNodeEndShutdown)", () => {
