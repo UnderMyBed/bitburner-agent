@@ -30,6 +30,7 @@ import {
   batchRamGb,
   type HackingPlayer,
   type HackingTarget,
+  MOST_PREPARATION_WAVES,
   operationTimeMs,
   recoveryInPlaceMs,
   usableRamGb,
@@ -357,8 +358,8 @@ async function batchingN00dles(simulation: Simulation, figures: Record<string, H
   return config;
 }
 
-/** How long a preparation that can't finish may run before it says so: past `MOST_PREPARATION_WAVES` waves. */
-const UNREADY_SAID_WITHIN_MS = 180 * 60_000;
+/** How long a preparation that can't finish may run before it says so: past twice `MOST_PREPARATION_WAVES` waves. */
+const UNREADY_SAID_WITHIN_MS = 360 * 60_000;
 /** How long the rogue hacks n00dles twice a minute: its streak's short recoveries add up past a recovery's time. */
 const TWICE_A_MINUTE_FOR_MS = 45 * 60_000;
 
@@ -392,11 +393,12 @@ test.each(SEEDS)(
     // #315's re-review), and their money isn't looked at: not the grows' doing.
     await simulation.advance(30_000);
     expect((await healthOf(simulation)).wavesStarted).toBe(gaveUp.wavesStarted);
-    // The rogue never stops, so the preparation never finishes: said, once past MOST_PREPARATION_WAVES waves (#315's
-    // re-review), never a silent `preparing`.
+    // The rogue never stops, so the preparation never finishes: said, past twice MOST_PREPARATION_WAVES waves (#315's
+    // re-review), never a silent `preparing`; in fixed words, its count the health's.
+    const unreadyProblem = `preparing n00dles has taken over ${2 * MOST_PREPARATION_WAVES} waves: maybe something keeps it down`;
     await advanceUntil(
       simulation,
-      (health) => health.problem?.includes("waves and it isn't ready") === true,
+      (health) => health.problem === unreadyProblem,
       UNREADY_SAID_WITHIN_MS,
       "an unready preparation said",
       60_000,
@@ -409,7 +411,12 @@ test.each(SEEDS)(
     expect(unready.state).toBe("preparing");
     expect(unready.moneyLooks).toBe(gaveUp.moneyLooks);
     expect(unready.wavesStarted).toBeGreaterThan(gaveUp.wavesStarted);
-    expect(unready.problem).toMatch(/^preparing n00dles has taken \d+ waves and it isn't ready: something keeps it/);
+    expect(unready.preparationWaves).toBeGreaterThan(2 * MOST_PREPARATION_WAVES);
+    // More waves: the same words, so one problem line however long it lasts.
+    await simulation.advance(10 * 60_000);
+    const later = await healthOf(simulation);
+    expect(later.problem).toBe(unreadyProblem);
+    expect(later.preparationWaves).toBeGreaterThan(unready.preparationWaves ?? 0);
   },
 );
 

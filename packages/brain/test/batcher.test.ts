@@ -1338,32 +1338,28 @@ describe("the run report's section, out of step after a clock step or page stall
     expect(section(run(), [STEP]).warnings).toHaveLength(1);
   });
 
-  test(
-    "grows short before a desync an incident explains: a cause beside it, which may be its cause instead " + "(#315)",
-    () => {
-      const short = run().map((point, index) =>
-        index === 1 || index === 2
-          ? {
-              ...point,
-              health: {
-                ...(point.health as object),
-                moneyLooksBelowFull: 5,
-                leastMoneyAfterGrow: 0.9,
-                leastMoneyAfterGrowOn: "the-hub",
-              },
-            }
-          : index > 2
-            ? { ...point, health: { ...(point.health as object), moneyLooksBelowFull: 5 } }
-            : point,
-      );
-      const [warning] = section(short).warnings;
-      expect(warning).toContain(
-        `${AFTER}; a grow shortfall before it too, which may be its cause instead, the money below full after 5 ` +
-          "grows " +
-          `from ${iso(734_478)}, the least 90.0% of the-hub's maximum`,
-      );
-    },
-  );
+  test("a desync an incident explains, grows short before it: a cause beside it, maybe its cause instead (#315)", () => {
+    const short = run().map((point, index) =>
+      index === 1 || index === 2
+        ? {
+            ...point,
+            health: {
+              ...(point.health as object),
+              moneyLooksBelowFull: 5,
+              leastMoneyAfterGrow: 0.9,
+              leastMoneyAfterGrowOn: "the-hub",
+            },
+          }
+        : index > 2
+          ? { ...point, health: { ...(point.health as object), moneyLooksBelowFull: 5 } }
+          : point,
+    );
+    const [warning] = section(short).warnings;
+    expect(warning).toContain(
+      `${AFTER}; a grow shortfall before it too, which may be its cause instead, the money below ` +
+        `full after 5 grows from ${iso(734_478)}, the least 90.0% of the-hub's maximum`,
+    );
+  });
 
   test("of two incidents within a weaken before the first desync, the latest", () => {
     const earlier = { ...STALL, fromMs: at(600_000), toMs: at(605_000) };

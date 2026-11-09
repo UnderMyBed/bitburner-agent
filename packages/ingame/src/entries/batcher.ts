@@ -52,12 +52,14 @@
 //   longer than core's `recoveryInPlaceMs` (a weaken's time and 10 batches, less what its streak spent recovering, at
 //   least a hack's time and 10 batches: core's `RecoveryClock`) has something keeping the target down: the batches not
 //   yet out are dropped and it prepares the target again, `preparing`, its first wave after their parts land, so the
-//   brain weighs it anew. A preparation brings a target back in step; one past `MOST_PREPARATION_WAVES` waves says so.
+//   brain weighs it anew. A preparation brings a target back in step; one past twice core's `MOST_PREPARATION_WAVES`
+//   waves (`UNREADY_AFTER_WAVES`) says it may be kept down.
 // - **The money after each grow (#234):** once all of a batch's grow parts have landed, and nothing has landed on its
 //   target since but its own weaken2, it looks at the target's money (core's `GrowLandingWatch`): one below the
 //   maximum is counted (`moneyLooksBelowFull`), a grow short of the hack before it, so the batches would drift toward
 //   the bounds' floor. A grow it can't look at so is counted (`growsNotLooked`, #235's review), and so are those that
-//   land on a target out of step, whose money isn't the grow's doing.
+//   land on a target out of step, on any but the target batched (a move's target before) or while preparing, whose
+//   money isn't the grow's doing (#315).
 // - **Sharing (#224):** while its config asks (the brain's switch on, faction work going on), once the batches' orders
 //   due and the waves are out, a round of `batch-share.js` (one `ns.share()`, 10 s) on home's RAM above what it keeps
 //   for the Agent, and, while it's batching, on its hosts' free RAM less the config's reserve for the batches and the
@@ -187,6 +189,11 @@ const SHARE_AFTER_SHORT_MS = 60_000;
 const WAITING_PROBLEM_AFTER_MS = 60_000;
 /** A next target with no room for a wave this long is a problem (#236): the brain moves to it only once it's ready. */
 const NEXT_WITHOUT_ROOM_PROBLEM_AFTER_MS = 60_000;
+/**
+ * A preparation past this many waves may be kept down (#315's re-review), and says so: twice core's
+ * `MOST_PREPARATION_WAVES`, the most the brain's `preparationTimeMs` counts, as its waves may have less RAM than that.
+ */
+const UNREADY_AFTER_WAVES = 2 * MOST_PREPARATION_WAVES;
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
@@ -411,7 +418,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    * A target's preparation waits past this, on the monotonic clock: the parts of a recovery given up, still landing.
    */
   const preparesAfter = new Map<string, number>();
-  /** The waves of the target's preparation under way, since it last started batching or moved (#315's re-review). */
+  /**
+   * The waves of the target's preparation under way, since it last started batching or moved (#315's re-review), in
+   * its health (`preparationWaves`).
+   */
   let wavesThisPreparation = 0;
 
   /**
@@ -437,10 +447,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         }
         // Woken by each record as it's written, so these are all that have landed (#234). No new NS call: no more RAM.
         const { due, notLooked } = growLandings.takeDue();
-        // On a target out of step (#235's review, #315), the money isn't the grows' doing: not looked at.
-        // Nor those of a recovery given up, landing before its preparation (#315's re-review).
+        // On a target out of step (#235's review, #315), the money isn't the grows' doing: not looked at. Nor any but
+        // the target batched's (#315's second re-review: a move's target before, its grows landing for up to a weaken,
+        // would be counted the new one's), nor while preparing (a recovery's dropped batches, or a move's, landing).
         const unlooked = (target: string) =>
-          outOfStep.has(target) || (preparesAfter.get(target) ?? Number.NEGATIVE_INFINITY) >= monotonicMs();
+          outOfStep.has(target) || target !== current().target || health.state === "preparing";
         const unlookedDue = due.filter(({ target }) => unlooked(target));
         recordGrowsNotLooked(health, notLooked + unlookedDue.length);
         for (const { target, moneyMax } of due) {
@@ -648,6 +659,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     outOfStep.delete(current().target);
     health.state = "batching";
     wavesThisPreparation = 0;
+    health.preparationWaves = 0;
     // Its hosts may share now (#242's review): looked at at once, not at home's next look, up to 5 s on.
     nextSharingLookAt = 0;
     logNow = true;
@@ -943,8 +955,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       preparingNext = new Set();
       // Recovering too (#315): its new target is prepared; the one before stays out of step while its batches land.
       if (health.state === "batching" || health.state === "recovering") health.state = "preparing";
-      recovery.stop();
+      // A new target's recovery starts afresh (#315's second re-review): the old one's time spent isn't its.
+      recovery.reset();
       wavesThisPreparation = 0;
+      health.preparationWaves = 0;
       if (waitingProblem !== null && health.problem === waitingProblem) setProblem(lastingProblem);
       waitingProblem = null;
       // A move under way until the new target's first hack (#237's review), in its health (#237's re-review).
@@ -1048,11 +1062,13 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     wave += 1;
     health.wavesStarted += 1;
     // A preparation that can't finish (#315's re-review): another's script keeping the target down, say, as after a
-    // recovery given up. Said once past core's `MOST_PREPARATION_WAVES`, the most `preparationTimeMs` counts.
+    // recovery given up. Said past `UNREADY_AFTER_WAVES`, twice the most the brain's `preparationTimeMs` counts: its
+    // waves have less RAM than the brain's model gives them (the next target's, players' scripts), so maybe. The text
+    // fixed, so the problem is one line however long it lasts; the count is the health's (#315's second re-review).
     wavesThisPreparation += 1;
-    if (problem === lastingProblem && wavesThisPreparation > MOST_PREPARATION_WAVES) {
-      problem =
-        `preparing ${target} has taken ${wavesThisPreparation} waves and it isn't ready: ` + "something keeps it down";
+    health.preparationWaves = wavesThisPreparation;
+    if (problem === lastingProblem && wavesThisPreparation > UNREADY_AFTER_WAVES) {
+      problem = `preparing ${target} has taken over ${UNREADY_AFTER_WAVES} waves: maybe something keeps it down`;
     }
     setProblem(problem);
     // The last wave, all started, on a target at its minimum security (#206): batches start now, their operations'
