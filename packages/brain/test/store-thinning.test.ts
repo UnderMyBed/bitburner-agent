@@ -48,6 +48,7 @@ const resetIntentsAt = (offsetMs: number) => [
 const fastData = (offsetMs: number) => ({
   degradedTiers: offsetMs % (10 * SECOND) === 4 * SECOND ? ["medium"] : [],
   pageHeapUsedBytes: 100_000_000 + offsetMs,
+  sentAtMs: T0 + offsetMs + 9,
   game: { money: offsetMs, homeRamUsed: 4, homeMaxRam: 8, homeProcesses: [{ pid: 1, filename: "a.js" }] },
   intents: [intent("buyTor()"), ...resetIntentsAt(offsetMs).map(intent)],
   dialogs: { handled: [], blocking: null },
@@ -129,6 +130,8 @@ describe("what thinning keeps (#283)", () => {
               thinned: true,
               degradedTiers: fastData(offsetMs).degradedTiers,
               pageHeapUsedBytes: 100_000_000 + offsetMs,
+              // The Agent's send stamp (#309): whose a delivery lag was, read over a thinned window too.
+              sentAtMs: T0 + offsetMs + 9,
               // The install and destroy intents it held, by id, in order (#283's review: the reloads read them).
               resetIntents: resetIntentsAt(offsetMs),
             }
@@ -168,10 +171,10 @@ describe("what thinning keeps (#283)", () => {
       });
     }
     thin(2 * DAY);
-    const empty = { thinned: true, degradedTiers: null, pageHeapUsedBytes: null, resetIntents: [] };
+    const empty = { thinned: true, degradedTiers: null, pageHeapUsedBytes: null, sentAtMs: null, resetIntents: [] };
     expect(snapshotsOf("fast").map((snapshot) => snapshot.data)).toEqual([
       { degradedTiers: ["slow", "fast"], pageHeapUsedBytes: null },
-      { thinned: true, degradedTiers: ["slow", "fast"], pageHeapUsedBytes: null, resetIntents: [] },
+      { ...empty, degradedTiers: ["slow", "fast"] },
       empty,
       empty,
       { ...empty, resetIntents: ["destroyBitNode(2)"] },

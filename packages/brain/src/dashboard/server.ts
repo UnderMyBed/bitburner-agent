@@ -13,6 +13,11 @@ const MAX_BODY_BYTES = 1024;
 /** What a browser says about a request's origin (Fetch Metadata): only these are the dashboard's own, or typed in. */
 const OWN_FETCH_SITES = new Set(["same-origin", "none"]);
 const PAGE = readFileSync(new URL("./page.html", import.meta.url), "utf8");
+/**
+ * A status built slower than this is reported (#309): it holds the brain's event loop, and every snapshot arriving
+ * meanwhile waits, a delivery lag. The page asks every 2 s; a sorting read on 2026-11-08's 440 MB store took 0.65 s.
+ */
+export const SLOW_DASHBOARD_STATUS_MS = 200;
 /** The paths that take a POST only. */
 const WRITE_PATHS = [
   "/api/supervision",
@@ -66,6 +71,8 @@ export interface DashboardServerOptions {
   setWork(request: unknown): { ok: true } | { ok: false; reason: string };
   /** A failure on the brain's side (a 500, or the server's own error): the brain logs it. The server carries on. */
   onError(error: unknown): void;
+  /** A status built slower than `SLOW_DASHBOARD_STATUS_MS` (#309), how long it took: the brain logs it. */
+  onSlowStatus?(tookMs: number): void;
 }
 
 export interface RunningDashboardServer {
@@ -119,8 +126,13 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
     switch (route) {
       case "GET /":
         return reply(response, 200, "text/html; charset=utf-8", PAGE);
-      case "GET /api/status":
-        return reply(response, 200, "application/json", JSON.stringify(options.status()));
+      case "GET /api/status": {
+        const startedMs = performance.now();
+        const status = JSON.stringify(options.status());
+        const tookMs = performance.now() - startedMs;
+        if (tookMs > SLOW_DASHBOARD_STATUS_MS) options.onSlowStatus?.(tookMs);
+        return reply(response, 200, "application/json", status);
+      }
       case "POST /api/supervision":
         return handleSwitch(request, response, origin, "paused", options.setSupervisionPaused);
       case "POST /api/hack-loop":

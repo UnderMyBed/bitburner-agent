@@ -19,6 +19,7 @@ import {
   readStopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
+import { watchBrainHolds } from "./brain-holds.ts";
 import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import {
@@ -248,6 +249,8 @@ try {
     onError: (error) =>
       log(`dashboard timeline: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });
+  // The brain's event loop held (#309): slow statuses and Node's own delay, a line a minute when anything was.
+  const brainHolds = watchBrainHolds(log);
   const dashboardServer = await startDashboardServer({
     port: config.dashboardPort,
     status: () =>
@@ -346,6 +349,8 @@ try {
       return set;
     },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
+    // A slow status holds every snapshot arriving meanwhile (#309): counted, logged with the minute's holds.
+    onSlowStatus: (tookMs) => brainHolds.holds.slowStatus(tookMs),
   });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
   log(`deploys ${deployer.deploymentId}`);
@@ -398,6 +403,7 @@ try {
     await dashboardServer.close();
     await remoteFileApiServer.close();
     await controlServer.close();
+    brainHolds.stop();
     store.close();
     log("stopped");
     process.exit(0);

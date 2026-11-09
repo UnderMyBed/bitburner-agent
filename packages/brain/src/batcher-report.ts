@@ -3,11 +3,14 @@
 // short of RAM, except while sharing on the batches' hosts, the share's failure (#232). Its counts are each run's,
 // from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
 // already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
-// (#224). Out of step is judged a stretch at a time (#241): one a clock step or page stall explains, which the batcher
-// recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts). Since #251 the batcher times its
-// batches on the page's monotonic clock (its health's `clock`), which a clock step doesn't move: only a page stall
-// explains its stretches, and a clock step only an older batcher's. A batcher stuck on poor targets (#275, the best
-// rooted one 100× more on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle.
+// (#224). Out of step is judged a stretch at a time (#241): one a clock step, page stall or delivery lag (#309)
+// explains, which the batcher recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts). Since
+// #251 the batcher times its batches on the page's monotonic clock (its health's `clock`), which a clock step doesn't
+// move: only a page stall explains its stretches, and a clock step only an older batcher's. A delivery lag (#309)
+// counts as a page stall only where the Agent's send stamps show the page was behind it: the socket's or the brain's
+// lag can't hold the page's batcher, and one whose side they can't tell excuses nothing (the 2026-11-08 clarkinc
+// desyncs stay a failure; their cause is #315). A batcher stuck on poor targets (#275, the best rooted one 100× more
+// on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle.
 import {
   BATCH_RAM_WAIT_MS,
   type BatcherHealth,
@@ -21,7 +24,9 @@ import {
   batcherSpanOf,
   type ClockIncident,
   describeIncident,
+  holdsThePage,
   INCIDENT_ATTRIBUTION_WEAKENS,
+  INCIDENT_KIND_NAMES,
 } from "./clock-incidents.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, formatDuration, formatIsoTime } from "./gap-report.ts";
 import type { BatcherTargetIncomes, TargetIncome } from "./hacking-ceiling.ts";
@@ -613,7 +618,10 @@ interface RunLook {
   monotonic: boolean;
 }
 
-/** The clock steps and page stalls found (section 4), a weaken's time on a target then, and the warnings (#241). */
+/**
+ * The clock steps, page stalls and delivery lags (#309) found (section 4), a weaken's time on a target then, and the
+ * warnings (#241).
+ */
 export interface IncidentContext {
   incidents: readonly ClockIncident[];
   weakenMs: (target: string, atMs: number) => number | null;
@@ -657,14 +665,17 @@ const countsText = (counts: OutOfStepCounts) =>
 const addCounts = (counts: OutOfStepCounts, rose: OutOfStepCounts) => {
   for (const count of OUT_OF_STEP_COUNTS) counts[count] += rose[count];
 };
-const kindName = ({ kind }: ClockIncident) => (kind === "clockStep" ? "clock step" : "page stall");
+const kindName = ({ kind }: ClockIncident) => INCIDENT_KIND_NAMES[kind];
 
 /**
  * The incident a stretch is put down to (#241), its first look out of step being at `firstMs`: the latest incident
  * whose span, as the batcher felt it (`batcherSpanOf`), started by then and ended no more than
  * `INCIDENT_ATTRIBUTION_WEAKENS` weaken times on `target` before it, and that no earlier stretch was put down to
  * (`attributed`); or why there's none. A batcher on the page's monotonic clock (#251, `monotonic`) can't be put out
- * of step by a clock step, so only a page stall explains its stretches; an older batcher's, either.
+ * of step by a clock step, so only a page stall explains its stretches; an older batcher's, either. A delivery lag
+ * (#309) explains one as a page stall does only where the Agent's send stamps show the page was behind it
+ * (`holdsThePage`); one they show was the socket's or the brain's, or can't tell, excuses nothing, and the reason
+ * names the last such within a weaken before the stretch.
  */
 function attributionOf(
   firstMs: number,
@@ -674,15 +685,38 @@ function attributionOf(
   attributed: Set<ClockIncident>,
 ): Attribution | { why: string } {
   const before = (incident: ClockIncident) => batcherSpanOf(incident).fromMs <= firstMs;
-  const explaining = monotonic ? context.incidents.filter(({ kind }) => kind === "pageStall") : context.incidents;
+  const explaining = context.incidents.filter(
+    (incident) =>
+      (!monotonic || incident.kind !== "clockStep") && (incident.kind !== "deliveryLag" || holdsThePage(incident)),
+  );
   const incidentsBefore = explaining.filter(before);
   const lastIncident = incidentsBefore.at(-1);
-  const kinds = monotonic ? "page stall" : "clock step or page stall";
-  // Said, so a step that came before reads as no excuse, not as missed.
+  const kinds = monotonic
+    ? "page stall, or delivery lag the page was behind,"
+    : "clock step, page stall, or delivery lag the page was behind,";
+  // Said, so a step, or a lag the page wasn't seen behind within a weaken before, reads as no excuse, not as missed.
+  const lagInReach = (incident: ClockIncident) => {
+    const lagWeakenMs = context.weakenMs(target, incident.fromMs);
+    return lagWeakenMs !== null && firstMs <= incident.toMs + INCIDENT_ATTRIBUTION_WEAKENS * lagWeakenMs;
+  };
+  const lastNotPage = context.incidents
+    .filter(
+      (incident) =>
+        incident.kind === "deliveryLag" && !holdsThePage(incident) && before(incident) && lagInReach(incident),
+    )
+    .at(-1);
+  const lagNote =
+    lastNotPage === undefined
+      ? ""
+      : typeof lastNotPage.pageLagMs === "number"
+        ? ` (${describeIncident(lastNotPage)} was the socket's or the brain's, the page sending on time: no ` +
+          "excuse, #309)"
+        : ` (${describeIncident(lastNotPage)}, its side unknown, no send stamps showing the page behind it: no ` +
+          "excuse, #309)";
   const stepNote =
-    monotonic && context.incidents.some((incident) => incident.kind === "clockStep" && before(incident))
+    (monotonic && context.incidents.some((incident) => incident.kind === "clockStep" && before(incident))
       ? " (a clock step can't put a batcher on the page's monotonic clock out of step, #251)"
-      : "";
+      : "") + lagNote;
   if (lastIncident === undefined) return { why: `no ${kinds} before it${stepNote}` };
   const weakenMs = context.weakenMs(target, batcherSpanOf(lastIncident).fromMs);
   if (weakenMs === null) {
@@ -873,9 +907,10 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
  * sent but not running, which fails the run (`failures`); then its sharing (#224), with the brain's worked faction's
  * reputation (`readings`). Its moves (#236) are joined across a batcher's restart, but not across an install
  * (`resetsMs`, the game's `lastAugReset` times in the slow snapshots): a new cycle starts from nothing. Each
- * stretch out of step a clock step or page stall explains (`incidentContext`, #241), the batcher batching again by
- * itself, is a warning. With `stuck` (the medium snapshots' targets' incomes, and 2b's cycles), after the moves, a
- * batcher stuck on a poor target (#275, `stuckTargetLines`), its warnings with `incidentContext`'s.
+ * stretch out of step a clock step, page stall or delivery lag explains (`incidentContext`, #241, #309), the batcher
+ * batching again by itself, is a warning. With `stuck` (the medium snapshots' targets' incomes, and 2b's cycles),
+ * after the moves, a batcher stuck on a poor target (#275, `stuckTargetLines`), its warnings with
+ * `incidentContext`'s.
  */
 export function batcherSection(
   points: BatcherPoint[],
@@ -1002,7 +1037,8 @@ export function batcherSection(
           "under 0 is late)",
   );
   // Out of step, a failure (#206): the batches no longer land as planned, or someone else touched the target. A
-  // stretch a clock step or page stall explains, which the batcher recovered from by itself, is a warning (#241).
+  // stretch a clock step, page stall or delivery lag (#309) explains, which the batcher recovered from by itself, is a
+  // warning (#241).
   if (total.desyncs + total.late + total.lost > 0) lines.push(...outOfStepLines(looks, incidentContext, failures));
   const describeBatchCount = (count: number) => `${count} batch${count === 1 ? "" : "es"}`;
   lines.push(

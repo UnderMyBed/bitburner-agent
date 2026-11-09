@@ -36,9 +36,10 @@ import {
 } from "./bitnode-end.ts";
 import {
   type ClockIncident,
+  type DeliveryLag,
   type FastSnapshotTime,
-  findClockIncidents,
   incidentLines,
+  readClockIncidents,
   type SnapshotTime,
   WeakenTimes,
 } from "./clock-incidents.ts";
@@ -206,9 +207,9 @@ export interface RunReport {
   failures: string[];
   /**
    * One line per warning (owner decision 55): what went wrong but isn't yet a failure. Something outside the brain
-   * that was put right by itself (#241: a batcher out of step after a clock step or page stall, batching again, or not
-   * yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle (#275). WARN with no
-   * failure; listed after FAIL's.
+   * that was put right by itself (#241: a batcher out of step after a clock step, page stall or delivery lag (#309),
+   * batching again, or not yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle
+   * (#275). WARN with no failure; listed after FAIL's.
    */
   warnings: string[];
 }
@@ -486,7 +487,7 @@ class FactionStateFolding {
 
 /**
  * A fast snapshot's times, its degraded tiers and its page heap: every one's, a thinned one's too (#283), for the time
- * checks (the heartbeat, clock steps and page stalls, the page heap, the run's end).
+ * checks (the heartbeat, clock steps, page stalls and delivery lags (#309), the page heap, the run's end).
  */
 interface FastTime extends FastSnapshotTime {
   pageHeapUsedBytes: unknown;
@@ -613,7 +614,10 @@ interface RunFacts extends RunWindow {
   thinned: { fast: number; medium: number; lastMs: number | null };
   mediumFirst: MediumSnapshotData | undefined;
   mediumLast: MediumSnapshotData | undefined;
-  /** The medium snapshots' times (#241), for clock steps and page stalls: every one's, a thinned one's too (#283). */
+  /**
+   * The medium snapshots' times (#241), for clock steps, page stalls and delivery lags (#309): every one's, a thinned
+   * one's too (#283).
+   */
   mediumTimes: SnapshotTime[];
   /** A weaken's time on a target over the window (#241), to put the batcher's desyncs down to an incident. */
   weakenTimes: WeakenTimes;
@@ -792,12 +796,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const batcherTargets = new BatcherTargets(resets);
     for (const { atMs, gameTimeMs, agentSessionId, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
-      const { degradedTiers, pageHeapUsedBytes } = data;
+      const { degradedTiers, pageHeapUsedBytes, sentAtMs } = data;
       const stubbed = isThinnedReading(data);
       const resetIntents = stubbed
         ? namesOf((data as { resetIntents?: unknown }).resetIntents)
         : resetIntentIds(Array.isArray(data.intents) ? data.intents : []);
-      fastTimes.push({ atMs, gameTimeMs, degradedTiers, pageHeapUsedBytes, resetIntents });
+      fastTimes.push({ atMs, gameTimeMs, degradedTiers, sentAtMs, pageHeapUsedBytes, resetIntents });
       if (stubbed) {
         thinned.fast++;
         thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
@@ -914,12 +918,16 @@ export function runReport(
       `game close not confirmed at ${formatIsoTime(atMs)}: ${displayValue(fieldsOf(detail).reason)} (the brain stopped)`,
     );
   }
-  // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
-  const incidents = findClockIncidents({
+  // Clock steps, page stalls (#241) and delivery lags (#309): section 4 lists them, section 6 puts the batcher's
+  // desyncs down to them.
+  const clocks = {
     medium: facts.mediumTimes,
     fast: facts.fastTimes,
     restartsMs: facts.events.filter((event) => RESTART_EVENT_KINDS.includes(event.kind)).map(({ atMs }) => atMs),
-  });
+  };
+  const { incidents, lags } = readClockIncidents(clocks);
+  // The brief delivery lags (#309), counted apart from the incidents (the backlogs).
+  const briefLags = lags.filter((lag) => !lag.backlog);
   const lines = [
     `Run report (${window.environment}) from ${formatIsoTime(window.sinceMs)} to ${formatIsoTime(window.untilMs)} ` +
       `(${formatDuration(window.untilMs - window.sinceMs)})`,
@@ -945,7 +953,7 @@ export function runReport(
     "",
     ...actionsSection(facts, verbose),
     "",
-    ...healthSection(facts, gapThresholdMs, failures, incidents, warnings),
+    ...healthSection(facts, gapThresholdMs, failures, incidents, briefLags, warnings),
     "",
     ...withWhoHacked(
       facts.hacking.section(failures, (fromMs, toMs) => facts.cycles.heldBackBetween(fromMs, toMs)),
@@ -1044,11 +1052,11 @@ function windowSection(facts: RunFacts): string[] {
     lines.push(
       `  note: the store is thinned (#283) in this window, up to ${formatIsoTime(thinned.lastMs)}: ` +
         `${thinned.fast} fast and ${thinned.medium} medium snapshots there keep only their times, one of each a ` +
-        "minute kept whole. The heartbeat's gaps, clock steps, page stalls and the page heap read every one; the " +
-        "rest read the whole ones, so their times there are within a minute, what came and went within one isn't " +
-        "seen, a backdoor overdue (it needs medium snapshots within 30 s) and a batcher stuck on a poor target (looks " +
-        "within 6 s) aren't judged there, and the batcher not running for 3 fast snapshots in a row counts whole " +
-        "ones, a minute apart",
+        "minute kept whole. The heartbeat's gaps, clock steps, page stalls, delivery lags and the page heap read " +
+        "every one; the rest read the whole ones, so their times there are within a minute, what came and went " +
+        "within one isn't seen, a backdoor overdue (it needs medium snapshots within 30 s) and a batcher stuck on a " +
+        "poor target (looks within 6 s) aren't judged there, and the batcher not running for 3 fast snapshots in a " +
+        "row counts whole ones, a minute apart",
     );
   }
   // Section 3's: the actions, with the rules' events (#203, #210).
@@ -2060,14 +2068,15 @@ function healthSection(
   gapThresholdMs: number,
   failures: string[],
   incidents: readonly ClockIncident[],
+  briefLags: readonly DeliveryLag[],
   warnings: string[],
 ): string[] {
   const lines = ["4. Health"];
   const heartbeat = heartbeatLines(facts, gapThresholdMs, failures);
   lines.push(...heartbeat.lines);
   lines.push(`  ${describePageHeap(facts.fastTimes.map((point) => point.pageHeapUsedBytes).filter(isNumber))}`);
-  // Clock steps and page stalls (#241): each, and 3 or more in an hour a failure.
-  lines.push(...incidentLines(incidents, failures));
+  // Clock steps, page stalls (#241) and delivery lags (#309): each, and 3 or more in an hour a failure.
+  lines.push(...incidentLines(incidents, failures, briefLags));
   lines.push(...stallLines(facts, heartbeat.gaps, failures));
 
   lines.push(`  stuck intents (${INTENT_STUCK_AFTER_TRIES} tries or more, not done at the last look):`);

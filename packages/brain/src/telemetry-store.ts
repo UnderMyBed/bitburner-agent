@@ -50,6 +50,9 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS snapshots_by_tier_and_time ON snapshots (environment, tier, received_at_ms);
   CREATE INDEX IF NOT EXISTS snapshots_by_session ON snapshots (environment, agent_session_id, tier, sequence_number);
+  -- The newest of a tier (NEWEST_OF_TIER_SQL, #309), and the slow tier past a row (slowResetInfoAfterId). Made on an
+  -- older store as the brain opens it: 0.3 s on a copy of the 2026-11-08 run's (512 MB, 108,000 snapshots).
+  CREATE INDEX IF NOT EXISTS snapshots_by_tier_and_id ON snapshots (environment, tier, id);
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     environment TEXT NOT NULL,
@@ -68,9 +71,10 @@ const SCHEMA = `
 /**
  * Thinning (#283): before a cutoff, the first fast and medium snapshot stored in each minute of the brain's clock stays
  * whole, and each other keeps its row (its times, session and sequence number) with its data cut to a stub,
- * `{"thinned":true}`, a fast one's with its `degradedTiers`, `pageHeapUsedBytes` and `resetIntents` (the ids of the
- * install and destroy intents it held): what the run report's time checks, its reloads and the gap report read of every
- * snapshot. The other tiers, the events and the settings are never thinned.
+ * `{"thinned":true}`, a fast one's with its `degradedTiers`, `pageHeapUsedBytes`, `sentAtMs` (the Agent's send stamp,
+ * #309: whose a delivery lag was) and `resetIntents` (the ids of the install and destroy intents it held): what the run
+ * report's time checks, its reloads and the gap report read of every snapshot. The other tiers, the events and the
+ * settings are never thinned.
  */
 export const THINNED_SNAPSHOT_TIERS = ["fast", "medium"] as const;
 /** One snapshot of each thinned tier a minute stays whole. */
@@ -88,6 +92,7 @@ const RESET_INTENT_IDS = `json((SELECT json_group_array(json_extract(value, '$.i
 const THINNED_STUB = `CASE tier WHEN 'fast' THEN json_object('thinned', json('true'),
     'degradedTiers', json_extract(data, '$.degradedTiers'),
     'pageHeapUsedBytes', json_extract(data, '$.pageHeapUsedBytes'),
+    'sentAtMs', json_extract(data, '$.sentAtMs'),
     'resetIntents', ${RESET_INTENT_IDS})
   ELSE '{"thinned":true}' END`;
 /** The snapshots thinning would cut to a stub in a span: thinned tiers, not yet stubs, not their minute's first. */
@@ -114,6 +119,13 @@ export interface ThinnedTier {
 const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
   missed_before, data`;
 const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
+/**
+ * The newest snapshots of a tier, newest first by id (the order stored), at most `limit` (the third parameter).
+ * Read off `snapshots_by_tier_and_id`, as stored, with no sort (#309): the dashboard's status and the supervisor read
+ * it.
+ */
+export const NEWEST_OF_TIER_SQL = `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
+  ORDER BY id DESC LIMIT ?`;
 
 function snapshotOfRow(row: Record<string, string | number>): RecordContext & StoredSnapshot {
   return {
@@ -148,6 +160,14 @@ export interface SlowResetInfo {
 // `INDEXED BY` fails with no such index, which `TelemetryStore.open` creates on every start.
 const RESET_INFO_COLUMNS = `id, release, game_time_ms, received_at_ms,
   CASE json_type(data, '$.resetInfo') WHEN 'object' THEN json_extract(data, '$.resetInfo') END AS reset_info`;
+
+/**
+ * The slow snapshots after a row, by the slow tier's index (`slowResetInfoAfterId`'s `byTierIndex`): a seek on
+ * `snapshots_by_tier_and_id` past the row, in id order, with no sort (#309). Parameters: the row id, the environment,
+ * the limit.
+ */
+export const SLOW_AFTER_ID_BY_TIER_INDEX_SQL = `SELECT ${RESET_INFO_COLUMNS} FROM snapshots
+  INDEXED BY snapshots_by_tier_and_id WHERE id > ? AND environment = ? AND tier = 'slow' ORDER BY id LIMIT ?`;
 
 function slowResetInfoOfRow(row: Record<string, string | number | null>): SlowResetInfo {
   return {
@@ -243,13 +263,13 @@ export class TelemetryStore {
     environment: Environment;
     tier: string;
   }): (RecordContext & StoredSnapshot) | null {
-    const row = this.#database
-      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT 1`)
-      .get(environment, tier) as Record<string, string | number> | undefined;
+    const row = this.#database.prepare(NEWEST_OF_TIER_SQL).get(environment, tier, 1) as
+      | Record<string, string | number>
+      | undefined;
     return row ? snapshotOfRow(row) : null;
   }
 
-  /** The newest `limit` snapshots of a tier, newest first, in the order stored (#197: the faction state's alert). */
+  /** The newest `limit` snapshots of a tier, newest first by id (the order stored; #197: the faction state's alert). */
   latestSnapshots({
     environment,
     tier,
@@ -259,9 +279,10 @@ export class TelemetryStore {
     tier: string;
     limit: number;
   }): (RecordContext & StoredSnapshot)[] {
-    const rows = this.#database
-      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT ?`)
-      .all(environment, tier, limit) as Record<string, string | number>[];
+    const rows = this.#database.prepare(NEWEST_OF_TIER_SQL).all(environment, tier, limit) as Record<
+      string,
+      string | number
+    >[];
     return rows.map(snapshotOfRow);
   }
 
@@ -403,8 +424,9 @@ export class TelemetryStore {
    * The slow snapshots stored after the row `afterId`, in the order stored, at most `limit`, with their `resetInfo`
    * (the dashboard's timeline, #285, once it has read the rest). By the row id's range alone (the `+` keeps SQLite off
    * the tier index), reading every tier's rows since: few, with the page open (a minute holds about 37). Or
-   * `byTierIndex`, by the slow tier's index (its entries scanned and sorted by id), so the rows of every other tier
-   * aren't read: the page closed for days (`RECENT_ROWS`, the timeline's choice).
+   * `byTierIndex`, by the slow tier's index on (environment, tier, id) (#309: a seek past `afterId`, in id order, no
+   * sort), so the rows of every other tier aren't read: the page closed for days (`RECENT_ROWS`, the timeline's
+   * choice).
    */
   slowResetInfoAfterId({
     environment,
@@ -420,8 +442,7 @@ export class TelemetryStore {
     const sql = !byTierIndex
       ? `SELECT ${RESET_INFO_COLUMNS} FROM snapshots WHERE id > ? AND +environment = ? AND +tier = 'slow'
             ORDER BY id LIMIT ?`
-      : `SELECT ${RESET_INFO_COLUMNS} FROM snapshots INDEXED BY snapshots_by_tier_and_time
-            WHERE id > ? AND environment = ? AND tier = 'slow' ORDER BY id LIMIT ?`;
+      : SLOW_AFTER_ID_BY_TIER_INDEX_SQL;
     const rows = this.#database.prepare(sql).all(afterId, environment, limit) as Record<
       string,
       string | number | null
