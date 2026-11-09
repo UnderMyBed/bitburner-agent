@@ -192,13 +192,13 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
     return data;
   };
   const ALL_HOSTS = ["alpha", "bravo", "charlie", "delta"];
-  /** A target last set that has been ready since, so the loop hacks it, with the hosts that prepared the next one. */
   /** `planHackLoop`'s arguments but the BitNode's hacking multipliers (#321): BN1's here. */
   type BN1Args = [
     Parameters<typeof planHackLoop>[0],
     Parameters<typeof planHackLoop>[1],
     Parameters<typeof planHackLoop>[3],
   ];
+  /** A target last set that has been ready since, so the loop hacks it, with the hosts that prepared the next one. */
   const earningOn = (target: string, preparingHosts: string[] = []): LastHackTarget => ({
     target,
     earning: true,

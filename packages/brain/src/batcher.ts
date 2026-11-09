@@ -55,7 +55,8 @@ export const BN1_HACKING: BitNodeHackingMultipliers = { ScriptHackMoney: 1, Hack
 
 /**
  * The hacking multipliers of `bitNode`, the slow snapshot's (#321, core's `bitNodeHackingMultipliers`), for the
- * player's parse to fold in; `known` false, and BN1's, for a BitNode core hasn't them for, or none read yet (no slow snapshot).
+ * player's parse to fold in; `known` false, and BN1's, for a BitNode core hasn't them for, or none read yet (no slow
+ * snapshot).
  * Never silently: the controller logs either (`HACKING_MULTIPLIERS_UNREAD`, and the BitNode's `bitNodeAssumptions`),
  * and the run report lists the BitNode's.
  */

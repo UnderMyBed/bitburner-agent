@@ -1217,10 +1217,6 @@ export class DesiredStateController {
   }
 
   /**
-   * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
-   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1.
-   */
-  /**
    * The BitNode's hacking multipliers for the hack loop's and the batcher's player (#321, `bitNodeHackingOf`), from the
    * slow snapshot's BitNode. Before one says it, BN1's, logged once (`HACKING_MULTIPLIERS_UNREAD`); a BitNode core has
    * none for, BN1's too, which its `bitNodeAssumptions` line says.
@@ -1233,6 +1229,10 @@ export class DesiredStateController {
     return multipliers;
   }
 
+  /**
+   * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
+   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1 or BN4.
+   */
   #logBitNodeAssumptions(): void {
     const currentNode = this.#slowData?.resetInfo?.currentNode;
     if (!isBitNodeNumber(currentNode) || currentNode === this.#assumptionsLoggedFor) return;
