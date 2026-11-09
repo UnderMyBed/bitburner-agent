@@ -208,8 +208,8 @@ export interface RunReport {
   /**
    * One line per warning (owner decision 55): what went wrong but isn't yet a failure. Something outside the brain
    * that was put right by itself (#241: a batcher out of step after a clock step, page stall or delivery lag (#309),
-   * batching again, or not yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle (#275). WARN with no
-   * failure; listed after FAIL's.
+   * batching again, or not yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle
+   * (#275). WARN with no failure; listed after FAIL's.
    */
   warnings: string[];
 }
@@ -918,7 +918,8 @@ export function runReport(
       `game close not confirmed at ${formatIsoTime(atMs)}: ${displayValue(fieldsOf(detail).reason)} (the brain stopped)`,
     );
   }
-  // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
+  // Clock steps, page stalls (#241) and delivery lags (#309): section 4 lists them, section 6 puts the batcher's
+  // desyncs down to them.
   const clocks = {
     medium: facts.mediumTimes,
     fast: facts.fastTimes,
@@ -1051,11 +1052,11 @@ function windowSection(facts: RunFacts): string[] {
     lines.push(
       `  note: the store is thinned (#283) in this window, up to ${formatIsoTime(thinned.lastMs)}: ` +
         `${thinned.fast} fast and ${thinned.medium} medium snapshots there keep only their times, one of each a ` +
-        "minute kept whole. The heartbeat's gaps, clock steps, page stalls and the page heap read every one; the " +
-        "rest read the whole ones, so their times there are within a minute, what came and went within one isn't " +
-        "seen, a backdoor overdue (it needs medium snapshots within 30 s) and a batcher stuck on a poor target (looks " +
-        "within 6 s) aren't judged there, and the batcher not running for 3 fast snapshots in a row counts whole " +
-        "ones, a minute apart",
+        "minute kept whole. The heartbeat's gaps, clock steps, page stalls, delivery lags and the page heap read " +
+        "every one; the rest read the whole ones, so their times there are within a minute, what came and went " +
+        "within one isn't seen, a backdoor overdue (it needs medium snapshots within 30 s) and a batcher stuck on a " +
+        "poor target (looks within 6 s) aren't judged there, and the batcher not running for 3 fast snapshots in a " +
+        "row counts whole ones, a minute apart",
     );
   }
   // Section 3's: the actions, with the rules' events (#203, #210).

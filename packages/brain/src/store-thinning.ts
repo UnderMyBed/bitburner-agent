@@ -2,11 +2,11 @@
 // kept to what its readers need of old runs. The last `keptWholeDays` before the newest snapshot stay whole; before
 // that, every event, setting, static and slow snapshot, and the first fast and medium snapshot of each minute, stay
 // whole, and each other fast and medium snapshot keeps its row and times with its data cut to a stub
-// (`TelemetryStore.thinSnapshots`). The run report's time checks (the heartbeat's gaps, clock steps, page stalls)
-// read every row, so stay exact; its content checks read one snapshot a minute there. It can't be undone. By hand,
-// with `npm run thin` (a dry run, and a backup first, unless told not to); at the brain's start only if config.json's
-// `telemetryKeptWholeDays` opts in (owner decision 60, #283), and only once a data backup (#284) holds whole
-// what it cuts, never in a run's hot path. The save backups are files beside the store: never touched.
+// (`TelemetryStore.thinSnapshots`). The run report's time checks (the heartbeat's gaps, clock steps, page stalls,
+// delivery lags) read every row, so stay exact; its content checks read one snapshot a minute there. It can't be
+// undone. By hand, with `npm run thin` (a dry run, and a backup first, unless told not to); at the brain's start only
+// if config.json's `telemetryKeptWholeDays` opts in (owner decision 60, #283), and only once a data backup (#284)
+// holds whole what it cuts, never in a run's hot path. The save backups are files beside the store: never touched.
 import { formatIsoTime, formatSeconds } from "./gap-report.ts";
 import type { RecordContext, TelemetryStore } from "./telemetry-store.ts";
 

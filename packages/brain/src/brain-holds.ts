@@ -6,8 +6,9 @@
 // lag the run report finds has its cause, or at least its size, in the brain's log at the same minute.
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { SLOW_DASHBOARD_STATUS_MS } from "./dashboard/server.ts";
+import { formatDuration } from "./gap-report.ts";
 
-/** An event-loop delay longer than this is logged: a snapshot arriving then is received this late at least. */
+/** An event-loop delay longer than this is logged: a snapshot arriving during it is received up to this late. */
 export const BRAIN_HELD_MS = 200;
 /** Each reading's minute: at most one line a minute, with what the minute held. */
 export const BRAIN_HOLDS_EVERY_MS = 60_000;
@@ -23,16 +24,31 @@ export interface LoopDelay {
 
 const NS_PER_MS = 1_000_000;
 
-/** The slow statuses and the loop's delay since the last minute's line, logged by `minute` if anything was held. */
+/**
+ * The slow statuses and the loop's delay since the last reading, logged by `minute` if anything was held, with the
+ * span it covers (a minute, or less at the brain's stop), on `nowMs` (the monotonic clock's, by default).
+ */
 export class BrainHolds {
   readonly #delay: LoopDelay;
   readonly #log: (line: string) => void;
   #slowStatuses = 0;
   #slowestStatusMs = 0;
+  readonly #nowMs: () => number;
+  #sinceMs: number;
 
-  constructor({ delay, log }: { delay: LoopDelay; log: (line: string) => void }) {
+  constructor({
+    delay,
+    log,
+    nowMs = () => performance.now(),
+  }: {
+    delay: LoopDelay;
+    log: (line: string) => void;
+    nowMs?: () => number;
+  }) {
     this.#delay = delay;
     this.#log = log;
+    this.#nowMs = nowMs;
+    this.#sinceMs = nowMs();
   }
 
   /** A dashboard status built slower than `SLOW_DASHBOARD_STATUS_MS`, how long it took. */
@@ -43,12 +59,16 @@ export class BrainHolds {
 
   /** The minute's line, if it held anything (also at the brain's stop, so nothing counted is lost); then afresh. */
   minute(): void {
+    const nowMs = this.#nowMs();
+    const span = formatDuration(nowMs - this.#sinceMs);
+    this.#sinceMs = nowMs;
     const longestMs = this.#delay.max / NS_PER_MS;
     const parts: string[] = [];
     if (this.#slowStatuses > 0) {
       const statuses = `${this.#slowStatuses} dashboard status${this.#slowStatuses === 1 ? "" : "es"}`;
       parts.push(
-        `${statuses} built slower than ${SLOW_DASHBOARD_STATUS_MS} ms, the slowest in ${Math.round(this.#slowestStatusMs)} ms`,
+        `${statuses} built slower than ${SLOW_DASHBOARD_STATUS_MS} ms, the slowest in ` +
+          `${Math.round(this.#slowestStatusMs)} ms`,
       );
     }
     if (longestMs > BRAIN_HELD_MS) {
@@ -58,7 +78,7 @@ export class BrainHolds {
       );
     }
     if (parts.length > 0) {
-      this.#log(`held in the last minute: ${parts.join("; ")}; every snapshot arriving meanwhile waited (#309)`);
+      this.#log(`held in the last ${span}: ${parts.join("; ")}; every snapshot arriving meanwhile waited (#309)`);
     }
     this.#slowStatuses = 0;
     this.#slowestStatusMs = 0;

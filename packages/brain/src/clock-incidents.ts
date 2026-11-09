@@ -1,4 +1,5 @@
-// Clock steps and page stalls (#241): what, outside the batcher, makes its landings look out of order. Run #3
+// Clock steps, page stalls (#241) and delivery lags (#309): what, outside the batcher, makes its landings look out of
+// order. Run #3
 // (2026-11-05) had a clock step: Windows stepped the PC's clock +2,678 ms at 17:11:33.5Z (its event log), the game's
 // process took it up at about 17:11:46 and the brain's at about 17:12:08 (each resyncs its wall clock now and then);
 // the batcher, then judging landings by `Date.now()`, saw every part in flight 2.7 s late, and 1,615 desyncs on the-hub

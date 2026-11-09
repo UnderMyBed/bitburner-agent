@@ -3907,7 +3907,7 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     expect(warnings).toEqual([]);
     expect(failures).toEqual([
       "batcher out of step: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub, the " +
-        `first seen at ${at(731_800)}; no clock step, page stall or delivery lag before it`,
+        `first seen at ${at(731_800)}; no clock step, page stall, or delivery lag the page was behind, before it`,
     ]);
     expect(text).toMatch(/3 or more within an hour fail\):\n {4}none\n/);
   });
@@ -3919,7 +3919,7 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     expect(warnings).toEqual([]);
     expect(failures).toEqual([
       "batcher out of step: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub, the " +
-        `first seen at ${at(734_478)}; no page stall or delivery lag before it (a clock step can't put a batcher on ` +
+        `first seen at ${at(734_478)}; no page stall, or delivery lag the page was behind, before it (a clock step can't put a batcher on ` +
         "the page's monotonic clock out of step, #251)",
     ]);
   });
@@ -3975,7 +3975,9 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     const { text, failures, warnings } = runReport(store, incidentWindow);
     expect(warnings).toEqual([]);
     expect(text).not.toContain(STEP_LINE);
-    expect(failures).toEqual([expect.stringMatching(/; no clock step, page stall or delivery lag before it$/)]);
+    expect(failures).toEqual([
+      expect.stringMatching(/; no clock step, page stall, or delivery lag the page was behind, before it$/),
+    ]);
   });
 
   test("a medium snapshot retried twice (14 s apart on both clocks, fast snapshots saying so) is no stall", () => {
@@ -4466,7 +4468,7 @@ describe("over a thinned store (#283)", () => {
   const note = (lastOffsetMs: number, fast: number, medium: number) =>
     `  note: the store is thinned (#283) in this window, up to ${at(lastOffsetMs)}: ${fast} fast and ${medium} medium ` +
     "snapshots there keep only their times, one of each a minute kept whole. The heartbeat's gaps, clock steps, page " +
-    "stalls and the page heap read every one; the rest read the whole ones, so their times there are within a " +
+    "stalls, delivery lags and the page heap read every one; the rest read the whole ones, so their times there are within a " +
     "minute, what came and went within one isn't seen, a backdoor overdue (it needs medium snapshots within 30 s) and " +
     "a batcher stuck on a poor target (looks within 6 s) aren't judged there, and the batcher not running for 3 fast " +
     "snapshots in a row counts whole ones, a minute apart";

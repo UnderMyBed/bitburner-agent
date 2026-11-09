@@ -73,7 +73,8 @@ const SCHEMA = `
  * whole, and each other keeps its row (its times, session and sequence number) with its data cut to a stub,
  * `{"thinned":true}`, a fast one's with its `degradedTiers`, `pageHeapUsedBytes`, `sentAtMs` (the Agent's send stamp,
  * #309: whose a delivery lag was) and `resetIntents` (the ids of the install and destroy intents it held): what the run
- * report's time checks, its reloads and the gap report read of every snapshot. The other tiers, the events and the settings are never thinned.
+ * report's time checks, its reloads and the gap report read of every snapshot. The other tiers, the events and the
+ * settings are never thinned.
  */
 export const THINNED_SNAPSHOT_TIERS = ["fast", "medium"] as const;
 /** One snapshot of each thinned tier a minute stays whole. */
@@ -119,8 +120,9 @@ const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence
   missed_before, data`;
 const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
 /**
- * The newest snapshots of a tier, newest first by id (the order stored), at most `limit` (the third parameter). Read off
- * `snapshots_by_tier_and_id`, as stored, with no sort (#309): the dashboard's status and the supervisor read it.
+ * The newest snapshots of a tier, newest first by id (the order stored), at most `limit` (the third parameter).
+ * Read off `snapshots_by_tier_and_id`, as stored, with no sort (#309): the dashboard's status and the supervisor read
+ * it.
  */
 export const NEWEST_OF_TIER_SQL = `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
   ORDER BY id DESC LIMIT ?`;
@@ -423,7 +425,8 @@ export class TelemetryStore {
    * (the dashboard's timeline, #285, once it has read the rest). By the row id's range alone (the `+` keeps SQLite off
    * the tier index), reading every tier's rows since: few, with the page open (a minute holds about 37). Or
    * `byTierIndex`, by the slow tier's index on (environment, tier, id) (#309: a seek past `afterId`, in id order, no
-   * sort), so the rows of every other tier aren't read: the page closed for days (`RECENT_ROWS`, the timeline's choice).
+   * sort), so the rows of every other tier aren't read: the page closed for days (`RECENT_ROWS`, the timeline's
+   * choice).
    */
   slowResetInfoAfterId({
     environment,

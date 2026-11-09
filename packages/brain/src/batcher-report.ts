@@ -4,13 +4,13 @@
 // from 0 when it starts (a new run has another `runName`), so each hour adds up each run's rises within it; a run
 // already under way at the window's first snapshot counts from there. Its sharing's lines are ./share-report.ts's
 // (#224). Out of step is judged a stretch at a time (#241): one a clock step, page stall or delivery lag (#309)
-// explains, which the batcher recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts). Since #251 the batcher times its
-// batches on the page's monotonic clock (its health's `clock`), which a clock step doesn't move: only a page stall
-// explains its stretches, and a clock step only an older batcher's. A delivery lag (#309) counts as a page stall
-// only where the Agent's send stamps show the page was behind it: the socket's or the brain's lag can't hold the
-// page's batcher, and one whose side they can't tell excuses nothing (the 2026-11-08 clarkinc desyncs stay a failure;
-// their cause is #315). A batcher stuck on poor targets (#275, the best rooted one 100× more on the hosts' RAM) is a warning for an
-// hour, and a failure for 2 hours in a cycle.
+// explains, which the batcher recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts). Since
+// #251 the batcher times its batches on the page's monotonic clock (its health's `clock`), which a clock step doesn't
+// move: only a page stall explains its stretches, and a clock step only an older batcher's. A delivery lag (#309)
+// counts as a page stall only where the Agent's send stamps show the page was behind it: the socket's or the brain's
+// lag can't hold the page's batcher, and one whose side they can't tell excuses nothing (the 2026-11-08 clarkinc
+// desyncs stay a failure; their cause is #315). A batcher stuck on poor targets (#275, the best rooted one 100× more
+// on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle.
 import {
   BATCH_RAM_WAIT_MS,
   type BatcherHealth,
@@ -691,7 +691,9 @@ function attributionOf(
   );
   const incidentsBefore = explaining.filter(before);
   const lastIncident = incidentsBefore.at(-1);
-  const kinds = monotonic ? "page stall or delivery lag" : "clock step, page stall or delivery lag";
+  const kinds = monotonic
+    ? "page stall, or delivery lag the page was behind,"
+    : "clock step, page stall, or delivery lag the page was behind,";
   // Said, so a step, or a lag the page wasn't seen behind within a weaken before, reads as no excuse, not as missed.
   const lagInReach = (incident: ClockIncident) => {
     const lagWeakenMs = context.weakenMs(target, incident.fromMs);
@@ -906,9 +908,9 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
  * reputation (`readings`). Its moves (#236) are joined across a batcher's restart, but not across an install
  * (`resetsMs`, the game's `lastAugReset` times in the slow snapshots): a new cycle starts from nothing. Each
  * stretch out of step a clock step, page stall or delivery lag explains (`incidentContext`, #241, #309), the batcher
- * batching again by
- * itself, is a warning. With `stuck` (the medium snapshots' targets' incomes, and 2b's cycles), after the moves, a
- * batcher stuck on a poor target (#275, `stuckTargetLines`), its warnings with `incidentContext`'s.
+ * batching again by itself, is a warning. With `stuck` (the medium snapshots' targets' incomes, and 2b's cycles),
+ * after the moves, a batcher stuck on a poor target (#275, `stuckTargetLines`), its warnings with
+ * `incidentContext`'s.
  */
 export function batcherSection(
   points: BatcherPoint[],
