@@ -1078,19 +1078,43 @@ npm run campaign -- [--data-dir <dir>] [--environment E0]
 
 ## The brain against the fork
 
-M4 phase B's exit criterion is the agent at least as far along as the legacy fork at each baseline checkpoint ([architecture §13](../../docs/architecture.md#13-milestones), [ADR 0011](../../docs/decisions/0011-checkpointed-simulator-comparisons.md); what that means is Q10, [#83](https://github.com/UnderMyBed/bitburner-agent/issues/83)). `test/brain-at-checkpoints-simulation.test.ts` ([#319](https://github.com/UnderMyBed/bitburner-agent/issues/319)) measures the brain there:
-- **The start:** exactly the baseline's, `baselineScenario()`'s fixture from `@bitburner-agent/legacy`: BN1 with SF1.1 and SF4.3, which the game makes BN1.2, home at 32 GB, on the same seeds and epoch. The brain plays with its rules as on Steam (`useFreshStarts`, `withDesiredState`).
-- **The runner** (`test/helpers/checkpoints.ts`, `runToCheckpoints`) reads the simulator's summary, the same one the baseline's checkpoints record, at 4, 8 and 12 virtual hours (`CHECKPOINTS_MS`), on the same clock: virtual time since the simulation started. It polls every virtual minute, and a checkpoint takes the first poll at or past it, within one driver step (200 ms).
-- **The end:** the first destroy, which is the first poll whose BitNode or Source-Files differ from the start's (the World Daemon rule destroys into BN1, so BN1.2 becomes BN1.3 with SF1.2). Otherwise it ends at a cap, 16 virtual hours by default. A checkpoint after a destroy is recorded as destroyed, and counts as ahead.
-- **The output:** rows in [baselines.md](../../docs/sim/baselines.md#the-brain-against-the-fork)'s columns, then each seed against the fork's same seed (`FORK_AT_CHECKPOINTS`: the 5238ab6 baseline run on v26.13.0, deterministic on that Node), then each seed's destroy. The heap isn't measured, because the game runs in a child process.
-- **CI** runs the runner's logic on a fake game, the rows and the comparison, and seed 1 from the baseline's start to 1 virtual hour, read at 20, 40 and 60 minutes. Each checkpoint must be the game's own summary, in BN1.2 with SF1.1 and SF4.3. That takes about 40 s.
-- **The full run** is a knobbed test rather than a CLI, because the harness is built on Vitest's hooks. It's heavy: on the reference rig, seeds 1 and 2 each took about 1 h 45 min of real time to their destroys (two at once, beside a third run). Most of that went on the hours when the cloud servers hold petabytes. So run one seed a run, each under a hard real-time limit:
-  ```
-  BRAIN_CHECKPOINTS=1 BRAIN_CHECKPOINTS_SEEDS=1 BRAIN_CHECKPOINTS_OUT=<folder> npx vitest run packages/brain/test/brain-at-checkpoints-simulation.test.ts -t "the run, seed" --maxWorkers=1
-  ```
-  - `BRAIN_CHECKPOINTS_HOURS` sets the cap (12 to 48 virtual hours).
-  - Each seed writes its progress lines to `seed-<n>.log` in the folder, and its result to `seed-<n>.json`, rewritten at each checkpoint and every 10 virtual minutes. So a run that's stopped keeps what it reached.
-  - At the end, it prints the rows, the comparison and the destroys over every result in the folder, and writes them to `table.md` there. `BRAIN_CHECKPOINTS_TABLE=<folder>` prints them again without running anything.
+M4 phase B's exit criterion is the agent at least as far along as the legacy fork at each baseline checkpoint ([architecture §13](../../docs/architecture.md#13-milestones), [ADR 0011](../../docs/decisions/0011-checkpointed-simulator-comparisons.md)). [Owner decision 65](../../docs/decisions/owner-decisions.md) says what that means (Q10, [#83](https://github.com/UnderMyBed/bitburner-agent/issues/83)). `test/brain-at-checkpoints-simulation.test.ts` ([#319](https://github.com/UnderMyBed/bitburner-agent/issues/319)) measures the brain there:
+- **The start:** exactly the baseline's, `baselineScenario()`'s fixture from `@bitburner-agent/legacy`: BN1 with SF1.1 and SF4.3, which the game makes BN1.2, home at 32 GB, on the same seeds and epoch.
+- **The play:** the brain plays with its rules as on Steam (`useFreshStarts`, `withDesiredState`), but through the simulator's own effectors, not the Singularity workers SF4.3 would give it on Steam.
+- **The runner** (`test/helpers/checkpoints.ts`, `runToCheckpoints`) reads the simulator's summary, the same one the baseline's checkpoints record, at 4, 8 and 12 virtual hours (`CHECKPOINTS_MS`). It uses the same clock: virtual time since the simulation started.
+  - It polls every virtual minute, and a checkpoint takes the first poll at or past it, within one driver step (200 ms).
+  - Each checkpoint also keeps the highest hacking level of every poll so far, its peak, for decision 65's gate.
+  - Checkpoints that aren't in ascending order fail loudly, and so does a cap before the last checkpoint or a game that doesn't move on.
+- **The end:** the first destroy, which is the first poll whose BitNode or Source-Files differ from the start's (the World Daemon rule destroys into BN1, so BN1.2 becomes BN1.3 with SF1.2). Otherwise it ends at a cap, 16 virtual hours by default.
+  - A checkpoint at or after the destroy's poll is recorded as destroyed, and counts as ahead.
+  - The destroy's time is that poll's, up to a minute after the game left the BitVerse.
+  - A destroy that changes neither the BitNode nor the Source-Files isn't seen: one at the Source-File's cap into the same BitNode, or b1t_flum3 into the same BitNode. Neither can happen from BN1.2 with SF1.1.
+- **The output:**
+  - rows in [baselines.md](../../docs/sim/baselines.md#the-brain-against-the-fork)'s columns;
+  - then each seed against the fork's same seed under decision 65's gate (`compareWithFork`), with `FORK_AT_CHECKPOINTS`: the 5238ab6 baseline run's per-seed values on v26.13.0, from its JSON;
+  - then each seed's destroy.
+
+  The heap isn't measured, because the game runs in a child process. A seed whose run was stopped (`partial`) counts at the checkpoints it reached and is named at those it didn't, marked "stopped" in the comparison; speed and real time are over the runs that ended.
+- **CI** runs, in about 40 s:
+  - the runner's logic on a fake game: a destroy on a checkpoint's own poll, and an install's dip on a checkpoint, whose peak is kept;
+  - the rows, the comparison and the knobs;
+  - seed 1 from the baseline's start to 1 virtual hour, read at 20, 40 and 60 minutes. Each checkpoint must be the game's own summary, in BN1.2 with SF1.1 and SF4.3, with its peak as every poll's highest.
+- **Decision 65's seeds:** seeds 1–2, while the lead is a multiple; more only if a gated measure comes within 25% of the fork's. #319 ran 1–2 to their destroys; 3 and 4 were stopped part-way when the owner stopped the long simulator runs, and their 4 h and 8 h readings are kept.
+- **The full run** is a knobbed test rather than a CLI, because the harness is built on Vitest's hooks. It's heavy: on the reference rig, seeds 1 and 2 each took about 1 h 45 min of real time to their destroys (two at once, beside a third run). Most of that went on the hours when the cloud servers hold petabytes.
+  - Run one seed a run, each under an external real-time kill. #319's ran under a 3-hour process-tree kill; Vitest's own 48 h test timeout kills nothing.
+  - POSIX:
+    ```
+    BRAIN_CHECKPOINTS=1 BRAIN_CHECKPOINTS_SEEDS=1 BRAIN_CHECKPOINTS_OUT=<folder> npx vitest run packages/brain/test/brain-at-checkpoints-simulation.test.ts -t "the run, seed" --maxWorkers=1
+    ```
+  - PowerShell: set `$env:BRAIN_CHECKPOINTS = "1"`, `$env:BRAIN_CHECKPOINTS_SEEDS = "1"` and `$env:BRAIN_CHECKPOINTS_OUT = "<folder>"`, then run the same `npx vitest run …` line. They stay set for the session, so `Remove-Item Env:BRAIN_CHECKPOINTS*` afterwards.
+  - `BRAIN_CHECKPOINTS_SEEDS` takes seeds as the baseline's `--seeds` does (`a..b` or `a,b,c`, distinct). `BRAIN_CHECKPOINTS_HOURS` sets the cap, 12 to 48 virtual hours. `BRAIN_CHECKPOINTS` set to anything but `1` runs nothing, and says so.
+  - The folder is made if need be.
+    - Each seed writes its progress lines to `seed-<n>.log` there.
+    - Its result goes to `seed-<n>.json`, with the run's date, commit, rig and Node. The result is rewritten at each checkpoint and every 10 virtual minutes, marked `partial` until the run ends, so a run that's stopped keeps what it reached.
+  - At the end, it prints the rows, the comparison and the destroys over every result in the folder, and writes them to `table.md` there.
+  - `BRAIN_CHECKPOINTS_TABLE=<folder>` prints them again without running anything.
+    - A result from before the peak was kept (#319's seeds 1–4) takes its peaks from its `seed-<n>.log` (`peaksFromLog`: the 10-minute progress lines and the checkpoint's own reading, a lower bound).
+    - A result from before the run's metadata was kept takes today's date, commit, rig and Node, and the print names those seeds.
 
 ## The lockstep driver
 
