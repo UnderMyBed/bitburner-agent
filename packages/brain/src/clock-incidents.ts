@@ -22,7 +22,7 @@ import {
   SNAPSHOT_TIER_PERIOD_MS,
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
-import { hackingPlayerOf } from "./batcher.ts";
+import { BN1_HACKING, hackingPlayerOf } from "./batcher.ts";
 import { formatDuration, formatIsoTime, formatSeconds } from "./gap-report.ts";
 
 /**
@@ -725,7 +725,9 @@ export class WeakenTimes {
   }
 
   addMedium(atMs: number, data: MediumSnapshotData): void {
-    const player = hackingPlayerOf(data?.player);
+    // A weaken's time reads the hacking level, intelligence and speed, none a BitNode's `ScriptHackMoney` or
+    // `HackExpGain` changes (#321): BN1's do here in every BitNode.
+    const player = hackingPlayerOf(data?.player, BN1_HACKING);
     if (player === null) return;
     const key = JSON.stringify(player);
     if (key === this.#lastPlayerKey) return;

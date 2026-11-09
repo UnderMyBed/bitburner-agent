@@ -6,8 +6,9 @@
 //   `lastAugReset`, `:126`), not before the last slow snapshot's game time (else a save loaded, as the campaign model
 //   tells one), with a destroy's reset note out (the brain's or the owner's queued `destroyBitNode`, #175: across a
 //   brain restart too), or else the BitNode's Source-File a level up (a destroy by hand in the game, below the cap:
-//   `giveSourceFile`, `RedPill.tsx:16-52`). The note is what tells the brain's replay at Source-File 1's cap (#311,
-//   ./world-daemon.ts's `replayOf`), which gives no level (`RedPill.tsx:27-31`): "BN1.4 destroyed, BN1.4 seen again".
+//   `giveSourceFile`, `RedPill.tsx:16-52`). The note is what tells the brain's replay with nothing left in the
+//   campaign's order to gain (#311, #321, ./world-daemon.ts's `replayOf`), which gives no level (`RedPill.tsx:27-31`):
+//   "BN1.4 destroyed, BN1.4 seen again".
 //   b1t_flum3 gives none (`RedPill.tsx:62-63`), and at the cap a destroy by hand gives none either, so with no note
 //   those two can't be told apart: neither stops the brain.
 // - **Once:** the switch is set back to "play on" as the brain shuts down (logged; the event says so), so it stops

@@ -5,6 +5,7 @@
 // switch turns it on and off; on is the default (owner decision 34). `DesiredStateController` (desired-state.ts)
 // sends it.
 import {
+  type BitNodeHackingMultipliers,
   growthLogPerThread,
   HACK_LOOP_RAM_BUDGET_GB,
   HACK_LOOP_SECURITY_MARGIN,
@@ -210,6 +211,7 @@ export interface LastHackTarget {
 export function planHackLoop(
   staticData: StaticSnapshotData | null,
   mediumData: MediumSnapshotData | null,
+  hacking: BitNodeHackingMultipliers,
   lastSet: LastHackTarget | null,
 ): { hackLoop: Omit<HackLoopState, "enabled">; lastSet: LastHackTarget | null } {
   const candidates = hackTargetCandidates(staticData, mediumData);
@@ -225,7 +227,7 @@ export function planHackLoop(
   if (current === best || ready(best) || !currentEarns) {
     const earning = current === best ? currentEarns : ready(best);
     return {
-      hackLoop: { target: best.hostname, hosts, ...hackThreadsOf(best, hostsWithRam, mediumData) },
+      hackLoop: { target: best.hostname, hosts, ...hackThreadsOf(best, hostsWithRam, mediumData, hacking) },
       lastSet: { target: best.hostname, earning, preparingHosts: [] },
     };
   }
@@ -235,14 +237,14 @@ export function planHackLoop(
   // No host to prepare on (none rooted with RAM): nothing prepared, rather than "preparing on 0 servers".
   if (preparing.length === 0) {
     return {
-      hackLoop: { target: current.hostname, hosts, ...hackThreadsOf(current, hostsWithRam, mediumData) },
+      hackLoop: { target: current.hostname, hosts, ...hackThreadsOf(current, hostsWithRam, mediumData, hacking) },
       lastSet: lastSetNow,
     };
   }
   const earningWithRam = hostsWithRam.filter(([hostname]) => !preparingHosts.has(hostname));
   const preparingWithRam = hostsWithRam.filter(([hostname]) => preparingHosts.has(hostname));
-  const earningThreads = hackThreadsOf(current, earningWithRam, mediumData).hackThreads ?? {};
-  const preparingThreads = hackThreadsOf(best, preparingWithRam, mediumData).hackThreads ?? {};
+  const earningThreads = hackThreadsOf(current, earningWithRam, mediumData, hacking).hackThreads ?? {};
+  const preparingThreads = hackThreadsOf(best, preparingWithRam, mediumData, hacking).hackThreads ?? {};
   return {
     hackLoop: {
       target: current.hostname,
@@ -282,14 +284,16 @@ export const HACK_REGROW_ROUNDS = 2;
  *   worker caps.
  * The player's multipliers are 1 where the snapshot doesn't say. None (absent) with no host; 1 each without the
  * target's minimum security, when a thread takes nothing, or when the inputs give no finite count (an infinite
- * multiplier, say, which the game can't produce). The BitNode's `ServerGrowthRate` is taken as 1 (core's
+ * multiplier, say, which the game can't produce). The BitNode's `ScriptHackMoney` is folded into `hacking_money`
+ * (#321, `hacking`: core's `bitNodeHackingMultipliers`); its `ServerGrowthRate` is taken as 1 (core's
  * `growthLogPerThread`): in BN2, BN3 and BN11 that makes the counts up to 5x too generous, the unsafe side; to revisit
- * when BitNode multipliers come to core. BN1 is exact.
+ * when those come to core. BN1 and BN4 are exact.
  */
 function hackThreadsOf(
   target: StaticServer,
   hostsWithRam: [string, number][],
   mediumData: MediumSnapshotData,
+  hacking: BitNodeHackingMultipliers,
 ): { hackThreads?: Record<string, number> } {
   if (hostsWithRam.length === 0) return {};
   const player = mediumData.player as {
@@ -297,13 +301,17 @@ function hackThreadsOf(
     mults?: { hacking_money?: unknown; hacking_grow?: unknown };
   };
   const numberOr1 = (value: unknown) => (typeof value === "number" ? value : 1);
-  const hacking = typeof player.skills?.hacking === "number" ? player.skills.hacking : 0;
+  const level = typeof player.skills?.hacking === "number" ? player.skills.hacking : 0;
   const { minDifficulty, requiredHackingSkill, serverGrowth } = target;
   const hackSharePerThread =
     typeof minDifficulty === "number"
       ? percentMoneyHackedPerThread(
           { hackDifficulty: minDifficulty, requiredHackingSkill: requiredHackingSkill ?? 0 },
-          { skills: { hacking }, mults: { hacking_money: numberOr1(player.mults?.hacking_money) } },
+          // The BitNode's `ScriptHackMoney` folded in (#321, `Hacking.ts:53-54`): 0.2 in BN4.
+          {
+            skills: { hacking: level },
+            mults: { hacking_money: numberOr1(player.mults?.hacking_money) * hacking.ScriptHackMoney },
+          },
         )
       : 0;
   const growthLogPerHostThread =

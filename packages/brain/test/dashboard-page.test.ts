@@ -235,6 +235,7 @@ const BUSY_STATUS: DashboardStatus = {
     ],
     destroying: false,
     ownersDestroy: false,
+    nextBitNode: 4,
     replay: null,
     stall: null,
   },
@@ -926,7 +927,7 @@ test("the World Daemon (#215): the path in the brain's words, a stall in red, an
     return { status: 200, body: current };
   });
   expect(textOf(document, "#world-daemon")).toContain(
-    "Destroying the BitNode (into BitNode 1): on, once w0r1d_d43m0n is ready",
+    "Destroying the BitNode (into BitNode 4): on, once w0r1d_d43m0n is ready",
   );
   expect(textOf(document, "#world-daemon")).toContain("Daedalus: joined; 31 of 30 augmentations installed");
   expect(textOf(document, "#world-daemon")).toContain("The Red Pill: Daedalus's reputation 1,000,000 of 2,500,000");
@@ -936,7 +937,7 @@ test("the World Daemon (#215): the path in the brain's words, a stall in red, an
   expect(requests.filter((request) => request.method === "POST").map((request) => [request.url, request.body])).toEqual(
     [["/api/world-daemon", '{"enabled":false}']],
   );
-  expect(textOf(document, "#world-daemon")).toContain("Destroying the BitNode (into BitNode 1): off");
+  expect(textOf(document, "#world-daemon")).toContain("Destroying the BitNode (into BitNode 4): off");
   expect(textOf(document, "#world-daemon button")).toBe("Start destroying the BitNode");
 });
 
@@ -949,15 +950,20 @@ test.each([
   ],
   ["with no path yet", { lines: [] }, "Waiting for the Agent's snapshots"],
   [
-    "the owner's destroy queued",
-    { destroying: true, ownersDestroy: true },
-    "yours is queued, and goes instead of the brain's",
+    "the owner's destroy queued, into its BitNode (#321)",
+    { destroying: true, ownersDestroy: true, nextBitNode: 2 },
+    "Destroying the BitNode (into BitNode 2): yours is queued, and goes instead of the brain's",
   ],
   [
-    "at Source-File 1's cap (#311)",
-    { replay: "Source-File 1 is at 3, nothing to gain but the run" },
-    "Destroying the BitNode (into BitNode 1): on, once w0r1d_d43m0n is ready; it replays BitNode 1: Source-File 1 is " +
-      "at 3, nothing to gain but the run",
+    "before a slow snapshot (#321)",
+    { nextBitNode: null },
+    "Destroying the BitNode (into the next BitNode, once the Agent's slow snapshot shows this one): on",
+  ],
+  [
+    "with nothing left in the campaign's order to gain (#311, #321)",
+    { nextBitNode: 1, replay: "the campaign's order has nothing left to gain" },
+    "Destroying the BitNode (into BitNode 1): on, once w0r1d_d43m0n is ready; it replays BitNode 1: the campaign's " +
+      "order has nothing left to gain",
   ],
 ])("the World Daemon, %s, says so", async (_description, changes, text) => {
   const worldDaemon = { ...(BUSY_STATUS.worldDaemon as NonNullable<DashboardStatus["worldDaemon"]>), ...changes };

@@ -10,9 +10,11 @@ import {
   type BatcherHealth,
   type BatcherPlayerMults,
   type BatcherState,
+  type BitNodeHackingMultipliers,
   batcherIncomePerGigabyteSecond,
   batchPlan,
   batchRamGb,
+  bitNodeHackingMultipliers,
   type HackingPlayer,
   type HackingTarget,
   hackChance,
@@ -44,30 +46,59 @@ export const HOME_KEPT_FOR_THE_AGENT_GB = 8;
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-/** The player's hacking figures from the medium snapshot (the Agent's word), or null if any is missing. */
-export function hackingPlayerOf(player: unknown): HackingPlayer | null {
+/** Logged once while no slow snapshot has said the BitNode (#321): its hacking multipliers taken as BN1's meanwhile. */
+export const HACKING_MULTIPLIERS_UNREAD =
+  "hacking: no slow snapshot yet says the BitNode, so its ScriptHackMoney and HackExpGain are taken as BN1's (1) until one does";
+
+/** BN1's hacking multipliers, the defaults (`BitNode/BitNodeMultipliers.ts`): 1 each. */
+export const BN1_HACKING: BitNodeHackingMultipliers = { ScriptHackMoney: 1, HackExpGain: 1 };
+
+/**
+ * The hacking multipliers of `bitNode`, the slow snapshot's (#321, core's `bitNodeHackingMultipliers`), for the
+ * player's parse to fold in; `known` false, and BN1's, for a BitNode core hasn't them for, or none read yet (no slow
+ * snapshot).
+ * Never silently: the controller logs either (`HACKING_MULTIPLIERS_UNREAD`, and the BitNode's `bitNodeAssumptions`),
+ * and the run report lists the BitNode's.
+ */
+export function bitNodeHackingOf(bitNode: unknown): { multipliers: BitNodeHackingMultipliers; known: boolean } {
+  const multipliers = isNumber(bitNode) ? bitNodeHackingMultipliers(bitNode) : null;
+  return multipliers === null ? { multipliers: BN1_HACKING, known: false } : { multipliers, known: true };
+}
+
+/**
+ * The player's hacking figures from the medium snapshot (the Agent's word), or null if any is missing; with the
+ * BitNode's `ScriptHackMoney` folded into `hacking_money` (#321: `Hacking.ts:53-54` multiplies the two), so every
+ * formula on the player is the game's in `hacking`'s BitNode.
+ */
+export function hackingPlayerOf(player: unknown, hacking: BitNodeHackingMultipliers): HackingPlayer | null {
   const { skills, mults } = (player ?? {}) as { skills?: Record<string, unknown>; mults?: Record<string, unknown> };
-  const hacking = skills?.hacking;
+  const level = skills?.hacking;
   const intelligence = skills?.intelligence;
   const multNames = ["hacking_chance", "hacking_speed", "hacking_money", "hacking_grow"] as const;
-  if (!isNumber(hacking) || !isNumber(intelligence) || !multNames.every((name) => isNumber(mults?.[name]))) return null;
+  if (!isNumber(level) || !isNumber(intelligence) || !multNames.every((name) => isNumber(mults?.[name]))) return null;
+  const folded = { hacking_money: (mults?.hacking_money as number) * hacking.ScriptHackMoney };
   return {
-    skills: { hacking, intelligence },
-    mults: Object.fromEntries(multNames.map((name) => [name, mults?.[name] as number])) as HackingPlayer["mults"],
+    skills: { hacking: level, intelligence },
+    mults: {
+      ...(Object.fromEntries(multNames.map((name) => [name, mults?.[name] as number])) as HackingPlayer["mults"]),
+      ...folded,
+    },
   };
 }
 
 /**
  * The player's multipliers a batcher config carries (#315): the formulas' four, and the level's and its exp's, with
  * which the batcher forecasts the level at each hack's landing; or null if any is missing from the medium snapshot.
+ * `hacking_money` and `hacking_exp` with the BitNode's `ScriptHackMoney` and `HackExpGain` folded in (#321,
+ * `Hacking.ts:37`, `:53-54`): the Agent's batcher sizes its hacks and forecasts its level with these.
  */
-export function batcherMultsOf(player: unknown): BatcherPlayerMults | null {
-  const hackingPlayer = hackingPlayerOf(player);
+export function batcherMultsOf(player: unknown, hacking: BitNodeHackingMultipliers): BatcherPlayerMults | null {
+  const hackingPlayer = hackingPlayerOf(player, hacking);
   const mults = (player as { mults?: Record<string, unknown> } | null)?.mults;
-  const hacking = mults?.hacking;
+  const levelMult = mults?.hacking;
   const hackingExp = mults?.hacking_exp;
-  if (hackingPlayer === null || !isNumber(hacking) || !isNumber(hackingExp)) return null;
-  return { ...hackingPlayer.mults, hacking, hacking_exp: hackingExp };
+  if (hackingPlayer === null || !isNumber(levelMult) || !isNumber(hackingExp)) return null;
+  return { ...hackingPlayer.mults, hacking: levelMult, hacking_exp: hackingExp * hacking.HackExpGain };
 }
 
 /** A target's figures from the static snapshot, or null if any is missing. */
@@ -127,6 +158,7 @@ function batcherRoomOf(
 export function planBatcher(
   staticData: StaticSnapshotData,
   mediumData: MediumSnapshotData,
+  hacking: BitNodeHackingMultipliers,
   target: string,
   hosts: string[],
   current: string | null = null,
@@ -134,8 +166,8 @@ export function planBatcher(
 ):
   | { batcher: BatcherState; incomePerSecond: number; ramGb: number; peakRamGb: number }
   | { batcher: null; why: string } {
-  const player = hackingPlayerOf(mediumData.player);
-  const mults = batcherMultsOf(mediumData.player);
+  const player = hackingPlayerOf(mediumData.player, hacking);
+  const mults = batcherMultsOf(mediumData.player, hacking);
   if (player === null || mults === null) {
     return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
   }
@@ -265,11 +297,12 @@ export interface BatcherTargetWorth {
 export function chooseBatcher(
   staticData: StaticSnapshotData,
   mediumData: MediumSnapshotData,
+  hacking: BitNodeHackingMultipliers,
   hosts: string[],
   current: BatcherState | null,
   batching: string | null,
 ): { batcher: BatcherState; worths: BatcherTargetWorth[] } | { batcher: null; why: string } {
-  const player = hackingPlayerOf(mediumData.player);
+  const player = hackingPlayerOf(mediumData.player, hacking);
   if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
   const targets = batcherTargetsOf(staticData, mediumData, player);
   if (targets.length === 0) return { batcher: null, why: "no rooted server with money the player can hack" };
@@ -300,7 +333,7 @@ export function chooseBatcher(
   const plans = new Map<string, PlannedBatcher | null>();
   const planOf = (hostname: string) => {
     if (!plans.has(hostname)) {
-      const plan = planBatcher(staticData, mediumData, hostname, hosts, runOn);
+      const plan = planBatcher(staticData, mediumData, hacking, hostname, hosts, runOn);
       if (plan.batcher === null) firstWhy ??= plan.why;
       plans.set(hostname, plan.batcher === null ? null : plan);
     }
@@ -308,7 +341,7 @@ export function chooseBatcher(
   };
   /** What a target's batches lose a second on four fifths of the RAM, as they do while a next is prepared (#278). */
   const lostPerSecondOf = (hostname: string, incomePerSecond: number) => {
-    const rest = planBatcher(staticData, mediumData, hostname, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
+    const rest = planBatcher(staticData, mediumData, hacking, hostname, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
     return rest.batcher === null ? incomePerSecond : Math.max(0, incomePerSecond - rest.incomePerSecond);
   };
   const room = batcherRoomOf(mediumData, hosts, runOn);
@@ -471,7 +504,7 @@ export function chooseBatcher(
       ? keptNext.each
       : worthiestNext?.each;
   if (next === undefined) return { batcher: chosen.state, worths };
-  const rest = planBatcher(staticData, mediumData, chosenName, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
+  const rest = planBatcher(staticData, mediumData, hacking, chosenName, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
   if (rest.batcher === null) return { batcher: chosen.state, worths };
   const nextConfig = { target: next.weighed.target, figures: next.figures, ramGb: nextGb(next) };
   return { batcher: { ...rest.batcher, config: { ...rest.batcher.config, next: nextConfig } }, worths };

@@ -114,9 +114,9 @@ export function hackLoopsByHost(workerArguments: unknown[]): Map<string, HostHac
 /**
  * The share of a server's money one thread's hack takes (#187): the game's `calculatePercentMoneyHacked`
  * (Hacking.ts:44-57), `(100 - security)/100 x (hacking - (required - 1))/hacking x hacking_money x ScriptHackMoney /
- * 240`, between 0 and 1. The BitNode's `ScriptHackMoney` is taken as 1: it's 1 in BN1 and at most 1 in every other
- * (BitNode.tsx), so this is never less than the game's, which errs toward fewer hack threads. 0 at security 100 or
- * more, below the hacking the server needs, or with no hacking at all.
+ * 240`, between 0 and 1. The BitNode's `ScriptHackMoney` comes folded into `hacking_money` (#321: the brain folds
+ * core's `bitNodeHackingMultipliers` in where it reads the player; 0.2 in BN4). 0 at security 100 or more, below the
+ * hacking the server needs, or with no hacking at all.
  */
 export function percentMoneyHackedPerThread(
   server: { hackDifficulty: number; requiredHackingSkill: number },

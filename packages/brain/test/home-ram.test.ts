@@ -68,12 +68,22 @@ describe("chooseHomeRamUpgrade", () => {
     });
   });
 
-  test("outside BN1 the price isn't known yet: nothing, and the dashboard says why", () => {
+  test("outside BN1 and BN4 the price isn't known yet: nothing, and the dashboard says why", () => {
     expect(chooseHomeRamUpgrade(medium(8, { money: 1e12 }), slowData(2))).toEqual({
       ram: 8,
       next: null,
       price: null,
       waitingFor: "the home RAM price in BitNode 2 (not known yet)",
+    });
+  });
+
+  test("in BN4 (#321) BN1's price, its HomeComputerRamCost 1: bought as in BN1", () => {
+    expect(chooseHomeRamUpgrade(medium(8, { money: 1e12 }), slowData(4))).toEqual(
+      chooseHomeRamUpgrade(medium(8, { money: 1e12 }), slowData(1)),
+    );
+    expect(chooseHomeRamUpgrade(medium(64, { money: 1e12 }), slowData(4))).toMatchObject({
+      next: { fromRam: 64, vendor: "Alpha Enterprises" },
+      price: homeRamUpgradePrice(64),
     });
   });
 

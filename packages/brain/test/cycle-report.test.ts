@@ -281,7 +281,7 @@ describe("section 2 split at each destroy (#244)", () => {
   test("the BitNodes line: each one entered, destroyed or not, with how long", () => {
     run();
     expect(report()).toContain(
-      `\n  BitNodes: BN1.1 from ${at(-60 * MINUTE)} (before the window), destroyed after 3 h 49 min; ` +
+      `\n  BitNodes: BN1.1 from ${at(-60 * MINUTE)} (before the window), destroyed after 3 h 49 min, into BN1.2; ` +
         `BN1.2 from ${at(169 * MINUTE + 55 * SECOND)}, not destroyed, 29 min 50 s by the window's last record\n`,
     );
   });
@@ -349,7 +349,7 @@ describe("section 2 split at each destroy (#244)", () => {
     run();
     // BN1.1 started 60 minutes before T0: in a window from 61 minutes before, CyberSec at its first look is a join.
     const text = report(T0 - 61 * MINUTE);
-    expect(text).toContain(`  BitNodes: BN1.1 from ${at(-60 * MINUTE)}, destroyed after 3 h 49 min; `);
+    expect(text).toContain(`  BitNodes: BN1.1 from ${at(-60 * MINUTE)}, destroyed after 3 h 49 min, into BN1.2; `);
     expect(text).toContain(`      first faction joined: CyberSec, +1 h 0 min (${at(30 * SECOND)})`);
   });
 
@@ -451,7 +451,7 @@ describe("section 2b: the augmentation cycles (#244)", () => {
     const text = report(T0, T0 + 169 * MINUTE + 52 * SECOND);
     expect(text).toContain(
       `  BitNodes: BN1.1 from ${at(-60 * MINUTE)} (before the window), destroy sent at ` +
-        `${at(169 * MINUTE + 50 * SECOND)}, the next BitNode not seen, 3 h 49 min by the window's last record\n`,
+        `${at(169 * MINUTE + 50 * SECOND)}, into BitNode 1, the next BitNode not seen, 3 h 49 min by the window's last record\n`,
     );
     expect(text).toContain(
       `      destroyed: sent +3 h 49 min (${at(169 * MINUTE + 50 * SECOND)}), the next BitNode not seen\n`,

@@ -4,6 +4,8 @@
 // default, as for the other purchases. Which purchase goes first, of this, the programs and home RAM, is the
 // controller's (desired-state.ts).
 import {
+  type BitNodePriceMultipliers,
+  bitNodePriceMultipliers,
   CLOUD_SERVER_MAX_RAM,
   CLOUD_SERVER_NAME_PREFIX,
   isBrainCloudServerName,
@@ -26,7 +28,7 @@ export function readCloudServersEnabled(store: TelemetryStore): boolean {
 
 /** BN1's price of a GB of a cloud server's RAM, at every size (`Server/data/Constants.ts:4`, the multipliers 1). */
 export const CLOUD_SERVER_PRICE_PER_GB = 55_000;
-/** BN1's limit on cloud servers: 25 × `CloudServerLimit` (1) (`Server/ServerPurchases.ts:96-98`). */
+/** BN1's and BN4's limit on cloud servers: 25 × `CloudServerLimit` (1 in both) (`Server/ServerPurchases.ts:96-98`). */
 export const CLOUD_SERVER_LIMIT = 25;
 /**
  * The least RAM the brain buys a server with: 8 GB holds three of the loop's 2.4 GB threads, 90% of it used. A 4 GB
@@ -61,11 +63,23 @@ export const CLOUD_SERVER_RESERVE_HORIZON_MS = 1 * 60_000;
 /**
  * What `ram` GB of cloud server costs in BN1, as the game works it out (`Server/ServerPurchases.ts:23-42`): ram ×
  * 55,000 × `CloudServerCost` × `CloudServerSoftcap`^max(0, log2(ram) − 6), the multipliers 1. An upgrade costs the
- * difference between the two sizes' prices (`ServerPurchases.ts:44-54`). Other BitNodes multiply it
- * (`BitNode/BitNode.tsx`): a later slice adds them.
+ * difference between the two sizes' prices (`ServerPurchases.ts:44-54`). Another BitNode's: `cloudServerPriceIn`.
  */
 export function cloudServerPrice(ram: number): number {
   return ram * CLOUD_SERVER_PRICE_PER_GB;
+}
+
+/**
+ * What `ram` GB of cloud server costs in a BitNode with `multipliers` (#321, core's `bitNodePriceMultipliers`), in the
+ * game's order (`Server/ServerPurchases.ts:34-41`), so in BN1 it's `cloudServerPrice`'s number; in BN4 the softcap 1.2
+ * raises it above 64 GB.
+ */
+export function cloudServerPriceIn(
+  ram: number,
+  multipliers: Pick<BitNodePriceMultipliers, "CloudServerCost" | "CloudServerSoftcap">,
+): number {
+  const upg = Math.max(0, Math.log(ram) / Math.log(2) - 6);
+  return ram * CLOUD_SERVER_PRICE_PER_GB * multipliers.CloudServerCost * multipliers.CloudServerSoftcap ** upg;
 }
 
 /** The hack loop's income over the window: per second, and per GB of its hosts' RAM per second. */
@@ -211,10 +225,12 @@ const formatMinutes = (ms: number) => `${Math.ceil(ms / 60_000).toLocaleString("
  * - **How much:** the largest power of two of RAM, at least 8 GB for a new server, whose price money covers less the
  *   `reserve`, and whose payback is within `CLOUD_SERVER_PAYBACK_LIMIT_MS`: its price over the RAM it adds times the
  *   hack loop's income per GB a second. In BN1 a GB costs the same at every size, so the payback is too: the rule buys
- *   the largest that money allows, or nothing.
+ *   the largest that money allows, or nothing. In BN4 a GB above 64 GB costs more with each doubling (#321), so the
+ *   payback limit can stop it short of what money allows.
  * - **`previous`**, the purchase last chosen, is kept while it's still to do and money and payback still allow it, so a
  *   purchase in flight keeps its id (and the Agent its count of tries) as money rises.
- * - **What it waits for:** the slow snapshot (the BitNode: the prices are known in BN1 only so far, as home RAM's), the
+ * - **What it waits for:** the slow snapshot (the BitNode: the prices are known in BN1 and BN4 only so far, as home
+ *   RAM's), the
  *   income over a full window, an income that pays back in time, or the money.
  * Snapshot data comes from the game, so nothing in it is taken on trust.
  */
@@ -241,7 +257,10 @@ export function chooseCloudServerPurchase({
   });
   if (slowData === null) return plan("the Agent's slow snapshot (which BitNode)");
   const currentNode = (slowData.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined)?.currentNode;
-  if (currentNode !== 1) return plan(`the cloud server prices in BitNode ${String(currentNode)} (not known yet)`);
+  // BN1's and BN4's (#321, core's `bitNodePriceMultipliers`); another's aren't known yet.
+  const multipliers = typeof currentNode === "number" ? bitNodePriceMultipliers(currentNode) : null;
+  if (multipliers === null) return plan(`the cloud server prices in BitNode ${String(currentNode)} (not known yet)`);
+  const priceOf = (ram: number) => cloudServerPriceIn(ram, multipliers);
   // The brain's own, at a RAM the game sells: an upgrade doubles it from there.
   const own = servers.filter((server) => isBrainCloudServerName(server.hostname) && isCloudServerRam(server.ram));
   const smallest = [...own].sort((a, b) => a.ram - b.ram)[0];
@@ -262,7 +281,7 @@ export function chooseCloudServerPurchase({
   // The purchase in flight, at today's price and income.
   const kept = previous === null ? null : stillToDo(previous, servers, own, mediumData);
   if (previous !== null && kept !== null) {
-    const price = cloudServerPrice(previous.ram) - cloudServerPrice(kept.fromRam);
+    const price = priceOf(previous.ram) - priceOf(kept.fromRam);
     const refreshed = { ...previous, price, paybackMs: paybackMs(price, previous.ram - kept.fromRam) };
     if (fits(refreshed)) return plan(null, refreshed);
   }
@@ -272,7 +291,7 @@ export function chooseCloudServerPurchase({
   const hostname = atTheLimit ? (smallest as CloudServer).hostname : nextCloudServerName(hostnamesOf(mediumData));
   const sizes: CloudServerPurchase[] = [];
   for (let ram = atTheLimit ? fromRam * 2 : MIN_CLOUD_SERVER_RAM; ram <= CLOUD_SERVER_MAX_RAM; ram *= 2) {
-    const price = cloudServerPrice(ram) - (atTheLimit ? cloudServerPrice(fromRam) : 0);
+    const price = priceOf(ram) - (atTheLimit ? priceOf(fromRam) : 0);
     sizes.push({
       action: atTheLimit ? "upgradeServer" : "buyServer",
       hostname,

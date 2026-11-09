@@ -83,6 +83,7 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
       hackingCeiling(
         staticData(),
         medium(50, { home: true, n00dles: true, foodnstuff: true, zer0: true, "pserv-0": true }),
+        1,
       ),
     );
     // n00dles, foodnstuff, zer0 and the cloud server pserv-0 are hosts (16 GB each, #194); home (8 GB) isn't. zer0
@@ -96,7 +97,7 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
     // Home's 8 GB holds 4 threads: 7 GB.
     expect(ceiling.boundIncomePerSecond).toBeCloseTo((7 + 4 * USABLE_16) * best, 9);
     // At hacking 150 zer0 counts, and beats both.
-    const at150 = known(hackingCeiling(staticData(), medium(150, { n00dles: true, foodnstuff: true, zer0: true })));
+    const at150 = known(hackingCeiling(staticData(), medium(150, { n00dles: true, foodnstuff: true, zer0: true }), 1));
     // A batcher still does best on n00dles there (a chance of 99% against zer0's 64%); any hacker on zer0.
     expect(at150.target).toBe("n00dles");
     expect(batcherPerGigabyteSecond("n00dles", 150)).toBeGreaterThan(batcherPerGigabyteSecond("zer0", 150));
@@ -104,7 +105,7 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
     expect(perGigabyteSecond("zer0", 150)).toBeGreaterThan(perGigabyteSecond("n00dles", 150));
     expect(at150.incomePerSecond).toBeCloseTo(3 * USABLE_16 * perGigabyteSecond("zer0", 150), 9);
     // Each host's own RAM, as the medium snapshot has it: 64 GB holds 37 threads, all 64 GB.
-    const larger = known(hackingCeiling(staticData(), medium(150, { zer0: true }, { ram: { zer0: 64 } })));
+    const larger = known(hackingCeiling(staticData(), medium(150, { zer0: true }, { ram: { zer0: 64 } }), 1));
     expect(larger).toMatchObject({ hostCount: 1, hostRamGb: 64 });
     expect(larger.batcherIncomePerSecond).toBeCloseTo(64 * batcherPerGigabyteSecond("zer0", 150), 9);
   });
@@ -115,12 +116,14 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
         server.hostname === "home" || server.hostname === "pserv-0" ? { ...server, moneyMax: 1e15 } : server,
       ),
     };
-    const ceiling = known(hackingCeiling(withMoney, medium(50, { home: true, n00dles: true, "pserv-0": true })));
+    const ceiling = known(hackingCeiling(withMoney, medium(50, { home: true, n00dles: true, "pserv-0": true }), 1));
     expect(ceiling.target).toBe("n00dles");
   });
 
   test("a target not rooted doesn't count, nor its RAM", () => {
-    const ceiling = known(hackingCeiling(staticData(), medium(150, { n00dles: true, foodnstuff: true, zer0: false })));
+    const ceiling = known(
+      hackingCeiling(staticData(), medium(150, { n00dles: true, foodnstuff: true, zer0: false }), 1),
+    );
     expect(ceiling).toMatchObject({ hostCount: 2, hostRamGb: 32, rootedCount: 3, rootedRamGb: 40 });
     expect(ceiling.target).not.toBe("zer0");
   });
@@ -134,6 +137,7 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
           { n00dles: true, foodnstuff: true, zer0: true },
           { cores: { foodnstuff: 4, home: 8 }, ram: { n00dles: "x" } },
         ),
+        1,
       ),
     );
     // n00dles's RAM isn't a number: no host, and none of the bound's.
@@ -148,14 +152,14 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
   });
 
   test("the player's multipliers count", () => {
-    const base = known(hackingCeiling(staticData(), medium(150, { zer0: true })));
-    const faster = known(hackingCeiling(staticData(), medium(150, { zer0: true }, { mults: { hacking_speed: 2 } })));
+    const base = known(hackingCeiling(staticData(), medium(150, { zer0: true }), 1));
+    const faster = known(hackingCeiling(staticData(), medium(150, { zer0: true }, { mults: { hacking_speed: 2 } }), 1));
     expect(faster.batcherIncomePerSecond).toBeGreaterThan(base.batcherIncomePerSecond);
     expect(faster.boundIncomePerSecond).toBeGreaterThan(base.boundIncomePerSecond);
   });
 
   test("nothing hackable rooted is a ceiling of 0, with no target", () => {
-    const ceiling = known(hackingCeiling(staticData(), medium(50, { n00dles: false, zer0: true })));
+    const ceiling = known(hackingCeiling(staticData(), medium(50, { n00dles: false, zer0: true }), 1));
     expect(ceiling).toEqual({
       known: true,
       batcherIncomePerSecond: 0,
@@ -171,7 +175,7 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
   });
 
   test("described: the batcher's, any hacker's, and the bound on all the rooted RAM", () => {
-    const ceiling = known(hackingCeiling(staticData(), medium(150, { zer0: true })));
+    const ceiling = known(hackingCeiling(staticData(), medium(150, { zer0: true }), 1));
     const perSecond = (value: number) => `$${Math.round(value).toLocaleString("en-US")}/s`;
     expect(describeCeiling(ceiling)).toBe(
       `${perSecond(ceiling.batcherIncomePerSecond)} for a batcher on zer0 (${perSecond(ceiling.incomePerSecond)} for ` +
@@ -181,21 +185,60 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
 
   test("unknown without both snapshots, or the player's skills and multipliers", () => {
     const rooted = { n00dles: true };
-    expect(hackingCeiling(null, medium(50, rooted))).toEqual({ known: false, reason: "no static snapshot" });
-    expect(hackingCeiling(staticData(), undefined)).toEqual({ known: false, reason: "no medium snapshot" });
+    expect(hackingCeiling(null, medium(50, rooted), 1)).toEqual({ known: false, reason: "no static snapshot" });
+    expect(hackingCeiling(staticData(), undefined, 1)).toEqual({ known: false, reason: "no medium snapshot" });
     // The fixtures' player has no intelligence or multipliers.
-    expect(hackingCeiling(staticData(), mediumData(50, rooted))).toEqual({
+    expect(hackingCeiling(staticData(), mediumData(50, rooted), 1)).toEqual({
       known: false,
       reason: "the medium snapshot's player has no skills.intelligence",
     });
     const noGrow = medium(50, rooted);
     delete (noGrow.player.mults as Record<string, unknown>).hacking_grow;
-    expect(hackingCeiling(staticData(), noGrow)).toEqual({
+    expect(hackingCeiling(staticData(), noGrow, 1)).toEqual({
       known: false,
       reason: "the medium snapshot's player has no mults.hacking_grow",
     });
-    expect(describeCeiling(hackingCeiling(null, null))).toBe("unknown: no static snapshot");
+    expect(describeCeiling(hackingCeiling(null, null, 1))).toBe("unknown: no static snapshot");
     expect(describeCeiling(null)).toBe("unknown: no medium snapshot");
+    // No slow snapshot says the BitNode (#321): unknown, never BN1's.
+    expect(hackingCeiling(staticData(), medium(50, rooted), null)).toEqual({
+      known: false,
+      reason: "no slow snapshot says the BitNode (its hacking multipliers)",
+    });
+  });
+
+  test("in BN4 (#321): its ScriptHackMoney 0.2 folded into hacking_money, as a player with a fifth of it", () => {
+    const rooted = { n00dles: true, foodnstuff: true, zer0: true };
+    const bn4 = known(hackingCeiling(staticData(), medium(150, rooted), 4));
+    const fifth = medium(150, rooted, { mults: { hacking_money: 0.2 } });
+    expect(bn4).toEqual(known(hackingCeiling(staticData(), fifth, 1)));
+    expect(bn4.incomePerSecond).toBeLessThan(
+      known(hackingCeiling(staticData(), medium(150, rooted), 1)).incomePerSecond,
+    );
+    // A BitNode core has none for: BN1's (its bitNodeAssumptions line says so in the run report).
+    expect(hackingCeiling(staticData(), medium(150, rooted), 2)).toEqual(
+      hackingCeiling(staticData(), medium(150, rooted), 1),
+    );
+  });
+
+  test("the run report's fold takes each medium snapshot's BitNode from the newest slow snapshot by then", () => {
+    const rooted = { n00dles: true, zer0: true };
+    const fold = new HackingFold(new Set(["home"]));
+    fold.addStatic(0, staticData());
+    fold.addSlow(MINUTE, slowData(4));
+    fold.addSlow(3 * MINUTE, slowData(1));
+    // Before the first slow snapshot: the first's.
+    fold.addMedium(0, medium(150, rooted));
+    expect(fold.latestCeiling).toEqual(hackingCeiling(staticData(), medium(150, rooted), 4));
+    fold.addMedium(2 * MINUTE, medium(150, rooted));
+    expect(fold.latestCeiling).toEqual(hackingCeiling(staticData(), medium(150, rooted), 4));
+    fold.addMedium(4 * MINUTE, medium(150, rooted));
+    expect(fold.latestCeiling).toEqual(hackingCeiling(staticData(), medium(150, rooted), 1));
+    // No slow snapshot at all: unknown.
+    const none = new HackingFold(new Set(["home"]));
+    none.addStatic(0, staticData());
+    none.addMedium(0, medium(150, rooted));
+    expect(none.latestCeiling).toMatchObject({ known: false });
   });
 });
 
@@ -212,9 +255,9 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
     const rooted = { home: true, n00dles: true, foodnstuff: true, zer0: false, "pserv-0": true };
     // n00dles' 1 PB: plenty for its money, and for foodnstuff's.
     const data = medium(100, rooted, { ram: { n00dles: 1_048_576 } });
-    const ceiling = known(hackingCeiling(staticData(), data, incomes));
+    const ceiling = known(hackingCeiling(staticData(), data, 1, incomes));
     // Filling them changes nothing of the ceiling.
-    expect(ceiling).toEqual(hackingCeiling(staticData(), data));
+    expect(ceiling).toEqual(hackingCeiling(staticData(), data, 1));
     // The game's rooted servers only: not zer0, not home or pserv-0.
     expect([...incomes.keys()].sort()).toEqual(["foodnstuff", "n00dles"]);
     const usableGb = usableRamGb(1_048_576) + 2 * USABLE_16;
@@ -229,11 +272,11 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
     expect(batcherPerGigabyteSecond("n00dles", 100) * usableGb).toBeGreaterThan(5 * (incomes.get("n00dles") ?? 0));
     // On 16 GB hosts, the RAM bounds it.
     const small = new Map<string, number>();
-    hackingCeiling(staticData(), medium(100, { n00dles: true, foodnstuff: true }), small);
+    hackingCeiling(staticData(), medium(100, { n00dles: true, foodnstuff: true }), 1, small);
     expect(small.get("n00dles")).toBeCloseTo(batcherPerGigabyteSecond("n00dles", 100) * 2 * USABLE_16, 6);
     // One the player can't hack yet: 0.
     const early = new Map<string, number>();
-    hackingCeiling(staticData(), medium(50, { n00dles: true, zer0: true }), early);
+    hackingCeiling(staticData(), medium(50, { n00dles: true, zer0: true }), 1, early);
     expect(early.get("zer0")).toBe(0);
     expect(early.get("n00dles")).toBeGreaterThan(0);
   });
@@ -241,6 +284,8 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
   test("the fold keeps them a medium snapshot at a time: the one in force at a time, the best, and the batched's", () => {
     const fold = new HackingFold(new Set(["home"]));
     fold.addStatic(0, staticData());
+    // BN1 (#321): its hacking multipliers, 1.
+    fold.addSlow(0, slowData());
     const rooted = { n00dles: true, foodnstuff: true, zer0: true };
     fold.addMedium(10 * SECOND, medium(150, rooted));
     fold.addMedium(20 * SECOND, medium(50, rooted, { ram: { n00dles: 1_048_576 } }));
@@ -250,7 +295,7 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
     const first = incomes.at(10 * SECOND);
     expect(first?.hacking).toBe(150);
     const firstMap = new Map<string, number>();
-    hackingCeiling(staticData(), medium(150, rooted), firstMap);
+    hackingCeiling(staticData(), medium(150, rooted), 1, firstMap);
     for (const [hostname, income] of firstMap) expect(first?.incomeOf(hostname), hostname).toBe(income);
     const bestFirst = [...firstMap].sort(([, a], [, b]) => b - a)[0] as [string, number];
     expect(first?.best).toEqual({ target: bestFirst[0], incomePerSecond: bestFirst[1] });
@@ -277,6 +322,8 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
   test("none from a medium snapshot over 30 s old, or from before an install between it and the look (#277's review)", () => {
     const fold = new HackingFold(new Set(["home"]));
     fold.addStatic(0, staticData());
+    // BN1 (#321): its hacking multipliers, 1.
+    fold.addSlow(0, slowData());
     fold.addMedium(10 * SECOND, medium(150, { n00dles: true }));
     const incomes = fold.targetIncomes;
     // MEDIUM_SNAPSHOT_GAP_MS: snapshots further apart than 30 s are a gap.
@@ -294,6 +341,8 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
   test("a target new to a later snapshot is read there, not in the earlier ones", () => {
     const fold = new HackingFold(new Set(["home"]));
     fold.addStatic(0, staticData());
+    // BN1 (#321): its hacking multipliers, 1.
+    fold.addSlow(0, slowData());
     fold.addMedium(10 * SECOND, medium(150, { n00dles: true }));
     fold.addMedium(20 * SECOND, medium(150, { n00dles: true, zer0: true }));
     expect(fold.targetIncomes.at(10 * SECOND)?.incomeOf("zer0")).toBeNull();
@@ -305,6 +354,7 @@ describe("each target's batcher income on the hosts' RAM (#275)", () => {
     // Nothing hackable rooted: no best.
     const none = new HackingFold(new Set(["home"]));
     none.addStatic(0, staticData());
+    none.addSlow(0, slowData());
     none.addMedium(10 * SECOND, medium(50, { zer0: true }));
     expect(none.targetIncomes.at(10 * SECOND)?.best).toBeNull();
   });
@@ -376,7 +426,7 @@ function foldOf({
 describe("the run report's section (#196)", () => {
   const small = medium(150, { zer0: true });
   const large = medium(150, { zer0: true }, { ram: { zer0: 64 } });
-  const ceilingsOf = (data: MediumSnapshotData) => known(hackingCeiling(staticData(), data));
+  const ceilingsOf = (data: MediumSnapshotData) => known(hackingCeiling(staticData(), data, 1));
   const perSecond = (value: number) => `$${Math.round(value).toLocaleString("en-US")}/s`;
   const atIso = (offsetMs: number) => new Date(offsetMs).toISOString();
   /** zer0's money set at each medium snapshot. */
@@ -577,6 +627,8 @@ describe("the run report's section (#196)", () => {
   test("no time judged: n/a, not NaN or Infinity", () => {
     const fold = new HackingFold(new Set(["home"]));
     fold.addStatic(0, staticData());
+    // BN1 (#321): its hacking multipliers, 1.
+    fold.addSlow(0, slowData());
     fold.addSlow(0, slowWith(0));
     fold.addSlow(0, slowWith(5));
     fold.addMedium(0, small);
@@ -594,9 +646,10 @@ describe("the run report's section (#196)", () => {
     };
     fold.addStatic(10 * SECOND, staticData());
     fold.addStatic(MINUTE, richer);
+    fold.addSlow(0, slowData());
     fold.addMedium(0, small);
-    expect(fold.latestCeiling).toEqual(hackingCeiling(staticData(), small));
+    expect(fold.latestCeiling).toEqual(hackingCeiling(staticData(), small, 1));
     fold.addMedium(MINUTE, small);
-    expect(fold.latestCeiling).toEqual(hackingCeiling(richer, small));
+    expect(fold.latestCeiling).toEqual(hackingCeiling(richer, small, 1));
   });
 });

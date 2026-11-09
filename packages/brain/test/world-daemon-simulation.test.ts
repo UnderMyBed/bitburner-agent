@@ -8,7 +8,8 @@
 //   NeuroFlux Governor, The Red Pill last, and installs through the gate and a save backup.
 // - After the reset, w0r1d_d43m0n is linked; a harness edit stands in for the hours back to its level (hacking past
 //   3000, and $1t). The brain buys the port openers, the hack loop roots it, and the World Daemon rule destroys BN1
-//   into BN1 through the gate and a backup; the game starts boot.js, and the next Agent connects in BN1 with SF1.1.
+//   into BN4, the campaign order's next (#321), through the gate and a backup; the game starts boot.js, and the next
+//   Agent connects in BN4 with SF1.1.
 // CI runs seed 1; `WORLD_DAEMON_SEEDS` (`1,2,3`, say) runs others.
 import {
   AUGMENTATION_NAMES,
@@ -58,7 +59,7 @@ test("WORLD_DAEMON_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd 
 });
 
 test.each(SEEDS)(
-  "seed %i: from a late game, Daedalus joined, The Red Pill worked for, bought and installed, w0r1d_d43m0n rooted and BN1 destroyed into BN1",
+  "seed %i: from a late game, Daedalus joined, The Red Pill worked for, bought and installed, w0r1d_d43m0n rooted and BN1 destroyed into BN4",
   { timeout: 300_000 },
   async (seed) => {
     expect(THIRTY).toHaveLength(30);
@@ -127,15 +128,15 @@ test.each(SEEDS)(
     // The batcher on, by default (owner decision 49): the hack loop's root worker roots w0r1d_d43m0n all the same.
     expect(fresh.controller().batcherView().enabled).toBe(true);
 
-    // BN1 again, with SF1.1; the next Agent back, the destroy off the queue.
-    expect(slow()?.resetInfo).toMatchObject({ currentNode: 1, ownedSF: { 1: 1 }, ownedAugs: {} });
+    // BN4, the campaign order's next (#321), with SF1.1; the next Agent back, the destroy off the queue.
+    expect(slow()?.resetInfo).toMatchObject({ currentNode: 4, ownedSF: { 1: 1 }, ownedAugs: {} });
     expect(events(BITNODE_DESTROY_SENT_EVENT_KIND).map((event) => event.detail)).toEqual([
-      { source: "brain", nextBitNode: 1, replay: null },
+      { source: "brain", nextBitNode: 4, replay: null },
     ]);
     expect(brain.saveBackupEvents.length).toBeGreaterThan(backupsBefore);
     expect(brain.logLines).toContainEqual(
       expect.stringMatching(
-        /^world daemon: w0r1d_d43m0n rooted at hacking \d+: destroying the BitNode, into BitNode 1/,
+        /^world daemon: w0r1d_d43m0n rooted at hacking \d+: destroying the BitNode, into BitNode 4/,
       ),
     );
     await game.run(MINUTE);
@@ -144,7 +145,7 @@ test.each(SEEDS)(
         .controller()
         .intentsView()
         .map((view) => view.id),
-    ).not.toContain("destroyBitNode(1)");
+    ).not.toContain("destroyBitNode(4)");
     expect(fresh.controller().worldDaemonView()).toMatchObject({ destroying: false, stall: null });
 
     // The run report: The Red Pill's install and the destroy, and no failure. By default, the install chosen's reason
@@ -156,10 +157,10 @@ test.each(SEEDS)(
     const { text, failures } = runReport(fresh.data.store, reportWindow, { verbose: true });
     const lines = text.split("\n");
     expect(lines).toContainEqual(expect.stringMatching(/The Red Pill reached: it links w0r1d_d43m0n once installed$/));
-    expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 1$/));
+    expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 4$/));
     // The install's and the destroy's workers die in the reset before they report; the slow snapshots after show each
     // done (#286): another `lastAugReset`, then another BitNode. And none of either is left not done.
-    for (const id of [/installAugmentations\(\)/, /destroyBitNode\(1\)/]) {
+    for (const id of [/installAugmentations\(\)/, /destroyBitNode\(4\)/]) {
       const done = /: done: the reset followed, \d+ tr(y|ies)( \(\w+\))?; the reset seen by /;
       expect(lines).toContainEqual(expect.stringMatching(new RegExp(`^ {4}${id.source}${done.source}`)));
       expect(lines).not.toContainEqual(expect.stringMatching(new RegExp(`^ {4}${id.source}: not done`)));

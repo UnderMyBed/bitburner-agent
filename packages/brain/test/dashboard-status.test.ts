@@ -659,11 +659,17 @@ test("the hacking rows (#196): the ceiling at the newest snapshots, and hacking'
   // A slow snapshot every minute: $1,000 a second of hacking, but for one 11 minutes ago, out of the window.
   recordSnapshot("slow", nowMs - 11 * 60_000, { moneySources: { hacking: 0 } });
   for (let minute = 10; minute >= 1; minute--) {
-    recordSnapshot("slow", nowMs - minute * 60_000, { moneySources: { hacking: 1e9 + (10 - minute) * 60_000 } });
+    // In BN4 (#321): the ceiling at its ScriptHackMoney, the newest slow snapshot's BitNode.
+    recordSnapshot("slow", nowMs - minute * 60_000, {
+      resetInfo: { currentNode: 4 },
+      moneySources: { hacking: 1e9 + (10 - minute) * 60_000 },
+    });
   }
   const { hacking } = status(nowMs);
-  const ceiling = hackingCeiling(staticData, mediumData);
+  const ceiling = hackingCeiling(staticData, mediumData, 4);
   if (!ceiling.known) throw new Error(ceiling.reason);
+  const inBn1 = hackingCeiling(staticData, mediumData, 1);
+  expect(inBn1.known && inBn1.incomePerSecond).toBeGreaterThan(ceiling.incomePerSecond);
   expect(ceiling).toMatchObject({ target: "zer0", hostCount: 1, hostRamGb: 32 });
   const percent = (whole: number) => `${((1_000 / whole) * 100).toFixed(1)}%`;
   expect(hacking).toEqual({

@@ -372,7 +372,8 @@ try {
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
-      // A replay at Source-File 1's cap (#311), as the last slow snapshot stored shows the game.
+      // Into the BitNode the campaign's order gives (#321), a replay with nothing left in it to gain (#311), as the
+      // last slow snapshot stored shows the game.
       `${describeWorldDaemonSwitch(
         readWorldDaemonEnabled(store),
         store.latestSnapshot({ environment: config.environment, tier: "slow" })?.data ?? null,

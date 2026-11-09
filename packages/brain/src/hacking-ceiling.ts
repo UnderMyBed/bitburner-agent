@@ -16,6 +16,7 @@ import {
   usableRamGb,
 } from "@bitburner-agent/core";
 import { MEDIUM_SNAPSHOT_GAP_MS } from "./backdoors.ts";
+import { bitNodeHackingOf } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
 import { chooseHackHosts } from "./hack-loop.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
@@ -48,8 +49,13 @@ export type HackingCeiling =
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-/** The player's skills and multipliers the formulas read, or the first missing (the snapshot is the Agent's word). */
-function hackingPlayerOf(player: unknown): HackingPlayer | string {
+/**
+ * The player's skills and multipliers the formulas read, or the first missing (the snapshot is the Agent's word), in
+ * `bitNode`, the slow snapshot's: its `ScriptHackMoney` folded into `hacking_money` (#321, `Hacking.ts:53-54`; core's
+ * `bitNodeHackingMultipliers`, BN1's in a BitNode it hasn't them for, which the run report lists). No BitNode read
+ * (no slow snapshot then) is a ceiling unknown, never BN1's.
+ */
+function hackingPlayerOf(player: unknown, bitNode: number | null): HackingPlayer | string {
   const { skills, mults } = (player ?? {}) as { skills?: Record<string, unknown>; mults?: Record<string, unknown> };
   for (const skill of ["hacking", "intelligence"]) {
     if (!isNumber(skills?.[skill])) return `the medium snapshot's player has no skills.${skill}`;
@@ -57,7 +63,12 @@ function hackingPlayerOf(player: unknown): HackingPlayer | string {
   for (const mult of ["hacking_chance", "hacking_speed", "hacking_money", "hacking_grow"]) {
     if (!isNumber(mults?.[mult])) return `the medium snapshot's player has no mults.${mult}`;
   }
-  return { skills, mults } as unknown as HackingPlayer;
+  if (bitNode === null) return "no slow snapshot says the BitNode (its hacking multipliers)";
+  const { ScriptHackMoney } = bitNodeHackingOf(bitNode).multipliers;
+  return {
+    skills,
+    mults: { ...mults, hacking_money: (mults?.hacking_money as number) * ScriptHackMoney },
+  } as unknown as HackingPlayer;
 }
 
 type MediumServer = MediumSnapshotData["servers"][number];
@@ -94,11 +105,12 @@ function ramOf(servers: (MediumServer | undefined)[]): { usableGb: number; ramGb
 export function hackingCeiling(
   staticData: StaticSnapshotData | null | undefined,
   mediumData: MediumSnapshotData | null | undefined,
+  bitNode: number | null,
   incomes?: Map<string, number>,
 ): HackingCeiling {
   if (!Array.isArray(staticData?.servers)) return { known: false, reason: "no static snapshot" };
   if (!Array.isArray(mediumData?.servers)) return { known: false, reason: "no medium snapshot" };
-  const player = hackingPlayerOf(mediumData.player);
+  const player = hackingPlayerOf(mediumData.player, bitNode);
   if (typeof player === "string") return { known: false, reason: player };
   const now = new Map(
     mediumData.servers
@@ -302,12 +314,15 @@ export function hackingView({
   nowMs,
   staticData,
   mediumData,
+  bitNode,
 }: {
   store: TelemetryStore;
   environment: Environment;
   nowMs: number;
   staticData: StaticSnapshotData | null | undefined;
   mediumData: MediumSnapshotData | null | undefined;
+  /** The BitNode the newest slow snapshot shows (#321), for its hacking multipliers; null without one. */
+  bitNode: number | null;
 }): HackingView {
   const points: HackingMoneyPoint[] = [];
   const window = { environment, tier: "slow", sinceMs: nowMs - DASHBOARD_HACKING_WINDOW_MS, untilMs: nowMs };
@@ -315,7 +330,7 @@ export function hackingView({
     const money = hackingMoneyOf(data as SlowSnapshotData);
     if (money !== null) points.push({ atMs: receivedAtMs, ...money });
   }
-  const ceiling = hackingCeiling(staticData, mediumData);
+  const ceiling = hackingCeiling(staticData, mediumData, bitNode);
   const incomePerSecond = hackingIncomePerSecond(points);
   const ofCeilings =
     incomePerSecond !== null && ceiling.known && ceiling.batcherIncomePerSecond > 0
@@ -370,6 +385,8 @@ export class HackingFold {
   readonly #statics: { atMs: number; data: StaticSnapshotData }[] = [];
   readonly #ceilings: { atMs: number; ceiling: HackingCeiling }[] = [];
   readonly #money: HackingMoneyPoint[] = [];
+  /** Each slow snapshot's BitNode (#321), for the medium snapshots' hacking multipliers: the newest by then. */
+  readonly #bitNodes: { atMs: number; bitNode: number }[] = [];
   readonly #breaks: Break[] = [];
   #slowCount = 0;
   /** Between breaks: the game's servers' money at the first medium snapshot and the last. */
@@ -390,6 +407,8 @@ export class HackingFold {
   addSlow(atMs: number, data: SlowSnapshotData): void {
     if (this.#ceilings.length > 0) throw new Error("the slow snapshots must come before the medium ones");
     this.#slowCount++;
+    const bitNode = (data?.resetInfo as { currentNode?: unknown } | undefined)?.currentNode;
+    if (isNumber(bitNode)) this.#bitNodes.push({ atMs, bitNode });
     const money = hackingMoneyOf(data);
     if (money === null) return;
     const point = { atMs, ...money };
@@ -403,7 +422,9 @@ export class HackingFold {
   addMedium(atMs: number, data: MediumSnapshotData): void {
     const staticThen = this.#statics.filter((each) => each.atMs <= atMs).at(-1) ?? this.#statics[0];
     const incomes = new Map<string, number>();
-    const ceiling = hackingCeiling(staticThen?.data, data, incomes);
+    // The BitNode then (#321): the newest slow snapshot's by then, else the first's (the slow snapshots come first).
+    const bitNodeThen = (this.#bitNodes.filter((each) => each.atMs <= atMs).at(-1) ?? this.#bitNodes[0])?.bitNode;
+    const ceiling = hackingCeiling(staticThen?.data, data, bitNodeThen ?? null, incomes);
     this.#ceilings.push({ atMs, ceiling });
     const hacking = (data.player as { skills?: { hacking?: unknown } } | undefined)?.skills?.hacking;
     this.targetIncomes.add(atMs, ceiling.known ? incomes : null, isNumber(hacking) ? hacking : null);

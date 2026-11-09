@@ -823,7 +823,7 @@ test("the stop at the BitNode's end (#303) under npm run brain's runner: set mid
   store.close();
 });
 
-test("started at Source-File 1's cap (#311): the start line says the brain's destroy replays BitNode 1", async () => {
+test("started at Source-File 1's cap (#311, #321): the start line names the BitNode the brain's destroy enters, 4", async () => {
   const { config, controlPort } = await startBrain();
   const { snapshot } = await standInAgent(config, controlPort);
   // BN1.4: Source-File 1 at 3. Stored, the brain stopped; started again, it reads the game from the store.
@@ -845,9 +845,7 @@ test("started at Source-File 1's cap (#311): the start line says the brain's des
   for (let attempt = 0; attempt < 40 && !again.output().includes("(the dashboard's switches)"); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  expect(again.output()).toContain(
-    ", destroying the BitNode on (it replays BitNode 1: Source-File 1 is at 3, nothing to gain but the run), ",
-  );
+  expect(again.output()).toContain(", destroying the BitNode on (into BitNode 4), ");
 });
 
 test("main.ts watches the brain's holds (#309): a slow dashboard status and the loop held, logged as the brain stops", async () => {

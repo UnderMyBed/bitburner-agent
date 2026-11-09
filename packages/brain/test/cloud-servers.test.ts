@@ -4,7 +4,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
+import {
+  type BitNodePriceMultipliers,
+  bitNodePriceMultipliers,
+  type MediumSnapshotData,
+  type StaticSnapshotData,
+} from "@bitburner-agent/core";
 import { IncomeWindow } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
@@ -14,6 +19,7 @@ import {
   type CloudServerPurchase,
   chooseCloudServerPurchase,
   cloudServerPrice,
+  cloudServerPriceIn,
   cloudServersOf,
   HackLoopIncome,
   type HackLoopIncomeRate,
@@ -28,6 +34,16 @@ test("the price is the game's in BN1: $55,000 a GB at every size (ServerPurchase
   expect(cloudServerPrice(64)).toBe(3_520_000);
   expect(cloudServerPrice(1_024)).toBe(56_320_000);
   expect(cloudServerPrice(2 ** 20)).toBe(57_671_680_000);
+});
+
+test("in BN4 (#321) the softcap 1.2 a doubling above 64 GB, as the game works it out; in BN1 cloudServerPrice's", () => {
+  const bn1 = bitNodePriceMultipliers(1) as BitNodePriceMultipliers;
+  const bn4 = bitNodePriceMultipliers(4) as BitNodePriceMultipliers;
+  for (let ram = 1; ram <= 2 ** 20; ram *= 2) expect(cloudServerPriceIn(ram, bn1)).toBe(cloudServerPrice(ram));
+  expect(cloudServerPriceIn(8, bn4)).toBe(440_000);
+  expect(cloudServerPriceIn(64, bn4)).toBe(3_520_000);
+  expect(cloudServerPriceIn(128, bn4)).toBeCloseTo(7_040_000 * 1.2, 4);
+  expect(cloudServerPriceIn(1_024, bn4)).toBeCloseTo(56_320_000 * 1.2 ** 4, 2);
 });
 
 /** The static snapshot: home (purchased, as the game has it) and n00dles, the game's. */
@@ -381,7 +397,20 @@ describe("chooseCloudServerPurchase: the largest that money allows and pays back
     expect(choose(medium(1e9, rams), { previous: upgrade }).next).toMatchObject({ hostname: "pserv-0" });
   });
 
-  test("what it waits for first: the slow snapshot, BN1's prices, the income, an income at all", () => {
+  test("in BN4 (#321): bought at BN4's prices, so a server above 64 GB pays back later than in BN1", () => {
+    // $10m covers 128 GB in BN4 ($8.448m), its payback 1.2 times BN1's.
+    const next = choose(medium(10e6), { slow: slowData(4) }).next;
+    expect(next).toMatchObject({
+      action: "buyServer",
+      hostname: "pserv-0",
+      ram: 128,
+      price: cloudServerPriceIn(128, bitNodePriceMultipliers(4) as BitNodePriceMultipliers),
+    });
+    expect(next?.paybackMs).toBeCloseTo(PAYBACK_MS * 1.2, 3);
+    expect(choose(medium(440_000), { slow: slowData(4) }).next).toMatchObject({ ram: 8, price: 440_000 });
+  });
+
+  test("what it waits for first: the slow snapshot, BN1's and BN4's prices, the income, an income at all", () => {
     expect(choose(medium(1e9), { slow: null as never })).toMatchObject({
       next: null,
       waitingFor: "the Agent's slow snapshot (which BitNode)",
