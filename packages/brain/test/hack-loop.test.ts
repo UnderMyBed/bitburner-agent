@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { MediumSnapshotData, StaticSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { BN1_HACKING, bitNodeHackingOf } from "../src/batcher.ts";
 import {
   chooseHackHosts,
   chooseHackTarget,
@@ -192,17 +193,28 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
   };
   const ALL_HOSTS = ["alpha", "bravo", "charlie", "delta"];
   /** A target last set that has been ready since, so the loop hacks it, with the hosts that prepared the next one. */
+  /** `planHackLoop`'s arguments but the BitNode's hacking multipliers (#321): BN1's here. */
+  type BN1Args = [
+    Parameters<typeof planHackLoop>[0],
+    Parameters<typeof planHackLoop>[1],
+    Parameters<typeof planHackLoop>[3],
+  ];
   const earningOn = (target: string, preparingHosts: string[] = []): LastHackTarget => ({
     target,
     earning: true,
     preparingHosts,
   });
   /** The plan's targets and hosts: its hack threads (#187) are the next describe's. */
-  const plan = (...args: Parameters<typeof planHackLoop>) => {
-    const { hackThreads: _hackThreads, ...targetsAndHosts } = planHackLoop(...args).hackLoop;
+  const plan = (...args: BN1Args) => {
+    const { hackThreads: _hackThreads, ...targetsAndHosts } = planHackLoop(
+      args[0],
+      args[1],
+      BN1_HACKING,
+      args[2],
+    ).hackLoop;
     return targetsAndHosts;
   };
-  const lastSetAfter = (...args: Parameters<typeof planHackLoop>) => planHackLoop(...args).lastSet;
+  const lastSetAfter = (...args: BN1Args) => planHackLoop(args[0], args[1], BN1_HACKING, args[2]).lastSet;
 
   test("what it notes: the target set, whether it earns (once a snapshot shows it ready), and the preparing hosts", () => {
     // Prepared while n00dles earns: n00dles is noted, with alpha preparing.
@@ -378,7 +390,8 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
   });
 
   describe("each host's hack threads (#187): a round of hacks takes no more than two rounds of grows bring back", () => {
-    const hackThreadsOf = (...args: Parameters<typeof planHackLoop>) => planHackLoop(...args).hackLoop.hackThreads;
+    const hackThreadsOf = (...args: BN1Args) =>
+      planHackLoop(args[0], args[1], BN1_HACKING, args[2]).hackLoop.hackThreads;
     /** Every host on zer0, ready, at `hacking`. */
     const onZer0 = (hacking: number, changes: Parameters<typeof medium>[1] = {}) =>
       hackThreadsOf(network, medium(hacking, { zer0: ZER0_READY, ...changes }), earningOn("n00dles"));
@@ -389,6 +402,17 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
       // 0.0008 at 15 (minimum + 5). The hosts' 26 + 13 + 6 + 6 threads, twice: 0.0815. alpha's half: 1 - e^-0.0408 =
       // 4.0%, 21 threads, so 16; bravo 10.6, so 8; charlie and delta 5.3, so 4.
       expect(onZer0(150)).toEqual({ alpha: 16, bravo: 8, charlie: 4, delta: 4 });
+    });
+
+    test("in BN4 (#321): a thread takes a fifth (ScriptHackMoney 0.2), so five times the threads, to the RAM's", () => {
+      // alpha's 4.0% over 0.038% a thread: 105, so 64, and its 64 GB holds 26; bravo 53, so 32, holds 13; 6 and 6.
+      const bn4 = planHackLoop(
+        network,
+        medium(150, { zer0: ZER0_READY }),
+        bitNodeHackingOf(4).multipliers,
+        earningOn("n00dles"),
+      );
+      expect(bn4.hackLoop.hackThreads).toEqual({ alpha: 26, bravo: 13, charlie: 6, delta: 6 });
     });
 
     test("n00dles (growth 3000) grows back from anything: every host hacks with all the threads its RAM holds", () => {

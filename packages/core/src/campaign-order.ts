@@ -1,9 +1,9 @@
 /**
  * The next BitNode (#321, owner decision 66): the campaign's draft order (docs/synthesis.md §3), as far as the brain
  * plays it. A destroy gives the destroyed BitNode's Source-File a level, up to `SOURCE_FILE_TOP_LEVEL` but for BN12's
- * (`RedPill.tsx:16-52`, `giveSourceFile`), then enters the BitNode chosen (`RedPill.tsx:54-66`, `enterBitNode`), so
- * the next is chosen from the Source-Files as they'll be after it: the first step of the order still short of its level.
- * With none, BitNode 1 is played again for the run (#311's replay).
+ * (`RedPill.tsx:16-52`, `giveSourceFile`), then enters the BitNode chosen (`RedPill.tsx:54-66`, `enterBitNode`),
+ * so the next is chosen from the Source-Files as they'll be after it: the first step of the order still short of its
+ * level. With none, BitNode 1 is played again for the run (#311's replay).
  */
 
 /** A Source-File's top level but for BN12's, which has none: destroying its BitNode again gives no level. */
@@ -36,7 +36,11 @@ export interface NextBitNode {
   replay: string | null;
 }
 
-/** The Source-Files after destroying `currentNode`: its own a level up, to the top but for BN12's (`giveSourceFile`). */
+/**
+ * The Source-Files after destroying `currentNode`: its own a level up, to the top but for BN12's (`giveSourceFile`).
+ * `ownedSF` is `getResetInfo`'s, the active levels, after any `sourceFileOverrides` (`NetscriptFunctions.ts:1491`),
+ * where `giveSourceFile` raises the owned ones: they differ only with overrides, which the brain never sets.
+ */
 export function sourceFilesAfterDestroy(
   currentNode: number,
   ownedSF: Readonly<Record<string, number>>,

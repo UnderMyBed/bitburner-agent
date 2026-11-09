@@ -221,6 +221,13 @@ const detailText = (detail: unknown, field: string) => {
   return value === undefined || value === null ? "" : String(value);
 };
 
+/** The BitNode a slow snapshot's reset info shows (#321), or null where it doesn't say (none yet, or an odd one). */
+const bitNodeOf = (slowData: unknown): number | null => {
+  const currentNode = (slowData as { resetInfo?: { currentNode?: unknown } } | null | undefined)?.resetInfo
+    ?.currentNode;
+  return typeof currentNode === "number" && Number.isFinite(currentNode) ? currentNode : null;
+};
+
 export function buildDashboardStatus({
   store,
   environment,
@@ -443,6 +450,7 @@ export function buildDashboardStatus({
       nowMs,
       staticData: latestOfTier.static?.data as StaticSnapshotData | undefined,
       mediumData: medium,
+      bitNode: bitNodeOf(slow?.data),
     }),
     timeline: timeline ?? null,
   };

@@ -3,7 +3,9 @@
  * its plan on some RAM, its timing, where its threads go, the bounds a batch in step keeps its target within, the
  * waves that prepare a target, and the checks on its landings. Pure, so the brain (A7c) plans with the same functions
  * the in-game batcher (`entries/batcher.ts`) runs. Design and plan: #204; the Agent runs it in #205, the brain chooses
- * in #206. BitNode multipliers are taken as 1, as in hacking-ceiling.ts: exact in BN1.
+ * in #206. BitNode multipliers as in hacking-ceiling.ts: `ScriptHackMoney` and `HackExpGain` folded into the player's
+ * `hacking_money` and `hacking_exp` by the brain (#321, core's `bitNodeHackingMultipliers`), the rest taken as 1: exact
+ * in BN1 and BN4.
  */
 import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
 import { growthLogPerThread, percentMoneyHackedPerThread } from "./hack-loop.ts";
@@ -330,8 +332,8 @@ export function hackingExpOfLevel(level: number, mult: number): number {
 
 /**
  * The hacking exp a thread of any operation on `target` gives as it lands (#315): the game's `calculateHackingExpGain`
- * (Hacking.ts:30-38), 3 + 0.3 x the server's base difficulty, x the player's `hacking_exp` multiplier (BitNode
- * multipliers, `HackExpGain` among them, taken as 1: the snapshots don't carry them, and exact in BN1), for a grow or
+ * (Hacking.ts:30-38), 3 + 0.3 x the server's base difficulty, x the player's `hacking_exp` multiplier (the BitNode's
+ * `HackExpGain` folded into it by the brain, #321: core's `bitNodeHackingMultipliers`), for a grow or
  * a weaken (NetscriptFunctions.ts:295, :373) and a hack that succeeds (a quarter of it if not,
  * NetscriptHelpers.tsx:564-565). The base difficulty is its starting security, the static snapshot's since #315's
  * review; without it (an older snapshot), the most a minimum a third of it, rounded (Server.ts:80-83), allows:

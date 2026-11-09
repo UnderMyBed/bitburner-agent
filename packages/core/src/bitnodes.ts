@@ -62,7 +62,7 @@ const DEFAULT_PRICE_MULTIPLIERS: BitNodePriceMultipliers = {
   CloudServerMaxRam: 1,
 };
 
-/** The BitNodes the brain plays (#321, the campaign's order): BN4 sets only the softcap (`BitNode/BitNode.tsx:633-661`). */
+/** The BitNodes the brain plays (#321, the campaign's order): BN4 sets only the softcap (`BitNode.tsx:633-661`). */
 const BITNODE_PRICE_MULTIPLIERS: Readonly<Record<number, BitNodePriceMultipliers>> = {
   1: DEFAULT_PRICE_MULTIPLIERS,
   4: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.2 },
@@ -75,23 +75,45 @@ export function bitNodePriceMultipliers(bitNode: number): BitNodePriceMultiplier
 }
 
 /**
- * What the brain takes as BN1's in `bitNode` though the game has it otherwise (#321): worded, for the brain's log line
- * and the run report, a known risk each until a slice models it. None in BN1. BN4's (`BitNode/BitNode.tsx:633-661`):
- * its hacking, which the snapshots don't carry and Singularity can't read there (`getBitNodeMultipliers` needs SF5).
+ * The BitNode multipliers on hacking the brain's formulas need (#321) that the snapshots don't carry, nor Singularity
+ * read without SF5 (`getBitNodeMultipliers`): the share of money a hack thread takes, `hacking_money` ×
+ * `ScriptHackMoney` (`Hacking.ts:53-54`), and a thread's exp, `hacking_exp` × `HackExpGain` (`Hacking.ts:37`). The
+ * brain folds them into the player's `hacking_money` and `hacking_exp` where it reads the player, so every formula on
+ * those (the hack loop's threads, the batcher's plan and level forecast, the ceilings) is the game's.
+ */
+export interface BitNodeHackingMultipliers {
+  ScriptHackMoney: number;
+  HackExpGain: number;
+}
+
+/**
+ * The BitNodes the brain plays (#321): BN1's the defaults (`BitNode/BitNodeMultipliers.ts`), BN4's its own
+ * (`BitNode/BitNode.tsx:633-661`: `ScriptHackMoney` 0.2, `HackExpGain` 0.4). Its other multipliers on hacking
+ * (`ServerGrowthRate`, `ServerWeakenRate`, `HackingSpeedMultiplier`, `HackingLevelMultiplier`) are 1 in both.
+ */
+const BITNODE_HACKING_MULTIPLIERS: Readonly<Record<number, BitNodeHackingMultipliers>> = {
+  1: { ScriptHackMoney: 1, HackExpGain: 1 },
+  4: { ScriptHackMoney: 0.2, HackExpGain: 0.4 },
+};
+
+/**
+ * `bitNode`'s hacking multipliers, or null for a BitNode the brain doesn't know them in yet: there it takes BN1's, said
+ * by `bitNodeAssumptions` (the brain's log line and the run report), never silently.
+ */
+export function bitNodeHackingMultipliers(bitNode: number): BitNodeHackingMultipliers | null {
+  const multipliers = BITNODE_HACKING_MULTIPLIERS[bitNode];
+  return multipliers === undefined ? null : { ...multipliers };
+}
+
+/**
+ * What the brain takes as BN1's in `bitNode` though the game may have it otherwise (#321): worded, for the brain's log
+ * line and the run report, a known risk each until a slice models it. None in BN1 or BN4, whose prices and hacking
+ * multipliers core has (`bitNodePriceMultipliers`, `bitNodeHackingMultipliers`).
  */
 export function bitNodeAssumptions(bitNode: number): string[] {
-  if (bitNode === 1) return [];
-  if (bitNode === 4) {
-    return [
-      "the money a hack thread takes: the hack loop, the batcher and the hacking ceilings take ScriptHackMoney as 1, " +
-        "it's 0.2 in BN4 (Hacking.ts:54), so a batch takes about a fifth of what it plans (fewer threads than " +
-        "it could, never more) and the ceilings are 5 times too high",
-      "hacking exp: the batcher's level forecast takes HackExpGain as 1, it's 0.4 in BN4 (Hacking.ts:37), so it " +
-        "forecasts levels sooner than they come",
-    ];
-  }
+  if (bitNodePriceMultipliers(bitNode) !== null && bitNodeHackingMultipliers(bitNode) !== null) return [];
   return [
     `BitNode ${bitNode}'s multipliers: the brain knows BN1's and BN4's only, so it buys no home RAM or cloud servers ` +
-      "here, and its hacking takes BN1's",
+      "here, and its hacking takes BN1's (ScriptHackMoney and HackExpGain 1)",
   ];
 }

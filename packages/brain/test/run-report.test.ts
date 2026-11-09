@@ -471,9 +471,14 @@ describe("the sections", () => {
 describe("cloud servers (#194)", () => {
   /**
    * A run whose medium snapshots show pserv-1 from 5 minutes at 8 GB, and at 64 GB from 12 minutes; with `gone`, none
-   * from 15 to 16 minutes (an install deleted it), then again at 8 GB.
+   * from 15 to 16 minutes (an install deleted it), then again at 8 GB. `firstRam` and `biggerRam` change the two sizes
+   * (#321: BN4's softcap only shows above 64 GB); with `fromBitNode`, a slow snapshot at 1 minute shows that BitNode,
+   * and the last one, `currentNode`'s, entered at 10 minutes (#321's review: each change priced in its own).
    */
-  function withPurchases(currentNode = 1, { gone = false } = {}) {
+  function withPurchases(
+    currentNode = 1,
+    { gone = false, firstRam = 8, biggerRam = 64, fromBitNode = null as number | null } = {},
+  ) {
     event(0, "brainStarted", { release: "r" });
     snapshot("static", 10 * SECOND, staticData());
     for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 2 * SECOND) snapshot("fast", offsetMs, fastData());
@@ -483,12 +488,19 @@ describe("cloud servers (#194)", () => {
       if (offsetMs >= 5 * MINUTE && !deleted) {
         data.servers.push({ ...(data.servers.at(-1) as MediumSnapshotData["servers"][number]), hostname: "pserv-1" });
         const bigger = offsetMs >= 12 * MINUTE && !(gone && offsetMs >= 15 * MINUTE);
-        (data.servers.at(-1) as { maxRam: number }).maxRam = bigger ? 64 : 8;
+        (data.servers.at(-1) as { maxRam: number }).maxRam = bigger ? biggerRam : firstRam;
       }
       snapshot("medium", offsetMs, data);
     }
     const slow = slowData(["pserv-0", "pserv-1"]);
-    snapshot("slow", RUN_MS, { ...slow, resetInfo: { ...slow.resetInfo, currentNode } });
+    if (fromBitNode !== null) {
+      snapshot("slow", MINUTE, { ...slow, resetInfo: { ...slow.resetInfo, currentNode: fromBitNode } });
+    }
+    const lastNodeReset = fromBitNode === null ? RESET : T0 + 10 * MINUTE;
+    snapshot("slow", RUN_MS, {
+      ...slow,
+      resetInfo: { ...slow.resetInfo, currentNode, lastNodeReset, lastAugReset: lastNodeReset },
+    });
   }
 
   test("each bought or upgraded, when, its RAM and BN1's price, and the total; the hosts' RAM", () => {
@@ -527,14 +539,32 @@ describe("cloud servers (#194)", () => {
     );
   });
 
-  test("in BN4 (#321), BN4's prices; its assumptions taken as BN1's listed under it", () => {
-    withPurchases(4);
-    const { text } = report();
-    expect(text).toContain("    in all: 1 bought, 1 upgraded, $3,520,000\n");
+  test("in BN4 (#321), BN4's prices, its softcap 1.2 a doubling above 64 GB; nothing taken as BN1's there", () => {
+    withPurchases(4, { biggerRam: 256 });
+    const { text } = report({ verbose: true });
+    // 256 GB: 256 × $55,000 × 1.2^2 = $20,275,200, less 8 GB's $440,000 (BN1's would be $14,080,000).
+    expect(text).toContain(`    ${at(12 * MINUTE)}  pserv-1 upgraded, 8 GB → 256 GB, $19,835,200\n`);
+    expect(text).toContain("    in all: 1 bought, 1 upgraded, $20,275,200\n");
     expect(text).not.toContain("the brain buys none");
-    expect(text).toMatch(
-      /\n {4}taken as BN1's in BitNode 4 \(#321\):\n {6}the money a hack thread takes: .*\n {6}hacking exp: .*\n/,
-    );
+    expect(text).not.toContain("taken as BN1's");
+  });
+
+  test("a window from BN1 into BN4 (#321's review): each change priced in the BitNode in force at its time", () => {
+    withPurchases(4, { fromBitNode: 1, firstRam: 256, biggerRam: 512 });
+    const { text } = report({ verbose: true });
+    // BN1's 256 GB at 5 minutes, $14,080,000 (BN4's would be $20,275,200); BN4's 256 → 512 GB at 12 minutes:
+    // 512 × $55,000 × 1.2^3 − $20,275,200.
+    expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 256 GB, $14,080,000\n`);
+    expect(text).toContain(`    ${at(12 * MINUTE)}  pserv-1 upgraded, 256 GB → 512 GB, $28,385,280\n`);
+    expect(text).toContain("    in all: 1 bought, 1 upgraded, $42,465,280\n");
+  });
+
+  test("a change in a BitNode with no known prices leaves the cycle's and the total's sums out", () => {
+    withPurchases(4, { fromBitNode: 2 });
+    const { text } = report({ verbose: true });
+    expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 2\n`);
+    expect(text).toContain(`    ${at(12 * MINUTE)}  pserv-1 upgraded, 8 GB → 64 GB, $3,080,000\n`);
+    expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
   });
 
   test("in BN1, no word of other BitNodes' prices", () => {
@@ -638,7 +668,7 @@ function hackingRun({
     hackDifficulty: 10,
   };
   const medium: MediumSnapshotData = { player, hasTorRouter: false, programs: [], servers: [zer0] };
-  const ceiling = hackingCeiling(servers, medium);
+  const ceiling = hackingCeiling(servers, medium, 1);
   if (!ceiling.known) throw new Error(ceiling.reason);
   event(0, "brainStarted", { release: "r" });
   snapshot("static", 10 * SECOND, servers);

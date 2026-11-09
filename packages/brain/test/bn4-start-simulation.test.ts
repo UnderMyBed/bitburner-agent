@@ -2,8 +2,8 @@
 // for a bounded hour of virtual time (about 10 s of real time), its rules as on Steam (all on), the simulator's own
 // effectors taken away so the Agent chooses its backends as in a browser: Singularity, at ×1 RAM in BN4
 // (`Netscript/RamCostGenerator.ts:82-95`), beside the Agent on SF1's 32 GB home. One seed: a thin slice, no sweep. It
-// plays BN4 with BN1's rules (core's `bitNodeAssumptions` lists what they take as BN1's); the first live BN4 run shows
-// what breaks.
+// plays BN4 with BN1's rules at BN4's prices and hacking multipliers (core's `bitNodePriceMultipliers` and
+// `bitNodeHackingMultipliers`); the first live BN4 run shows what else breaks.
 import { bitNodeAssumptions } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { runReport } from "../src/run-report.ts";
@@ -42,12 +42,25 @@ test("1 virtual hour from BN4.1 with SF1.3: roots, batches, earns and buys throu
   expect(actions.every((each) => / done after /.test(each))).toBe(true);
   expect(line("    buyTor(Alpha Enterprises): ")).toMatch(/: done after 1 try \(singularity\); /);
   expect(line("    buyProgram(BruteSSH.exe): ")).toMatch(/: done after 1 try \(singularity\); /);
-  // What it takes as BN1's here: logged, and listed under the BitNode.
-  const assumptions = bitNodeAssumptions(4);
-  expect(fresh.brain.logLines.filter((each) => each.startsWith("in BitNode 4, taken as BN1's: "))).toEqual(
-    assumptions.map((each) => `in BitNode 4, taken as BN1's: ${each}`),
+  // Nothing taken as BN1's in BN4: core has its prices and its hacking multipliers (#321's review).
+  expect(bitNodeAssumptions(4)).toEqual([]);
+  expect(text).not.toContain("taken as BN1's");
+  // BN4's ScriptHackMoney folded in: what the batcher's hacks landed (its own count, from each hack's return) is what
+  // the slow snapshots' money sources say hacking earned, and the ceilings are BN4's, so hacking sits under them (no
+  // "income above the bound" failure) at a share like BN1's on n00dles. Measured on 2026-11-09: $3.72m landed,
+  // $993/s over the 59 min, 6.5% of the batcher ceiling; BN1 from the same start, 19.4%. Both batch n00dles all hour:
+  // BN1's has 8.9 times BN4's most money (ServerMaxMoney 0.1125 there, BitNode.tsx:635), and the BN4 run's hosts held
+  // 524 GB, five times the BN1 run's, so the ceiling on the best target outgrows what n00dles gives.
+  const landed = Number(/ hack parts landed \(\$(\d+)\)/.exec(text)?.[1]);
+  const window5 = /\n {2}over the window: \$([\d,]+)\/s: ([\d.]+)% of the batcher ceiling .*\((\d+\.\d) h\)\n/.exec(
+    text,
   );
-  expect(text).toContain(`    taken as BN1's in BitNode 4 (#321):\n      ${assumptions.join("\n      ")}\n`);
+  const perSecond = Number(window5?.[1]?.replaceAll(",", ""));
+  const hours = Number(window5?.[3]);
+  expect(landed / (perSecond * hours * 3600)).toBeGreaterThan(0.8);
+  expect(landed / (perSecond * hours * 3600)).toBeLessThan(1.25);
+  expect(Number(window5?.[2])).toBeGreaterThan(3);
+  expect(Number(window5?.[2])).toBeLessThan(100);
   // No stall: income rising, nothing stuck, and a passing verdict.
   expect(text).toContain(
     "  income stalls (money in the medium snapshots not rising for 10 min or more, after it first rose):\n    none",

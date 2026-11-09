@@ -33,6 +33,7 @@ import {
   BATCHER_NEXT_RAM_SHARE,
   BATCHER_TARGET_HORIZON_MS,
   BATCHER_TARGETS_PLANNED,
+  BN1_HACKING,
   chooseBatcher,
   planBatcher,
 } from "../src/batcher.ts";
@@ -158,8 +159,8 @@ const nowIn = (data: MediumSnapshotData, hostname: string) => {
  */
 function worthAPath(staticData: StaticSnapshotData, data: MediumSnapshotData, hosts: string[], batched: string) {
   const player = data.player as unknown as HackingPlayer;
-  const from = planBatcher(staticData, data, batched, hosts);
-  const rest = planBatcher(staticData, data, batched, hosts, null, 1 - BATCHER_NEXT_RAM_SHARE);
+  const from = planBatcher(staticData, data, BN1_HACKING, batched, hosts);
+  const rest = planBatcher(staticData, data, BN1_HACKING, batched, hosts, null, 1 - BATCHER_NEXT_RAM_SHARE);
   if (from.batcher === null) throw new Error(from.why);
   const lostPerSecond = rest.batcher === null ? from.incomePerSecond : from.incomePerSecond - rest.incomePerSecond;
   const fromWeakenMs = operationTimeMs("weaken1", figuresIn(staticData, batched), player);
@@ -168,7 +169,7 @@ function worthAPath(staticData: StaticSnapshotData, data: MediumSnapshotData, ho
     .map((each) => each.hostname)
     .filter((hostname) => {
       if (hostname === batched) return false;
-      const plan = planBatcher(staticData, data, hostname, hosts);
+      const plan = planBatcher(staticData, data, BN1_HACKING, hostname, hosts);
       if (plan.batcher === null) return false;
       const figures = figuresIn(staticData, hostname);
       const weakenMs = operationTimeMs("weaken1", figures, player);
@@ -212,12 +213,12 @@ function follow(shape: Shape): Followed {
   const player = shape.player;
   const weakenOf = (hostname: string) => operationTimeMs("weaken1", figuresIn(staticData, hostname), player);
   let batching = "n00dles";
-  let current = planBatcher(staticData, data, batching, hosts).batcher;
+  let current = planBatcher(staticData, data, BN1_HACKING, batching, hosts).batcher;
   let moves = 0;
   const failed = (problem: string): Followed => ({ problems: [problem], moves, richerLeft: false });
   const most = shape.targets.length + 2;
   for (let choice = 0; choice < most; choice++) {
-    const chosen = chooseBatcher(staticData, data, hosts, current, batching);
+    const chosen = chooseBatcher(staticData, data, BN1_HACKING, hosts, current, batching);
     if (chosen.batcher === null) return failed(`choice ${choice}: none: ${chosen.why}`);
     const target = chosen.batcher.config.target;
     const next = chosen.batcher.config.next;
@@ -225,10 +226,10 @@ function follow(shape: Shape): Followed {
     if (target === batching && next === undefined) {
       if (worth.length > 0)
         return failed(`choice ${choice}: rests on ${batching}, with ${worth.join(", ")} worth a path`);
-      const restingWorth = (planBatcher(staticData, data, batching, hosts) as { incomePerSecond: number })
+      const restingWorth = (planBatcher(staticData, data, BN1_HACKING, batching, hosts) as { incomePerSecond: number })
         .incomePerSecond;
       const richerLeft = staticData.servers.some(({ hostname }) => {
-        const plan = planBatcher(staticData, data, hostname, hosts);
+        const plan = planBatcher(staticData, data, BN1_HACKING, hostname, hosts);
         const preparedWorth =
           plan.batcher === null
             ? 0
@@ -283,9 +284,9 @@ test("the shapes reach what it's for: a move or a next beyond the 5 best by the 
     fc.property(anyShape, (shape) => {
       const { staticData, data } = snapshotsOf(shape);
       const hosts = hostsOf(shape);
-      const current = planBatcher(staticData, data, "n00dles", hosts).batcher;
+      const current = planBatcher(staticData, data, BN1_HACKING, "n00dles", hosts).batcher;
       if (worthAPath(staticData, data, hosts, "n00dles").length > 0) counts.worth++;
-      const chosen = chooseBatcher(staticData, data, hosts, current, "n00dles");
+      const chosen = chooseBatcher(staticData, data, BN1_HACKING, hosts, current, "n00dles");
       const target = chosen.batcher?.config.target;
       const next = chosen.batcher?.config.next?.target;
       if (target !== "n00dles") counts.moved++;

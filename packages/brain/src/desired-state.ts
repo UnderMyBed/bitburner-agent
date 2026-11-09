@@ -10,6 +10,7 @@
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type BatcherHealth,
+  type BitNodeHackingMultipliers,
   bitNodeAssumptions,
   type DesiredState,
   EFFECTOR_BACKENDS,
@@ -49,7 +50,9 @@ import {
   batcherHostsOf,
   batcherNotRunning,
   batcherViewOf,
+  bitNodeHackingOf,
   chooseBatcher,
+  HACKING_MULTIPLIERS_UNREAD,
   readBatcherEnabled,
 } from "./batcher.ts";
 import {
@@ -387,6 +390,8 @@ export class DesiredStateController {
   #worldDaemonDestroy = false;
   /** The BitNode whose BN1-only assumptions (#321) were last logged: logged again only for another. */
   #assumptionsLoggedFor: number | null = null;
+  /** `HACKING_MULTIPLIERS_UNREAD` logged, until a slow snapshot says the BitNode: once, not every update. */
+  #hackingUnreadLogged = false;
   /** The stop at the BitNode's end (#303): it asks main.ts, through its event, to shut the brain down. */
   readonly #bitNodeEnd: BitNodeEndWatch;
   /** The close of the game at the BitNode's end (#303): when it went out, and whether it's withdrawn, tried enough. */
@@ -1215,6 +1220,19 @@ export class DesiredStateController {
    * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
    * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1.
    */
+  /**
+   * The BitNode's hacking multipliers for the hack loop's and the batcher's player (#321, `bitNodeHackingOf`), from the
+   * slow snapshot's BitNode. Before one says it, BN1's, logged once (`HACKING_MULTIPLIERS_UNREAD`); a BitNode core has
+   * none for, BN1's too, which its `bitNodeAssumptions` line says.
+   */
+  #hackingMultipliers(): BitNodeHackingMultipliers {
+    const currentNode = this.#slowData?.resetInfo?.currentNode;
+    const { multipliers } = bitNodeHackingOf(currentNode);
+    if (currentNode === undefined && !this.#hackingUnreadLogged) this.#log(HACKING_MULTIPLIERS_UNREAD);
+    this.#hackingUnreadLogged = currentNode === undefined;
+    return multipliers;
+  }
+
   #logBitNodeAssumptions(): void {
     const currentNode = this.#slowData?.resetInfo?.currentNode;
     if (!isBitNodeNumber(currentNode) || currentNode === this.#assumptionsLoggedFor) return;
@@ -1361,14 +1379,26 @@ export class DesiredStateController {
     // rho-construction and back.
     const health = this.#batcherHealth();
     const batching = health?.state === "batching" || health?.state === "recovering" ? health.target : null;
-    const planned = chooseBatcher(this.#staticData, this.#mediumData, hosts, this.#desired?.batcher ?? null, batching);
+    const planned = chooseBatcher(
+      this.#staticData,
+      this.#mediumData,
+      this.#hackingMultipliers(),
+      hosts,
+      this.#desired?.batcher ?? null,
+      batching,
+    );
     if (planned.batcher === null) {
       this.#batcherWhy = planned.why;
       return { hackLoop };
     }
     // Sharing its spare RAM (#224), while the player works for a faction, the brain's work or the owner's.
     const sharingConfig = factionWorking
-      ? sharingConfigOf(planned.batcher.config, this.#mediumData, singularityRamMultiplierOf(this.#slowData))
+      ? sharingConfigOf(
+          planned.batcher.config,
+          this.#mediumData,
+          this.#hackingMultipliers(),
+          singularityRamMultiplierOf(this.#slowData),
+        )
       : null;
     const sharing = readShareEnabled(this.#store) ? sharingConfig : null;
     this.#shareWhy = !factionWorking
@@ -1448,8 +1478,8 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       enabled: readAugmentationsEnabled(this.#store),
       homeRamEnabled: readHomeRamEnabled(this.#store),
-      // The destroy wanted once The Red Pill is installed (#215 review): ordinary installs held for it. At Source-File
-      // 1's cap too: a replay (#311).
+      // The destroy wanted once The Red Pill is installed (#215 review): ordinary installs held for it. With nothing
+      // left in the campaign's order to gain too: a replay (#311, #321).
       destroyWanted: readWorldDaemonEnabled(this.#store),
       // Who works for a faction while an install is held for Daedalus's count (#243 review): A5 under the hold.
       holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
@@ -1569,7 +1599,12 @@ export class DesiredStateController {
       if (resetAt !== null && this.#lastSetHackTargetResetAt !== null && resetAt !== this.#lastSetHackTargetResetAt) {
         this.#lastSetHackTarget = null;
       }
-      const { hackLoop, lastSet } = planHackLoop(this.#staticData, this.#mediumData, this.#lastSetHackTarget);
+      const { hackLoop, lastSet } = planHackLoop(
+        this.#staticData,
+        this.#mediumData,
+        this.#hackingMultipliers(),
+        this.#lastSetHackTarget,
+      );
       this.#lastSetHackTarget = lastSet;
       this.#lastSetHackTargetResetAt = resetAt ?? this.#lastSetHackTargetResetAt;
       const factionWorking = factionWorkGoingOn(work, this.#fastData?.work);

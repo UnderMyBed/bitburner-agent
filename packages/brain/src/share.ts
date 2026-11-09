@@ -7,6 +7,7 @@
 import {
   type BatcherConfig,
   type BatcherHealth,
+  type BitNodeHackingMultipliers,
   batchHoldsMs,
   batchPeakRamGb,
   batchThreads,
@@ -71,9 +72,11 @@ export function factionWorkGoingOn(work: Work | null, outcome: unknown): boolean
 export function sharingConfigOf(
   config: BatcherConfig,
   mediumData: MediumSnapshotData,
+  hacking: BitNodeHackingMultipliers,
   singularityMultiplier: number | null = null,
 ): SharingConfig | null {
-  const player = hackingPlayerOf(mediumData.player);
+  // The BitNode's hacking multipliers folded in (#321), as the batcher's own plan has them.
+  const player = hackingPlayerOf(mediumData.player, hacking);
   if (player === null) return null;
   const { figures, hackShare, spacingMs } = config;
   const threads = batchThreads(figures, player, hackThreadsForShare(hackShare, figures, player));

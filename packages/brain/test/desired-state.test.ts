@@ -28,6 +28,7 @@ import {
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
@@ -753,6 +754,8 @@ describe("backdoors for the hacker factions (#195)", () => {
     expect(lastIntents(connection)).toEqual([]);
     expect(controller.intentsView()).toEqual([]);
     expect(lines).toEqual([
+      // No slow snapshot in this test (#321): the hack loop's hacking multipliers BN1's meanwhile, said once.
+      HACKING_MULTIPLIERS_UNREAD,
       "backdoor: asking for CSEC (hacking 54, needs 54), for CyberSec's invitation",
       "backdoor: CSEC backdoored, 0 s after it was asked for",
     ]);
@@ -1617,7 +1620,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       ]);
     });
 
-    // With nothing left in the campaign's order to gain too (#311, #321): the destroy, a replay, is wanted all the same.
+    // With nothing left in the campaign's order to gain too (#311, #321): the destroy, a replay, is wanted all the
+    // same.
     test.each([
       ["", {}],
       [", with nothing left in the order to gain (#311, #321)", { 1: 3, 4: 3 }],
@@ -3288,19 +3292,17 @@ describe("the brain's own irreversible intents go through the irreversible gate 
 });
 
 describe("what the brain takes as BN1's (#321): logged once per BitNode, from the slow snapshot", () => {
-  test("none in BN1; BN4's on its first slow snapshot, once; another BitNode's when it shows", () => {
+  test("none in BN1 or BN4 (core has both's); another BitNode's on its first slow snapshot, once", () => {
     const lines: string[] = [];
     new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
     const connection = connectAgent();
     const taken = () => lines.filter((line) => line.includes("taken as BN1's"));
     send(connection, "slow", slowData(1));
+    send(connection, "slow", slowData(4));
     expect(taken()).toEqual([]);
-    send(connection, "slow", slowData(4));
-    send(connection, "slow", slowData(4));
-    const bn4 = bitNodeAssumptions(4).map((each) => `in BitNode 4, taken as BN1's: ${each}`);
-    expect(bn4).toHaveLength(2);
-    expect(taken()).toEqual(bn4);
     send(connection, "slow", slowData(2));
-    expect(taken()).toEqual([...bn4, `in BitNode 2, taken as BN1's: ${bitNodeAssumptions(2)[0]}`]);
+    send(connection, "slow", slowData(2));
+    expect(bitNodeAssumptions(2)).toHaveLength(1);
+    expect(taken()).toEqual([`in BitNode 2, taken as BN1's: ${bitNodeAssumptions(2)[0]}`]);
   });
 });

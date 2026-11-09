@@ -22,7 +22,7 @@ import {
   shareReserveGb,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
+import { BN1_HACKING, HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { bestWorkRate, FactionRule, WORK_TYPE_SWITCH_GAIN } from "../src/factions.ts";
 import {
@@ -119,34 +119,45 @@ describe("sharingConfigOf", () => {
 
   test("the reserve covers the plan's peak with the margin, and the next target's RAM; home keeps the Agent's", () => {
     const data = medium(50, { foodnstuff: true, CSEC: true });
-    expect(sharingConfigOf(config, data)).toEqual({
+    expect(sharingConfigOf(config, data, BN1_HACKING)).toEqual({
       reserveGb: shareReserveGb(plan.peakRamGb, 0),
       homeKeptGb: SHARE_HOME_KEPT_GB,
       cores: {},
     });
+    // In BN4 (#321) a hack thread takes a fifth, so the plan's share needs more threads: a larger peak to keep free.
+    const inBn4 = sharingConfigOf(config, data, { ScriptHackMoney: 0.2, HackExpGain: 0.4 });
+    expect(inBn4?.reserveGb).toBeGreaterThan(shareReserveGb(plan.peakRamGb, 0));
     // Home keeps 4 times the Agent's 8 GB free of share threads (#226's review); with Singularity, the most its largest
     // worker, the destroy's 33.9 GB at SF4.3, takes at the SF4 level owned beside that (#242's review): not all of
     // home.
     expect(SHARE_HOME_KEPT_GB).toBe(4 * HOME_KEPT_FOR_THE_AGENT_GB);
     const withHome = medium(50, { foodnstuff: true, CSEC: true }, [], 2 ** 20);
-    expect(sharingConfigOf(config, withHome, 1)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 33.9, 9);
-    expect(sharingConfigOf(config, withHome, 4)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 1.6 + 4 * 32.3, 9);
-    expect(sharingConfigOf(config, withHome, 16)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 1.6 + 16 * 32.3, 9);
-    expect(sharingConfigOf(config, withHome, null)?.homeKeptGb).toBe(SHARE_HOME_KEPT_GB);
+    expect(sharingConfigOf(config, withHome, BN1_HACKING, 1)?.homeKeptGb).toBeCloseTo(SHARE_HOME_KEPT_GB + 33.9, 9);
+    expect(sharingConfigOf(config, withHome, BN1_HACKING, 4)?.homeKeptGb).toBeCloseTo(
+      SHARE_HOME_KEPT_GB + 1.6 + 4 * 32.3,
+      9,
+    );
+    expect(sharingConfigOf(config, withHome, BN1_HACKING, 16)?.homeKeptGb).toBeCloseTo(
+      SHARE_HOME_KEPT_GB + 1.6 + 16 * 32.3,
+      9,
+    );
+    expect(sharingConfigOf(config, withHome, BN1_HACKING, null)?.homeKeptGb).toBe(SHARE_HOME_KEPT_GB);
     expect(shareReserveGb(plan.peakRamGb, 0)).toBeGreaterThanOrEqual(plan.peakRamGb * 1.25);
     const next = { target: "foodnstuff", figures: N00DLES, ramGb: 6.4 };
-    expect(sharingConfigOf({ ...config, next }, data)?.reserveGb).toBe(shareReserveGb(plan.peakRamGb, 6.4));
+    expect(sharingConfigOf({ ...config, next }, data, BN1_HACKING)?.reserveGb).toBe(
+      shareReserveGb(plan.peakRamGb, 6.4),
+    );
   });
 
   test("the hosts' cores over 1, from the medium snapshot; none without the player's hacking figures", () => {
     const data = medium(50, { foodnstuff: true, CSEC: true, "omega-net": true });
     data.servers = data.servers.map((server) => ({ ...server, cpuCores: server.hostname === "foodnstuff" ? 1 : 3 }));
     // omega-net isn't a host: left out. Home, which shares beside the hosts, is in (#226's review).
-    expect(sharingConfigOf(config, data)?.cores).toEqual({ CSEC: 3 });
+    expect(sharingConfigOf(config, data, BN1_HACKING)?.cores).toEqual({ CSEC: 3 });
     const withHome = medium(50, { foodnstuff: true, CSEC: true }, [], 64);
     withHome.servers = withHome.servers.map((server) => ({ ...server, cpuCores: server.hostname === "home" ? 8 : 1 }));
-    expect(sharingConfigOf(config, withHome)?.cores).toEqual({ home: 8 });
-    expect(sharingConfigOf(config, mediumData(50, { foodnstuff: true }))).toBeNull();
+    expect(sharingConfigOf(config, withHome, BN1_HACKING)?.cores).toEqual({ home: 8 });
+    expect(sharingConfigOf(config, mediumData(50, { foodnstuff: true }), BN1_HACKING)).toBeNull();
   });
 });
 
@@ -290,7 +301,7 @@ test("the controller asks the batcher to share while faction work goes on, with 
   agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }));
   agent.send("medium", medium(50, rooted));
   const config = agent.lastSent()?.batcher?.config as BatcherConfig;
-  expect(config.sharing).toEqual(sharingConfigOf({ ...config, sharing: undefined }, medium(50, rooted)));
+  expect(config.sharing).toEqual(sharingConfigOf({ ...config, sharing: undefined }, medium(50, rooted), BN1_HACKING));
   expect(config.sharing?.reserveGb).toBeGreaterThan(0);
   expect(log).toContain("batcher: batches n00dles, sharing its spare RAM");
   expect(controller.shareView()).toMatchObject({ enabled: true, asked: true, why: null });

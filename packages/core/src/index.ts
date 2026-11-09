@@ -198,8 +198,10 @@ export {
 } from "./batcher.ts";
 export {
   BITNODE_COUNT,
+  type BitNodeHackingMultipliers,
   type BitNodePriceMultipliers,
   bitNodeAssumptions,
+  bitNodeHackingMultipliers,
   bitNodePriceMultipliers,
   DESTROY_BITNODE_WORKER_NAME,
   isBitNodeNumber,

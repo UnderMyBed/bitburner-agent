@@ -228,7 +228,7 @@ Each level constrains the one below. A level re-plans when its inputs change or 
 
 #### 4.5.1 Campaign level
 - Chooses the next BitNode by minimising **estimated remaining campaign time**, given the current Source-Files and the bonuses each candidate would add.
-- **Until then (#321, owner decision 66):** the brain's destroy follows the synthesis's draft order as far as the brain plays it, core's `CAMPAIGN_ORDER` (BN1.1, BN4 ×3, BN1.2-1.3): the first BitNode whose Source-File, after this destroy's level, is short of its step's; with none, BN1 again (a replay, #311). What the brain takes as BN1's in another BitNode (core's `bitNodeAssumptions`: BN4's hacking multipliers) is logged once per BitNode and listed in the run report under it, the known risks of playing it with BN1's rules.
+- **Until then (#321, owner decision 66):** the brain's destroy follows the synthesis's draft order as far as the brain plays it, core's `CAMPAIGN_ORDER` (BN1.1, BN4 ×3, BN1.2-1.3): the first BitNode whose Source-File, after this destroy's level, is short of its step's; with none, BN1 again (a replay, #311). In BN4 the brain plays with its BN1 rules at BN4's prices and hacking multipliers (core's `bitNodePriceMultipliers` and `bitNodeHackingMultipliers`, folded into the player's `hacking_money` and `hacking_exp` where the brain reads the player). What it takes as BN1's in a BitNode it knows neither for (core's `bitNodeAssumptions`) is logged once per BitNode and listed in the run report under it.
 - Per-BitNode duration estimates come from a table maintained by simulator runs and real telemetry. The draft order in the synthesis is the **prior**.
 - **BN12:** `sourceFileOverrides {12: 0}` keeps difficulty at level 1, subject to verification (Q6).
 
