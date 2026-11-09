@@ -78,6 +78,12 @@ export interface SlowSnapshotData {
    */
   factions?: FactionStateReading;
   /**
+   * The gang's faction (#325), from the gang worker's last reading, added by the Agent with the faction state: null
+   * with no gang read (none formed, or none managed); absent from an older Agent. What the reports need to leave it
+   * out of the factions taking donations (core's `acceptsDonations`).
+   */
+  gangFaction?: string | null;
+  /**
    * `ns.getMoneySources().sinceInstall` (#196): money made (and spent, as negatives) by source since the last install,
    * which resets it (PlayerObjectGeneralMethods.ts:128). `hacking` is every hack's money. Absent from an older Agent.
    */

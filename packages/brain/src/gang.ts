@@ -10,11 +10,14 @@
 // - Managing: the desired state's `gang`, the recruits the respect allows and each member's task, done by the Agent's
 //   worker every 10 s, which reads the gang after. A recruit is set to train at once.
 // - The gang's faction is left out of what the faction and augmentation rules see as joined (`withoutGangFaction`):
-//   the game offers no work or donations there (`Faction/FactionHelpers.tsx:150-153`), and its shop is nearly every
-//   augmentation (`:172-202`), which core doesn't model yet (G5).
+//   the game offers no work or donations there (`Faction/ui/FactionRoot.tsx:97-99`, `:113`; Singularity's work and
+//   donation, `NetscriptFunctions/Singularity.ts:808-810`, `:934-935`), and its shop is nearly every augmentation
+//   (`Faction/FactionHelpers.tsx:172-202`), which core doesn't model yet (G5). In BN2, before the gang worker's first
+//   reading (a brain just started), every gang faction is left out, so no work goes to one the gang may have.
 // - No switch (#325): in BN2 the gang is the brain's to play; the owner can move members in the game, and the brain
 //   sets them back within 10 s.
 import {
+  GANG_FACTIONS,
   GANG_STATS,
   type GangInformation,
   type GangMemberReading,
@@ -25,6 +28,7 @@ import {
   gangTrainingTask,
   type Intent,
   intentId,
+  MAX_GANG_MEMBER_NAME_LENGTH,
   type MediumSnapshotData,
   planGang,
   type SlowSnapshotData,
@@ -102,23 +106,27 @@ function joinedFactionsOf(mediumData: MediumSnapshotData | null): string[] {
 }
 
 /**
- * The slow snapshot with the gang's faction left out of the faction state's joined factions (#325): what the faction,
- * augmentation and World Daemon rules decide on. The game offers no work or donations there, and its shop isn't
- * modelled until G5. `slowData` itself is left as it is; null or no gang, it's returned as it is.
+ * The slow snapshot with `hidden` (the gang's faction, `GangRule.hiddenFactions`) left out of the faction state's
+ * joined factions (#325): what the faction, augmentation and World Daemon rules decide on. The game offers no work or
+ * donations there, and its shop isn't modelled until G5. `slowData` itself is left as it is; null, or none of them
+ * joined, it's returned as it is.
  */
 export function withoutGangFaction(
   slowData: SlowSnapshotData | null,
-  gangFaction: string | null,
+  hidden: readonly string[],
 ): SlowSnapshotData | null {
   const state = slowData?.factions?.state;
-  if (slowData === null || gangFaction === null || !Array.isArray(state?.joined)) return slowData;
-  if (!state.joined.some((faction) => faction?.name === gangFaction)) return slowData;
+  if (slowData === null || !Array.isArray(state?.joined)) return slowData;
+  if (!state.joined.some((faction) => hidden.includes(faction?.name))) return slowData;
   const factions = slowData.factions as NonNullable<SlowSnapshotData["factions"]>;
   return {
     ...slowData,
-    factions: { ...factions, state: { ...state, joined: state.joined.filter((each) => each.name !== gangFaction) } },
+    factions: { ...factions, state: { ...state, joined: state.joined.filter((each) => !hidden.includes(each.name)) } },
   };
 }
+
+/** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
+const isProtocolName = (name: string) => name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
 
 /** What the rule wants now: the gang's forming intent, or null; and the desired state's gang, or null for none. */
 export interface GangDecision {
@@ -152,6 +160,8 @@ export class GangRule {
   #view: GangView = { stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)", plan: null };
   /** The faction of the gang the last reading showed, or null. */
   #faction: string | null = null;
+  /** In BN2 with no reading yet that says whether there's a gang, or whose: every gang faction is held out. */
+  #holding = false;
   #lastLogged = "";
 
   constructor(log: (line: string) => void = () => {}) {
@@ -168,6 +178,15 @@ export class GangRule {
     return this.#faction;
   }
 
+  /**
+   * The factions the other rules mustn't see as joined (`withoutGangFaction`): the gang's; in BN2 before a reading
+   * says whether there's one, every gang faction; else none.
+   */
+  hiddenFactions(): readonly string[] {
+    if (this.#faction !== null) return [this.#faction];
+    return this.#holding ? GANG_FACTIONS : [];
+  }
+
   /** The decision on the latest snapshots. Null for both outside BN2: no gang is managed. */
   update({
     mediumData,
@@ -179,6 +198,7 @@ export class GangRule {
     const bitNode = bitNodeOfSlow(slowData);
     if (bitNode !== GANG_BITNODE) {
       this.#faction = null;
+      this.#holding = false;
       const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
       return this.#decide({ stage: "notManaged", line: `Gang: not managed (${why})`, plan: null }, null, null);
     }
@@ -186,9 +206,11 @@ export class GangRule {
     const read: GangState = { recruit: [], tasks: {} };
     const snapshot = gangSnapshotOf(mediumData);
     if (snapshot.kind === "absent" || snapshot.kind === "unread") {
+      this.#holding = this.#faction === null;
       const why = snapshot.kind === "unread" ? `unread: ${snapshot.problem}` : "waiting for the gang worker's reading";
       return this.#decide({ stage: "waiting", line: `Gang: ${why}`, plan: null }, null, read);
     }
+    this.#holding = false;
     if (snapshot.kind === "none") {
       this.#faction = null;
       const faction = gangFactionToForm(joinedFactionsOf(mediumData));
@@ -208,7 +230,8 @@ export class GangRule {
       softcap: gangSoftcapOf(GANG_BITNODE),
     });
     const tasks: Record<string, string> = {};
-    for (const { name, task } of plan.assignments) tasks[name] = task;
+    // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
+    for (const { name, task } of plan.assignments) if (isProtocolName(name)) tasks[name] = task;
     for (const name of plan.recruit) tasks[name] = gangTrainingTask(gang.isHacking);
     const line =
       `Gang: ${gang.faction}'s, ${formatCount(members.length, "member")} of 12 (${describeTaskMix(plan)}); ` +

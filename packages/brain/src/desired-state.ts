@@ -513,7 +513,7 @@ export class DesiredStateController {
         this.#gates.mediumSnapshot(this.#mediumData, this.#judgedQueue(), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
         this.#slowSnapshot = event.snapshot.data as SlowSnapshotData;
-        this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.gangFaction());
+        this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
         this.#slowGameTimeMs = event.snapshot.gameTimeMs;
         this.#slowAtMs = event.atMs;
         this.#logBitNodeAssumptions();
@@ -1496,7 +1496,7 @@ export class DesiredStateController {
     const gang = this.#gang.update({ mediumData: this.#mediumData, slowData: this.#slowSnapshot });
     this.#gangIntent = gang.intent;
     this.#gangState = gang.gang;
-    this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.gangFaction());
+    this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
     // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
     // a health gone stale, or a batcher reported not running (#226's review).
     const shareBonus = shareBonusOf(

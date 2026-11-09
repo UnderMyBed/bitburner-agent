@@ -256,7 +256,9 @@ export function createSnapshotter(
             ? await readFactions(roundEndsAtMs)
             : factionsUnread(noTimeToRead(roundsWaitingToRead));
           roundsWaitingToRead = 0;
-          lastSlowData = { ...(report.data as SlowSnapshotData), factions };
+          // The gang's faction (#325), from its worker's last reading: the reports leave it out of the donors.
+          const gangFaction = gangReading()?.gang?.faction ?? null;
+          lastSlowData = { ...(report.data as SlowSnapshotData), factions, gangFaction };
           send(snapshot("slow", report.gameTimeMs, lastSlowData));
           roundsUntilDue.slow = ROUNDS_BETWEEN.slow - 1;
         }

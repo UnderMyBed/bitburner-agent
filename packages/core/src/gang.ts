@@ -487,6 +487,12 @@ export function gangTerritoryLeverage(isHacking: boolean, territory: number): nu
   return territoryMultiplier(territory, top.territory.respect);
 }
 
+/** The slow snapshot's gang faction (#325, `SlowSnapshotData.gangFaction`), or null: none read, or an older Agent. */
+export function gangFactionOf(slow: unknown): string | null {
+  const faction = (slow as { gangFaction?: unknown } | null | undefined)?.gangFaction;
+  return typeof faction === "string" ? faction : null;
+}
+
 /** Home worker: forms the gang, the `createGang` intent's (#325), with the NS API alone, so in any game. */
 export const CREATE_GANG_WORKER_NAME = "create-gang.js";
 /** Home worker: recruits, sets the members' tasks and reads the gang, every 10 s while the brain manages it (#325). */

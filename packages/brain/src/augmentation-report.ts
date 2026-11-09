@@ -5,6 +5,7 @@
 // never showed, and donations unused (one within reach for 30 minutes online with the brain counting none).
 import {
   acceptsDonations,
+  gangFactionOf,
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
@@ -285,9 +286,9 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
       const { money, reputation } = augmentationCost(name, purchaseState);
       const sellers = joined.filter((faction) => shops.get(faction.name)?.includes(name));
       if (sellers.some((faction) => faction.reputation >= reputation)) continue;
-      // No gang is modelled (none in BN1): the gang's faction would take none.
+      // The gang's faction takes none (#325, `Singularity.ts:934-935`).
       const donors = sellers.filter(
-        (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
+        (faction) => acceptsDonations(faction.name, gangFactionOf(data)) && donationsUnlocked(faction.favor, multipliers),
       );
       const donor = donors.reduce<(typeof donors)[number] | null>(
         (best, each) => (best === null || each.reputation > best.reputation ? each : best),
@@ -313,8 +314,8 @@ export function donationStatus(
   slow: SlowSnapshotData | undefined,
 ): string {
   const info = slow?.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
-  // No gang is modelled (none in BN1): the gang's faction would take none.
-  if (!acceptsDonations(faction, null) || !Number.isInteger(info?.currentNode)) return "";
+  // The gang's faction takes none (#325).
+  if (!acceptsDonations(faction, gangFactionOf(slow)) || !Number.isInteger(info?.currentNode)) return "";
   try {
     const multipliers = augmentationBitNodeMultipliers(
       info?.currentNode as number,

@@ -416,6 +416,7 @@ export {
   type GangState,
   type GangTask,
   gangExpPerCycle,
+  gangFactionOf,
   gangFactionToForm,
   gangMemberAfter,
   gangMoneyPerCycle,
@@ -440,6 +441,7 @@ export {
   UNASSIGNED_GANG_TASK,
 } from "./gang.ts";
 export {
+  GANG_JUSTICE_RELEASE,
   GANG_MEMBER_NAMES,
   GANG_TRAINING_HORIZON_MS,
   GANG_TRAINING_STEP_MS,
@@ -454,6 +456,8 @@ export {
   gangObjectiveOf,
   gangTrainingTask,
   gangTrains,
+  gangWantedFalls,
+  isGangJusticeTask,
   planGang,
 } from "./gang-rule.ts";
 export {
