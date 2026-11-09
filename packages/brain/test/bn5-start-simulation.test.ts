@@ -86,4 +86,5 @@ test("1 virtual hour from BN5.1 with SF1.3 and SF4.3: roots, batches, earns and 
     skipped: "BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet",
     stall: null,
   });
-});
+  // About 14 s locally; CI's runners are slower (over 30 s on 2026-11-09), so it gets its own bound.
+}, 180_000);

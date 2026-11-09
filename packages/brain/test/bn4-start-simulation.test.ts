@@ -70,4 +70,5 @@ test("1 virtual hour from BN4.1 with SF1.3: roots, batches, earns and buys throu
   expect(lines.at(-1)).toBe("Verdict: PASS");
   // The World Daemon's destroy, when it comes, would go into BN4 again (SF4 short of 3).
   expect(fresh.controller().worldDaemonView()).toMatchObject({ nextBitNode: 4, replay: null, stall: null });
-});
+  // About 8 s locally; its own bound, as the BN5 suite's, for CI's slower runners.
+}, 180_000);
