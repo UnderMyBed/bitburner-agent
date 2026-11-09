@@ -159,6 +159,14 @@ export interface SlowResetInfo {
 const RESET_INFO_COLUMNS = `id, release, game_time_ms, received_at_ms,
   CASE json_type(data, '$.resetInfo') WHEN 'object' THEN json_extract(data, '$.resetInfo') END AS reset_info`;
 
+/**
+ * The slow snapshots after a row, by the slow tier's index (`slowResetInfoAfterId`'s `byTierIndex`): a seek on
+ * `snapshots_by_tier_and_id` past the row, in id order, with no sort (#309). Parameters: the row id, the environment,
+ * the limit.
+ */
+export const SLOW_AFTER_ID_BY_TIER_INDEX_SQL = `SELECT ${RESET_INFO_COLUMNS} FROM snapshots
+  INDEXED BY snapshots_by_tier_and_id WHERE id > ? AND environment = ? AND tier = 'slow' ORDER BY id LIMIT ?`;
+
 function slowResetInfoOfRow(row: Record<string, string | number | null>): SlowResetInfo {
   return {
     id: row.id as number,
@@ -431,8 +439,7 @@ export class TelemetryStore {
     const sql = !byTierIndex
       ? `SELECT ${RESET_INFO_COLUMNS} FROM snapshots WHERE id > ? AND +environment = ? AND +tier = 'slow'
             ORDER BY id LIMIT ?`
-      : `SELECT ${RESET_INFO_COLUMNS} FROM snapshots INDEXED BY snapshots_by_tier_and_id
-            WHERE id > ? AND environment = ? AND tier = 'slow' ORDER BY id LIMIT ?`;
+      : SLOW_AFTER_ID_BY_TIER_INDEX_SQL;
     const rows = this.#database.prepare(sql).all(afterId, environment, limit) as Record<
       string,
       string | number | null

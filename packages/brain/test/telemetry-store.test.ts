@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { NEWEST_OF_TIER_SQL, TelemetryStore } from "../src/telemetry-store.ts";
+import { NEWEST_OF_TIER_SQL, SLOW_AFTER_ID_BY_TIER_INDEX_SQL, TelemetryStore } from "../src/telemetry-store.ts";
 
 let directory: string;
 let store: TelemetryStore;
@@ -325,6 +325,20 @@ test("the newest snapshots of a tier are read off an index, sorting nothing (#30
   expect(newestOfTierPlan(older)).toContain("USE TEMP B-TREE FOR ORDER BY");
   TelemetryStore.open(older).close();
   expect(newestOfTierPlan(older)).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+});
+
+test("the slow snapshots past a row, by the tier index, are a seek on the new index, sorting nothing (#309)", () => {
+  const database = new DatabaseSync(path.join(directory, "telemetry.sqlite"), { readOnly: true });
+  try {
+    const rows = database.prepare(`EXPLAIN QUERY PLAN ${SLOW_AFTER_ID_BY_TIER_INDEX_SQL}`).all(0, "E0", 10);
+    expect(rows.map((row) => String(row.detail))).toEqual([
+      expect.stringMatching(
+        /^SEARCH snapshots USING INDEX snapshots_by_tier_and_id \(environment=\? AND tier=\? AND id>\?\)$/,
+      ),
+    ]);
+  } finally {
+    database.close();
+  }
 });
 
 test("the newest snapshot of a tier received before a time (#196), in an environment", () => {
