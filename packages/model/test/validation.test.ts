@@ -230,11 +230,16 @@ describe("the verdict's checks on run #3's BN1.2, the run fitted on", () => {
     }
   });
 
-  test("out of range: phase 3 on (it ends at the 8th install), so phases 3 to 5 and the destroy are no validation", () => {
+  test("downstream out of range from phase 3; fitted, in range by #310's tail: the destroy 12 h 1 min, +6.5% [15%]", () => {
     // Measured: run #3's 7th-10th curves run past their ends (31.6, 27.5, 81.7, 18.5 min), as the model's cycles are
-    // others; fitted: the Daedalus cycle's clocks run far past the curves' 120 min. By the figures, the destroy is
-    // 11 h 26 min and 12 h 1 min against 11 h 17 min.
-    for (const run of [measured, fitted]) expect(Math.min(...run.outOfRange)).toBeLessThanOrEqual(8);
+    // others (the destroy 11 h 26 min). Fitted: the Daedalus cycle's clocks run past the curves' 120 min, within the
+    // tail #310 fitted on BN1.3 (its 8th 23 min past the range, under the bound). Run #3's phases 3 to 5 aren't in the
+    // fixtures, so only the total is checked: on the run the curves are fitted on, consistency only.
+    expect(Math.min(...measured.outOfRange)).toBeLessThanOrEqual(8);
+    expect(fitted.outOfRange).toEqual([]);
+    const total = (fitted.destroyedAtMs as number) / MINUTE_MS;
+    expect(Math.round(total)).toBe(721);
+    expect(off(total, RUN_3_BN1_2.totalMinutes)).toBeLessThan(0.15);
   });
 });
 

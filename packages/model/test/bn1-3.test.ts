@@ -1,8 +1,9 @@
 // The validation on BN1.3, the exit run (#276). #263's part 2 held it out; its first review's findings then cited its
 // figures, and #294 was planned from them (the joins' time, the first cloud purchase, the share at a high level), so
-// it is no longer held out: every check here is "seen (no longer held out)". Nothing is fitted on it: #294's refit is
-// on run #3 alone (test/fit.ts, test/model.test.ts), and #294's mechanisms are the brain's code and the game's, tested
-// against them (packages/brain/test). The next live run is the held-out check. Labels:
+// it is no longer held out: every check here is "seen (no longer held out)". The curves are fitted on run #3 alone
+// (#294's refit, test/fit.ts, test/model.test.ts), and #294's mechanisms are the brain's code and the game's, tested
+// against them (packages/brain/test); but #310 fits the curves' tail past 120 min on BN1.3 (`tailCheckedMin`), so the
+// checks that lean on it are labelled fitted. BN1.4 (#310) was the held-out check. Labels:
 // - independent: the fitted model from BN1.3's start (SF1.2, today's brain with #242's share and #243's hold);
 // - downstream: today's rules on BN1.3's own measured level and income a cycle (`BN1_3_CYCLES`). They share inputs with
 //   what they check, so they test the rules' mechanism, not the curves;
@@ -217,9 +218,14 @@ describe("seen (no longer held out), downstream: today's rules on BN1.3's own me
 describe("seen (no longer held out), independent: the fitted model from BN1.3's start", () => {
   const model = read({ policy: TODAYS_POLICY });
 
-  test("its range: the 8th cycle, Daedalus's grind, runs out of it (114 min past the curves' 120)", () => {
-    expect(model.run.outOfRange).toEqual([8]);
-    expect(Math.round(model.run.cycles[7]?.extrapolatedMinutes ?? 0)).toBe(114);
+  test("fitted (#310's tail, fitted on BN1.3): every cycle in range, the 8th, Daedalus's grind, too", () => {
+    // In range only by the tail fitted on BN1.3's own Daedalus cycles (`BN1_3_TAIL_CYCLES`): no validation of it.
+    expect(model.run.outOfRange).toEqual([]);
+    expect(model.run.cycles[7]?.extrapolatedMinutes).toBe(0);
+    // Without #310's checked tail, 114 min past the curves' last reading, out, as #294 had it.
+    const tail = { tailCheckedMin: { exp: 0, money: 0 } };
+    const unchecked = runModel(BN1_3.start, { policy: TODAYS_POLICY, calibration: tail });
+    expect(Math.round(unchecked.cycles[7]?.extrapolatedMinutes ?? 0)).toBe(114);
   });
 
   test("the 5th cycle's quick install at 17 min, BN1.3's at 18.5 [25%]; BitRunners joined at 12 min (BN1.3: 10-15)", () => {
@@ -251,8 +257,16 @@ describe("seen (no longer held out), independent: the fitted model from BN1.3's 
     expect(third).toBe(-1);
   });
 
-  test("out of range: phases 4 and 5 and the destroy, past the 8th cycle", () => {
-    expect(model.inRange(model.endInstalls[3] as number)).toBe(false);
+  test("fitted (the tail): phases 4 and 5 [15%], +16% and −37%, and the destroy −15%: misses on the tail's own run", () => {
+    // In range by #310's tail, fitted on BN1.3's Daedalus cycles, so in-sample: phase 4 108 min (93), phase 5 17 (27),
+    // the destroy 10 h 40 min (12 h 35 min, phases 2 and 3 confounded by #274).
+    expect(model.inRange(model.endInstalls[3] as number)).toBe(true);
+    const offs = model.phases.slice(3).map((minutes, index) => off(minutes, BN1_3_PHASES[index + 3] as number));
+    expect(offs.map((each) => Math.round(each * 100))).toEqual([16, -37]);
+    // The destroy misses by 0.2 points.
+    const destroy = off((model.run.destroyedAtMs as number) / MINUTE_MS, BN1_3.destroyedAtMinutes);
+    expect(destroy).toBeLessThan(-0.15);
+    expect(destroy).toBeGreaterThan(-0.155);
   });
 
   test("cycles 1 to 7: each length [25%]; the count after the 1st to 6th [one]; known: the 7th 2 over", () => {
@@ -301,12 +315,12 @@ describe("seen (no longer held out), independent: the fitted model from BN1.3's 
     expect(model.firstCloudMin.get(8)).toBe(12);
   });
 
-  test("known miss, out of range: the money 5, 10 and 15 min into Daedalus's cycle, ×0.02, ×1.6, ×350 BN1.3's", () => {
+  test("known miss, fitted (the tail): the money 5, 10 and 15 min into Daedalus's cycle, ×0.02, ×1.6, ×350 BN1.3's", () => {
     // BN1.3's 9th held $100b for Daedalus from 8.6 min, bought no cloud server by 15 min, and its money rose about $1b
     // a minute on the world servers alone. The model's money runs away from its first cloud server (12 min) on: the
-    // batches' ramp on the new RAM isn't modelled.
+    // batches' ramp on the new RAM isn't modelled. In range by #310's tail, fitted on this run's Daedalus cycles.
     const daedalusCycle = model.run.cycles.findIndex((cycle) => cycle.reason === "Daedalus donations") + 1;
-    expect(model.inRange(daedalusCycle)).toBe(false);
+    expect(model.inRange(daedalusCycle)).toBe(true);
     const ratios = [5, 10, 15].map(
       (minutes) =>
         model.grossAt(daedalusCycle, minutes) / (BN1_3_CYCLES[8]?.points.find(([at]) => at === minutes)?.[2] as number),

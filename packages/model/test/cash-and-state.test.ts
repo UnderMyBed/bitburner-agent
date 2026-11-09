@@ -20,6 +20,7 @@ import {
   CLOUD_SERVER_INCOME_WINDOW_MS,
   CLOUD_SERVER_LIMIT,
   CLOUD_SERVER_PRICE_PER_GB,
+  Curves,
   cloudRamOf,
   EXTRAPOLATION_BOUND_MIN,
   FIRST_INCOME_SAMPLE_MS,
@@ -658,7 +659,9 @@ describe("the structural variants (#263): gross money, share by index", () => {
 });
 
 describe("extrapolated cycles flagged (#263)", () => {
-  test("minutes past the curve's last reading (120 min), by the clock furthest on; none within it", () => {
+  test("minutes past the curves' range (#310: the last reading, 120 min, and the tail checked past it, by clock)", () => {
+    const curves = new Curves(CALIBRATION);
+    expect(curves.range).toEqual({ exp: 260, money: 240 });
     const furthest: number[] = [];
     let cycle = 0;
     let last = -1;
@@ -667,20 +670,33 @@ describe("extrapolated cycles flagged (#263)", () => {
       onStep: ({ onlineMs, clocks }) => {
         if (onlineMs < last) cycle += 1;
         last = onlineMs;
-        furthest[cycle] = Math.max(furthest[cycle] ?? 0, clocks.exp, clocks.money);
+        furthest[cycle] = Math.max(
+          furthest[cycle] ?? 0,
+          clocks.exp - curves.range.exp,
+          clocks.money - curves.range.money,
+        );
       },
     });
     for (const [index, each] of run.cycles.entries()) {
-      expect(each.extrapolatedMinutes, `cycle ${index + 1}`).toBeCloseTo(Math.max(0, (furthest[index] ?? 0) - 120), 9);
+      expect(each.extrapolatedMinutes, `cycle ${index + 1}`).toBeCloseTo(Math.max(0, furthest[index] ?? 0), 9);
     }
+    // Without the tail's check (#263's range), the minutes past 120 by the clock furthest on.
+    const unchecked = runModel(RUN_3_BN1_2.start, {
+      policy: RUN_3_POLICY,
+      calibration: { tailCheckedMin: { exp: 0, money: 0 } },
+    });
+    expect(Math.max(...unchecked.cycles.map((each) => each.extrapolatedMinutes))).toBeGreaterThan(
+      Math.max(...run.cycles.map((each) => each.extrapolatedMinutes)),
+    );
     expect(run.cycles[0]?.extrapolatedMinutes).toBe(0);
     expect(run.cycles.some((each) => each.extrapolatedMinutes > 0)).toBe(true);
-    // Bounded: a cycle more than EXTRAPOLATION_BOUND_MIN past is out of range, and the run says which.
-    const beyond = run.cycles.flatMap((each, index) =>
+    // Bounded: a cycle more than EXTRAPOLATION_BOUND_MIN past is out of range, and the run says which (without the
+    // tail, as with it run #3's fitted run stays within the bound: its 8th 23 min past the range).
+    const beyond = unchecked.cycles.flatMap((each, index) =>
       each.extrapolatedMinutes > EXTRAPOLATION_BOUND_MIN ? [index + 1] : [],
     );
     expect(beyond.length).toBeGreaterThan(0);
-    expect(run.outOfRange.slice(0, beyond.length)).toEqual(beyond);
+    expect(unchecked.outOfRange.slice(0, beyond.length)).toEqual(beyond);
   });
 
   test("the cycle under way at the horizon is flagged too: out of range past the bound, not before", () => {
