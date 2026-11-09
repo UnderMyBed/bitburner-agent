@@ -560,8 +560,9 @@ export class WorldDaemonRule {
 
   /**
    * Why the destroy, on and ready to go (w0r1d_d43m0n rooted at its level), is refused as its next BitNode, BitNode 1,
-   * gives nothing more (#303), or null: the brain's stop at the BitNode's end. Set after the `nextBitNode` stall's line
-   * and event, in the same update.
+   * gives nothing more (#303), or null: the brain's stop at the BitNode's end. The `nextBitNode` stall is stored once,
+   * as w0r1d_d43m0n shows; this is set once it's ready too, an update after `#watch`'s: the same update as the stall
+   * only when it's ready as it shows (a brain started there), else minutes later (#308).
    */
   nothingMoreToGainNow(): string | null {
     return this.#nothingMoreToGain;
