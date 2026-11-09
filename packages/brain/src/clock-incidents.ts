@@ -126,21 +126,32 @@ export interface ClockIncident {
 /**
  * Snapshots received late (#309), from the first received more than `DELIVERY_LAG_MIN_MS` after its stamp
  * (`fromMs`) to the first fast snapshot on time after (`drainedAtMs`; null if a restart (`cutByRestart`) or the
- * window's end came first, `toMs` then the last late one's receipt). A backlog if it outlasted a round (late
- * snapshots stamped in more than one), else brief: the snapshots of one round, late once. `lateMs` the most one was
- * late; `pageLagMs` the most the Agent took over a late fast snapshot, its send's stamp less its worker's, or null
- * where none says.
+ * window's end came first, `toMs` then the last late one's receipt; `lateAtStart` if the window's first snapshot
+ * was late already, so it began before). A backlog if it outlasted a round (late snapshots stamped in more than one),
+ * else brief: the snapshots of one round, late once. `lateCount` the snapshots late, `fastLateCount` the fast ones
+ * of them; `lateMs` the most one was late, `leastLateMs` the least; `pageLagMs` the most the Agent took over a late
+ * fast snapshot, its send's stamp less its worker's, or null where none says.
  */
 export interface DeliveryLag {
   fromMs: number;
   toMs: number;
   drainedAtMs: number | null;
   cutByRestart: boolean;
+  lateAtStart: boolean;
   lateCount: number;
+  fastLateCount: number;
   lateMs: number;
+  leastLateMs: number;
   backlog: boolean;
   pageLagMs: number | null;
 }
+
+/** What section 4 and section 6 call each kind of incident. */
+export const INCIDENT_KIND_NAMES: Record<ClockIncident["kind"], string> = {
+  clockStep: "clock step",
+  pageStall: "page stall",
+  deliveryLag: "delivery lag",
+};
 
 /** Two consecutive snapshots of a tier, as both clocks saw them. */
 interface SnapshotInterval {
@@ -430,8 +441,11 @@ function deliveryLagsOf(
         beforeMs: previous === null || restarted ? point.atMs : previous.atMs,
         drainedAtMs: null,
         cutByRestart: false,
+        lateAtStart: previous === null,
         lateCount: 0,
+        fastLateCount: 0,
         lateMs,
+        leastLateMs: lateMs,
         backlog: false,
         pageLagMs: null,
         firstGameMs: point.gameTimeMs,
@@ -441,7 +455,9 @@ function deliveryLagsOf(
       open.drainingAtMs = null;
       open.toMs = point.atMs;
       open.lateCount += 1;
+      if (isFast) open.fastLateCount += 1;
       open.lateMs = Math.max(open.lateMs, lateMs);
+      open.leastLateMs = Math.min(open.leastLateMs, lateMs);
       open.firstGameMs = Math.min(open.firstGameMs, point.gameTimeMs);
       open.lastGameMs = Math.max(open.lastGameMs, point.gameTimeMs);
       if (pageLagMs !== null) open.pageLagMs = Math.max(open.pageLagMs ?? pageLagMs, pageLagMs);
@@ -501,23 +517,42 @@ function readClocks({
  * `findClockIncidents` reads them.
  */
 export function findDeliveryLags(input: Parameters<typeof readClocks>[0]): DeliveryLag[] {
-  return readClocks(input).lags.map(({ beforeMs: _beforeMs, ...lag }) => lag);
+  return readClockIncidents(input).lags;
 }
 
-/** A backlog's line text after its span (#309): how many were late, how long it took to drain, and whose it was. */
+/**
+ * A lag never drained, its snapshots late by the same amount throughout (within `CLOCK_STEP_STEADY_MS`), of more than
+ * `CLOCK_STEP_MIN_MS`: the brain's clock stepping on alone, the game's not seen to follow before the window's end or
+ * a restart, reads the same, so the line says so. Under `CLOCK_STEP_MIN_MS` it's a lag only: a step that small isn't
+ * one.
+ */
+const steadyAndUndrained = (lag: DeliveryLag) =>
+  lag.drainedAtMs === null && lag.lateMs > CLOCK_STEP_MIN_MS && lag.lateMs - lag.leastLateMs <= CLOCK_STEP_STEADY_MS;
+
+/**
+ * A backlog's line text after its span (#309): whether it could be a clock step, how many were late, how long it took
+ * to drain, and whose it was. The Agent's share ends at its send stamp, taken as it builds the fast snapshot: its
+ * encoding and the send fall on the far side, with the socket's and the brain's.
+ */
 function describeBacklog(lag: DeliveryLag): string {
+  const kind = steadyAndUndrained(lag)
+    ? `(or a clock step, the brain's alone: steady at about ${formatSeconds(lag.lateMs)}, never drained)`
+    : "(not a clock step)";
+  const start = lag.lateAtStart ? "already late at the window's start, " : "";
   const drained =
     lag.drainedAtMs !== null
-      ? `drained in ${formatDuration(lag.drainedAtMs - lag.fromMs)}`
+      ? `drained in ${lag.lateAtStart ? "at least " : ""}${formatDuration(lag.drainedAtMs - lag.fromMs)}`
       : lag.cutByRestart
         ? "cut by a restart before it drained"
         : "not drained by the window's end";
   const side =
-    lag.pageLagMs === null
-      ? "whose, unknown (no send stamps: an Agent before #309)"
-      : `the Agent's share at most ${formatSeconds(lag.pageLagMs)} (its worker's report to its send), the rest the ` +
-        "socket's and the brain's";
-  return `${lag.lateCount} snapshots received late, ${drained}; ${side}`;
+    lag.pageLagMs !== null
+      ? `the Agent's share at most ${formatSeconds(lag.pageLagMs)} (its worker's report to its send stamp), the ` +
+        "rest its encoding's, the socket's and the brain's"
+      : lag.fastLateCount === 0
+        ? "whose, unknown (no fast snapshot late in it to tell)"
+        : "whose, unknown (no send stamps: an Agent before #309)";
+  return `${kind}: ${lag.lateCount} snapshots received late, ${start}${drained}; ${side}`;
 }
 
 /**
@@ -527,6 +562,14 @@ function describeBacklog(lag: DeliveryLag): string {
  * (`restartsMs`: the brain or the Agent starting or stopping, a deploy), in time order.
  */
 export function findClockIncidents(input: Parameters<typeof readClocks>[0]): ClockIncident[] {
+  return readClockIncidents(input).incidents;
+}
+
+/** The incidents and every delivery lag, backlog or brief, from one read of the clocks (the run report's). */
+export function readClockIncidents(input: Parameters<typeof readClocks>[0]): {
+  incidents: ClockIncident[];
+  lags: DeliveryLag[];
+} {
   const { moves, lags, intervals, mediumRetried } = readClocks(input);
   const steps = clockSteps(moves);
   const stalls = pageStalls(intervals, moves, mediumRetried);
@@ -542,25 +585,33 @@ export function findClockIncidents(input: Parameters<typeof readClocks>[0]): Clo
         pageLagMs: lag.pageLagMs,
       }),
     );
-  return [...steps, ...stalls, ...backlogs].sort((first, second) => first.fromMs - second.fromMs);
+  const incidents = [...steps, ...stalls, ...backlogs].sort((first, second) => first.fromMs - second.fromMs);
+  return { incidents, lags: lags.map(({ beforeMs: _beforeMs, ...lag }) => lag) };
 }
 
 /**
  * Whether an incident can put a batcher on the page's monotonic clock out of step (#251): a page stall, or a delivery
- * lag (#309) unless the Agent's send stamps show the page sent on time (the socket's or the brain's lag, not the
- * page's).
+ * lag (#309) the Agent's send stamps show was the page's (its share over `DELIVERY_LAG_MIN_MS`). One whose side they
+ * can't tell (none, from an Agent before #309, or no fast snapshot late in it) excuses nothing: every such lag seen
+ * was the brain's (2026-11-08's, its dashboard's status), which can't move the page's clock. The 2026-11-08 clarkinc
+ * desyncs inside one stay a failure; their cause is #315.
  */
 export const holdsThePage = (incident: ClockIncident): boolean =>
   incident.kind === "pageStall" ||
-  (incident.kind === "deliveryLag" && (incident.pageLagMs ?? Number.POSITIVE_INFINITY) > DELIVERY_LAG_MIN_MS);
+  (incident.kind === "deliveryLag" &&
+    typeof incident.pageLagMs === "number" &&
+    incident.pageLagMs > DELIVERY_LAG_MIN_MS);
 
 /** "a clock step of +2.7 s from … to …", "a page stall of ~3.0 s from … to …", "a delivery lag of up to 0.6 s …". */
 export function describeIncident({ kind, sizeMs, fromMs, toMs }: ClockIncident): string {
   const span = `from ${formatIsoTime(fromMs)} to ${formatIsoTime(toMs)}`;
-  if (kind === "deliveryLag") return `a delivery lag of up to ${formatSeconds(sizeMs)} ${span}`;
-  const size = kind === "clockStep" ? signedSeconds(sizeMs) : `~${formatSeconds(sizeMs)}`;
-  const name = kind === "clockStep" ? "clock step" : "page stall";
-  return `a ${name} of ${size} ${span}`;
+  const size =
+    kind === "clockStep"
+      ? signedSeconds(sizeMs)
+      : kind === "deliveryLag"
+        ? `up to ${formatSeconds(sizeMs)}`
+        : `~${formatSeconds(sizeMs)}`;
+  return `a ${INCIDENT_KIND_NAMES[kind]} of ${size} ${span}`;
 }
 
 /**
@@ -582,8 +633,7 @@ export function incidentLines(
   const lines = [
     `  clock steps, page stalls and delivery lags (#241: one clock's interval between snapshots off the other's by ` +
       `more than ${formatSeconds(CLOCK_STEP_MIN_MS)}, long that once; or the snapshots later than due on both ` +
-      `clocks, ` +
-      `the medium by more than ${formatSeconds(PAGE_STALL_MEDIUM_MARGIN_MS)}, the fast more than ` +
+      `clocks, the medium by more than ${formatSeconds(PAGE_STALL_MEDIUM_MARGIN_MS)}, the fast more than ` +
       `${formatSeconds(PAGE_STALL_FAST_INTERVAL_MS)} apart; #309: or snapshots received over ` +
       `${formatSeconds(DELIVERY_LAG_MIN_MS)} after the page stamped them, one PC's clock, in more than one round; ` +
       `${TOO_MANY_INCIDENTS} or more within an hour fail):`,
@@ -594,7 +644,7 @@ export function incidentLines(
       kind === "clockStep"
         ? `    clock step ${signedSeconds(sizeMs)} ${span}: ${detail}`
         : kind === "deliveryLag"
-          ? `    delivery lag up to ${formatSeconds(sizeMs)} ${span} (not a clock step): ${detail}`
+          ? `    delivery lag up to ${formatSeconds(sizeMs)} ${span} ${detail}`
           : `    page stalled ~${formatSeconds(sizeMs)} ${span} (cause unknown): ${detail}`,
     );
   }
@@ -631,15 +681,13 @@ export function incidentLines(
   for (const stretch of stretches) {
     const first = stretch[0] as ClockIncident;
     const last = stretch.at(-1) as ClockIncident;
-    const kindCount = (kind: ClockIncident["kind"], name: string) => {
+    const kindCount = (kind: ClockIncident["kind"]) => {
       const ofKind = stretch.filter((incident) => incident.kind === kind).length;
-      return ofKind === 0 ? null : `${ofKind} ${name}${ofKind === 1 ? "" : "s"}`;
+      return ofKind === 0 ? null : `${ofKind} ${INCIDENT_KIND_NAMES[kind]}${ofKind === 1 ? "" : "s"}`;
     };
-    const kinds = [
-      kindCount("clockStep", "clock step"),
-      kindCount("pageStall", "page stall"),
-      kindCount("deliveryLag", "delivery lag"),
-    ].filter((kindText) => kindText !== null);
+    const kinds = [kindCount("clockStep"), kindCount("pageStall"), kindCount("deliveryLag")].filter(
+      (kindText) => kindText !== null,
+    );
     const line =
       `clock steps, page stalls or delivery lags: ${stretch.length} from ${formatIsoTime(first.fromMs)} to ` +
       `${formatIsoTime(last.toMs)}, ${TOO_MANY_INCIDENTS} or more within an hour (${kinds.join(", ")})`;

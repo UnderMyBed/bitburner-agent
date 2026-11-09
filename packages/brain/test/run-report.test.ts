@@ -3869,15 +3869,26 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
   /** Rounds 360 to 370 (12:01.8 to 12:21.8) received 0.6 s late; the desyncs first seen at round 365, inside. */
   const laggedRounds = Array.from({ length: 11 }, (_, index) => 360 + index);
 
-  test("a delivery lag (#309) the desyncs began in: in section 4, not a clock step; the desyncs put down to it", () => {
+  test("a delivery lag (#309) the desyncs began in, from an Agent before #309: in section 4, no excuse: FAIL", () => {
     incidentRun({ noStep: true, monotonic: true, laggedRounds });
     const lagged = runReport(store, incidentWindow);
     const LAG_LINE =
       `    delivery lag up to 0.6 s from ${at(721_800 + 600)} to ${at(743_800)} (not a clock step): 14 snapshots ` +
       "received late, drained in 21 s; whose, unknown (no send stamps: an Agent before #309)";
     expect(lagged.text).toContain(`within an hour fail):\n${LAG_LINE}\n  income stalls`);
-    expect(lagged.failures).toEqual([]);
-    expect(lagged.warnings).toEqual([
+    // Its side unknown, it excuses nothing (P1 of #314's review), as the 2026-11-08 clarkinc desyncs (#315).
+    expect(lagged.warnings).toEqual([]);
+    expect(lagged.failures).toEqual([
+      expect.stringMatching(/, its side unknown, no send stamps showing the page behind it: no excuse, #309\)$/),
+    ]);
+  });
+
+  test("the same, the Agent's send stamps saying the page sent 0.59 s late: the page held, its batcher too: WARN", () => {
+    incidentRun({ noStep: true, monotonic: true, laggedRounds, sentAfterMs: 590 });
+    const pages = runReport(store, incidentWindow);
+    expect(pages.text).toContain("14 snapshots received late, drained in 21 s; the Agent's share at most 0.6 s");
+    expect(pages.failures).toEqual([]);
+    expect(pages.warnings).toEqual([
       expect.stringMatching(
         /^batcher out of step after a delivery lag: .*, after a delivery lag of up to 0\.6 s from /,
       ),
@@ -3889,9 +3900,14 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     const brains = runReport(store, incidentWindow);
     expect(brains.text).toContain("14 snapshots received late, drained in 21 s; the Agent's share at most 0.0 s");
     expect(brains.warnings).toEqual([]);
-    expect(brains.failures).toEqual([
-      expect.stringMatching(/ was the socket's or the brain's, the page sending on time: no excuse, #309\)$/),
-    ]);
+    const failure = / was the socket's or the brain's, the page sending on time: no excuse, #309\)$/;
+    expect(brains.failures).toEqual([expect.stringMatching(failure)]);
+    // Thinned (D1 of #314's review): the stubs keep the send stamps, so the lag's side and the verdict hold.
+    thinBefore(END_MS + MINUTE);
+    const thinned = runReport(store, incidentWindow);
+    expect(thinned.text).toContain("14 snapshots received late, drained in 21 s; the Agent's share at most 0.0 s");
+    // The batcher seen at the whole snapshots, one a minute: first seen later, the same lag named, no excuse.
+    expect(thinned.failures).toEqual([expect.stringMatching(failure)]);
   });
 
   test("a move of the clocks' gap over a restart isn't a step: FAIL then", () => {

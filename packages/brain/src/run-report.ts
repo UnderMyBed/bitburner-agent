@@ -38,9 +38,8 @@ import {
   type ClockIncident,
   type DeliveryLag,
   type FastSnapshotTime,
-  findClockIncidents,
-  findDeliveryLags,
   incidentLines,
+  readClockIncidents,
   type SnapshotTime,
   WeakenTimes,
 } from "./clock-incidents.ts";
@@ -208,8 +207,8 @@ export interface RunReport {
   failures: string[];
   /**
    * One line per warning (owner decision 55): what went wrong but isn't yet a failure. Something outside the brain
-   * that was put right by itself (#241: a batcher out of step after a clock step or page stall, batching again, or not
-   * yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle (#275). WARN with no
+   * that was put right by itself (#241: a batcher out of step after a clock step, page stall or delivery lag (#309),
+   * batching again, or not yet seen to), or a batcher an hour or more on poor targets, short of 2 hours in its cycle (#275). WARN with no
    * failure; listed after FAIL's.
    */
   warnings: string[];
@@ -488,7 +487,7 @@ class FactionStateFolding {
 
 /**
  * A fast snapshot's times, its degraded tiers and its page heap: every one's, a thinned one's too (#283), for the time
- * checks (the heartbeat, clock steps and page stalls, the page heap, the run's end).
+ * checks (the heartbeat, clock steps, page stalls and delivery lags (#309), the page heap, the run's end).
  */
 interface FastTime extends FastSnapshotTime {
   pageHeapUsedBytes: unknown;
@@ -615,7 +614,10 @@ interface RunFacts extends RunWindow {
   thinned: { fast: number; medium: number; lastMs: number | null };
   mediumFirst: MediumSnapshotData | undefined;
   mediumLast: MediumSnapshotData | undefined;
-  /** The medium snapshots' times (#241), for clock steps and page stalls: every one's, a thinned one's too (#283). */
+  /**
+   * The medium snapshots' times (#241), for clock steps, page stalls and delivery lags (#309): every one's, a thinned
+   * one's too (#283).
+   */
   mediumTimes: SnapshotTime[];
   /** A weaken's time on a target over the window (#241), to put the batcher's desyncs down to an incident. */
   weakenTimes: WeakenTimes;
@@ -922,9 +924,9 @@ export function runReport(
     fast: facts.fastTimes,
     restartsMs: facts.events.filter((event) => RESTART_EVENT_KINDS.includes(event.kind)).map(({ atMs }) => atMs),
   };
-  const incidents = findClockIncidents(clocks);
+  const { incidents, lags } = readClockIncidents(clocks);
   // The brief delivery lags (#309), counted apart from the incidents (the backlogs).
-  const briefLags = findDeliveryLags(clocks).filter((lag) => !lag.backlog);
+  const briefLags = lags.filter((lag) => !lag.backlog);
   const lines = [
     `Run report (${window.environment}) from ${formatIsoTime(window.sinceMs)} to ${formatIsoTime(window.untilMs)} ` +
       `(${formatDuration(window.untilMs - window.sinceMs)})`,

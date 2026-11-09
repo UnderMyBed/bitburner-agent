@@ -19,6 +19,7 @@ import {
   readStopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
+import { watchBrainHolds } from "./brain-holds.ts";
 import { BRAIN_RUNNER_PID_VARIABLE, claimBrainLock, removeBrainLock } from "./brain-lock.ts";
 import { readCloudServersEnabled } from "./cloud-servers.ts";
 import {
@@ -28,7 +29,7 @@ import {
   resolveDataDirectory,
   STORE_FILE_NAME,
 } from "./config.ts";
-import { SLOW_DASHBOARD_STATUS_MS, startDashboardServer } from "./dashboard/server.ts";
+import { startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { CampaignTimeline } from "./dashboard/timeline.ts";
 import { backupBeforeThinning, DataBackups, dataBackupStoreId, describeDataBackup } from "./data-backup.ts";
@@ -248,7 +249,8 @@ try {
     onError: (error) =>
       log(`dashboard timeline: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });
-  const slowStatuses = { count: 0, loggedAtMs: Number.NEGATIVE_INFINITY };
+  // The brain's event loop held (#309): slow statuses and Node's own delay, a line a minute when anything was.
+  const brainHolds = watchBrainHolds(log);
   const dashboardServer = await startDashboardServer({
     port: config.dashboardPort,
     status: () =>
@@ -347,19 +349,8 @@ try {
       return set;
     },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
-    // A slow status holds every snapshot arriving meanwhile (#309): logged, at most once a minute, with the count.
-    onSlowStatus: (tookMs) => {
-      slowStatuses.count++;
-      const nowMs = systemClock.now();
-      if (nowMs - slowStatuses.loggedAtMs < 60_000) return;
-      const over = `${slowStatuses.count} over ${SLOW_DASHBOARD_STATUS_MS} ms since the last line`;
-      log(
-        `dashboard: status built in ${Math.round(tookMs)} ms (${over}): the brain's event loop is held meanwhile, ` +
-          "every snapshot arriving late (#309)",
-      );
-      slowStatuses.count = 0;
-      slowStatuses.loggedAtMs = nowMs;
-    },
+    // A slow status holds every snapshot arriving meanwhile (#309): counted, logged with the minute's holds.
+    onSlowStatus: (tookMs) => brainHolds.holds.slowStatus(tookMs),
   });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
   log(`deploys ${deployer.deploymentId}`);
@@ -408,6 +399,7 @@ try {
     await dashboardServer.close();
     await remoteFileApiServer.close();
     await controlServer.close();
+    brainHolds.stop();
     store.close();
     log("stopped");
     process.exit(0);

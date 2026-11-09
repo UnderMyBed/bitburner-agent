@@ -397,8 +397,11 @@ describe("delivery lags (#309)", () => {
     toMs: T0 + 232_650,
     drainedAtMs: T0 + 232_650,
     cutByRestart: false,
+    lateAtStart: false,
     lateCount: 113,
+    fastLateCount: 94,
     lateMs: 670,
+    leastLateMs: 203,
     backlog: true,
     pageLagMs: null,
   };
@@ -413,7 +416,8 @@ describe("delivery lags (#309)", () => {
         toMs: T0 + 232_650,
         sizeMs: 670,
         detail:
-          "113 snapshots received late, drained in 3 min 20 s; whose, unknown (no send stamps: an Agent before #309)",
+          "(not a clock step): 113 snapshots received late, drained in 3 min 20 s; whose, unknown (no send stamps: an " +
+          "Agent before #309)",
         pageLagMs: null,
       },
     ]);
@@ -472,10 +476,56 @@ describe("delivery lags (#309)", () => {
     const late = [point(0), point(2_300, 2_000), point(4_300, 4_000), point(6_300, 6_000), point(8_000)];
     const [cut] = findClockIncidents({ medium: [], fast: late, restartsMs: [T0 + 5_000] });
     expect(cut).toMatchObject({ kind: "deliveryLag", fromMs: T0 + 2_300, toMs: T0 + 4_300 });
-    expect(cut?.detail).toMatch(/^2 snapshots received late, cut by a restart before it drained; /);
+    expect(cut?.detail).toMatch(
+      /^\(not a clock step\): 2 snapshots received late, cut by a restart before it drained; /,
+    );
     const [undrained] = findClockIncidents({ ...none, fast: late.slice(0, 4) });
     expect(undrained).toMatchObject({ kind: "deliveryLag", fromMs: T0 + 2_300, toMs: T0 + 6_300 });
-    expect(undrained?.detail).toMatch(/^3 snapshots received late, not drained by the window's end; /);
+    expect(undrained?.detail).toMatch(
+      /^\(not a clock step\): 3 snapshots received late, not drained by the window's end; /,
+    );
+  });
+
+  test("never drained, steady over 0.5 s: said it could be the brain's clock stepping alone; under 0.5 s, a lag only", () => {
+    // The brain's clock +0.7 s from round 364, the game's never seen to follow before the window's end.
+    const [alone] = findClockIncidents(run3({ gameMoves: [], brainMoves: [[364, 700]] }));
+    expect(alone).toMatchObject({ kind: "deliveryLag", sizeMs: 700 });
+    expect(alone?.detail).toMatch(
+      /^\(or a clock step, the brain's alone: steady at about 0\.7 s, never drained\): \d+ snapshots received late, not drained by the window's end; /,
+    );
+    // Drained, the same size: a lag.
+    const drained = run3({
+      gameMoves: [],
+      brainMoves: [
+        [364, 700],
+        [380, -700],
+      ],
+    });
+    expect(findClockIncidents(drained)[0]?.detail).toMatch(/^\(not a clock step\): /);
+    // Under 0.5 s (a step that small isn't one), or not steady: a lag.
+    const small = findClockIncidents(run3({ gameMoves: [], brainMoves: [[364, 450]] }));
+    expect(small.map(({ detail }) => detail.slice(0, 19))).toEqual(["(not a clock step):"]);
+    const ramp = [point(0), ...[1, 2, 3, 4].map((round) => point(2_000 * round + 300 * round, 2_000 * round))];
+    expect(findClockIncidents({ ...none, fast: ramp })[0]?.detail).toMatch(/^\(not a clock step\): /);
+  });
+
+  test("already late at the window's start: said so, its drain at least", () => {
+    const late = [point(2_300, 2_000), point(4_300, 4_000), point(6_000), point(8_000)];
+    const [atStart] = findClockIncidents({ ...none, fast: late });
+    expect(atStart?.detail).toMatch(
+      /^\(not a clock step\): 2 snapshots received late, already late at the window's start, drained in at least 4 s; /,
+    );
+    expect(findDeliveryLags({ ...none, fast: late })).toEqual([expect.objectContaining({ lateAtStart: true })]);
+  });
+
+  test("a backlog seen only in medium snapshots (the fast ones' workers failing meanwhile): no fast one to tell whose", () => {
+    const failed = (offsetMs: number) => point(offsetMs, offsetMs, ["fast"]);
+    const fast = [point(0), failed(2_000), failed(4_000), failed(6_000), failed(8_000), point(10_000)];
+    const medium = [point(2_330, 2_030), point(8_330, 8_030)];
+    const [lag] = findClockIncidents({ medium, fast, restartsMs: [] });
+    expect(lag).toMatchObject({ kind: "deliveryLag", pageLagMs: null });
+    expect(lag?.detail).toMatch(/; whose, unknown \(no fast snapshot late in it to tell\)$/);
+    expect(holdsThePage(lag as ClockIncident)).toBe(false);
   });
 
   test("a clock step with the brain's clock first is the step's, not a lag; the game's first leaves none either", () => {
@@ -490,8 +540,8 @@ describe("delivery lags (#309)", () => {
     const [brains] = findClockIncidents(heldEveryPoll({ sentAfterMs: 1 }));
     expect(brains).toMatchObject({ kind: "deliveryLag", pageLagMs: 1 });
     expect(brains?.detail).toBe(
-      "113 snapshots received late, drained in 3 min 20 s; the Agent's share at most 0.0 s (its worker's report to " +
-        "its send), the rest the socket's and the brain's",
+      "(not a clock step): 113 snapshots received late, drained in 3 min 20 s; the Agent's share at most 0.0 s (its " +
+        "worker's report to its send stamp), the rest its encoding's, the socket's and the brain's",
     );
     expect(holdsThePage(brains as ClockIncident)).toBe(false);
     // The page late in sending them: its own, the page held.
@@ -502,8 +552,12 @@ describe("delivery lags (#309)", () => {
     const [pages] = findClockIncidents({ ...none, fast: [point(-2_000), ...pageLate] });
     expect(pages).toMatchObject({ kind: "deliveryLag", pageLagMs: 600 });
     expect(holdsThePage(pages as ClockIncident)).toBe(true);
-    // Unknown (an older Agent): counted as the page's, as a page stall is.
-    expect(holdsThePage(findClockIncidents(heldEveryPoll())[0] as ClockIncident)).toBe(true);
+    // Unknown (an older Agent): no excuse (P1 of #314's review: every such lag seen was the brain's; #315).
+    expect(holdsThePage(findClockIncidents(heldEveryPoll())[0] as ClockIncident)).toBe(false);
+    // The Agent's share over 200 ms holds the page; 200 doesn't.
+    const lagOf = (pageLagMs: number): ClockIncident => ({ ...(pages as ClockIncident), pageLagMs });
+    expect(holdsThePage(lagOf(200))).toBe(false);
+    expect(holdsThePage(lagOf(201))).toBe(true);
     expect(holdsThePage({ kind: "pageStall", fromMs: 0, toMs: 1, sizeMs: 1, detail: "" })).toBe(true);
     expect(holdsThePage(findClockIncidents(run3())[0] as ClockIncident)).toBe(false);
   });

@@ -202,7 +202,8 @@ export function createSnapshotter(
         batcher: batcherHealth(),
         batcherDeploy: batcherDeploy(),
         refusedMessage: refusedMessage(),
-        // Stamped last, as it's sent (#309): its worker's report to here is the page's share of a delivery lag.
+        // Stamped last, before it's encoded and sent (#309): its worker's report to here is the page's share of a
+        // delivery lag; the encoding and the send fall on the far side, with the socket's and the brain's.
         sentAtMs: Date.now(),
       };
       send(snapshot("fast", fastReport ? fastReport.gameTimeMs : roundStartedAtMs, fastData));

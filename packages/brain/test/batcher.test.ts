@@ -1176,18 +1176,18 @@ describe("the run report's section, out of step after a clock step or page stall
     ]);
   });
 
-  test("a delivery lag (#309) the same, as a page stall, for a batcher on the monotonic clock too; not one the page wasn't behind", () => {
+  test("a delivery lag (#309) the page was behind explains a stretch as a page stall does; one it wasn't, or can't tell, doesn't", () => {
     const monotonic = (points: Point[]) =>
       points.map((point) => ({ ...point, health: { ...(point.health as object), clock: "monotonic" } }));
-    // 2026-11-08's: the desyncs on clarkinc began inside a backlog; an older Agent's, so whose is unknown.
     const lag: ClockIncident = {
       kind: "deliveryLag",
       fromMs: at(700_000),
       toMs: at(800_000),
       sizeMs: 632,
       detail: "…",
-      pageLagMs: null,
+      pageLagMs: 600,
     };
+    // The Agent's send stamps show it 0.6 s late sending: the page held, so its batcher too.
     const within =
       `after a delivery lag of up to 0.6 s from ${iso(700_000)} to ${iso(800_000)} (within a weaken there, ` +
       "7 min 57 s)";
@@ -1195,18 +1195,35 @@ describe("the run report's section, out of step after a clock step or page stall
       `batcher out of step after a delivery lag: ${COUNTS}, ${FIRST}, ${within}; ${RECOVERED}, and nothing out of ` +
         "step in the 10 min after",
     ]);
-    expect(section(monotonic(run()), [{ ...lag, pageLagMs: 600 }]).warnings).toHaveLength(1);
+    const lagText = `a delivery lag of up to 0.6 s from ${iso(700_000)} to ${iso(800_000)}`;
     // The Agent sent on time (its share 1 ms): the socket's or the brain's lag, which can't hold the page's batcher.
     const brains = { ...lag, pageLagMs: 1 };
-    const notPage =
-      ` (a delivery lag of up to 0.6 s from ${iso(700_000)} to ${iso(800_000)} was the socket's or the brain's, the ` +
-      "page sending on time: no excuse, #309)";
+    const notPage = ` (${lagText} was the socket's or the brain's, the page sending on time: no excuse, #309)`;
     expect(section(monotonic(run()), [brains])).toMatchObject({
       warnings: [],
       failures: [`batcher out of step: ${COUNTS}, ${FIRST}; no page stall or delivery lag before it${notPage}`],
     });
     expect(section(run(), [brains]).failures).toEqual([
       `batcher out of step: ${COUNTS}, ${FIRST}; no clock step, page stall or delivery lag before it${notPage}`,
+    ]);
+    // 2026-11-08's: the clarkinc desyncs began inside a backlog from an Agent before #309, whose side is unknown: no
+    // excuse (P1 of #314's review: every such lag seen was the brain's). They stay a failure; their cause is #315.
+    const unknown = { ...lag, pageLagMs: null };
+    expect(section(monotonic(run()), [unknown])).toMatchObject({
+      warnings: [],
+      failures: [
+        `batcher out of step: ${COUNTS}, ${FIRST}; no page stall or delivery lag before it (${lagText}, its side ` +
+          "unknown, no send stamps showing the page behind it: no excuse, #309)",
+      ],
+    });
+    // One that ended more than a weaken before the first look isn't named.
+    const longBefore = { ...brains, fromMs: at(100_000), toMs: at(200_000) };
+    expect(section(monotonic(run()), [longBefore]).failures).toEqual([
+      `batcher out of step: ${COUNTS}, ${FIRST}; no page stall or delivery lag before it`,
+    ]);
+    // Nor with a weaken's time unknown there.
+    expect(section(monotonic(run()), [brains], null).failures).toEqual([
+      `batcher out of step: ${COUNTS}, ${FIRST}; no page stall or delivery lag before it`,
     ]);
   });
 
