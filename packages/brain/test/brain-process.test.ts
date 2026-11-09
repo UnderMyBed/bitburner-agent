@@ -866,7 +866,7 @@ test("main.ts watches the brain's holds (#309): a slow dashboard status and the 
           gameTimeMs: 1_000 + index * 60_000,
           receivedAtMs: 1_000 + index * 60_000,
           missedBefore: 0,
-          data: { ...bitNode1(0, 3, { "The Red Pill": 1 }), filler },
+          data: { ...bitNode1(0, 2), filler },
         },
       );
     }
@@ -878,18 +878,12 @@ test("main.ts watches the brain's holds (#309): a slow dashboard status and the 
   expect((await askDashboard(dashboardPort, "GET", "/api/status")).status).toBe(200);
   // Within the minute: the line comes from the stop alone, the count flushed, not lost.
   expect(output()).not.toContain("held in the last minute");
-  // Stopped cleanly, as at the BitNode's end (#303): BN1.4, The Red Pill installed, the destroy giving nothing more.
-  const { snapshot } = await standInAgent(config, controlPort);
-  snapshot("static", { servers: [{ hostname: "w0r1d_d43m0n", requiredHackingSkill: 3000 }] });
-  snapshot("slow", bitNode1(0, 3, { "The Red Pill": 1 }));
-  snapshot("medium", {
-    player: { skills: { hacking: 3000 }, money: 0, city: "Sector-12", factions: [] },
-    hasTorRouter: true,
-    programs: [],
-    servers: [{ hostname: "w0r1d_d43m0n", maxRam: 0, cpuCores: 1, hasAdminRights: true }],
-  });
+  // Stopped cleanly, as at the BitNode's end (#303): the switch set, then BN1.3 destroyed by hand and BN1.4 seen.
   const exited = once(brain as ChildProcess, "exit");
   await setStopAtBitNodeEnd(dashboardPort, "brain");
+  const { snapshot } = await standInAgent(config, controlPort);
+  snapshot("slow", bitNode1(0, 2), 100_000_000);
+  snapshot("slow", bitNode1(100_005_000, 3), 100_006_000);
   const [code] = (await exited) as [number | null];
   expect(code).toBe(0);
   brain = undefined;
