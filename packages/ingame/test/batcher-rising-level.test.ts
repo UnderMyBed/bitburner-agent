@@ -34,7 +34,7 @@ const TARGET = "harakiri-sushi";
 /**
  * Home, the batches' only host: 4 PB, so a batch every 80 ms with a share of about three quarters. The more RAM, the
  * steeper the batches' own exp raises the level: on 1 PB the control arm desynced with its least look at 92%, on 4 PB
- * at 39% (seeds 1 to 3, #315's review).
+ * at 32-40% (seeds 1 to 4, #315's review).
  */
 const HOME_GB = 2 ** 22;
 /** A fresh BN1 player's multipliers, all 1, and no intelligence. */
@@ -127,7 +127,8 @@ async function risingLevel(seed: number, forecasting: boolean) {
   console.log(
     `seed ${seed}, ${TARGET}, ${forecasting ? "forecast" : "sized at the level now"}: share ` +
       `${(config.hackShare * 100).toFixed(1)}%, a batch every ${config.spacingMs} ms; hacking ${startLevel} → ` +
-      `${endLevel} in ${BATCHED_MS / 60_000} minutes; ${health.hacksLanded} hacks, ${health.hacksTrimmedForLevel} sent ` +
+      `${endLevel} in ${BATCHED_MS / 60_000} minutes; ${health.hacksLanded} hacks, ` +
+      `${health.hacksTrimmedForLevel} sent ` +
       `smaller for the level at their landing (up to +${health.mostLevelRise}); ${health.moneyLooks} looks after a ` +
       `grow, ${health.moneyLooksBelowFull} below full (least ${health.leastMoneyAfterGrow}); ${health.desyncs} desyncs`,
   );

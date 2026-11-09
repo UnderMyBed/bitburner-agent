@@ -67,12 +67,14 @@ import {
   type RamHold,
   type RamWait,
   RECOVERY_SPARE_BATCHES,
+  RecoveryClock,
   ramHeldOf,
   recordGrowsNotLooked,
   recordHackLanded,
   recordMoneyLook,
   recordRamWait,
   recordShort,
+  recoveryInPlaceLeastMs,
   recoveryInPlaceMs,
   threadsThatFit,
 } from "../src/batcher.ts";
@@ -395,10 +397,60 @@ describe("the level at a landing (#315): the game's formulas", () => {
     }
   });
 
+  describe("RecoveryClock (#315's re-review): the whole less the streak's time recovering, at least the least", () => {
+    const WHOLE = 100_000;
+    const LEAST = 28_000;
+
+    test("a first recovery has the whole; one in a fresh streak, a whole time in step after, the whole again", () => {
+      const clock = new RecoveryClock();
+      expect(clock.endsAt()).toBeNull();
+      expect(clock.begin(0, WHOLE, LEAST)).toBe(WHOLE);
+      expect(clock.endsAt()).toBe(WHOLE);
+      clock.end(60_000, WHOLE);
+      expect(clock.endsAt()).toBeNull();
+      // In step past a whole time: a fresh streak, the first's 60 s forgotten.
+      expect(clock.begin(60_000 + WHOLE + 1, WHOLE, LEAST)).toBe(60_000 + WHOLE + 1 + WHOLE);
+    });
+
+    test("within the streak: the whole less the time spent recovering, never the time in step between", () => {
+      const clock = new RecoveryClock();
+      clock.begin(0, WHOLE, LEAST);
+      clock.end(15_000, WHOLE);
+      // 40 s in step, then a desync: the whole less the 15 s spent, not less the 55 s since.
+      expect(clock.begin(55_000, WHOLE, LEAST)).toBe(55_000 + 85_000);
+      clock.end(105_000, WHOLE);
+      // 65 s spent: the whole less it, 35 s, above the least; then, 95 s spent, the least.
+      expect(clock.begin(110_000, WHOLE, LEAST)).toBe(110_000 + 35_000);
+      clock.end(140_000, WHOLE);
+      expect(clock.begin(150_000, WHOLE, LEAST)).toBe(150_000 + LEAST);
+    });
+
+    test("stop keeps the streak; reset forgets it", () => {
+      const clock = new RecoveryClock();
+      clock.begin(0, WHOLE, LEAST);
+      clock.end(50_000, WHOLE);
+      clock.begin(60_000, WHOLE, LEAST);
+      clock.stop();
+      expect(clock.endsAt()).toBeNull();
+      clock.end(70_000, WHOLE);
+      // 50 s and 10 s spent: 40 s left.
+      expect(clock.begin(80_000, WHOLE, LEAST)).toBe(80_000 + 40_000);
+      clock.reset();
+      expect(clock.endsAt()).toBeNull();
+      expect(clock.begin(90_000, WHOLE, LEAST)).toBe(90_000 + WHOLE);
+    });
+  });
+
   test("recoveryInPlaceMs (#315's review): a weaken's time at the minimum, the lead, and 10 batches", () => {
     expect(RECOVERY_SPARE_BATCHES).toBe(10);
     expect(recoveryInPlaceMs(zer0, player(150), 80)).toBeCloseTo(
       operationTimeMs("weaken1", zer0, player(150)) + BATCH_LAUNCH_LEAD_MS + 800,
+      9,
+    );
+    // The least any recovery gets, however much its streak spent (#315's re-review): a hack's time, the lead, 10
+    // batches.
+    expect(recoveryInPlaceLeastMs(zer0, player(150), 80)).toBeCloseTo(
+      operationTimeMs("hack", zer0, player(150)) + BATCH_LAUNCH_LEAD_MS + 800,
       9,
     );
   });
@@ -449,9 +501,9 @@ describe("LevelForecast (#315)", () => {
 
   /**
    * Batches every 80 ms on a target needing hacking 1,041, the level 1,176 at first, raised only by the exp of the
-   * batches' own landings (the live run of 2026-11-08's shape, numbers synthetic): each operation thread gives
-   * (3 + 0.3 x 51) x 4.5 exp as it lands, the base difficulty 51 behind its minimum 17. Each batch is planned a
-   * weaken's time before its hack lands, at the level then, for a share of 12%, and its hack sized as it goes out, a hack's time
+   * batches' own landings (the live run of 2026-11-08's shape, numbers synthetic): each operation thread gives (3 + 0.3
+   * x 51) x 4.5 exp as it lands, the base difficulty 51 behind its minimum 17. Each batch is planned a weaken's time
+   * before its hack lands, at the level then, for a share of 12%, and its hack sized as it goes out, a hack's time
    * before it lands: at the level then (before #315), or for the level `LevelForecast` gives at its landing. The money
    * is taken at the level as each hack lands (NetscriptHelpers.tsx:561-568), and grown back by the batch's grow.
    */

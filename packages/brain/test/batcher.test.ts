@@ -255,7 +255,7 @@ describe("batcherHostsOf", () => {
 });
 
 describe("batcherMultsOf (#315)", () => {
-  test("the formulas' four and the level forecast's two, each the medium snapshot's own; null if one is missing", () => {
+  test("the formulas' four and the level forecast's two, the medium snapshot's own; null if one is missing", () => {
     const mults = { hacking_chance: 1.1, hacking_speed: 1.2, hacking_money: 1.3, hacking_grow: 1.4 };
     const player = { skills: { hacking: 100, intelligence: 0 }, mults: { ...mults, hacking: 3.4, hacking_exp: 4.5 } };
     expect(batcherMultsOf(player)).toEqual({ ...mults, hacking: 3.4, hacking_exp: 4.5 });
@@ -332,7 +332,7 @@ describe("the run report's section", () => {
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
   });
 
-  test("a desync after grows short of their hacks names the shortfall as its cause (#315); one without, or older, not", () => {
+  test("a desync after grows short of their hacks names the shortfall its cause (#315); one without, or older, not", () => {
     const failures: string[] = [];
     const lines = batcherSection(
       [
@@ -392,14 +392,18 @@ describe("the run report's section", () => {
       [
         { atMs: at(0), health: health("d", { moneyLooksBelowFull: 0 }) },
         { atMs: at(1), health: health("d", { moneyLooksBelowFull: 9, ...least(0.0, "n00dles") }) },
+        // The move: zer0 prepared while n00dles' grows still land below full (#315's re-review): not zer0's.
         {
           atMs: at(2),
-          health: { ...health("d", { moneyLooksBelowFull: 9, ...least(0.0, "n00dles") }), target: "zer0" },
+          health: {
+            ...health("d", { state: "preparing", moneyLooksBelowFull: 12, ...least(0.0, "n00dles") }),
+            target: "zer0",
+          },
         },
         {
           atMs: at(3),
           health: {
-            ...health("d", { moneyLooksBelowFull: 9, ...least(0.0, "n00dles"), desyncs: 1, outOfBounds: 1 }),
+            ...health("d", { moneyLooksBelowFull: 12, ...least(0.0, "n00dles"), desyncs: 1, outOfBounds: 1 }),
             target: "zer0",
           },
         },
@@ -461,7 +465,7 @@ describe("the run report's section", () => {
     );
   });
 
-  test("the level at the hacks' landings (#315): the hacks sent smaller, the most levels; an older batcher's not", () => {
+  test("the level at the hacks' landings (#315): hacks sent smaller, the most levels; an older batcher's not", () => {
     const lines = batcherSection([
       { atMs: at(0), health: health("a", { hacksTrimmedForLevel: 10, mostLevelRise: 3 }) },
       { atMs: at(1), health: health("a", { hacksTrimmedForLevel: 45, mostLevelRise: 41 }) },
@@ -1334,28 +1338,32 @@ describe("the run report's section, out of step after a clock step or page stall
     expect(section(run(), [STEP]).warnings).toHaveLength(1);
   });
 
-  test("grows short before a desync an incident explains: a cause beside it, which may be its cause instead (#315)", () => {
-    const short = run().map((point, index) =>
-      index === 1 || index === 2
-        ? {
-            ...point,
-            health: {
-              ...(point.health as object),
-              moneyLooksBelowFull: 5,
-              leastMoneyAfterGrow: 0.9,
-              leastMoneyAfterGrowOn: "the-hub",
-            },
-          }
-        : index > 2
-          ? { ...point, health: { ...(point.health as object), moneyLooksBelowFull: 5 } }
-          : point,
-    );
-    const [warning] = section(short).warnings;
-    expect(warning).toContain(
-      `${AFTER}; a grow shortfall before it too, which may be its cause instead, the money below full after 5 grows ` +
-        `from ${iso(734_478)}, the least 90.0% of the-hub's maximum`,
-    );
-  });
+  test(
+    "grows short before a desync an incident explains: a cause beside it, which may be its cause instead " + "(#315)",
+    () => {
+      const short = run().map((point, index) =>
+        index === 1 || index === 2
+          ? {
+              ...point,
+              health: {
+                ...(point.health as object),
+                moneyLooksBelowFull: 5,
+                leastMoneyAfterGrow: 0.9,
+                leastMoneyAfterGrowOn: "the-hub",
+              },
+            }
+          : index > 2
+            ? { ...point, health: { ...(point.health as object), moneyLooksBelowFull: 5 } }
+            : point,
+      );
+      const [warning] = section(short).warnings;
+      expect(warning).toContain(
+        `${AFTER}; a grow shortfall before it too, which may be its cause instead, the money below full after 5 ` +
+          "grows " +
+          `from ${iso(734_478)}, the least 90.0% of the-hub's maximum`,
+      );
+    },
+  );
 
   test("of two incidents within a weaken before the first desync, the latest", () => {
     const earlier = { ...STALL, fromMs: at(600_000), toMs: at(605_000) };

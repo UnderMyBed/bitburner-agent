@@ -664,7 +664,8 @@ const shortfallText = ({ sinceMs, looks, least, on }: GrowShortfall, besideIncid
 /**
  * The grows short of their hacks on `target` in a run's looks (`history`, in time order, ending with the stretch's
  * first) within `GROW_SHORTFALL_REACH_MS` before it (#315), or null: none rose there, or an older batcher doesn't look.
- * A look's rise counts only while the run batched `target` (a move's grows on the target before aren't its); the least
+ * A look's rise counts only while the run batched `target`, `batching` or `recovering` (a move's grows on the target
+ * before, landing while the new one is prepared, aren't its); the least
  * is the run's least so far, given only where it fell within the reach, on `target`.
  */
 function shortfallBefore(history: readonly RunLook[], target: string): GrowShortfall | null {
@@ -681,7 +682,9 @@ function shortfallBefore(history: readonly RunLook[], target: string): GrowShort
   for (let index = baseIndex + 1; index < history.length; index++) {
     const look = history[index] as RunLook;
     const rise = (look.belowFull ?? 0) - ((history[index - 1] as RunLook).belowFull ?? 0);
-    if (look.target !== target || !(rise > 0)) continue;
+    // While it batched the target (#315's re-review): after a move, preparing the new one, the old one's grows land.
+    const batched = look.target === target && (look.state === "batching" || look.state === "recovering");
+    if (!batched || !(rise > 0)) continue;
     looks += rise;
     sinceMs ??= look.atMs;
   }
@@ -710,10 +713,10 @@ interface Attribution {
 /**
  * A stretch out of step (#241), one run's: from its first look with something risen to its first look batching with
  * nothing risen (`recoveredMs`), and anything risen within `BATCHER_INCIDENT_RECOVERY_MS` after that (`againMs`, the
- * first). After a desync's recovery (`recovering` seen), the hacks out before it have landed and the target is back
- * at its maximum (#315: it recovers in place, its held batches' grows and weakens still landing). With late or lost
- * alone it never stops batching, so the parts in flight at its incident may land late, or be found lost, until a weaken and
- * a part's loss after the incident's end (`landingUntilMs`): each such rise is the stretch's, and batching again waits
+ * first). After a desync's recovery (`recovering` seen), the hacks out before it have landed and the target is back at
+ * its maximum (#315: it recovers in place, its held batches' grows and weakens still landing). With late or lost alone
+ * it never stops batching, so the parts in flight at its incident may land late, or be found lost, until a weaken and a
+ * part's loss after the incident's end (`landingUntilMs`): each such rise is the stretch's, and batching again waits
  * for the last; one over `BATCHER_INCIDENT_RECOVERY_MS` after the incident, once it was batching again
  * (`firstRecoveredMs`), is out of step again (`lateAgainMs`, #249's review). A move (`preparing` a new target) is
  * neither. The incident's end is the batcher's: the game's clock's move, for a step (`batcherSpanOf`; a step explains

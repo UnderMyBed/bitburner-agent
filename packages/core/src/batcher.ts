@@ -102,14 +102,14 @@ export function mayStillStart(waitedMs: number, slackMs: number | null): boolean
   return waitedMs < BATCH_RAM_WAIT_MS && (slackMs === null || slackMs >= BATCH_START_SLACK_MS);
 }
 /**
- * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the
- * plan and the hack's landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking), the game taking it
- * at the level as the hack lands (NetscriptHelpers.tsx:561-568). The hack's threads are replanned when it starts, for
- * the level forecast at its landing (`hackThreadsAtLaunch`, `LevelForecast`, #315), so the margin covers the forecast's
- * error, exp from elsewhere and split grows (#234). Before #315 they were replanned at the level at the start, and
- * the margin had to cover a hack's time of the rise: on the live run of 2026-11-08 clarkinc (needing 1,041) at hacking 1,176 rose 40 levels in a hack's
- * 62 s once its own batches landed, each hack took up to 1.26x its share, and the grows fell short. Extra grow costs
- * RAM, never security: only the threads used add it (ServerHelpers.ts:202-212).
+ * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the plan
+ * and the hack's landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking), the game taking it at
+ * the level as the hack lands (NetscriptHelpers.tsx:561-568). The hack's threads are replanned when it starts, for the
+ * level forecast at its landing (`hackThreadsAtLaunch`, `LevelForecast`, #315), so the margin covers the forecast's
+ * error, exp from elsewhere and split grows (#234). Before #315 they were replanned at the level at the start, and the
+ * margin had to cover a hack's time of the rise: on the live run of 2026-11-08 clarkinc (needing 1,041) at hacking
+ * 1,176 rose 40 levels in a hack's 62 s once its own batches landed, each hack took up to 1.26x its share, and the
+ * grows fell short. Extra grow costs RAM, never security: only the threads used add it (ServerHelpers.ts:202-212).
  */
 export const GROW_MARGIN = 1.1;
 /** The largest share a batch takes: grow is sized for `GROW_MARGIN` times it, which must stay under all of it. */
@@ -755,6 +755,61 @@ export const RECOVERY_SPARE_BATCHES = 10;
  */
 export function recoveryInPlaceMs(target: HackingTarget, player: HackingPlayer, spacingMs: number): number {
   return operationTimeMs("weaken1", target, player) + BATCH_LAUNCH_LEAD_MS + RECOVERY_SPARE_BATCHES * spacingMs;
+}
+
+/**
+ * The least any recovery in place is given (#315's re-review), ms, however much of `recoveryInPlaceMs` its streak has
+ * spent: a hack's time (the hacks out before it land), the lead and `RECOVERY_SPARE_BATCHES` batches (the held ones'
+ * grows refill the target). So a run of short ordinary desyncs each recovers in place, never prepared again.
+ */
+export function recoveryInPlaceLeastMs(target: HackingTarget, player: HackingPlayer, spacingMs: number): number {
+  return operationTimeMs("hack", target, player) + BATCH_LAUNCH_LEAD_MS + RECOVERY_SPARE_BATCHES * spacingMs;
+}
+
+/**
+ * When a recovery in place gives up (#315's review and re-review). A recovery has its whole time
+ * (`recoveryInPlaceMs`) less what its streak has spent recovering: a desync within a whole time of the last recovery's
+ * end goes on with the time spent so far, never the time in step between, so a target kept down for a hack or two at
+ * a time still gives up; past that, a fresh whole. And never less than the least (`recoveryInPlaceLeastMs`), so a run
+ * of short ordinary desyncs each recovers in place. On the monotonic clock, ms.
+ */
+export class RecoveryClock {
+  #endsAt: number | null = null;
+  #streakUntil = Number.NEGATIVE_INFINITY;
+  #spentMs = 0;
+  #since = 0;
+
+  /** A recovery begins at `nowMs`, `wholeMs` and `leastMs` its times: when it gives up. */
+  begin(nowMs: number, wholeMs: number, leastMs: number): number {
+    if (nowMs > this.#streakUntil) this.#spentMs = 0;
+    this.#since = nowMs;
+    this.#endsAt = nowMs + Math.max(wholeMs - this.#spentMs, leastMs);
+    return this.#endsAt;
+  }
+
+  /** The recovery ended at `nowMs`, the target back: its time counts toward a desync's within `wholeMs`. */
+  end(nowMs: number, wholeMs: number): void {
+    this.#spentMs += nowMs - this.#since;
+    this.#streakUntil = nowMs + wholeMs;
+    this.#endsAt = null;
+  }
+
+  /** None under way, its streak kept: a move, or a fall back to preparing. */
+  stop(): void {
+    this.#endsAt = null;
+  }
+
+  /** Given up: the next recovery starts afresh. */
+  reset(): void {
+    this.#endsAt = null;
+    this.#streakUntil = Number.NEGATIVE_INFINITY;
+    this.#spentMs = 0;
+  }
+
+  /** When the recovery under way gives up, or null with none. */
+  endsAt(): number | null {
+    return this.#endsAt;
+  }
 }
 
 /** A target ready for batches: at its minimum security and maximum money. */

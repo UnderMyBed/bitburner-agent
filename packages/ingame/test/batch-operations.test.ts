@@ -332,7 +332,7 @@ test("the batcher counts a landing out of order and desyncs, and names a record 
   expect((await healthOf(simulation)).wavesStarted).toBe(wavesBefore);
 });
 
-test("a config without the level forecast's multipliers (an older brain's, #315): it batches, and says so", async () => {
+test("a config without the level forecast's multipliers (an older brain's, #315): batches, and says so", async () => {
   const simulation = await gameWithScripts();
   const config = n00dlesConfig();
   const { hacking: _level, hacking_exp: _exp, ...olderMults } = config.player.mults;
@@ -344,6 +344,42 @@ test("a config without the level forecast's multipliers (an older brain's, #315)
       "out, not at their landing",
   );
   expect(health.hacksTrimmedForLevel).toBe(0);
+});
+
+test("a move back to a target still out of step (#315's re-review): prepared again, it batches, in step", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  expect((await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME)).error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(n00dlesConfig())] });
+  await healthOnceThat(simulation, (health) => health.hacksLanded > 0, 5_000, 20 * 60_000, "hacks landing");
+  // A desync: the later landing recorded first, then the earlier one.
+  const running = await inFlight(simulation);
+  const first = running[0] as { id: string; landAt: number };
+  const last = running.at(-1) as { id: string; landAt: number };
+  await simulation.run("home", "write-port.js", {
+    args: [BATCHER_LANDING_PORT, recordJson(last.id, last.landAt), recordJson(first.id, first.landAt)],
+  });
+  await healthOnceThat(simulation, (health) => health.state === "recovering", 1_000, 60_000, "recovering");
+  // A move to n00dles' own figures anew (with its base difficulty): a move, back to a target out of step.
+  const again = { ...n00dlesConfig(), figures: { ...N00DLES, baseDifficulty: 3 } };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(again)] });
+  const prepared = await healthOnceThat(
+    simulation,
+    (health) => health.state !== "preparing" && health.state !== "recovering",
+    1_000,
+    20 * 60_000,
+    "prepared again",
+  );
+  // Its preparation brought it back: in step, batching, its first hack's check never left to a recovery's time.
+  expect(prepared).toMatchObject({ state: "batching", recoveriesTimedOut: 0 });
+  await healthOnceThat(
+    simulation,
+    (health) => health.hacksLanded > prepared.hacksLanded,
+    5_000,
+    10 * 60_000,
+    "hacks landing again",
+  );
+  expect((await healthOf(simulation)).recoveriesTimedOut).toBe(0);
 });
 
 test.each([
