@@ -217,9 +217,13 @@ describe("seen (no longer held out), downstream: today's rules on BN1.3's own me
 describe("seen (no longer held out), independent: the fitted model from BN1.3's start", () => {
   const model = read({ policy: TODAYS_POLICY });
 
-  test("its range: the 8th cycle, Daedalus's grind, runs out of it (114 min past the curves' 120)", () => {
+  test("its range: the 8th cycle, Daedalus's grind, runs out of it (65 min past the money's 160; #294: 114 past 120)", () => {
     expect(model.run.outOfRange).toEqual([8]);
-    expect(Math.round(model.run.cycles[7]?.extrapolatedMinutes ?? 0)).toBe(114);
+    expect(Math.round(model.run.cycles[7]?.extrapolatedMinutes ?? 0)).toBe(65);
+    // Without #310's checked tail, 114 min past the curves' last reading, as #294 had it.
+    const tail = { tailCheckedMin: { exp: 0, money: 0 } };
+    const unchecked = runModel(BN1_3.start, { policy: TODAYS_POLICY, calibration: tail });
+    expect(Math.round(unchecked.cycles[7]?.extrapolatedMinutes ?? 0)).toBe(114);
   });
 
   test("the 5th cycle's quick install at 17 min, BN1.3's at 18.5 [25%]; BitRunners joined at 12 min (BN1.3: 10-15)", () => {

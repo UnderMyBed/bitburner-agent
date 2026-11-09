@@ -99,10 +99,22 @@ export class Curves {
     this.#exp = exp;
     this.#money = money;
     this.lastMinute = (exp.at(-1) as readonly [number, number])[0];
+    const { tailCheckedMin } = calibration;
+    this.range = { exp: this.lastMinute + tailCheckedMin.exp, money: this.lastMinute + tailCheckedMin.money };
   }
 
-  /** The curve's last reading, in minutes: past it, each clock is extrapolated at its last slope (#263 flags it). */
+  /** The curve's last reading, in minutes: past it, each clock runs on at its last slope. */
   readonly lastMinute: number;
+  /**
+   * The clocks' range, minutes (#310): the last reading and the tail checked past it (`Calibration.tailCheckedMin`).
+   * Past it a clock is extrapolated (#263 flags it).
+   */
+  readonly range: Clocks;
+
+  /** How far either clock is past its range, minutes; 0 within it. */
+  extrapolatedMinutes(clocks: Clocks): number {
+    return Math.max(0, clocks.exp - this.range.exp, clocks.money - this.range.money);
+  }
 
   /** The hacking level `clockMin` minutes into the reference curve by the experience's clock, at `multipliers`. */
   hackingLevelAt(clockMin: number, multipliers: Pick<HackingMultipliers, "hacking" | "hacking_exp">): number {
@@ -149,6 +161,40 @@ export class Curves {
     }
     return { exp, money };
   }
+}
+
+/** A cycle's own state, as the game showed it at its start (#310): what the curves are run on by `replayCycle`. */
+export interface CycleState {
+  multipliers: HackingMultipliers;
+  homeRamGb: number;
+  /** When its first cloud server was bought, minutes into the cycle; null for none. */
+  firstCloudMin: number | null;
+}
+
+/**
+ * The curves alone on a cycle's own state (#310): the clocks, the hacking level and the gross income at each of
+ * `minutes` (ascending), the money's pace capped till `firstCloudMin`, as `runModel` runs them. No rule, so no choice of
+ * the brain's moves them: a check of the curves, not the path.
+ */
+export function replayCycle(
+  curves: Curves,
+  { multipliers, homeRamGb, firstCloudMin }: CycleState,
+  minutes: readonly number[],
+): { minutes: number; clocks: Clocks; hacking: number; money: number }[] {
+  let clocks: Clocks = { exp: 0, money: 0 };
+  let atMs = 0;
+  return minutes.map((each) => {
+    for (; atMs + CLOCK_SUBSTEP_MS <= each * MINUTE_MS; atMs += CLOCK_SUBSTEP_MS) {
+      const beforeCloud = firstCloudMin === null || atMs < firstCloudMin * MINUTE_MS;
+      clocks = curves.advanceClocks(clocks, CLOCK_SUBSTEP_MS, multipliers, homeRamGb, beforeCloud);
+    }
+    return {
+      minutes: each,
+      clocks,
+      hacking: curves.hackingLevelAt(clocks.exp, multipliers),
+      money: curves.moneyAt(clocks.money, multipliers),
+    };
+  });
 }
 
 /**

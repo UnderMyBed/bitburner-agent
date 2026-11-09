@@ -183,9 +183,12 @@ describe("the paired comparison", () => {
     // Count first (today's brain) against favour first, minutes: the least and the most difference, and the settings
     // with no pair. #294's re-review: from SF1.1 count first reached Daedalus's count sooner at all 17 of the first
     // grid's settings, but by as little as 2 min, on the install the count misses; with a margin of two steps, the
-    // count's miss (2 installed more or fewer) and \`firstCycleSpeed\` wider, it doesn't hold: no answer. From SF1.2,
-    // 16 of the 21 settings have no pair (favour first's runs go out of range first). From a fresh BN1.1 (8 GB, out of
-    // the measured range), no answer by rule. Daedalus's join and the destroy are out of range everywhere.
+    // count's miss (2 installed more or fewer) and \`firstCycleSpeed\` wider, it doesn't hold: no answer. #310's range
+    // (the tail checked past 120 min) pairs SF1.2's settings, 16 of 21 unpaired before: favour first unlocks the
+    // donations later at 18 of 21 (by up to 99 min), sooner with #260's gross money (−54) and the share by index (−7);
+    // count first reaches Daedalus's count sooner at all 20 paired (18 to 117 min), but at 2 more installed favour first
+    // never does in range: no answer either. One setting each pairs Daedalus's join and the destroy (73 and 48 min).
+    // From a fresh BN1.1 (8 GB, out of the measured range), no answer by rule.
     const byStart = comparisonByStart(TODAYS_POLICY, FAVOUR_FIRST_POLICY);
     const summaries = byStart.map(({ comparison }) => {
       const { verdict, settings } = comparison;
@@ -206,8 +209,8 @@ describe("the paired comparison", () => {
     const outOfRange = ["no answer", Number.NaN, Number.NaN, 21];
     expect(summaries).toEqual([
       {
-        donationsUnlocked: ["no answer", -48, -18, 1],
-        daedalusCount: ["no answer", -7, 46, 2],
+        donationsUnlocked: ["no answer", -48, 119, 0],
+        daedalusCount: ["no answer", -7, 179, 1],
         daedalusJoined: outOfRange,
         destroyed: outOfRange,
       },
@@ -218,10 +221,10 @@ describe("the paired comparison", () => {
         destroyed: outOfRange,
       },
       {
-        donationsUnlocked: ["no answer", -54, 48, 16],
-        daedalusCount: ["no answer", 18, 78, 16],
-        daedalusJoined: outOfRange,
-        destroyed: outOfRange,
+        donationsUnlocked: ["no answer", -54, 99, 0],
+        daedalusCount: ["no answer", 18, 117, 1],
+        daedalusJoined: ["no answer", 73, 73, 20],
+        destroyed: ["no answer", 48, 48, 20],
       },
     ]);
     // SF1.1, setting by setting: Daedalus's count's difference, the cycle it falls in under each policy, and the
@@ -258,13 +261,14 @@ describe("the paired comparison", () => {
       ["Daedalus's count at 2 fewer installed", 38, 7, 8, 0],
     ]);
     for (const { cycles } of sf11) expect(cycles.daedalusCount.second?.extrapolatedMinutes ?? 0).toBe(0);
-    // From SF1.2 as fitted, count first reaches the count in its 7th cycle, which ran 60 min past the curves: at the
-    // bound, still in range; favour first's never does in range.
-    const sf12 = byStart[2]?.comparison.settings[0]?.cycles.daedalusCount;
-    expect(sf12?.first?.cycle).toBe(7);
-    expect(sf12?.first?.extrapolatedMinutes).toBeGreaterThan(55);
-    expect(sf12?.first?.extrapolatedMinutes).toBeLessThanOrEqual(60);
-    expect(sf12?.second).toBeNull();
+    // From SF1.2 as fitted, count first reaches the count in its 7th cycle, 19 min past the curves' range (#294's: 60
+    // past their last reading, at the bound); favour first in its 8th, within it (#294's: never in range), 73 min later.
+    const sf12 = byStart[2]?.comparison.settings[0];
+    expect(sf12?.cycles.daedalusCount.first?.cycle).toBe(7);
+    expect(sf12?.cycles.daedalusCount.first?.extrapolatedMinutes).toBeCloseTo(19, 0);
+    expect(sf12?.cycles.daedalusCount.second?.cycle).toBe(8);
+    expect(sf12?.cycles.daedalusCount.second?.extrapolatedMinutes).toBe(0);
+    expect(Math.round((sf12?.difference.daedalusCount as number) / MINUTE_MS)).toBe(73);
     const donations = sf11.map(({ difference }) => difference.donationsUnlocked as number);
     expect(donations.filter((each) => each > COMPARISON_MARGIN_MS)).toHaveLength(20);
     expect(Math.round((donations[1] as number) / MINUTE_MS)).toBe(-45);

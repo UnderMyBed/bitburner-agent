@@ -232,6 +232,16 @@ export interface Calibration {
    * model's Daedalus cycle's multipliers, where BN1.3's 9th left about 10%. Nothing fitted; the grid varies it.
    */
   batchesUseFactor: number;
+  /**
+   * How far past the curves' last reading (120 min) their tail, each clock on at its last slope, has been checked on a
+   * live cycle, minutes, by clock (#310): the range a cycle runs in before its minutes count as extrapolated
+   * (`ModelCycle.extrapolatedMinutes`, bounded by `EXTRAPOLATION_BOUND_MIN`). Fitted on BN1.4's Daedalus cycles, the
+   * 13th and 14th (only the 13th reaches past 120): the curves run on the 13th's own multipliers, home RAM and first cloud
+   * server (`replayCycle`) put its experience's clock at 201 min by its end and its money's at 163, and past 120 the
+   * level's ratio to the game's holds within 3% and the money's within 10% (test/bn1-4.test.ts). Its other cycles only
+   * check. Before #310, 0: the tail's shape unchecked.
+   */
+  tailCheckedMin: { exp: number; money: number };
 }
 
 export const CALIBRATION: Calibration = {
@@ -249,6 +259,7 @@ export const CALIBRATION: Calibration = {
   shareBonusByCycle: RUN_3_SHARE_BONUS,
   shareRamShare: 0.01,
   batchesUseFactor: 1,
+  tailCheckedMin: { exp: 80, money: 40 },
 };
 
 /**

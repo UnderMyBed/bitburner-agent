@@ -29,11 +29,13 @@ export {
 export {
   type Clocks,
   Curves,
+  type CycleState,
   type HackingMultipliers,
   hackingLevelOf,
   homeRamAfter,
   measuredAt,
   READ_MINUTES,
+  replayCycle,
 } from "./curves.ts";
 export {
   AUGMENTATION_RESERVE_LOOKAHEAD_MS,
