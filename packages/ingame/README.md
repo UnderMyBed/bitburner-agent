@@ -86,6 +86,8 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `class-work.js` | `getPlayer` (0.5 GB), for the money and the city; the page costs nothing | 2.1 GB (2.1) |
 | `install-augmentations.js` | nothing beyond the base; the page costs nothing (#167) | 1.6 GB (1.6) |
 | `close-game.js` | nothing beyond the base; the page costs nothing (#303) | 1.6 GB (1.6) |
+| `create-gang.js` | `gang.createGang` (1 GB), `gang.getGangInformation` (2 GB); `gang.inGang` costs nothing; no page (#325) | 4.6 GB (4.6) |
+| `gang.js` | `gang.getGangInformation`, `gang.getMemberInformation`, `gang.recruitMember`, `gang.setMemberTask` (2 GB each), `gang.getMemberNames` (1 GB); `gang.inGang` and `gang.getTaskNames` cost nothing; no page (#325). Only where a gang can be formed, BN2 in the campaign, which has SF1.3's 32 GB home: left out of the fresh save's 8 GB check, and checked against BN2's home instead | 10.6 GB (10.6) |
 | `destroy-bitnode.js` | `getServer` (2 GB), `scan` (0.2 GB), `serverExists`, `getServerRequiredHackingLevel` (0.1 GB each), `hasRootAccess`, `getHackingLevel`, `getHackTime` (0.05 GB each); the page costs nothing (#177) | 4.15 GB (4.15) |
 | `singularity-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
 | `singularity-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |
@@ -152,7 +154,7 @@ It's safe to run any number of times. When nothing is deployed, `current.txt` do
 1. **Start:** it finds its folder from its own path (`deploymentIdOfPath`), then reads `config.json` and `token.txt` there. `config.json`'s `deploymentId` must name that folder. If a file is missing, empty or invalid, it says which in the terminal and in its log, and exits. It makes a new `agentSessionId`, kept across its reconnects.
 2. **Connect:** to `ws://127.0.0.1:<controlPort>`. When the socket opens, it sends `hello` with the game's version (`ns.ui.getGameInfo()`).
 3. **`welcome`:** it stays connected, and its backoff goes back to 1 s. From then on it takes a round of snapshots every 2 s, the first one at once, then converges [the hack loop](#the-hack-loop) when that's due, then runs the [intents](#intents) that are due, and sleeps (`ns.sleep`) in between. It acts on what arrived (a `restart`, a `desiredState`, a close) at the start of each round, after the sleep. A round never runs past 2 s, so that's within 2 s. Last in the round, the [work activity](#work) converges the work when that's due. At the `welcome` it stops converging on any state a brain sent before: from then on, only this brain's states count.
-4. **`desiredState`:** it keeps the latest: the hack loop converges on it, the intent runner does its intents, and the [work activity](#work) converges the work last. Every round, before them, the [dialog watcher](#dialogs) handles the game's dialogs. It also keeps it for [safe mode](#safe-mode), in `agent/desired-state.json`.
+4. **`desiredState`:** it keeps the latest: the hack loop converges on it, the intent runner does its intents, [the gang](#the-gang)'s worker runs on its `gang` (#325), and the [work activity](#work) converges the work last. Every round, before them, the [dialog watcher](#dialogs) handles the game's dialogs. It also keeps it for [safe mode](#safe-mode), in `agent/desired-state.json`.
 5. **`restart`:** it runs `agent/boot.js` with its own pid and exits; `boot.js` waits for it to go, then starts the deployed Agent. Its socket closes as it exits.
 6. **Disconnected:**
    - closed with 4000 (a newer Agent replaced it): it exits for good;
@@ -407,6 +409,17 @@ The page reader's choices, steps and checks are tested on a stand-in page in jsd
   3. **The price** (`cloud.getServerUpgradeCost`; Infinity past this BitNode's most) against the money: "not enough money: upgrading pserv-0 to 128 GB costs $3520000".
   4. **The upgrade**, done; refused past the checks, "the game refused to upgrade …".
   - Its logic is in `src/workers/cloud-server-upgrade.ts`, which `test/agent/cloud-server-upgrade.test.ts` drives with a stand-in NS. The brain sends it for its own servers at the limit of 25 ([packages/brain](../brain/README.md#cloud-servers)).
+
+## The gang
+
+[#325](https://github.com/UnderMyBed/bitburner-agent/issues/325) (G1 of the gangs epic #324): the brain plays a gang in BN2 ([packages/brain](../brain/README.md#the-gang-bn2)). Both workers use the NS gang API, which needs a gang but no Singularity (`NetscriptFunctions/Gang.ts:20-23`), so no page and no Singularity worker.
+- **`createGang { faction }`** (`src/entries/create-gang.ts`, `src/workers/gang-creation.ts`), the `ui` backend's in any game: the game first, a gang of that faction's is done, another's a problem ("only one gang a BitNode"); else `gang.createGang`, which makes NiteSec's and The Black Hand's hacking gangs, the others combat ones (`NetscriptFunctions/Gang.ts:49`); refused, "the game formed no gang with …: not a member, or no gangs here (BN2, or SF2 with karma)". The simulator's effector does what the faction page's "Create Gang" does (`createGangWith`, `docs/sim/parity.md`).
+- **The gang activity** (`src/agent/gang.ts`) keeps the desired state's `gang` from the brain it's connected to (none in safe mode: the members keep their tasks), and runs `gang.js` (`src/entries/gang.ts`, `src/workers/gang-management.ts`) with it as JSON when it changes and every 5 rounds (10 s), after the intents, before the work:
+  1. **No gang:** read as none (`gang: null`, no problem).
+  2. **The recruits,** in order, each name not a member yet; a refusal is a problem, and none after it is tried.
+  3. **The tasks,** each member named, every time (setting one again changes nothing, `GangMember.ts:91-98`, and puts back a member the owner moved); a task the gang's kind hasn't is a problem, never set, as the game would answer true having left the member Unassigned (`NetscriptFunctions/Gang.ts:200-207`); a name not a member, skipped.
+  4. **The reading:** the gang's information and each member's, which the snapshotter adds to the next medium snapshot as `gang` ([protocol](../../docs/bridge/protocol.md)); `null` while no gang is managed. The gang information's recruit threshold isn't read: its property is named like an NS function (1 GB); the brain computes it.
+  - Tested in the simulator by `packages/brain/test/gang-effectors.test.ts` (each refusal, the reading) and `gang-simulation.test.ts` (an hour from BN2).
 
 ## Backdoors
 

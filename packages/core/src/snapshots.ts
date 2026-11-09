@@ -7,6 +7,7 @@
 import type { BatcherDeployReport, BatcherHealth } from "./batcher.ts";
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { FactionStateReading } from "./faction-state.ts";
+import type { GangReading } from "./gang.ts";
 import type { IntentOutcome } from "./intents.ts";
 import type { WorkOutcome } from "./work.ts";
 
@@ -102,6 +103,11 @@ export interface MediumSnapshotData {
     moneyAvailable?: number;
     hackDifficulty?: number;
   }[];
+  /**
+   * The gang (#325), as the Agent's gang worker last read it (within 10 s), added by the Agent: null while the brain
+   * manages no gang, or before the worker's first reading; absent from an older Agent.
+   */
+  gang?: GangReading | null;
 }
 
 /** What the fast tier's worker reads: money, home's RAM, and the scripts running on home. */

@@ -43,6 +43,7 @@ import {
   donate,
   favorNeededToDonate,
 } from "../../../../../vendor/bitburner-src/src/Faction/formulas/donation";
+import { canCreateGang } from "../../../../../vendor/bitburner-src/src/Gang/helpers";
 import { Locations } from "../../../../../vendor/bitburner-src/src/Locations/Locations";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { startWorkerScript } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
@@ -735,6 +736,28 @@ const effectors = {
         queuedAugmentations: Player.queuedAugmentations.map((augmentation) => augmentation.name),
       },
     };
+  },
+  /**
+   * The faction page's "Manage Gang" and its modal's "Create Gang" (#325, `Faction/ui/CreateGangModal.tsx:33-46`): the
+   * game's own check (`Gang/helpers.ts:6-26`: no gang yet, BN2 or SF2 with the karma, one of the seven, a member), then
+   * `startGang`, a hacking gang for NiteSec and The Black Hand. Done once the player's gang is that faction's. Not
+   * named `createGang`, which is an NS function.
+   */
+  createGangWith(factionName: string): EffectorResult {
+    const formedWith = () => Player.gang?.facName as string | undefined;
+    if (formedWith() === undefined && Object.values(FactionName).includes(factionName as FactionName)) {
+      const faction = factionName as FactionName;
+      if (canCreateGang(faction).success) {
+        Player.startGang(faction, faction === FactionName.NiteSec || faction === FactionName.TheBlackHand);
+      }
+    }
+    const now = formedWith();
+    return result(
+      now === factionName,
+      now === undefined
+        ? `the game formed no gang with ${factionName}: not a member, or no gangs here (BN2, or SF2 with karma)`
+        : `the gang is ${now}'s already: only one gang a BitNode`,
+    );
   },
 };
 

@@ -3,7 +3,8 @@
 // welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), the slow one with the faction state
 // (../agent/faction-state.ts, #197), converges the hack loop on the brain's
 // desired state when that's due (../agent/hack-loop.ts, #134), does the brain's intents through their effectors
-// (../agent/intent-runner.ts, #141), converges the work last (../agent/work.ts, #151), and sleeps in between. Before
+// (../agent/intent-runner.ts, #141), runs the gang's worker (../agent/gang.ts, #325), converges the work last
+// (../agent/work.ts, #151), and sleeps in between. Before
 // the hack loop, the intents and the work, it handles the game's routine dialogs (../agent/dialog-watcher.ts, #143).
 // With no brain, while it keeps a desired state for safe mode (../agent/safe-mode.ts, #160), its rounds go on without
 // snapshots or intents: the dialogs, the hack loop and the work, on the kept state, while it connects and waits.
@@ -38,6 +39,7 @@ import { createBatcherActivity } from "../agent/batcher.ts";
 import { createDialogWatcher } from "../agent/dialog-watcher.ts";
 import { createEffectorRunner } from "../agent/effector-runner.ts";
 import { createFactionStateReader } from "../agent/faction-state.ts";
+import { createGangActivity } from "../agent/gang.ts";
 import { createHackLoop } from "../agent/hack-loop.ts";
 import { createIntentRunner } from "../agent/intent-runner.ts";
 import { createWorkerRunner } from "../agent/run-worker.ts";
@@ -117,6 +119,7 @@ export async function main(ns: NS): Promise<void> {
   const workActivity = createWorkActivity(ns, { effectorRunner });
   const dialogWatcher = createDialogWatcher(ns);
   const batcher = createBatcherActivity(ns, { deploymentId, workerRunner });
+  const gangActivity = createGangActivity(ns, { deploymentId, workerRunner });
   /** The brain's last message refused, until a desired state is taken again, and the count this connection (#194). */
   let refused: RefusedBrainMessage | null = null;
   let refusedCount = 0;
@@ -139,6 +142,7 @@ export async function main(ns: NS): Promise<void> {
     // A restart after a reset that couldn't type `run /agent/boot.js` left a note: reported, never silent (#212).
     takeRestartNote,
     refusedMessage: () => refused,
+    gangReading: () => gangActivity.reading(),
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
     factionsUnread: (problem) => factionStateReader.unread(problem),
   });
@@ -191,6 +195,8 @@ export async function main(ns: NS): Promise<void> {
     await hackLoop.convergeIfDue(roundEndsAtMs);
     if (!batcherStopping) await batcher.convergeIfDue(roundEndsAtMs);
     await intentRunner.runDue(roundEndsAtMs);
+    // The gang (#325) after the intents, so a gang formed this round is read; before the work, which goes last.
+    await gangActivity.convergeIfDue(roundEndsAtMs);
     await workActivity.convergeIfDue(roundEndsAtMs);
     // Clamped all the same: a round never sleeps longer than a round.
     const untilNextRoundMs = roundEndsAtMs - monotonicMs();
@@ -273,6 +279,7 @@ export async function main(ns: NS): Promise<void> {
           hackLoop.forget();
           batcher.forget();
           workActivity.forget();
+          gangActivity.forget();
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;
@@ -283,6 +290,7 @@ export async function main(ns: NS): Promise<void> {
           batcher.desire(event.message.batcher ?? null);
           intentRunner.desire(event.message.intents);
           workActivity.desire(event.message.work ?? null);
+          gangActivity.desire(event.message.gang ?? null);
           // The wall clock: safe mode's time is kept in a file across reloads (#251).
           safeMode.heard(event.message, Date.now(), snapshotter.lastAugReset());
         }
@@ -292,8 +300,10 @@ export async function main(ns: NS): Promise<void> {
     }
     socket = null;
     // One-shot actions need the brain: the next one sends its own. The hack loop and the work go on in safe mode, on
-    // the last state, its clock stopping here; with none kept, they wait for the next brain.
+    // the last state, its clock stopping here; with none kept, they wait for the next brain. The gang waits for it too
+    // (#325): its members keep their tasks in the game.
     intentRunner.forget();
+    gangActivity.forget();
 
     // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one), nor
     // write the file over the newer one's.

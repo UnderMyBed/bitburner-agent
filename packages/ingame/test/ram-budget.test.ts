@@ -11,6 +11,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   BATCHER_SCRIPT_NAME,
   freshSaveHomeWorkerFileNames,
+  gangWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
   homeWorkerFileNames,
   SHARE_RAM_GB,
@@ -76,6 +77,17 @@ test("the Agent's budget plus its largest fresh-save home worker's fits in a fre
     ...freshSaveHomeWorkerFileNames().map((fileName) => budgets[fileName] as number),
   );
   expect((budgets["agent.js"] as number) + largestWorkerBudget).toBeLessThanOrEqual(8);
+});
+
+test("the Agent's budget plus its largest gang worker's fits BN2's home with SF1.3 and SF4.3, as the campaign enters it (#325)", async () => {
+  // The gang's workers run only where a gang can be formed: BN2 in the campaign, which comes to it with SF1.3 and
+  // SF4.3 (docs/synthesis.md §3). The NS gang API costs the same with or without Singularity.
+  const inBitNode2 = await start({ ...NEW_GAME, fixture: { kind: "bitnode", n: 2, sourceFiles: { 1: 3, 4: 3 } } });
+  const homeGb = (await inBitNode2.summary()).homeRamMax;
+  const largestGangWorkerBudget = Math.max(...gangWorkerFileNames().map((fileName) => budgets[fileName] as number));
+  expect(largestGangWorkerBudget).toBe(budgets["gang.js"]);
+  expect((budgets["agent.js"] as number) + largestGangWorkerBudget).toBeLessThanOrEqual(homeGb);
+  expect(homeGb).toBe(32);
 });
 
 test("the loop's budget is core's, by which the brain counts a host's threads (#187)", () => {

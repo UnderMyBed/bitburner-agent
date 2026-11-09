@@ -89,6 +89,7 @@ const newGate = (): Gate => ({
  *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode. The game also
  *   allows a destroy with every Black Op done (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count
  *   that route, the conservative direction.
+ * - Forming a gang (#325): its faction joined, as the game requires (`Gang/helpers.ts:20-22`).
  */
 export function guardFailure(
   intent: Intent,
@@ -99,16 +100,22 @@ export function guardFailure(
   return queueGuardFailure(intent, queue) ?? snapshotGuardFailure(intent, medium, staticData);
 }
 
-/** The part of `intent`'s guard that reads the snapshots, or null: a join's enemies, w0r1d_d43m0n's preconditions. */
+/**
+ * The part of `intent`'s guard that reads the snapshots, or null: a join's enemies, w0r1d_d43m0n's preconditions, a
+ * gang's faction joined (#325).
+ */
 export function snapshotGuardFailure(
   intent: Intent,
   medium: MediumSnapshotData,
   staticData: StaticSnapshotData | null,
 ): string | null {
   if (intent.action === "destroyBitNode") return worldDaemonGuardFailure(medium, staticData);
-  if (intent.action !== "joinFaction") return null;
+  if (intent.action !== "joinFaction" && intent.action !== "createGang") return null;
   const joined = (medium.player as { factions?: unknown } | undefined)?.factions;
   if (!Array.isArray(joined)) return "the medium snapshot has no list of the factions joined";
+  if (intent.action === "createGang") {
+    return joined.includes(intent.args.faction) ? null : `${intent.args.faction} isn't joined`;
+  }
   const joinedEnemy = (FACTION_ENEMIES[intent.args.faction] ?? []).find((enemy) => joined.includes(enemy));
   return joinedEnemy === undefined ? null : `${intent.args.faction}'s enemy ${joinedEnemy} is joined`;
 }

@@ -69,6 +69,7 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
+import { GangFold } from "./gang-report.ts";
 import {
   countsOf,
   DEFAULT_GAP_THRESHOLD_MS,
@@ -642,6 +643,8 @@ interface RunFacts extends RunWindow {
   augmentations: AugmentationTimeline;
   /** The hacking experience rate over the medium snapshots (#215), for the World Daemon's ETA. */
   worldDaemon: WorldDaemonFold;
+  /** The gang in BN2 (#325), from the slow and medium snapshots. */
+  gang: GangFold;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -737,8 +740,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
+    const gang = new GangFold();
     for (const { atMs, gameTimeMs, data } of ofTier<SlowSnapshotData>("slow")) {
       snapshotCount++;
+      gang.addSlow(atMs, data);
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
@@ -792,6 +797,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       backdoors.addMedium(atMs, data);
       factionWork.addMedium(atMs, data);
       augmentations.addMedium(atMs, data);
+      gang.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     const fastTimes: FastTime[] = [];
@@ -869,6 +875,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       factionWork,
       augmentations,
       worldDaemon,
+      gang,
       snapshotCount,
       playersServers,
       staticLast,
@@ -971,6 +978,8 @@ export function runReport(
       // A batcher stuck on a poor target (#275), by section 5's medium snapshots' incomes and 2b's cycles.
       { incomes: facts.hacking.targetIncomes, cycleLabelAt: (atMs) => facts.cycles.cycleLabelAt(atMs) },
     ),
+    "",
+    ...facts.gang.section(failures, window.untilMs),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
     ...failures.map((failure) => `  ${failure}`),

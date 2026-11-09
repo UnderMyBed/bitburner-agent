@@ -5,6 +5,7 @@
  */
 import { type BatcherConfig, parseBatcherConfig } from "./batcher.ts";
 import { isValidDeploymentId } from "./deploy-layout.ts";
+import { type GangState, parseGangState } from "./gang.ts";
 import { type Intent, intentId, MAX_INTENTS, parseIntentRequest } from "./intents.ts";
 import { parseWork, type Work } from "./work.ts";
 
@@ -81,6 +82,12 @@ export interface DesiredState {
    */
   work?: Work | null;
   /**
+   * The gang (#325): recruits and members' tasks, done and the gang read every 10 s by the Agent's gang worker, whose
+   * reading goes in the medium snapshot; or absent (null): no gang managed, nothing read. Absent is how an older brain
+   * says none. Not kept for safe mode: the members keep their tasks in the game.
+   */
+  gang?: GangState | null;
+  /**
    * Safe mode (#160, architecture §5.4): with the brain gone, the Agent keeps converging on this state, minus its
    * intents, for this long after it was last connected to the brain that sent it, at most `MAX_SAFE_MODE_TTL_MS`. Absent
    * (an older brain) or 0: it isn't kept past the brain.
@@ -127,7 +134,8 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * last sent, and with nothing sent yet, nothing goes. So the intents' removal gets through a hold whatever the hack
  * loop does. The batcher (#205) likewise: off (absent) goes as it is, stopping ours; on, it stays as last sent. So
  * turned off during a hold, nothing hacks the hosts the batcher had until the hold ends: the hack loop goes as last
- * sent, with none of them (#211's review, finding 16). No work either: the Agent leaves the work as it is (#151).
+ * sent, with none of them (#211's review, finding 16). No work either: the Agent leaves the work as it is (#151), nor
+ * a gang (#325): the members keep their tasks.
  * `ttlMs` goes as the brain set it (#160): a held state starts nothing new, so safe mode keeping it starts nothing new
  * either.
  */
@@ -423,6 +431,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       if (!work.ok) return { ok: false, reason: `desiredState's ${work.reason}` };
       const batcher = parseBatcherState(fields.batcher, hackLoop.message);
       if (!batcher.ok) return { ok: false, reason: `desiredState's ${batcher.reason}` };
+      const gang = parseGangState(fields.gang);
+      if (!gang.ok) return { ok: false, reason: `desiredState's ${gang.reason}` };
       const { ttlMs } = fields;
       if (ttlMs !== undefined && (!isSafeIntegerAtLeast(ttlMs, 0) || ttlMs > MAX_SAFE_MODE_TTL_MS)) {
         return { ok: false, reason: `desiredState's ttlMs is ${describeValue(ttlMs)}` };
@@ -438,6 +448,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
           intents: intents.message,
           // Absent and null are the same: no work managed. Only a work to do is carried.
           ...(work.message === null ? {} : { work: work.message }),
+          // Absent and null are the same: no gang managed (#325).
+          ...(gang.gang === null ? {} : { gang: gang.gang }),
           // Absent and 0 are the same: not kept past the brain (#160).
           ...(ttlMs === undefined || ttlMs === 0 ? {} : { ttlMs }),
         },

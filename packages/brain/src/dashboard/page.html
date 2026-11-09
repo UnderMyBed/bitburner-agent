@@ -82,7 +82,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option><option>createGang</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -350,6 +350,8 @@ function render(status) {
     // The hacking rows (#196): the brain's own words, as the run report has them.
     ["Hacking ceiling", status.hacking.ceilingText],
     ["Hacking income", status.hacking.incomeText],
+    // The gang (#325): the brain's one line, in BN2.
+    ["Gang", status.gang?.line.replace(/^Gang: /, "") ?? "—"],
     ["Home RAM", values.homeRamUsed === null ? "—" : `${values.homeRamUsed} of ${values.homeMaxRam} GB`],
     ["Scripts on home", orNone(values.homeScripts)],
     ["Page heap", orNone(values.pageHeapUsedBytes, megabytes)],

@@ -5,8 +5,8 @@
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
 // - `ui`: a home worker that does it without Singularity: through the game's page, or with NS calls alone where the
-//   API has them (`buyServer`, #159; `upgradeServer`, #194). Such an action has no Singularity worker: the `ui` one
-//   does it in any game.
+//   API has them (`buyServer`, #159; `upgradeServer`, #194; `createGang`, #325). Such an action has no Singularity
+//   worker: the `ui` one does it in any game.
 // The brain never knows which backend does an intent or the work. The simulator's effectors aren't named like NS
 // functions: the game charges RAM for such names in in-game code.
 import {
@@ -19,6 +19,7 @@ import {
   CLASS_WORK_WORKER_NAME,
   CLOSE_GAME_WORKER_NAME,
   COMPANY_WORK_WORKER_NAME,
+  CREATE_GANG_WORKER_NAME,
   CRIME_WORK_WORKER_NAME,
   classLabel,
   DESTROY_BITNODE_WORKER_NAME,
@@ -73,6 +74,7 @@ export interface SimEffectors {
   installQueuedAugmentations(callbackScript: string): EffectorReport;
   destroyWorldDaemon(nextBitNode: number, callbackScript: string): EffectorReport;
   readFactionState(): FactionStateReport;
+  createGangWith(faction: string): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -209,6 +211,14 @@ export function effectorFor(intent: Intent): Effector {
         ui: { workerName: CLOSE_GAME_WORKER_NAME, workerArguments: [] },
         singularity: null,
         sim: () => ({ done: false, problem: "the simulator has no game window to close" }),
+      };
+    // Forming the gang (#325), with the NS API alone (`NetscriptFunctions/Gang.ts:41-52`): no Singularity, no page.
+    case "createGang":
+      return {
+        description: `form a gang with ${intent.args.faction}`,
+        ui: { workerName: CREATE_GANG_WORKER_NAME, workerArguments: [intent.args.faction] },
+        singularity: null,
+        sim: (effectors) => effectors.createGangWith(intent.args.faction),
       };
   }
 }

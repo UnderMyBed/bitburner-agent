@@ -278,6 +278,7 @@ try {
         worldDaemonStall: desiredState.worldDaemonStall(),
         share: desiredState.shareView(),
         stopAtBitNodeEnd: desiredState.stopAtBitNodeEndView(),
+        gang: desiredState.gangView(),
         storeThinningFailure,
         dataBackupProblem: dataBackups?.problem() ?? null,
         timeline: campaignTimeline.read(),
