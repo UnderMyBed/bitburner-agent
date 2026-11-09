@@ -68,7 +68,7 @@ describe("chooseHomeRamUpgrade", () => {
     });
   });
 
-  test("outside BN1 and BN4 the price isn't known yet: nothing, and the dashboard says why", () => {
+  test("outside BN1, BN4 and BN5 the price isn't known yet: nothing, and the dashboard says why", () => {
     expect(chooseHomeRamUpgrade(medium(8, { money: 1e12 }), slowData(2))).toEqual({
       ram: 8,
       next: null,

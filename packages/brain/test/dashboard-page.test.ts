@@ -237,6 +237,7 @@ const BUSY_STATUS: DashboardStatus = {
     ownersDestroy: false,
     nextBitNode: 4,
     replay: null,
+    skipped: null,
     stall: null,
   },
   share: { enabled: true, asked: true, why: null, sharing: null },
@@ -967,6 +968,16 @@ test.each([
     "before a slow snapshot (#321)",
     { nextBitNode: null },
     "Destroying the BitNode (into the next BitNode, once the Agent's slow snapshot shows this one): on",
+  ],
+  [
+    "into BN5 past the BitNodes the brain can't play yet (#323)",
+    { nextBitNode: 5, skipped: "BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet" },
+    "Destroying the BitNode (into BitNode 5; BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet): on",
+  ],
+  [
+    "the owner's destroy queued: the brain's skips not said (#323)",
+    { ownersDestroy: true, nextBitNode: 2, skipped: "BN2 skipped: no hacking multipliers or prices yet" },
+    "Destroying the BitNode (into BitNode 2): yours is queued",
   ],
   [
     "with nothing left in the campaign's order to gain (#311, #321)",

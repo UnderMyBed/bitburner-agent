@@ -14,10 +14,11 @@
 //   of the preconditions, a save backup). Asked for, it's held until a slow snapshot shows another `lastNodeReset`, as
 //   the install's is.
 // - The dashboard's switch ("Stop destroying the BitNode", `worldDaemon.enabled`), on by default (owner decision 50).
-//   The next BitNode follows the order: BN4 while Source-File 4 is short of 3, then BN1 (owner decision 66, superseding
-//   64). Another is the owner's: `destroyBitNode` queued by hand goes instead. With nothing left in the order to gain,
-//   the destroy goes ahead all the same, into BN1, a replay (#311): BN1 played again from its start for the run (the
-//   stop at the BitNode's end, if the owner set it, fires on it: ./bitnode-end.ts).
+//   The next BitNode follows the order: BN4 while Source-File 4 is short of 3, then BN1, then BN5 (owner decision 66,
+//   superseding 64), the BitNodes the brain can't play yet skipped and said (#323: core's `describeSkipped`). Another
+//   is the owner's: `destroyBitNode` queued by hand goes instead. With nothing playable left in the order to gain, the
+//   destroy goes ahead all the same, into BN1, a replay (#311): BN1 played again from its start for the run (the stop
+//   at the BitNode's end, if the owner set it, fires on it: ./bitnode-end.ts).
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
@@ -29,11 +30,13 @@
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
+  bitNodeUnplayableReason,
   CAMPAIGN_ORDER,
   DAEDALUS,
   daedalusCountOf,
   daedalusMissing,
   daedalusRequirements,
+  describeSkipped,
   type FactionState,
   factionReadingOf,
   hackingExpForLevel,
@@ -72,11 +75,12 @@ export function worldDaemonDestroyIntent(nextBitNode: number): Intent {
 }
 
 /**
- * The BitNode a reset note's destroy entered, if it's one the brain's destroy can be (#321: a BitNode of the campaign's
- * order), or null: a restarted brain holds its destroy across the reset by it (#215 review).
+ * The BitNode a reset note's destroy entered, if it's one the brain's destroy can be (#321, #323: a BitNode of the
+ * campaign's order the brain plays), or null: a restarted brain holds its destroy across the reset by it (#215 review).
  */
 export function worldDaemonDestroyInto(id: string): number | null {
-  return CAMPAIGN_ORDER.find((step) => worldDaemonDestroyIntent(step.bitNode).id === id)?.bitNode ?? null;
+  const step = CAMPAIGN_ORDER.find((each) => worldDaemonDestroyIntent(each.bitNode).id === id);
+  return step !== undefined && bitNodeUnplayableReason(step.bitNode) === null ? step.bitNode : null;
 }
 
 /**
@@ -109,6 +113,8 @@ export type WorldDaemonEvent =
       nextBitNode: number;
       /** Why it's a replay (#311, `replayOf`), or null: from the last slow snapshot's BitNode into this one. */
       replay: string | null;
+      /** The BitNodes of the order skipped on the way to it, in words (#323, `skippedOf`), or null: none. */
+      skipped: string | null;
     }
   | {
       type: typeof DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND;
@@ -162,7 +168,7 @@ export function nextBitNodeFrom(resetInfo: unknown): NextBitNode | null {
 
 /**
  * Why a destroy into `nextBitNode` is a replay (#311, kept by #321 for its one case), or null: the brain's next BitNode
- * from `resetInfo` is `nextBitNode`, with nothing left in the campaign's order to gain (core's `nextBitNodeOf`). BN1
+ * from `resetInfo` is `nextBitNode`, with nothing playable left in the order to gain (core's `nextBitNodeOf`). BN1
  * destroyed at the caps gives no level (`giveSourceFile`, `RedPill.tsx:27-31`), and the portal enters BN1 all the same
  * (`BitNode/ui/PortalModal.tsx:117-126`): the run itself is the gain.
  */
@@ -171,12 +177,28 @@ export function replayOf(resetInfo: unknown, nextBitNode: number): string | null
   return next !== null && next.bitNode === nextBitNode ? next.replay : null;
 }
 
+/**
+ * The BitNodes the order skipped on the way to `nextBitNode` (#323), in words (core's `describeSkipped`), or null:
+ * none, or `nextBitNode` isn't the brain's next from `resetInfo` (the owner's, say).
+ */
+export function skippedOf(resetInfo: unknown, nextBitNode: number): string | null {
+  const next = nextBitNodeFrom(resetInfo);
+  return next !== null && next.bitNode === nextBitNode ? describeSkipped(next.skipped) : null;
+}
+
 /** Why the brain's destroy isn't asked for with w0r1d_d43m0n ready (#321): no next BitNode from the slow snapshot. */
 export const NEXT_UNREAD = "the next BitNode can't be read from the slow snapshot (its BitNode or Source-Files)";
 
-/** "into BitNode 4", or "into BitNode 1, a replay (…)" (#321): the brain's log line's words, and the start line's. */
+/**
+ * "into BitNode 4", "into BitNode 5 (BN2 … skipped: …)" (#323), or "into BitNode 1 (…), a replay (…)" (#321): the
+ * brain's log line's words, and the start line's.
+ */
 export function describeNextBitNode(next: NextBitNode): string {
-  return `into BitNode ${next.bitNode}${next.replay === null ? "" : `, a replay (${next.replay})`}`;
+  const skipped = describeSkipped(next.skipped);
+  return (
+    `into BitNode ${next.bitNode}${skipped === null ? "" : ` (${skipped})`}` +
+    (next.replay === null ? "" : `, a replay (${next.replay})`)
+  );
 }
 
 /**
@@ -515,6 +537,8 @@ export interface WorldDaemonView {
   nextBitNode: number | null;
   /** Why the brain's destroy is a replay (#311, `replayOf`), from the last slow snapshot, or null. */
   replay: string | null;
+  /** The BitNodes the order skipped on the way to it (#323, `skippedOf`), from the last slow snapshot, or null. */
+  skipped: string | null;
   /** A stall, from when it could have been done, or null: the `worldDaemonStalled` alert's. */
   stall: WorldDaemonStall | null;
 }
@@ -615,6 +639,7 @@ export class WorldDaemonRule {
       nextBitNode,
       // The asked-for BitNode's, as the last slow snapshot says it: a restored ask's too.
       replay: this.#next !== null && this.#next.bitNode === nextBitNode ? this.#next.replay : null,
+      skipped: this.#next !== null && this.#next.bitNode === nextBitNode ? describeSkipped(this.#next.skipped) : null,
       stall: this.stall(),
     };
   }

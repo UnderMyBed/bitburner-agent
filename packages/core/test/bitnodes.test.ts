@@ -7,7 +7,10 @@ import {
   bitNodeAssumptions,
   bitNodeHackingMultipliers,
   bitNodePriceMultipliers,
+  bitNodeUnplayableReason,
   isBitNodeNumber,
+  listedBitNodes,
+  playableBitNodes,
   THE_RED_PILL,
   worldDaemonProblem,
 } from "../src/bitnodes.ts";
@@ -92,11 +95,43 @@ test("bitNodeHackingMultipliers (#321): BN1's 1 and 1, BN4's 0.2 and 0.4, as the
   expect(bitNodeHackingMultipliers(0)).toBeNull();
 });
 
-test("bitNodeAssumptions: none in BN1 or BN4, whose prices and hacking core has; another BitNode's said", () => {
+test("BN5's rows (#323): its softcap 1.2, ScriptHackMoney 0.15 and HackExpGain 0.5, as the pinned game sets them", () => {
+  const bitNodes = gameSource("BitNode/BitNode.tsx");
+  // BN5's own block, up to BN6's (`BitNode.tsx:663-693`).
+  const bn5 = bitNodes.slice(bitNodes.indexOf("    case 5: {"), bitNodes.indexOf("    case 6: {"));
+  expect(bn5).toContain("CloudServerSoftcap: 1.2,");
+  expect(bn5).toContain("ScriptHackMoney: 0.15,");
+  expect(bn5).toContain("HackExpGain: 0.5,");
+  // The rest of the prices, and the other multipliers on hacking, are the defaults; ServerMaxMoney too.
+  expect(bn5).not.toMatch(/HomeComputerRamCost|CloudServerCost|CloudServerLimit|CloudServerMaxRam/);
+  expect(bn5).not.toMatch(
+    /ServerGrowthRate|ServerWeakenRate|HackingSpeedMultiplier|HackingLevelMultiplier|ScriptHackMoneyGain|ServerMaxMoney/,
+  );
+  // What it sets on the servers, the snapshots read; w0r1d_d43m0n's level is the static snapshot's (4500).
+  expect(bn5).toContain("ServerStartingSecurity: 2,");
+  expect(bn5).toContain("ServerStartingMoney: 0.5,");
+  expect(bn5).toContain("WorldDaemonDifficulty: 1.5,");
+  const ones = { HomeComputerRamCost: 1, CloudServerCost: 1, CloudServerLimit: 1, CloudServerMaxRam: 1 };
+  expect(bitNodePriceMultipliers(5)).toEqual({ ...ones, CloudServerSoftcap: 1.2 });
+  expect(bitNodeHackingMultipliers(5)).toEqual({ ScriptHackMoney: 0.15, HackExpGain: 0.5 });
+});
+
+test("playable: BN1, BN4 and BN5, with both tables; another says what core lacks of it", () => {
+  expect(playableBitNodes()).toEqual([1, 4, 5]);
+  expect(listedBitNodes([1, 4, 5])).toBe("BN1, BN4 and BN5");
+  expect(listedBitNodes([2, 3])).toBe("BN2 and BN3");
+  expect(listedBitNodes([2])).toBe("BN2");
+  expect([1, 4, 5].map(bitNodeUnplayableReason)).toEqual([null, null, null]);
+  expect(bitNodeUnplayableReason(2)).toBe("no hacking multipliers or prices yet");
+  expect(bitNodeUnplayableReason(15)).toBe("no hacking multipliers or prices yet");
+});
+
+test("bitNodeAssumptions: none in BN1, BN4 or BN5, whose prices and hacking core has; another BitNode's said", () => {
   expect(bitNodeAssumptions(1)).toEqual([]);
   expect(bitNodeAssumptions(4)).toEqual([]);
+  expect(bitNodeAssumptions(5)).toEqual([]);
   expect(bitNodeAssumptions(2)).toEqual([
-    "BitNode 2's multipliers: the brain knows BN1's and BN4's only, so it buys no home RAM or cloud servers here, " +
-      "and its hacking takes BN1's (ScriptHackMoney and HackExpGain 1)",
+    "BitNode 2's multipliers: the brain knows those of BN1, BN4 and BN5 only, so it buys no home RAM or cloud " +
+      "servers here, and its hacking takes BN1's (ScriptHackMoney and HackExpGain 1)",
   ]);
 });
