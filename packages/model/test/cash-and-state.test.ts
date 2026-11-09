@@ -661,7 +661,7 @@ describe("the structural variants (#263): gross money, share by index", () => {
 describe("extrapolated cycles flagged (#263)", () => {
   test("minutes past the curves' range (#310: the last reading, 120 min, and the tail checked past it, by clock)", () => {
     const curves = new Curves(CALIBRATION);
-    expect(curves.range).toEqual({ exp: 200, money: 160 });
+    expect(curves.range).toEqual({ exp: 260, money: 240 });
     const furthest: number[] = [];
     let cycle = 0;
     let last = -1;
@@ -670,7 +670,11 @@ describe("extrapolated cycles flagged (#263)", () => {
       onStep: ({ onlineMs, clocks }) => {
         if (onlineMs < last) cycle += 1;
         last = onlineMs;
-        furthest[cycle] = Math.max(furthest[cycle] ?? 0, clocks.exp - 200, clocks.money - 160);
+        furthest[cycle] = Math.max(
+          furthest[cycle] ?? 0,
+          clocks.exp - curves.range.exp,
+          clocks.money - curves.range.money,
+        );
       },
     });
     for (const [index, each] of run.cycles.entries()) {
@@ -686,12 +690,13 @@ describe("extrapolated cycles flagged (#263)", () => {
     );
     expect(run.cycles[0]?.extrapolatedMinutes).toBe(0);
     expect(run.cycles.some((each) => each.extrapolatedMinutes > 0)).toBe(true);
-    // Bounded: a cycle more than EXTRAPOLATION_BOUND_MIN past is out of range, and the run says which.
-    const beyond = run.cycles.flatMap((each, index) =>
+    // Bounded: a cycle more than EXTRAPOLATION_BOUND_MIN past is out of range, and the run says which (without the
+    // tail, as with it run #3's fitted run stays within the bound: its 8th 23 min past the range).
+    const beyond = unchecked.cycles.flatMap((each, index) =>
       each.extrapolatedMinutes > EXTRAPOLATION_BOUND_MIN ? [index + 1] : [],
     );
     expect(beyond.length).toBeGreaterThan(0);
-    expect(run.outOfRange.slice(0, beyond.length)).toEqual(beyond);
+    expect(unchecked.outOfRange.slice(0, beyond.length)).toEqual(beyond);
   });
 
   test("the cycle under way at the horizon is flagged too: out of range past the bound, not before", () => {

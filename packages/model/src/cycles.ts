@@ -99,6 +99,7 @@ export interface ModelStart {
   /**
    * An install within the BitNode to start from, in place of its start (#310: BN1.4's 2nd cycle, after a 1st with
    * offline income): what's installed (NeuroFlux Governor's levels as its value), each faction's favour, home's RAM.
+   * Lookups by cycle index (`share: "index"`, `measured`) count from this start, not from the BitNode's 1st cycle.
    */
   afterInstall?: {
     installed: Readonly<Record<string, number>>;
@@ -211,9 +212,10 @@ export interface ModelRun {
 }
 
 /**
- * How far past its last reading a curve is trusted, minutes (#263): half the 120 min it spans. Past the last reading
- * each clock runs on at the last slope (RAM at its most, a steady income), which holds for a while; a cycle further out
- * is flagged out of range (`ModelRun.outOfRange`).
+ * How far past the curves' range (`Curves.range`: their last reading, 120 min, and the tail checked past it, #310) a
+ * cycle is still trusted, minutes (#263): half the 120 min the readings span. There each clock runs on at its last
+ * slope, unchecked; a cycle further out is flagged out of range (`ModelRun.outOfRange`). So with #310's checked tail
+ * a cycle is out of range only past 320 min on the experience's clock or 300 on the money's.
  */
 export const EXTRAPOLATION_BOUND_MIN = 60;
 
@@ -305,7 +307,10 @@ export const startHomeRamGb = (sourceFile1Level: number) => (sourceFile1Level > 
 /** An install puts the player in Sector-12 (`PlayerObjectGeneralMethods.ts:104`). */
 const START_CITY = "Sector-12";
 
-/** Runs the model from a BitNode's start (or an install within it, `ModelStart.afterInstall`), under `policy` (today's brain by default). */
+/**
+ * Runs the model from a BitNode's start (or an install within it, `ModelStart.afterInstall`), under `policy` (today's
+ * brain by default).
+ */
 export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRun {
   const policy = options.policy ?? TODAYS_POLICY;
   const horizonMs = options.horizonMs ?? 24 * 60 * MINUTE_MS;

@@ -440,9 +440,11 @@ export const BN1_3_SHARE_RAM: readonly { cycle: number; points: readonly (readon
 
 /**
  * BN1.4 (#310, the held-out run for #294's item 4): b212138, SF1.3, 2026-11-08, from the builder's read-only extract
- * on #310: https://github.com/UnderMyBed/bitburner-agent/issues/310#issuecomment-6734050810. Numbers written by hand,
- * never a save or a dump. Its cycle 1 (36 h 24 min by the clock, 34 min online, 35 h 45 min offline with offline income)
- * is left out: the runs start from its 2nd cycle's start (17:00:34Z), as the game showed it then, and every minute here
+ * on #310: https://github.com/UnderMyBed/bitburner-agent/issues/310#issuecomment-6734050810, and its figures at the
+ * precision taken (four significant figures, faction_rep among the multipliers):
+ * https://github.com/UnderMyBed/bitburner-agent/issues/310#issuecomment-6734355899. Numbers written by hand, never a
+ * save or a dump. Its cycle 1 (36 h 24 min by the clock, 34 min online, 35 h 45 min offline, with offline income) is
+ * left out: the runs start from its 2nd cycle's start (17:00:34Z), as the game showed it then, and every minute here
  * is from there. Cycle numbers are the BitNode's as #310 counts them (its 2nd to 14th), the model's 1st to 13th.
  */
 export const BN1_4 = {
@@ -511,7 +513,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.472,
     firstCloudMin: 10.4,
     bitRunnersJoinedMin: 18.1,
-    multipliers: { hacking: 1.956, hacking_exp: 1.915, hacking_speed: 1.795, hacking_money: 1.658 },
+    multipliers: { hacking: 1.956, hacking_exp: 1.915, hacking_speed: 1.795, hacking_money: 1.658, faction_rep: 2.097 },
     homeRamGb: 524_288,
   },
   {
@@ -526,7 +528,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.465,
     firstCloudMin: 10.4,
     bitRunnersJoinedMin: 14.1,
-    multipliers: { hacking: 2.182, hacking_exp: 2.457, hacking_speed: 2.002, hacking_money: 1.85 },
+    multipliers: { hacking: 2.182, hacking_exp: 2.457, hacking_speed: 2.002, hacking_money: 1.85, faction_rep: 2.34 },
     homeRamGb: 524_288,
   },
   {
@@ -541,7 +543,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.472,
     firstCloudMin: 10.4,
     bitRunnersJoinedMin: 12.1,
-    multipliers: { hacking: 2.387, hacking_exp: 2.687, hacking_speed: 2.19, hacking_money: 2.023 },
+    multipliers: { hacking: 2.387, hacking_exp: 2.687, hacking_speed: 2.19, hacking_money: 2.023, faction_rep: 2.559 },
     homeRamGb: 524_288,
   },
   {
@@ -556,7 +558,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.472,
     firstCloudMin: 10.4,
     bitRunnersJoinedMin: 10.1,
-    multipliers: { hacking: 2.559, hacking_exp: 2.881, hacking_speed: 2.348, hacking_money: 2.169 },
+    multipliers: { hacking: 2.559, hacking_exp: 2.881, hacking_speed: 2.348, hacking_money: 2.169, faction_rep: 2.744 },
     homeRamGb: 524_288,
   },
   {
@@ -571,7 +573,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.472,
     firstCloudMin: 10.41,
     bitRunnersJoinedMin: 8.1,
-    multipliers: { hacking: 2.963, hacking_exp: 3.089, hacking_speed: 2.517, hacking_money: 2.326 },
+    multipliers: { hacking: 2.963, hacking_exp: 3.089, hacking_speed: 2.517, hacking_money: 2.326, faction_rep: 2.942 },
     homeRamGb: 524_288,
   },
   {
@@ -586,7 +588,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.471,
     firstCloudMin: 10.4,
     bitRunnersJoinedMin: 7.1,
-    multipliers: { hacking: 3.177, hacking_exp: 4.14, hacking_speed: 2.699, hacking_money: 2.494 },
+    multipliers: { hacking: 3.177, hacking_exp: 4.14, hacking_speed: 2.699, hacking_money: 2.494, faction_rep: 3.154 },
     homeRamGb: 524_288,
   },
   {
@@ -601,7 +603,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.495,
     firstCloudMin: 10.4,
     bitRunnersJoinedMin: 6.1,
-    multipliers: { hacking: 3.44, hacking_exp: 4.483, hacking_speed: 2.923, hacking_money: 2.7 },
+    multipliers: { hacking: 3.44, hacking_exp: 4.483, hacking_speed: 2.923, hacking_money: 2.7, faction_rep: 3.416 },
     homeRamGb: 524_288,
   },
   {
@@ -616,7 +618,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.528,
     firstCloudMin: 10.41,
     bitRunnersJoinedMin: 5.1,
-    multipliers: { hacking: 4.564, hacking_exp: 5.81, hacking_speed: 3.359, hacking_money: 3.499 },
+    multipliers: { hacking: 4.564, hacking_exp: 5.81, hacking_speed: 3.359, hacking_money: 3.499, faction_rep: 3.849 },
     homeRamGb: 2_097_152,
   },
   {
@@ -631,7 +633,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.554,
     firstCloudMin: 10.42,
     bitRunnersJoinedMin: 5.1,
-    multipliers: { hacking: 5.444, hacking_exp: 7.059, hacking_speed: 3.898, hacking_money: 5.798 },
+    multipliers: { hacking: 5.444, hacking_exp: 7.059, hacking_speed: 3.898, hacking_money: 5.798, faction_rep: 4.252 },
     homeRamGb: 4_194_304,
   },
   {
@@ -646,7 +648,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.554,
     firstCloudMin: 10.42,
     bitRunnersJoinedMin: 4.1,
-    multipliers: { hacking: 7.079, hacking_exp: 9.596, hacking_speed: 4.436, hacking_money: 8.454 },
+    multipliers: { hacking: 7.079, hacking_exp: 9.596, hacking_speed: 4.436, hacking_money: 8.454, faction_rep: 4.697 },
     homeRamGb: 4_194_304,
   },
   {
@@ -671,7 +673,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.554,
     firstCloudMin: 10.41,
     bitRunnersJoinedMin: 5.1,
-    multipliers: { hacking: 7.514, hacking_exp: 11.41, hacking_speed: 4.803, hacking_money: 8.975 },
+    multipliers: { hacking: 7.514, hacking_exp: 11.41, hacking_speed: 4.803, hacking_money: 8.975, faction_rep: 4.986 },
     homeRamGb: 4_194_304,
   },
   {
@@ -686,7 +688,7 @@ export const BN1_4_PER_CYCLE = [
     share: 1.607,
     firstCloudMin: 10.42,
     bitRunnersJoinedMin: 4.1,
-    multipliers: { hacking: 14.95, hacking_exp: 22.04, hacking_speed: 5.563, hacking_money: 18.45 },
+    multipliers: { hacking: 14.95, hacking_exp: 22.04, hacking_speed: 5.563, hacking_money: 18.45, faction_rep: 4.986 },
     homeRamGb: 4_194_304,
   },
   {
@@ -706,14 +708,15 @@ export const BN1_4_PER_CYCLE = [
     share: null,
     firstCloudMin: null,
     bitRunnersJoinedMin: 3.1,
-    multipliers: { hacking: 16.35, hacking_exp: 24.11, hacking_speed: 6.084, hacking_money: 20.18 },
+    multipliers: { hacking: 16.35, hacking_exp: 24.11, hacking_speed: 6.084, hacking_money: 20.18, faction_rep: 5.877 },
     homeRamGb: 16_777_216,
   },
 ] as const;
 
 /**
- * BN1.4's cycles 2 to 14 in `RUN_3_CYCLES`' form: [minutes, hacking level, the game's hacking income since the install],
- * every 2.5 min to 20, every 5 to 45, and at the end, from the extract's medium (level) and slow (income) snapshots.
+ * BN1.4's cycles 2 to 14 in `RUN_3_CYCLES`' form: [minutes, hacking level, the game's hacking income since the
+ * install], every 2.5 min to 20, every 5 to 45, and at the end, from the extract's medium (level) and slow (income)
+ * snapshots, at four significant figures (the second comment on #310 above).
  */
 export const BN1_4_CYCLES: readonly { lengthMin: number; points: readonly (readonly [number, number, number])[] }[] = [
   {
@@ -900,4 +903,87 @@ export const BN1_4_CYCLES: readonly { lengthMin: number; points: readonly (reado
       [8.4, 6089, 51.8e12],
     ],
   },
+];
+
+/**
+ * BN1.3's cycles the curves' tail past 120 min is fitted on (#310, the review of #316: fitted on the seen run,
+ * checked on BN1.4):
+ * its 141-min 4th and its Daedalus cycles, the 9th and 10th, in `BN1_4_PER_CYCLE`'s form, with
+ * [minutes, hacking level, hacking income since the install] from the builder's read-only extract at four significant
+ * figures: https://github.com/UnderMyBed/bitburner-agent/issues/310#issuecomment-6734355899.
+ */
+export const BN1_3_TAIL_CYCLES = [
+  {
+    cycle: 4,
+    multipliers: { hacking: 2.172, hacking_exp: 2.831, hacking_speed: 1.845, hacking_money: 1.705 },
+    homeRamGb: 1_048_576,
+    firstCloudMin: 10.42,
+    points: [
+      [5, 106, 1.056e6],
+      [10, 395, 97.43e6],
+      [15, 617, 3.063e9],
+      [20, 686, 82.19e9],
+      [30, 954, 9.47e12],
+      [45, 1029, 52.19e12],
+      [60, 1090, 185.6e12],
+      [75, 1122, 318.6e12],
+      [90, 1144, 451.4e12],
+      [105, 1160, 584.3e12],
+      [120, 1174, 717.2e12],
+      [135, 1185, 850e12],
+      [141.2, 1189, 903.1e12],
+    ],
+  },
+  {
+    cycle: 9,
+    multipliers: { hacking: 8.46, hacking_exp: 12.47, hacking_speed: 3.148, hacking_money: 10.44 },
+    homeRamGb: 2_097_152,
+    firstCloudMin: 15.6,
+    points: [
+      [5, 2268, 1.997e9],
+      [10, 2558, 7.674e9],
+      [15, 2668, 12.47e9],
+      [20, 3566, 393.7e12],
+      [30, 3992, 3047e12],
+      [45, 4342, 16630e12],
+      [60, 4505, 32740e12],
+      [75, 4601, 48730e12],
+      [90, 4679, 64890e12],
+      [92.8, 4691, 68140e12],
+    ],
+  },
+  {
+    cycle: 10,
+    multipliers: { hacking: 10.43, hacking_exp: 15.37, hacking_speed: 3.88, hacking_money: 12.87 },
+    homeRamGb: 33_554_432,
+    firstCloudMin: 19.12,
+    points: [
+      [5, 2833, 2.162e9],
+      [10, 3174, 7.76e9],
+      [15, 3356, 13.36e9],
+      [20, 3407, 877.2e9],
+      [22.5, 4209, 293.1e12],
+    ],
+  },
+] as const;
+
+/**
+ * BN1.4's share at a high level (#294's item 5; the review of #316, S2b): its cycles 8 to 13 every 5 min with the cloud
+ * bought (1m GB or more), [cycle, minute, hacking level, home RAM GB, cloud RAM GB, the share's RAM GB], from the
+ * builder's read-only extract: https://github.com/UnderMyBed/bitburner-agent/issues/310#issuecomment-6734507054.
+ */
+export const BN1_4_SHARE_RAM: readonly (readonly [number, number, number, number, number, number])[] = [
+  [8, 35, 1257, 524_288, 26_214_400, 524_248],
+  [8, 40, 1266, 524_288, 26_214_400, 5_619_872],
+  [8, 45, 1531, 1_048_576, 26_214_400, 1_048_536],
+  [9, 30, 1650, 2_097_152, 6_684_672, 2_349_996],
+  [9, 35, 1931, 2_097_152, 26_214_400, 2_097_112],
+  [10, 25, 2198, 4_194_304, 24_215_552, 4_194_264],
+  [10, 30, 2504, 4_194_304, 26_214_400, 4_194_264],
+  [11, 15, 2747, 4_194_304, 14_851_456, 4_194_264],
+  [13, 15, 6370, 4_194_304, 26_214_400, 24_837_500],
+  [13, 20, 7055, 8_388_608, 26_214_400, 28_979_528],
+  [13, 25, 7340, 8_388_608, 26_214_400, 28_977_032],
+  [13, 30, 7518, 8_388_608, 26_214_400, 28_974_648],
+  [13, 35, 7641, 16_777_216, 26_214_400, 37_441_236],
 ];

@@ -11,6 +11,7 @@ import {
   FAVOUR_FIRST_POLICY,
   GRID_LATER_MS,
   type ModelRun,
+  type ModelStart,
   milestonesOf,
   type PolicyView,
   pairedComparison,
@@ -179,16 +180,17 @@ describe("the paired comparison", () => {
     expect(COMPARISON_STARTS.map(({ start }) => start.ownedSF["1"] ?? 0)).toEqual([0, 1, 2]);
   });
 
-  test("#247's comparison, each start over the 21 settings, for the record (the model isn't fit for #247): no answer", () => {
+  test("#247's comparison, each start over the 21 settings, for the record (the model isn't fit for #247)", () => {
     // Count first (today's brain) against favour first, minutes: the least and the most difference, and the settings
     // with no pair. #294's re-review: from SF1.1 count first reached Daedalus's count sooner at all 17 of the first
     // grid's settings, but by as little as 2 min, on the install the count misses; with a margin of two steps, the
     // count's miss (2 installed more or fewer) and \`firstCycleSpeed\` wider, it doesn't hold: no answer. #310's range
-    // (the tail checked past 120 min) pairs SF1.2's settings, 16 of 21 unpaired before: favour first unlocks the
-    // donations later at 18 of 21 (by up to 99 min), sooner with #260's gross money (−54) and the share by index (−7);
-    // count first reaches Daedalus's count sooner at all 20 paired (18 to 117 min), but at 2 more installed favour first
-    // never does in range: no answer either. One setting each pairs Daedalus's join and the destroy (73 and 48 min).
-    // From a fresh BN1.1 (8 GB, out of the measured range), no answer by rule.
+    // (the tail checked past 120 min, fitted on BN1.3's 4th, 9th and 10th cycles) pairs every setting from SF1.1 and
+    // SF1.2, and three answers appear, count first sooner each time: from SF1.1 the destroy (8 to 98 min); from SF1.2
+    // Daedalus's count (18 to 158) and its join (18 to 117). They lean on the tail, fitted on BN1.3, whose start is
+    // SF1.2's, and the model misses its bar on BN1.4 (test/bn1-4.test.ts): for the record, not #247's answer. Favour
+    // first unlocks the donations later at most settings from both, sooner with #260's gross money: no answer. A fresh
+    // BN1.1 (8 GB, out of the measured range) gets no verdict by rule; its gross-money setting now pairs (119 min).
     const byStart = comparisonByStart(TODAYS_POLICY, FAVOUR_FIRST_POLICY);
     const summaries = byStart.map(({ comparison }) => {
       const { verdict, settings } = comparison;
@@ -206,29 +208,30 @@ describe("the paired comparison", () => {
         ]),
       );
     });
-    const outOfRange = ["no answer", Number.NaN, Number.NaN, 21];
     expect(summaries).toEqual([
       {
         donationsUnlocked: ["no answer", -48, 119, 0],
-        daedalusCount: ["no answer", -7, 179, 1],
-        daedalusJoined: outOfRange,
-        destroyed: outOfRange,
+        daedalusCount: ["no answer", -7, 179, 0],
+        daedalusJoined: ["no answer", 4, 160, 3],
+        destroyed: ["no answer", -1, 165, 3],
       },
       {
         donationsUnlocked: ["no answer", -45, 69, 0],
-        daedalusCount: ["no answer", 2, 97, 1],
-        daedalusJoined: outOfRange,
-        destroyed: outOfRange,
+        daedalusCount: ["no answer", 2, 162, 0],
+        daedalusJoined: ["no answer", 2, 97, 0],
+        destroyed: ["first sooner", 8, 98, 0],
       },
       {
         donationsUnlocked: ["no answer", -54, 99, 0],
-        daedalusCount: ["no answer", 18, 117, 1],
-        daedalusJoined: ["no answer", 73, 73, 20],
-        destroyed: ["no answer", 48, 48, 20],
+        daedalusCount: ["first sooner", 18, 158, 0],
+        daedalusJoined: ["first sooner", 18, 117, 0],
+        destroyed: ["no answer", -32, 121, 0],
       },
     ]);
+    // A fresh BN1.1 is out of the measured range: no verdict, whatever its figures.
+    expect(startInRange(byStart[0]?.start as ModelStart)).toBe(false);
     // SF1.1, setting by setting: Daedalus's count's difference, the cycle it falls in under each policy, and the
-    // minutes the first's ran past the curves (none). At 2 more installed, favour first never gets there in range.
+    // minutes the first's ran past the curves (none). At 2 more installed, favour first now gets there, 162 min later.
     // Favour first unlocks the donations later
     // at 20 of the 21 settings, sooner only with #260's gross money (−45 min).
     const sf11 = byStart[1]?.comparison.settings ?? [];
@@ -257,15 +260,15 @@ describe("the paired comparison", () => {
       ["the first cloud server: 5 min later than modelled", 58, 7, 9, 0],
       ["firstCycleSpeed 0.5 (wide)", 68, 7, 9, 0],
       ["firstCycleSpeed 0.8 (#263's)", 64, 7, 9, 0],
-      ["Daedalus's count at 2 more installed", null, 7, null, 0],
+      ["Daedalus's count at 2 more installed", 162, 7, 11, 0],
       ["Daedalus's count at 2 fewer installed", 38, 7, 8, 0],
     ]);
     for (const { cycles } of sf11) expect(cycles.daedalusCount.second?.extrapolatedMinutes ?? 0).toBe(0);
-    // From SF1.2 as fitted, count first reaches the count in its 7th cycle, 19 min past the curves' range (#294's: 60
-    // past their last reading, at the bound); favour first in its 8th, within it (#294's: never in range), 73 min later.
+    // From SF1.2 as fitted, count first reaches the count in its 7th cycle, within the curves' range (#294's: 60 past
+    // their last reading, at the bound); favour first in its 8th, within it (#294's: never in range), 73 min later.
     const sf12 = byStart[2]?.comparison.settings[0];
     expect(sf12?.cycles.daedalusCount.first?.cycle).toBe(7);
-    expect(sf12?.cycles.daedalusCount.first?.extrapolatedMinutes).toBeCloseTo(19, 0);
+    expect(sf12?.cycles.daedalusCount.first?.extrapolatedMinutes).toBe(0);
     expect(sf12?.cycles.daedalusCount.second?.cycle).toBe(8);
     expect(sf12?.cycles.daedalusCount.second?.extrapolatedMinutes).toBe(0);
     expect(Math.round((sf12?.difference.daedalusCount as number) / MINUTE_MS)).toBe(73);

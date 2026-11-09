@@ -173,8 +173,8 @@ export interface CycleState {
 
 /**
  * The curves alone on a cycle's own state (#310): the clocks, the hacking level and the gross income at each of
- * `minutes` (ascending), the money's pace capped till `firstCloudMin`, as `runModel` runs them. No rule, so no choice of
- * the brain's moves them: a check of the curves, not the path.
+ * `minutes` (ascending), the money's pace capped till `firstCloudMin`, as `runModel` runs them. No rule, so no
+ * choice of the brain's moves them: a check of the curves, not the path.
  */
 export function replayCycle(
   curves: Curves,

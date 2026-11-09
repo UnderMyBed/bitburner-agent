@@ -172,7 +172,8 @@ export interface Calibration {
    * run #3's own measured level and income (the downstream run, `measured: RUN_3_CYCLES`): checked equal by
    * test/model.test.ts. Each cycle's level (through the game's skill formula, `hackingExpForLevel`) and income, divided
    * by them, is a curve at multiplier 1; the curve is their median a minute. Read to 120 min (cycles 5 and 6); past it,
-   * linear at the last slope, 105 to 120 min, flagged and bounded (#263, `EXTRAPOLATION_BOUND_MIN`). Assumed
+   * linear at the last slope, 105 to 120 min: checked past it to `tailCheckedMin` (#310), then flagged, and out of
+   * range `EXTRAPOLATION_BOUND_MIN` further (#263). Assumed
    * multipliers: what run #3 installed a cycle isn't known yet. Until #294 the fitted run's own; with #294's joins and
    * purchases that has no fixed point (its 5th cycle a quick install or not, by turns), the downstream run has one.
    * #294 moved them too: the 4th cycle's `hacking_exp` 2.5704 to 2.0563, the 5th's `hacking` 2.2613 to 2.0938 and
@@ -235,11 +236,13 @@ export interface Calibration {
   /**
    * How far past the curves' last reading (120 min) their tail, each clock on at its last slope, has been checked on a
    * live cycle, minutes, by clock (#310): the range a cycle runs in before its minutes count as extrapolated
-   * (`ModelCycle.extrapolatedMinutes`, bounded by `EXTRAPOLATION_BOUND_MIN`). Fitted on BN1.4's Daedalus cycles, the
-   * 13th and 14th (only the 13th reaches past 120): the curves run on the 13th's own multipliers, home RAM and first cloud
-   * server (`replayCycle`) put its experience's clock at 201 min by its end and its money's at 163, and past 120 the
-   * level's ratio to the game's holds within 3% and the money's within 10% (test/bn1-4.test.ts). Its other cycles only
-   * check. Before #310, 0: the tail's shape unchecked.
+   * (`ModelCycle.extrapolatedMinutes`; `EXTRAPOLATION_BOUND_MIN` more is out of range). Fitted on BN1.3, the seen
+   * run (#294's item 4), its 141-min 4th cycle and its Daedalus cycles, the 9th and 10th (`BN1_3_TAIL_CYCLES`): the
+   * curves on each cycle's own multipliers, home RAM and first cloud server (`replayCycle`) put the clocks at 151/151,
+   * 262/240 and 80/40 by their ends, and past 120 the level's ratio to the game's moves 5.3% at most [#263's 15%] and
+   * the money's ×0.67 at least [#263's ×2] against the reading before: checked to 262 and 240, so 140 and 120 past.
+   * Checked on BN1.4, held out (test/bn1-4.test.ts): its 13th reaches 200/162, past 120 the level's ratio moves 2.9%
+   * and the money's ×0.96; its 14th never reaches 120. Before #310, 0: the tail's shape unchecked.
    */
   tailCheckedMin: { exp: number; money: number };
 }
@@ -259,7 +262,7 @@ export const CALIBRATION: Calibration = {
   shareBonusByCycle: RUN_3_SHARE_BONUS,
   shareRamShare: 0.01,
   batchesUseFactor: 1,
-  tailCheckedMin: { exp: 80, money: 40 },
+  tailCheckedMin: { exp: 140, money: 120 },
 };
 
 /**
