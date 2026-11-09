@@ -75,7 +75,15 @@ function figuresOf(staticData: StaticSnapshotData, target: string): HackingTarge
   const server = staticData.servers.find((each) => each?.hostname === target);
   const { moneyMax, minDifficulty, requiredHackingSkill, serverGrowth } = server ?? {};
   if (![moneyMax, minDifficulty, requiredHackingSkill, serverGrowth].every(isNumber)) return null;
-  return { moneyMax, minDifficulty, requiredHackingSkill, serverGrowth } as HackingTarget;
+  const { baseDifficulty } = server ?? {};
+  // Its starting security, when the snapshot has it (#315's review): the batcher's level forecast.
+  return {
+    moneyMax,
+    minDifficulty,
+    requiredHackingSkill,
+    serverGrowth,
+    ...(isNumber(baseDifficulty) ? { baseDifficulty } : {}),
+  } as HackingTarget;
 }
 
 /**
@@ -223,9 +231,10 @@ export interface BatcherTargetWorth {
  * plan's income over `BATCHER_TARGET_HORIZON_MS` less the time until it earns: preparing it (core's
  * `preparationTimeMs`, from its money and security in the medium snapshot), then a weaken's time for its first batch.
  * A target is prepared on the RAM the batches of the one batched now leave (#216's review), or all of it.
- * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching`, from the batcher's
- *   health) earns at once; with nothing batched (a fresh start, a handover, a restart), another is chosen only if it
- *   earns within `BATCHER_MOST_IDLE_MS`, or with none such, the soonest to earn.
+ * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching` from the batcher's
+ *   health, or since #315 `recovering`, which batches on in place) earns at once; with nothing batched (a fresh
+ *   start, a handover, a restart), another is chosen only if it earns within `BATCHER_MOST_IDLE_MS`, or with none
+ *   such, the soonest to earn.
  * - **Earning through a move (#236):** while one earns (batched), another is chosen only once it's prepared (at its
  *   minimum security and maximum money in the medium snapshot), so its first batch is a weaken away and the batches out
  *   land meanwhile: within `BATCHER_MOST_IDLE_MS` of their weaken (#237's review: a weaken of over 5 minutes doesn't

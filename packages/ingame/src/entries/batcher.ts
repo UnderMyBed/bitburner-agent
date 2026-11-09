@@ -48,7 +48,9 @@
 //   desync, and the target is out of step. It recovers in place (#315): batching on, `recovering`, every hack on that
 //   target held until one finds it back in step (core's `isBackInStep`: the hacks sent before landed, at its maximum
 //   money, within the bounds' security), the held batches' grows and weakens bringing it back meanwhile. Before #315 it
-//   let everything in flight land and prepared again: on 2026-11-08 clarkinc sat 8.5 minutes without a hack.
+//   let everything in flight land and prepared again: on 2026-11-08 clarkinc sat 8.5 minutes without a hack. A recovery
+//   longer than core's `recoveryInPlaceMs` (a weaken's time and 10 batches) has something keeping the target down: the
+//   batches not yet out are dropped and it prepares the target again, `preparing`, so the brain weighs it anew.
 // - **The money after each grow (#234):** once all of a batch's grow parts have landed, and nothing has landed on its
 //   target since but its own weaken2, it looks at the target's money (core's `GrowLandingWatch`): one below the
 //   maximum is counted (`moneyLooksBelowFull`), a grow short of the hack before it, so the batches would drift toward
@@ -136,6 +138,7 @@ import {
   recordMoneyLook,
   recordRamWait,
   recordShort,
+  recoveryInPlaceMs,
   SHARE_RAM_GB,
   SHARE_ROUND_MS,
   SHARE_SCRIPT_NAME,
@@ -348,7 +351,54 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     health.desyncs += 1;
     logNow = true;
     outOfStep.add(target);
-    if (health.state === "batching" && target === current().target) health.state = "recovering";
+    if (health.state === "batching" && target === current().target) beginRecovery();
+  };
+
+  /**
+   * When a recovery in place gives up (#315's review), on the monotonic clock, or null: core's `recoveryInPlaceMs`
+   * after it began. Past it, something keeps the target down, and the batcher prepares it again (`abandonRecovery`).
+   * A desync within that long of a recovery's end goes on with its time (`recoveryStreakUntil`): a target that comes
+   * back for a hack or two between desyncs, another's script hacking it, is still one kept down.
+   */
+  let recoveryEndsAt: number | null = null;
+  let recoveryStreakUntil = 0;
+  const recoveryAllowanceMs = () => {
+    const { figures, spacingMs } = current();
+    return recoveryInPlaceMs(figures, playerNow(), spacingMs);
+  };
+  const beginRecovery = () => {
+    health.state = "recovering";
+    const now = monotonicMs();
+    if (recoveryEndsAt === null || now > recoveryStreakUntil) recoveryEndsAt = now + recoveryAllowanceMs();
+  };
+  /** A recovery ended, the target back: a desync soon after carries its time on. */
+  const endRecovery = () => {
+    recoveryStreakUntil = monotonicMs() + recoveryAllowanceMs();
+  };
+
+  /**
+   * A recovery in place past its time (#315's review): the batches planned on the target and not yet out are dropped
+   * (their hacks counted skipped), the target is no longer held out of step, and it's prepared again, `preparing`, so
+   * the brain weighs it as one to prepare. Counted in the health (`recoveriesTimedOut`), and logged.
+   */
+  const abandonRecovery = () => {
+    const { target } = current();
+    const dropped = new Set<number>();
+    for (const [number, batch] of batches) {
+      if (batch.target !== target) continue;
+      dropped.add(number);
+      batches.delete(number);
+    }
+    const kept = pending.filter((order) => !dropped.has(order.batch));
+    pending.splice(0, pending.length, ...kept);
+    for (const order of [...waitingForRam.keys()]) if (dropped.has(order.batch)) waitingForRam.delete(order);
+    health.hacksSkipped += dropped.size;
+    health.recoveriesTimedOut = (health.recoveriesTimedOut ?? 0) + 1;
+    outOfStep.delete(target);
+    health.state = "preparing";
+    recoveryEndsAt = null;
+    recoveryStreakUntil = 0;
+    logNow = true;
   };
 
   /**
@@ -577,7 +627,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
    */
   const startBatching = (notBeforeMs = 0) => {
     // Back to a target still out of step (#315: a move back to it before a hack found it back), it recovers.
-    health.state = outOfStep.has(current().target) ? "recovering" : "batching";
+    if (outOfStep.has(current().target)) beginRecovery();
+    else health.state = "batching";
     // Its hosts may share now (#242's review): looked at at once, not at home's next look, up to 5 s on.
     nextSharingLookAt = 0;
     logNow = true;
@@ -762,6 +813,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         // Batching again, its problems back to what lasts, as a start to batch clears them.
         if (health.state === "recovering" && batch.target === current().target) {
           health.state = "batching";
+          endRecovery();
           setProblem(lastingProblem);
         }
         logNow = true;
@@ -848,7 +900,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   };
 
   /**
-   * A config read: new hosts get the operation scripts; a new target lets what's in flight land, as after a desync (a
+   * A config read: new hosts get the operation scripts; a new target lets what's in flight land (a
    * batch's own operations keep its target), then is prepared; the rest applies from the next batch.
    */
   const applyConfig = (next: BatcherConfig) => {
@@ -872,6 +924,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       preparingNext = new Set();
       // Recovering too (#315): its new target is prepared; the one before stays out of step while its batches land.
       if (health.state === "batching" || health.state === "recovering") health.state = "preparing";
+      recoveryEndsAt = null;
       if (waitingProblem !== null && health.problem === waitingProblem) setProblem(lastingProblem);
       waitingProblem = null;
       // A move under way until the new target's first hack (#237's review), in its health (#237's re-review).
@@ -1044,7 +1097,10 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       ["weaken2", weaken2, landAt + 2 * BATCH_LANDING_GAP_MS],
     ];
     for (const [operation, operationThreads, operationLandAt] of parts) {
-      // A part that won't start waits for the next wave: the RAM was the batches'.
+      // A part that won't start waits for the next wave: the RAM was the batches'. Its exp goes to the level forecast
+      // (`launch`), but a hack already out doesn't see it: a weaken here, faster than the target's hack, can land
+      // before that hack. `GROW_MARGIN` covers it (#315's review): one wave at a time, on at most the next's share of
+      // the RAM, against the batches' stream of landings, which the forecast does count.
       if (operationThreads > 0) {
         const id = `n${nextWave}.${operation}`;
         launch(operation, operationThreads, operationLandAt, id, next.target, next.figures, preparingNext);
@@ -1331,17 +1387,27 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       launchOrder(pending.shift() as LaunchOrder);
     }
     if (pending.length > 0) wakeAt = Math.min(wakeAt, (pending[0] as LaunchOrder).launchAt);
+    // A recovery in place past its time (#315's review): something keeps the target down, so it's prepared again.
+    if (health.state === "recovering" && recoveryEndsAt !== null) {
+      if (monotonicMs() >= recoveryEndsAt) abandonRecovery();
+      else wakeAt = Math.min(wakeAt, recoveryEndsAt);
+    }
     const ordersLeft = pending.length + waitingForRam.size;
     // Recovering with no batch planned and nothing in flight (#315: none fits the RAM, or a hack takes nothing), it
     // prepares again, as every recovery did before; the target stays out of step until a hack finds it back.
     if (health.state === "recovering" && ordersLeft === 0 && landings.inFlight() === 0) {
       health.state = "preparing";
+      recoveryEndsAt = null;
       batches.clear();
       landing = [];
       preparing = new Set();
       logNow = true;
     }
-    if (health.state !== "recovering") prepareNext();
+    // The next target is prepared in every state (#315's review): a recovery in place batches on, holding the RAM
+    // its batches always do, so the next's waves keep the share of it they had; paused, as recoveries paused it when
+    // they let everything land and prepared again, a target that won't come back would leave the move away from it a
+    // weaken further off.
+    prepareNext();
     shareSpareRam();
     health.sharing = sharingHealth();
     // Awake for its next look while asked, in every state (#242: home shares beside the hosts, and a half's RAM is

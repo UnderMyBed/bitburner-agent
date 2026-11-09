@@ -105,9 +105,9 @@ export function mayStillStart(waitedMs: number, slackMs: number | null): boolean
  * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the
  * plan and the hack's landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking), the game taking it
  * at the level as the hack lands (NetscriptHelpers.tsx:561-568). The hack's threads are replanned when it starts, for
- * the level forecast at its landing (`hackThreadsAtLaunch`, `LevelForecast`, #315), so the margin covers only the
- * forecast's error. Before #315 they were replanned at the level at the start, and the margin had to cover a hack's
- * time of the rise: on the live run of 2026-11-08 clarkinc (needing 1,041) at hacking 1,176 rose 40 levels in a hack's
+ * the level forecast at its landing (`hackThreadsAtLaunch`, `LevelForecast`, #315), so the margin covers the forecast's
+ * error, exp from elsewhere and split grows (#234). Before #315 they were replanned at the level at the start, and
+ * the margin had to cover a hack's time of the rise: on the live run of 2026-11-08 clarkinc (needing 1,041) at hacking 1,176 rose 40 levels in a hack's
  * 62 s once its own batches landed, each hack took up to 1.26x its share, and the grows fell short. Extra grow costs
  * RAM, never security: only the threads used add it (ServerHelpers.ts:202-212).
  */
@@ -301,7 +301,7 @@ export function isOutsideBounds(
  * `LevelForecast`, #315). The share a thread takes rises with the level (`percentMoneyHackedPerThread`'s
  * (hacking - (required - 1))/hacking), taken as the hack lands (NetscriptHelpers.tsx:561-568), so between the plan and
  * the landing it could outrun the grow's `GROW_MARGIN`: replanned here for the level at the landing, the margin need
- * cover only the forecast's error. At least 1.
+ * cover only the forecast's error, exp from elsewhere and split grows. At least 1.
  */
 export function hackThreadsAtLaunch(
   plannedHack: number,
@@ -315,7 +315,8 @@ export function hackThreadsAtLaunch(
 
 /**
  * The hacking level at `exp` hacking exp, `mult` the player's hacking multiplier: the game's `calculateSkill`
- * (PersonObjects/formulas/skill.ts:7-15; Person.ts:60 passes it `mults.hacking`), BitNode multipliers taken as 1.
+ * (PersonObjects/formulas/skill.ts:7-15; Person.ts:60 passes it `mults.hacking`), BitNode multipliers taken as 1: the
+ * snapshots don't carry them, and outside BN1 a `HackingLevelMultiplier` under 1 makes this err high, the safe side.
  */
 export function hackingLevelOfExp(exp: number, mult: number): number {
   if (mult === 0) return 1;
@@ -329,13 +330,20 @@ export function hackingExpOfLevel(level: number, mult: number): number {
 
 /**
  * The hacking exp a thread of any operation on `target` gives as it lands (#315): the game's `calculateHackingExpGain`
- * (Hacking.ts:30-41), 3 + 0.3 x the server's base difficulty, x the player's `hacking_exp` multiplier, for a grow or a
- * weaken (NetscriptFunctions.ts:295, :373) and a hack that succeeds (a quarter of it if not, NetscriptHelpers.tsx:564-
- * 565). The base difficulty, its starting security, isn't in the snapshots; its minimum is a third of it, rounded
- * (Server.ts:80-83), so this takes the most it may be, 3 x the minimum + 1.5.
+ * (Hacking.ts:30-38), 3 + 0.3 x the server's base difficulty, x the player's `hacking_exp` multiplier (BitNode
+ * multipliers, `HackExpGain` among them, taken as 1: the snapshots don't carry them, and exact in BN1), for a grow or
+ * a weaken (NetscriptFunctions.ts:295, :373) and a hack that succeeds (a quarter of it if not,
+ * NetscriptHelpers.tsx:564-565). The base difficulty is its starting security, the static snapshot's since #315's
+ * review; without it (an older snapshot), the most a minimum a third of it, rounded (Server.ts:80-83), allows:
+ * 3 x the minimum + 1.5, which holds unless Hacknet hashes lowered the minimum (BN9, HacknetHelpers.tsx:497).
  */
 export function operationExpPerThread(target: HackingTarget, hackingExpMult: number): number {
-  return (3 + 0.3 * (3 * target.minDifficulty + 1.5)) * hackingExpMult;
+  const { baseDifficulty } = target;
+  const base =
+    typeof baseDifficulty === "number" && Number.isFinite(baseDifficulty) && baseDifficulty >= 0
+      ? baseDifficulty
+      : 3 * target.minDifficulty + 1.5;
+  return (3 + 0.3 * base) * hackingExpMult;
 }
 
 /** The ms each bucket of `LevelForecast`'s landings spans: one counts whole, so a forecast may run this far ahead. */
@@ -735,6 +743,20 @@ export function isBackInStep(
   return !hacksLanding && seen.money >= target.moneyMax && seen.security <= securityCeiling;
 }
 
+/** The batches beyond a weaken's time a recovery in place may take (`recoveryInPlaceMs`). */
+export const RECOVERY_SPARE_BATCHES = 10;
+
+/**
+ * The longest a recovery in place may take (#315's review), ms: a weaken's time on the target at its minimum, the lead,
+ * and `RECOVERY_SPARE_BATCHES` batches. The hacks sent before a desync land within a hack's time, and then each held
+ * batch's grow refills the target, so a recovery takes a hack's time and a few batches; one that takes longer has
+ * something keeping the target down (another's script, the player), and the batcher prepares it again instead, as
+ * `preparing`, so the brain's move rules apply to it again.
+ */
+export function recoveryInPlaceMs(target: HackingTarget, player: HackingPlayer, spacingMs: number): number {
+  return operationTimeMs("weaken1", target, player) + BATCH_LAUNCH_LEAD_MS + RECOVERY_SPARE_BATCHES * spacingMs;
+}
+
 /** A target ready for batches: at its minimum security and maximum money. */
 export function isTargetPrepared(target: HackingTarget, now: { money: number; security: number }): boolean {
   return now.security <= target.minDifficulty + 1e-6 && now.money >= target.moneyMax;
@@ -935,7 +957,8 @@ interface GrowLook {
  * and each part raises the security before the next grows (ServerHelpers.ts:211, called a part from
  * NetscriptFunctions.ts:292), so above a minimum security of about 8.57, where growth isn't capped (grow.ts:15-18),
  * its later parts grow less than the plan, which counts them all at the minimum. Its margin (`GROW_MARGIN`) covers
- * the batcher's own plans (#234's measurement), so a grow that leaves the target below its maximum is a drift to see.
+ * that on the batcher's own plans (#234's measurement), with the level forecast's error and exp from elsewhere (#315),
+ * so a grow that leaves the target below its maximum is a drift to see.
  * A grow is due once every part started has landed; its money is the grow's only while nothing has landed on its
  * target since but its own weaken2, δ after it (the next batch's hack lands 2δ after it at the least spacing). The
  * batcher drains its landing port as each record is written, so the records drained with a grow's last part are all
@@ -1053,7 +1076,8 @@ export function recordHackLanded(
 
 /**
  * Grows not looked at (#235's review), in the health: something landed on their target before the look, or they
- * landed while the batcher recovered from a desync (the money then isn't a grow's doing).
+ * landed on a target out of step, a desync's until a held hack finds it back (#315; the money then isn't a grow's
+ * doing).
  */
 export function recordGrowsNotLooked(health: BatcherHealth, count: number): void {
   health.growsNotLooked = (health.growsNotLooked ?? 0) + count;
@@ -1151,8 +1175,11 @@ function figuresProblem(figures: unknown): string | null {
   for (const field of ["moneyMax", "minDifficulty", "requiredHackingSkill", "serverGrowth"]) {
     if (!isFiniteNumber(fields[field])) return field;
   }
-  return null;
+  return baseDifficultyProblem(fields.baseDifficulty) ? "baseDifficulty of 0 or more" : null;
 }
+
+/** Whether a figures' `baseDifficulty` (#315's review) is wrong: given, and not a number of 0 or more. */
+const baseDifficultyProblem = (value: unknown) => value !== undefined && !(isFiniteNumber(value) && value >= 0);
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
@@ -1166,6 +1193,9 @@ export function parseBatcherConfig(
   const targetFigures = (figures ?? {}) as Record<string, unknown>;
   for (const field of ["moneyMax", "minDifficulty", "requiredHackingSkill", "serverGrowth"]) {
     if (!isFiniteNumber(targetFigures[field])) return { ok: false, reason: `the config's figures have no ${field}` };
+  }
+  if (baseDifficultyProblem(targetFigures.baseDifficulty)) {
+    return { ok: false, reason: "the config's figures have no baseDifficulty of 0 or more" };
   }
   const { intelligence, mults } = (player ?? {}) as Record<string, unknown>;
   if (!isFiniteNumber(intelligence)) return { ok: false, reason: "the config's player has no intelligence" };
@@ -1249,7 +1279,7 @@ export interface BatcherHealth {
    * found it below its maximum (a grow short of the hack before it: a split grow's later parts grow at the security the
    * earlier ones left, and the batches then drift down to the bounds' floor); the run's least money so far, a share of
    * the maximum (1 while none was below), and its target (null before one); and the grows not looked at (#235's
-   * review: something else landed on the target first, or they landed while it recovered from a desync). Absent from an
+   * review: something else landed on the target first, or they landed on a target out of step, #315). Absent from an
    * older batcher.
    */
   moneyLooks?: number;
@@ -1276,6 +1306,11 @@ export interface BatcherHealth {
    */
   hacksTrimmedForLevel?: number;
   mostLevelRise?: number;
+  /**
+   * Recoveries in place that took longer than `recoveryInPlaceMs` (#315's review): each then prepared its target again.
+   * Absent from an older batcher.
+   */
+  recoveriesTimedOut?: number;
   /** Landings out of order, operations started too late, records lost, and the target outside the bounds. */
   outOfOrder: number;
   late: number;
@@ -1515,6 +1550,7 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     hacksSkipped: 0,
     hacksTrimmedForLevel: 0,
     mostLevelRise: 0,
+    recoveriesTimedOut: 0,
     outOfOrder: 0,
     late: 0,
     lost: 0,

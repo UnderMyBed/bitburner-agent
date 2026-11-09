@@ -31,6 +31,7 @@ import {
   type HackingPlayer,
   type HackingTarget,
   operationTimeMs,
+  recoveryInPlaceMs,
   usableRamGb,
 } from "@bitburner-agent/core";
 import type { Simulation } from "@bitburner-agent/sim";
@@ -334,6 +335,63 @@ test.each(SEEDS)(
       `seed ${seed}, n00dles: a desync ${desynced.outOfBounds} time(s) out of bounds, ${held.hacksSkipped} hacks ` +
         `held, no preparation wave, a hack again ${(backAfterMs / 1000).toFixed(0)} s after the rogue stopped`,
     );
+  },
+);
+
+/**
+ * Scripts that hack n00dles behind the batcher's back and never stop (#315's review): over and over; or twice, then a
+ * minute's rest, so n00dles comes back between, and a recovery ends only for the next desync to come soon after.
+ */
+const NEVER_STOPPING: [string, string][] = [
+  ["over and over", "export async function main(ns) { for (;;) await ns.hack(ns.args[0]); }"],
+  [
+    "twice a minute",
+    "export async function main(ns) { for (;;) { await ns.hack(ns.args[0]); await ns.hack(ns.args[0]); " +
+      "await ns.sleep(60000); } }",
+  ],
+];
+
+test.each(SEEDS.flatMap((seed) => NEVER_STOPPING.map(([how, script]) => [seed, how, script] as const)))(
+  "seed %i: a script hacking n00dles %s, never stopping: the recovery in place gives up past its time (#315)",
+  { timeout: 600_000 },
+  async (seed, how, script) => {
+    const { simulation, figures } = await freshGame(seed);
+    const config = await plannedConfig(simulation, "n00dles", figures.n00dles as HackingTarget);
+    expect(
+      (await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] })).error,
+    ).toBeUndefined();
+    await advanceUntil(simulation, (health) => health.hacksLanded > 0, PREPARED_WITHIN_MS, "n00dles batched");
+    await simulation.diagnostics.setHomeRam(ROGUE_HOME_RAM_GB);
+    await simulation.writeFile("home", "rogue.js", script);
+    expect(
+      (await simulation.run("home", "rogue.js", { threads: ROGUE_THREADS, args: ["n00dles"] })).error,
+    ).toBeUndefined();
+    await advanceUntil(simulation, (health) => health.desyncs > 0, DESYNC_WITHIN_MS, "a desync seen", 1_000);
+    const desynced = await healthOf(simulation);
+    expect(desynced.state).toBe("recovering");
+    const desyncedAt = await simulation.now();
+    const level = (await simulation.summary()).hackingLevel;
+    const allowedMs = recoveryInPlaceMs(figures.n00dles as HackingTarget, player(level), config.spacingMs);
+    // Recovering in place until its time is up, however the rogue's hacks come and go (a desync soon after a recovery
+    // goes on with its time); then it prepares n00dles, `preparing`, so the brain's move rules weigh it anew.
+    await advanceUntil(
+      simulation,
+      (health) => (health.recoveriesTimedOut ?? 0) > 0,
+      allowedMs + 60_000,
+      "the recovery given up",
+      1_000,
+    );
+    const gaveUpAfterMs = (await simulation.now()) - desyncedAt;
+    const gaveUp = await healthOf(simulation);
+    console.log(
+      `seed ${seed}, n00dles hacked ${how}: recovery given up ${(gaveUpAfterMs / 1000).toFixed(0)} s after the ` +
+        `first desync (allowed ${(allowedMs / 1000).toFixed(0)} s), ${gaveUp.desyncs} desyncs, then ${gaveUp.state}`,
+    );
+    expect(gaveUpAfterMs).toBeGreaterThanOrEqual(allowedMs - 2_000);
+    expect(gaveUp).toMatchObject({ state: "preparing", recoveriesTimedOut: 1 });
+    expect(gaveUp.batchesPending).toBe(0);
+    // Twice a minute, n00dles came back between: recoveries ended, and desynced again within one's time.
+    if (how === "twice a minute") expect(gaveUp.desyncs).toBeGreaterThan(1);
   },
 );
 

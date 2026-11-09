@@ -66,12 +66,14 @@ import {
   preparationWave,
   type RamHold,
   type RamWait,
+  RECOVERY_SPARE_BATCHES,
   ramHeldOf,
   recordGrowsNotLooked,
   recordHackLanded,
   recordMoneyLook,
   recordRamWait,
   recordShort,
+  recoveryInPlaceMs,
   threadsThatFit,
 } from "../src/batcher.ts";
 import { growthLogPerThread } from "../src/hack-loop.ts";
@@ -384,6 +386,21 @@ describe("the level at a landing (#315): the game's formulas", () => {
       const minDifficulty = Math.min(Math.max(1, Math.round(base / 3)), 100);
       expect(operationExpPerThread({ ...zer0, minDifficulty }, 1)).toBeGreaterThanOrEqual(3 + 0.3 * base);
     }
+    // The static snapshot's base difficulty, when it has one (#315's review): Hacknet's Reduce Minimum Security can
+    // take the minimum below a third of it (BN9), where the bound would fall short.
+    expect(operationExpPerThread({ ...zer0, baseDifficulty: 30 }, 2)).toBeCloseTo((3 + 0.3 * 30) * 2, 12);
+    expect(operationExpPerThread({ ...zer0, minDifficulty: 1, baseDifficulty: 30 }, 1)).toBeCloseTo(12, 12);
+    for (const odd of [Number.NaN, -1]) {
+      expect(operationExpPerThread({ ...zer0, baseDifficulty: odd }, 1)).toBeCloseTo(3 + 0.3 * 31.5, 12);
+    }
+  });
+
+  test("recoveryInPlaceMs (#315's review): a weaken's time at the minimum, the lead, and 10 batches", () => {
+    expect(RECOVERY_SPARE_BATCHES).toBe(10);
+    expect(recoveryInPlaceMs(zer0, player(150), 80)).toBeCloseTo(
+      operationTimeMs("weaken1", zer0, player(150)) + BATCH_LAUNCH_LEAD_MS + 800,
+      9,
+    );
   });
 });
 
@@ -433,8 +450,8 @@ describe("LevelForecast (#315)", () => {
   /**
    * Batches every 80 ms on a target needing hacking 1,041, the level 1,176 at first, raised only by the exp of the
    * batches' own landings (the live run of 2026-11-08's shape, numbers synthetic): each operation thread gives
-   * (3 + 0.3 x 51) x 4.5 exp as it lands, the base difficulty 51 behind its minimum 17. Each batch is planned a weaken's
-   * time before its hack lands, at the level then, for a share of 12%, and its hack sized as it goes out, a hack's time
+   * (3 + 0.3 x 51) x 4.5 exp as it lands, the base difficulty 51 behind its minimum 17. Each batch is planned a
+   * weaken's time before its hack lands, at the level then, for a share of 12%, and its hack sized as it goes out, a hack's time
    * before it lands: at the level then (before #315), or for the level `LevelForecast` gives at its landing. The money
    * is taken at the level as each hack lands (NetscriptHelpers.tsx:561-568), and grown back by the batch's grow.
    */
@@ -1174,6 +1191,9 @@ describe("parseBatcherConfig", () => {
     // An older brain's, without the level forecast's multipliers (#315): read, the batcher saying it can't forecast.
     const older = { ...config, player: { intelligence: 0, mults: player(1).mults } };
     expect(parseBatcherConfig(older)).toEqual({ ok: true, config: older });
+    // With the base difficulty (#315's review).
+    const based = { ...config, figures: { ...joesguns, baseDifficulty: 15 } };
+    expect(parseBatcherConfig(based)).toEqual({ ok: true, config: based });
   });
 
   test.each([
@@ -1186,6 +1206,12 @@ describe("parseBatcherConfig", () => {
     [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking: "2" } } }, "mults.hacking isn't"],
     [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking_exp: null } } }, "mults.hacking_exp"],
     [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking_exp: -1 } } }, "mults.hacking_exp"],
+    // The base difficulty (#315's review), when given, a number of 0 or more, the next's too.
+    [{ ...config, figures: { ...joesguns, baseDifficulty: -1 } }, "figures have no baseDifficulty of 0 or more"],
+    [
+      { ...config, next: { target: "n00dles", figures: { ...n00dles, baseDifficulty: "15" }, ramGb: 30 } },
+      "next figures have no baseDifficulty of 0 or more",
+    ],
     [{ ...config, hosts: [] }, "hosts"],
     [{ ...config, hosts: ["a", ""] }, "hosts"],
     [{ ...config, hackShare: 0 }, "hackShare"],

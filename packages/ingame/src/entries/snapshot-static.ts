@@ -15,6 +15,7 @@ export function main(ns: NS): void {
         purchasedByPlayer: server.purchasedByPlayer,
         moneyMax: server.moneyMax,
         minDifficulty: server.minDifficulty,
+        baseDifficulty: server.baseDifficulty,
         requiredHackingSkill: server.requiredHackingSkill,
         numOpenPortsRequired: server.numOpenPortsRequired,
         serverGrowth: server.serverGrowth,
