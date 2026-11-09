@@ -9,6 +9,7 @@
 import path from "node:path";
 import process from "node:process";
 import { Deployer, REMOTE_FILE_API_MAX_FRAME_BYTES, startWebSocketServer, systemClock } from "@bitburner-agent/bridge";
+import { describeFactionWorkPolicy } from "@bitburner-agent/core";
 import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import { readAugmentationsEnabled } from "./augmentations.ts";
 import { readBatcherEnabled } from "./batcher.ts";
@@ -34,7 +35,7 @@ import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/stat
 import { CampaignTimeline } from "./dashboard/timeline.ts";
 import { backupBeforeThinning, DataBackups, dataBackupStoreId, describeDataBackup } from "./data-backup.ts";
 import { DesiredStateController } from "./desired-state.ts";
-import { readFactionWorkEnabled } from "./factions.ts";
+import { readFactionWorkEnabled, readFactionWorkPolicy } from "./factions.ts";
 import { readHackLoopEnabled } from "./hack-loop.ts";
 import { readHomeRamEnabled } from "./home-ram.ts";
 import { readInGameBuild, readPinnedDefinitions } from "./in-game-build.ts";
@@ -370,7 +371,8 @@ try {
   log(
     `hack loop ${readHackLoopEnabled(store) ? "on" : "off"}, the batcher ${readBatcherEnabled(store) ? "on" : "off"}, buying hacking programs ${readProgramsEnabled(store) ? "on" : "off"}, ` +
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
-      `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
+      `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"} ` +
+      `(${describeFactionWorkPolicy(readFactionWorkPolicy(store))}), ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
       // A replay at Source-File 1's cap (#311), as the last slow snapshot stored shows the game.
       `${describeWorldDaemonSwitch(

@@ -13,6 +13,8 @@
 //   (#225, owner decision 53: `workTarget`, `redPillTarget`); every augmentation a candidate short of Daedalus's count
 //   (#228); an install held for the count first (#243). With the Augmentations switch off, no install or donation
 //   follows, so the work is to the augmentation's reputation. This reads the snapshots and calls it.
+//   Favour first (#247), by its setting (`FACTION_WORK_POLICY_SETTING`; count first, today's, unless set): core's
+//   `factionWorkChoiceUnder`, toward donations at the faction selling the most countable augmentations once joined.
 //   Tian Di Hui's and the city factions' invitations are ./invitations.ts's travel.
 // - The owner's work wins; the dashboard's switch for the brain's faction work turns it off.
 import {
@@ -22,16 +24,19 @@ import {
   daedalusCountOf,
   FACTION_ENEMIES,
   FACTION_NAMES,
+  FACTION_WORK_POLICIES,
   FACTIONS,
   type FactionState,
   type FactionWorkChoice,
+  type FactionWorkPolicy,
   type FactionWorkType,
   factionReadingKind,
   factionReadingOf,
-  factionWorkChoice,
+  factionWorkChoiceUnder,
   favorAfterInstall,
   type Intent,
   intentId,
+  isFactionWorkPolicy,
   type MediumSnapshotData,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
   type SlowSnapshotData,
@@ -70,6 +75,29 @@ export function readFactionWorkEnabled(store: TelemetryStore): boolean {
 
 export function writeFactionWorkEnabled(store: TelemetryStore, enabled: boolean): void {
   writeSwitch(store, FACTION_WORK_ENABLED_SETTING, enabled);
+}
+
+/**
+ * The faction work's policy (#247): "countFirst", today's (the work augmentation by augmentation, by hacking value), or
+ * "favourFirst" (core's `favourFirstWork`: toward donations at the faction selling the most countable augmentations
+ * once it's joined). Count first unless set.
+ */
+export const FACTION_WORK_POLICY_SETTING = "factionWork.policy";
+
+/** The policy: count first unless set. Fails on a value it didn't write, rather than guess. */
+export function readFactionWorkPolicy(store: TelemetryStore): FactionWorkPolicy {
+  const value = store.getSetting(FACTION_WORK_POLICY_SETTING);
+  if (value === null) return "countFirst";
+  if (!isFactionWorkPolicy(value)) {
+    throw new Error(
+      `the ${FACTION_WORK_POLICY_SETTING} setting is ${JSON.stringify(value)}, not ${FACTION_WORK_POLICIES.join(" or ")}`,
+    );
+  }
+  return value;
+}
+
+export function writeFactionWorkPolicy(store: TelemetryStore, policy: FactionWorkPolicy): void {
+  store.setSetting(FACTION_WORK_POLICY_SETTING, policy);
 }
 
 /**
@@ -239,7 +267,13 @@ export function chooseFactionWork(
   {
     donations = true,
     held = null,
-  }: { donations?: boolean; held?: { faction: string; augmentation: string } | null } = {},
+    policy = "countFirst",
+  }: {
+    donations?: boolean;
+    held?: { faction: string; augmentation: string } | null;
+    /** The faction work's policy (#247): count first, today's, unless given. */
+    policy?: FactionWorkPolicy;
+  } = {},
 ): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
   const state: FactionState | null = factionReadingOf(slowData)?.state ?? null;
@@ -257,7 +291,7 @@ export function chooseFactionWork(
   try {
     const conditions = { ...workConditionsOf(resetInfo, slowData, shareBonus), donations, ...(keep ? { keep } : {}) };
     const count = countOf(state, resetInfo);
-    const choice = factionWorkChoice(person, state, resetInfo, conditions, count, held);
+    const choice = factionWorkChoiceUnder(policy, person, state, resetInfo, conditions, count, held);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
   } catch (error) {
@@ -357,6 +391,8 @@ export interface FactionInputs {
   cityGroup?: string | null;
   /** The augmentation an install is held for by work (#243 review, A6's `countHoldTarget`), worked for first. */
   countHoldTarget?: { faction: string; augmentation: string } | null;
+  /** The faction work's policy (#247, `FACTION_WORK_POLICY_SETTING`): count first when absent. */
+  policy?: FactionWorkPolicy;
 }
 
 const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
@@ -389,7 +425,8 @@ export function describeChoice(choice: FactionWorkChoice): string {
     (choice.count === undefined
       ? ""
       : `, for Daedalus's count: ${choice.count.installed} of ${choice.count.required} augmentations installed`) +
-    (choice.held === true ? ", the install held for it" : "")
+    (choice.held === true ? ", the install held for it" : "") +
+    (choice.favourFirst === true ? ", favour first (the faction selling the most countable augmentations)" : "")
   );
 }
 
@@ -552,6 +589,7 @@ export class FactionRule {
         : chooseFactionWork(mediumData, slowData, shareBonus, this.#sent ?? undefined, {
             donations: inputs.augmentationsEnabled ?? true,
             held: inputs.countHoldTarget ?? null,
+            policy: inputs.policy ?? "countFirst",
           });
     const notSent = !enabled
       ? "the brain's faction work is switched off"
@@ -664,6 +702,7 @@ function targetFieldsOf(detail: Partial<FactionWorkChoice>): Partial<FactionWork
     ...(isFiniteNumber(detail.count?.installed) && isFiniteNumber(detail.count?.required)
       ? { count: { installed: detail.count.installed, required: detail.count.required } }
       : {}),
+    ...(detail.favourFirst === true ? { favourFirst: true as const } : {}),
   };
 }
 

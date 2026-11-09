@@ -59,6 +59,8 @@ export interface FactionWorkChoice {
   count?: Pick<DaedalusCount, "installed" | "required">;
   /** The work is for an install A6 holds for Daedalus's count (#243 review). Absent otherwise. */
   held?: true;
+  /** The work is favour first's (#247, ./favour-first.ts): toward donations at the faction selling the most. */
+  favourFirst?: true;
 }
 
 /** The reputation worked toward at a faction for an augmentation (#225), and why. */

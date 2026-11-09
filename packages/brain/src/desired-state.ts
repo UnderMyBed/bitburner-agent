@@ -82,6 +82,7 @@ import {
   type FactionWorkEvent,
   type FactionWorkStall,
   readFactionWorkEnabled,
+  readFactionWorkPolicy,
   resetInfoOf,
   writeFactionWorkEnabled,
 } from "./factions.ts";
@@ -1482,6 +1483,8 @@ export class DesiredStateController {
       cityGroup: this.#invitations.view().cityGroup,
       // An install held for Daedalus's count by work (#243 review): its augmentation's seller, worked for first.
       countHoldTarget: this.#augmentations.countHoldTarget(),
+      // The faction work's policy (#247): count first, today's, unless set.
+      policy: readFactionWorkPolicy(this.#store),
     });
     this.#join = factions.join;
     this.#joinAlongside = factions.joinAlongside;

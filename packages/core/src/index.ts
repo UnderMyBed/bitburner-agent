@@ -378,6 +378,16 @@ export {
   TIAN_DI_HUI_HACKING,
   TIAN_DI_HUI_MONEY,
 } from "./factions.ts";
+export {
+  describeFactionWorkPolicy,
+  FACTION_WORK_POLICIES,
+  FAVOUR_FIRST_FACTIONS,
+  type FactionWorkPolicy,
+  factionWorkChoiceUnder,
+  favourFirstFaction,
+  favourFirstWork,
+  isFactionWorkPolicy,
+} from "./favour-first.ts";
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   growthLogPerThread,

@@ -1,5 +1,8 @@
 // The brain's joins and faction work (#203): which invitation it joins, which faction and work it chooses and why, the
 // rule's log, events and stall as the controller runs it, and what the run report reads of them.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   augmentationBitNodeMultipliers,
   augmentationsSoldBy,
@@ -9,6 +12,7 @@ import {
   isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
+  reputationToUnlockDonations,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
@@ -19,6 +23,7 @@ import {
   describeChoice,
   describeEta,
   FACTION_WORK_CHOSEN_EVENT_KIND,
+  FACTION_WORK_POLICY_SETTING,
   FACTION_WORK_STALLED_AFTER_MS,
   FACTION_WORK_STOPPED_EVENT_KIND,
   type FactionInputs,
@@ -28,13 +33,16 @@ import {
   FactionWorkTimeline,
   joinIntent,
   onTrack,
+  readFactionWorkPolicy,
   redPillTarget,
   resetInfoOf,
   SLOW_SNAPSHOT_GAP_MS,
   workCandidates,
   workingPersonOf,
   workTarget,
+  writeFactionWorkPolicy,
 } from "../src/factions.ts";
+import { TelemetryStore } from "../src/telemetry-store.ts";
 
 /** A player at `hacking`, every other skill at `others`, intelligence 0 and `faction_rep` 1 unless given. */
 function player(
@@ -1134,5 +1142,71 @@ describe("short of Daedalus's count (#228)", () => {
       "brainStarted",
     );
     expect(timeline.records[0]).toMatchObject({ kind: "chosen", choice: { count: { installed: 23, required: 30 } } });
+  });
+});
+
+describe("favour first (#247)", () => {
+  const JOINED = {
+    CyberSec: 0,
+    NiteSec: 0,
+    BitRunners: { reputation: 1_000, favor: 5 },
+  };
+  const needed = reputationToUnlockDonations(5, { FavorToDonateToFaction: 1 });
+
+  test("the setting: count first unless set; favour first once written; anything else fails loudly", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "favour-first-"));
+    const store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+    try {
+      expect(readFactionWorkPolicy(store)).toBe("countFirst");
+      writeFactionWorkPolicy(store, "favourFirst");
+      expect(store.getSetting(FACTION_WORK_POLICY_SETTING)).toBe("favourFirst");
+      expect(readFactionWorkPolicy(store)).toBe("favourFirst");
+      store.setSetting(FACTION_WORK_POLICY_SETTING, "favour first");
+      expect(() => readFactionWorkPolicy(store)).toThrow(
+        'the factionWork.policy setting is "favour first", not countFirst or favourFirst',
+      );
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("chooseFactionWork: count first by default; favour first works at BitRunners toward its donations", () => {
+    const own = chooseFactionWork(player(600), slow({ joined: JOINED }));
+    expect(own).toEqual(
+      chooseFactionWork(player(600), slow({ joined: JOINED }), 1, undefined, { policy: "countFirst" }),
+    );
+    expect(own.choice?.favourFirst).toBeUndefined();
+    const plan = chooseFactionWork(player(600), slow({ joined: JOINED }), 1, undefined, { policy: "favourFirst" });
+    expect(plan.choice).toMatchObject({
+      faction: "BitRunners",
+      reputation: 1_000,
+      reputationNeeded: needed,
+      target: "donations",
+      favor: 5,
+      favourFirst: true,
+    });
+    expect(plan.choice).not.toEqual(own.choice);
+    expect(describeChoice(plan.choice as FactionWorkChoice)).toMatch(
+      /^hacking for BitRunners, for \S.* \(reputation 1,000 of [\d,]+: donations at the next install, .*; favour 5\.0, 150\.0 after the next install at it, .*\), favour first \(the faction selling the most countable augmentations\)$/,
+    );
+  });
+
+  test("the rule sends favour first's work under its policy, and stores it; the run report reads it back", () => {
+    const { events, update } = ruleOf();
+    expect(update({ mediumData: player(600), slowData: slow({ joined: JOINED }) }).work?.faction).not.toBe(
+      "BitRunners",
+    );
+    expect(
+      update({ mediumData: player(600), slowData: slow({ joined: JOINED }), policy: "favourFirst", nowMs: 2_000 }).work,
+    ).toEqual({ faction: "BitRunners", workType: "hacking" });
+    const stored = events.at(-1);
+    expect(stored).toMatchObject({ type: FACTION_WORK_CHOSEN_EVENT_KIND, atMs: 2_000, favourFirst: true });
+    const { type: _type, atMs: _atMs, ...detail } = stored as FactionWorkEvent & { atMs: number };
+    const timeline = new FactionWorkTimeline(
+      [{ atMs: 2_000, kind: FACTION_WORK_CHOSEN_EVENT_KIND, detail }],
+      "brainStarted",
+    );
+    expect(timeline.records[0]).toMatchObject({ kind: "chosen", choice: { favourFirst: true, target: "donations" } });
   });
 });

@@ -9,8 +9,8 @@
  * #247's first rule (a difference only beyond the grid's spread) compared unpaired ranges, with one parameter varied
  * at a time, and missed errors in the model's structure (#262's review).
  */
-import { augmentationsSoldBy, DAEDALUS, isWorthInstalling, TIAN_DI_HUI } from "@bitburner-agent/core";
-import { CALIBRATION, calibrationSteps, HACKER_FACTION_JOINS } from "./calibration.ts";
+import { DAEDALUS, favourFirstFaction } from "@bitburner-agent/core";
+import { CALIBRATION, calibrationSteps } from "./calibration.ts";
 import {
   type CyclePolicy,
   type ModelOptions,
@@ -217,22 +217,16 @@ export function verdictOf(
 
 /**
  * #247's "favour first": once the faction selling the most countable augmentations not installed is joined (of the
- * hacker factions and Tian Di Hui, BN1's before Daedalus: BitRunners, 13 at first), work there toward the favour that
- * unlocks its donations, buying from it as reputation allows; the brain's own choices otherwise. Countable is core's
- * `isWorthInstalling` with nothing short.
+ * hacker factions and Tian Di Hui, BN1's before Daedalus: BitRunners, 12 at first), work there toward the favour that
+ * unlocks its donations, buying from it as reputation allows; the brain's own choices otherwise. The faction is core's
+ * `favourFirstFaction`, the brain's own under its favour first setting (#247, core's `favourFirstWork`).
  */
 export const FAVOUR_FIRST_POLICY: CyclePolicy = {
   name: "favour first",
   daedalusCountHold: true,
   homeShares: true,
   favourGrind: (view) => {
-    let best: { name: string; countable: number } | null = null;
-    for (const faction of [...HACKER_FACTION_JOINS.map((each) => each.faction), TIAN_DI_HUI]) {
-      const countable = augmentationsSoldBy(faction, 1, null).filter(
-        (name) => isWorthInstalling(name) && !Object.hasOwn(view.installed, name),
-      ).length;
-      if (best === null || countable > best.countable) best = { name: faction, countable };
-    }
-    return view.joined.some((each) => each.name === best?.name) ? (best?.name ?? null) : null;
+    const faction = favourFirstFaction(1, view.installed).faction;
+    return view.joined.some((each) => each.name === faction) ? faction : null;
   },
 };
