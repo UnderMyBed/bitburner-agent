@@ -584,6 +584,24 @@ describe("the campaign report", () => {
     ]);
   });
 
+  test("at the cap, the 5-minute bound (#311 review): sent 4 min 59 s before the last look counts, 5 min 1 s doesn't", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5, sf: 3 });
+    event(10 - 299 / 60, V100, "bitNodeDestroySent", {});
+    play({ from: 11, to: 20, release: V100, node: 10.5, aug: 10.5, sf: 3 });
+    event(20 - 301 / 60, V100, "bitNodeDestroySent", {});
+    play({ from: 21, to: 22, release: V100, node: 20.5, aug: 20.5, sf: 3 });
+    expect(
+      bitNodeRows()
+        .slice(1)
+        .map((row) => row[2]),
+    ).toEqual([
+      `destroyed ${at(10.5)} (at the cap)`,
+      `b1t_flum3, or a destroy not sent by the brain at the cap, ${at(20.5)}`,
+      "not yet",
+    ]);
+  });
+
   test("Source-File overrides: one overridden on either side isn't compared; the BitNode's own falls back on the destroy sent", () => {
     event(-1, V100, "brainStarted", { release: "v1.0.0" });
     // SF4 overridden to 0 in BN1.2 (ownedSF hides it), shown at its level in BN1.3: not another Source-File rising.

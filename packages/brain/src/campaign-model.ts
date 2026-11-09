@@ -471,7 +471,7 @@ const unseenAfter = (next: CampaignBitNode | undefined) =>
  * - its Source-File gained a level: destroyed (`RedPill.tsx:62-63`, `giveSourceFile`); more than one, or another
  *   Source-File rose too: destroyed, with BitNodes the store didn't see between; another rose alone: those BitNodes;
  * - at its Source-File's cap (`RedPill.tsx:28`, no level to gain), or with its Source-File overridden (its level
- *   doesn't say), the brain's `bitNodeDestroySent` after its last look: destroyed; overridden with none: unknown;
+ *   doesn't say), the brain's last `bitNodeDestroySent` in its last cycle (below): destroyed; overridden with none: unknown;
  * - a Source-File lost, or none to lose (b1t_flum3 needs one: `Programs.ts:29-33`, `BitNodeUtils.ts:21-25`): a new
  *   game (a new player's `lastNodeReset` is the time it began, `PlayerObject.ts:168`);
  * - otherwise b1t_flum3, which enters a BitNode with no Source-File (`RedPill.tsx:62`, its `isFlume`;

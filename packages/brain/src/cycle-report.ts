@@ -311,7 +311,8 @@ export interface BitNodeSpan {
   label: string;
   /**
    * Its label, with " #2" on for a label seen again (#311: a replay at the cap, BN1.4 into BN1.4; a new game, a save
-   * loaded), as the campaign report names it: unique among the BitNodes seen, so their cycles never merge.
+   * loaded), as the campaign report names it: unique among the BitNodes seen, so their cycles never merge. The run
+   * report counts names within its window, so one BitNode can be "BN1.4" there and "BN1.4 #3" in the campaign.
    */
   name: string;
   currentNode: number;
