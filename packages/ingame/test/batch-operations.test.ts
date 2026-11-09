@@ -346,6 +346,28 @@ test("a config without the level forecast's multipliers (an older brain's, #315)
   expect(health.hacksTrimmedForLevel).toBe(0);
 });
 
+test("a move resets the recovery clock (#315's re-review): the new target's recovery has its whole time", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  expect((await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME)).error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(n00dlesConfig())] });
+  await healthOnceThat(simulation, (health) => health.hacksLanded > 0, 5_000, 20 * 60_000, "hacks landing");
+  // A desync (the later landing recorded first), and a recovery that ends: its streak has spent some time recovering.
+  const running = await inFlight(simulation);
+  const first = running[0] as { id: string; landAt: number };
+  const last = running.at(-1) as { id: string; landAt: number };
+  await simulation.run("home", "write-port.js", {
+    args: [BATCHER_LANDING_PORT, recordJson(last.id, last.landAt), recordJson(first.id, first.landAt)],
+  });
+  await healthOnceThat(simulation, (health) => health.state === "recovering", 1_000, 60_000, "recovering");
+  const back = await healthOnceThat(simulation, (health) => health.state === "batching", 1_000, 10 * 60_000, "back");
+  expect(back.recoverySpentMs).toBeGreaterThan(0);
+  // A move (n00dles' figures anew): the time the old target's streak spent isn't the new one's.
+  const moved = { ...n00dlesConfig(), figures: { ...N00DLES, baseDifficulty: 3 } };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(moved)] });
+  await simulation.advance(1_000);
+  expect((await healthOf(simulation)).recoverySpentMs).toBe(0);
+});
 test("a move back to a target still out of step (#315's re-review): prepared again, it batches, in step", async () => {
   const simulation = await gameWithScripts();
   await simulation.diagnostics.gainHackingExp(2_000);

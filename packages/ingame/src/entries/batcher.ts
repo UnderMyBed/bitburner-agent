@@ -1470,6 +1470,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     // Awake when a part would be lost, so it's counted then, not at the next launch.
     wakeAt = Math.min(wakeAt, landings.nextLostAtMs());
     health.batchesPending = batches.size;
+    health.recoverySpentMs = recovery.spentMs();
     const latestLandAt = landings.latestLandAt();
     // Never before the one it waits for (#211): a batcher started while this one waits must wait for that one too. On
     // the monotonic clock (#251): only the next batcher, on the same page, reads it.

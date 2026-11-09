@@ -434,9 +434,11 @@ describe("the level at a landing (#315): the game's formulas", () => {
       expect(clock.endsAt()).toBeNull();
       clock.end(70_000, WHOLE);
       // 50 s and 10 s spent: 40 s left.
+      expect(clock.spentMs()).toBe(60_000);
       expect(clock.begin(80_000, WHOLE, LEAST)).toBe(80_000 + 40_000);
       clock.reset();
       expect(clock.endsAt()).toBeNull();
+      expect(clock.spentMs()).toBe(0);
       expect(clock.begin(90_000, WHOLE, LEAST)).toBe(90_000 + WHOLE);
     });
   });
